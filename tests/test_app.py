@@ -8,7 +8,6 @@ from unittest.mock import AsyncMock
 from fastapi.testclient import TestClient
 
 import extra_codeowners.app as app_module
-from extra_codeowners.app import create_app
 from extra_codeowners.database import QueueStore
 from extra_codeowners.manifest import ManifestService
 from extra_codeowners.settings import Settings
@@ -88,7 +87,7 @@ def webhook_headers(body: bytes, delivery: str = "delivery-1") -> dict[str, str]
 def test_health_and_signed_webhook_ingestion(tmp_path: Path) -> None:
     store = QueueStore(f"sqlite:///{tmp_path / 'app.db'}")
     github = StubGitHub()
-    app = create_app(configured_settings(), github=github, store=store)  # type: ignore[arg-type]
+    app = app_module.create_app(configured_settings(), github=github, store=store)  # type: ignore[arg-type]
     payload: dict[str, Any] = {
         "action": "opened",
         "installation": {"id": 10},
@@ -115,7 +114,7 @@ def test_webhook_fast_path_failure_is_durable_and_replayable(tmp_path: Path) -> 
     store = QueueStore(f"sqlite:///{tmp_path / 'app.db'}")
     github = StubGitHub()
     github.fail_next_check = True
-    app = create_app(configured_settings(), github=github, store=store)  # type: ignore[arg-type]
+    app = app_module.create_app(configured_settings(), github=github, store=store)  # type: ignore[arg-type]
     body = json.dumps(
         {
             "action": "submitted",
@@ -149,7 +148,7 @@ def test_liveness_fails_when_enabled_worker_task_has_died(tmp_path: Path) -> Non
     runtime = configured_settings().model_copy(
         update={"worker_enabled": True, "worker_poll_seconds": 0.05}
     )
-    app = create_app(runtime, github=StubGitHub(), store=store)  # type: ignore[arg-type]
+    app = app_module.create_app(runtime, github=StubGitHub(), store=store)  # type: ignore[arg-type]
 
     class DeadTask:
         @staticmethod
@@ -171,7 +170,7 @@ def test_liveness_fails_when_enabled_worker_task_has_died(tmp_path: Path) -> Non
 def test_liveness_fails_when_enabled_reconciler_task_has_died(tmp_path: Path) -> None:
     store = QueueStore(f"sqlite:///{tmp_path / 'app.db'}")
     runtime = configured_settings().model_copy(update={"reconcile_enabled": True})
-    app = create_app(runtime, github=StubGitHub(), store=store)  # type: ignore[arg-type]
+    app = app_module.create_app(runtime, github=StubGitHub(), store=store)  # type: ignore[arg-type]
 
     class DeadTask:
         @staticmethod
@@ -192,7 +191,7 @@ def test_liveness_fails_when_enabled_reconciler_task_has_died(tmp_path: Path) ->
 
 def test_org_config_repository_webhook_is_acknowledged_but_not_queued(tmp_path: Path) -> None:
     store = QueueStore(f"sqlite:///{tmp_path / 'app.db'}")
-    app = create_app(configured_settings(), github=StubGitHub(), store=store)  # type: ignore[arg-type]
+    app = app_module.create_app(configured_settings(), github=StubGitHub(), store=store)  # type: ignore[arg-type]
     payload: dict[str, Any] = {
         "action": "opened",
         "installation": {"id": 10},
@@ -212,7 +211,7 @@ def test_org_config_repository_webhook_is_acknowledged_but_not_queued(tmp_path: 
 def test_authority_webhook_is_durably_queued_without_pr_fast_path(tmp_path: Path) -> None:
     store = QueueStore(f"sqlite:///{tmp_path / 'authority-app.db'}")
     github = StubGitHub()
-    app = create_app(configured_settings(), github=github, store=store)  # type: ignore[arg-type]
+    app = app_module.create_app(configured_settings(), github=github, store=store)  # type: ignore[arg-type]
     payload: dict[str, Any] = {
         "ref": "refs/heads/main",
         "forced": False,
@@ -242,7 +241,7 @@ def test_authority_guard_failure_returns_retryable_service_error(
 ) -> None:
     store = QueueStore(f"sqlite:///{tmp_path / 'authority-failure.db'}")
     monkeypatch.setattr(store, "acquire_authority_guard", lambda *args, **kwargs: None)
-    app = create_app(configured_settings(), github=StubGitHub(), store=store)  # type: ignore[arg-type]
+    app = app_module.create_app(configured_settings(), github=StubGitHub(), store=store)  # type: ignore[arg-type]
     payload: dict[str, Any] = {
         "action": "member_removed",
         "installation": {"id": 10},
@@ -262,7 +261,7 @@ def test_authority_guard_failure_returns_retryable_service_error(
 
 def test_invalid_signature_returns_unauthorized(tmp_path: Path) -> None:
     store = QueueStore(f"sqlite:///{tmp_path / 'app.db'}")
-    app = create_app(configured_settings(), github=StubGitHub(), store=store)  # type: ignore[arg-type]
+    app = app_module.create_app(configured_settings(), github=StubGitHub(), store=store)  # type: ignore[arg-type]
 
     with TestClient(app) as client:
         response = client.post(
@@ -283,7 +282,7 @@ def test_streamed_webhook_is_bounded_without_content_length(
 ) -> None:
     monkeypatch.setattr(app_module, "MAX_WEBHOOK_BYTES", 4)
     store = QueueStore(f"sqlite:///{tmp_path / 'app.db'}")
-    app = create_app(configured_settings(), github=StubGitHub(), store=store)  # type: ignore[arg-type]
+    app = app_module.create_app(configured_settings(), github=StubGitHub(), store=store)  # type: ignore[arg-type]
 
     with TestClient(app) as client:
         response = client.post(
@@ -301,7 +300,7 @@ def test_streamed_webhook_is_bounded_without_content_length(
 
 def test_setup_routes_are_hidden_when_disabled(tmp_path: Path) -> None:
     store = QueueStore(f"sqlite:///{tmp_path / 'app.db'}")
-    app = create_app(configured_settings(), github=StubGitHub(), store=store)  # type: ignore[arg-type]
+    app = app_module.create_app(configured_settings(), github=StubGitHub(), store=store)  # type: ignore[arg-type]
 
     with TestClient(app) as client:
         assert client.get("/setup").status_code == 404
@@ -329,7 +328,7 @@ def test_setup_manifest_flow_is_no_store_and_escapes_credentials(
         "exchange",
         AsyncMock(return_value={"id": 1, "pem": "<private>", "webhook_secret": "secret"}),
     )
-    app = create_app(settings, github=StubGitHub(), store=store)  # type: ignore[arg-type]
+    app = app_module.create_app(settings, github=StubGitHub(), store=store)  # type: ignore[arg-type]
 
     with TestClient(app) as client:
         setup = client.get("/setup?organization=example")
@@ -352,7 +351,7 @@ def test_readiness_fails_without_github_credentials(tmp_path: Path) -> None:
         worker_enabled=False,
         reconcile_enabled=False,
     )
-    app = create_app(settings, github=StubGitHub(), store=store)  # type: ignore[arg-type]
+    app = app_module.create_app(settings, github=StubGitHub(), store=store)  # type: ignore[arg-type]
 
     with TestClient(app) as client:
         response = client.get("/health/ready")

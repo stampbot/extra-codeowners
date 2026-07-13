@@ -282,7 +282,7 @@ class GitHubClient:
             if isinstance(body, dict) and isinstance(body.get("message"), str):
                 message = body["message"]
         except ValueError:
-            pass
+            return message
         return message
 
     @staticmethod
