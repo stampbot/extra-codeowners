@@ -618,7 +618,7 @@ async def test_revocation_is_ordered_after_inflight_stale_completion(tmp_path: P
     assert revocation.done() is False
 
     allow_completion.set()
-    await evaluation
+    await asyncio.wait_for(evaluation, timeout=1)
     assert await revocation is True
     # The webhook path adds one post-PATCH generation to fence any worker
     # that completed immediately before revocation.

@@ -7,7 +7,6 @@ import pytest
 from sqlalchemy import Table, inspect, update
 from sqlalchemy.exc import IntegrityError
 
-import extra_codeowners.database as database_module
 from extra_codeowners.database import (
     AuthorityJob,
     AuthorityRequest,
@@ -373,7 +372,9 @@ def test_unique_base_push_backlog_coalesces_to_bounded_repository_work(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(database_module, "MAX_BASE_SCOPED_AUTHORITY_JOBS_PER_REPOSITORY", 2)
+    monkeypatch.setattr(
+        "extra_codeowners.database.MAX_BASE_SCOPED_AUTHORITY_JOBS_PER_REPOSITORY", 2
+    )
     store = make_store(tmp_path)
     for index, branch in enumerate(("main", "release", "third")):
         store.accept_delivery(
