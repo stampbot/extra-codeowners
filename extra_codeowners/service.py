@@ -1003,7 +1003,7 @@ class Worker:
             await asyncio.to_thread(self.store.complete, job, self.owner)
         finally:
             done.set()
-            await heartbeat
+            await asyncio.gather(heartbeat)
 
     async def _renew_authority_lease(self, job: ClaimedAuthorityJob, done: asyncio.Event) -> None:
         interval = max(1.0, self.settings.worker_lease_seconds / 3)
@@ -1145,7 +1145,7 @@ class Worker:
             await asyncio.to_thread(self.store.complete_authority, job, self.owner)
         finally:
             done.set()
-            await heartbeat
+            await asyncio.gather(heartbeat)
 
     async def run(self, stop: asyncio.Event) -> None:
         """Run the worker loop."""
@@ -1237,7 +1237,7 @@ class Reconciler:
             return await self._reconcile_owned(lost)
         finally:
             done.set()
-            await heartbeat
+            await asyncio.gather(heartbeat)
 
     async def _reconcile_owned(self, lost: asyncio.Event) -> int:
         """Perform one reconciliation while the heartbeat owns the lease."""
