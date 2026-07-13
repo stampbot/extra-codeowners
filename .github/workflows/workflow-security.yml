@@ -2,17 +2,11 @@ name: Workflow security
 
 on:
   pull_request:
-    paths:
-      - .github/dependabot.yml
-      - .github/scripts/**
-      - .github/workflows/**
+    branches:
+      - main
   push:
     branches:
       - main
-    paths:
-      - .github/dependabot.yml
-      - .github/scripts/**
-      - .github/workflows/**
   workflow_dispatch:
 
 permissions:
