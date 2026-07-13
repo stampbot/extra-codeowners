@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+dist/
+build/
+
+# Virtual environments and local configuration
+.venv/
+.env
+.env.*
+!.env.example
+*.key
+*.p12
+*.pem
+*.pfx
+
+# Documentation output
+site/
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Local runtime state
+*.db
+*.sqlite
+*.sqlite3
+
+# Helm packages
+*.tgz

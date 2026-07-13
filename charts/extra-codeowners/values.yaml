@@ -1,0 +1,186 @@
+# replicaCount is the number of API/worker pods when autoscaling is disabled.
+replicaCount: 1
+
+# revisionHistoryLimit is the number of old ReplicaSets retained for rollback.
+revisionHistoryLimit: 3
+
+# deploymentStrategy avoids overlapping application versions during upgrades.
+deploymentStrategy:
+  type: Recreate
+
+# image configures the published Extra CODEOWNERS container.
+image:
+  # image.repository is the OCI image repository.
+  repository: ghcr.io/stampbot/extra-codeowners
+  # image.pullPolicy controls when Kubernetes pulls the image.
+  pullPolicy: IfNotPresent
+  # image.tag defaults to the chart appVersion when empty.
+  tag: ""
+  # image.digest, when set, takes precedence over image.tag.
+  digest: ""
+
+# imagePullSecrets lists Secret names used to pull the container image.
+imagePullSecrets: []
+
+# nameOverride replaces the chart name in generated resource names.
+nameOverride: ""
+
+# fullnameOverride replaces the complete generated resource name.
+fullnameOverride: ""
+
+# serviceAccount configures the pod's Kubernetes service account.
+serviceAccount:
+  # serviceAccount.create creates a dedicated service account.
+  create: true
+  # serviceAccount.automountServiceAccountToken mounts a Kubernetes API token.
+  automountServiceAccountToken: false
+  # serviceAccount.annotations adds annotations to the service account.
+  annotations: {}
+  # serviceAccount.name uses this existing account when create is false.
+  name: ""
+
+# podAnnotations adds annotations to application pods.
+podAnnotations: {}
+
+# podLabels adds non-selector labels to application pods.
+podLabels: {}
+
+# podSecurityContext applies security settings to every pod container.
+podSecurityContext:
+  runAsNonRoot: true
+  fsGroup: 65532
+  fsGroupChangePolicy: OnRootMismatch
+  seccompProfile:
+    type: RuntimeDefault
+
+# securityContext applies security settings to the application container.
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+
+# existingSecret names a Secret whose keys are exposed as environment variables.
+existingSecret: ""
+
+# allowInsecureChanges disables only the application's built-in non-delegable paths.
+allowInsecureChanges: false
+
+# extraEnvFrom appends Kubernetes EnvFromSource entries to the container.
+extraEnvFrom: []
+
+# extraEnv appends non-chart-managed Kubernetes EnvVar entries to the container.
+extraEnv: []
+
+# extraVolumes appends Kubernetes Volume entries other than the built-in tmp volume.
+extraVolumes: []
+
+# extraVolumeMounts appends mounts outside the built-in /tmp mount.
+extraVolumeMounts: []
+
+# extraArgs overrides the image's default command arguments but not its entrypoint.
+extraArgs: []
+
+# service configures the in-cluster HTTP service.
+service:
+  # service.type is the Kubernetes Service type.
+  type: ClusterIP
+  # service.port is the Service port.
+  port: 80
+  # service.annotations adds annotations to the Service.
+  annotations: {}
+
+# ingress optionally exposes the HTTP service outside the cluster.
+ingress:
+  # ingress.enabled creates an Ingress resource.
+  enabled: false
+  # ingress.className selects an ingress controller.
+  className: ""
+  # ingress.annotations adds controller-specific annotations.
+  annotations: {}
+  # ingress.hosts defines host and path routing.
+  hosts:
+    - host: extra-codeowners.example.com
+      paths:
+        - path: /webhooks/github
+          pathType: Exact
+  # ingress.tls defines TLS secrets and covered hosts.
+  tls: []
+
+# resources configures application container requests and limits.
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    memory: 512Mi
+
+# probes configures the HTTP health endpoints.
+probes:
+  # probes.liveness configures process-health checks.
+  liveness:
+    enabled: true
+    path: /health/live
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 3
+  # probes.readiness configures dependency-health checks.
+  readiness:
+    enabled: true
+    path: /health/ready
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 3
+
+# autoscaling configures a CPU-based HorizontalPodAutoscaler.
+autoscaling:
+  # autoscaling.enabled creates a HorizontalPodAutoscaler.
+  enabled: false
+  # autoscaling.minReplicas is the lower replica bound.
+  minReplicas: 2
+  # autoscaling.maxReplicas is the upper replica bound.
+  maxReplicas: 5
+  # autoscaling.targetCPUUtilizationPercentage is the average CPU target.
+  targetCPUUtilizationPercentage: 70
+
+# podDisruptionBudget controls voluntary disruption availability.
+podDisruptionBudget:
+  # podDisruptionBudget.enabled creates a PodDisruptionBudget.
+  enabled: false
+  # podDisruptionBudget.minAvailable is the minimum available pod count.
+  minAvailable: 1
+
+# networkPolicy controls pod ingress and optional egress restrictions.
+networkPolicy:
+  # networkPolicy.enabled creates a NetworkPolicy.
+  enabled: true
+  # networkPolicy.ingressFrom lists allowed peers; empty allows the HTTP port from all peers.
+  ingressFrom: []
+  # networkPolicy.egressEnabled enables explicit egress rules.
+  egressEnabled: false
+  # networkPolicy.egress contains complete Kubernetes NetworkPolicy egress rules.
+  egress: []
+
+# terminationGracePeriodSeconds allows leased work to stop before pod termination.
+terminationGracePeriodSeconds: 30
+
+# priorityClassName assigns a pre-existing Kubernetes PriorityClass.
+priorityClassName: ""
+
+# nodeSelector constrains pods to nodes with matching labels.
+nodeSelector: {}
+
+# tolerations configures pod scheduling on tainted nodes.
+tolerations: []
+
+# affinity configures Kubernetes pod and node affinity.
+affinity: {}
+
+# topologySpreadConstraints configures distribution across failure domains.
+topologySpreadConstraints: []

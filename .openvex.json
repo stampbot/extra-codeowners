@@ -1,0 +1,51 @@
+{
+  "@context": "https://openvex.dev/ns/v0.2.0",
+  "@id": "https://github.com/stampbot/extra-codeowners/security/vex/CVE-2026-15308",
+  "author": "https://github.com/stampbot/extra-codeowners",
+  "timestamp": "2026-07-12T00:00:00Z",
+  "version": 1,
+  "statements": [
+    {
+      "vulnerability": {
+        "name": "CVE-2026-15308"
+      },
+      "products": [
+        {
+          "@id": "extra-codeowners:ci-amd64",
+          "subcomponents": [
+            {
+              "@id": "pkg:generic/python@3.14.6"
+            }
+          ]
+        },
+        {
+          "@id": "extra-codeowners:ci-arm64",
+          "subcomponents": [
+            {
+              "@id": "pkg:generic/python@3.14.6"
+            }
+          ]
+        },
+        {
+          "@id": "extra-codeowners:release-candidate-amd64",
+          "subcomponents": [
+            {
+              "@id": "pkg:generic/python@3.14.6"
+            }
+          ]
+        },
+        {
+          "@id": "extra-codeowners:release-candidate-arm64",
+          "subcomponents": [
+            {
+              "@id": "pkg:generic/python@3.14.6"
+            }
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "Extra CODEOWNERS does not import or invoke html.parser.HTMLParser. Its only html standard-library use is html.escape for static setup-page output; untrusted webhook and GitHub API data never enters the vulnerable incremental parser."
+    }
+  ]
+}
