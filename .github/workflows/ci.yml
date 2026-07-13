@@ -1,0 +1,456 @@
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}
+  UV_FROZEN: "true"
+
+jobs:
+  lint:
+    name: Lint and type check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Validate narrow OpenVEX scope
+        run: jq -e -f .github/scripts/validate-openvex.jq .openvex.json >/dev/null
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version-file: .python-version
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@6ee6290f1cbc4156c0bdd66691b2c144ef8df19a # v7.4.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install locked dependencies
+        run: uv sync --all-groups --frozen
+
+      - name: Check formatting
+        run: uv run ruff format --check .
+
+      - name: Lint Python
+        run: uv run ruff check .
+
+      - name: Type check
+        run: uv run mypy extra_codeowners tests
+
+      - name: Lint YAML
+        run: uv run yamllint .
+
+      - name: Lint shell scripts
+        run: >-
+          docker run --rm
+          --volume "${PWD}:/mnt:ro"
+          koalaman/shellcheck:v0.11.0@sha256:61862eba1fcf09a484ebcc6feea46f1782532571a34ed51fedf90dd25f925a8d
+          /mnt/.github/scripts/smoke-container.sh
+
+  test:
+    name: Test (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - python-version: "3.12"
+            coverage: true
+            postgres: true
+            test-postgres-url: >-
+              postgresql+psycopg://extra_codeowners:extra_codeowners@127.0.0.1:5432/extra_codeowners_test
+          - python-version: "3.13"
+            coverage: false
+            postgres: false
+            test-postgres-url: ""
+          - python-version: "3.14"
+            coverage: false
+            postgres: false
+            test-postgres-url: ""
+    services:
+      postgres:
+        # GitHub skips the service when this resolves to the empty string.
+        image: >- # zizmor: ignore[unpinned-images] The only non-empty branch is digest-pinned.
+          ${{ matrix.postgres &&
+          'postgres:17.7-alpine@sha256:bb377b7239d2774ac8cc76f481596ce96c5a6b5e9d141f6d0a0ee371a6e7c0f2'
+          || '' }}
+        env:
+          POSTGRES_DB: extra_codeowners_test
+          POSTGRES_PASSWORD: extra_codeowners
+          POSTGRES_USER: extra_codeowners
+        options: >-
+          --health-cmd "pg_isready --username=extra_codeowners --dbname=extra_codeowners_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@6ee6290f1cbc4156c0bdd66691b2c144ef8df19a # v7.4.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install locked dependencies
+        run: uv sync --all-groups --frozen --python "${{ matrix.python-version }}"
+
+      - name: Run tests with branch coverage
+        if: matrix.coverage
+        env:
+          TEST_POSTGRES_URL: ${{ matrix.test-postgres-url }}
+        run: >-
+          uv run --python "${{ matrix.python-version }}" pytest
+          --cov=extra_codeowners
+          --cov-branch
+          --cov-report=term-missing
+          --cov-report=xml
+          --cov-report=html
+          --cov-fail-under=85
+
+      - name: Run Python compatibility tests
+        if: ${{ !matrix.coverage }}
+        run: uv run pytest --no-cov
+
+      - name: Upload coverage report
+        if: matrix.coverage
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-python-3.12
+          path: |
+            coverage.xml
+            htmlcov/
+          if-no-files-found: error
+          retention-days: 14
+
+  docs:
+    name: Documentation and Markdown
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version-file: .python-version
+
+      - name: Set up Node.js
+        uses: actions/setup-node@395ad3262231945c25e8478fd5baf05154b1d79f # v6.1.0
+        with:
+          node-version: 24
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@6ee6290f1cbc4156c0bdd66691b2c144ef8df19a # v7.4.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install locked dependencies
+        run: uv sync --all-groups --frozen
+
+      - name: Build documentation in strict mode
+        run: uv run mkdocs build --strict
+
+      - name: Lint Markdown
+        run: npx --yes markdownlint-cli2@0.20.0 '**/*.md' '#site/**' '#.venv/**'
+
+  helm:
+    name: Helm chart
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Helm
+        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
+        with:
+          version: v3.19.0
+
+      - name: Verify chart metadata and license
+        run: |
+          cmp --silent LICENSE charts/extra-codeowners/LICENSE
+          project_version="$(awk -F'"' '
+            $0 == "[project]" { in_project = 1; next }
+            in_project && /^\[/ { exit }
+            in_project && /^version = / { print $2; exit }
+          ' pyproject.toml)"
+          chart_version="$(helm show chart charts/extra-codeowners \
+            | awk '$1 == "version:" {print $2}')"
+          app_version="$(helm show chart charts/extra-codeowners \
+            | awk '$1 == "appVersion:" {gsub(/"/, "", $2); print $2}')"
+          if [[ "$chart_version" != "$project_version" || "$app_version" != "$project_version" ]]; then
+            echo "Chart version, appVersion, and project version must match." >&2
+            exit 1
+          fi
+
+      - name: Lint chart
+        run: helm lint charts/extra-codeowners
+
+      - name: Render default values
+        run: |
+          helm template extra-codeowners charts/extra-codeowners > rendered-default.yaml
+          helm template extra-codeowners charts/extra-codeowners \
+            --show-only templates/tests/test-connection.yaml > rendered-test.yaml
+          if grep -Eq \
+            '^[[:space:]]+app\.kubernetes\.io/(name|instance):' \
+            rendered-test.yaml; then
+            echo "Helm test Pod must not match the application Service selector." >&2
+            exit 1
+          fi
+
+      - name: Render optional resources
+        run: >-
+          helm template extra-codeowners charts/extra-codeowners
+          --set existingSecret=extra-codeowners-runtime
+          --set ingress.enabled=true
+          --set ingress.className=nginx
+          --set autoscaling.enabled=true
+          --set podDisruptionBudget.enabled=true
+          --set allowInsecureChanges=true
+          > rendered-optional.yaml
+
+      - name: Render mounted GitHub credentials
+        run: >-
+          helm template extra-codeowners charts/extra-codeowners
+          --set existingSecret=extra-codeowners-runtime
+          --set extraVolumes[0].name=github-credentials
+          --set extraVolumes[0].secret.secretName=extra-codeowners-github
+          --set extraVolumes[0].secret.defaultMode=288
+          --set extraVolumeMounts[0].name=github-credentials
+          --set extraVolumeMounts[0].mountPath=/run/secrets/extra-codeowners
+          --set extraVolumeMounts[0].readOnly=true
+          > rendered-credentials.yaml
+
+      - name: Render rolling-update opt-in
+        run: >-
+          helm template extra-codeowners charts/extra-codeowners
+          --set deploymentStrategy.type=RollingUpdate
+          --set deploymentStrategy.rollingUpdate.maxUnavailable=0
+          --set deploymentStrategy.rollingUpdate.maxSurge=1
+          > rendered-rolling-update.yaml
+
+      - name: Reject chart-managed environment overrides
+        run: |
+          reject_values() {
+            description="$1"
+            shift
+            if helm template extra-codeowners charts/extra-codeowners \
+              "$@" >/dev/null 2>&1; then
+              echo "Chart accepted unsafe values: ${description}." >&2
+              exit 1
+            fi
+          }
+
+          reject_values "insecure-mode environment override" \
+            --set-string extraEnv[0].name=EXTRA_CODEOWNERS_ALLOW_INSECURE_CHANGES \
+            --set-string extraEnv[0].value=true
+          reject_values "runtime-environment override" \
+            --set-string extraEnv[0].name=EXTRA_CODEOWNERS_ENVIRONMENT \
+            --set-string extraEnv[0].value=development
+          reject_values "pod selector-label override" \
+            --set-string podLabels.app\\.kubernetes\\.io/name=hijack
+          reject_values "temporary-volume override" \
+            --set-string extraVolumes[0].name=tmp \
+            --set-string extraVolumes[0].emptyDir={}
+          reject_values "temporary-mount override" \
+            --set-string extraVolumeMounts[0].name=other \
+            --set-string extraVolumeMounts[0].mountPath=/tmp
+          reject_values "rolling-update settings on Recreate" \
+            --set deploymentStrategy.rollingUpdate.maxSurge=1
+
+      - name: Validate Kubernetes resources
+        run: >-
+          docker run --rm
+          --volume "${PWD}:/work:ro"
+          ghcr.io/yannh/kubeconform:v0.7.0@sha256:85dbef6b4b312b99133decc9c6fc9495e9fc5f92293d4ff3b7e1b30f5611823c
+          -kubernetes-version 1.27.0 -strict -summary
+          /work/rendered-default.yaml
+          /work/rendered-optional.yaml
+          /work/rendered-credentials.yaml
+          /work/rendered-rolling-update.yaml
+
+      - name: Package chart
+        run: helm package charts/extra-codeowners --destination /tmp
+
+  container:
+    name: Container build (${{ matrix.architecture }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: amd64
+            platform: linux/amd64
+          - architecture: arm64
+            platform: linux/arm64
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
+
+      - name: Build container without publishing
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+        with:
+          context: .
+          load: true
+          platforms: ${{ matrix.platform }}
+          push: false
+          tags: extra-codeowners:ci-${{ matrix.architecture }}
+          build-args: |
+            VCS_REF=${{ github.sha }}
+            VERSION=0.0.0-ci
+
+      - name: Smoke test hardened container
+        run: >-
+          bash .github/scripts/smoke-container.sh
+          extra-codeowners:ci-${{ matrix.architecture }}
+          ${{ matrix.architecture }}
+          extra-codeowners-ci-smoke-${{ matrix.architecture }}
+
+      - name: Inventory all high-severity vulnerabilities
+        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0
+        with:
+          image: extra-codeowners:ci-${{ matrix.architecture }}
+          fail-build: false
+          only-fixed: false
+          output-file: vulnerability-report-${{ matrix.architecture }}.json
+          output-format: json
+          severity-cutoff: high
+          vex: .openvex.json
+
+      - name: Upload vulnerability inventory
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: vulnerability-report-${{ matrix.architecture }}
+          path: vulnerability-report-${{ matrix.architecture }}.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Enforce fixable high-severity vulnerability gate
+        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0
+        with:
+          image: extra-codeowners:ci-${{ matrix.architecture }}
+          fail-build: true
+          only-fixed: true
+          output-format: table
+          severity-cutoff: high
+          vex: .openvex.json
+
+  publish-container:
+    name: Publish signed main container
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs:
+      - lint
+      - test
+      - docs
+      - helm
+      - container
+    runs-on: ubuntu-latest
+    permissions:
+      attestations: write
+      contents: read
+      id-token: write
+      packages: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
+
+      - name: Log in to GHCR
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set image metadata
+        id: metadata
+        uses: docker/metadata-action@80c7e94dd9b9319bd5eb7a0e0fe9291e23a2a2e9 # v6.1.0
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=raw,value=main
+            type=sha,prefix=sha-
+          labels: |
+            org.opencontainers.image.title=Extra CODEOWNERS
+            org.opencontainers.image.description=Delegated GitHub App approvals for CODEOWNERS policy
+
+      - name: Build and push image
+        id: build
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.metadata.outputs.tags }}
+          labels: ${{ steps.metadata.outputs.labels }}
+          cache-from: type=gha,scope=main
+          cache-to: type=gha,scope=main,mode=max
+          provenance: mode=max
+          sbom: true
+          build-args: |
+            VCS_REF=${{ github.sha }}
+            VERSION=0.0.0-main
+
+      - name: Attest image provenance
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Sign image by digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: cosign sign --yes "${IMAGE}@${DIGEST}"

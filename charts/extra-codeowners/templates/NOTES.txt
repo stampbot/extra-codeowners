@@ -1,0 +1,26 @@
+Extra CODEOWNERS has been installed as {{ include "extra-codeowners.fullname" . }}.
+
+Verify the rollout:
+  kubectl --namespace {{ .Release.Namespace }} rollout status deployment/{{ include "extra-codeowners.fullname" . }}
+
+Run the chart test after the pod becomes ready:
+  helm test {{ .Release.Name }} --namespace {{ .Release.Namespace }}
+
+{{- if not .Values.existingSecret }}
+
+WARNING: existingSecret is empty. The application requires GitHub App and
+persistence configuration before its readiness probe can succeed.
+{{- end }}
+{{- if .Values.allowInsecureChanges }}
+
+SECURITY WARNING: allowInsecureChanges is enabled. Application approvals may
+satisfy changes to built-in security-sensitive policy, workflow, and
+repository-local action paths. Organization guardrails still apply. Confirm
+that this cluster-wide authority change is intentional before accepting any
+Extra CODEOWNERS check.
+{{- end }}
+{{- if not .Values.ingress.enabled }}
+
+Ingress is disabled. Forward the Service locally for diagnostics:
+  kubectl --namespace {{ .Release.Namespace }} port-forward service/{{ include "extra-codeowners.fullname" . }} 8000:{{ .Values.service.port }}
+{{- end }}

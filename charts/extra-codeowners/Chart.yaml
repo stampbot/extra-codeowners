@@ -1,0 +1,22 @@
+apiVersion: v2
+name: extra-codeowners
+description: Deploy the Extra CODEOWNERS GitHub App service
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+kubeVersion: ">=1.27.0-0"
+home: https://github.com/stampbot/extra-codeowners
+sources:
+  - https://github.com/stampbot/extra-codeowners
+maintainers:
+  - name: Extra CODEOWNERS maintainers
+    url: https://github.com/stampbot/extra-codeowners
+annotations:
+  artifacthub.io/category: security
+  artifacthub.io/images: |
+    - name: extra-codeowners
+      image: ghcr.io/stampbot/extra-codeowners:0.1.0
+  artifacthub.io/license: Apache-2.0
+  artifacthub.io/links: |
+    - name: Security policy
+      url: https://github.com/stampbot/extra-codeowners/security/policy

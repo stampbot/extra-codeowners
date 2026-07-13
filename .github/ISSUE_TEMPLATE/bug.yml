@@ -1,0 +1,72 @@
+---
+name: Bug report
+description: Report reproducible incorrect behavior that is not security-sensitive.
+title: "bug: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for helping improve Extra CODEOWNERS. Remove secrets, private
+        repository content, webhook payloads, and organization identifiers from
+        everything you submit here.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Initial checks
+      options:
+        - label: I searched existing issues for this behavior.
+          required: true
+        - label: This report does not disclose a suspected vulnerability.
+          required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Provide a release version or immutable container digest.
+      placeholder: v0.2.1 or sha256:…
+    validations:
+      required: true
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: Deployment method
+      options:
+        - Helm chart
+        - Container directly
+        - Python package
+        - Local development checkout
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: Describe the check conclusion or operational result you expected.
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Describe what happened, including sanitized error text.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction
+      description: Provide the smallest safe sequence that reproduces the issue.
+      placeholder: |
+        1. Configure …
+        2. Open a pull request that …
+        3. Observe …
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Add sanitized logs or configuration excerpts if they are necessary.

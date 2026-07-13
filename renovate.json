@@ -1,0 +1,73 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:best-practices",
+    ":dependencyDashboard",
+    ":semanticCommits"
+  ],
+  "labels": [
+    "dependencies"
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Update PostgreSQL test service images",
+      "managerFilePatterns": [
+        "/^\\.github/workflows/(?:ci|coverage-pages|release)\\.yml$/"
+      ],
+      "matchStrings": [
+        "'postgres:(?<currentValue>[^@\\s]+)@(?<currentDigest>sha256:[a-f0-9]{64})'",
+        "image: postgres:(?<currentValue>[^@\\s]+)@(?<currentDigest>sha256:[a-f0-9]{64})"
+      ],
+      "depNameTemplate": "postgres",
+      "datasourceTemplate": "docker",
+      "versioningTemplate": "docker"
+    },
+    {
+      "customType": "regex",
+      "description": "Update digest-pinned CI utility containers",
+      "managerFilePatterns": [
+        "/^\\.github/workflows/ci\\.yml$/"
+      ],
+      "matchStrings": [
+        "(?<depName>koalaman/shellcheck):(?<currentValue>[^@\\s]+)@(?<currentDigest>sha256:[a-f0-9]{64})",
+        "(?<depName>ghcr.io/yannh/kubeconform):(?<currentValue>[^@\\s]+)@(?<currentDigest>sha256:[a-f0-9]{64})"
+      ],
+      "datasourceTemplate": "docker",
+      "versioningTemplate": "docker"
+    }
+  ],
+  "minimumReleaseAge": "3 days",
+  "osvVulnerabilityAlerts": true,
+  "packageRules": [
+    {
+      "description": "Group non-major Python development dependency updates",
+      "matchDepTypes": [
+        "dependency-groups"
+      ],
+      "matchUpdateTypes": [
+        "minor",
+        "patch"
+      ],
+      "groupName": "Python development dependencies"
+    },
+    {
+      "description": "Let Dependabot own GitHub Actions updates",
+      "matchManagers": [
+        "github-actions"
+      ],
+      "enabled": false
+    },
+    {
+      "description": "Refresh container digests weekly",
+      "matchUpdateTypes": [
+        "digest"
+      ],
+      "schedule": [
+        "before 6am on monday"
+      ]
+    }
+  ],
+  "prConcurrentLimit": 5,
+  "rangeStrategy": "update-lockfile"
+}

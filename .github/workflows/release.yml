@@ -1,0 +1,634 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - v[0-9]*.[0-9]*.[0-9]*
+
+permissions:
+  contents: read
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}
+  UV_FROZEN: "true"
+
+jobs:
+  validate:
+    name: Validate release tag
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate narrow OpenVEX scope
+        run: jq -e -f .github/scripts/validate-openvex.jq .openvex.json >/dev/null
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@6ee6290f1cbc4156c0bdd66691b2c144ef8df19a # v7.4.0
+        with:
+          enable-cache: false
+
+      - name: Validate tag and project version
+        id: version
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "Release tags must point to a commit contained in main." >&2
+            exit 1
+          fi
+          version="${REF_NAME#v}"
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Release tag must have the form vMAJOR.MINOR.PATCH"
+            exit 1
+          fi
+          project_version="$(uv version --short)"
+          if [[ "$project_version" != "$version" ]]; then
+            echo "::error::Tag version $version does not match project version $project_version"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  quality:
+    name: Verify release source
+    needs: validate
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17.7-alpine@sha256:bb377b7239d2774ac8cc76f481596ce96c5a6b5e9d141f6d0a0ee371a6e7c0f2
+        env:
+          POSTGRES_DB: extra_codeowners_test
+          POSTGRES_PASSWORD: extra_codeowners
+          POSTGRES_USER: extra_codeowners
+        options: >-
+          --health-cmd "pg_isready --username=extra_codeowners --dbname=extra_codeowners_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version-file: .python-version
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@6ee6290f1cbc4156c0bdd66691b2c144ef8df19a # v7.4.0
+        with:
+          enable-cache: false
+
+      - name: Set up Helm
+        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
+        with:
+          version: v3.19.0
+
+      - name: Install locked dependencies
+        run: uv sync --all-groups --frozen
+
+      - name: Verify Python source
+        run: |
+          uv run ruff format --check .
+          uv run ruff check .
+          uv run mypy extra_codeowners tests
+
+      - name: Run release tests
+        env:
+          TEST_POSTGRES_URL: >-
+            postgresql+psycopg://extra_codeowners:extra_codeowners@127.0.0.1:5432/extra_codeowners_test
+        run: >-
+          uv run pytest
+          --cov=extra_codeowners
+          --cov-branch
+          --cov-report=term-missing
+          --cov-report=xml
+          --cov-fail-under=85
+
+      - name: Build documentation in strict mode
+        run: uv run mkdocs build --strict
+
+      - name: Lint Helm chart
+        run: |
+          cmp --silent LICENSE charts/extra-codeowners/LICENSE
+          helm lint charts/extra-codeowners
+
+  security-scan:
+    name: Scan release candidate (${{ matrix.architecture }})
+    needs: validate
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: amd64
+            platform: linux/amd64
+          - architecture: arm64
+            platform: linux/arm64
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
+
+      - name: Build release candidate without publishing
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+        with:
+          context: .
+          load: true
+          platforms: ${{ matrix.platform }}
+          push: false
+          tags: extra-codeowners:release-candidate-${{ matrix.architecture }}
+          cache-from: type=gha,scope=main
+          build-args: |
+            VCS_REF=${{ github.sha }}
+            VERSION=${{ needs.validate.outputs.version }}
+
+      - name: Smoke test hardened release candidate
+        run: >-
+          bash .github/scripts/smoke-container.sh
+          extra-codeowners:release-candidate-${{ matrix.architecture }}
+          ${{ matrix.architecture }}
+          extra-codeowners-release-smoke-${{ matrix.architecture }}
+
+      - name: Inventory all high-severity vulnerabilities
+        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0
+        with:
+          image: extra-codeowners:release-candidate-${{ matrix.architecture }}
+          fail-build: false
+          only-fixed: false
+          output-file: vulnerability-report-${{ matrix.architecture }}.json
+          output-format: json
+          severity-cutoff: high
+          vex: .openvex.json
+
+      - name: Upload vulnerability inventory
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-vulnerability-report-${{ matrix.architecture }}
+          path: vulnerability-report-${{ matrix.architecture }}.json
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Enforce fixable high-severity vulnerability gate
+        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0
+        with:
+          image: extra-codeowners:release-candidate-${{ matrix.architecture }}
+          fail-build: true
+          only-fixed: true
+          output-format: table
+          severity-cutoff: high
+          vex: .openvex.json
+
+  python:
+    name: Build and attest Python artifacts
+    needs:
+      - validate
+      - quality
+      - security-scan
+      - image
+    runs-on: ubuntu-latest
+    permissions:
+      attestations: write
+      contents: read
+      id-token: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version-file: .python-version
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@6ee6290f1cbc4156c0bdd66691b2c144ef8df19a # v7.4.0
+        with:
+          enable-cache: false
+
+      - name: Install locked dependencies
+        run: uv sync --all-groups --frozen
+
+      - name: Build source and wheel distributions
+        run: uv build
+
+      - name: Attest Python artifacts
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: |
+            dist/*.whl
+            dist/*.tar.gz
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Sign Python artifacts
+        run: |
+          for artifact in dist/*.whl dist/*.tar.gz; do
+            cosign sign-blob --yes --bundle "${artifact}.sigstore.json" "${artifact}"
+          done
+
+      - name: Upload Python artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: python-distributions
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  image:
+    name: Publish release image
+    needs:
+      - validate
+      - quality
+      - security-scan
+    runs-on: ubuntu-latest
+    permissions:
+      attestations: write
+      contents: read
+      id-token: write
+      packages: write
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
+
+      - name: Log in to GHCR
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set image metadata
+        id: metadata
+        uses: docker/metadata-action@80c7e94dd9b9319bd5eb7a0e0fe9291e23a2a2e9 # v6.1.0
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+          labels: |
+            org.opencontainers.image.title=Extra CODEOWNERS
+            org.opencontainers.image.description=Delegated GitHub App approvals for CODEOWNERS policy
+
+      - name: Build and push image
+        id: build
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ env.IMAGE }}:release-candidate-${{ github.sha }}
+          labels: ${{ steps.metadata.outputs.labels }}
+          cache-from: type=gha,scope=main
+          provenance: mode=max
+          sbom: true
+          build-args: |
+            VCS_REF=${{ github.sha }}
+            VERSION=${{ needs.validate.outputs.version }}
+
+      - name: Extract per-platform SPDX SBOMs
+        id: platforms
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          image="${IMAGE}@${DIGEST}"
+          raw_manifest="$(docker buildx imagetools inspect "$image" --raw)"
+
+          for architecture in amd64 arm64; do
+            platform_digest="$(
+              jq -er --arg architecture "$architecture" '
+                [.manifests[]
+                 | select(
+                     .platform.os == "linux"
+                     and .platform.architecture == $architecture
+                   )]
+                | if length == 1
+                  then .[0].digest
+                  else error("expected exactly one platform manifest")
+                  end
+              ' <<<"$raw_manifest"
+            )"
+            echo "${architecture}_digest=${platform_digest}" >> "$GITHUB_OUTPUT"
+
+            docker buildx imagetools inspect "$image" \
+              --format "{{ json (index .SBOM \"linux/${architecture}\").SPDX }}" \
+              | jq -e 'select(.SPDXID == "SPDXRef-DOCUMENT")' \
+              > "image-sbom-linux-${architecture}.spdx.json"
+          done
+
+      - name: Generate platform-source scan VEX
+        env:
+          AMD64_DIGEST: ${{ steps.platforms.outputs.amd64_digest }}
+          ARM64_DIGEST: ${{ steps.platforms.outputs.arm64_digest }}
+        run: |
+          timestamp="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          amd64_product="${IMAGE}@${AMD64_DIGEST}"
+          arm64_product="${IMAGE}@${ARM64_DIGEST}"
+          jq \
+            --arg document_id \
+              "https://github.com/stampbot/extra-codeowners/security/vex/release-scan/${GITHUB_SHA}" \
+            --arg amd64_product "$amd64_product" \
+            --arg arm64_product "$arm64_product" \
+            --arg timestamp "$timestamp" \
+            '.["@id"] = $document_id
+             | .timestamp = $timestamp
+             | .statements[0].timestamp = $timestamp
+             | .statements[0].products = [
+                 {
+                   "@id": $amd64_product,
+                   "subcomponents": [{"@id": "pkg:generic/python@3.14.6"}]
+                 },
+                 {
+                   "@id": $arm64_product,
+                   "subcomponents": [{"@id": "pkg:generic/python@3.14.6"}]
+                 }
+               ]' \
+            .openvex.json > release-scan.openvex.json
+
+      - name: Scan published amd64 candidate digest
+        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0
+        with:
+          image: ${{ env.IMAGE }}@${{ steps.platforms.outputs.amd64_digest }}
+          fail-build: true
+          only-fixed: true
+          output-format: table
+          severity-cutoff: high
+          vex: release-scan.openvex.json
+
+      - name: Scan published arm64 candidate digest
+        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0
+        with:
+          image: ${{ env.IMAGE }}@${{ steps.platforms.outputs.arm64_digest }}
+          fail-build: true
+          only-fixed: true
+          output-format: table
+          severity-cutoff: high
+          vex: release-scan.openvex.json
+
+      - name: Generate digest-bound OpenVEX document
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          timestamp="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          product="pkg:oci/extra-codeowners@${DIGEST}"
+          jq \
+            --arg document_id \
+              "https://github.com/stampbot/extra-codeowners/security/vex/v${VERSION}/CVE-2026-15308" \
+            --arg product "$product" \
+            --arg timestamp "$timestamp" \
+            '.["@id"] = $document_id
+             | .timestamp = $timestamp
+             | .statements[0].timestamp = $timestamp
+             | .statements[0].products = [{
+                 "@id": $product,
+                 "subcomponents": [{"@id": "pkg:generic/python@3.14.6"}]
+               }]' \
+            .openvex.json > "extra-codeowners-${VERSION}.openvex.json"
+
+      - name: Attest image provenance
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+      - name: Attest amd64 image SBOM
+        uses: actions/attest-sbom@4651f806c01d8637787e274ac3bdf724ef169f34 # v3.0.0
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.platforms.outputs.amd64_digest }}
+          sbom-path: image-sbom-linux-amd64.spdx.json
+          push-to-registry: true
+
+      - name: Attest arm64 image SBOM
+        uses: actions/attest-sbom@4651f806c01d8637787e274ac3bdf724ef169f34 # v3.0.0
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.platforms.outputs.arm64_digest }}
+          sbom-path: image-sbom-linux-arm64.spdx.json
+          push-to-registry: true
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Sign image and security metadata
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          cosign sign --yes "${IMAGE}@${DIGEST}"
+          cosign attest --yes \
+            --type openvex \
+            --predicate "extra-codeowners-${VERSION}.openvex.json" \
+            "${IMAGE}@${DIGEST}"
+          for sbom in image-sbom-linux-*.spdx.json; do
+            cosign sign-blob --yes \
+              --bundle "${sbom}.sigstore.json" \
+              "$sbom"
+          done
+          cosign sign-blob --yes \
+            --bundle "extra-codeowners-${VERSION}.openvex.json.sigstore.json" \
+            "extra-codeowners-${VERSION}.openvex.json"
+
+      - name: Upload SBOM and VEX
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: image-security-metadata
+          path: |
+            image-sbom-linux-*.spdx.json
+            image-sbom-linux-*.spdx.json.sigstore.json
+            extra-codeowners-*.openvex.json
+            extra-codeowners-*.openvex.json.sigstore.json
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Add release tags to the verified image
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          RELEASE_TAGS: ${{ steps.metadata.outputs.tags }}
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          immutable_tag="${IMAGE}:${VERSION}"
+          while IFS= read -r tag; do
+            if [[ -z "$tag" ]]; then
+              continue
+            fi
+            existing_digest="$(
+              docker buildx imagetools inspect "$tag" 2>/dev/null \
+                | awk '$1 == "Digest:" { print $2; exit }' \
+                || true
+            )"
+            if [[ "$tag" == "$immutable_tag" \
+              && -n "$existing_digest" \
+              && "$existing_digest" != "$DIGEST" ]]; then
+              echo "Refusing to move existing release tag $tag from $existing_digest." >&2
+              exit 1
+            fi
+            if [[ "$existing_digest" == "$DIGEST" ]]; then
+              continue
+            fi
+            docker buildx imagetools create \
+              --tag "$tag" \
+              "${IMAGE}@${DIGEST}"
+            tagged_digest=""
+            for _ in $(seq 1 10); do
+              tagged_digest="$(
+                docker buildx imagetools inspect "$tag" 2>/dev/null \
+                  | awk '$1 == "Digest:" { print $2; exit }' \
+                  || true
+              )"
+              if [[ "$tagged_digest" == "$DIGEST" ]]; then
+                break
+              fi
+              sleep 2
+            done
+            if [[ "$tagged_digest" != "$DIGEST" ]]; then
+              echo "Release tag $tag resolved to $tagged_digest, expected $DIGEST." >&2
+              exit 1
+            fi
+          done <<< "$RELEASE_TAGS"
+
+  chart:
+    name: Package and publish Helm chart
+    needs:
+      - validate
+      - quality
+      - security-scan
+      - image
+    runs-on: ubuntu-latest
+    permissions:
+      attestations: write
+      contents: read
+      id-token: write
+      packages: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Helm
+        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
+        with:
+          version: v3.19.0
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Lint and package chart
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          old_image='image: ghcr.io/stampbot/extra-codeowners:[^[:space:]]*'
+          new_image="image: ghcr.io/stampbot/extra-codeowners:${VERSION}"
+          sed -i "s#${old_image}#${new_image}#" charts/extra-codeowners/Chart.yaml
+          sed -i \
+            "s/--version 0\.1\.0/--version ${VERSION}/g" \
+            charts/extra-codeowners/README.md
+          helm lint charts/extra-codeowners
+          mkdir -p dist
+          helm package charts/extra-codeowners \
+            --version "$VERSION" \
+            --app-version "$VERSION" \
+            --destination dist
+
+      - name: Attest chart package
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: dist/extra-codeowners-*.tgz
+
+      - name: Sign chart package
+        run: |
+          for chart in dist/*.tgz; do
+            cosign sign-blob --yes --bundle "${chart}.sigstore.json" "${chart}"
+          done
+
+      - name: Log in to GHCR
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push chart to OCI registry
+        run: helm push dist/extra-codeowners-*.tgz oci://ghcr.io/${{ github.repository_owner }}/charts
+
+      - name: Sign chart in OCI registry
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: >-
+          cosign sign --yes
+          "ghcr.io/${{ github.repository_owner }}/charts/extra-codeowners:${VERSION}"
+
+      - name: Upload chart artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: helm-chart
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: Create GitHub release
+    needs:
+      - python
+      - image
+      - chart
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download Python artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: python-distributions
+          path: release-artifacts
+
+      - name: Download image security metadata
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: image-security-metadata
+          path: release-artifacts
+
+      - name: Download Helm chart
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: helm-chart
+          path: release-artifacts
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
+        with:
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: release-artifacts/**

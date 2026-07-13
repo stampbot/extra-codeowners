@@ -1,0 +1,81 @@
+[tools]
+actionlint = "1.7.12"
+helm = "3.19.0"
+jq = "1.8.1"
+node = "24"
+python = "3.12"
+shellcheck = "0.11.0"
+uv = "0.11.28"
+"npm:markdownlint-cli2" = "0.20.0"
+
+[settings]
+experimental = true
+idiomatic_version_file_enable_tools = ["python"]
+
+[tasks.bootstrap]
+description = "Install all locked Python dependencies"
+run = "uv sync --all-groups --frozen"
+
+[tasks.format]
+description = "Format Python sources"
+run = "uv run ruff format ."
+
+[tasks.lint]
+description = "Run source and workflow linters"
+depends = ["lint:python", "lint:workflows", "lint:yaml", "lint:markdown"]
+
+[tasks."lint:python"]
+run = [
+  "uv run ruff format --check .",
+  "uv run ruff check .",
+  "uv run mypy extra_codeowners tests",
+]
+
+[tasks."lint:workflows"]
+run = [
+  "actionlint",
+  "shellcheck .github/scripts/smoke-container.sh",
+  "jq -e -f .github/scripts/validate-openvex.jq .openvex.json > /dev/null",
+]
+
+[tasks."lint:yaml"]
+run = "uv run yamllint ."
+
+[tasks."lint:markdown"]
+run = "markdownlint-cli2 '**/*.md' '#site/**' '#.venv/**'"
+
+[tasks.test]
+description = "Run all locally available tests without enforcing coverage"
+run = "uv run pytest --no-cov"
+
+[tasks."test:coverage"]
+description = "Run the complete PostgreSQL suite and enforce branch coverage"
+run = '''
+if [ -z "${TEST_POSTGRES_URL:-}" ]; then
+  echo "TEST_POSTGRES_URL must point to a disposable database whose name ends in _test." >&2
+  exit 2
+fi
+uv run pytest \
+  --cov=extra_codeowners \
+  --cov-branch \
+  --cov-report=term-missing \
+  --cov-report=xml \
+  --cov-report=html \
+  --cov-fail-under=85
+'''
+
+[tasks.docs]
+description = "Build documentation in strict mode"
+run = "uv run mkdocs build --strict"
+
+[tasks.helm]
+description = "Lint and render the Helm chart"
+run = [
+  "cmp --silent LICENSE charts/extra-codeowners/LICENSE",
+  "helm lint charts/extra-codeowners",
+  "helm template extra-codeowners charts/extra-codeowners > /dev/null",
+]
+
+[tasks.check]
+description = "Run the local pull-request checks"
+depends = ["lint", "test", "docs", "helm"]

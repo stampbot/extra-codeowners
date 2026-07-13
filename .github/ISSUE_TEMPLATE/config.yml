@@ -1,0 +1,9 @@
+---
+blank_issues_enabled: false
+contact_links:
+  - name: Ask a usage or deployment question
+    url: https://github.com/stampbot/extra-codeowners/discussions
+    about: Use Discussions for support and policy-design questions.
+  - name: Report a vulnerability privately
+    url: https://github.com/stampbot/extra-codeowners/security/advisories/new
+    about: Do not disclose suspected vulnerabilities in a public issue.

@@ -1,0 +1,12 @@
+# Default review owner.
+* @dannysauer
+
+# Security-sensitive policy and delivery surfaces require explicit ownership.
+/.github/ @dannysauer
+/charts/ @dannysauer
+/.openvex.json @dannysauer
+/Dockerfile @dannysauer
+/SECURITY.md @dannysauer
+/extra_codeowners/ @dannysauer
+/pyproject.toml @dannysauer
+/uv.lock @dannysauer

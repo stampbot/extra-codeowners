@@ -1,0 +1,52 @@
+site_name: Extra CODEOWNERS
+site_description: Delegate narrowly scoped CODEOWNERS approvals to trusted GitHub Apps.
+site_url: https://extra-codeowners.readthedocs.io/
+repo_url: https://github.com/stampbot/extra-codeowners
+repo_name: stampbot/extra-codeowners
+edit_uri: edit/main/docs/
+strict: true
+
+theme:
+  name: material
+  features:
+    - navigation.indexes
+    - navigation.sections
+    - content.action.edit
+
+plugins:
+  - search
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+
+nav:
+  - Home: index.md
+  - Tutorial:
+      - Development installation: tutorials/development-installation.md
+  - How-to guides:
+      - Register a GitHub App: how-to/register-app.md
+      - Configure policy: how-to/configure.md
+      - Prepare repository rules: how-to/prepare-repository-rules.md
+      - Deploy: how-to/deploy.md
+      - Operate and recover: how-to/operate.md
+  - Reference:
+      - Configuration: reference/configuration.md
+      - Checks and evaluation: reference/checks.md
+      - Command line: reference/cli.md
+      - GitHub permissions and events: reference/github-permissions.md
+      - HTTP API: reference/http-api.md
+  - Explanation:
+      - Native CODEOWNERS comparison: explanation/native-codeowners.md
+      - Architecture: explanation/architecture.md
+      - Threat model: explanation/threat-model.md

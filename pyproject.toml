@@ -1,0 +1,113 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "extra-codeowners"
+version = "0.1.0"
+description = "A GitHub App that accepts delegated application approvals in place of selected CODEOWNERS"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "Apache-2.0"
+authors = [{ name = "Extra CODEOWNERS contributors" }]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Framework :: FastAPI",
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Typing :: Typed",
+]
+dependencies = [
+  "cryptography>=44.0.0,<49",
+  "fastapi>=0.115.0,<1",
+  "httpx>=0.28.0,<1",
+  "prometheus-client>=0.21.0,<1",
+  "psycopg[binary]>=3.2.0,<4",
+  "pydantic-settings>=2.7.0,<3",
+  "pyjwt[crypto]>=2.10.0,<3",
+  "sqlalchemy>=2.0.36,<3",
+  "structlog>=24.4.0,<26",
+  "typer>=0.15.0,<1",
+  "uvicorn>=0.34.0,<1",
+]
+
+[project.urls]
+Documentation = "https://extra-codeowners.readthedocs.io/"
+Issues = "https://github.com/stampbot/extra-codeowners/issues"
+Repository = "https://github.com/stampbot/extra-codeowners"
+Security = "https://github.com/stampbot/extra-codeowners/security/policy"
+
+[project.scripts]
+extra-codeowners = "extra_codeowners.cli:main"
+
+[dependency-groups]
+dev = [
+  "httpx2>=2.5.0,<3",
+  "mypy>=1.14.0,<2",
+  "pre-commit>=4.0.0,<5",
+  "pytest>=8.3.0,<10",
+  "pytest-asyncio>=0.25.0,<2",
+  "pytest-cov>=6.0.0,<8",
+  "respx>=0.22.0,<1",
+  "ruff>=0.9.0,<1",
+  "yamllint>=1.38.0,<2",
+]
+docs = [
+  "mkdocs>=1.6.0,<2",
+  "mkdocs-material>=9.5.0,<10",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["extra_codeowners"]
+
+[tool.pytest.ini_options]
+addopts = "--strict-config --strict-markers --cov=extra_codeowners --cov-branch --cov-report=term-missing --cov-report=xml"
+asyncio_mode = "auto"
+testpaths = ["tests"]
+markers = [
+  "integration: tests with a database or simulated GitHub API",
+  "live: tests that access live external services",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["extra_codeowners"]
+omit = ["extra_codeowners/__main__.py"]
+
+[tool.coverage.report]
+fail_under = 85
+show_missing = true
+skip_covered = true
+exclude_also = [
+  "if TYPE_CHECKING:",
+  "if __name__ == .__main__.:",
+  "raise NotImplementedError",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["A", "ASYNC", "B", "C4", "DTZ", "E", "F", "I", "N", "PERF", "PIE", "RUF", "S", "SIM", "T20", "UP", "W"]
+ignore = ["S101"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S105", "S106"]
+
+[tool.ruff.format]
+docstring-code-format = true
+quote-style = "double"
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unreachable = true
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = ["prometheus_client.*"]
+ignore_missing_imports = true
