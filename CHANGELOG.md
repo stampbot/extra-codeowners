@@ -1,26 +1,44 @@
 # Changelog
 
-All notable changes to Extra CODEOWNERS will be documented in this file.
+This file records notable changes to Extra CODEOWNERS.
 
-The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before `1.0.0`, incompatible interfaces may change with release notes.
+The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before `1.0.0`, release notes may describe incompatible interface changes.
 
 ## [Unreleased]
 
 ### Added
 
-- GitHub App service with signed webhook ingestion, Check Runs, health endpoints, Prometheus metrics, and an optional App Manifest setup flow.
-- Strict CODEOWNERS and Extra CODEOWNERS policy models with human-or-application evaluation on exact pull-request revisions.
-- Organization App enrollment, repository path and owner delegation, label restrictions, and non-delegable security paths.
-- Database-backed delivery deduplication, latest-generation evaluation and authority fan-out queues, indefinite retries with bounded delay, audit evidence, direct base, policy, label, membership, team, organization, installation, target-repository and policy-repository lifecycle invalidation, and scheduled open-pull-request reconciliation.
-- Opt-in, no-noise repository enrollment and a bounded webhook-triggered fast path for revoking managed successes, backed by durable worker evaluation and replay-safe invalidation recovery.
-- Blocking `in_progress` checks with pre- and post-publication generation guards, plus configurable webhook-delivery retention.
-- Enqueue-time installation authority epochs that permanently fence work queued before an accepted broad authority or repository-identity change.
-- Conservative installation-wide fencing when the organization-policy repository is removed from App selection or repository-removal evidence is malformed; well-formed ordinary-target removals remain an access-loss handoff.
-- Broad-first authority scheduling, repository-wide preemption of base-specific pushes, and conservative repository-wide collapse after 100 distinct base-ref rows.
-- Automatic reactivation of terminal rows created by pre-release builds; current evaluation and authority failures remain pending and retry indefinitely so revocation work is never abandoned.
-- Publication-time fail-closed handling when one head commit is already shared by multiple open pull requests.
-- Production startup validation requiring hostname-verified `sslmode=verify-full` for non-local PostgreSQL, plus hardened HTTPS App Manifest setup requirements.
-- Reproducible uv and mise development environment, non-root container, preview Helm chart, and initial CI and supply-chain workflows.
-- Diataxis documentation, security model, operating guidance, and ReadTheDocs configuration.
+- GitHub App service with signed webhook ingestion and Check Runs.
+- Health endpoints, Prometheus metrics, and an optional App Manifest setup flow.
+- Strict models for `CODEOWNERS`, organization policy, and repository policy.
+- Human-or-application evaluation against exact pull-request revisions.
+- Organization enrollment by App identity.
+- Repository delegation by path, CODEOWNER, and label.
+- Built-in and organization-defined non-delegable paths.
+- Database-backed webhook delivery deduplication.
+- Evaluation queues that retain the latest generation for a pull request.
+- Authority fan-out queues with bounded backoff and indefinite retries.
+- Audit evidence tied to the delivery and evaluation that produced it.
+- Invalidation for base-branch, policy, label, membership, team, organization, installation, and repository lifecycle changes.
+- Scheduled reconciliation of open pull requests.
+- Explicit repository opt-in that stays silent when no policy or managed check exists.
+- A bounded webhook fast path that moves an existing success back to `in_progress`.
+- Durable worker recovery when fast invalidation fails.
+- Generation guards before and after check publication.
+- Configurable webhook-delivery retention.
+- Installation authority epochs that permanently fence older queued work.
+- Installation-wide fencing when the organization-policy repository is removed, or when repository-removal evidence is missing or malformed.
+- A documented handoff for ordinary repository removal after the App loses access.
+- Broad authority work scheduled ahead of base-specific work.
+- Repository-wide work that replaces older base-specific rows.
+- Conservative repository-wide collapse after 100 distinct base-ref rows.
+- Reactivation of terminal rows left by older builds.
+- Evaluation and authority failures that remain pending until recovery.
+- Failure when multiple open pull requests already share a head commit.
+- Hostname-verified PostgreSQL TLS for non-local production databases.
+- HTTPS and secret-strength checks for App Manifest setup.
+- Reproducible uv and mise development tasks.
+- A non-root container, Helm chart source, and supply-chain workflows.
+- Diátaxis documentation, a threat model, operating guides, and Read the Docs configuration.
 
 [Unreleased]: https://github.com/stampbot/extra-codeowners/commits/main

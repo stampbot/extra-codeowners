@@ -1,24 +1,28 @@
 # Extra CODEOWNERS Helm chart
 
 This chart deploys the self-hosted Extra CODEOWNERS GitHub App service. The
-project is still in early development and has no supported hosted service or
-production release. Do not use a preview to authorize production merges. The
-commands below are for reviewers testing a specific checked-out commit.
+repository contains the source chart. No versioned GitHub release, supported
+production release, or hosted service is available.
 
-Successful `main` builds publish signed multi-architecture preview images under
-the mutable `main` tag and a commit-specific `sha-*` tag. When a version tag
-produces a GitHub release, the release workflow also publishes signed
-semantic-versioned images and the chart at
-`oci://ghcr.io/stampbot/charts/extra-codeowners`. Treat the GitHub release and
-its attestations as the authority for whether a version is actually available;
-workflow definitions alone are not evidence that an artifact was published.
+Successful `main` builds publish public, signed multi-architecture development
+images under the mutable `main` tag and a commit-specific `sha-*` tag. A version
+tag that produces a GitHub release also publishes signed semantic-versioned
+images and the chart at
+`oci://ghcr.io/stampbot/charts/extra-codeowners`. No versioned chart is
+available until such a release exists. The GitHub release and its attestations
+define artifact availability; workflow definitions do not prove publication.
+
+The current Check Run design has a documented commit-to-pull-request
+inheritance window. It does not provide native-equivalent production
+enforcement. The commands below test a specific checked-out commit and must not
+be used to authorize production merges.
 
 ## Prerequisites
 
 - Kubernetes 1.27 or later
 - Helm 3.14 or later
 - Docker and an operator-controlled container registry reachable by the cluster
-  when building the image from source
+  when building an image from source
 - an installed Extra CODEOWNERS GitHub App
 - a durable database supported by the application
 - Kubernetes Secrets containing the runtime environment variables and mounted
@@ -27,22 +31,28 @@ workflow definitions alone are not evidence that an artifact was published.
 - an ingress controller or another way for GitHub to reach the webhook endpoint
   over HTTPS
 
-The chart does not create application secrets or a database. It also does not
-install an ingress controller, issue TLS certificates, or run a pre-upgrade
-migration Job. The current application initializes missing tables during
-startup, but it has no supported schema migration or database rollback contract.
-The chart always sets `EXTRA_CODEOWNERS_ENVIRONMENT=production`; the runtime
-Secret must override the container's development-only SQLite database URL with a
-PostgreSQL URL. Do not redefine chart-managed environment variables through
-`extraEnv`.
+The chart does not provide these resources or operations:
 
-## Build a preview image
+- application Secrets
+- a database
+- an ingress controller
+- TLS certificates
+- a pre-upgrade migration Job.
 
-The following commands run from the repository root. `IMAGE_REPOSITORY` is an
-operator-controlled registry path; the reserved `example.com` hostname must be
-replaced. `IMAGE_TAG` is the reviewed Git commit and must not be reused for a
-different image. Authenticate Docker and the cluster to the selected registry
-before continuing.
+The application initializes missing tables during startup. It has no supported
+schema migration or database rollback contract.
+
+The chart sets `EXTRA_CODEOWNERS_ENVIRONMENT=production`. The runtime Secret
+must replace the container's development-only SQLite URL with a PostgreSQL URL.
+`extraEnv` rejects chart-managed environment variables.
+
+## Build an image from source
+
+Run these commands from the repository root. `IMAGE_REPOSITORY` must name an
+operator-controlled registry path that the cluster can reach. Replace the
+reserved `example.com` hostname. `IMAGE_TAG` identifies the reviewed Git commit
+and must not be reused for another image. Docker and the cluster must already be
+authenticated to the selected registry.
 
 ```shell
 export IMAGE_REPOSITORY="registry.example.com/example/extra-codeowners"
@@ -51,28 +61,33 @@ docker build --tag "${IMAGE_REPOSITORY}:${IMAGE_TAG}" .
 docker push "${IMAGE_REPOSITORY}:${IMAGE_TAG}"
 ```
 
-Record the digest returned by the registry. This local source-build workflow
-does not produce a signature or provenance attestation. CI-published preview and
+The registry returns the image digest. Record it. This local source build does
+not create a signature or provenance attestation. CI-published development and
 release images have workflow-identity signatures and provenance attestations.
+
+Export the digest returned by the registry, including its `sha256:` prefix:
+
+```shell
+export IMAGE_DIGEST="sha256:REPLACE_WITH_REGISTRY_DIGEST"
+```
 
 ## Install the source chart
 
-The following commands use `extra-codeowners` as both the Helm release and
-Kubernetes namespace. `RUNTIME_ENV_FILE` is a local file containing the required
-environment variables in `KEY=value` format, including the database URL and
-these two file settings:
+The commands use `extra-codeowners` as both the Helm release and Kubernetes
+namespace. `RUNTIME_ENV_FILE` contains the required environment variables in
+`KEY=value` format. It includes the database URL and these file settings:
 
 ```text
 EXTRA_CODEOWNERS_GITHUB_PRIVATE_KEY_FILE=/run/secrets/extra-codeowners/github-private-key
 EXTRA_CODEOWNERS_GITHUB_WEBHOOK_SECRET_FILE=/run/secrets/extra-codeowners/github-webhook-secret
 ```
 
-Keep that file and both credential source files outside version control and
-restrict their filesystem permissions. Create separate Secrets for environment
-variables and mounted credential files:
+The environment file and both credential source files must remain outside
+version control with restricted filesystem permissions. The deployment uses
+separate Secrets for environment variables and mounted credential files:
 
 ```shell
-export RUNTIME_ENV_FILE="$HOME/.config/extra-codeowners/preview.env"
+export RUNTIME_ENV_FILE="$HOME/.config/extra-codeowners/runtime.env"
 export GITHUB_PRIVATE_KEY_FILE="$HOME/.config/extra-codeowners/private-key.pem"
 export GITHUB_WEBHOOK_SECRET_FILE="$HOME/.config/extra-codeowners/webhook-secret"
 kubectl create namespace extra-codeowners
@@ -106,13 +121,21 @@ helm install extra-codeowners \
   --namespace extra-codeowners \
   --values deployment-values.yaml \
   --set-string image.repository="$IMAGE_REPOSITORY" \
-  --set-string image.tag="$IMAGE_TAG"
+  --set-string image.digest="$IMAGE_DIGEST"
 ```
 
-Do not pass secret values with `--set`; shell history and Helm release metadata
-may retain them. A successful install creates a Deployment, Service,
-ServiceAccount, and ingress NetworkPolicy. The application will not become
-ready until its GitHub App and persistence configuration are valid.
+Secret values must not be passed with `--set`. Shell history and Helm release
+metadata may retain them.
+
+A successful install creates:
+
+- a Deployment
+- a Service
+- a ServiceAccount
+- an ingress NetworkPolicy.
+
+The application remains unready until its GitHub App and persistence
+configuration are valid.
 
 ## Verify
 
@@ -125,9 +148,9 @@ helm test extra-codeowners --namespace extra-codeowners
 kubectl --namespace extra-codeowners get pods,service,networkpolicy
 ```
 
-If rollout fails, inspect sanitized pod events and logs. Never copy App private
-keys, webhook secrets, installation tokens, or private webhook payloads into an
-issue.
+If rollout fails, the following commands show pod events and logs. Output must
+be sanitized before sharing. App private keys, webhook secrets, installation
+tokens, and private webhook payloads must not appear in an issue.
 
 ```shell
 kubectl --namespace extra-codeowners describe deployment/extra-codeowners
@@ -137,9 +160,9 @@ kubectl --namespace extra-codeowners logs \
 
 ## Expose the webhook securely
 
-Enable the Ingress only after an ingress controller and TLS issuer exist. Replace
+Ingress requires an installed ingress controller and TLS issuer. Replace
 `extra-codeowners.example.com` with the public hostname registered in the GitHub
-App. The Secret `extra-codeowners-tls` must contain a certificate valid for that
+App. The `extra-codeowners-tls` Secret must contain a certificate valid for that
 hostname.
 
 ```yaml
@@ -157,10 +180,10 @@ ingress:
         - extra-codeowners.example.com
 ```
 
-Apply the file as `ingress-values.yaml` during install or upgrade:
+Save the file as `ingress-values.yaml`, then apply it to the existing release:
 
 ```shell
-helm upgrade --install extra-codeowners \
+helm upgrade extra-codeowners \
   ./charts/extra-codeowners \
   --namespace extra-codeowners \
   --reset-then-reuse-values \
@@ -168,24 +191,28 @@ helm upgrade --install extra-codeowners \
 ```
 
 The default NetworkPolicy permits traffic to the HTTP port from any network
-peer so that ingress-controller deployments work across common topologies.
-Restrict `networkPolicy.ingressFrom` to the ingress controller's namespace and
-pod selectors when your cluster labels are known. Keep `/metrics`, health
-endpoints, and setup routes off the public Ingress; use an authenticated
-operator route or port forwarding when you need them.
+peer. This supports ingress controllers across common cluster topologies.
+`networkPolicy.ingressFrom` can restrict access to the controller's namespace
+and pod selectors when those labels are known.
+
+The public Ingress must not expose `/metrics`, health endpoints, or setup
+routes. Access to those endpoints requires an authenticated operator route or
+port forwarding.
 
 ## Upgrade and roll back
 
-Back up the database using its native tools before testing another commit. Read
-the changed code and documentation for schema compatibility; the source chart
-has no migration hook, and Helm rollback cannot reverse application startup
-changes. The default `Recreate` strategy prevents old and new application
-versions from using the database concurrently, at the cost of a short webhook
-processing pause. GitHub does not automatically redeliver failed webhook
-deliveries. After recovery, inspect and manually redeliver failures; periodic
-reconciliation provides a separate path for open pull requests to converge.
-Build and push the newly reviewed commit under a new `IMAGE_TAG`, then upgrade
-from the same checkout:
+Before an upgrade, back up the database with its native tools and review the
+changed code and documentation for schema compatibility. The source chart has
+no migration hook. Helm rollback cannot reverse application startup changes.
+
+The default `Recreate` strategy prevents old and new application versions from
+using the database concurrently. It causes a short pause in webhook processing.
+GitHub does not automatically redeliver failed webhook deliveries. After
+recovery, inspect and manually redeliver failures. Periodic reconciliation is a
+separate convergence path for open pull requests.
+
+Build and push the reviewed commit under a new `IMAGE_TAG`. Record its new
+registry digest in `IMAGE_DIGEST`, then upgrade from the same checkout:
 
 ```shell
 helm upgrade extra-codeowners \
@@ -193,7 +220,7 @@ helm upgrade extra-codeowners \
   --namespace extra-codeowners \
   --reset-then-reuse-values \
   --set-string image.repository="$IMAGE_REPOSITORY" \
-  --set-string image.tag="$IMAGE_TAG"
+  --set-string image.digest="$IMAGE_DIGEST"
 kubectl --namespace extra-codeowners rollout status \
   deployment/extra-codeowners --timeout=5m
 ```
@@ -206,67 +233,83 @@ helm history extra-codeowners --namespace extra-codeowners
 helm rollback extra-codeowners REVISION --namespace extra-codeowners --wait
 ```
 
-`REVISION` is the known-good revision shown by `helm history`. A Helm rollback
-does not reverse database changes; use the application-version-specific recovery
-procedure when a migration is not backward-compatible.
+`REVISION` is the known-good revision shown by `helm history`. Helm rollback
+does not reverse database changes. A non-backward-compatible migration requires
+the recovery procedure for that application version.
 
 `--reset-then-reuse-values` starts with the new chart defaults before applying
-the release's existing overrides. This preserves new required safety defaults
-that plain `--reuse-values` can omit. Review `helm get values` and the new
-`values.yaml` before every upgrade; a successful merge is not evidence that an
-old override remains safe.
+the release's existing overrides. Plain `--reuse-values` can omit new safety
+defaults. Every upgrade requires review of `helm get values` and the new
+`values.yaml`. A successful merge does not establish that an old override
+remains safe.
 
 ## Scaling and disruption
 
 The application serves webhooks and executes durable leased work in the same
-process. Database leases are designed to prevent duplicate ownership, but the
-project does not yet claim validated high availability. Keep `replicaCount: 1`,
-autoscaling disabled, and the PodDisruptionBudget disabled until you have tested
-reconciliation, database capacity, webhook routing, and termination behavior in
-your environment.
+process. Database leases are designed to prevent duplicate ownership. High
+availability has not been validated.
 
-The default `Recreate` deployment strategy also remains appropriate until mixed
-application versions have a tested database-compatibility contract. Switch to
-`RollingUpdate` only when that overlap is intentional and validated.
+Until environment-specific validation is complete, use these settings:
 
-When that validation is complete, set at least two replicas before enabling the
-default `podDisruptionBudget.minAvailable: 1`. Enabling the budget with one
-replica can block voluntary node maintenance. The CPU-based autoscaler also
-requires a cluster metrics API and meaningful CPU requests.
+```yaml
+replicaCount: 1
+autoscaling:
+  enabled: false
+podDisruptionBudget:
+  enabled: false
+```
 
-The app currently has no separate worker command, so the chart creates one
-Deployment only. A future chart may split webhook serving and work execution
-after that runtime interface exists.
+Validation must cover reconciliation, database capacity, webhook routing, and
+termination behavior.
+
+The default `Recreate` strategy avoids mixed application versions. A
+`RollingUpdate` requires an intentional and tested database-compatibility
+contract for version overlap.
+
+After validation, `podDisruptionBudget.minAvailable: 1` requires at least two
+replicas. With one replica, the budget can block voluntary node maintenance.
+The CPU-based autoscaler requires a cluster metrics API and meaningful CPU
+requests.
+
+The application has no separate worker command. The chart therefore creates one
+Deployment. Separate webhook and worker Deployments are not supported.
 
 ## Insecure policy override
 
 `allowInsecureChanges: true` sets
-`EXTRA_CODEOWNERS_ALLOW_INSECURE_CHANGES=true` for the process. This removes the
-application's built-in non-delegable path list, allowing an enrolled application
-to satisfy changes to files such as `CODEOWNERS`, Extra CODEOWNERS policy, and
-Stampbot policy (`/stampbot.toml`), GitHub Actions workflows, or
-repository-local actions under `.github/actions/` when a repository delegation
-covers them. It does not remove
-organization-added guardrails or bypass ordinary delegation matching.
+`EXTRA_CODEOWNERS_ALLOW_INSECURE_CHANGES=true` for the process. It removes the
+built-in non-delegable path list. When repository delegation covers them, an
+enrolled application can then satisfy changes to:
 
-The default is `false`. Keep it false unless you intentionally accept the risk
-that an application could approve a change which expands its own authority. The
-setting affects every installation served by the deployment, not one repository.
-The Helm notes print a security warning whenever it is enabled.
+- `CODEOWNERS`
+- Extra CODEOWNERS policy
+- Stampbot policy at `/stampbot.toml`
+- GitHub Actions workflows
+- repository-local actions under `.github/actions/`.
+
+The setting does not remove organization guardrails or bypass delegation
+matching.
+
+The default is `false`. A value of `true` accepts the risk that an application
+can approve a change that expands its authority. The setting affects every
+installation served by the deployment, not one repository. Helm notes print a
+security warning when it is enabled.
 
 ## Egress policy
 
-Egress isolation is off by default because the app must reach GitHub and its
-database, and GitHub API addresses are not a stable Kubernetes CIDR contract. If
-your cluster provides an egress proxy or gateway, set `networkPolicy.egressEnabled`
-and supply complete DNS, GitHub, database, and telemetry rules in
-`networkPolicy.egress`. An empty egress list denies all egress and prevents the
-readiness probe from succeeding.
+Egress isolation is disabled by default. The application must reach GitHub and
+its database, and GitHub API addresses do not form a stable Kubernetes CIDR
+contract.
+
+Clusters with an egress proxy or gateway can set
+`networkPolicy.egressEnabled`. `networkPolicy.egress` must then contain complete
+DNS, GitHub, database, and telemetry rules. An empty list denies all egress and
+prevents the readiness probe from succeeding.
 
 ## Uninstall
 
-Restore repository enforcement before stopping the check publisher. For every
-repository that depends on Extra CODEOWNERS:
+Repository enforcement must be restored before the check publisher stops. For
+every repository that depends on Extra CODEOWNERS:
 
 1. Re-enable GitHub's native **Require review from Code Owners** rule.
 2. Remove `Extra CODEOWNERS / approval` and its expected App source from the
@@ -274,38 +317,43 @@ repository that depends on Extra CODEOWNERS:
 3. Verify the changed rule is active, and use a test pull request to confirm
    that an unapproved owned-file change is blocked.
 
-Only after every dependent repository has passed that verification should you
-stop the service:
+Stop the service only after every dependent repository passes that
+verification:
 
 ```shell
 helm uninstall extra-codeowners --namespace extra-codeowners
 ```
 
-Do not suspend the GitHub App installation, remove repository access, or
-uninstall the App before restoring and verifying native enforcement. Once App
-access or this deployment is gone, Extra CODEOWNERS cannot revoke an earlier
-successful check, and this project does not assume that GitHub invalidates that
-success automatically.
+The GitHub App installation must remain active and retain repository access
+until native enforcement is restored and verified. After App access or the
+deployment is gone, Extra CODEOWNERS cannot revoke an earlier successful check.
+The project does not assume that GitHub invalidates that success automatically.
 
-Uninstalling does not delete the runtime or GitHub credential Secrets, database,
-TLS Secret, or externally managed infrastructure. Remove those only after
-confirming that no other deployment uses them, retaining any required audit
-data, and completing the App-access cleanup in that order.
+Uninstalling does not delete:
+
+- the runtime Secret
+- the GitHub credential Secret
+- the database
+- the TLS Secret
+- externally managed infrastructure.
+
+These resources can be removed after confirming that no other deployment uses
+them, retaining required audit data, and completing App-access cleanup in that
+order.
 
 ## Values
 
-The following table describes every value. The [values file](values.yaml) keeps
-the same descriptions beside the defaults, and
-[values.schema.json](values.schema.json) validates types, bounds, accepted
-enums, and unknown top-level properties during `helm install`, `helm upgrade`,
-`helm lint`, and `helm template`.
+The table describes every chart value. The [values file](values.yaml) repeats
+the descriptions beside each default. [values.schema.json](values.schema.json)
+validates types, bounds, accepted enums, and unknown top-level properties during
+`helm install`, `helm upgrade`, `helm lint`, and `helm template`.
 
 | Value | Type | Default | Purpose |
 | --- | --- | --- | --- |
 | `replicaCount` | integer | `1` | API/worker pods when autoscaling is off. |
 | `revisionHistoryLimit` | integer | `3` | Old ReplicaSets retained for rollback. |
 | `deploymentStrategy` | object | `Recreate` | Deployment replacement strategy; avoids overlapping application versions by default. |
-| `image.repository` | string | `ghcr.io/stampbot/extra-codeowners` | Container repository used by CI preview and tagged release images. |
+| `image.repository` | string | `ghcr.io/stampbot/extra-codeowners` | Container repository used by CI development and tagged release images. |
 | `image.pullPolicy` | enum | `IfNotPresent` | Kubernetes image pull policy. |
 | `image.tag` | string | empty | Image tag; an empty value uses chart `appVersion`. |
 | `image.digest` | string | empty | `sha256:` digest that takes precedence over the tag. |
@@ -366,14 +414,14 @@ enums, and unknown top-level properties during `helm install`, `helm upgrade`,
 | `affinity` | object | `{}` | Pod and node affinity rules. |
 | `topologySpreadConstraints` | array | `[]` | Failure-domain distribution rules. |
 
-Security-relevant defaults include:
+Security-relevant defaults are:
 
-- a dedicated ServiceAccount with API token automounting disabled;
-- non-root execution with all Linux capabilities dropped;
-- a read-only root filesystem and runtime-default seccomp profile;
-- HTTP liveness and dependency-aware readiness probes;
-- the insecure policy override disabled;
-- no chart-managed Secret or credential value; and
+- a dedicated ServiceAccount with API token automounting disabled
+- non-root execution with all Linux capabilities dropped
+- a read-only root filesystem and runtime-default seccomp profile
+- HTTP liveness and dependency-aware readiness probes
+- the insecure policy override disabled
+- no chart-managed Secret or credential value
 - an ingress NetworkPolicy limited to the application port.
 
 [configuration]: https://github.com/stampbot/extra-codeowners/blob/main/docs/reference/configuration.md

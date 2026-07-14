@@ -1,26 +1,44 @@
 # Threat model
 
-Extra CODEOWNERS participates in merge authorization. Treat a false success as a security incident, not a cosmetic CI defect.
+Extra CODEOWNERS helps decide whether a pull request may merge. The failure that
+matters is a false success: the check says an owner approved work when no
+eligible owner did. Treat that as a security incident, not a flaky-CI problem.
 
-This threat model covers the self-hosted GitHub App design. A future multi-tenant hosted service will require additional tenant-isolation, billing, abuse, and privacy analysis before launch.
+This threat model covers the self-hosted GitHub App. A multi-tenant hosted
+service does not exist yet. Before one can launch, its design must add explicit
+analysis for tenant isolation, billing, abuse, and privacy.
 
 ## Assets
 
-The system protects:
+The service protects five things:
 
-- repository merge policy and the integrity of required checks;
-- GitHub App private keys, webhook secrets, setup-state secrets, and short-lived installation tokens;
-- organization application enrollment and repository delegation policy;
-- private repository metadata, paths, ownership, review, and team-membership evidence; and
-- durable queue and audit records used to explain decisions.
+- repository merge policy and the integrity of required checks
+- GitHub App private keys, webhook secrets, setup-state secrets, and short-lived
+  installation tokens
+- organization App enrollment and repository delegation policy
+- private repository metadata, including paths, ownership, reviews, and team
+  membership
+- durable queue and audit records that explain decisions
 
 ## Trust boundaries
 
-GitHub authenticates an installation and sends signed webhook requests. The public webhook endpoint crosses into the operator's service. Workers cross back into GitHub using installation-scoped tokens. Organization administrators define trusted App identities; repository maintainers may only delegate those identities within organization guardrails.
+GitHub authenticates an installation and signs each webhook request. That
+request crosses the public boundary into the operator's service. Workers cross
+back into GitHub with short-lived, installation-scoped tokens.
 
-The database and secret manager are operator-controlled trusted dependencies. Logs, metrics, and check summaries are lower-trust outputs and must not contain credentials or full private payloads.
+People cross a different boundary. Organization administrators decide which
+App identities the organization trusts. Repository maintainers may delegate
+those identities, but only inside the organization's guardrails.
+
+The operator trusts the database and secret manager. Logs, metrics, and check
+summaries have a wider audience, so they are lower-trust outputs. Credentials
+and full private payloads must never reach them.
 
 ## Adversaries and failure modes
+
+No single control carries this design. The table pairs each threat with the
+control that narrows it and the risk that remains afterward. That last column
+is part of the contract.
 
 | Threat | Control | Residual risk |
 | --- | --- | --- |
@@ -37,7 +55,7 @@ The database and secret manager are operator-controlled trusted dependencies. Lo
 | A webhook is missed | Subscribe to authority changes, periodically reconcile accessible open pull requests, and support operator-requested GitHub redelivery | A stale result can remain visible until reconciliation runs |
 | A head or base-branch commit arrives during evaluation | Require exact-head reviews, re-fetch base/head before publishing, and enqueue direct or base-ref fan-out work | GitHub check display remains eventually consistent during rapid updates |
 | Contributor-controlled branch names create an unbounded base-push queue | Coalesce the same base ref; retain at most 100 distinct base-ref rows per installation and repository; collapse overflow to one conservative repository-wide job; claim broader authority work first | A repository-wide collapse performs more GitHub API work than a base-specific job and can temporarily increase merge latency |
-| Multiple pull requests share one head commit but require different decisions | Refuse to publish success when another open pull request already uses the head; invalidate on pull-request open and retarget events | A pull request created or retargeted after success can inherit the commit-scoped result until its webhook is processed; this blocks production use of the preview |
+| Multiple pull requests share one head commit but require different decisions | Refuse to publish success when another open pull request already uses the head; invalidate on pull-request open and retarget events | A pull request created or retargeted after success can inherit the commit-scoped result until its webhook is processed; this blocks production use of the check |
 | A mapped review, label, pull-request, or rerequest trigger races with evaluation | Durably record the trigger, attempt bounded immediate check invalidation, verify the database generation before and after completion, and restore `in_progress` after a publication race | The fast path is best-effort so GitHub receives a timely acknowledgement; when the Check Runs API is unavailable, a displayed success can remain until the durable worker reaches GitHub |
 | A repository label used by policy is renamed or deleted | Subscribe to label-definition events, fan out repository evaluation, and fetch current pull-request label names | A displayed success can remain while the event and fan-out are processed or until reconciliation after a missed delivery |
 | A rename moves content across ownership boundaries | Evaluate both the old and new path | GitHub must report the previous path; incomplete evidence fails closed |
@@ -48,14 +66,14 @@ The database and secret manager are operator-controlled trusted dependencies. Lo
 | Human or team ownership eligibility changes after approval | Revalidate direct-user repository permission, team visibility, repository access, and active membership during evaluation; subscribe to repository and organization authority events; reconcile open pull requests | Stale success may remain while delivery and fan-out are in progress or until reconciliation after a missed event |
 | App access is suspended or an ordinary target repository is removed from its installation | Keep native human enforcement until access changes are complete, and restore it before intentional removal; acknowledge well-formed ordinary-target removal without pretending revocation succeeded | Once access is gone, Extra CODEOWNERS cannot revoke an existing check in that repository |
 | A trusted application is compromised | Limit delegation by path, effective owner, and labels; preserve non-delegable paths | Within its delegated scope, the application is intentionally trusted to approve |
-| An operator loses GitHub API access or reaches a rate limit | Fail closed; retry indefinitely with a configured maximum ordinary backoff; honor a separately bounded provider `Retry-After`; expose queue state and API failures | Availability failures block merges and continue consuming bounded retry capacity until evidence can be obtained; the preview lacks a remaining-quota metric |
+| An operator loses GitHub API access or reaches a rate limit | Fail closed; retry indefinitely with a configured maximum ordinary backoff; honor a separately bounded provider `Retry-After`; expose queue state and API failures | Availability failures block merges and continue consuming bounded retry capacity until evidence can be obtained; the service lacks a remaining-quota metric |
 | Another actor publishes a check with the same name | Require the check from the Extra CODEOWNERS App as the expected source; grant installation-level Statuses write for organization ruleset discovery but omit it from runtime tokens | Rules configured by name alone are vulnerable to source confusion |
 | A proxy, browser, or observer captures App Manifest setup material | Require HTTPS and signed short-lived state, suppress access logs, return no-store pages with a restrictive content security policy, and disable setup after use | The one-time callback and displayed conversion response contain credentials; a compromised operator endpoint or browser can disclose them |
 | The service or database is compromised | Least-privilege App permissions, short-lived installation tokens, secret manager, encrypted transport, restricted database access | A service compromise can falsify checks within installed repositories; rotate the App key and investigate all affected checks |
 
 ## Security invariants
 
-The implementation and tests must preserve these invariants:
+Controls can change as the implementation matures. These invariants cannot:
 
 1. No incomplete or contradictory evidence yields success.
 2. No review for an older head satisfies the current head.
@@ -68,33 +86,69 @@ The implementation and tests must preserve these invariants:
 9. Relevant pending or retrying authority fan-out work prevents an evaluation from publishing a completed result.
 10. Credentials and raw private payloads do not appear in logs, metrics, checks, or audit details.
 
-Invariant 7 binds publication to the evaluated commit and App identity, not permanently to one pull request. GitHub does not provide a pull-request-scoped required Check Run. Publication-time shared-head detection and webhook invalidation reduce but do not eliminate that platform mismatch.
+Invariant 7 deserves a careful reading. It binds publication to the evaluated
+commit and the expected App identity, but GitHub offers no pull-request-scoped
+required Check Run. Shared-head detection at publication time and fast webhook
+invalidation make the mismatch smaller. They do not eliminate it.
 
 ## Non-delegable paths
 
-The built-in list covers all standard CODEOWNERS locations, the effective configured policy path (by default `.github/extra-codeowners.toml`), Stampbot's root `/stampbot.toml`, `.github/workflows/**`, and repository-local actions under `.github/actions/**`. Organization policy can add paths that repository maintainers cannot remove. These controls prevent the approving application from substituting for a human on an owned policy or execution surface that grants its authority.
+Some files decide who may approve; others decide what trusted automation does.
+Letting an App approve changes to those files could let it expand its own
+authority. Extra CODEOWNERS therefore makes a built-in set non-delegable:
 
-The service cannot infer every file that a privileged workflow or approving application executes. Beyond the built-in Stampbot policy, use organization `guardrails.non_delegable_paths` to cover every enrolled App's repository-local configuration, policy, rules, prompts, generated inputs, and decision code, plus repository-specific release scripts, deployment helpers, action code outside `.github/actions/`, or any other path that can affect trusted behavior. Review these transitive execution paths whenever an App, workflow, or approval policy changes.
+- every standard CODEOWNERS location
+- the effective Extra CODEOWNERS policy path, which defaults to
+  `.github/extra-codeowners.toml`
+- Stampbot's root `/stampbot.toml`
+- `.github/workflows/**`
+- repository-local actions under `.github/actions/**`
 
-The contents of these files are not limited to humans. The restriction means an application approval cannot substitute for an appropriate human when a pull request changes them.
+Organization policy can add more paths, and repository maintainers cannot
+remove them. On any owned path in the combined set, an App approval cannot
+substitute for an eligible human approval.
 
-The built-in list does not assign owners. Repositories must explicitly cover these files in standard CODEOWNERS; an unowned path creates no code-owner requirement in either the native model or Extra CODEOWNERS.
+The service cannot discover every file that a privileged workflow or approving
+App executes. The built-in Stampbot rule is one known case, not a complete
+inventory. Use organization `guardrails.non_delegable_paths` for each enrolled
+App's local configuration, policy, rules, prompts, generated inputs, and
+decision code. Add repository-specific release scripts, deployment helpers,
+action code outside `.github/actions/`, and any other path that can change
+trusted behavior. Revisit those transitive execution paths whenever an App,
+workflow, or approval policy changes.
+
+“Non-delegable” describes approval, not authorship or file contents. Apps may
+still appear in workflows or configuration. They cannot substitute for an
+appropriate human when a pull request changes an owned protected path.
+
+The list also does not assign an owner. Each repository must cover these paths
+in standard CODEOWNERS. An unowned path creates no code-owner requirement in
+GitHub's native model or in Extra CODEOWNERS.
 
 ## Insecure-changes escape hatch
 
-Setting `EXTRA_CODEOWNERS_ALLOW_INSECURE_CHANGES=true` disables the built-in non-delegable paths for every installation served by that process. The service must emit a high-severity startup warning and expose an always-on metric while the setting is enabled.
+`EXTRA_CODEOWNERS_ALLOW_INSECURE_CHANGES=true` removes the built-in
+non-delegable set for every installation served by that process. The name is
+blunt because the effect is blunt. While it is enabled, the service emits a
+high-severity startup warning and keeps an always-on metric visible.
 
 The setting does **not**:
 
-- remove organization-defined non-delegable paths;
-- create or broaden any repository delegation;
-- bypass path, owner, label, identity, or exact-head checks;
-- change the standard GitHub numeric review count; or
+- remove organization-defined non-delegable paths
+- create or broaden any repository delegation
+- bypass path, owner, label, identity, or exact-head checks
+- change the standard GitHub numeric review count
 - bypass other required checks.
 
-Use it only when another independently enforced control protects ownership, Extra CODEOWNERS and Stampbot policy, workflow, and local-action changes. Run such installations separately from repositories that rely on the built-in guardrails. Record the exception, owner, justification, compensating control, and expiration date.
+Use the escape hatch only when another independently enforced control protects
+ownership files, Extra CODEOWNERS and Stampbot policy, workflows, and local
+actions. Isolate that deployment from repositories that depend on the built-in
+guardrails. Record who owns the exception, why it exists, what compensates for
+it, and when it expires.
 
 ## Secret handling
+
+Secrets give the service its GitHub identity. Handle them accordingly:
 
 - Store the App private key and webhook secret in a managed secret store, not a repository, image, policy file, command line, or log field.
 - Prefer file-mounted secrets over multiline environment values where the platform supports them.
@@ -102,12 +156,21 @@ Use it only when another independently enforced control protects ownership, Extr
 - Rotate the webhook secret and App private key after suspected disclosure, operator departure, or service compromise.
 - Installation access tokens are short-lived cache material and must not be persisted in the durable queue or audit store.
 
-If a private key is compromised, suspend the App or revoke the key first, restore native human code-owner enforcement on affected repositories, rotate credentials, and review checks published during the exposure window.
+If a private key is compromised, stop its authority first: suspend the App or
+revoke the key. Restore native human code-owner enforcement on affected
+repositories, rotate credentials, and review every check published during the
+exposure window.
 
-## Out of scope for the initial release
+## Boundaries not implemented
 
-- GitHub Enterprise Server compatibility until tested against named server versions.
-- High-assurance merge-queue support until `merge_group` reevaluation is implemented and tested.
-- Transfers or installation changes that remove the App's repository access before repository rules are handed back to native enforcement.
-- Multi-tenant hosted-service isolation and service-level commitments.
-- Authentication or authorization for arbitrary third-party callers; the webhook endpoint is for GitHub only.
+The current implementation does not cover:
+
+- GitHub Enterprise Server compatibility, until named server versions have been
+  tested
+- high-assurance merge queues, until `merge_group` reevaluation is implemented
+  and tested
+- transfers or installation changes that remove repository access before rules
+  are handed back to native enforcement
+- isolation or service-level commitments for a multi-tenant hosted service
+- arbitrary third-party callers; the webhook endpoint authenticates GitHub,
+  not a general API client

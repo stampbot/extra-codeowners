@@ -1,19 +1,30 @@
 # Architecture
 
-This page describes the initial implementation architecture. The GitHub App and core evaluator are under active development; hosted service and Marketplace Action components are roadmap items.
+Extra CODEOWNERS has two jobs that pull in opposite directions. It must react
+quickly when approval evidence changes, but it must never turn a partial view of
+GitHub into permission to merge. The implemented GitHub App resolves that
+tension with a fast invalidation path in front of a durable, deliberately
+slower evaluation path.
+
+This page explains that design. The self-hosted App and evaluator exist today.
+A hosted service and Marketplace Action do not; they remain separate roadmap
+items.
 
 ## Design goals
 
-The architecture prioritizes four properties:
+Four properties govern the design:
 
-1. Relevant webhook delivery is stored durably before acknowledgement, with a bounded best-effort fast path to revoke a managed success immediately.
-2. Authorization decisions use current GitHub evidence, not trusted webhook payload fields.
-3. Policy evaluation is deterministic and independent of the network adapter.
+1. The service stores relevant webhook work before it acknowledges delivery. A
+   bounded fast path tries to revoke a managed success immediately.
+2. The evaluator uses evidence fetched from GitHub now. It never treats fields
+   in a webhook payload as proof of authorization.
+3. Policy evaluation is deterministic and does not depend on a network adapter.
 4. Missing, stale, truncated, or contradictory evidence cannot produce success.
 
 ## Components
 
-The following diagram shows the data path from GitHub events to a Check Run.
+The data path begins with a signed GitHub event and ends with a Check Run on one
+exact head commit:
 
 ```mermaid
 flowchart LR
@@ -35,60 +46,220 @@ flowchart LR
     REPO[CODEOWNERS and repository policy] -. fetched at base commit .-> WK
 ```
 
-Text equivalent:
+In prose, the same flow works like this:
 
-- Webhook ingress verifies GitHub's signature, deduplicates mapped deliveries, and transactionally records direct pull-request or authority fan-out work. For direct pull-request triggers, it also makes a bounded attempt to create or update the managed current-head check as `in_progress`. It does not perform the full evaluation inline.
-- Authority fan-out handles base-branch, policy, label-definition, membership, team, organization, installation, repository-selection, and repository lifecycle changes. It identifies affected open pull requests, supersedes their evaluation jobs, and attempts bounded check invalidation.
-- A scheduled reconciler adds absent work for open pull requests without superseding active or retrying jobs, so missed webhook events do not leave otherwise idle checks stale indefinitely.
-- A worker obtains a short-lived installation token, moves the current-head check to `in_progress`, and fetches current pull-request evidence plus policy.
-- A network-free evaluator returns a decision and structured evidence.
-- The worker verifies that base, head, and database generation are unchanged, then publishes the completed check for the exact head commit and checks the generation once more for a publication race.
+- Webhook ingress verifies GitHub's signature and deduplicates events that map to
+  work. In one transaction, it records either direct pull-request work or an
+  authority fan-out job. For a direct trigger, ingress also makes a bounded
+  attempt to mark the managed check on the current head `in_progress`. It does
+  not run the full evaluation while GitHub waits for a response.
+- Authority fan-out responds to changes in a base branch, policy, label
+  definition, membership, team, organization, installation, repository
+  selection, or repository lifecycle. It finds affected open pull requests,
+  supersedes their evaluation jobs, and makes a bounded attempt to invalidate
+  their checks.
+- A scheduled reconciler finds open pull requests with no queued work. It does
+  not supersede active or retrying jobs. This is how the service eventually
+  revisits an idle check after a missed webhook.
+- An evaluation worker gets a short-lived installation token, marks the check
+  on the current head `in_progress`, and fetches current pull-request evidence
+  and policy.
+- A network-free evaluator turns that evidence into a decision and an
+  explanation.
+- Before it publishes, the worker proves that the base, head, and database
+  generation have not changed. It writes the completed check to the exact head,
+  then checks the generation once more in case publication raced with new work.
 
 ### Webhook ingress
 
-The public `/webhooks/github` endpoint verifies the HMAC-SHA256 signature over the raw request body before parsing authorization-relevant fields. `X-GitHub-Delivery` is the deduplication key for mapped work. Acceptance of a mapped delivery and creation or update of its pull-request or authority job occur in one database transaction. For an installation-wide authority event, that transaction also advances a persistent installation authority epoch. Authority acceptance first waits for the database-backed installation publication guard, bounded by `EXTRA_CODEOWNERS_WEBHOOK_INVALIDATION_TIMEOUT_SECONDS` and below GitHub's delivery deadline. If that guard cannot be acquired, ingress returns `503` without recording the delivery; an operator must redeliver it after recovery. Authenticated events and actions the handler does not map are acknowledged without retention so the App's own check updates do not create a durable feedback loop.
+The public `/webhooks/github` endpoint first verifies the HMAC-SHA256 signature
+over the raw request body. Only then does it parse fields that might affect
+authorization. For events that map to work, `X-GitHub-Delivery` is the
+deduplication key.
 
-For a mapped pull-request, review, or check-rerequest trigger, ingress then attempts to fetch the current pull request and policy. If policy exists, it creates or updates the managed check as `in_progress`; if policy is absent but this App already manages the named check on the current head, it updates that check to `in_progress`. A repository with no policy and no managed check is deliberately skipped. Broader authority events return after durable acceptance; their fan-out worker performs GitHub API work asynchronously.
+Ingress accepts the delivery and creates or updates its pull-request or
+authority job in one database transaction. If the event changes authority for
+an entire installation, the same transaction advances a persistent authority
+epoch. Before that can happen, ingress waits for the installation's
+database-backed publication guard. The wait is bounded by
+`EXTRA_CODEOWNERS_WEBHOOK_INVALIDATION_TIMEOUT_SECONDS` and stays below
+GitHub's delivery deadline. If ingress can't acquire the guard, it returns
+`503` without recording the event. An operator must redeliver that event after
+the database or lock recovers.
 
-The direct-trigger fast path is bounded by `EXTRA_CODEOWNERS_WEBHOOK_INVALIDATION_TIMEOUT_SECONDS`. After durable acceptance, a timeout or GitHub API error is logged and counted but still returns `202`; the queued worker remains authoritative and moves the check to `in_progress` before evaluating. This avoids crossing GitHub's 10-second delivery deadline, and GitHub [does not automatically redeliver failed webhooks](https://docs.github.com/en/webhooks/using-webhooks/handling-failed-webhook-deliveries). If no evaluator is configured at all, ingress returns `503` after storing the delivery because it cannot promise that any worker can process it. A manual duplicate redelivery can resume a still-pending direct-trigger invalidation. By contrast, an authority-guard timeout returns `503` before acceptance, so the original delivery must be redelivered after the lock or database problem is resolved.
+Not every authentic event needs durable work. Ingress acknowledges unmapped
+events and actions without retaining them. In particular, the App's own check
+updates don't become a feedback loop in the queue.
 
-Repeated triggers coalesce by installation, repository, and pull request. A generation counter prevents an older worker from deleting work that arrived while it was evaluating.
+For a mapped pull-request, review, or check-rerequest event, ingress fetches the
+current pull request and policy. When policy exists, it creates or updates the
+managed check as `in_progress`. When policy has disappeared but this App still
+manages a check with that name on the current head, it also puts that check back
+`in_progress`. A repository with neither policy nor a managed check is not
+enrolled, so ingress skips it. Broader authority events return after durable
+acceptance and leave GitHub API work to the fan-out worker.
+
+The direct-trigger fast path uses the same configured timeout. Once the event
+is safely stored, a timeout or GitHub API error is logged and counted, but
+ingress still returns `202`. The queued worker remains the authority and marks
+the check `in_progress` before it evaluates. This split keeps the response
+inside GitHub's 10-second deadline. That matters because GitHub
+[does not automatically redeliver failed webhooks](https://docs.github.com/en/webhooks/using-webhooks/handling-failed-webhook-deliveries).
+
+If no evaluator is configured, ingress stores the delivery and returns `503`:
+it cannot claim that a worker will process the job. A manual duplicate
+redelivery can resume a direct trigger whose invalidation is still pending. An
+authority-guard timeout is different. It happens before acceptance, so the
+original event must be redelivered after recovery.
+
+Repeated triggers for the same installation, repository, and pull request
+coalesce. A generation counter stops an older worker from deleting work that
+arrived while it was evaluating.
 
 ### Durable store
 
-SQLite is the developer default; production startup requires PostgreSQL so multiple instances can share delivery deduplication, leased pull-request and authority work, retry state, and evaluation audit records. PostgreSQL connections, application-pool checkout, and ordinary statements use fixed fail-fast budgets of 3, 2, and 3 seconds respectively; advisory-lock statements use the bounded wait of the operation acquiring the guard. Pull-request jobs retain the most recent triggering delivery ID, and the latest audit records its trigger reason and delivery ID for correlation.
+SQLite keeps local development light. A production process refuses to start
+without PostgreSQL, because every instance must share delivery deduplication,
+leased pull-request and authority jobs, retry state, and audit records.
+PostgreSQL connection, pool-checkout, and ordinary-statement budgets fail fast
+after 3, 2, and 3 seconds respectively. Advisory-lock statements instead use
+the bounded wait of the operation that needs the guard. Each pull-request job
+keeps its newest triggering delivery ID, and the latest audit record keeps that
+ID and its trigger reason for correlation.
 
-Authority jobs coalesce by installation, repository scope, and base ref. Claim order gives installation-wide work priority over repository-wide work and repository-wide work priority over base-specific pushes. An installation-wide job durably splits into repository-scoped fences before it completes, so one repository's retry does not prevent fan-out from reaching the others. Creating a repository-wide fence removes older base-specific rows for that repository. A repository retains at most 100 distinct base-ref rows; adding a 101st distinct ref collapses them into one conservative repository-wide fence, preventing contributor-controlled branch names from creating an unbounded queue without dropping reevaluation coverage.
+Authority work coalesces at three scopes: installation, repository, and base
+ref. Workers claim the broadest scope first. Before an installation-wide job
+finishes, it durably splits itself into repository fences. A retry in one
+repository therefore cannot hold back fan-out to every other repository.
+Creating a repository-wide fence removes older base-ref rows for that
+repository.
 
-Repository scopes still use mutable `owner/repository` routes, but every evaluation row stores the installation authority epoch that was current when it was enqueued. An accepted repository or installation-owner identity event advances that epoch before current repositories are rediscovered. Work already queued under an old name therefore remains permanently stale, even if it is first claimed after fan-out; new work uses the current name and epoch. A delayed old-name webhook could arrive after the epoch changed, so the worker also compares the queued route with the authoritative base repository full name and discards a mismatch before any Check Run or policy lookup. The installation-and-head publication guard serializes Check Run writes across names as a final ordering layer. These controls cannot repair a transfer or installation change that removes the App's access before it can update a check.
+That base-ref queue has a hard bound. A repository can retain 100 distinct
+base-ref rows; the 101st collapses them into one conservative repository-wide
+fence. A contributor can make the worker do broader API work, but cannot grow
+the queue without limit or make reevaluation disappear.
 
-The elected reconciler prunes delivery IDs after the configured retention period. Database initialization reactivates terminal rows created by the earlier pre-release retry contract. Audit evidence can contain private repository names, paths, owners, and decision details, and audit rows are not automatically expired in the preview. Protect the database as private repository metadata, set an operator-owned retention policy, and include it in access reviews. The database must not store installation access tokens or GitHub App private keys.
+Repository jobs still need the mutable route `owner/repository`, so the store
+also records an immutable ordering fact: the installation authority epoch at
+enqueue time. An accepted repository-identity or installation-owner event
+advances that epoch before the service rediscovers current repositories. Work
+queued under an old name is then permanently stale, even if a worker claims it
+only after fan-out. Fresh work gets the new name and epoch.
+
+An old-name webhook can arrive late, after the epoch has advanced. The worker
+therefore compares the queued route with the authoritative full name of the
+pull request's base repository. It discards a mismatch before looking up policy
+or writing a Check Run. As a last ordering layer, the installation-and-head
+publication guard serializes check writes across repository names. None of
+these controls can repair a transfer or installation change that removes the
+App's access before it can update an existing check.
+
+The elected reconciler prunes delivery IDs after the configured retention
+period. Database initialization also reactivates terminal rows left by an older
+retry contract.
+
+Audit evidence is sensitive. It can name private repositories, paths, owners,
+and decision details, and the service does not automatically expire audit rows.
+Treat the database as private repository metadata. Give retention an explicit
+operator-owned policy and include the store in access reviews. Installation
+tokens and GitHub App private keys never belong there.
 
 ### Worker
 
-The worker processes two durable job types. For installation-wide authority work, it lists accessible repositories and creates an independently retryable repository authority job for each target. A repository authority job then lists affected open pull requests, creates or supersedes every pull-request job before attempting bounded parallel invalidation, and filters an ordinary repository push to pull requests whose base ref matches the pushed branch. Removing the configured organization-policy repository from the installation, or receiving malformed removal evidence, creates conservative installation-wide work for every target that remains accessible. A well-formed removal containing only ordinary targets is acknowledged without work because the App has already lost the capability needed to update those repositories.
+The worker handles authority jobs and pull-request jobs. For installation-wide
+authority work, it lists every accessible repository and gives each target an
+independently retryable repository job. That job lists affected open pull
+requests and creates or supersedes all their jobs before it attempts bounded,
+parallel check invalidation. An ordinary repository push is narrower: it
+selects only pull requests whose base ref matches the pushed branch.
 
-For a pull-request job, the worker fetches the current revisions and moves the named current-head check to `in_progress` before collecting mutable review and label evidence. It verifies that its database generation is still current, fetches authoritative evidence, evaluates it, and posts a completed Check Run only for that generation. Evaluation and authority exceptions remain pending and retry indefinitely with exponential backoff capped by `EXTRA_CODEOWNERS_WORKER_RETRY_MAX_SECONDS`. GitHub rate limits use the provider's separately bounded `Retry-After` delay without advancing ordinary backoff. Terminal retry exhaustion would be unsafe: revocation or reevaluation work abandoned after a transient dependency failure could leave a stale success visible.
+Losing the organization-policy repository is not an ordinary removal. If that
+repository leaves the installation, or if the removal evidence is malformed,
+the worker conservatively creates installation-wide work for every target it
+can still reach. When a well-formed removal names only ordinary target
+repositories, the service acknowledges it without work. Access is already
+gone, so pretending it can update those repositories would be worse than doing
+nothing.
 
-Per-pull-request generation checks before and after completion, plus a final base/head comparison, prevent an evaluation for older state from overwriting a newer decision. Each evaluation row records the current installation authority epoch when it is enqueued, and publication rejects a claim whose stored epoch is no longer current. That permanent fence still applies after the corresponding installation-wide authority job completes. A relevant unresolved authority job prevents a completed result as well, so an evaluation that started before any applicable authority event cannot publish through the fan-out window. Final Check Run publication and authority-webhook acceptance use a database-backed installation guard: normal evaluations can publish concurrently, but an authority event's durable epoch or fan-out is ordered wholly before or after each result. If a direct pull-request trigger commits while a completed check is being published, the worker immediately patches the check back to `in_progress`; the newer generation then reevaluates.
+For a pull-request job, the worker fetches the current revisions first. It
+moves the named check on the current head to `in_progress` before it collects
+mutable reviews and labels. The worker then confirms that its database
+generation is current, fetches authoritative evidence, evaluates it, and posts
+a completed Check Run for that generation only.
 
-GitHub stores the Check Run on the head commit, while the service evaluates a specific pull request. Before success, the worker verifies that no other open pull request currently uses that head. A pull request opened or retargeted after publication can still inherit the existing commit result until its event is accepted and invalidated. Reconciliation recovers missed events but cannot make a commit-scoped check permanently pull-request-specific.
+Evaluation and authority errors leave the job pending. They retry forever with
+exponential backoff capped by
+`EXTRA_CODEOWNERS_WORKER_RETRY_MAX_SECONDS`. GitHub rate limits use the
+provider's separately bounded `Retry-After` value and do not advance ordinary
+backoff. Giving up permanently would be unsafe: one transient dependency
+failure could strand a stale success.
+
+Several fences stop old work from winning a race. The worker checks the
+pull-request generation before and after completion, then compares base and
+head one last time. It refuses publication if the installation authority epoch
+stored with the job is no longer current. That epoch remains a permanent fence
+after the installation-wide job itself has finished.
+
+Unresolved authority work is another fence. An evaluation that began before a
+relevant authority change cannot publish while fan-out is pending or retrying.
+The database-backed installation guard also orders final Check Run publication
+against authority-webhook acceptance. Evaluations can normally publish in
+parallel, but each result lands wholly before or after the authority event's
+durable epoch change or fan-out. If a direct trigger commits during
+publication, the worker immediately restores `in_progress`; the newer
+generation evaluates next.
+
+One boundary remains outside those fences. GitHub stores a Check Run on the
+head commit, while Extra CODEOWNERS evaluates one pull request. Before success,
+the worker confirms that no other open pull request currently shares that
+head. A pull request opened or retargeted later can still inherit the completed
+result until the new event is accepted and invalidated. Reconciliation can
+recover a missed event, but it cannot turn a commit-scoped GitHub object into a
+permanent pull-request-scoped one.
 
 ### Reconciler
 
-Webhook delivery is not a complete reliability mechanism: an endpoint can be unavailable, GitHub does not automatically redeliver a failed webhook, and some installation-scope losses cannot be repaired after access disappears. The reconciler periodically discovers accessible open pull requests, creates work only when that pull request has no existing evaluation job, and prunes expired webhook delivery IDs while holding a database-coordinated singleton lease. Long runs renew the lease between installations. The configured organization-policy repository is excluded from reconciliation.
+Webhooks are a signal, not a complete recovery system. The endpoint can be
+down, GitHub does not automatically redeliver a failed event, and the App
+cannot repair some installation-wide losses after its access disappears. The
+reconciler covers the recoverable middle ground.
 
-Reconciliation does not supersede active or backoff-delayed work. This avoids repeatedly resetting retry state or starving an evaluation when a scan takes longer than its interval; pending failures retry on their own schedule. An otherwise idle open pull request is reevaluated each interval, temporarily moving its check to `in_progress`. The interval is therefore a stale-evidence, merge-availability, and API-budget trade-off. Reconciliation limits how long stale success may remain visible but does not make the system strongly consistent. Merge-queue support must add evaluation of the `merge_group` state before high-assurance use with merge queues.
+At each interval, it discovers accessible open pull requests and creates work
+only for a pull request with no evaluation job. While holding a
+database-coordinated singleton lease, it also prunes expired webhook delivery
+IDs. A long scan renews that lease between installations. The configured
+organization-policy repository is never part of reconciliation.
+
+The reconciler leaves active and backoff-delayed jobs alone. Otherwise, a slow
+scan could repeatedly reset retry state or starve work that takes longer than
+one interval. Pending failures keep their own schedule. An idle open pull
+request is reevaluated at every interval, which temporarily moves its check to
+`in_progress`.
+
+Choosing the interval means balancing stale evidence, merge availability, and
+GitHub API budget. Reconciliation bounds some missed-event delays; it does not
+make the service strongly consistent. Merge queues add another state entirely.
+Before Extra CODEOWNERS can support them with high assurance, it must evaluate
+`merge_group` events and state.
 
 ### Pure evaluator
 
-The core evaluator accepts typed evidence and performs no GitHub or database calls. It parses CODEOWNERS, compiles organization and repository policy, reduces each actor to the latest opinionated review, groups changed paths by owner set, and evaluates human or delegated application evidence. This boundary makes adversarial and property-based testing practical.
+The core evaluator knows nothing about GitHub clients or databases. It accepts
+typed evidence, parses CODEOWNERS, compiles organization and repository policy,
+and reduces each actor to their latest opinionated review. Then it groups
+changed paths by owner set and tests each group against human or delegated App
+evidence. Keeping that boundary network-free makes adversarial and
+property-based tests practical.
 
-The evaluator is shared implementation, not a stable public Python API before 1.0. Future distributions should reuse its tested semantics through an intentionally versioned interface rather than importing arbitrary internal modules.
+The evaluator is shared implementation, but it is not a stable public Python
+API before 1.0. A future distribution should call an intentionally versioned
+interface with these tested semantics. Importing arbitrary internal modules
+would quietly create a second compatibility promise.
 
 ## Evaluation sequence
 
-The following sequence shows why a webhook response is not the final policy decision.
+A `202` webhook response means “the work is safe in the queue,” not “this pull
+request may merge.” The final decision comes later:
 
 ```mermaid
 sequenceDiagram
@@ -139,11 +310,24 @@ sequenceDiagram
     end
 ```
 
-Text equivalent: ingress authenticates and persists the trigger, then makes a bounded attempt to create or update the managed check as blocking. A repository with neither policy nor a prior managed check is skipped. A fast-path timeout or GitHub API error is deferred to the durable worker and still acknowledged; manual redelivery can retry the marker. The worker independently fetches the current revision, keeps its check blocking, and confirms that it owns the latest database generation before collecting evidence. The pure evaluator decides. The worker confirms the revisions, generation, and absence of relevant unresolved authority work before completion, then checks the generation again after publication. A revision race creates new work; a trigger or authority race leaves or restores the blocking `in_progress` state for newer work.
+In prose, ingress authenticates and stores the trigger. It then makes a bounded
+attempt to create or update a blocking managed check. A repository with neither
+policy nor an earlier managed check is skipped. If that fast path times out or
+GitHub's API fails, ingress still acknowledges the durable work; a manual
+redelivery can retry the marker.
+
+The worker fetches the current revision independently and keeps the check
+blocking. Before it collects evidence, it proves that it owns the newest
+database generation. The pure evaluator decides. Before completion, the worker
+checks the revisions and generation again and makes sure no relevant authority
+job remains unresolved. It checks the generation once more after publication.
+A revision race creates fresh work. A trigger or authority race leaves the
+check `in_progress`, or puts it back there, for the newer job.
 
 ## Deployment topology
 
-The first production topology is one or more stateless web/worker processes plus PostgreSQL:
+The self-hosted topology is intentionally ordinary: one or more stateless
+web-and-worker processes share PostgreSQL.
 
 ```text
 public HTTPS load balancer
@@ -154,15 +338,32 @@ secret manager
   -> App private key, webhook secret, setup-state secret
 ```
 
-Ingress should restrict request size and rate before traffic reaches the application. `/metrics` and health endpoints belong on an operator-controlled network or authenticated monitoring path; they are not intended as public product APIs.
+The public load balancer should bound request size and rate before traffic
+reaches the application. Put `/metrics` and the health endpoints on an
+operator-controlled network or an authenticated monitoring path. They are
+operational surfaces, not public product APIs.
 
 ## Distribution boundaries
 
-- **Implemented first:** GitHub App service and reusable Python evaluator.
-- **Preview distribution:** dedicated Helm chart source plus signed, attested `main` and commit-specific preview containers after successful main CI; these are not supported releases.
-- **Tag-release automation:** exact semantic-version tags are configured to publish a signed versioned image, OCI chart, Python artifacts, provenance, and software-bill-of-material attestations. Artifact existence follows a successful release, not the presence of workflow source.
-- **Still planned:** tested chart upgrade guarantees and a reproducible Google Cloud deployment guide.
-- **Planned separately:** `extra-codeowners-action`, using a prebuilt signed container rather than building Python dependencies during every workflow run.
-- **Possible later:** a paid hosted installation with tenant isolation, billing, support boundaries, and explicit service-level objectives.
+The repository currently implements the GitHub App service and reusable Python
+evaluator. It also contains a dedicated Helm chart. After successful `main` CI,
+the project publishes signed, attested containers for `main` and the exact
+commit. These development builds are available for evaluation, but they are not
+supported releases.
 
-These future distribution models must reuse the evaluator and policy schema rather than create different authorization semantics.
+Exact semantic-version tags are wired to publish a signed versioned image, OCI
+chart, Python artifacts, provenance, and software-bill-of-material
+attestations. Workflow code is not proof that those artifacts exist; only a
+successful tagged release creates them. No supported release has been
+published.
+
+Tested chart-upgrade guarantees and a reproducible Google Cloud deployment
+guide are still planned. The Marketplace Action will live separately as
+`extra-codeowners-action` and run a prebuilt signed container instead of
+building Python dependencies in every workflow. A paid hosted installation may
+follow later, but it would first need tenant isolation, billing, support
+boundaries, and explicit service-level objectives.
+
+However they are packaged, future distributions must reuse the evaluator and
+policy schema. Two authorization implementations with almost the same rules
+would eventually disagree at exactly the wrong moment.
