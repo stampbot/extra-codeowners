@@ -354,6 +354,21 @@ def test_invalid_private_key_is_rejected_at_startup() -> None:
         GitHubClient(1, "not-a-private-key")
 
 
+def test_api_error_truncates_json_message() -> None:
+    """A structured API error must not bypass the diagnostic-size limit."""
+
+    response = httpx.Response(500, json={"message": "x" * 1001})
+
+    assert GitHubClient._response_message(response) == "x" * 1000
+
+
+@pytest.mark.parametrize("retry_after", ["INF", "-INF", "NAN"])
+def test_non_finite_retry_after_uses_bounded_default(retry_after: str) -> None:
+    response = httpx.Response(429, headers={"Retry-After": retry_after})
+
+    assert GitHubClient._retry_delay(response, "rate limit") == 60
+
+
 @pytest.mark.asyncio
 async def test_installation_token_is_downscoped_without_status_write(private_key: str) -> None:
     token_request: dict[str, object] = {}

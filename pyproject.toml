@@ -46,6 +46,7 @@ extra-codeowners = "extra_codeowners.cli:main"
 
 [dependency-groups]
 dev = [
+  "hypothesis>=6.151.0,<7",
   "httpx2>=2.5.0,<3",
   "mypy>=1.14.0,<2",
   "packaging>=26.0,<27",
@@ -73,6 +74,7 @@ testpaths = ["tests"]
 markers = [
   "integration: tests with a database or simulated GitHub API",
   "live: tests that access live external services",
+  "property: bounded generative tests for untrusted input contracts",
 ]
 
 [tool.coverage.run]
