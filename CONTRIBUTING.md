@@ -42,6 +42,12 @@ It does not enforce coverage. PostgreSQL tests are skipped unless `TEST_POSTGRES
 
 Set that variable and run `mise run test:coverage` for the complete suite and coverage gate. The [development installation tutorial][database-tests] shows a safe setup.
 
+The normal suite runs the bounded development property-test profile. Run
+`mise run test:property` to match the larger pull-request profile. See the
+[property-testing design](docs/explanation/property-testing.md) before adding a
+generator or regression seed; generated inputs and CI reports must remain free
+of real payloads and credentials.
+
 > [!WARNING]
 > Never point `TEST_POSTGRES_URL` at a production or shared database. The test suite drops and recreates project tables.
 

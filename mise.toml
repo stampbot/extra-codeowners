@@ -68,6 +68,14 @@ uv run pytest \
 description = "Run the destructive opt-in live GitHub contract fixture"
 run = "uv run python -m tools.live_github_contract"
 
+[tasks."test:property"]
+description = "Run bounded generative security tests with the pull-request profile"
+run = "HYPOTHESIS_PROFILE=ci uv run pytest tests/test_security_properties.py --no-cov --hypothesis-show-statistics"
+
+[tasks."test:property:scheduled"]
+description = "Run the longer non-deterministic generative security profile"
+run = "HYPOTHESIS_PROFILE=scheduled uv run pytest tests/test_security_properties.py --no-cov --hypothesis-show-statistics"
+
 [tasks.docs]
 description = "Build documentation in strict mode"
 run = "uv run mkdocs build --strict"

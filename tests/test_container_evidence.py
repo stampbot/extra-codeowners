@@ -2944,14 +2944,16 @@ def test_container_build_toolchain_is_exactly_pinned_and_renovate_managed() -> N
     managers = {manager["description"]: manager for manager in renovate["customManagers"]}
     workflow_pattern = [r"/^\.github/workflows/(?:ci|release)\.yml$/"]
 
-    utility = managers["Update digest-pinned CI and release utility containers"]
+    utility = managers["Update digest-pinned kubeconform and BuildKit utility containers"]
     assert utility["managerFilePatterns"] == workflow_pattern
     assert utility["datasourceTemplate"] == "docker"
     assert utility["versioningTemplate"] == "docker"
-    assert (
+    assert utility["matchStrings"] == [
+        r"(?<depName>ghcr.io/yannh/kubeconform):(?<currentValue>[^@\s]+)"
+        r"@(?<currentDigest>sha256:[a-f0-9]{64})",
         r"(?<depName>moby/buildkit):(?<currentValue>[^@\s]+)"
-        r"@(?<currentDigest>sha256:[a-f0-9]{64})"
-    ) in utility["matchStrings"]
+        r"@(?<currentDigest>sha256:[a-f0-9]{64})",
+    ]
 
     qemu_manager = managers["Update digest-pinned QEMU binfmt images"]
     assert qemu_manager["managerFilePatterns"] == workflow_pattern
@@ -2971,6 +2973,22 @@ def test_container_build_toolchain_is_exactly_pinned_and_renovate_managed() -> N
     assert buildx_manager["datasourceTemplate"] == "github-releases"
     assert buildx_manager["extractVersionTemplate"] == (r"^v(?<version>[0-9]+\.[0-9]+\.[0-9]+)$")
     assert buildx_manager["versioningTemplate"] == "semver"
+
+    shellcheck_manager = managers[
+        "Open reviewed ShellCheck release updates; CI requires a matching asset digest"
+    ]
+    assert shellcheck_manager["managerFilePatterns"] == [r"/^\.github/workflows/ci\.yml$/"]
+    assert shellcheck_manager["matchStrings"] == [
+        r"SHELLCHECK_VERSION: v(?<currentValue>\d+\.\d+\.\d+)"
+    ]
+    assert shellcheck_manager["depNameTemplate"] == "koalaman/shellcheck"
+    assert shellcheck_manager["datasourceTemplate"] == "github-releases"
+    assert shellcheck_manager["versioningTemplate"] == "semver"
+    assert "SHELLCHECK_VERSION: v0.11.0" in ci
+    assert (
+        "SHELLCHECK_SHA256: 8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198" in ci
+    )
+    assert "koalaman/shellcheck:" not in ci
 
 
 def test_run_metadata_binds_event_checkout_and_inventory(tmp_path: Path) -> None:

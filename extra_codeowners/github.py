@@ -280,7 +280,7 @@ class GitHubClient:
         try:
             body = response.json()
             if isinstance(body, dict) and isinstance(body.get("message"), str):
-                message = body["message"]
+                message = body["message"][:1000]
         except ValueError:
             return message
         return message
@@ -313,6 +313,8 @@ class GitHubClient:
                     delay = float(reset) - datetime.now(UTC).timestamp()
                 except ValueError:
                     delay = None
+        if delay is not None and not math.isfinite(delay):
+            delay = None
         return max(1, min(math.ceil(delay if delay is not None else 60), 86_400))
 
     @classmethod
