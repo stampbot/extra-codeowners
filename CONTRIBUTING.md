@@ -51,6 +51,11 @@ Docker is required to build the Dockerfile locally:
 docker build --tag extra-codeowners:dev .
 ```
 
+The live GitHub contract fixture is destructive and opt-in. It is not part of
+`mise run check`. Use only the disposable organization procedure in the
+[live-contract guide](docs/how-to/run-live-github-contract.md); ordinary tests
+must never need GitHub credentials.
+
 Do not paste real GitHub payloads, credentials, organization identifiers, or
 private repository content into tests. Use clearly fictional fixtures.
 

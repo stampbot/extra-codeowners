@@ -104,6 +104,7 @@ Start runtime configuration from [`.env.example`](.env.example). Keep real crede
 - [Register an App with the setup URL](docs/how-to/register-app.md)
 - [Configure organizations and repositories](docs/how-to/configure.md)
 - [Prepare repository rules](docs/how-to/prepare-repository-rules.md)
+- [Run the live GitHub contract fixture](docs/how-to/run-live-github-contract.md)
 - [Deploy the service](docs/how-to/deploy.md)
 - [Operate and recover the service](docs/how-to/operate.md)
 - [Configuration reference](docs/reference/configuration.md)

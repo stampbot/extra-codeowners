@@ -64,6 +64,10 @@ uv run pytest \
   --cov-fail-under=85
 '''
 
+[tasks."test:github-contract"]
+description = "Run the destructive opt-in live GitHub contract fixture"
+run = "uv run python -m tools.live_github_contract"
+
 [tasks.docs]
 description = "Build documentation in strict mode"
 run = "uv run mkdocs build --strict"

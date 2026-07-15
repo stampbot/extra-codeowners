@@ -91,6 +91,14 @@ commit and the expected App identity, but GitHub offers no pull-request-scoped
 required Check Run. Shared-head detection at publication time and fast webhook
 invalidation make the mismatch smaller. They do not eliminate it.
 
+The opt-in [live GitHub contract fixture](../how-to/run-live-github-contract.md)
+measures required-check invalidation, shared-head inheritance, retargeting,
+expected-source rulesets, App reviews, and sanitized delivery shapes against a
+disposable GitHub.com repository. A fixture run is evidence for the tested API
+and account at its recorded time. It is not a proof that webhook delivery is
+instantaneous or reliable, and it cannot remove this production blocker while
+a success can be inherited before invalidation.
+
 ## Non-delegable paths
 
 Some files decide who may approve; others decide what trusted automation does.

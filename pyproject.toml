@@ -66,6 +66,7 @@ packages = ["extra_codeowners"]
 [tool.pytest.ini_options]
 addopts = "--strict-config --strict-markers --cov=extra_codeowners --cov-branch --cov-report=term-missing --cov-report=xml"
 asyncio_mode = "auto"
+pythonpath = ["."]
 testpaths = ["tests"]
 markers = [
   "integration: tests with a database or simulated GitHub API",
