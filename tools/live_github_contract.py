@@ -103,6 +103,7 @@ class Config:
 
     organization: str
     operator_token: str
+    repository_selection_token: str | None
     source_revision: str
     checker: AppCredentials
     approver: AppCredentials | None
@@ -139,9 +140,19 @@ class Config:
         source_revision = _required_env("EXTRA_CODEOWNERS_LIVE_SOURCE_REVISION").lower()
         if re.fullmatch(r"[0-9a-f]{40}", source_revision) is None:
             raise ContractError("EXTRA_CODEOWNERS_LIVE_SOURCE_REVISION must be a full commit SHA")
+        operator_token = _required_env("EXTRA_CODEOWNERS_LIVE_OPERATOR_TOKEN")
+        repository_selection_token = os.getenv(
+            "EXTRA_CODEOWNERS_LIVE_REPOSITORY_SELECTION_TOKEN", ""
+        ).strip()
+        if repository_selection_token == operator_token:
+            raise ContractError(
+                "EXTRA_CODEOWNERS_LIVE_REPOSITORY_SELECTION_TOKEN must be a separate "
+                "short-lived classic PAT, not the operator token"
+            )
         return cls(
             organization=organization,
-            operator_token=_required_env("EXTRA_CODEOWNERS_LIVE_OPERATOR_TOKEN"),
+            operator_token=operator_token,
+            repository_selection_token=repository_selection_token or None,
             source_revision=source_revision,
             checker=checker,
             approver=AppCredentials.from_environment(
@@ -360,6 +371,45 @@ def _review_rule() -> JsonObject:
     }
 
 
+def contract_interpretation(assertions: JsonObject) -> JsonObject:
+    """Interpret observed booleans without treating an unsafe result as a fixture error."""
+    protective_assertions = (
+        "organization_ruleset_expected_source",
+        "repository_ruleset_expected_source",
+        "completed_success_to_in_progress_blocks_merge",
+        "shared_head_invalidation_blocks_both_pull_requests",
+    )
+    inheritance_assertions = (
+        "shared_head_inherits_success_before_invalidation",
+        "retarget_inherits_commit_scoped_success_before_invalidation",
+    )
+    github_contract_fail_closed = all(
+        assertions.get(name) is True for name in protective_assertions
+    ) and all(assertions.get(name) is False for name in inheritance_assertions)
+    return {
+        "github_contract_fail_closed": github_contract_fail_closed,
+        "production_warning_required": True,
+        "production_warning_reason": (
+            "GitHub contract is not fail closed"
+            if not github_contract_fail_closed
+            else "fixture does not cover deployed webhook delivery and reconciliation"
+        ),
+        "scope": "GitHub rules and Check Run behavior only; deployment delivery is separate",
+    }
+
+
+def merge_attempt_was_blocked(status_code: int) -> bool:
+    """Interpret a merge response, retaining an accepted merge as unsafe evidence."""
+    if status_code == 200:
+        return False
+    if status_code in {405, 409}:
+        return True
+    raise ContractError(
+        "merge probe returned an indeterminate HTTP status; "
+        f"GitHub returned {status_code} instead of 200, 405, or 409"
+    )
+
+
 def _object(value: Any, description: str) -> JsonObject:
     if not isinstance(value, dict):
         raise ContractError(f"GitHub response omitted {description}")
@@ -384,6 +434,11 @@ class Fixture:
     def __init__(self, config: Config) -> None:
         self.config = config
         self.operator = RestClient(config.operator_token)
+        self.repository_selection = (
+            RestClient(config.repository_selection_token)
+            if config.repository_selection_token is not None
+            else None
+        )
         self.checker_auth = AppAuth(config.checker)
         self.checker: RestClient | None = None
         self.approver_auth = AppAuth(config.approver) if config.approver is not None else None
@@ -415,7 +470,13 @@ class Fixture:
     def repo_path(self) -> str:
         return f"/repos/{quote(self.repository, safe='/')}"
 
-    def _ensure_app_access(self, auth: AppAuth, permissions: dict[str, str]) -> RestClient:
+    def _ensure_app_access(
+        self,
+        auth: AppAuth,
+        permissions: dict[str, str],
+        *,
+        repository_selection: str,
+    ) -> RestClient:
         client = auth.installation_client(permissions)
         status = client.status("GET", self.repo_path)
         if status == 200:
@@ -423,7 +484,34 @@ class Fixture:
         client.close()
         if status != 404 or self.repository_id is None:
             raise ContractError(f"App repository probe returned unexpected status {status}")
-        self.operator.request(
+
+        if repository_selection == "all":
+            for _ in range(20):
+                client = auth.installation_client(permissions)
+                status = client.status("GET", self.repo_path)
+                if status == 200:
+                    return client
+                client.close()
+                if status != 404:
+                    raise ContractError(
+                        f"all-repositories App probe returned unexpected status {status}"
+                    )
+                time.sleep(1)
+            raise ContractError(
+                "all-repositories GitHub App installation did not gain access to the "
+                "new fixture repository"
+            )
+
+        if repository_selection != "selected":
+            raise ContractError("GitHub App installation returned an unknown repository selection")
+        if self.repository_selection is None:
+            raise ContractError(
+                "selected-repositories installation does not cover the new fixture repository; "
+                "prefer an all-repositories installation in the disposable organization or set "
+                "EXTRA_CODEOWNERS_LIVE_REPOSITORY_SELECTION_TOKEN to a separate short-lived "
+                "classic PAT with repo scope"
+            )
+        self.repository_selection.request(
             "PUT",
             (
                 f"/user/installations/{auth.credentials.installation_id}/repositories/"
@@ -433,9 +521,12 @@ class Fixture:
         )
         for _ in range(20):
             client = auth.installation_client(permissions)
-            if client.status("GET", self.repo_path) == 200:
+            status = client.status("GET", self.repo_path)
+            if status == 200:
                 return client
             client.close()
+            if status != 404:
+                raise ContractError(f"selected-repositories App probe returned status {status}")
             time.sleep(1)
         raise ContractError("GitHub App installation did not gain access to the fixture repository")
 
@@ -480,6 +571,21 @@ class Fixture:
         )
         return _integer(result.get("number"), "pull request number")
 
+    def _attempt_in_progress_merge(self, pull_number: int) -> tuple[bool, int]:
+        """Attempt the blocked merge and recover the remaining probes if GitHub accepts it."""
+        merge_status = self.operator.status(
+            "PUT", f"{self.repo_path}/pulls/{pull_number}/merge", body={"merge_method": "squash"}
+        )
+        blocked = merge_attempt_was_blocked(merge_status)
+        if blocked:
+            return True, pull_number
+        replacement = self._create_pull(
+            head="shared-head",
+            base="replacement",
+            title="Replacement contract PR after unsafe merge",
+        )
+        return False, replacement
+
     def _create_check(self, sha: str) -> int:
         assert self.checker is not None
         result = _object(
@@ -521,9 +627,11 @@ class Fixture:
             body=body,
         )
 
-    def _wait_for_merge_state(self, pull_number: int, expected: str) -> str:
+    def _wait_for_merge_outcome(self, pull_number: int, *, preferred: bool | None = None) -> bool:
+        """Return true for clean and false for blocked; reject indeterminate states."""
         deadline = time.monotonic() + 90
         observed: list[str] = []
+        last_terminal: bool | None = None
         while time.monotonic() < deadline:
             pull = _object(
                 self.operator.request("GET", f"{self.repo_path}/pulls/{pull_number}"),
@@ -532,11 +640,18 @@ class Fixture:
             value = pull.get("mergeable_state")
             if isinstance(value, str):
                 observed.append(value)
-                if value == expected:
-                    return value
+                if value == "clean":
+                    last_terminal = True
+                elif value == "blocked":
+                    last_terminal = False
+                if last_terminal is not None and (preferred is None or last_terminal is preferred):
+                    return last_terminal
             time.sleep(1)
+        if last_terminal is not None:
+            return last_terminal
         raise ContractError(
-            f"pull request did not become {expected!r}; observed {sorted(set(observed))}"
+            "pull request did not reach a terminal 'clean' or 'blocked' merge state; "
+            f"observed {sorted(set(observed))}"
         )
 
     def _create_rulesets(self) -> None:
@@ -578,6 +693,7 @@ class Fixture:
                         "ref_name": {
                             "include": [
                                 "refs/heads/alternate",
+                                "refs/heads/replacement",
                                 "refs/heads/retarget",
                             ],
                             "exclude": [],
@@ -600,13 +716,13 @@ class Fixture:
             context=self.config.check_name,
             app_id=self.config.checker.app_id,
         )
-        if not all(assertions.values()):
-            raise ContractError("GitHub did not preserve the expected App source in both rulesets")
 
     def _exercise_app_review(self, base_sha: str) -> None:
         assertions = _object(self.report["assertions"], "report assertions")
         if self.approver is None:
             assertions["app_review_counts_as_numeric_approval"] = None
+            assertions["app_review_attributed_to_bot"] = None
+            assertions["numeric_approval_rule_blocks_before_app_review"] = None
             self.report["app_review_note"] = "not run: approver App credentials were not supplied"
             return
         self._create_branch("review-base", base_sha)
@@ -632,7 +748,8 @@ class Fixture:
             head="review-head", base="review-base", title="App numeric approval contract"
         )
         self._create_check(review_sha)
-        self._wait_for_merge_state(pull, "blocked")
+        blocked_before_review = not self._wait_for_merge_outcome(pull, preferred=False)
+        assertions["numeric_approval_rule_blocks_before_app_review"] = blocked_before_review
         review = _object(
             self.approver.request(
                 "POST",
@@ -643,10 +760,13 @@ class Fixture:
             "App-authored review",
         )
         actor = _object(review.get("user"), "review actor")
-        if actor.get("type") != "Bot":
-            raise ContractError("GitHub did not attribute the approving App review to a Bot actor")
-        self._wait_for_merge_state(pull, "clean")
-        assertions["app_review_counts_as_numeric_approval"] = True
+        assertions["app_review_attributed_to_bot"] = actor.get("type") == "Bot"
+        clean_after_review = self._wait_for_merge_outcome(pull, preferred=True)
+        assertions["app_review_counts_as_numeric_approval"] = (
+            blocked_before_review
+            and assertions["app_review_attributed_to_bot"] is True
+            and clean_after_review
+        )
 
     def _capture_webhook_contracts(self) -> None:
         client = self.checker_auth.jwt_client()
@@ -712,10 +832,12 @@ class Fixture:
 
     def run(self) -> JsonObject:
         fixture_report = _object(self.report["fixture"], "fixture report")
-        fixture_report["checker_repository_selection"] = self.checker_auth.repository_selection()
-        fixture_report["approver_repository_selection"] = (
+        checker_repository_selection = self.checker_auth.repository_selection()
+        approver_repository_selection = (
             self.approver_auth.repository_selection() if self.approver_auth is not None else None
         )
+        fixture_report["checker_repository_selection"] = checker_repository_selection
+        fixture_report["approver_repository_selection"] = approver_repository_selection
         created_response = self.operator.request(
             "POST",
             f"/orgs/{quote(self.config.organization)}/repos",
@@ -723,7 +845,7 @@ class Fixture:
                 "name": self.repository_name,
                 "private": True,
                 "auto_init": True,
-                "delete_branch_on_merge": True,
+                "delete_branch_on_merge": False,
                 "description": "Disposable Extra CODEOWNERS live contract fixture",
             },
             expected=(201,),
@@ -750,65 +872,87 @@ class Fixture:
             raise ContractError("GitHub did not initialize the fixture default branch")
 
         self.checker = self._ensure_app_access(
-            self.checker_auth, {"checks": "write", "contents": "read"}
+            self.checker_auth,
+            {"checks": "write", "contents": "read"},
+            repository_selection=checker_repository_selection,
         )
         if self.approver_auth is not None:
+            assert approver_repository_selection is not None
             self.approver = self._ensure_app_access(
-                self.approver_auth, {"contents": "read", "pull_requests": "write"}
+                self.approver_auth,
+                {"contents": "read", "pull_requests": "write"},
+                repository_selection=approver_repository_selection,
             )
 
-        for branch in ("alternate", "retarget", "shared-head"):
+        for branch in ("alternate", "replacement", "retarget", "shared-head"):
             self._create_branch(branch, base_sha)
         head_sha = self._commit_file("shared-head", "contract-probe.txt", "shared head\n")
+        check_id = self._create_check(head_sha)
         self._create_rulesets()
 
         first = self._create_pull(
             head="shared-head", base=self.default_branch, title="First contract PR"
         )
-        check_id = self._create_check(head_sha)
-        self._wait_for_merge_state(first, "clean")
-        self._update_check(check_id, "in_progress")
-        self._wait_for_merge_state(first, "blocked")
-        merge_status = self.operator.status(
-            "PUT", f"{self.repo_path}/pulls/{first}/merge", body={"merge_method": "squash"}
-        )
-        if merge_status not in {405, 409}:
+        if not self._wait_for_merge_outcome(first, preferred=True):
             raise ContractError(
-                "an in-progress required check did not block the disposable merge; "
-                f"GitHub returned {merge_status}"
+                "indeterminate transition: the completed successful check did not satisfy "
+                "the fixture's required-check precondition"
             )
+        self._update_check(check_id, "in_progress")
+        transition_blocked = not self._wait_for_merge_outcome(first, preferred=False)
+        merge_attempt_blocked = False
+        if transition_blocked:
+            merge_attempt_blocked, first = self._attempt_in_progress_merge(first)
         assertions = _object(self.report["assertions"], "report assertions")
-        assertions["completed_success_to_in_progress_blocks_merge"] = True
-
+        assertions["in_progress_merge_state_blocked"] = transition_blocked
+        assertions["in_progress_merge_attempt_blocked"] = (
+            merge_attempt_blocked if transition_blocked else None
+        )
+        assertions["completed_success_to_in_progress_blocks_merge"] = (
+            transition_blocked and merge_attempt_blocked
+        )
         self._update_check(check_id, "completed")
-        self._wait_for_merge_state(first, "clean")
+        if not self._wait_for_merge_outcome(first, preferred=True):
+            raise ContractError(
+                "indeterminate shared-head probe: the restored successful check did not satisfy "
+                "the first pull request"
+            )
         second = self._create_pull(
             head="shared-head", base="alternate", title="Shared-head contract PR"
         )
-        self._wait_for_merge_state(second, "clean")
+        self._wait_for_merge_outcome(second)
         time.sleep(self.config.observation_seconds)
-        self._wait_for_merge_state(second, "clean")
-        assertions["shared_head_inherits_success_before_invalidation"] = True
+        assertions["shared_head_inherits_success_before_invalidation"] = (
+            self._wait_for_merge_outcome(second)
+        )
 
         self._update_check(check_id, "in_progress")
-        self._wait_for_merge_state(first, "blocked")
-        self._wait_for_merge_state(second, "blocked")
-        assertions["shared_head_invalidation_blocks_both_pull_requests"] = True
+        first_blocked = not self._wait_for_merge_outcome(first, preferred=False)
+        second_blocked = not self._wait_for_merge_outcome(second, preferred=False)
+        assertions["shared_head_invalidation_blocks_both_pull_requests"] = (
+            first_blocked and second_blocked
+        )
 
         self._update_check(check_id, "completed")
-        self._wait_for_merge_state(second, "clean")
+        if not self._wait_for_merge_outcome(second, preferred=True):
+            raise ContractError(
+                "indeterminate retarget probe: the restored successful check did not satisfy "
+                "the shared-head pull request"
+            )
         self.operator.request(
             "PATCH",
             f"{self.repo_path}/pulls/{second}",
             body={"base": "retarget"},
         )
-        self._wait_for_merge_state(second, "clean")
+        self._wait_for_merge_outcome(second)
         time.sleep(self.config.observation_seconds)
-        self._wait_for_merge_state(second, "clean")
-        assertions["retarget_inherits_commit_scoped_success_before_invalidation"] = True
+        assertions["retarget_inherits_commit_scoped_success_before_invalidation"] = (
+            self._wait_for_merge_outcome(second)
+        )
 
         self._exercise_app_review(base_sha)
         self._capture_webhook_contracts()
+        self.report["interpretation"] = contract_interpretation(assertions)
         self.report["finished_at"] = datetime.now(UTC).isoformat()
         return self.report
 
@@ -856,6 +1000,8 @@ class Fixture:
             self.checker.close()
         if self.approver is not None:
             self.approver.close()
+        if self.repository_selection is not None:
+            self.repository_selection.close()
         self.operator.close()
         return errors
 

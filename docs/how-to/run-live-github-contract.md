@@ -32,8 +32,10 @@ Prepare:
 - an organization reserved for disposable integration tests
 - an operator token authorized to create and delete repositories, repository
   rulesets, and narrowly targeted organization rulesets
-- an Extra CODEOWNERS test App installed in that organization, with Checks
-  write and Contents read
+- an Extra CODEOWNERS test App installed in that organization, preferably for
+  all repositories, with Checks and Statuses write, Contents and Pull requests
+  read, an active webhook, and the [normal Extra CODEOWNERS event
+  subscriptions](../reference/github-permissions.md#webhook-subscriptions)
 - the test App ID, installation ID, and a disposable private-key file
 - optionally, a separate approver App installed in the organization with Pull
   requests write, to exercise the numeric-review contract.
@@ -50,13 +52,26 @@ rulesets][repository-rulesets], [installation repository selection][app-reposito
 [App-authored reviews][pull-reviews], and [App webhook deliveries][app-deliveries].
 The fixture pins the `2026-03-10` API version and records it in every report.
 
-If an App installation is limited to selected repositories, the operator
-token must also be allowed to add the newly created fixture repository. That
-operation should produce `installation_repositories.added`. An installation
-covering all repositories may gain access automatically without producing
-that action. Installation creation, suspension, permission acceptance, and
-uninstallation remain manual lifecycle tests because changing them can affect
-every repository in an installation.
+Prefer an all-repositories installation because this organization must contain
+only disposable test repositories. A new repository then becomes accessible
+without another broad credential, although GitHub may not produce an
+`installation_repositories.added` delivery.
+
+If either App installation is limited to selected repositories, the fixture
+needs a **separate** short-lived classic personal access token (PAT) with the
+`repo` scope to add the new repository. GitHub does not accept a fine-grained
+PAT or GitHub App token for that endpoint. The classic `repo` scope is broader
+than this fixture needs, so create it from a dedicated test account, authorize
+it for the disposable organization if single sign-on requires that step, and
+give that account administrator access to the newly created fixture repository
+(normally through an owner role in the disposable organization). Revoke the
+PAT immediately after the run. Do not reuse the fine-grained operator token or
+a production credential. Adding the repository should produce
+`installation_repositories.added`.
+
+Installation creation, suspension, permission acceptance, and uninstallation
+remain manual lifecycle tests because changing them can affect every
+repository in an installation.
 
 ## 1. Export credentials without putting them on the command line
 
@@ -93,6 +108,19 @@ echo. Environment variables remain readable to sufficiently privileged local
 processes. Use a trusted workstation without untrusted processes sharing the
 operator account.
 
+Only for a selected-repositories checker or approver installation, prompt for
+the separate classic PAT:
+
+```bash
+IFS= read -r -s -p 'Disposable repository-selection classic PAT: ' \
+  EXTRA_CODEOWNERS_LIVE_REPOSITORY_SELECTION_TOKEN
+printf '\n'
+export EXTRA_CODEOWNERS_LIVE_REPOSITORY_SELECTION_TOKEN
+```
+
+Do not set this variable for all-repositories installations. The fixture never
+falls back to the operator token for repository-selection changes.
+
 To test the ordinary numeric approval count, also set all three approver
 variables:
 
@@ -123,20 +151,36 @@ export EXTRA_CODEOWNERS_LIVE_OBSERVATION_SECONDS=15
 mise run test:github-contract
 ```
 
-The command exits nonzero when setup, a contract assertion, or cleanup fails.
-If cleanup fails, follow the printed repository URL and delete both the named
-organization ruleset and repository. To inspect live resources during tool
-development, `EXTRA_CODEOWNERS_LIVE_KEEP_REPOSITORY=true` deliberately skips
-cleanup; never use that setting in a routine evidence run.
+The command exits nonzero when setup fails, an observation remains
+indeterminate, an API response cannot be interpreted, or cleanup fails. A
+determinate unsafe observation is recorded as `false` and does not make the
+fixture itself fail. If cleanup fails, follow the printed repository URL and
+delete both the named organization ruleset and repository. To inspect live
+resources during tool development, `EXTRA_CODEOWNERS_LIVE_KEEP_REPOSITORY=true`
+deliberately skips cleanup; never use that setting in a routine evidence run.
 
-A successful run prints the disposable repository URL, deletes the fixture,
-writes the report, and exits with status zero. Confirm the report result and
-cleanup state:
+A completed observation prints the disposable repository URL, deletes the
+fixture, writes the report, and exits with status zero even when GitHub's
+observed behavior is unsafe or an App review does not count. Confirm only that
+the observation completed and cleanup succeeded:
 
 ```bash
 jq -e '.result == "observed" and .cleanup_succeeded == true' \
   live-github-contract-report.json
 ```
+
+Then inspect the fail-closed interpretation separately:
+
+```bash
+jq '.interpretation, .assertions' live-github-contract-report.json
+```
+
+`result: observed` means the fixture obtained determinate answers. It does not
+mean the GitHub contract is fail closed. The fixture always keeps
+`interpretation.production_warning_required` at `true`: even a
+`github_contract_fail_closed` value of `true` covers only the GitHub rules and
+Check Run probes. Delayed and lost delivery tests against a deployed service
+remain mandatory before maintainers can reconsider the warning.
 
 ## 3. Review and retain the sanitized report
 
@@ -235,13 +279,15 @@ After the report and cleanup checks pass, remove the token from the shell:
 
 ```bash
 unset EXTRA_CODEOWNERS_LIVE_OPERATOR_TOKEN
+unset EXTRA_CODEOWNERS_LIVE_REPOSITORY_SELECTION_TOKEN
 ```
 
-Revoke the short-lived operator token when the evidence run is complete. If
-the checker or approver private key was created only for this fixture, revoke
-that key in the App settings and securely remove its local file. Preserve the
-sanitized report, tested source commit, GitHub plan, and installation-selection
-mode; do not preserve credentials or raw deliveries with the evidence.
+Revoke the short-lived operator token and any repository-selection classic PAT
+when the evidence run is complete. If the checker or approver private key was
+created only for this fixture, revoke that key in the App settings and securely
+remove its local file. Preserve the sanitized report, tested source commit,
+GitHub plan, and installation-selection mode; do not preserve credentials or
+raw deliveries with the evidence.
 
 [app-deliveries]: https://docs.github.com/en/rest/apps/webhooks?apiVersion=2026-03-10
 [app-repositories]: https://docs.github.com/en/rest/apps/installations?apiVersion=2026-03-10#add-a-repository-to-an-app-installation
