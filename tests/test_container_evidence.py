@@ -2931,6 +2931,7 @@ def test_container_build_toolchain_is_exactly_pinned_and_renovate_managed() -> N
         assert workflow.count(qemu_action) == expected_count
         assert workflow.count(buildx_action) == expected_count
         assert workflow.count(qemu) == expected_count
+        assert workflow.count("cache-binary: false") == expected_count
         assert workflow.count("version: v0.35.0") == expected_count
         assert workflow.count(buildkit) == expected_count
 

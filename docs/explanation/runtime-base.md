@@ -76,9 +76,10 @@ Both selected platforms passed the same checks:
 
 The ordinary Python matrix still runs the full test suite, including the
 PostgreSQL integration suite. Container jobs then build independently for each
-architecture. The workflows version-pin the Buildx 0.35.0 client and
-digest-pin the multi-platform BuildKit 0.30.0 and QEMU 10.2.3 images; Renovate
-tracks all three references. The builder asserts the exact Python patch
+architecture. The workflows version-pin the Buildx 0.35.0 client, disable the
+setup action's mutable binary cache, and digest-pin the multi-platform BuildKit
+0.30.0 and QEMU 10.2.3 images; Renovate tracks all three references. The
+builder asserts the exact Python patch
 version and suppresses uv's installer-only metadata so `uv_cache.json` cannot
 carry its recorded source ctime into the application's installed `RECORD`. The
 hardened smoke test
