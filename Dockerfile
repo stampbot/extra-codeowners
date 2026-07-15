@@ -11,7 +11,21 @@ ENV UV_COMPILE_BYTECODE=1 \
 WORKDIR /build
 
 COPY --from=uv /uv /uvx /bin/
-COPY pyproject.toml uv.lock README.md ./
+COPY pyproject.toml uv.lock README.md mise.toml ./
+
+# Bind the reviewed version to the executable selected by the immutable image digest.
+RUN python - <<'PY'
+import subprocess
+import tomllib
+from pathlib import Path
+
+expected = tomllib.loads(Path("mise.toml").read_text(encoding="utf-8"))["tools"]["uv"]
+reported = subprocess.check_output(["uv", "--version"], text=True).split()
+actual = reported[1] if len(reported) >= 2 and reported[0] == "uv" else ""
+if actual != expected:
+    raise SystemExit(f"digest-selected uv is {actual!r}; reviewed version is {expected!r}")
+PY
+
 COPY extra_codeowners/ ./extra_codeowners/
 
 RUN --mount=type=cache,target=/root/.cache/uv \

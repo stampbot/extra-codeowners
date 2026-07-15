@@ -59,6 +59,16 @@
       "enabled": false
     },
     {
+      "description": "Update the uv image, executable, and setup action together",
+      "matchPackageNames": [
+        "astral-sh/setup-uv",
+        "astral-sh/uv",
+        "ghcr.io/astral-sh/uv"
+      ],
+      "groupName": "uv toolchain",
+      "enabled": true
+    },
+    {
       "description": "Refresh container digests weekly",
       "matchUpdateTypes": [
         "digest"
