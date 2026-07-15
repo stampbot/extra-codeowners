@@ -4,13 +4,15 @@ This chart deploys the self-hosted Extra CODEOWNERS GitHub App service. The
 repository contains the source chart. No versioned GitHub release, supported
 production release, or hosted service is available.
 
-Successful `main` builds publish public, signed multi-architecture development
-images under the mutable `main` tag and a commit-specific `sha-*` tag. A version
-tag that produces a GitHub release also publishes signed semantic-versioned
-images and the chart at
-`oci://ghcr.io/stampbot/charts/extra-codeowners`. No versioned chart is
-available until such a release exists. The GitHub release and its attestations
-define artifact availability; workflow definitions do not prove publication.
+The `main` publication job has been removed, and tagged-release publication is
+blocked while CPython normalization, native-wheel and embedded-SBOM expansion,
+historical Python `RECORD` replay, hash-pinned build isolation, and privilege
+separation remain unresolved.
+An older public `main` image may still exist in GHCR; it is unsupported,
+unapproved for distribution, and must not be used by this guide. Build the
+reviewed commit into an access-restricted, non-public temporary registry. No versioned chart is
+available. A future GitHub release and its attestations will define artifact
+availability; workflow definitions do not prove publication.
 
 The current Check Run design has a documented commit-to-pull-request
 inheritance window. It does not provide native-equivalent production
@@ -21,8 +23,8 @@ be used to authorize production merges.
 
 - Kubernetes 1.27 or later
 - Helm 3.14 or later
-- Docker and an operator-controlled container registry reachable by the cluster
-  when building an image from source
+- Docker and an access-restricted, non-public temporary container registry
+  reachable by the cluster when building an image from source
 - an installed Extra CODEOWNERS GitHub App
 - a durable database supported by the application
 - Kubernetes Secrets containing the runtime environment variables and mounted
@@ -48,27 +50,162 @@ must replace the container's development-only SQLite URL with a PostgreSQL URL.
 
 ## Build an image from source
 
-Run these commands from the repository root. `IMAGE_REPOSITORY` must name an
-operator-controlled registry path that the cluster can reach. Replace the
-reserved `example.com` hostname. `IMAGE_TAG` identifies the reviewed Git commit
-and must not be reused for another image. Docker and the cluster must already be
-authenticated to the selected registry.
+The Dockerfile and source execute with network access during this build. Use a
+disposable no-secret builder with no cloud metadata access, production
+credentials, mounted secrets, or Docker access to other workloads. Build one
+architecture from a fresh detached worktree at an explicit full commit.
+
+The current `[build-system]` range is not hash-locked by `uv.lock`. Issue
+[`#32`](https://github.com/stampbot/extra-codeowners/issues/32) must pin the
+isolated PEP 517 environment and bind installation to its exact wheel. Treat
+this as a disposable review build, not reproducible distribution evidence.
+
+`IMAGE_REPOSITORY` must be an access-restricted, non-public temporary repository
+that the cluster can reach. This procedure requires a native builder of the
+target architecture; QEMU and `binfmt` emulation are outside its reviewed
+boundary. Do not inject any registry credential until the separate push step
+has rechecked the completed local image.
 
 ```shell
-export IMAGE_REPOSITORY="registry.example.com/example/extra-codeowners"
-export IMAGE_TAG="$(git rev-parse HEAD)"
-docker build --tag "${IMAGE_REPOSITORY}:${IMAGE_TAG}" .
-docker push "${IMAGE_REPOSITORY}:${IMAGE_TAG}"
+set -euo pipefail
+umask 077
+
+export REPOSITORY_ROOT="$(git rev-parse --show-toplevel)"
+export SOURCE_REVISION='REPLACE_WITH_REVIEWED_40_CHARACTER_COMMIT'
+export TARGET_ARCH='amd64'
+export IMAGE_REPOSITORY='registry.example.com/private/extra-codeowners'
+export GIT_NO_REPLACE_OBJECTS=1
+
+case "$SOURCE_REVISION" in (*[!0-9a-f]*|'') exit 1 ;; esac
+test "${#SOURCE_REVISION}" -eq 40
+case "$TARGET_ARCH" in (amd64|arm64) ;; (*) exit 1 ;; esac
+case "$(docker info --format '{{.Architecture}}')" in
+  (amd64|x86_64) BUILDER_ARCH=amd64 ;;
+  (arm64|aarch64) BUILDER_ARCH=arm64 ;;
+  (*) exit 1 ;;
+esac
+test "$BUILDER_ARCH" = "$TARGET_ARCH"
+test "$(git -C "$REPOSITORY_ROOT" rev-parse --verify "${SOURCE_REVISION}^{commit}")" = \
+  "$SOURCE_REVISION"
+
+WORKTREE_PARENT="$(mktemp -d)"
+WORKTREE="$WORKTREE_PARENT/source"
+cleanup() {
+  git -C "$REPOSITORY_ROOT" worktree remove --force "$WORKTREE" \
+    >/dev/null 2>&1 || true
+  rm -rf -- "$WORKTREE_PARENT"
+}
+trap cleanup EXIT
+
+git -C "$REPOSITORY_ROOT" worktree add --detach "$WORKTREE" "$SOURCE_REVISION"
+test "$(git -C "$WORKTREE" rev-parse HEAD)" = "$SOURCE_REVISION"
+test -z "$(git -C "$WORKTREE" -c core.fsmonitor=false \
+  status --porcelain=v1 --untracked-files=all)"
+
+IMAGE_TAG="${SOURCE_REVISION}-${TARGET_ARCH}"
+IMAGE_REFERENCE="${IMAGE_REPOSITORY}:${IMAGE_TAG}"
+docker buildx build \
+  --platform "linux/${TARGET_ARCH}" \
+  --build-arg "VCS_REF=${SOURCE_REVISION}" \
+  --build-arg VERSION=0.0.0-review \
+  --load \
+  --tag "$IMAGE_REFERENCE" \
+  "$WORKTREE"
+test -z "$(git -C "$WORKTREE" -c core.fsmonitor=false \
+  status --porcelain=v1 --untracked-files=all)"
+
+IMAGE_ARCHITECTURE="$(docker image inspect --format '{{.Architecture}}' "$IMAGE_REFERENCE")"
+IMAGE_SOURCE_REVISION="$(docker image inspect \
+  --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' \
+  "$IMAGE_REFERENCE")"
+IMAGE_CONFIG_DIGEST="$(docker image inspect --format '{{.Id}}' "$IMAGE_REFERENCE")"
+test "$IMAGE_ARCHITECTURE" = "$TARGET_ARCH"
+test "$IMAGE_SOURCE_REVISION" = "$SOURCE_REVISION"
+[[ "$IMAGE_CONFIG_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+printf 'local-image=%s config=%s source=%s architecture=%s\n' \
+  "$IMAGE_REFERENCE" "$IMAGE_CONFIG_DIGEST" "$IMAGE_SOURCE_REVISION" \
+  "$IMAGE_ARCHITECTURE"
+cleanup
+trap - EXIT
 ```
 
-The registry returns the image digest. Record it. This local source build does
-not create a signature or provenance attestation. CI-published development and
-release images have workflow-identity signatures and provenance attestations.
-
-Export the digest returned by the registry, including its `sha256:` prefix:
+Record the local image reference, configuration digest, source commit, and
+architecture. Keep the local image on the disposable builder for the push
+step. Give the builder a short-lived push credential scoped only to that
+repository; do not reuse the cluster's read-only pull credential. Re-export
+the exact recorded values if this is a new shell. The following commands check
+the local image before requesting the token. After the token is present, they
+run only the trusted Docker client, shell, and `awk`, not pull-request code.
 
 ```shell
-export IMAGE_DIGEST="sha256:REPLACE_WITH_REGISTRY_DIGEST"
+set -euo pipefail
+umask 077
+
+export SOURCE_REVISION='REPLACE_WITH_REVIEWED_40_CHARACTER_COMMIT'
+export TARGET_ARCH='amd64'
+export IMAGE_REPOSITORY='registry.example.com/private/extra-codeowners'
+export REGISTRY_HOST='registry.example.com'
+export REGISTRY_PUSH_USER='REPLACE_WITH_EPHEMERAL_PUSH_USER'
+
+case "$SOURCE_REVISION" in (*[!0-9a-f]*|'') exit 1 ;; esac
+test "${#SOURCE_REVISION}" -eq 40
+case "$TARGET_ARCH" in (amd64|arm64) ;; (*) exit 1 ;; esac
+case "$IMAGE_REPOSITORY" in ("${REGISTRY_HOST}/"*) ;; (*) exit 1 ;; esac
+IMAGE_TAG="${SOURCE_REVISION}-${TARGET_ARCH}"
+IMAGE_REFERENCE="${IMAGE_REPOSITORY}:${IMAGE_TAG}"
+
+IMAGE_ARCHITECTURE="$(docker image inspect --format '{{.Architecture}}' "$IMAGE_REFERENCE")"
+IMAGE_SOURCE_REVISION="$(docker image inspect \
+  --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' \
+  "$IMAGE_REFERENCE")"
+IMAGE_CONFIG_DIGEST="$(docker image inspect --format '{{.Id}}' "$IMAGE_REFERENCE")"
+test "$IMAGE_ARCHITECTURE" = "$TARGET_ARCH"
+test "$IMAGE_SOURCE_REVISION" = "$SOURCE_REVISION"
+[[ "$IMAGE_CONFIG_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+
+: "${REGISTRY_PUSH_TOKEN:?inject a short-lived repository-scoped push token}"
+PUSH_DOCKER_CONFIG="$(mktemp -d)"
+cleanup_push() {
+  docker --config "$PUSH_DOCKER_CONFIG" logout "$REGISTRY_HOST" \
+    >/dev/null 2>&1 || true
+  rm -rf -- "$PUSH_DOCKER_CONFIG"
+  unset REGISTRY_PUSH_TOKEN
+}
+trap cleanup_push EXIT
+
+printf '%s' "$REGISTRY_PUSH_TOKEN" | docker --config "$PUSH_DOCKER_CONFIG" login \
+  "$REGISTRY_HOST" --username "$REGISTRY_PUSH_USER" --password-stdin
+docker --config "$PUSH_DOCKER_CONFIG" image push "$IMAGE_REFERENCE"
+IMAGE_DIGEST="$(
+  docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' \
+    "$IMAGE_REFERENCE" \
+  | awk -v prefix="${IMAGE_REPOSITORY}@" \
+      'index($0, prefix) == 1 {sub(prefix, ""); print; exit}'
+)"
+[[ "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+cleanup_push
+trap - EXIT
+printf 'image=%s@%s config=%s source=%s architecture=%s\n' \
+  "$IMAGE_REPOSITORY" "$IMAGE_DIGEST" "$IMAGE_CONFIG_DIGEST" \
+  "$IMAGE_SOURCE_REVISION" "$IMAGE_ARCHITECTURE"
+```
+
+Record the repository, registry digest, local configuration digest, source
+commit, and architecture outside the disposable builder. Revoke the push
+credential and destroy the builder. This source build is not signed, attested,
+or approved for redistribution.
+
+Do not enable anonymous pulls or copy the image to a shared registry. After the
+review deployment is removed, use the registry's API or CLI to delete the exact
+`IMAGE_REPOSITORY@IMAGE_DIGEST`, not only its tag. Verify that a pull by digest
+fails before destroying the audit record.
+
+Export the recorded values on the separate cluster-administration host:
+
+```shell
+export IMAGE_REPOSITORY='registry.example.com/private/extra-codeowners'
+export IMAGE_DIGEST='sha256:REPLACE_WITH_RECORDED_REGISTRY_DIGEST'
+export TARGET_ARCH='amd64'
 ```
 
 ## Install the source chart
@@ -83,14 +220,50 @@ EXTRA_CODEOWNERS_GITHUB_WEBHOOK_SECRET_FILE=/run/secrets/extra-codeowners/github
 ```
 
 The environment file and both credential source files must remain outside
-version control with restricted filesystem permissions. The deployment uses
-separate Secrets for environment variables and mounted credential files:
+version control with restricted filesystem permissions. Use a separate
+read-only registry credential scoped to pulls from only `IMAGE_REPOSITORY`.
+Keep the exact reviewed source in a clean detached worktree on the
+cluster-administration host. Do not install the chart from a mutable working
+tree.
 
 ```shell
+set -euo pipefail
+umask 077
+
+export SOURCE_REVISION='REPLACE_WITH_THE_SAME_REVIEWED_40_CHARACTER_COMMIT'
+export CHART_SOURCE='/path/to/clean-detached-extra-codeowners-worktree'
+export REGISTRY_HOST='registry.example.com'
+export REGISTRY_PULL_USER='REPLACE_WITH_READ_ONLY_PULL_USER'
+export GIT_NO_REPLACE_OBJECTS=1
+case "$SOURCE_REVISION" in (*[!0-9a-f]*|'') exit 1 ;; esac
+test "${#SOURCE_REVISION}" -eq 40
+test "$(git -C "$CHART_SOURCE" rev-parse --verify "${SOURCE_REVISION}^{commit}")" = \
+  "$SOURCE_REVISION"
+test "$(git -C "$CHART_SOURCE" rev-parse HEAD)" = "$SOURCE_REVISION"
+test -z "$(git -C "$CHART_SOURCE" -c core.fsmonitor=false \
+  status --porcelain=v1 --untracked-files=all)"
+
+kubectl create namespace extra-codeowners
+: "${REGISTRY_PULL_TOKEN:?inject the repository-scoped read-only pull token}"
+PULL_DOCKER_CONFIG="$(mktemp -d)"
+cleanup_pull_config() {
+  docker --config "$PULL_DOCKER_CONFIG" logout "$REGISTRY_HOST" \
+    >/dev/null 2>&1 || true
+  rm -rf -- "$PULL_DOCKER_CONFIG"
+  unset REGISTRY_PULL_TOKEN
+}
+trap cleanup_pull_config EXIT
+printf '%s' "$REGISTRY_PULL_TOKEN" | docker --config "$PULL_DOCKER_CONFIG" login \
+  "$REGISTRY_HOST" --username "$REGISTRY_PULL_USER" --password-stdin
+kubectl --namespace extra-codeowners create secret generic extra-codeowners-registry \
+  --type=kubernetes.io/dockerconfigjson \
+  --from-file=.dockerconfigjson="$PULL_DOCKER_CONFIG/config.json"
+cleanup_pull_config
+trap - EXIT
+
 export RUNTIME_ENV_FILE="$HOME/.config/extra-codeowners/runtime.env"
 export GITHUB_PRIVATE_KEY_FILE="$HOME/.config/extra-codeowners/private-key.pem"
 export GITHUB_WEBHOOK_SECRET_FILE="$HOME/.config/extra-codeowners/webhook-secret"
-kubectl create namespace extra-codeowners
 kubectl --namespace extra-codeowners create secret generic extra-codeowners-runtime \
   --from-env-file="$RUNTIME_ENV_FILE"
 kubectl --namespace extra-codeowners create secret generic extra-codeowners-github \
@@ -98,10 +271,22 @@ kubectl --namespace extra-codeowners create secret generic extra-codeowners-gith
   --from-file=github-webhook-secret="$GITHUB_WEBHOOK_SECRET_FILE"
 ```
 
-Save the non-secret mount wiring as `deployment-values.yaml`:
+The pull credential remains active inside the namespaced Secret so a pod can
+reschedule. Remove its local plaintext value after creating the Secret. Rotate
+the credential and replace the Secret on an operator-defined schedule; revoke
+the old credential only after a new pod has successfully pulled with its
+replacement.
+
+The deployment uses separate Secrets for registry pulls, environment
+variables, and mounted GitHub credential files. Save the non-secret wiring as
+`deployment-values.yaml`:
 
 ```yaml
 existingSecret: extra-codeowners-runtime
+imagePullSecrets:
+  - name: extra-codeowners-registry
+nodeSelector:
+  kubernetes.io/arch: amd64
 extraVolumes:
   - name: github-credentials
     secret:
@@ -113,11 +298,14 @@ extraVolumeMounts:
     readOnly: true
 ```
 
+Set `kubernetes.io/arch` to the exact recorded `TARGET_ARCH`. A digest built for
+one architecture must never be scheduled on the other architecture.
+
 Install the reviewed image and source chart:
 
 ```shell
 helm install extra-codeowners \
-  ./charts/extra-codeowners \
+  "$CHART_SOURCE/charts/extra-codeowners" \
   --namespace extra-codeowners \
   --values deployment-values.yaml \
   --set-string image.repository="$IMAGE_REPOSITORY" \
@@ -184,7 +372,7 @@ Save the file as `ingress-values.yaml`, then apply it to the existing release:
 
 ```shell
 helm upgrade extra-codeowners \
-  ./charts/extra-codeowners \
+  "$CHART_SOURCE/charts/extra-codeowners" \
   --namespace extra-codeowners \
   --reset-then-reuse-values \
   --values ingress-values.yaml
@@ -216,7 +404,7 @@ registry digest in `IMAGE_DIGEST`, then upgrade from the same checkout:
 
 ```shell
 helm upgrade extra-codeowners \
-  ./charts/extra-codeowners \
+  "$CHART_SOURCE/charts/extra-codeowners" \
   --namespace extra-codeowners \
   --reset-then-reuse-values \
   --set-string image.repository="$IMAGE_REPOSITORY" \
@@ -322,6 +510,7 @@ verification:
 
 ```shell
 helm uninstall extra-codeowners --namespace extra-codeowners
+kubectl --namespace extra-codeowners delete secret extra-codeowners-registry
 ```
 
 The GitHub App installation must remain active and retain repository access
@@ -339,7 +528,9 @@ Uninstalling does not delete:
 
 These resources can be removed after confirming that no other deployment uses
 them, retaining required audit data, and completing App-access cleanup in that
-order.
+order. After the last pod is gone, revoke the registry pull credential. Delete
+the exact temporary registry object by `IMAGE_REPOSITORY@IMAGE_DIGEST`, verify
+that a pull by digest fails, and only then remove any remaining tag.
 
 ## Values
 
@@ -353,7 +544,7 @@ validates types, bounds, accepted enums, and unknown top-level properties during
 | `replicaCount` | integer | `1` | API/worker pods when autoscaling is off. |
 | `revisionHistoryLimit` | integer | `3` | Old ReplicaSets retained for rollback. |
 | `deploymentStrategy` | object | `Recreate` | Deployment replacement strategy; avoids overlapping application versions by default. |
-| `image.repository` | string | `ghcr.io/stampbot/extra-codeowners` | Container repository used by CI development and tagged release images. |
+| `image.repository` | string | `example.invalid/stampbot/extra-codeowners` | Intentionally non-pullable placeholder; override it with the operator-controlled source build. |
 | `image.pullPolicy` | enum | `IfNotPresent` | Kubernetes image pull policy. |
 | `image.tag` | string | empty | Image tag; an empty value uses chart `appVersion`. |
 | `image.digest` | string | empty | `sha256:` digest that takes precedence over the tag. |
@@ -424,4 +615,4 @@ Security-relevant defaults are:
 - no chart-managed Secret or credential value
 - an ingress NetworkPolicy limited to the application port.
 
-[configuration]: https://github.com/stampbot/extra-codeowners/blob/main/docs/reference/configuration.md
+[configuration]: ../../docs/reference/configuration.md

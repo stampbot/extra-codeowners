@@ -24,11 +24,7 @@ markdown_extensions:
       permalink: true
   - pymdownx.details
   - pymdownx.highlight
-  - pymdownx.superfences:
-      custom_fences:
-        - name: mermaid
-          class: mermaid
-          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.superfences
 
 nav:
   - Home: index.md
@@ -40,14 +36,15 @@ nav:
       - Prepare repository rules: how-to/prepare-repository-rules.md
       - Deploy: how-to/deploy.md
       - Operate and recover: how-to/operate.md
-      - Verify container evidence: how-to/verify-container-evidence.md
-      - Review container evidence: how-to/review-container-evidence.md
+      - Review CI container evidence: how-to/review-container-evidence.md
   - Reference:
       - Configuration: reference/configuration.md
       - Checks and evaluation: reference/checks.md
       - Command line: reference/cli.md
       - GitHub permissions and events: reference/github-permissions.md
       - HTTP API: reference/http-api.md
+      - Container evidence policy: reference/container-evidence-policy.md
+      - Container evidence release contract: reference/container-evidence-release-contract.md
   - Explanation:
       - Native CODEOWNERS comparison: explanation/native-codeowners.md
       - Architecture: explanation/architecture.md

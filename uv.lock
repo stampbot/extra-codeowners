@@ -397,6 +397,7 @@ dependencies = [
 dev = [
     { name = "httpx2" },
     { name = "mypy" },
+    { name = "packaging" },
     { name = "pre-commit" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -429,6 +430,7 @@ requires-dist = [
 dev = [
     { name = "httpx2", specifier = ">=2.5.0,<3" },
     { name = "mypy", specifier = ">=1.14.0,<2" },
+    { name = "packaging", specifier = ">=26.0,<27" },
     { name = "pre-commit", specifier = ">=4.0.0,<5" },
     { name = "pytest", specifier = ">=8.3.0,<10" },
     { name = "pytest-asyncio", specifier = ">=0.25.0,<2" },

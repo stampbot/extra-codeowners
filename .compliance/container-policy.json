@@ -50,24 +50,20 @@
   "base_image_index_digest": "sha256:26730869004e2b9c4b9ad09cab8625e81d256d1ce97e72df5520e806b1709f92",
   "base_image_platforms": {
     "linux/amd64": {
-      "config_digest": "sha256:7ff4111a89e61a65f2246d5687bbba5c735c6d9e0ba7d488cf9b404154fec262",
       "layer_diff_ids": [
         "sha256:34884abbe92863fce933ed7c39c0e045631af0ed86d5cc0dfbdf9fdca426ce3c",
         "sha256:460337c1ba7e527ed7b05b71c37014059ba6b0a49b89073b152a6cc80586866c",
         "sha256:d1acd644bdb683fa2347c9f7ba0ad074ec0cfa9f11b933fecab47e5eeb06428a",
         "sha256:92a229ac48b6a870f271c0bc8b312b5dbf2e8957ea42dbc843e96daa68811f8e"
-      ],
-      "manifest_digest": "sha256:47f36929d95852c8aa959380eeeea761ba7411ebe793d090da4cd518ac3af237"
+      ]
     },
     "linux/arm64": {
-      "config_digest": "sha256:86bc78aef1279ab7ef2a0b98a4affba90e16f6d782c0143dd0d1cd307ccec3ac",
       "layer_diff_ids": [
         "sha256:b2848c02ac6ff53d265469b5b30f649f335e546a83330cd8916d54e65e640409",
         "sha256:15fc7fbc6cefcfb3047537e9358cbb953dc6e664040062c5192972e6393f4662",
         "sha256:e65178efb902c981db1458214da2df47179e0ecc435084fa169543c1283b11f6",
         "sha256:4c6347b5384b9a4ca034bfa626e5cb9de279b81ead0b7d793a7e032542943428"
-      ],
-      "manifest_digest": "sha256:ea1c84f6f8fd70586985617ca87516c75e583748885d70515d83c7f3c8e94174"
+      ]
     }
   },
   "cpython_source": {
@@ -98,7 +94,5407 @@
     "approved": false,
     "approved_by": "",
     "approved_on": "",
-    "rationale": "A maintainer must review the produced archives and recipient delivery before enabling a release."
+    "rationale": "Distribution is denied: component/source completeness remains open in issue #18, and privilege separation remains open in issue #28."
+  },
+  "filesystem_baselines": {
+    "linux/amd64": {
+      "apk_database_occurrences": [
+        {
+          "effective": false,
+          "gid": 0,
+          "layer": 0,
+          "mode": 420,
+          "path": "lib/apk/db/installed",
+          "sha256": "e251a329d04cf2a1be7f44188f849aad30db1bafff60c40dfb19570e885432ab",
+          "size": 15155,
+          "uid": 0
+        },
+        {
+          "effective": false,
+          "gid": 0,
+          "layer": 1,
+          "mode": 420,
+          "path": "lib/apk/db/installed",
+          "sha256": "82ad1e64c32a66ce16891aae75973f1886cd59516e2bad0fff281aa3e6942521",
+          "size": 51228,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 2,
+          "mode": 420,
+          "path": "lib/apk/db/installed",
+          "sha256": "8db674d0e0c63f35b46d2cb67034adf54ef11aa886f366250a365275a7d7cddb",
+          "size": 59145,
+          "uid": 0
+        }
+      ],
+      "post_base_directory_effects": [
+        {
+          "layer": 4,
+          "path": "app",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/bin",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/include",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/include/site",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/include/site/python3.14",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/include/site/python3.14/greenlet",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/annotated_doc",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/annotated_doc-0.0.4.dist-info",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/annotated_doc-0.0.4.dist-info/licenses",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/annotated_types",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/annotated_types-0.7.0.dist-info",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/annotated_types-0.7.0.dist-info/licenses",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/anyio",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/anyio-4.14.2.dist-info",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/anyio-4.14.2.dist-info/licenses",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/anyio/_backends",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/anyio/_core",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/anyio/abc",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/anyio/streams",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/certifi",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/certifi-2026.6.17.dist-info",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/certifi-2026.6.17.dist-info/licenses",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/cffi",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/cffi-2.1.0.dist-info",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/cffi-2.1.0.dist-info/licenses",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/click",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/click-8.4.2.dist-info",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/click-8.4.2.dist-info/licenses",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/cryptography",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/licenses",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/cryptography.libs",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/cryptography/hazmat",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/cryptography/hazmat/asn1",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/cryptography/hazmat/backends",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/cryptography/hazmat/backends/openssl",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/cryptography/hazmat/bindings",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/cryptography/hazmat/bindings/_rust",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/cryptography/hazmat/bindings/_rust/openssl",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/cryptography/hazmat/bindings/openssl",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/cryptography/hazmat/decrepit",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/cryptography/hazmat/decrepit/ciphers",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/cryptography/hazmat/primitives",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/cryptography/hazmat/primitives/asymmetric",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/cryptography/hazmat/primitives/ciphers",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/cryptography/hazmat/primitives/kdf",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/cryptography/hazmat/primitives/serialization",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/cryptography/hazmat/primitives/twofactor",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/cryptography/x509",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/dotenv",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/extra_codeowners",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/extra_codeowners-0.1.0.dist-info",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/fastapi",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/fastapi-0.139.0.dist-info",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/fastapi-0.139.0.dist-info/licenses",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/fastapi/.agents",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/fastapi/.agents/skills",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/fastapi/.agents/skills/fastapi",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/fastapi/.agents/skills/fastapi/references",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/fastapi/_compat",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/fastapi/dependencies",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/fastapi/middleware",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/fastapi/openapi",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/fastapi/security",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/greenlet",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/greenlet-3.5.3.dist-info",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/greenlet-3.5.3.dist-info/licenses",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/greenlet-3.5.3.dist-info/sboms",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/greenlet.libs",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/greenlet/platform",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/greenlet/tests",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/h11",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/h11-0.16.0.dist-info",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/h11-0.16.0.dist-info/licenses",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/httpcore",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/httpcore-1.0.9.dist-info",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/httpcore-1.0.9.dist-info/licenses",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/httpcore/_async",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/httpcore/_backends",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/httpcore/_sync",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/httpx",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/httpx-0.28.1.dist-info",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/httpx-0.28.1.dist-info/licenses",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/httpx/_transports",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/idna",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/idna-3.18.dist-info",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/idna-3.18.dist-info/licenses",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/jwt",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/markdown_it",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/markdown_it/cli",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/markdown_it/common",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/markdown_it/helpers",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/markdown_it/presets",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/markdown_it/rules_block",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/markdown_it/rules_core",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/markdown_it/rules_inline",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/markdown_it_py-4.2.0.dist-info",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/markdown_it_py-4.2.0.dist-info/licenses",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/mdurl",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/mdurl-0.1.2.dist-info",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/prometheus_client",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/prometheus_client-0.25.0.dist-info",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/prometheus_client-0.25.0.dist-info/licenses",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/prometheus_client/aiohttp",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/prometheus_client/bridge",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/prometheus_client/django",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/prometheus_client/openmetrics",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/prometheus_client/twisted",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/psycopg",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/psycopg-3.3.4.dist-info",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/psycopg-3.3.4.dist-info/licenses",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/psycopg/crdb",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/psycopg/pq",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/psycopg/types",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/psycopg_binary",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/psycopg_binary-3.3.4.dist-info",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/psycopg_binary-3.3.4.dist-info/licenses",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/psycopg_binary-3.3.4.dist-info/sboms",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/psycopg_binary.libs",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/psycopg_binary/types",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/pycparser",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/pycparser-3.0.dist-info",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/pycparser-3.0.dist-info/licenses",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/pydantic",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/pydantic-2.13.4.dist-info",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/pydantic-2.13.4.dist-info/licenses",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/pydantic/_internal",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/pydantic/deprecated",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/pydantic/experimental",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/pydantic/plugin",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/pydantic/v1",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/pydantic_core",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/pydantic_core-2.46.4.dist-info",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/pydantic_core-2.46.4.dist-info/licenses",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/pydantic_core-2.46.4.dist-info/sboms",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/pydantic_core.libs",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/pydantic_settings",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/pydantic_settings-2.14.2.dist-info",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/pydantic_settings-2.14.2.dist-info/licenses",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/pydantic_settings/sources",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/pydantic_settings/sources/providers",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/pygments",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/pygments-2.20.0.dist-info",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/pygments-2.20.0.dist-info/licenses",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/pygments/filters",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/pygments/formatters",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/pygments/lexers",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/pygments/styles",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/pyjwt-2.13.0.dist-info",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/pyjwt-2.13.0.dist-info/licenses",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/python_dotenv-1.2.2.dist-info",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/python_dotenv-1.2.2.dist-info/licenses",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/rich",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/rich-15.0.0.dist-info",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/rich-15.0.0.dist-info/licenses",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/rich/_unicode_data",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/shellingham",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/shellingham-1.5.4.dist-info",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/shellingham/posix",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy-2.0.51.dist-info",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy-2.0.51.dist-info/licenses",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy/connectors",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy/cyextension",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy/dialects",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy/dialects/mssql",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy/dialects/mysql",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy/dialects/oracle",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy/dialects/postgresql",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy/dialects/sqlite",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy/engine",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy/event",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy/ext",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy/ext/asyncio",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy/ext/declarative",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy/ext/mypy",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy/future",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy/orm",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy/pool",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy/sql",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy/testing",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy/testing/fixtures",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy/testing/plugin",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy/testing/suite",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy/util",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/starlette",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/starlette-1.3.1.dist-info",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/starlette-1.3.1.dist-info/licenses",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/starlette/middleware",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/structlog",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/structlog-25.5.0.dist-info",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/structlog-25.5.0.dist-info/licenses",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/typer",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/typer-0.26.8.dist-info",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/typer-0.26.8.dist-info/licenses",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/typer/.agents",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/typer/.agents/skills",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/typer/.agents/skills/typer",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/typer/_click",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/typing_extensions-4.16.0.dist-info",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/typing_extensions-4.16.0.dist-info/licenses",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/typing_inspection",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/typing_inspection-0.4.2.dist-info",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/typing_inspection-0.4.2.dist-info/licenses",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/uvicorn",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/uvicorn-0.51.0.dist-info",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/uvicorn-0.51.0.dist-info/licenses",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/uvicorn/lifespan",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/uvicorn/loops",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/uvicorn/middleware",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/uvicorn/protocols",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/uvicorn/protocols/http",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/uvicorn/protocols/websockets",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/uvicorn/supervisors",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 6,
+          "path": "usr/share/licenses",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 6,
+          "path": "usr/share/licenses/extra-codeowners",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        }
+      ],
+      "post_base_removals": [
+        {
+          "kind": "whiteout",
+          "path": "sbin/.wh.apk",
+          "target": "sbin/apk"
+        },
+        {
+          "kind": "whiteout",
+          "path": "usr/local/bin/.wh.pip",
+          "target": "usr/local/bin/pip"
+        },
+        {
+          "kind": "whiteout",
+          "path": "usr/local/bin/.wh.pip3",
+          "target": "usr/local/bin/pip3"
+        },
+        {
+          "kind": "whiteout",
+          "path": "usr/local/bin/.wh.pip3.14",
+          "target": "usr/local/bin/pip3.14"
+        },
+        {
+          "kind": "whiteout",
+          "path": "usr/local/lib/python3.14/.wh.ensurepip",
+          "target": "usr/local/lib/python3.14/ensurepip"
+        },
+        {
+          "kind": "whiteout",
+          "path": "usr/local/lib/python3.14/site-packages/.wh.pip",
+          "target": "usr/local/lib/python3.14/site-packages/pip"
+        },
+        {
+          "kind": "whiteout",
+          "path": "usr/local/lib/python3.14/site-packages/.wh.pip-26.1.2.dist-info",
+          "target": "usr/local/lib/python3.14/site-packages/pip-26.1.2.dist-info"
+        }
+      ]
+    },
+    "linux/arm64": {
+      "apk_database_occurrences": [
+        {
+          "effective": false,
+          "gid": 0,
+          "layer": 0,
+          "mode": 420,
+          "path": "lib/apk/db/installed",
+          "sha256": "05a374ef814e2909cafd466adb305eee75dabde6b452746713438efa2bc051f3",
+          "size": 15097,
+          "uid": 0
+        },
+        {
+          "effective": false,
+          "gid": 0,
+          "layer": 1,
+          "mode": 420,
+          "path": "lib/apk/db/installed",
+          "sha256": "582b43192649d64e365e514aecd02ae4d2c91791a7637307cf4502722a972337",
+          "size": 51173,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 2,
+          "mode": 420,
+          "path": "lib/apk/db/installed",
+          "sha256": "c2f5d1ca9607edbced7929ae685921317ed940b5ab5a210c4f9db89db54bd084",
+          "size": 59113,
+          "uid": 0
+        }
+      ],
+      "post_base_directory_effects": [
+        {
+          "layer": 4,
+          "path": "app",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/bin",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/include",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/include/site",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/include/site/python3.14",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/include/site/python3.14/greenlet",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/annotated_doc",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/annotated_doc-0.0.4.dist-info",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/annotated_doc-0.0.4.dist-info/licenses",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/annotated_types",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/annotated_types-0.7.0.dist-info",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/annotated_types-0.7.0.dist-info/licenses",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/anyio",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/anyio-4.14.2.dist-info",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/anyio-4.14.2.dist-info/licenses",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/anyio/_backends",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/anyio/_core",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/anyio/abc",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/anyio/streams",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/certifi",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/certifi-2026.6.17.dist-info",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/certifi-2026.6.17.dist-info/licenses",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/cffi",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/cffi-2.1.0.dist-info",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/cffi-2.1.0.dist-info/licenses",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/click",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/click-8.4.2.dist-info",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/click-8.4.2.dist-info/licenses",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/cryptography",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/licenses",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/cryptography.libs",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/cryptography/hazmat",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/cryptography/hazmat/asn1",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/cryptography/hazmat/backends",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/cryptography/hazmat/backends/openssl",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/cryptography/hazmat/bindings",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/cryptography/hazmat/bindings/_rust",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/cryptography/hazmat/bindings/_rust/openssl",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/cryptography/hazmat/bindings/openssl",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/cryptography/hazmat/decrepit",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/cryptography/hazmat/decrepit/ciphers",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/cryptography/hazmat/primitives",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/cryptography/hazmat/primitives/asymmetric",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/cryptography/hazmat/primitives/ciphers",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/cryptography/hazmat/primitives/kdf",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/cryptography/hazmat/primitives/serialization",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/cryptography/hazmat/primitives/twofactor",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/cryptography/x509",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/dotenv",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/extra_codeowners",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/extra_codeowners-0.1.0.dist-info",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/fastapi",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/fastapi-0.139.0.dist-info",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/fastapi-0.139.0.dist-info/licenses",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/fastapi/.agents",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/fastapi/.agents/skills",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/fastapi/.agents/skills/fastapi",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/fastapi/.agents/skills/fastapi/references",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/fastapi/_compat",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/fastapi/dependencies",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/fastapi/middleware",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/fastapi/openapi",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/fastapi/security",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/greenlet",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/greenlet-3.5.3.dist-info",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/greenlet-3.5.3.dist-info/licenses",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/greenlet-3.5.3.dist-info/sboms",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/greenlet.libs",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/greenlet/platform",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/greenlet/tests",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/h11",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/h11-0.16.0.dist-info",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/h11-0.16.0.dist-info/licenses",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/httpcore",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/httpcore-1.0.9.dist-info",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/httpcore-1.0.9.dist-info/licenses",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/httpcore/_async",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/httpcore/_backends",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/httpcore/_sync",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/httpx",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/httpx-0.28.1.dist-info",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/httpx-0.28.1.dist-info/licenses",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/httpx/_transports",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/idna",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/idna-3.18.dist-info",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/idna-3.18.dist-info/licenses",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/jwt",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/markdown_it",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/markdown_it/cli",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/markdown_it/common",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/markdown_it/helpers",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/markdown_it/presets",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/markdown_it/rules_block",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/markdown_it/rules_core",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/markdown_it/rules_inline",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/markdown_it_py-4.2.0.dist-info",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/markdown_it_py-4.2.0.dist-info/licenses",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/mdurl",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/mdurl-0.1.2.dist-info",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/prometheus_client",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/prometheus_client-0.25.0.dist-info",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/prometheus_client-0.25.0.dist-info/licenses",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/prometheus_client/aiohttp",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/prometheus_client/bridge",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/prometheus_client/django",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/prometheus_client/openmetrics",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/prometheus_client/twisted",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/psycopg",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/psycopg-3.3.4.dist-info",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/psycopg-3.3.4.dist-info/licenses",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/psycopg/crdb",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/psycopg/pq",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/psycopg/types",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/psycopg_binary",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/psycopg_binary-3.3.4.dist-info",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/psycopg_binary-3.3.4.dist-info/licenses",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/psycopg_binary-3.3.4.dist-info/sboms",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/psycopg_binary.libs",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/psycopg_binary/types",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/pycparser",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/pycparser-3.0.dist-info",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/pycparser-3.0.dist-info/licenses",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/pydantic",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/pydantic-2.13.4.dist-info",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/pydantic-2.13.4.dist-info/licenses",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/pydantic/_internal",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/pydantic/deprecated",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/pydantic/experimental",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/pydantic/plugin",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/pydantic/v1",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/pydantic_core",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/pydantic_core-2.46.4.dist-info",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/pydantic_core-2.46.4.dist-info/licenses",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/pydantic_core-2.46.4.dist-info/sboms",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/pydantic_core.libs",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/pydantic_settings",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/pydantic_settings-2.14.2.dist-info",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/pydantic_settings-2.14.2.dist-info/licenses",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/pydantic_settings/sources",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/pydantic_settings/sources/providers",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/pygments",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/pygments-2.20.0.dist-info",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/pygments-2.20.0.dist-info/licenses",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/pygments/filters",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/pygments/formatters",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/pygments/lexers",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/pygments/styles",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/pyjwt-2.13.0.dist-info",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/pyjwt-2.13.0.dist-info/licenses",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/python_dotenv-1.2.2.dist-info",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/python_dotenv-1.2.2.dist-info/licenses",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/rich",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/rich-15.0.0.dist-info",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/rich-15.0.0.dist-info/licenses",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/rich/_unicode_data",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/shellingham",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/shellingham-1.5.4.dist-info",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/shellingham/posix",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy-2.0.51.dist-info",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy-2.0.51.dist-info/licenses",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy/connectors",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy/cyextension",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy/dialects",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy/dialects/mssql",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy/dialects/mysql",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy/dialects/oracle",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy/dialects/postgresql",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy/dialects/sqlite",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy/engine",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy/event",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy/ext",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy/ext/asyncio",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy/ext/declarative",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy/ext/mypy",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy/future",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy/orm",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy/pool",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy/sql",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy/testing",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy/testing/fixtures",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy/testing/plugin",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy/testing/suite",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy/util",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/starlette",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/starlette-1.3.1.dist-info",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/starlette-1.3.1.dist-info/licenses",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/starlette/middleware",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/structlog",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/structlog-25.5.0.dist-info",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/structlog-25.5.0.dist-info/licenses",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/typer",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/typer-0.26.8.dist-info",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/typer-0.26.8.dist-info/licenses",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/typer/.agents",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/typer/.agents/skills",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/typer/.agents/skills/typer",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/typer/_click",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/typing_extensions-4.16.0.dist-info",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/typing_extensions-4.16.0.dist-info/licenses",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/typing_inspection",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/typing_inspection-0.4.2.dist-info",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/typing_inspection-0.4.2.dist-info/licenses",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/uvicorn",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/uvicorn-0.51.0.dist-info",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/uvicorn-0.51.0.dist-info/licenses",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/uvicorn/lifespan",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/uvicorn/loops",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/uvicorn/middleware",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/uvicorn/protocols",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/uvicorn/protocols/http",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/uvicorn/protocols/websockets",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 5,
+          "path": "opt/venv/lib/python3.14/site-packages/uvicorn/supervisors",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 6,
+          "path": "usr/share/licenses",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        },
+        {
+          "layer": 6,
+          "path": "usr/share/licenses/extra-codeowners",
+          "mode": 493,
+          "uid": 0,
+          "gid": 0
+        }
+      ],
+      "post_base_removals": [
+        {
+          "kind": "whiteout",
+          "path": "sbin/.wh.apk",
+          "target": "sbin/apk"
+        },
+        {
+          "kind": "whiteout",
+          "path": "usr/local/bin/.wh.pip",
+          "target": "usr/local/bin/pip"
+        },
+        {
+          "kind": "whiteout",
+          "path": "usr/local/bin/.wh.pip3",
+          "target": "usr/local/bin/pip3"
+        },
+        {
+          "kind": "whiteout",
+          "path": "usr/local/bin/.wh.pip3.14",
+          "target": "usr/local/bin/pip3.14"
+        },
+        {
+          "kind": "whiteout",
+          "path": "usr/local/lib/python3.14/.wh.ensurepip",
+          "target": "usr/local/lib/python3.14/ensurepip"
+        },
+        {
+          "kind": "whiteout",
+          "path": "usr/local/lib/python3.14/site-packages/.wh.pip",
+          "target": "usr/local/lib/python3.14/site-packages/pip"
+        },
+        {
+          "kind": "whiteout",
+          "path": "usr/local/lib/python3.14/site-packages/.wh.pip-26.1.2.dist-info",
+          "target": "usr/local/lib/python3.14/site-packages/pip-26.1.2.dist-info"
+        }
+      ]
+    }
+  },
+  "unexpanded_python_payloads": {
+    "linux/amd64": {
+      "embedded_sboms": [
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/auditwheel.cdx.json",
+          "sha256": "dae5479c7694801d07dbd8b0a8a495e4aebce0c30832910ca5c848ca66e40fd3",
+          "size": 1288,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json",
+          "sha256": "9b2b3873832a3999a192327543e07e9cdcd66f083fd77a009054ace71cc6e92f",
+          "size": 45613,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/sbom.json",
+          "sha256": "58f780e03ba9030ff66b3ed9e02c06e72a9f0a477caa3ae4299ab3e7b81c5f50",
+          "size": 1206,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/greenlet-3.5.3.dist-info/sboms/auditwheel.cdx.json",
+          "sha256": "88ec96555dafdd7a1e4bac19a57701e712ff3a361a537e653b4baf6829a28e9e",
+          "size": 1690,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/psycopg_binary-3.3.4.dist-info/sboms/auditwheel.cdx.json",
+          "sha256": "ed66539d58a72ebe684d6a918841d10b8f980c63a3eb65d401f3b4028a7c4a63",
+          "size": 5695,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/pydantic_core-2.46.4.dist-info/sboms/pydantic-core.cyclonedx.json",
+          "sha256": "b2da43ae9b1f9f388f8845b6f96df645d16b7e5c8f9f9f2fa8e64ef894b59598",
+          "size": 105102,
+          "uid": 0
+        }
+      ],
+      "native_payloads": [
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/_cffi_backend.cpython-314-x86_64-linux-musl.so",
+          "sha256": "d2ee0b7499f1b3fd3ee5bc6c7b90ee9d6111fdfb9901d32cff7cf462f094321f",
+          "size": 350232,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/cryptography/hazmat/bindings/_rust.abi3.so",
+          "sha256": "1c0ce16828aaa93804050b334e260d1487abd7cf85e948696915532164c6b9fd",
+          "size": 13735257,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/cryptography.libs/libgcc_s-0cd532bd.so.1",
+          "sha256": "c8f934f958f22b3b9c8e790fde6bc2d2f55ab9ae8b9f5eea65425b20271782d0",
+          "size": 181737,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/greenlet/_greenlet.cpython-314-x86_64-linux-musl.so",
+          "sha256": "2e1f9964eb2619a4735c6ce1b28c3e9c289e3b51697b5e77c04f2dd4c0ef4e8f",
+          "size": 1216609,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/greenlet/tests/_test_extension.cpython-314-x86_64-linux-musl.so",
+          "sha256": "26f96ccb0d3b7f27cc3dece6d30c1d6717a5609638f32cd103b39a9f71aef14d",
+          "size": 18016,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/greenlet/tests/_test_extension_cpp.cpython-314-x86_64-linux-musl.so",
+          "sha256": "b66cd7447b8754958133ce96857ff3576cdc8d880ccfa7e068cb38697b581a7c",
+          "size": 62753,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/greenlet.libs/libgcc_s-0cd532bd.so.1",
+          "sha256": "c8f934f958f22b3b9c8e790fde6bc2d2f55ab9ae8b9f5eea65425b20271782d0",
+          "size": 181737,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/greenlet.libs/libstdc++-5d72f927.so.6.0.33",
+          "sha256": "e43bc58c5e9fde5230e0aab5a9927a4d01a034d9f1d760856682b4d1695da3c0",
+          "size": 3935145,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/psycopg_binary/_psycopg.cpython-314-x86_64-linux-musl.so",
+          "sha256": "d2a8057b71bee5071de045798a9ee54dd16d131967f1906690cdbdfd4056fa72",
+          "size": 751129,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/psycopg_binary/pq.cpython-314-x86_64-linux-musl.so",
+          "sha256": "7bb3959640b81f36bf95decfa8cbc212f627716238da1eeba34e591e8c4a1fa1",
+          "size": 353929,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/psycopg_binary.libs/libcom_err-a17f0a2b.so.2.1",
+          "sha256": "cab66d211e667578992c9390321e6393e50f44f8a04f802f7c177d493fb24fa6",
+          "size": 21553,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/psycopg_binary.libs/libcrypto-a4df7a4c.so.3",
+          "sha256": "776fd1ee0b3457cbdf412480e6ee4b36b3d3d2d791dc1b72cc1caacd449e502b",
+          "size": 5148721,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/psycopg_binary.libs/libgssapi_krb5-fe9dade7.so.2.2",
+          "sha256": "e617785792c2d73d7a7519d1b4ec4d5e008a2267006b6e71311e923a8a60c2b1",
+          "size": 300625,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/psycopg_binary.libs/libk5crypto-d61acad3.so.3.1",
+          "sha256": "77c69f65bf09113c96ac37d3b56af01e248dd056cb9f7d917a932008b8418432",
+          "size": 174625,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/psycopg_binary.libs/libkeyutils-939fe6df.so.1.10",
+          "sha256": "2449b11be19f6f25d75d6286f4a4cd1b341ec82a3bca0da10ed5757d993eced1",
+          "size": 22609,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/psycopg_binary.libs/libkrb5-4daf5d73.so.3.3",
+          "sha256": "f369a84d67d72c459d37eaf9325c105cba14e08ae452fb5ab3e1798500a7bbbb",
+          "size": 760353,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/psycopg_binary.libs/libkrb5support-53ecc640.so.0.1",
+          "sha256": "b962162efc28ef4e3d215e6f90c801c0428a55f8da73ce1f6f4350a12bf8f6d3",
+          "size": 48921,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/psycopg_binary.libs/liblber-47491b30.so.2.0.200",
+          "sha256": "e74fb8a663b993be7f731bed49e6e3c3a7e4aacdc9f7c1dba020a933e7ac4500",
+          "size": 57361,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/psycopg_binary.libs/libldap-5dbe2b75.so.2.0.200",
+          "sha256": "6452c92f914e2c76d51248a2db986cdcdc21e94bc9c61b3ab4b41102124ba9dc",
+          "size": 365273,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/psycopg_binary.libs/libpq-20c1f007.so.5.18",
+          "sha256": "da987a6fd454fb0507230bd36d5b4a04b7a00a1dac00c3e9196f7ba7a59ff0b9",
+          "size": 420113,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/psycopg_binary.libs/libsasl2-a80d8951.so.3.0.0",
+          "sha256": "0206fa25248fa165ee756f0cbb5f25caa8c87accd3a562d717697fa23f43a85a",
+          "size": 107601,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/psycopg_binary.libs/libssl-136dc5f3.so.3",
+          "sha256": "cf0f173e61b6452002ba1bb099cbff1376f6b9c88d8a5d659ceaa9d2e53b23bb",
+          "size": 901329,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/pydantic_core/_pydantic_core.cpython-314-x86_64-linux-musl.so",
+          "sha256": "01069454b58a83a857863199d76e6b6e24e3a5299a9b6d87c9c785cb0ddc9db1",
+          "size": 5169337,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/pydantic_core.libs/libgcc_s-f685abf1.so.1",
+          "sha256": "ad9894a62fa7c3cb4d48e25e37ebebdd14c400c08c6877fbde04cd195a9174ab",
+          "size": 536145,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy/cyextension/collections.cpython-314-x86_64-linux-musl.so",
+          "sha256": "a48610d29b3b54f5ba67b874302c6f400ff3e684f148a50ef0affb6341cfffc6",
+          "size": 1424968,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy/cyextension/immutabledict.cpython-314-x86_64-linux-musl.so",
+          "sha256": "548b681d56bc5d945a0b34e6f02a4b3eab88fb54341e4047b8dcae18b7ff215e",
+          "size": 563520,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy/cyextension/processors.cpython-314-x86_64-linux-musl.so",
+          "sha256": "d2105caa5c25faf239930079bef0e821be9e85e659031200a78a31a20e1abce2",
+          "size": 434912,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy/cyextension/resultproxy.cpython-314-x86_64-linux-musl.so",
+          "sha256": "ba92efd35c3c6e528932d84c9363edad2a4ccdac2238b8dfdcf8d40a8d0f35bd",
+          "size": 431280,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy/cyextension/util.cpython-314-x86_64-linux-musl.so",
+          "sha256": "9093c13f438c92753f6c3dad7a93ca2034a4b06f91f04575ce9cbf107d3b4bf1",
+          "size": 605968,
+          "uid": 0
+        }
+      ],
+      "wheel_identity_files": [
+        {
+          "effective": false,
+          "gid": 0,
+          "layer": 2,
+          "mode": 420,
+          "path": "usr/local/lib/python3.14/site-packages/pip-26.1.2.dist-info/RECORD",
+          "sha256": "9dbef7545d27b37ac0a90632046874897625bfa1ca80d99d9d901be2182ec9b9",
+          "size": 67381,
+          "uid": 0
+        },
+        {
+          "effective": false,
+          "gid": 0,
+          "layer": 2,
+          "mode": 420,
+          "path": "usr/local/lib/python3.14/site-packages/pip-26.1.2.dist-info/WHEEL",
+          "sha256": "1b68144734c4b66791f27add5d425f3620775585718a03d0f9b110ba3a4d88db",
+          "size": 82,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/annotated_doc-0.0.4.dist-info/RECORD",
+          "sha256": "8b8cd3b333efaffa62e882fd2221383c1f3ab70f431074072d395618d7abc9dd",
+          "size": 662,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/annotated_doc-0.0.4.dist-info/WHEEL",
+          "sha256": "f4fdb2811c43ad3273de0b1a81cd19f7aba4af18ebf8b14118e82fdc0b8a9420",
+          "size": 90,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/annotated_types-0.7.0.dist-info/RECORD",
+          "sha256": "56fc82ed90ac798e4e93c83a904da76a64d15295e1d4f33bf0309abdef6a9e98",
+          "size": 585,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/annotated_types-0.7.0.dist-info/WHEEL",
+          "sha256": "cc431c46bf4aaf4df1d68cc6c20e6ff4d4012a7de49dda7a2d2a1295583e8e15",
+          "size": 87,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/anyio-4.14.2.dist-info/RECORD",
+          "sha256": "6b173cfbe57abb71d456c511714dce6d8e5672340972410336545bdb88426549",
+          "size": 4196,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/anyio-4.14.2.dist-info/WHEEL",
+          "sha256": "2b6eb4118ce7cd7b09601406aa623c553c4476265836f0d9c16f5c061f7efcc0",
+          "size": 91,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/certifi-2026.6.17.dist-info/RECORD",
+          "sha256": "7fec6cbc76ea6b645de2cc3a119472401d159ce52e087140e5e7d87e0754cc55",
+          "size": 781,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/certifi-2026.6.17.dist-info/WHEEL",
+          "sha256": "69e6228a0d35958183cc1812f07c565ce837b95eb51bd8a33acba9fa4f68d6c9",
+          "size": 91,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/cffi-2.1.0.dist-info/RECORD",
+          "sha256": "e3d9834b3a2f23d202f05b71d9e821e6778168d777d8bf213c6118747ac0845f",
+          "size": 2464,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/cffi-2.1.0.dist-info/WHEEL",
+          "sha256": "17aa0b19d6f90811088ed51461c2451b3d2cd25fdfbd124f9baeba69562d92fc",
+          "size": 112,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/click-8.4.2.dist-info/RECORD",
+          "sha256": "85e9777a1f3322218959369a10d3f8261754fe31de7cd65ab6bbdb8a277b990a",
+          "size": 1640,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/click-8.4.2.dist-info/WHEEL",
+          "sha256": "1b68144734c4b66791f27add5d425f3620775585718a03d0f9b110ba3a4d88db",
+          "size": 82,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/RECORD",
+          "sha256": "fe390a751c72144ef4f847361107db4c1023fcf877e9ddc099a85fdf147d8d22",
+          "size": 12004,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/WHEEL",
+          "sha256": "52cf133856faf64db9ee1d35f84a71b9ddf6632321ed9d85f88245763033b85d",
+          "size": 108,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/extra_codeowners-0.1.0.dist-info/RECORD",
+          "sha256": "ed43f22ea3924718bb15d81c42fa1dff21c3b64985a9b0e5baf4eeac49daf73d",
+          "size": 1851,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/extra_codeowners-0.1.0.dist-info/WHEEL",
+          "sha256": "942926c567d0b1273d09f20295879abd37507845f6b683eab9f87d808df91100",
+          "size": 87,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/fastapi-0.139.0.dist-info/RECORD",
+          "sha256": "ba868b4a6dbf19a38ffa0643a007c5a3cbf9cfbad87886422206fd6c4c02a270",
+          "size": 5200,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/fastapi-0.139.0.dist-info/WHEEL",
+          "sha256": "54ff83e133d2db7d2c304f59def6f720d5efa35cadd3ddb86119b900eb24fdd1",
+          "size": 90,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/greenlet-3.5.3.dist-info/RECORD",
+          "sha256": "96463a5a964421f3e4e7a4a5b1df41f4854b2b1388f8a14a90288eb141c8863a",
+          "size": 8999,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/greenlet-3.5.3.dist-info/WHEEL",
+          "sha256": "20422576b24cc95a1a3bb9e37cc201844e9a6aeac9198e9aef3018c876f0a4fb",
+          "size": 112,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/h11-0.16.0.dist-info/RECORD",
+          "sha256": "873726af97e5251dca6999e54cb1cf00a7e3190b4a17b4556745f78870fdc831",
+          "size": 1244,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/h11-0.16.0.dist-info/WHEEL",
+          "sha256": "0a6c85234931e5c7443132e238d4116c64308c8a11d5a21807b782010e0a3c9d",
+          "size": 91,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/httpcore-1.0.9.dist-info/RECORD",
+          "sha256": "12d7c78f55b009d337943bd2de8db1a47996e5aaa02e3b14aa319afecef268f3",
+          "size": 2947,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/httpcore-1.0.9.dist-info/WHEEL",
+          "sha256": "aad0b0a12256807936d52d4a6f88a1773236ae527564a688bab4e3fe780e8724",
+          "size": 87,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/httpx-0.28.1.dist-info/RECORD",
+          "sha256": "d56fe1a8d9041acd53424aa23322ed71ef28712c33d394df5607e9bbdb090cc4",
+          "size": 2297,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/httpx-0.28.1.dist-info/WHEEL",
+          "sha256": "0b615483066088b6f39d1fa4d1bff9937022ff568048e5c3b2cde5cc252c52e8",
+          "size": 87,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/idna-3.18.dist-info/RECORD",
+          "sha256": "fc98aa20db91a402da601373a4b81dd3502ea86735d3a4ef189f156010de7018",
+          "size": 1242,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/idna-3.18.dist-info/WHEEL",
+          "sha256": "1b68144734c4b66791f27add5d425f3620775585718a03d0f9b110ba3a4d88db",
+          "size": 82,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/markdown_it_py-4.2.0.dist-info/RECORD",
+          "sha256": "32670f29395ecc97477794e42ea12b91a29ae4a9e396625f0d111d0a92244305",
+          "size": 6645,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/markdown_it_py-4.2.0.dist-info/WHEEL",
+          "sha256": "1b68144734c4b66791f27add5d425f3620775585718a03d0f9b110ba3a4d88db",
+          "size": 82,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/mdurl-0.1.2.dist-info/RECORD",
+          "sha256": "1ee183093ecc8aed2449a98db8cb46786bcbaa3ab223a630ad44004c1851cdab",
+          "size": 788,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/mdurl-0.1.2.dist-info/WHEEL",
+          "sha256": "e137ca201ff1bbed386dcda22b3ebfcc5b7e80414410353fdf51c686acce084f",
+          "size": 81,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/prometheus_client-0.25.0.dist-info/RECORD",
+          "sha256": "2fff3ca1629727c3d43714ecc33aa2ff870204d1ee532a68bb9f0918cda2828f",
+          "size": 3340,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/prometheus_client-0.25.0.dist-info/WHEEL",
+          "sha256": "69e6228a0d35958183cc1812f07c565ce837b95eb51bd8a33acba9fa4f68d6c9",
+          "size": 91,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/psycopg-3.3.4.dist-info/RECORD",
+          "sha256": "d03a2f7d4ead11e6fd4f150792f51876614adaabdf7f31d52c2d66a17088ba95",
+          "size": 7070,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/psycopg-3.3.4.dist-info/WHEEL",
+          "sha256": "69e6228a0d35958183cc1812f07c565ce837b95eb51bd8a33acba9fa4f68d6c9",
+          "size": 91,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/psycopg_binary-3.3.4.dist-info/RECORD",
+          "sha256": "c8d5f28680447d207e5b960e18c6c5e097273f43fe15c5e398a31b5fbf7ffd2c",
+          "size": 2681,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/psycopg_binary-3.3.4.dist-info/WHEEL",
+          "sha256": "681aa5135bbd86c89fe0ec04d51a46e72d101cc00882577f09f5ec3fab4b748a",
+          "size": 112,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/pycparser-3.0.dist-info/RECORD",
+          "sha256": "429b1e8b0782a4096678528e0469405445a9f9256723e805e5d52e64be9e61fd",
+          "size": 1028,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/pycparser-3.0.dist-info/WHEEL",
+          "sha256": "a842dba36b35633977f599ab0226d70368e33cb5187e756150d4e5c85d6bab46",
+          "size": 92,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/pydantic-2.13.4.dist-info/RECORD",
+          "sha256": "5100577c075c1ec5b551a4cd0ddba8a218caba379017127e9b762013e9339f0e",
+          "size": 9339,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/pydantic-2.13.4.dist-info/WHEEL",
+          "sha256": "41c708c5adba6e097513ab8ccb9f1d7865a2fb469e22491a9e01dcc64da459fc",
+          "size": 87,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/pydantic_core-2.46.4.dist-info/RECORD",
+          "sha256": "ceeede1e5fee0b3e9aa72132ad694a2e180e1d40135dc7c5d6a7c70cd573a0bc",
+          "size": 1012,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/pydantic_core-2.46.4.dist-info/WHEEL",
+          "sha256": "48992c14333f0728d86303ca4b43f64223a19dcc67f863041a4701f7868f420d",
+          "size": 108,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/pydantic_settings-2.14.2.dist-info/RECORD",
+          "sha256": "be377137c229304853c3c6b3257c71ec229e4d925057429fc9e18ebf3a9817cf",
+          "size": 2539,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/pydantic_settings-2.14.2.dist-info/WHEEL",
+          "sha256": "99f7cfcbcc019d9427d959c9514e6313df4ab316927e2c8c1d5f58b7468b571b",
+          "size": 87,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/pygments-2.20.0.dist-info/RECORD",
+          "sha256": "e084a8e8f6d493bd918791914c91175f21dee62b68db5d0254a6199971eebdbf",
+          "size": 28656,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/pygments-2.20.0.dist-info/WHEEL",
+          "sha256": "41c708c5adba6e097513ab8ccb9f1d7865a2fb469e22491a9e01dcc64da459fc",
+          "size": 87,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/pyjwt-2.13.0.dist-info/RECORD",
+          "sha256": "da6bd0daf0f3e9b871ba2cac25baa7f62a707a4dc31864a32565e90e8b109ce1",
+          "size": 1418,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/pyjwt-2.13.0.dist-info/WHEEL",
+          "sha256": "69e6228a0d35958183cc1812f07c565ce837b95eb51bd8a33acba9fa4f68d6c9",
+          "size": 91,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/python_dotenv-1.2.2.dist-info/RECORD",
+          "sha256": "5656aa40c24f88d854bebf1a9f4dac73cc5434b773c21fb7edf76046be746d67",
+          "size": 1257,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/python_dotenv-1.2.2.dist-info/WHEEL",
+          "sha256": "6027f0606398322e49870d9f538c8d83012bc9b6f6217e4f13004a57865b741a",
+          "size": 91,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/rich-15.0.0.dist-info/RECORD",
+          "sha256": "3706988b5f6f9f30a50bd64c66d1087cd0ebb72abe9a29d6a8c073c8c84406cf",
+          "size": 8062,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/rich-15.0.0.dist-info/WHEEL",
+          "sha256": "909091253fe0d1a75f009cd3c761943264bcd2b4c92151d109f1b40d080bab7a",
+          "size": 88,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/shellingham-1.5.4.dist-info/RECORD",
+          "sha256": "d8c33ff9b4f74d4f26e766c4572a408f7c622213a6b61bd6ab7643b7a9e9ae81",
+          "size": 1054,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/shellingham-1.5.4.dist-info/WHEEL",
+          "sha256": "89896fe5f5f7e7b3d0c914f6a3ab70d5b37e61c2851472aa07f2f01cee703fe8",
+          "size": 110,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy-2.0.51.dist-info/RECORD",
+          "sha256": "0b7f69da79b3abd11809fd8381cf7de69fafaec19891f95d0594afed27521d18",
+          "size": 24603,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy-2.0.51.dist-info/WHEEL",
+          "sha256": "20422576b24cc95a1a3bb9e37cc201844e9a6aeac9198e9aef3018c876f0a4fb",
+          "size": 112,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/starlette-1.3.1.dist-info/RECORD",
+          "sha256": "a61635e841bee2e75108c5d43b6dc82e67fd8b3d6f377091d9af73bba8f0dac6",
+          "size": 3199,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/starlette-1.3.1.dist-info/WHEEL",
+          "sha256": "99f7cfcbcc019d9427d959c9514e6313df4ab316927e2c8c1d5f58b7468b571b",
+          "size": 87,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/structlog-25.5.0.dist-info/RECORD",
+          "sha256": "38072194caa3c6e55ee2abdb7fcaa60e324c7381681c105331f631ade76d2397",
+          "size": 2231,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/structlog-25.5.0.dist-info/WHEEL",
+          "sha256": "aad0b0a12256807936d52d4a6f88a1773236ae527564a688bab4e3fe780e8724",
+          "size": 87,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/typer-0.26.8.dist-info/RECORD",
+          "sha256": "9e637c9d2c8db742a05c8b865bc10605681ce6da722b409021786662f8d00abc",
+          "size": 3199,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/typer-0.26.8.dist-info/WHEEL",
+          "sha256": "54ff83e133d2db7d2c304f59def6f720d5efa35cadd3ddb86119b900eb24fdd1",
+          "size": 90,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/typing_extensions-4.16.0.dist-info/RECORD",
+          "sha256": "200f8fda9df97d9d2936ecbcc1db5a072b62ea711c6ec4d5fe055b9f5e91c8c9",
+          "size": 427,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/typing_extensions-4.16.0.dist-info/WHEEL",
+          "sha256": "1b68144734c4b66791f27add5d425f3620775585718a03d0f9b110ba3a4d88db",
+          "size": 82,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/typing_inspection-0.4.2.dist-info/RECORD",
+          "sha256": "2f395131ae02ab74d9007b700d20ff5542d8bd08ba012eb25fcd8e74b5d8c95c",
+          "size": 784,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/typing_inspection-0.4.2.dist-info/WHEEL",
+          "sha256": "aad0b0a12256807936d52d4a6f88a1773236ae527564a688bab4e3fe780e8724",
+          "size": 87,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/uvicorn-0.51.0.dist-info/RECORD",
+          "sha256": "817a6e3e1934a617424c48542713a009cd3450ac58e01700359105ad9ebb0383",
+          "size": 4026,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/uvicorn-0.51.0.dist-info/WHEEL",
+          "sha256": "99f7cfcbcc019d9427d959c9514e6313df4ab316927e2c8c1d5f58b7468b571b",
+          "size": 87,
+          "uid": 0
+        }
+      ]
+    },
+    "linux/arm64": {
+      "embedded_sboms": [
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/auditwheel.cdx.json",
+          "sha256": "2ec6b8e8ae1c144269de3834e53f5919f5042980d191ff7f3efd17885028102f",
+          "size": 1321,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json",
+          "sha256": "63618571a3c46cf1aae2e13b88b4ca1170929f23d14e2cf9107bf8f29842e176",
+          "size": 45613,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/sbom.json",
+          "sha256": "fcd9321ee4677d2dbcbfe85abc4b195716be0e8be545a883eeddf9c325d0b0cb",
+          "size": 1207,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/greenlet-3.5.3.dist-info/sboms/auditwheel.cdx.json",
+          "sha256": "3adae2e69cbfa1547fec1c336a0a51b7ad5549fb0d321cae2d3afb43fc66d530",
+          "size": 1695,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/psycopg_binary-3.3.4.dist-info/sboms/auditwheel.cdx.json",
+          "sha256": "d4b27924b425127c33ddbc41f082abe2246bc1b25fc9b88716f889fb7686832e",
+          "size": 5700,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/pydantic_core-2.46.4.dist-info/sboms/pydantic-core.cyclonedx.json",
+          "sha256": "1fc40db0ee56a5fc8b5f09acc4fcca649910986d13cedd22732c40051ab76176",
+          "size": 105102,
+          "uid": 0
+        }
+      ],
+      "native_payloads": [
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/_cffi_backend.cpython-314-aarch64-linux-musl.so",
+          "sha256": "4695e07563fac839a6d455619b70f72b1f41c19fcffaedcb66f597aec9757758",
+          "size": 450600,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/cryptography/hazmat/bindings/_rust.abi3.so",
+          "sha256": "0d5d08e576f7b94f2d80ec1867d492becf2facbfb55d6833af9900c04d23ffee",
+          "size": 13243817,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/cryptography.libs/libgcc_s-2d945d6c.so.1",
+          "sha256": "767fb99107fa5e41168413b1eed9d73191c94126c37526263e1af1f1f898788f",
+          "size": 201673,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/greenlet/_greenlet.cpython-314-aarch64-linux-musl.so",
+          "sha256": "1211c76e369977508dc2e69b840a436a4dc957a7d49d9f0715896f65dfc35360",
+          "size": 1257585,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/greenlet/tests/_test_extension.cpython-314-aarch64-linux-musl.so",
+          "sha256": "3e91f5cbe3de485d2fe71162a2c84a08670d0dd3c8f08fddb021dd09e0bd6609",
+          "size": 72304,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/greenlet/tests/_test_extension_cpp.cpython-314-aarch64-linux-musl.so",
+          "sha256": "20437e5340c5b0f5d660f0c1a116714889b6b0cf128f6280b105a8eb8f2aab8f",
+          "size": 197945,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/greenlet.libs/libgcc_s-2d945d6c.so.1",
+          "sha256": "767fb99107fa5e41168413b1eed9d73191c94126c37526263e1af1f1f898788f",
+          "size": 201673,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/greenlet.libs/libstdc++-85f2cd6d.so.6.0.33",
+          "sha256": "74d419612500998317744231a2b322e296836f4a111fdb48196f136d17f0f030",
+          "size": 4043321,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/psycopg_binary/_psycopg.cpython-314-aarch64-linux-musl.so",
+          "sha256": "180fab590ae2cdc21444d3fe23427ab96f6875b6b3106138a2fde4bddc639409",
+          "size": 857649,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/psycopg_binary/pq.cpython-314-aarch64-linux-musl.so",
+          "sha256": "9efd04799a664c21354e58b090793b340134b11ff93df460d601b63701357dfa",
+          "size": 464537,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/psycopg_binary.libs/libcom_err-934f4c86.so.2.1",
+          "sha256": "b3b1bb51424ad0731ab9f06b8b9f99e6a210b76682c4339699f0bb671d7bf5cc",
+          "size": 132097,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/psycopg_binary.libs/libcrypto-85ee27b2.so.3",
+          "sha256": "cc4ca67876fe6f75016d8bd0d919922d709b2eda102ffa7d77fe79c6fbdd8320",
+          "size": 4812761,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/psycopg_binary.libs/libgssapi_krb5-bd701c95.so.2.2",
+          "sha256": "a58c5cd32b6ad2e9dbfd9d5505e5e1509e1cb6bd12eb3bc957ae936a64ff4a7b",
+          "size": 468593,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/psycopg_binary.libs/libk5crypto-95e68b98.so.3.1",
+          "sha256": "65fbe6799e22110ccbabe54dc1389b0afb085c0fdbc5f0570246a41fb93de32c",
+          "size": 330305,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/psycopg_binary.libs/libkeyutils-6ce80ab8.so.1.10",
+          "sha256": "160729ebbdbd4be5d7c26931b05ad6c3f8acb4e859971333762288341615a0a3",
+          "size": 133185,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/psycopg_binary.libs/libkrb5-46c15cab.so.3.3",
+          "sha256": "ea2873b9cb7940c4c58603c2fbe9342fb81a8acddbc7a51c9a01a15c0733a7ab",
+          "size": 870977,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/psycopg_binary.libs/libkrb5support-108576e7.so.0.1",
+          "sha256": "c67847ba03abe1e212863e916967a359318081c801772f6f0b7b2f7d0f6d5236",
+          "size": 134913,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/psycopg_binary.libs/liblber-3da4cb0c.so.2.0.200",
+          "sha256": "2576e5ba92ce94b7547a7c2a1c131c9f874c3294f6cba158880c1b851c8e9c61",
+          "size": 135161,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/psycopg_binary.libs/libldap-a6923df4.so.2.0.200",
+          "sha256": "6a498cf37968812c0111eef94603c34d51db4aaa7043c9a38c45ad0c252169a0",
+          "size": 541441,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/psycopg_binary.libs/libpq-f8ff58a6.so.5.18",
+          "sha256": "b209afc2a5fab191729a3d1dcb0c19aa4c3c624e9ad59edb1ab116f1920d09c5",
+          "size": 596257,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/psycopg_binary.libs/libsasl2-b0635103.so.3.0.0",
+          "sha256": "917cea344ae2649c630781faa30fa8cb965ac7c8891011d4d0cdfdcc18a96be5",
+          "size": 201793,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/psycopg_binary.libs/libssl-6228e41f.so.3",
+          "sha256": "dfa7998381a5a0a29e4f35e5c485f50225cea04d53ec519126a0494f28ff5d10",
+          "size": 1007857,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/pydantic_core/_pydantic_core.cpython-314-aarch64-linux-musl.so",
+          "sha256": "b7cbe3b3cf48a98575ff59063077816c49a1e22e1d5608cc8a79c80eac1fbdf1",
+          "size": 4722873,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/pydantic_core.libs/libgcc_s-0bf60adc.so.1",
+          "sha256": "f5f857e58a62c2d1ddb222cc2f3efb3f0f638c8106ae2b5e57b50e52baf0be99",
+          "size": 527681,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy/cyextension/collections.cpython-314-aarch64-linux-musl.so",
+          "sha256": "af0e06bc14c4d1e07e9a782ea989a660c93a1d73a03183f8526538ccbdf45815",
+          "size": 1495280,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy/cyextension/immutabledict.cpython-314-aarch64-linux-musl.so",
+          "sha256": "51ffb26c1053f8d94f772103542c1c9e175980956e3f8fdfe78a749140509b9e",
+          "size": 605872,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy/cyextension/processors.cpython-314-aarch64-linux-musl.so",
+          "sha256": "87baa582e4ec656af88ab83eadd181919d13afccbfda646d4a2e35901ea9a24d",
+          "size": 492024,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy/cyextension/resultproxy.cpython-314-aarch64-linux-musl.so",
+          "sha256": "953be69c142a001094f93f0c682c6b3f57144677cbe394efc5197d297259eb6c",
+          "size": 493608,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy/cyextension/util.cpython-314-aarch64-linux-musl.so",
+          "sha256": "f5ac85bf51fa1cda4b1ab4e109f5a7f390419ef6a4e8d1aad618b7bd213acce1",
+          "size": 646352,
+          "uid": 0
+        }
+      ],
+      "wheel_identity_files": [
+        {
+          "effective": false,
+          "gid": 0,
+          "layer": 2,
+          "mode": 420,
+          "path": "usr/local/lib/python3.14/site-packages/pip-26.1.2.dist-info/RECORD",
+          "sha256": "9dbef7545d27b37ac0a90632046874897625bfa1ca80d99d9d901be2182ec9b9",
+          "size": 67381,
+          "uid": 0
+        },
+        {
+          "effective": false,
+          "gid": 0,
+          "layer": 2,
+          "mode": 420,
+          "path": "usr/local/lib/python3.14/site-packages/pip-26.1.2.dist-info/WHEEL",
+          "sha256": "1b68144734c4b66791f27add5d425f3620775585718a03d0f9b110ba3a4d88db",
+          "size": 82,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/annotated_doc-0.0.4.dist-info/RECORD",
+          "sha256": "8b8cd3b333efaffa62e882fd2221383c1f3ab70f431074072d395618d7abc9dd",
+          "size": 662,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/annotated_doc-0.0.4.dist-info/WHEEL",
+          "sha256": "f4fdb2811c43ad3273de0b1a81cd19f7aba4af18ebf8b14118e82fdc0b8a9420",
+          "size": 90,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/annotated_types-0.7.0.dist-info/RECORD",
+          "sha256": "56fc82ed90ac798e4e93c83a904da76a64d15295e1d4f33bf0309abdef6a9e98",
+          "size": 585,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/annotated_types-0.7.0.dist-info/WHEEL",
+          "sha256": "cc431c46bf4aaf4df1d68cc6c20e6ff4d4012a7de49dda7a2d2a1295583e8e15",
+          "size": 87,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/anyio-4.14.2.dist-info/RECORD",
+          "sha256": "6b173cfbe57abb71d456c511714dce6d8e5672340972410336545bdb88426549",
+          "size": 4196,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/anyio-4.14.2.dist-info/WHEEL",
+          "sha256": "2b6eb4118ce7cd7b09601406aa623c553c4476265836f0d9c16f5c061f7efcc0",
+          "size": 91,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/certifi-2026.6.17.dist-info/RECORD",
+          "sha256": "7fec6cbc76ea6b645de2cc3a119472401d159ce52e087140e5e7d87e0754cc55",
+          "size": 781,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/certifi-2026.6.17.dist-info/WHEEL",
+          "sha256": "69e6228a0d35958183cc1812f07c565ce837b95eb51bd8a33acba9fa4f68d6c9",
+          "size": 91,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/cffi-2.1.0.dist-info/RECORD",
+          "sha256": "e1ce4cc2b7e22d8062262416532584752380d89345b916a14803796431e9012c",
+          "size": 2465,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/cffi-2.1.0.dist-info/WHEEL",
+          "sha256": "7a7caeef912b086c0753ef844c48320370941b592f60c8fac5fb40413be691cd",
+          "size": 113,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/click-8.4.2.dist-info/RECORD",
+          "sha256": "85e9777a1f3322218959369a10d3f8261754fe31de7cd65ab6bbdb8a277b990a",
+          "size": 1640,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/click-8.4.2.dist-info/WHEEL",
+          "sha256": "1b68144734c4b66791f27add5d425f3620775585718a03d0f9b110ba3a4d88db",
+          "size": 82,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/RECORD",
+          "sha256": "5cd47d8c13cf5ab927cce036fc6a07600ba00bd41a406ebb7913ee4b4207f3db",
+          "size": 12004,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/WHEEL",
+          "sha256": "9fee8ba750bab9905a031b73d7a0c98b4a105280c1db025e6c336ca5392bff10",
+          "size": 109,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/extra_codeowners-0.1.0.dist-info/RECORD",
+          "sha256": "ed43f22ea3924718bb15d81c42fa1dff21c3b64985a9b0e5baf4eeac49daf73d",
+          "size": 1851,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/extra_codeowners-0.1.0.dist-info/WHEEL",
+          "sha256": "942926c567d0b1273d09f20295879abd37507845f6b683eab9f87d808df91100",
+          "size": 87,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/fastapi-0.139.0.dist-info/RECORD",
+          "sha256": "ba868b4a6dbf19a38ffa0643a007c5a3cbf9cfbad87886422206fd6c4c02a270",
+          "size": 5200,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/fastapi-0.139.0.dist-info/WHEEL",
+          "sha256": "54ff83e133d2db7d2c304f59def6f720d5efa35cadd3ddb86119b900eb24fdd1",
+          "size": 90,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/greenlet-3.5.3.dist-info/RECORD",
+          "sha256": "a52283add41b21e6520d43d8ac1f1d273a1e4e5174af58c88687860687d56e57",
+          "size": 9003,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/greenlet-3.5.3.dist-info/WHEEL",
+          "sha256": "65af8284031537a21af94191b3984a5fb68f4ea67b3d8265f2c09c8fdbcc1b31",
+          "size": 113,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/h11-0.16.0.dist-info/RECORD",
+          "sha256": "873726af97e5251dca6999e54cb1cf00a7e3190b4a17b4556745f78870fdc831",
+          "size": 1244,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/h11-0.16.0.dist-info/WHEEL",
+          "sha256": "0a6c85234931e5c7443132e238d4116c64308c8a11d5a21807b782010e0a3c9d",
+          "size": 91,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/httpcore-1.0.9.dist-info/RECORD",
+          "sha256": "12d7c78f55b009d337943bd2de8db1a47996e5aaa02e3b14aa319afecef268f3",
+          "size": 2947,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/httpcore-1.0.9.dist-info/WHEEL",
+          "sha256": "aad0b0a12256807936d52d4a6f88a1773236ae527564a688bab4e3fe780e8724",
+          "size": 87,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/httpx-0.28.1.dist-info/RECORD",
+          "sha256": "d56fe1a8d9041acd53424aa23322ed71ef28712c33d394df5607e9bbdb090cc4",
+          "size": 2297,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/httpx-0.28.1.dist-info/WHEEL",
+          "sha256": "0b615483066088b6f39d1fa4d1bff9937022ff568048e5c3b2cde5cc252c52e8",
+          "size": 87,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/idna-3.18.dist-info/RECORD",
+          "sha256": "fc98aa20db91a402da601373a4b81dd3502ea86735d3a4ef189f156010de7018",
+          "size": 1242,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/idna-3.18.dist-info/WHEEL",
+          "sha256": "1b68144734c4b66791f27add5d425f3620775585718a03d0f9b110ba3a4d88db",
+          "size": 82,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/markdown_it_py-4.2.0.dist-info/RECORD",
+          "sha256": "32670f29395ecc97477794e42ea12b91a29ae4a9e396625f0d111d0a92244305",
+          "size": 6645,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/markdown_it_py-4.2.0.dist-info/WHEEL",
+          "sha256": "1b68144734c4b66791f27add5d425f3620775585718a03d0f9b110ba3a4d88db",
+          "size": 82,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/mdurl-0.1.2.dist-info/RECORD",
+          "sha256": "1ee183093ecc8aed2449a98db8cb46786bcbaa3ab223a630ad44004c1851cdab",
+          "size": 788,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/mdurl-0.1.2.dist-info/WHEEL",
+          "sha256": "e137ca201ff1bbed386dcda22b3ebfcc5b7e80414410353fdf51c686acce084f",
+          "size": 81,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/prometheus_client-0.25.0.dist-info/RECORD",
+          "sha256": "2fff3ca1629727c3d43714ecc33aa2ff870204d1ee532a68bb9f0918cda2828f",
+          "size": 3340,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/prometheus_client-0.25.0.dist-info/WHEEL",
+          "sha256": "69e6228a0d35958183cc1812f07c565ce837b95eb51bd8a33acba9fa4f68d6c9",
+          "size": 91,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/psycopg-3.3.4.dist-info/RECORD",
+          "sha256": "d03a2f7d4ead11e6fd4f150792f51876614adaabdf7f31d52c2d66a17088ba95",
+          "size": 7070,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/psycopg-3.3.4.dist-info/WHEEL",
+          "sha256": "69e6228a0d35958183cc1812f07c565ce837b95eb51bd8a33acba9fa4f68d6c9",
+          "size": 91,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/psycopg_binary-3.3.4.dist-info/RECORD",
+          "sha256": "318725b421e16d8b75a7570fa485650837567828e5aafef5c3acbed073313330",
+          "size": 2688,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/psycopg_binary-3.3.4.dist-info/WHEEL",
+          "sha256": "3a7ee59357449bcd9084f205f5139eff18199dbfb7d71c51dcdf8212c080210f",
+          "size": 113,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/pycparser-3.0.dist-info/RECORD",
+          "sha256": "429b1e8b0782a4096678528e0469405445a9f9256723e805e5d52e64be9e61fd",
+          "size": 1028,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/pycparser-3.0.dist-info/WHEEL",
+          "sha256": "a842dba36b35633977f599ab0226d70368e33cb5187e756150d4e5c85d6bab46",
+          "size": 92,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/pydantic-2.13.4.dist-info/RECORD",
+          "sha256": "5100577c075c1ec5b551a4cd0ddba8a218caba379017127e9b762013e9339f0e",
+          "size": 9339,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/pydantic-2.13.4.dist-info/WHEEL",
+          "sha256": "41c708c5adba6e097513ab8ccb9f1d7865a2fb469e22491a9e01dcc64da459fc",
+          "size": 87,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/pydantic_core-2.46.4.dist-info/RECORD",
+          "sha256": "1a0aa429c8dffdf28d16c6b92fa2b303121f19a5f5d446b0b0f463104544c949",
+          "size": 1013,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/pydantic_core-2.46.4.dist-info/WHEEL",
+          "sha256": "f0e576aad8b25b0dee836db0d15366a1c4ffd198c90c0f9b9fd91cc30ef99cdf",
+          "size": 109,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/pydantic_settings-2.14.2.dist-info/RECORD",
+          "sha256": "be377137c229304853c3c6b3257c71ec229e4d925057429fc9e18ebf3a9817cf",
+          "size": 2539,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/pydantic_settings-2.14.2.dist-info/WHEEL",
+          "sha256": "99f7cfcbcc019d9427d959c9514e6313df4ab316927e2c8c1d5f58b7468b571b",
+          "size": 87,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/pygments-2.20.0.dist-info/RECORD",
+          "sha256": "e084a8e8f6d493bd918791914c91175f21dee62b68db5d0254a6199971eebdbf",
+          "size": 28656,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/pygments-2.20.0.dist-info/WHEEL",
+          "sha256": "41c708c5adba6e097513ab8ccb9f1d7865a2fb469e22491a9e01dcc64da459fc",
+          "size": 87,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/pyjwt-2.13.0.dist-info/RECORD",
+          "sha256": "da6bd0daf0f3e9b871ba2cac25baa7f62a707a4dc31864a32565e90e8b109ce1",
+          "size": 1418,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/pyjwt-2.13.0.dist-info/WHEEL",
+          "sha256": "69e6228a0d35958183cc1812f07c565ce837b95eb51bd8a33acba9fa4f68d6c9",
+          "size": 91,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/python_dotenv-1.2.2.dist-info/RECORD",
+          "sha256": "5656aa40c24f88d854bebf1a9f4dac73cc5434b773c21fb7edf76046be746d67",
+          "size": 1257,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/python_dotenv-1.2.2.dist-info/WHEEL",
+          "sha256": "6027f0606398322e49870d9f538c8d83012bc9b6f6217e4f13004a57865b741a",
+          "size": 91,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/rich-15.0.0.dist-info/RECORD",
+          "sha256": "3706988b5f6f9f30a50bd64c66d1087cd0ebb72abe9a29d6a8c073c8c84406cf",
+          "size": 8062,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/rich-15.0.0.dist-info/WHEEL",
+          "sha256": "909091253fe0d1a75f009cd3c761943264bcd2b4c92151d109f1b40d080bab7a",
+          "size": 88,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/shellingham-1.5.4.dist-info/RECORD",
+          "sha256": "d8c33ff9b4f74d4f26e766c4572a408f7c622213a6b61bd6ab7643b7a9e9ae81",
+          "size": 1054,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/shellingham-1.5.4.dist-info/WHEEL",
+          "sha256": "89896fe5f5f7e7b3d0c914f6a3ab70d5b37e61c2851472aa07f2f01cee703fe8",
+          "size": 110,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy-2.0.51.dist-info/RECORD",
+          "sha256": "cd3011f8b7dd82067ad811d3a8a2a207e60bbd3ad2c9b8cc7e2bccc5e61708e4",
+          "size": 24608,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy-2.0.51.dist-info/WHEEL",
+          "sha256": "65af8284031537a21af94191b3984a5fb68f4ea67b3d8265f2c09c8fdbcc1b31",
+          "size": 113,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/starlette-1.3.1.dist-info/RECORD",
+          "sha256": "a61635e841bee2e75108c5d43b6dc82e67fd8b3d6f377091d9af73bba8f0dac6",
+          "size": 3199,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/starlette-1.3.1.dist-info/WHEEL",
+          "sha256": "99f7cfcbcc019d9427d959c9514e6313df4ab316927e2c8c1d5f58b7468b571b",
+          "size": 87,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/structlog-25.5.0.dist-info/RECORD",
+          "sha256": "38072194caa3c6e55ee2abdb7fcaa60e324c7381681c105331f631ade76d2397",
+          "size": 2231,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/structlog-25.5.0.dist-info/WHEEL",
+          "sha256": "aad0b0a12256807936d52d4a6f88a1773236ae527564a688bab4e3fe780e8724",
+          "size": 87,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/typer-0.26.8.dist-info/RECORD",
+          "sha256": "9e637c9d2c8db742a05c8b865bc10605681ce6da722b409021786662f8d00abc",
+          "size": 3199,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/typer-0.26.8.dist-info/WHEEL",
+          "sha256": "54ff83e133d2db7d2c304f59def6f720d5efa35cadd3ddb86119b900eb24fdd1",
+          "size": 90,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/typing_extensions-4.16.0.dist-info/RECORD",
+          "sha256": "200f8fda9df97d9d2936ecbcc1db5a072b62ea711c6ec4d5fe055b9f5e91c8c9",
+          "size": 427,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/typing_extensions-4.16.0.dist-info/WHEEL",
+          "sha256": "1b68144734c4b66791f27add5d425f3620775585718a03d0f9b110ba3a4d88db",
+          "size": 82,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/typing_inspection-0.4.2.dist-info/RECORD",
+          "sha256": "2f395131ae02ab74d9007b700d20ff5542d8bd08ba012eb25fcd8e74b5d8c95c",
+          "size": 784,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/typing_inspection-0.4.2.dist-info/WHEEL",
+          "sha256": "aad0b0a12256807936d52d4a6f88a1773236ae527564a688bab4e3fe780e8724",
+          "size": 87,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/uvicorn-0.51.0.dist-info/RECORD",
+          "sha256": "817a6e3e1934a617424c48542713a009cd3450ac58e01700359105ad9ebb0383",
+          "size": 4026,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/uvicorn-0.51.0.dist-info/WHEEL",
+          "sha256": "99f7cfcbcc019d9427d959c9514e6313df4ab316927e2c8c1d5f58b7468b571b",
+          "size": 87,
+          "uid": 0
+        }
+      ]
+    }
   },
   "docker_python_recipe": {
     "license_sha256": "0a3ffdfc4f368b76ae1140b5fbe2f2f69ee76ee00a3024e8a09ca9b2e265186f",
@@ -109,103 +5505,103 @@
   "license_resolutions": {
     "alpine:alpine-baselayout-data@3.7.2-r1": {
       "expression": "GPL-2.0-only",
-      "rationale": "Accepted from installed package metadata; exact source and license evidence is retained."
+      "rationale": "Accepted from installed metadata for CI drift review; this is not distribution approval."
     },
     "alpine:alpine-baselayout@3.7.2-r1": {
       "expression": "GPL-2.0-only",
-      "rationale": "Accepted from installed package metadata; exact source and license evidence is retained."
+      "rationale": "Accepted from installed metadata for CI drift review; this is not distribution approval."
     },
     "alpine:alpine-keys@2.6-r0": {
       "expression": "MIT",
-      "rationale": "Accepted from installed package metadata; exact source and license evidence is retained."
+      "rationale": "Accepted from installed metadata for CI drift review; this is not distribution approval."
     },
     "alpine:alpine-release@3.24.1-r0": {
       "expression": "MIT",
-      "rationale": "Accepted from installed package metadata; exact source and license evidence is retained."
+      "rationale": "Accepted from installed metadata for CI drift review; this is not distribution approval."
     },
     "alpine:apk-tools@3.0.6-r0": {
       "expression": "GPL-2.0-only",
-      "rationale": "Accepted from installed package metadata; exact source and license evidence is retained."
+      "rationale": "Accepted from installed metadata for CI drift review; this is not distribution approval."
     },
     "alpine:busybox-binsh@1.37.0-r31": {
       "expression": "GPL-2.0-only",
-      "rationale": "Accepted from installed package metadata; exact source and license evidence is retained."
+      "rationale": "Accepted from installed metadata for CI drift review; this is not distribution approval."
     },
     "alpine:busybox@1.37.0-r31": {
       "expression": "GPL-2.0-only",
-      "rationale": "Accepted from installed package metadata; exact source and license evidence is retained."
+      "rationale": "Accepted from installed metadata for CI drift review; this is not distribution approval."
     },
     "alpine:ca-certificates-bundle@20260611-r0": {
       "expression": "MPL-2.0 AND MIT",
-      "rationale": "Accepted from installed package metadata; exact source and license evidence is retained."
+      "rationale": "Accepted from installed metadata for CI drift review; this is not distribution approval."
     },
     "alpine:ca-certificates@20260611-r0": {
       "expression": "MPL-2.0 AND MIT",
-      "rationale": "Accepted from installed package metadata; exact source and license evidence is retained."
+      "rationale": "Accepted from installed metadata for CI drift review; this is not distribution approval."
     },
     "alpine:gdbm@1.26-r0": {
       "expression": "GPL-3.0-or-later",
-      "rationale": "Accepted from installed package metadata; exact source and license evidence is retained."
+      "rationale": "Accepted from installed metadata for CI drift review; this is not distribution approval."
     },
     "alpine:libapk@3.0.6-r0": {
       "expression": "GPL-2.0-only",
-      "rationale": "Accepted from installed package metadata; exact source and license evidence is retained."
+      "rationale": "Accepted from installed metadata for CI drift review; this is not distribution approval."
     },
     "alpine:libbz2@1.0.8-r6": {
       "expression": "bzip2-1.0.6",
-      "rationale": "Accepted from installed package metadata; exact source and license evidence is retained."
+      "rationale": "Accepted from installed metadata for CI drift review; this is not distribution approval."
     },
     "alpine:libcrypto3@3.5.7-r0": {
       "expression": "Apache-2.0",
-      "rationale": "Accepted from installed package metadata; exact source and license evidence is retained."
+      "rationale": "Accepted from installed metadata for CI drift review; this is not distribution approval."
     },
     "alpine:libffi@3.5.2-r1": {
       "expression": "MIT",
-      "rationale": "Accepted from installed package metadata; exact source and license evidence is retained."
+      "rationale": "Accepted from installed metadata for CI drift review; this is not distribution approval."
     },
     "alpine:libncursesw@6.6_p20260516-r0": {
       "expression": "X11",
-      "rationale": "Accepted from installed package metadata; exact source and license evidence is retained."
+      "rationale": "Accepted from installed metadata for CI drift review; this is not distribution approval."
     },
     "alpine:libpanelw@6.6_p20260516-r0": {
       "expression": "X11",
-      "rationale": "Accepted from installed package metadata; exact source and license evidence is retained."
+      "rationale": "Accepted from installed metadata for CI drift review; this is not distribution approval."
     },
     "alpine:libssl3@3.5.7-r0": {
       "expression": "Apache-2.0",
-      "rationale": "Accepted from installed package metadata; exact source and license evidence is retained."
+      "rationale": "Accepted from installed metadata for CI drift review; this is not distribution approval."
     },
     "alpine:libuuid@2.42-r0": {
       "expression": "BSD-3-Clause",
-      "rationale": "Accepted from installed package metadata; exact source and license evidence is retained."
+      "rationale": "Accepted from installed metadata for CI drift review; this is not distribution approval."
     },
     "alpine:musl-utils@1.2.6-r2": {
       "expression": "MIT AND BSD-2-Clause AND GPL-2.0-or-later",
-      "rationale": "Accepted from installed package metadata; exact source and license evidence is retained."
+      "rationale": "Accepted from installed metadata for CI drift review; this is not distribution approval."
     },
     "alpine:musl@1.2.6-r2": {
       "expression": "MIT",
-      "rationale": "Accepted from installed package metadata; exact source and license evidence is retained."
+      "rationale": "Accepted from installed metadata for CI drift review; this is not distribution approval."
     },
     "alpine:ncurses-terminfo-base@6.6_p20260516-r0": {
       "expression": "X11",
-      "rationale": "Accepted from installed package metadata; exact source and license evidence is retained."
+      "rationale": "Accepted from installed metadata for CI drift review; this is not distribution approval."
     },
     "alpine:readline@8.3.3-r1": {
       "expression": "GPL-3.0-or-later",
-      "rationale": "Accepted from installed package metadata; exact source and license evidence is retained."
+      "rationale": "Accepted from installed metadata for CI drift review; this is not distribution approval."
     },
     "alpine:scanelf@1.3.9-r1": {
       "expression": "GPL-2.0-only",
-      "rationale": "Accepted from installed package metadata; exact source and license evidence is retained."
+      "rationale": "Accepted from installed metadata for CI drift review; this is not distribution approval."
     },
     "alpine:sqlite-libs@3.53.2-r0": {
       "expression": "blessing",
-      "rationale": "Accepted from installed package metadata; exact source and license evidence is retained."
+      "rationale": "Accepted from installed metadata for CI drift review; this is not distribution approval."
     },
     "alpine:ssl_client@1.37.0-r31": {
       "expression": "GPL-2.0-only",
-      "rationale": "Accepted from installed package metadata; exact source and license evidence is retained."
+      "rationale": "Accepted from installed metadata for CI drift review; this is not distribution approval."
     },
     "alpine:tzdata@2026b-r0": {
       "expression": "LicenseRef-Public-Domain",
@@ -217,15 +5613,15 @@
     },
     "alpine:zlib@1.3.2-r0": {
       "expression": "Zlib",
-      "rationale": "Accepted from installed package metadata; exact source and license evidence is retained."
+      "rationale": "Accepted from installed metadata for CI drift review; this is not distribution approval."
     },
     "alpine:zstd-libs@1.5.7-r2": {
       "expression": "BSD-3-Clause OR GPL-2.0-or-later",
-      "rationale": "Accepted from installed package metadata; exact source and license evidence is retained."
+      "rationale": "Accepted from installed metadata for CI drift review; this is not distribution approval."
     },
     "python:annotated-doc@0.0.4": {
       "expression": "MIT",
-      "rationale": "Accepted from installed package metadata; exact source and license evidence is retained."
+      "rationale": "Accepted from installed metadata for CI drift review; this is not distribution approval."
     },
     "python:annotated-types@0.7.0": {
       "expression": "MIT",
@@ -233,51 +5629,51 @@
     },
     "python:anyio@4.14.2": {
       "expression": "MIT",
-      "rationale": "Accepted from installed package metadata; exact source and license evidence is retained."
+      "rationale": "Accepted from installed metadata for CI drift review; this is not distribution approval."
     },
     "python:certifi@2026.6.17": {
       "expression": "MPL-2.0",
-      "rationale": "Accepted from installed package metadata; exact source and license evidence is retained."
+      "rationale": "Accepted from installed metadata for CI drift review; this is not distribution approval."
     },
     "python:cffi@2.1.0": {
       "expression": "MIT-0",
-      "rationale": "Accepted from installed package metadata; exact source and license evidence is retained."
+      "rationale": "Accepted from installed metadata for CI drift review; this is not distribution approval."
     },
     "python:click@8.4.2": {
       "expression": "BSD-3-Clause",
-      "rationale": "Accepted from installed package metadata; exact source and license evidence is retained."
+      "rationale": "Accepted from installed metadata for CI drift review; this is not distribution approval."
     },
     "python:cryptography@48.0.1": {
       "expression": "Apache-2.0 OR BSD-3-Clause",
-      "rationale": "Accepted from installed package metadata; exact source and license evidence is retained."
+      "rationale": "Accepted from installed metadata for CI drift review; this is not distribution approval."
     },
     "python:extra-codeowners@0.1.0": {
       "expression": "Apache-2.0",
-      "rationale": "Accepted from installed package metadata; exact source and license evidence is retained."
+      "rationale": "Accepted from installed metadata for CI drift review; this is not distribution approval."
     },
     "python:fastapi@0.139.0": {
       "expression": "MIT",
-      "rationale": "Accepted from installed package metadata; exact source and license evidence is retained."
+      "rationale": "Accepted from installed metadata for CI drift review; this is not distribution approval."
     },
     "python:greenlet@3.5.3": {
       "expression": "MIT AND PSF-2.0",
-      "rationale": "Accepted from installed package metadata; exact source and license evidence is retained."
+      "rationale": "Accepted from installed metadata for CI drift review; this is not distribution approval."
     },
     "python:h11@0.16.0": {
       "expression": "MIT",
-      "rationale": "Accepted from installed package metadata; exact source and license evidence is retained."
+      "rationale": "Accepted from installed metadata for CI drift review; this is not distribution approval."
     },
     "python:httpcore@1.0.9": {
       "expression": "BSD-3-Clause",
-      "rationale": "Accepted from installed package metadata; exact source and license evidence is retained."
+      "rationale": "Accepted from installed metadata for CI drift review; this is not distribution approval."
     },
     "python:httpx@0.28.1": {
       "expression": "BSD-3-Clause",
-      "rationale": "Accepted from installed package metadata; exact source and license evidence is retained."
+      "rationale": "Accepted from installed metadata for CI drift review; this is not distribution approval."
     },
     "python:idna@3.18": {
       "expression": "BSD-3-Clause",
-      "rationale": "Accepted from installed package metadata; exact source and license evidence is retained."
+      "rationale": "Accepted from installed metadata for CI drift review; this is not distribution approval."
     },
     "python:markdown-it-py@4.2.0": {
       "expression": "MIT",
@@ -289,51 +5685,51 @@
     },
     "python:pip@26.1.2": {
       "expression": "MIT",
-      "rationale": "Accepted from installed package metadata; exact source and license evidence is retained."
+      "rationale": "Accepted from installed metadata for CI drift review; this is not distribution approval."
     },
     "python:prometheus-client@0.25.0": {
       "expression": "Apache-2.0 AND BSD-2-Clause",
-      "rationale": "Accepted from installed package metadata; exact source and license evidence is retained."
+      "rationale": "Accepted from installed metadata for CI drift review; this is not distribution approval."
     },
     "python:psycopg-binary@3.3.4": {
       "expression": "LGPL-3.0-only",
-      "rationale": "Accepted from installed package metadata; exact source and license evidence is retained."
+      "rationale": "Accepted from installed metadata for CI drift review; this is not distribution approval."
     },
     "python:psycopg@3.3.4": {
       "expression": "LGPL-3.0-only",
-      "rationale": "Accepted from installed package metadata; exact source and license evidence is retained."
+      "rationale": "Accepted from installed metadata for CI drift review; this is not distribution approval."
     },
     "python:pycparser@3.0": {
       "expression": "BSD-3-Clause",
-      "rationale": "Accepted from installed package metadata; exact source and license evidence is retained."
+      "rationale": "Accepted from installed metadata for CI drift review; this is not distribution approval."
     },
     "python:pydantic-core@2.46.4": {
       "expression": "MIT",
-      "rationale": "Accepted from installed package metadata; exact source and license evidence is retained."
+      "rationale": "Accepted from installed metadata for CI drift review; this is not distribution approval."
     },
     "python:pydantic-settings@2.14.2": {
       "expression": "MIT",
-      "rationale": "Accepted from installed package metadata; exact source and license evidence is retained."
+      "rationale": "Accepted from installed metadata for CI drift review; this is not distribution approval."
     },
     "python:pydantic@2.13.4": {
       "expression": "MIT",
-      "rationale": "Accepted from installed package metadata; exact source and license evidence is retained."
+      "rationale": "Accepted from installed metadata for CI drift review; this is not distribution approval."
     },
     "python:pygments@2.20.0": {
       "expression": "BSD-2-Clause",
-      "rationale": "Accepted from installed package metadata; exact source and license evidence is retained."
+      "rationale": "Accepted from installed metadata for CI drift review; this is not distribution approval."
     },
     "python:pyjwt@2.13.0": {
       "expression": "MIT",
-      "rationale": "Accepted from installed package metadata; exact source and license evidence is retained."
+      "rationale": "Accepted from installed metadata for CI drift review; this is not distribution approval."
     },
     "python:python-dotenv@1.2.2": {
       "expression": "BSD-3-Clause",
-      "rationale": "Accepted from installed package metadata; exact source and license evidence is retained."
+      "rationale": "Accepted from installed metadata for CI drift review; this is not distribution approval."
     },
     "python:rich@15.0.0": {
       "expression": "MIT",
-      "rationale": "Accepted from installed package metadata; exact source and license evidence is retained."
+      "rationale": "Accepted from installed metadata for CI drift review; this is not distribution approval."
     },
     "python:shellingham@1.5.4": {
       "expression": "ISC",
@@ -341,31 +5737,31 @@
     },
     "python:sqlalchemy@2.0.51": {
       "expression": "MIT",
-      "rationale": "Accepted from installed package metadata; exact source and license evidence is retained."
+      "rationale": "Accepted from installed metadata for CI drift review; this is not distribution approval."
     },
     "python:starlette@1.3.1": {
       "expression": "BSD-3-Clause",
-      "rationale": "Accepted from installed package metadata; exact source and license evidence is retained."
+      "rationale": "Accepted from installed metadata for CI drift review; this is not distribution approval."
     },
     "python:structlog@25.5.0": {
       "expression": "MIT OR Apache-2.0",
-      "rationale": "Accepted from installed package metadata; exact source and license evidence is retained."
+      "rationale": "Accepted from installed metadata for CI drift review; this is not distribution approval."
     },
     "python:typer@0.26.8": {
       "expression": "MIT",
-      "rationale": "Accepted from installed package metadata; exact source and license evidence is retained."
+      "rationale": "Accepted from installed metadata for CI drift review; this is not distribution approval."
     },
     "python:typing-extensions@4.16.0": {
       "expression": "PSF-2.0",
-      "rationale": "Accepted from installed package metadata; exact source and license evidence is retained."
+      "rationale": "Accepted from installed metadata for CI drift review; this is not distribution approval."
     },
     "python:typing-inspection@0.4.2": {
       "expression": "MIT",
-      "rationale": "Accepted from installed package metadata; exact source and license evidence is retained."
+      "rationale": "Accepted from installed metadata for CI drift review; this is not distribution approval."
     },
     "python:uvicorn@0.51.0": {
       "expression": "BSD-3-Clause",
-      "rationale": "Accepted from installed package metadata; exact source and license evidence is retained."
+      "rationale": "Accepted from installed metadata for CI drift review; this is not distribution approval."
     }
   },
   "license_texts": [
@@ -460,10 +5856,6 @@
       "url": "https://raw.githubusercontent.com/spdx/license-list-data/421fbabbe80c94c58c12316af1bc6a2dca2362bc/text/bzip2-1.0.6.txt"
     }
   ],
-  "paid_hosting_legal_review": {
-    "completed": false,
-    "rationale": "Qualified legal review is required before offering paid hosted distribution."
-  },
   "platforms": {
     "linux/amd64": [
       {
@@ -815,7 +6207,7 @@
       {
         "ecosystem": "python",
         "effective": true,
-        "metadata_sha256": "9e305190d98bc1ee18315b894fefe3d9a78a9a6934f04e4609d2a63b5ca5adc4",
+        "metadata_sha256": "8d526c00fc1f2d259b655673f72092c6ceb298fae63c5d205d95bf6dc4f470ad",
         "name": "extra-codeowners",
         "observed_license": "Apache-2.0",
         "version": "0.1.0"
@@ -1395,7 +6787,7 @@
       {
         "ecosystem": "python",
         "effective": true,
-        "metadata_sha256": "9e305190d98bc1ee18315b894fefe3d9a78a9a6934f04e4609d2a63b5ca5adc4",
+        "metadata_sha256": "8d526c00fc1f2d259b655673f72092c6ceb298fae63c5d205d95bf6dc4f470ad",
         "name": "extra-codeowners",
         "observed_license": "Apache-2.0",
         "version": "0.1.0"

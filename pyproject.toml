@@ -47,6 +47,7 @@ extra-codeowners = "extra_codeowners.cli:main"
 dev = [
   "httpx2>=2.5.0,<3",
   "mypy>=1.14.0,<2",
+  "packaging>=26.0,<27",
   "pre-commit>=4.0.0,<5",
   "pytest>=8.3.0,<10",
   "pytest-asyncio>=0.25.0,<2",
