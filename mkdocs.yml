@@ -43,6 +43,7 @@ nav:
       - Upgrade, back up, and restore: how-to/upgrade.md
       - Operate and recover: how-to/operate.md
       - Respond to dependency audit: how-to/respond-to-dependency-audit.md
+      - Review CI container evidence: how-to/review-container-evidence.md
   - Reference:
       - Configuration: reference/configuration.md
       - Checks and evaluation: reference/checks.md
@@ -50,8 +51,12 @@ nav:
       - GitHub permissions and events: reference/github-permissions.md
       - HTTP API: reference/http-api.md
       - Database upgrade notes: reference/upgrade-notes.md
+      - Container evidence policy: reference/container-evidence-policy.md
+      - Container evidence release contract: reference/container-evidence-release-contract.md
   - Explanation:
       - Native CODEOWNERS comparison: explanation/native-codeowners.md
       - Architecture: explanation/architecture.md
       - Database migrations: explanation/database-migrations.md
       - Threat model: explanation/threat-model.md
+      - Runtime base image decision: explanation/runtime-base.md
+      - Container distribution evidence: explanation/container-distribution-evidence.md
