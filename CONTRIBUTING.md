@@ -64,6 +64,9 @@ and previous-revision upgrade tests, PostgreSQL concurrency or interruption
 coverage where relevant, and a versioned entry in
 [`docs/reference/upgrade-notes.md`](docs/reference/upgrade-notes.md). Normal
 application startup must remain migration-free.
+Every Alembic head change is a restore boundary: document and test the backup
+restore path rather than claiming an additive migration permits an old-image
+rollback.
 
 ## Sign off commits
 

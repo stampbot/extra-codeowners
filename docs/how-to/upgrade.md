@@ -14,12 +14,12 @@ You need:
 - a dedicated PostgreSQL role that can alter only the Extra CODEOWNERS database
 - a tested `pg_dump` and `pg_restore` version compatible with the server
 - enough storage for both the backup and an isolated restore
-- operator access to restore native GitHub code-owner protection if rollback
-  compatibility fails.
+- operator access to restore native GitHub code-owner protection before any
+  database restore.
 
 Read the [versioned upgrade notes](../reference/upgrade-notes.md) for both the
-current and target releases. Do not continue when the notes do not explicitly
-name the target database revision and application rollback compatibility.
+current and target releases. Do not continue when the notes do not name the
+target database revision and whether the upgrade changes the head.
 
 ## 1. Record the current compatibility state
 
@@ -109,22 +109,21 @@ not wait or migrate; they fail startup until the database reaches the exact
 head.
 
 The Helm chart enables a `pre-install,pre-upgrade` migration Job by default.
-The Job uses the target image, the runtime database environment, a 60-second
-lock timeout, no process retry, and a 180-second Kubernetes deadline. Helm does
-not replace application pods when that hook fails. Retain the Job logs as
-change evidence.
+The Job uses the target image and migration-only database configuration. It
+does not inherit runtime environment sources, GitHub credential volumes, or
+App secrets. It has a 60-second lock timeout, no process retry, and a
+180-second Kubernetes deadline. Helm does not replace application pods when
+that hook fails. Retain the Job logs as change evidence.
 
-Every released migration must be compatible with the immediately previous
-application while the pre-upgrade Job runs. Use expand-and-contract revisions:
+Any migration that changes the Alembic head is a restore boundary. The previous
+artifact's exact-head check rejects the new revision even when the physical
+change is additive. Do not plan an old-image rollback against that database.
+Restore the verified pre-migration backup with the procedure below.
 
-1. add nullable columns, additive tables, or additive indexes
-2. deploy code that can use both old and new shapes
-3. backfill in bounded, restartable work outside a long DDL transaction
-4. stop reading the old shape in a later release
-5. remove it only after the documented rollback window closes.
-
-Do not put an unbounded table rewrite, destructive contraction, or external API
-operation in an Alembic revision.
+The old application process can remain active while the pre-upgrade hook runs.
+Do not put an unbounded table rewrite, destructive operation, or external API
+operation in an Alembic revision. This protects in-flight work during the hook;
+it is not a cross-head compatibility promise.
 
 ## 5. Verify and resume
 
@@ -146,11 +145,12 @@ reconciliation covers all open pull requests.
 Database migrations are forward-only. Helm rollback and application rollback
 never run Alembic downgrade.
 
-If the target release notes say the previous application is compatible with
-the new schema, restore the previous image by digest and run its `database
-check` before resuming traffic.
+Compare the database head recorded in step 1 with the target head. If the head
+did not change, the release notes may permit an application-only rollback. Run
+the previous artifact's `database check` before resuming traffic.
 
-If compatibility is absent or the check fails:
+If the head changed, always restore the verified pre-migration backup. An
+additive schema change does not create an exception. Use this sequence:
 
 1. restore native **Require review from Code Owners** on every affected
    repository
@@ -174,14 +174,21 @@ command rejects them by default.
 
 After taking and verifying a backup, inspect the
 [0.1.0 upgrade note](../reference/upgrade-notes.md#010). If the database came
-from the documented pre-release schema, run once:
+from that documented pre-release schema, use the Extra CODEOWNERS 0.1.0
+artifact and run once:
 
 ```shell
 extra-codeowners database migrate --adopt-pre-alembic-schema
 ```
 
 Adoption succeeds only when every expected table, column, primary key, named
-unique constraint, index, and compatibility marker matches. It stamps the
-baseline and then runs later revisions. A partial or modified schema is never
-adopted automatically; restore, recreate, or write a separately reviewed
-migration for its exact origin.
+unique constraint, index, and compatibility marker matches the immutable 0001
+contract, with no unexpected application table, index, foreign key, check, or
+unique constraint. It stamps the baseline and then runs the remaining 0.1.0
+revision.
+
+Later application artifacts reject this adoption flag. Establish the
+database's pre-release provenance before using 0.1.0; structural inspection
+cannot prove why an Alembic marker is absent. A partial, modified, or
+origin-ambiguous schema is never adopted. Restore, recreate, or write a
+separately reviewed migration for its exact origin.

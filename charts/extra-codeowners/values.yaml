@@ -95,10 +95,22 @@ migrations:
   activeDeadlineSeconds: 180
   # migrations.backoffLimit controls retries after a failed migration process.
   backoffLimit: 0
+  # migrations.ttlSecondsAfterFinished bounds retention of the completed hook Job.
+  ttlSecondsAfterFinished: 3600
   # migrations.annotations adds non-hook annotations to the migration Job.
   annotations: {}
   # migrations.serviceAccountName selects a pre-existing identity for database access.
   serviceAccountName: ""
+  # migrations.existingSecret names a database-only Secret exposed to the migration container.
+  existingSecret: ""
+  # migrations.extraEnvFrom appends migration-only Kubernetes EnvFromSource entries.
+  extraEnvFrom: []
+  # migrations.extraEnv appends migration-only Kubernetes EnvVar entries.
+  extraEnv: []
+  # migrations.extraVolumes appends migration-only volumes other than the built-in tmp volume.
+  extraVolumes: []
+  # migrations.extraVolumeMounts appends migration-only mounts outside the built-in /tmp mount.
+  extraVolumeMounts: []
 
 # service configures the in-cluster HTTP service.
 service:

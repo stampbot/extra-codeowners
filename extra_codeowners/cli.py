@@ -35,8 +35,8 @@ def database_migrate(
         bool,
         typer.Option(
             help=(
-                "Adopt the exact schema from a pre-release build after a verified backup; "
-                "reject it by default."
+                "From the 0.1.0 artifact only, adopt the provenance-verified schema that "
+                "exactly matches immutable revision 0001 after a verified backup."
             )
         ),
     ] = False,

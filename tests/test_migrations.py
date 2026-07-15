@@ -6,6 +6,7 @@ import pytest
 from alembic.config import Config
 from sqlalchemy import create_engine, inspect, text
 
+import extra_codeowners.database as database
 import extra_codeowners.migrations as migrations
 from extra_codeowners.database import DATABASE_MIGRATION_HEAD, Base, QueueStore
 from extra_codeowners.migrations import (
@@ -71,6 +72,28 @@ def test_baseline_upgrade_reactivates_legacy_terminal_work(tmp_path: Path) -> No
     assert store.dead_count() == 0
 
 
+def test_exact_head_requires_database_restore_across_rollback_boundary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    url = database_url(tmp_path)
+    upgrade_database(url, revision=BASELINE_REVISION)
+
+    current_store = QueueStore(url)
+    with pytest.raises(RuntimeError, match="required revision '0002_retry_dead_jobs'"):
+        current_store.initialize()
+    current_store.close()
+
+    monkeypatch.setattr(database, "DATABASE_MIGRATION_HEAD", BASELINE_REVISION)
+    previous_store = QueueStore(url)
+    previous_store.initialize()
+
+    upgrade_database(url)
+
+    with pytest.raises(RuntimeError, match="required revision '0001_initial_schema'"):
+        previous_store.initialize()
+    previous_store.close()
+
+
 def test_failed_migration_releases_guard_and_can_be_retried(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -109,6 +132,19 @@ def test_pre_alembic_schema_requires_explicit_strict_adoption(tmp_path: Path) ->
     assert current_revision(url) == DATABASE_MIGRATION_HEAD
 
 
+def test_immutable_adoption_contract_matches_revision_0001(tmp_path: Path) -> None:
+    url = database_url(tmp_path)
+    upgrade_database(url, revision=BASELINE_REVISION)
+    engine = create_engine(url)
+    with engine.begin() as connection:
+        connection.execute(text("DROP TABLE alembic_version"))
+    engine.dispose()
+
+    upgrade_database(url, adopt_pre_alembic_schema=True)
+
+    assert current_revision(url) == DATABASE_MIGRATION_HEAD
+
+
 def test_partial_pre_alembic_schema_is_never_adopted(tmp_path: Path) -> None:
     url = database_url(tmp_path)
     engine = create_engine(url)
@@ -119,7 +155,35 @@ def test_partial_pre_alembic_schema_is_never_adopted(tmp_path: Path) -> None:
         connection.execute(text("INSERT INTO schema_metadata VALUES (1, 1)"))
     engine.dispose()
 
-    with pytest.raises(RuntimeError, match="partial pre-Alembic schema"):
+    with pytest.raises(RuntimeError, match="non-baseline pre-Alembic schema"):
+        upgrade_database(url, adopt_pre_alembic_schema=True)
+
+
+def test_modified_pre_alembic_contract_is_never_adopted(tmp_path: Path) -> None:
+    url = database_url(tmp_path)
+    engine = create_engine(url)
+    Base.metadata.create_all(engine)
+    with engine.begin() as connection:
+        connection.execute(text("INSERT INTO schema_metadata VALUES (1, 1)"))
+        connection.execute(text("CREATE INDEX unexpected_index ON service_leases (owner)"))
+    engine.dispose()
+
+    with pytest.raises(RuntimeError, match="expected indexes"):
+        upgrade_database(url, adopt_pre_alembic_schema=True)
+
+
+def test_future_artifact_cannot_reinterpret_pre_alembic_baseline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    url = database_url(tmp_path)
+    engine = create_engine(url)
+    Base.metadata.create_all(engine)
+    with engine.begin() as connection:
+        connection.execute(text("INSERT INTO schema_metadata VALUES (1, 1)"))
+    engine.dispose()
+    monkeypatch.setattr(migrations, "__version__", "0.2.0")
+
+    with pytest.raises(RuntimeError, match=r"only from the 0\.1\.0 artifact"):
         upgrade_database(url, adopt_pre_alembic_schema=True)
 
 

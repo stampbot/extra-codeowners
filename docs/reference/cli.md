@@ -59,7 +59,7 @@ uv run python -m extra_codeowners database migrate \
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `--lock-timeout-seconds` | number | `60` | Wait longer than `0` and at most `300` seconds for the migration lock. |
-| `--adopt-pre-alembic-schema` | flag | off | After a verified backup, adopt only the exact schema produced by documented pre-release builds. |
+| `--adopt-pre-alembic-schema` | flag | off | In the 0.1.0 artifact only, adopt the provenance-verified schema that exactly matches immutable revision 0001. |
 | `--help` | flag | off | Show command help and exit. |
 
 Production mode applies the same PostgreSQL and transport validation as the
@@ -69,7 +69,9 @@ lock timeout. A failed or interrupted process releases the lock when its
 connection closes.
 
 Normal application startup never runs this command. Read the [upgrade and
-restore procedure](../how-to/upgrade.md) before using the adoption flag.
+restore procedure](../how-to/upgrade.md) before using the adoption flag. Every
+change to the Alembic head requires a database restore before an old artifact
+can be started again; additive SQL does not create an exception.
 
 ## `database check`
 

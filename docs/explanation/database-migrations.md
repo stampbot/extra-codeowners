@@ -32,25 +32,31 @@ tables, columns, primary keys, named unique constraints, or indexes stop
 startup. Readiness repeats a lightweight revision and query compatibility
 check. Neither path calls `create_all` or applies a revision.
 
-## Transaction and compatibility contract
+## Transaction and restore contract
 
 PostgreSQL runs each revision transactionally. A failed revision rolls back
 before the migration lock is released. SQLite remains available for local
 development, but SQLite DDL is not the production interruption-recovery
 contract.
 
-The Helm hook runs before the old application Deployment is replaced. Every
-ordinary release migration must therefore be an additive expansion that the
-immediately previous application can tolerate. Destructive contraction belongs
-in a later release after the rollback window, and its release note must state
-that restoring an earlier application requires restoring its verified backup.
+Every application artifact accepts one exact Alembic head. A migration that
+changes that head crosses a restore boundary even when its SQL only adds a
+nullable column or an index. The previous artifact rejects the newer revision
+by design, so rolling its image back also requires restoring the verified
+backup taken at its revision.
 
-Application rollback and database rollback are different operations. Alembic
-downgrades are intentionally not an operator interface: data transformations
-such as reactivating abandoned work cannot be reconstructed reliably. An image
-rollback is allowed only when versioned notes declare the earlier application
-compatible with the current schema. Otherwise operators restore a verified
-native PostgreSQL backup under native GitHub code-owner protection.
+Alembic downgrades are intentionally not an operator interface. Data
+transformations such as reactivating abandoned work cannot be reconstructed
+reliably, and a downgrade would make the revision marker claim an unverified
+state. Operators preserve the failed database, restore into a new empty
+database, and validate that restored copy with the previous artifact under
+native GitHub code-owner protection.
+
+The Helm hook runs before the old application Deployment is replaced. A
+migration must still avoid unbounded rewrites and destructive operations that
+could break an old process during the hook. That execution constraint does not
+make the old artifact compatible with the new head or remove the restore
+requirement.
 
 ## Why startup does not auto-migrate
 
@@ -60,11 +66,11 @@ application versions, hide an incomplete deployment behind repeated pod
 restarts, and make a read-only runtime role impossible.
 
 Explicit migration gives operators a bounded change step and evidence before
-traffic moves. It also permits a tighter steady-state database role in a future
-split-role deployment. The current initial chart uses the same database
-environment sources for both processes. Installations whose database
-authentication depends on Kubernetes identity may select a pre-existing
-migration service account through chart values.
+traffic moves. It also permits separate database roles now: the Helm Job has
+migration-only Secret, environment, volume, mount, and ServiceAccount inputs.
+It does not inherit the runtime GitHub App Secret or credential mounts. The
+runtime database role can therefore omit schema-change privileges, while the
+migration role can be limited to database migration authority.
 
 ## Release discipline
 
@@ -74,7 +80,7 @@ Every schema-changing pull request must include:
 - a fresh-install test and an upgrade test from the preceding revision
 - PostgreSQL interruption, concurrency, and shape validation where applicable
 - an entry in the [versioned upgrade notes](../reference/upgrade-notes.md)
-- explicit previous/target application compatibility and backup boundaries
+- an explicit head-change and restore boundary
 - chart, container, and documentation updates when operator behavior changes.
 
 CI checks that the application's declared head matches the packaged Alembic

@@ -25,8 +25,8 @@ be used to authorize production merges.
   when building an image from source
 - an installed Extra CODEOWNERS GitHub App
 - a durable database supported by the application
-- Kubernetes Secrets containing the runtime environment variables and mounted
-  GitHub credential files documented in the
+- separate Kubernetes Secrets containing runtime settings, the database URL,
+  and mounted GitHub credential files documented in the
   [configuration reference][configuration]
 - an ingress controller or another way for GitHub to reach the webhook endpoint
   over HTTPS
@@ -43,9 +43,14 @@ The chart runs a bounded Alembic migration Job before install and upgrade. The
 application then validates the exact revision and table shape during startup;
 it never creates or upgrades tables implicitly.
 
-The chart sets `EXTRA_CODEOWNERS_ENVIRONMENT=production`. The runtime Secret
+The chart sets `EXTRA_CODEOWNERS_ENVIRONMENT=production`. The database Secret
 must replace the container's development-only SQLite URL with a PostgreSQL URL.
 `extraEnv` rejects chart-managed environment variables.
+
+The migration Job does not inherit `existingSecret`, `extraEnvFrom`,
+`extraEnv`, `extraVolumes`, or `extraVolumeMounts`. Configure its database-only
+inputs under `migrations`. Never attach the App private key or webhook secret
+to that Job.
 
 ## Build an image from source
 
@@ -75,25 +80,37 @@ export IMAGE_DIGEST="sha256:REPLACE_WITH_REGISTRY_DIGEST"
 ## Install the source chart
 
 The commands use `extra-codeowners` as both the Helm release and Kubernetes
-namespace. `RUNTIME_ENV_FILE` contains the required environment variables in
-`KEY=value` format. It includes the database URL and these file settings:
+namespace. `RUNTIME_ENV_FILE` contains non-database runtime variables in
+`KEY=value` format, including these file settings:
 
 ```text
 EXTRA_CODEOWNERS_GITHUB_PRIVATE_KEY_FILE=/run/secrets/extra-codeowners/github-private-key
 EXTRA_CODEOWNERS_GITHUB_WEBHOOK_SECRET_FILE=/run/secrets/extra-codeowners/github-webhook-secret
 ```
 
-The environment file and both credential source files must remain outside
+`DATABASE_ENV_FILE` contains exactly the database setting required by both
+processes:
+
+```text
+EXTRA_CODEOWNERS_DATABASE_URL=postgresql+psycopg://DB_USER:DB_PASSWORD@DB_HOST:5432/DB_NAME?sslmode=verify-full
+```
+
+Replace every database placeholder and percent-encode reserved URL characters.
+Both environment files and both credential source files must remain outside
 version control with restricted filesystem permissions. The deployment uses
-separate Secrets for environment variables and mounted credential files:
+separate Secrets for runtime settings, the database URL, and mounted GitHub
+credential files:
 
 ```shell
 export RUNTIME_ENV_FILE="$HOME/.config/extra-codeowners/runtime.env"
+export DATABASE_ENV_FILE="$HOME/.config/extra-codeowners/database.env"
 export GITHUB_PRIVATE_KEY_FILE="$HOME/.config/extra-codeowners/private-key.pem"
 export GITHUB_WEBHOOK_SECRET_FILE="$HOME/.config/extra-codeowners/webhook-secret"
 kubectl create namespace extra-codeowners
 kubectl --namespace extra-codeowners create secret generic extra-codeowners-runtime \
   --from-env-file="$RUNTIME_ENV_FILE"
+kubectl --namespace extra-codeowners create secret generic extra-codeowners-database \
+  --from-env-file="$DATABASE_ENV_FILE"
 kubectl --namespace extra-codeowners create secret generic extra-codeowners-github \
   --from-file=github-private-key="$GITHUB_PRIVATE_KEY_FILE" \
   --from-file=github-webhook-secret="$GITHUB_WEBHOOK_SECRET_FILE"
@@ -103,6 +120,9 @@ Save the non-secret mount wiring as `deployment-values.yaml`:
 
 ```yaml
 existingSecret: extra-codeowners-runtime
+extraEnvFrom:
+  - secretRef:
+      name: extra-codeowners-database
 extraVolumes:
   - name: github-credentials
     secret:
@@ -112,6 +132,8 @@ extraVolumeMounts:
   - name: github-credentials
     mountPath: /run/secrets/extra-codeowners
     readOnly: true
+migrations:
+  existingSecret: extra-codeowners-database
 ```
 
 Install the reviewed image and source chart:
@@ -130,10 +152,12 @@ metadata may retain them.
 
 A successful install creates:
 
+- a bounded pre-install migration Job
 - a Deployment
 - a Service
 - a ServiceAccount
-- an ingress NetworkPolicy.
+- a NetworkPolicy that selects both application and migration pods after
+  chart resources are installed.
 
 The application remains unready until its GitHub App and persistence
 configuration are valid.
@@ -196,6 +220,15 @@ peer. This supports ingress controllers across common cluster topologies.
 `networkPolicy.ingressFrom` can restrict access to the controller's namespace
 and pod selectors when those labels are known.
 
+The policy's selector covers the application and migration pod labels. The
+Service and PodDisruptionBudget add `app.kubernetes.io/component: application`,
+so they never select the one-shot migration pod. On the first install, Helm
+runs `pre-install` hooks before it creates ordinary chart resources, including
+this NetworkPolicy. Use a namespace-level default-deny policy or pre-create an
+equivalent policy before installation when the initial migration must be
+network-isolated. On upgrade, the installed chart policy already covers the
+new migration pod.
+
 The public Ingress must not expose `/metrics`, health endpoints, or setup
 routes. Access to those endpoints requires an authenticated operator route or
 port forwarding.
@@ -206,14 +239,20 @@ Before an upgrade, complete the documented [backup and isolated restore
 test][upgrade]. The chart's pre-upgrade hook uses the target image and database
 environment to run `extra-codeowners database migrate`. It waits at most 60
 seconds for the cross-replica PostgreSQL advisory lock, has no process retry,
-and has a 180-second Job deadline by default. A failed hook stops Helm before
-the application Deployment changes.
+has a 180-second Job deadline, and retains the completed Job for one hour by
+default. A failed hook stops Helm before the application Deployment changes.
 
 Keep `migrations.enabled: true` unless a separately controlled process applies
 the exact target migration before Helm. Set `migrations.serviceAccountName` to
 a pre-existing ServiceAccount when database authentication needs a Kubernetes
 identity. The chart disables Kubernetes API token automounting for that pod;
 review any identity-provider admission mutation separately.
+
+Set `migrations.existingSecret` to a Secret containing only
+`EXTRA_CODEOWNERS_DATABASE_URL`. Use the migration-specific `extraEnvFrom`,
+`extraEnv`, `extraVolumes`, and `extraVolumeMounts` values only for database
+authentication or trust material. Runtime App settings and GitHub credential
+mounts are never inherited.
 
 The default `Recreate` strategy prevents old and new application versions from
 using the database concurrently. It causes a short pause in webhook processing.
@@ -235,8 +274,9 @@ kubectl --namespace extra-codeowners rollout status \
   deployment/extra-codeowners --timeout=5m
 ```
 
-If health checks fail and the reviewed changes leave the database
-backward-compatible, roll back:
+If health checks fail, compare the current database head with the previous
+artifact's [required head][upgrade-notes]. When the head did not change, roll
+back the application:
 
 ```shell
 helm history extra-codeowners --namespace extra-codeowners
@@ -244,10 +284,12 @@ helm rollback extra-codeowners REVISION --namespace extra-codeowners --wait
 ```
 
 `REVISION` is the known-good revision shown by `helm history`. Helm rollback
-does not reverse database changes or run Alembic downgrade. Roll back only when
-the target release's [database upgrade notes][upgrade-notes] declare the old
-application compatible with the new schema. Otherwise restore the verified
-backup under native GitHub code-owner protection.
+does not reverse database changes or run Alembic downgrade. When the head did
+change, do not start the old image against the migrated database. Restore
+native GitHub code-owner protection, preserve the failed database, restore the
+verified pre-migration backup into a new empty database, and validate it with
+the old artifact before rolling back the Deployment. This restore is required
+even when the migration SQL was additive.
 
 `--reset-then-reuse-values` starts with the new chart defaults before applying
 the release's existing overrides. Plain `--reuse-values` can omit new safety
@@ -316,7 +358,9 @@ contract.
 Clusters with an egress proxy or gateway can set
 `networkPolicy.egressEnabled`. `networkPolicy.egress` must then contain complete
 DNS, GitHub, database, and telemetry rules. An empty list denies all egress and
-prevents the readiness probe from succeeding.
+prevents the readiness probe and migration Job from succeeding. The migration
+pod receives no GitHub credentials even when the shared network rule permits
+GitHub egress.
 
 ## Uninstall
 
@@ -344,6 +388,7 @@ The project does not assume that GitHub invalidates that success automatically.
 Uninstalling does not delete:
 
 - the runtime Secret
+- the database Secret
 - the GitHub credential Secret
 - the database
 - the TLS Secret
@@ -391,8 +436,14 @@ validates types, bounds, accepted enums, and unknown top-level properties during
 | `migrations.lockTimeoutSeconds` | number | `60` | Maximum PostgreSQL migration advisory-lock wait. |
 | `migrations.activeDeadlineSeconds` | integer | `180` | Complete migration Job deadline. |
 | `migrations.backoffLimit` | integer | `0` | Kubernetes retries after migration process failure. |
+| `migrations.ttlSecondsAfterFinished` | integer | `3600` | Seconds to retain a completed migration Job for logs, from `60` through `604800`. |
 | `migrations.annotations` | object | `{}` | Additional non-hook Job annotations. |
 | `migrations.serviceAccountName` | string | empty | Pre-existing migration identity; empty uses the namespace's default account. |
+| `migrations.existingSecret` | string | empty | Database-only Secret exposed to the migration container with `envFrom`. |
+| `migrations.extraEnvFrom` | array | `[]` | Additional migration-only `EnvFromSource` objects. |
+| `migrations.extraEnv` | array | `[]` | Additional migration-only `EnvVar` objects; the chart-managed environment name is reserved. |
+| `migrations.extraVolumes` | array | `[]` | Migration-only volumes; the name `tmp` is reserved. |
+| `migrations.extraVolumeMounts` | array | `[]` | Migration-only mounts; the name `tmp` and path `/tmp` are reserved. |
 | `service.type` | enum | `ClusterIP` | Service type. |
 | `service.port` | integer | `80` | In-cluster HTTP Service port. |
 | `service.annotations` | object | `{}` | Service annotations. |
@@ -421,7 +472,7 @@ validates types, bounds, accepted enums, and unknown top-level properties during
 | `autoscaling.targetCPUUtilizationPercentage` | integer | `70` | Average CPU utilization target. |
 | `podDisruptionBudget.enabled` | boolean | `false` | Create a PodDisruptionBudget. |
 | `podDisruptionBudget.minAvailable` | integer or percentage | `1` | Pods retained during voluntary disruption. |
-| `networkPolicy.enabled` | boolean | `true` | Limit ingress to the named HTTP container port. |
+| `networkPolicy.enabled` | boolean | `true` | Isolate application and migration pods; permit ingress only to the named application HTTP port. |
 | `networkPolicy.ingressFrom` | array | `[]` | Allowed ingress peers; empty permits all peers to that port. |
 | `networkPolicy.egressEnabled` | boolean | `false` | Add egress isolation to the NetworkPolicy. |
 | `networkPolicy.egress` | array | `[]` | Complete egress rules; empty with isolation enabled denies all egress. |
@@ -440,7 +491,10 @@ Security-relevant defaults are:
 - HTTP liveness and dependency-aware readiness probes
 - the insecure policy override disabled
 - no chart-managed Secret or credential value
-- an ingress NetworkPolicy limited to the application port.
+- separate runtime and migration credential inputs
+- a Service selector that excludes migration hooks
+- a NetworkPolicy that covers both application and migration pod labels after
+  ordinary chart resources are installed.
 
 [configuration]: https://github.com/stampbot/extra-codeowners/blob/main/docs/reference/configuration.md
 [upgrade]: https://extra-codeowners.readthedocs.io/en/latest/how-to/upgrade/

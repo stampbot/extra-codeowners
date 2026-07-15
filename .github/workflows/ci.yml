@@ -269,7 +269,47 @@ jobs:
           --set extraVolumeMounts[0].name=github-credentials
           --set extraVolumeMounts[0].mountPath=/run/secrets/extra-codeowners
           --set extraVolumeMounts[0].readOnly=true
+          --set migrations.existingSecret=extra-codeowners-database
+          --set migrations.extraVolumes[0].name=database-ca
+          --set migrations.extraVolumes[0].secret.secretName=extra-codeowners-database-ca
+          --set migrations.extraVolumeMounts[0].name=database-ca
+          --set migrations.extraVolumeMounts[0].mountPath=/run/secrets/database-ca
+          --set migrations.extraVolumeMounts[0].readOnly=true
           > rendered-credentials.yaml
+
+      - name: Verify workload selector and credential isolation
+        run: |
+          helm template extra-codeowners charts/extra-codeowners \
+            --set existingSecret=extra-codeowners-runtime \
+            --set extraVolumes[0].name=github-credentials \
+            --set extraVolumes[0].secret.secretName=extra-codeowners-github \
+            --set extraVolumeMounts[0].name=github-credentials \
+            --set extraVolumeMounts[0].mountPath=/run/secrets/extra-codeowners \
+            --set migrations.existingSecret=extra-codeowners-database \
+            --set migrations.extraVolumes[0].name=database-ca \
+            --set migrations.extraVolumes[0].secret.secretName=extra-codeowners-database-ca \
+            --set migrations.extraVolumeMounts[0].name=database-ca \
+            --set migrations.extraVolumeMounts[0].mountPath=/run/secrets/database-ca \
+            --show-only templates/migration-job.yaml > rendered-migration-job.yaml
+          helm template extra-codeowners charts/extra-codeowners \
+            --show-only templates/service.yaml > rendered-service.yaml
+          helm template extra-codeowners charts/extra-codeowners \
+            --show-only templates/networkpolicy.yaml > rendered-network-policy.yaml
+          grep -Fq 'app.kubernetes.io/instance: extra-codeowners' rendered-migration-job.yaml
+          grep -Fq 'app.kubernetes.io/component: database-migration' rendered-migration-job.yaml
+          grep -Fq 'name: extra-codeowners-database' rendered-migration-job.yaml
+          grep -Fq 'name: database-ca' rendered-migration-job.yaml
+          grep -Fq 'app.kubernetes.io/component: application' rendered-service.yaml
+          grep -Fq 'app.kubernetes.io/instance: extra-codeowners' rendered-network-policy.yaml
+          if grep -Fq 'app.kubernetes.io/component:' rendered-network-policy.yaml; then
+            echo 'NetworkPolicy no longer covers both application and migration pods.' >&2
+            exit 1
+          fi
+          if grep -Eq 'extra-codeowners-(runtime|github)|github-credentials' \
+            rendered-migration-job.yaml; then
+            echo 'Migration Job inherited runtime GitHub credentials.' >&2
+            exit 1
+          fi
 
       - name: Render rolling-update opt-in
         run: >-
@@ -299,8 +339,19 @@ jobs:
             --set-string extraEnv[0].value=development
           reject_values "migration hook override" \
             --set-string migrations.annotations.helm\\.sh/hook=post-install
+          reject_values "migration environment override" \
+            --set-string migrations.extraEnv[0].name=EXTRA_CODEOWNERS_ENVIRONMENT \
+            --set-string migrations.extraEnv[0].value=development
+          reject_values "migration temporary-volume override" \
+            --set-string migrations.extraVolumes[0].name=tmp \
+            --set-string migrations.extraVolumes[0].emptyDir={}
+          reject_values "migration temporary-mount override" \
+            --set-string migrations.extraVolumeMounts[0].name=other \
+            --set-string migrations.extraVolumeMounts[0].mountPath=/tmp
           reject_values "pod selector-label override" \
             --set-string podLabels.app\\.kubernetes\\.io/name=hijack
+          reject_values "pod component-label override" \
+            --set-string podLabels.app\\.kubernetes\\.io/component=database-migration
           reject_values "temporary-volume override" \
             --set-string extraVolumes[0].name=tmp \
             --set-string extraVolumes[0].emptyDir={}

@@ -196,6 +196,74 @@ def test_concurrent_migrations_create_one_valid_schema() -> None:
             store.close()
 
 
+def test_postgres_baseline_upgrade_reactivates_representative_dead_jobs() -> None:
+    url = postgres_url()
+    cleanup = QueueStore(url)
+    Base.metadata.drop_all(cleanup.engine)
+    with cleanup.engine.begin() as connection:
+        connection.execute(text("DROP TABLE IF EXISTS alembic_version"))
+    cleanup.close()
+    engine = create_engine(url)
+    try:
+        upgrade_database(url, revision="0001_initial_schema")
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO evaluation_jobs (
+                        installation_id, repository_full_name, pull_number, reason,
+                        generation, authority_generation, state, attempts,
+                        requested_at, available_at, lease_owner, lease_until, last_error
+                    ) VALUES (
+                        17, 'example/project', 42, 'postgres-upgrade', 1, 0,
+                        'dead', 9, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP,
+                        'old-worker', CURRENT_TIMESTAMP, 'old error'
+                    )
+                    """
+                )
+            )
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO authority_jobs (
+                        installation_id, scope_key, base_ref, reason, generation,
+                        state, attempts, requested_at, available_at, lease_owner,
+                        lease_until, last_error
+                    ) VALUES (
+                        17, 'example/project', 'main', 'postgres-upgrade', 1,
+                        'dead', 8, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP,
+                        'old-worker', CURRENT_TIMESTAMP, 'old error'
+                    )
+                    """
+                )
+            )
+
+        upgrade_database(url)
+
+        with engine.connect() as connection:
+            rows = connection.execute(
+                text(
+                    """
+                    SELECT 'authority', state, attempts, lease_owner, lease_until, last_error
+                    FROM authority_jobs
+                    UNION ALL
+                    SELECT 'evaluation', state, attempts, lease_owner, lease_until, last_error
+                    FROM evaluation_jobs
+                    ORDER BY 1
+                    """
+                )
+            ).all()
+        assert [tuple(row) for row in rows] == [
+            ("authority", "pending", 0, None, None, None),
+            ("evaluation", "pending", 0, None, None, None),
+        ]
+    finally:
+        Base.metadata.drop_all(engine)
+        with engine.begin() as connection:
+            connection.execute(text("DROP TABLE IF EXISTS alembic_version"))
+        engine.dispose()
+
+
 def test_interrupted_postgres_migration_rolls_back_and_retries(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

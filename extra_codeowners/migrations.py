@@ -6,21 +6,31 @@ import threading
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 
 from alembic import command
 from alembic.config import Config
 from alembic.migration import MigrationContext
 from alembic.script import ScriptDirectory
-from sqlalchemy import Connection, Engine, UniqueConstraint, create_engine, inspect, select, text
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    Connection,
+    DateTime,
+    Engine,
+    Integer,
+    String,
+    create_engine,
+    inspect,
+    text,
+)
 from sqlalchemy.pool import NullPool
 
+from extra_codeowners import __version__
 from extra_codeowners.database import (
     DATABASE_CONNECT_TIMEOUT_SECONDS,
     DATABASE_MIGRATION_HEAD,
-    SCHEMA_VERSION,
-    Base,
-    SchemaMetadata,
 )
 
 # Signed BLAKE2b-64 of ``extra-codeowners\0database-migrations``. Keep this
@@ -28,7 +38,167 @@ from extra_codeowners.database import (
 MIGRATION_LOCK_KEY = 4_177_414_672_904_750_600
 MIGRATION_STATEMENT_TIMEOUT_MILLISECONDS = 60_000
 BASELINE_REVISION = "0001_initial_schema"
+PRE_ALEMBIC_ADOPTION_RELEASE = "0.1.0"
+PRE_ALEMBIC_SCHEMA_MARKER = 1
 _LOCAL_MIGRATION_LOCK = threading.Lock()
+
+
+@dataclass(frozen=True, slots=True)
+class _BaselineColumn:
+    """One immutable column in the pre-Alembic 0.1 schema contract."""
+
+    name: str
+    type_affinity: type[object]
+    length: int | None
+    nullable: bool
+
+
+@dataclass(frozen=True, slots=True)
+class _BaselineKey:
+    """One immutable named index or unique constraint."""
+
+    name: str
+    columns: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _BaselineTable:
+    """One immutable table in the pre-Alembic 0.1 schema contract."""
+
+    name: str
+    columns: tuple[_BaselineColumn, ...]
+    primary_key: frozenset[str]
+    indexes: tuple[_BaselineKey, ...] = ()
+    unique_constraints: tuple[_BaselineKey, ...] = ()
+
+
+def _column(
+    name: str,
+    type_affinity: type[object],
+    *,
+    length: int | None = None,
+    nullable: bool = False,
+) -> _BaselineColumn:
+    return _BaselineColumn(name, type_affinity, length, nullable)
+
+
+# Do not derive this contract from Base.metadata. This is the exact schema made
+# by pre-Alembic 0.1 builds and represented by revision 0001. Future ORM or
+# migration changes must not silently broaden the one-time adoption boundary.
+_PRE_ALEMBIC_0_1_BASELINE = (
+    _BaselineTable(
+        "schema_metadata",
+        (
+            _column("singleton_id", Integer),
+            _column("version", Integer),
+        ),
+        frozenset({"singleton_id"}),
+    ),
+    _BaselineTable(
+        "evaluation_jobs",
+        (
+            _column("id", Integer),
+            _column("installation_id", Integer),
+            _column("repository_full_name", String, length=512),
+            _column("pull_number", Integer),
+            _column("head_sha_hint", String, length=64, nullable=True),
+            _column("last_delivery_id", String, length=128, nullable=True),
+            _column("reason", String, length=255),
+            _column("generation", Integer),
+            _column("authority_generation", Integer),
+            _column("state", String, length=16),
+            _column("attempts", Integer),
+            _column("requested_at", DateTime),
+            _column("available_at", DateTime),
+            _column("lease_owner", String, length=128, nullable=True),
+            _column("lease_until", DateTime, nullable=True),
+            _column("last_error", String, length=2000, nullable=True),
+        ),
+        frozenset({"id"}),
+        (_BaselineKey("ix_evaluation_jobs_claim", ("state", "available_at", "lease_until")),),
+        (
+            _BaselineKey(
+                "uq_evaluation_job_pr",
+                ("installation_id", "repository_full_name", "pull_number"),
+            ),
+        ),
+    ),
+    _BaselineTable(
+        "webhook_deliveries",
+        (
+            _column("delivery_id", String, length=128),
+            _column("event", String, length=128),
+            _column("received_at", DateTime),
+            _column("invalidation_required", Boolean),
+            _column("invalidation_completed_at", DateTime, nullable=True),
+        ),
+        frozenset({"delivery_id"}),
+        (_BaselineKey("ix_webhook_deliveries_received_at", ("received_at",)),),
+    ),
+    _BaselineTable(
+        "evaluation_audits",
+        (
+            _column("id", Integer),
+            _column("repository_full_name", String, length=512),
+            _column("pull_number", Integer),
+            _column("head_sha", String, length=64),
+            _column("conclusion", String, length=32),
+            _column("details", JSON),
+            _column("evaluated_at", DateTime),
+        ),
+        frozenset({"id"}),
+        unique_constraints=(
+            _BaselineKey(
+                "uq_evaluation_audit_pr",
+                ("repository_full_name", "pull_number"),
+            ),
+        ),
+    ),
+    _BaselineTable(
+        "service_leases",
+        (
+            _column("name", String, length=128),
+            _column("owner", String, length=128),
+            _column("lease_until", DateTime),
+        ),
+        frozenset({"name"}),
+    ),
+    _BaselineTable(
+        "authority_jobs",
+        (
+            _column("id", Integer),
+            _column("installation_id", Integer),
+            _column("scope_key", String, length=512),
+            _column("base_ref", String, length=255),
+            _column("reason", String, length=255),
+            _column("generation", Integer),
+            _column("state", String, length=16),
+            _column("attempts", Integer),
+            _column("requested_at", DateTime),
+            _column("available_at", DateTime),
+            _column("lease_owner", String, length=128, nullable=True),
+            _column("lease_until", DateTime, nullable=True),
+            _column("last_error", String, length=2000, nullable=True),
+        ),
+        frozenset({"id"}),
+        (_BaselineKey("ix_authority_jobs_claim", ("state", "available_at", "lease_until")),),
+        (
+            _BaselineKey(
+                "uq_authority_job_scope",
+                ("installation_id", "scope_key", "base_ref"),
+            ),
+        ),
+    ),
+    _BaselineTable(
+        "authority_epochs",
+        (
+            _column("installation_id", Integer),
+            _column("generation", Integer),
+            _column("changed_at", DateTime),
+        ),
+        frozenset({"installation_id"}),
+    ),
+)
 
 
 def _engine(database_url: str) -> Engine:
@@ -133,22 +303,27 @@ def _migration_guard(connection: Connection, timeout_seconds: float) -> Iterator
             _LOCAL_MIGRATION_LOCK.release()
 
 
-def _application_tables() -> set[str]:
-    return {table.name for table in Base.metadata.sorted_tables}
+def _baseline_tables() -> frozenset[str]:
+    return frozenset(table.name for table in _PRE_ALEMBIC_0_1_BASELINE)
 
 
-def _adopt_pre_alembic_schema(connection: Connection, config: Config) -> bool:
+def _adopt_pre_alembic_schema(connection: Connection, config: Config) -> None:
+    if __version__ != PRE_ALEMBIC_ADOPTION_RELEASE:
+        raise RuntimeError(
+            "pre-Alembic adoption is available only from the 0.1.0 artifact; "
+            "use that artifact to adopt the immutable baseline before upgrading"
+        )
     inspector = inspect(connection)
     actual_tables = set(inspector.get_table_names())
-    known_tables = actual_tables & _application_tables()
-    if not known_tables:
-        return False
-    if known_tables != _application_tables():
-        missing = sorted(_application_tables() - known_tables)
+    baseline_tables = _baseline_tables()
+    if actual_tables != baseline_tables:
+        missing = sorted(baseline_tables - actual_tables)
+        unexpected = sorted(actual_tables - baseline_tables)
         raise RuntimeError(
-            "refusing to adopt a partial pre-Alembic schema; missing tables: " + ", ".join(missing)
+            "refusing to adopt a non-baseline pre-Alembic schema; "
+            f"missing tables: {missing!r}; unexpected tables: {unexpected!r}"
         )
-    for table in Base.metadata.sorted_tables:
+    for table in _PRE_ALEMBIC_0_1_BASELINE:
         expected_columns = {column.name for column in table.columns}
         inspected_columns = inspector.get_columns(table.name)
         actual_columns = {column["name"] for column in inspected_columns}
@@ -161,63 +336,71 @@ def _adopt_pre_alembic_schema(connection: Connection, config: Config) -> bool:
         for expected_column in table.columns:
             actual_column = actual_by_name[expected_column.name]
             actual_type = actual_column["type"]
-            expected_affinity = expected_column.type._type_affinity
-            expected_length = getattr(expected_column.type, "length", None)
             actual_length = getattr(actual_type, "length", None)
             if (
-                expected_affinity is None
-                or not isinstance(actual_type, expected_affinity)
-                or expected_length != actual_length
-                or bool(actual_column["nullable"]) != bool(expected_column.nullable)
+                not isinstance(actual_type, expected_column.type_affinity)
+                or expected_column.length != actual_length
+                or bool(actual_column["nullable"]) != expected_column.nullable
             ):
                 raise RuntimeError(
                     f"refusing to adopt pre-Alembic column "
                     f"{table.name}.{expected_column.name}: type, length, or nullability differs"
                 )
-        expected_primary_key = {column.name for column in table.primary_key.columns}
         actual_primary_key = set(inspector.get_pk_constraint(table.name)["constrained_columns"])
-        if actual_primary_key != expected_primary_key:
+        if actual_primary_key != table.primary_key:
             raise RuntimeError(
                 f"refusing to adopt pre-Alembic table {table.name!r}: expected primary key "
-                f"{sorted(expected_primary_key)!r}, found {sorted(actual_primary_key)!r}"
+                f"{sorted(table.primary_key)!r}, found {sorted(actual_primary_key)!r}"
             )
-        expected_indexes = {str(index.name) for index in table.indexes if index.name is not None}
+        expected_indexes = {index.name: (index.columns, False) for index in table.indexes}
         actual_indexes = {
-            str(index["name"])
+            str(index["name"]): (
+                tuple(str(column) for column in index["column_names"]),
+                bool(index["unique"]),
+            )
             for index in inspector.get_indexes(table.name)
-            if index["name"] is not None
+            if index["name"] is not None and index.get("duplicates_constraint") is None
         }
-        if not expected_indexes <= actual_indexes:
+        if actual_indexes != expected_indexes:
             raise RuntimeError(
-                f"refusing to adopt pre-Alembic table {table.name!r}: missing indexes "
-                f"{sorted(expected_indexes - actual_indexes)!r}"
+                f"refusing to adopt pre-Alembic table {table.name!r}: expected indexes "
+                f"{expected_indexes!r}, found {actual_indexes!r}"
             )
         expected_uniques = {
-            str(constraint.name)
-            for constraint in table.constraints
-            if isinstance(constraint, UniqueConstraint) and constraint.name is not None
+            constraint.name: constraint.columns for constraint in table.unique_constraints
         }
         actual_uniques = {
-            str(constraint["name"])
+            str(constraint["name"]): tuple(str(column) for column in constraint["column_names"])
             for constraint in inspector.get_unique_constraints(table.name)
             if constraint["name"] is not None
         }
-        if not expected_uniques <= actual_uniques:
+        if actual_uniques != expected_uniques:
             raise RuntimeError(
-                f"refusing to adopt pre-Alembic table {table.name!r}: missing unique constraints "
-                f"{sorted(expected_uniques - actual_uniques)!r}"
+                f"refusing to adopt pre-Alembic table {table.name!r}: expected unique "
+                f"constraints {expected_uniques!r}, found {actual_uniques!r}"
             )
-    version = connection.scalar(
-        select(SchemaMetadata.version).where(SchemaMetadata.singleton_id == 1)
+        foreign_keys = inspector.get_foreign_keys(table.name)
+        check_constraints = inspector.get_check_constraints(table.name)
+        if foreign_keys or check_constraints:
+            raise RuntimeError(
+                f"refusing to adopt pre-Alembic table {table.name!r}: baseline has no "
+                "foreign-key or check constraints"
+            )
+    marker_rows = tuple(
+        tuple(row)
+        for row in connection.execute(
+            text("SELECT singleton_id, version FROM schema_metadata ORDER BY singleton_id")
+        )
     )
-    if version != SCHEMA_VERSION:
+    expected_marker_rows = ((1, PRE_ALEMBIC_SCHEMA_MARKER),)
+    if marker_rows != expected_marker_rows:
         raise RuntimeError(
-            f"refusing to adopt pre-Alembic schema marker {version!r}; expected {SCHEMA_VERSION}"
+            f"refusing to adopt pre-Alembic schema marker {marker_rows!r}; "
+            f"expected {expected_marker_rows!r}"
         )
     connection.commit()
     command.stamp(config, BASELINE_REVISION)
     connection.commit()
-    return True
 
 
 def _apply_upgrade(config: Config, revision: str) -> None:
@@ -244,13 +427,13 @@ def upgrade_database(
             config = _config(connection)
             migration_context = MigrationContext.configure(connection)
             current = migration_context.get_current_revision()
-            known_tables = set(inspect(connection).get_table_names()) & _application_tables()
-            if current is None and known_tables:
+            unversioned_tables = set(inspect(connection).get_table_names())
+            if current is None and unversioned_tables:
                 if not adopt_pre_alembic_schema:
                     raise RuntimeError(
-                        "database contains a pre-Alembic Extra CODEOWNERS schema; back it up, "
-                        "then rerun with --adopt-pre-alembic-schema after reviewing the "
-                        "pre-release adoption procedure"
+                        "database contains an unversioned schema; back it up, then rerun with "
+                        "--adopt-pre-alembic-schema only for the exact documented 0.1 "
+                        "pre-Alembic baseline"
                     )
                 _adopt_pre_alembic_schema(connection, config)
             # Inspector and revision queries autobegin a transaction. End that

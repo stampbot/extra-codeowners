@@ -17,10 +17,11 @@ metadata:
 spec:
   activeDeadlineSeconds: {{ .Values.migrations.activeDeadlineSeconds }}
   backoffLimit: {{ .Values.migrations.backoffLimit }}
+  ttlSecondsAfterFinished: {{ .Values.migrations.ttlSecondsAfterFinished }}
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: {{ include "extra-codeowners.name" . }}
+        {{- include "extra-codeowners.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: database-migration
     spec:
       automountServiceAccountToken: false
@@ -43,22 +44,20 @@ spec:
             - {{ .Values.migrations.lockTimeoutSeconds | quote }}
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
-          {{- if or .Values.existingSecret .Values.extraEnvFrom }}
+          {{- if or .Values.migrations.existingSecret .Values.migrations.extraEnvFrom }}
           envFrom:
-            {{- if .Values.existingSecret }}
+            {{- if .Values.migrations.existingSecret }}
             - secretRef:
-                name: {{ .Values.existingSecret }}
+                name: {{ .Values.migrations.existingSecret }}
             {{- end }}
-            {{- with .Values.extraEnvFrom }}
+            {{- with .Values.migrations.extraEnvFrom }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
           {{- end }}
           env:
             - name: EXTRA_CODEOWNERS_ENVIRONMENT
               value: production
-            - name: EXTRA_CODEOWNERS_ALLOW_INSECURE_CHANGES
-              value: {{ .Values.allowInsecureChanges | quote }}
-            {{- with .Values.extraEnv }}
+            {{- with .Values.migrations.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
           resources:
@@ -66,13 +65,13 @@ spec:
           volumeMounts:
             - name: tmp
               mountPath: /tmp
-            {{- with .Values.extraVolumeMounts }}
+            {{- with .Values.migrations.extraVolumeMounts }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
       volumes:
         - name: tmp
           emptyDir: {}
-        {{- with .Values.extraVolumes }}
+        {{- with .Values.migrations.extraVolumes }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
       {{- with .Values.nodeSelector }}

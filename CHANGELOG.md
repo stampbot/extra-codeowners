@@ -36,6 +36,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Rel
 - Explicit Alembic migrations with bounded PostgreSQL advisory locking.
 - A fail-closed startup schema check with no implicit ORM table creation.
 - A Helm pre-install and pre-upgrade migration Job.
+- Migration-only Helm Secret, environment, volume, mount, and ServiceAccount inputs that exclude runtime GitHub credentials.
 - Versioned database compatibility, backup, restore, and rollback guidance.
 - Evaluation and authority failures that remain pending until recovery.
 - Failure when multiple open pull requests already share a head commit.
