@@ -50,5 +50,6 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Rel
 ### Changed
 
 - GitHub API error messages are capped at 1,000 characters, and non-finite rate-limit hints use the bounded default delay.
+- Shell lint CI verifies the pinned official ShellCheck release archive instead of depending on an anonymous Docker Hub pull.
 
 [Unreleased]: https://github.com/stampbot/extra-codeowners/commits/main

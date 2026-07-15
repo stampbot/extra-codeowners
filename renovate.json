@@ -25,12 +25,11 @@
     },
     {
       "customType": "regex",
-      "description": "Update digest-pinned CI and release utility containers",
+      "description": "Update digest-pinned kubeconform and BuildKit utility containers",
       "managerFilePatterns": [
         "/^\\.github/workflows/(?:ci|release)\\.yml$/"
       ],
       "matchStrings": [
-        "(?<depName>koalaman/shellcheck):(?<currentValue>[^@\\s]+)@(?<currentDigest>sha256:[a-f0-9]{64})",
         "(?<depName>ghcr.io/yannh/kubeconform):(?<currentValue>[^@\\s]+)@(?<currentDigest>sha256:[a-f0-9]{64})",
         "(?<depName>moby/buildkit):(?<currentValue>[^@\\s]+)@(?<currentDigest>sha256:[a-f0-9]{64})"
       ],
