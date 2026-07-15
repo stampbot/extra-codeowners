@@ -1,10 +1,94 @@
 {
   "@context": "https://openvex.dev/ns/v0.2.0",
-  "@id": "https://github.com/stampbot/extra-codeowners/security/vex/CVE-2026-15308",
+  "@id": "https://github.com/stampbot/extra-codeowners/security/vex/python-3.14.6/2",
   "author": "https://github.com/stampbot/extra-codeowners",
-  "timestamp": "2026-07-12T00:00:00Z",
-  "version": 1,
+  "timestamp": "2026-07-14T00:00:00Z",
+  "version": 2,
   "statements": [
+    {
+      "vulnerability": {
+        "name": "CVE-2026-11940"
+      },
+      "products": [
+        {
+          "@id": "extra-codeowners:ci-amd64",
+          "subcomponents": [
+            {
+              "@id": "pkg:generic/python@3.14.6"
+            }
+          ]
+        },
+        {
+          "@id": "extra-codeowners:ci-arm64",
+          "subcomponents": [
+            {
+              "@id": "pkg:generic/python@3.14.6"
+            }
+          ]
+        },
+        {
+          "@id": "extra-codeowners:release-candidate-amd64",
+          "subcomponents": [
+            {
+              "@id": "pkg:generic/python@3.14.6"
+            }
+          ]
+        },
+        {
+          "@id": "extra-codeowners:release-candidate-arm64",
+          "subcomponents": [
+            {
+              "@id": "pkg:generic/python@3.14.6"
+            }
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "Extra CODEOWNERS does not import tarfile, accept archives, or call tarfile.extractall. Runtime inputs are GitHub JSON, TOML policy, and CODEOWNERS text, so an untrusted archive cannot reach the vulnerable hardlink and symlink extraction path."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-11972"
+      },
+      "products": [
+        {
+          "@id": "extra-codeowners:ci-amd64",
+          "subcomponents": [
+            {
+              "@id": "pkg:generic/python@3.14.6"
+            }
+          ]
+        },
+        {
+          "@id": "extra-codeowners:ci-arm64",
+          "subcomponents": [
+            {
+              "@id": "pkg:generic/python@3.14.6"
+            }
+          ]
+        },
+        {
+          "@id": "extra-codeowners:release-candidate-amd64",
+          "subcomponents": [
+            {
+              "@id": "pkg:generic/python@3.14.6"
+            }
+          ]
+        },
+        {
+          "@id": "extra-codeowners:release-candidate-arm64",
+          "subcomponents": [
+            {
+              "@id": "pkg:generic/python@3.14.6"
+            }
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "Extra CODEOWNERS does not import tarfile, accept archives, or open a tar archive in streaming mode. No runtime input can reach the vulnerable tarfile r| end-of-file parsing path."
+    },
     {
       "vulnerability": {
         "name": "CVE-2026-15308"

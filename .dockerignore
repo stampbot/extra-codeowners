@@ -17,7 +17,6 @@ dist
 build
 charts
 docs
-tests
 *.db
 *.key
 *.p12

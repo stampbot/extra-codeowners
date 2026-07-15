@@ -55,3 +55,4 @@ nav:
       - Architecture: explanation/architecture.md
       - Database migrations: explanation/database-migrations.md
       - Threat model: explanation/threat-model.md
+      - Runtime base image decision: explanation/runtime-base.md

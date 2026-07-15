@@ -10,7 +10,7 @@ There is no tagged release today. After the first release and until the project 
 
 CI builds and scans separate `linux/amd64` and `linux/arm64` candidates. The release image job cannot run until both scans finish.
 
-A High or Critical finding blocks the candidate when the scanner knows of a fix. CI also saves a JSON inventory of every finding, including those with no upstream fix. This keeps unresolved risk visible without pretending that an unavailable patch can be applied.
+CI saves a raw JSON inventory without applying VEX, including findings with no upstream fix. Narrowly reviewed OpenVEX dispositions are then applied to the blocking scan, and any remaining High or Critical finding blocks the candidate when the scanner knows of a fix. This keeps unresolved risk visible without pretending that an unavailable or inapplicable patch can be applied.
 
 For a tagged release, the image job first pushes a candidate tag named for the full commit. It scans each published platform digest, then signs and attests the verified index and its software bills of materials (SBOMs). Semantic-version tags are added last.
 
@@ -18,7 +18,7 @@ If an exact-artifact scan, signature, attestation, or metadata upload fails, the
 
 Each release publishes a signed SPDX SBOM for each supported architecture. An SBOM attestation names its platform digest. The multi-platform index gets a separate provenance attestation and signature, so one architecture's package list is never presented as evidence for the other.
 
-A Vulnerability Exploitability eXchange (VEX) exception must name one vulnerability and the exact package version. It must also explain why the vulnerable code cannot run in this application. Review it like any other security-sensitive change.
+A Vulnerability Exploitability eXchange (VEX) exception must name one vulnerability and the exact package version. It must also explain why the vulnerable code cannot run in this application. VEX dispositions are honored by the blocking scan even when another, unsupported release line contains a fix, so review them like any other security-sensitive change.
 
 Source statements live in [`.openvex.json`](.openvex.json). Release VEX documents are bound to the image digest, attached as OCI attestations, signed, and included with the release artifacts. If a usable fix exists, upgrade instead of adding a VEX statement.
 
