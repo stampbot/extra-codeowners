@@ -1159,6 +1159,49 @@ async def test_reconciler_enqueues_open_pull_requests(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_reconciler_recovers_missed_shared_head_open_and_fails_closed(
+    tmp_path: Path,
+) -> None:
+    github = FakeGitHub(changed_path="uv.lock")
+    github.checks.append({"status": "completed", "conclusion": "success"})
+    github.list_installations = AsyncMock(  # type: ignore[attr-defined]
+        return_value=[{"id": 2, "suspended_at": None}]
+    )
+    github.list_installation_repositories = AsyncMock(  # type: ignore[attr-defined]
+        return_value=[{"full_name": "example/project", "archived": False}]
+    )
+    github.list_open_pulls = AsyncMock(  # type: ignore[attr-defined]
+        return_value=[
+            {"number": 3, "head": {"sha": HEAD}},
+            {"number": 4, "head": {"sha": HEAD}},
+        ]
+    )
+    github.list_commit_pulls = AsyncMock(  # type: ignore[method-assign]
+        return_value=[
+            {"number": 3, "state": "open", "head": {"sha": HEAD}},
+            {"number": 4, "state": "open", "head": {"sha": HEAD}},
+        ]
+    )
+    store = QueueStore(f"sqlite:///{tmp_path / 'missed-shared-head.db'}")
+    store.initialize()
+    reconciler = Reconciler(settings(), github, store, "reconciler")  # type: ignore[arg-type]
+    service = EvaluationService(settings(), github, store)  # type: ignore[arg-type]
+
+    assert await reconciler.reconcile_once() == 2
+    for _ in range(2):
+        claimed = store.claim("worker", 60)
+        assert claimed is not None
+        await service.evaluate_job(claimed)
+        store.complete(claimed, claimed.lease_owner)
+
+    published = [check for check in github.checks[1:] if check.get("status") == "completed"]
+    assert len(published) == 2
+    assert all(check.get("conclusion") == "failure" for check in published)
+    assert all("shared" in str(check.get("text")) for check in published)
+    assert store.pending_count() == 0
+
+
+@pytest.mark.asyncio
 async def test_evaluator_skips_organization_config_repository(tmp_path: Path) -> None:
     github = FakeGitHub(changed_path="README.md")
     store = QueueStore(f"sqlite:///{tmp_path / 'org-config.db'}")
