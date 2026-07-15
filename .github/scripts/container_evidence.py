@@ -2705,7 +2705,7 @@ def canonical_post_base_filesystem_changes(
         "removal": files.get("whiteouts"),
     }
     grouped: dict[str, list[list[Mapping[str, Any]]]] = {
-        kind: [[] for _layer in layers] for kind in categories
+        kind: [[] for _ in layers] for kind in categories
     }
     total_records = 0
     for kind, value in categories.items():
@@ -3460,7 +3460,7 @@ def require_https_source_url(url: str) -> None:
             raise EvidenceError(f"source URL must not contain surrounding whitespace: {url!r}")
         parsed = urllib.parse.urlparse(url)
         hostname = parsed.hostname
-        _port = parsed.port
+        port = parsed.port
     except (UnicodeError, ValueError) as exc:
         raise EvidenceError(f"source URL is invalid: {url!r}") from exc
     if (
@@ -3470,6 +3470,7 @@ def require_https_source_url(url: str) -> None:
         or parsed.username
         or parsed.password
         or parsed.fragment
+        or (port is not None and not 0 <= port <= 65535)
     ):
         raise EvidenceError(f"source URL must be credential-free HTTPS: {url}")
 

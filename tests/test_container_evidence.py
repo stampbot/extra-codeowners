@@ -1267,6 +1267,11 @@ def test_fetch_rejects_an_invalid_expected_digest_before_network() -> None:
         evidence.fetch("https://example.com/source.tar.gz", "not-a-digest")
 
 
+def test_source_url_rejects_an_out_of_range_port_before_network() -> None:
+    with pytest.raises(evidence.EvidenceError, match="source URL is invalid"):
+        evidence.require_https_source_url("https://example.com:65536/source.tar.gz")
+
+
 def test_cpython_source_is_bound_to_official_recipe_version_and_hash() -> None:
     digest = "a" * 64
     recipe = f"ENV PYTHON_VERSION 3.14.6\nENV PYTHON_SHA256 {digest}\n".encode()
