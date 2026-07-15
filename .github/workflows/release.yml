@@ -31,6 +31,7 @@ jobs:
       - name: Set up uv
         uses: astral-sh/setup-uv@6ee6290f1cbc4156c0bdd66691b2c144ef8df19a # v7.4.0
         with:
+          version: "0.11.28" # uv runtime
           enable-cache: false
 
       - name: Validate tag and project version
@@ -86,6 +87,7 @@ jobs:
       - name: Set up uv
         uses: astral-sh/setup-uv@6ee6290f1cbc4156c0bdd66691b2c144ef8df19a # v7.4.0
         with:
+          version: "0.11.28" # uv runtime
           enable-cache: false
 
       - name: Set up Helm
@@ -236,6 +238,7 @@ jobs:
       - name: Set up uv
         uses: astral-sh/setup-uv@6ee6290f1cbc4156c0bdd66691b2c144ef8df19a # v7.4.0
         with:
+          version: "0.11.28" # uv runtime
           enable-cache: false
 
       - name: Install locked dependencies
