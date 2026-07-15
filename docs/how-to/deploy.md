@@ -48,6 +48,11 @@ The checked-in tag-release pipeline can publish signed, attestable versioned ima
 
 The [runtime base image decision](../explanation/runtime-base.md) records the selected upstream image, architecture evidence, vulnerability dispositions, update contract, and residual risk.
 
+For a tagged release, also verify the platform-specific notice and source
+archive with the
+[container distribution evidence procedure](verify-container-evidence.md).
+Image provenance and a software bill of materials do not replace that archive.
+
 ## 2. Provision durable state
 
 Create a dedicated PostgreSQL database and role. Give the role ownership only of the Extra CODEOWNERS database; don't grant cluster-administrator or unrelated-database privileges.
@@ -170,7 +175,9 @@ The initial Helm chart source lives at `charts/extra-codeowners`. A successful e
 - a signed multi-architecture image at `ghcr.io/stampbot/extra-codeowners:<version>`
 - a signed OCI chart at `oci://ghcr.io/stampbot/charts/extra-codeowners`, using the release version
 - Python wheel and source artifacts
-- build provenance and software-bill-of-material attestations.
+- build provenance and software-bill-of-material attestations
+- signed, attested notice and corresponding-source evidence for each platform
+  digest.
 
 Workflow source doesn't prove that an artifact was published. Confirm the artifact exists after successful CI or a GitHub release. Until the repository announces a supported release, none exists.
 

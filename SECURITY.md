@@ -16,7 +16,24 @@ For a tagged release, the image job first pushes a candidate tag named for the f
 
 If an exact-artifact scan, signature, attestation, or metadata upload fails, the workflow does not create a release-version tag.
 
+The repository's `v*` tag ruleset restricts tag changes to an explicit
+maintainer bypass identity. The tag workflow also queries the configured release
+milestone number with read-only issue permission, verifies its expected title,
+and stops when any issue remains open. It records the milestone counts and
+release context in the workflow summary.
+This workflow gate cannot prevent an authorized user from pushing a Git tag; it
+prevents that unready tag from publishing release artifacts through the
+workflow.
+
 Each release publishes a signed SPDX SBOM for each supported architecture. An SBOM attestation names its platform digest. The multi-platform index gets a separate provenance attestation and signature, so one architecture's package list is never presented as evidence for the other.
+
+Each release must also publish a deterministic notice and source-evidence
+archive for each platform digest. The archive includes effective and all-layer
+inventories, commit-pinned Alpine recipes, checksum-verified distfiles, locked
+Python source, license texts, and a human-readable notice file. A reviewed
+component policy and explicit maintainer distribution approval gate the release.
+This evidence is not a legal-compliance determination. See the
+[container distribution evidence design](docs/explanation/container-distribution-evidence.md).
 
 A Vulnerability Exploitability eXchange (VEX) exception must name one vulnerability and the exact package version. It must also explain why the vulnerable code cannot run in this application. VEX dispositions are honored by the blocking scan even when another, unsupported release line contains a fix, so review them like any other security-sensitive change.
 

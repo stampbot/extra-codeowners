@@ -136,8 +136,10 @@ the aggregate packages and their declared licenses; they are inventory, not
 proof that redistribution duties have been satisfied. The application is
 Apache-2.0, but the base includes copyleft and notice-bearing packages such as
 BusyBox, GNU readline, and the Mozilla CA certificate bundle. The application's
-license does not relicense those components. A supported release must also pass
-the [third-party notice and corresponding-source gate](https://github.com/stampbot/extra-codeowners/issues/18).
+license does not relicense those components. A supported release must also
+produce the digest-bound
+[container distribution evidence](container-distribution-evidence.md) and pass
+its separate human approval gate.
 
 To roll back a base refresh, deploy the previous application image by its
 recorded digest and verify readiness, queue processing, and a disposable

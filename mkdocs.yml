@@ -40,6 +40,8 @@ nav:
       - Prepare repository rules: how-to/prepare-repository-rules.md
       - Deploy: how-to/deploy.md
       - Operate and recover: how-to/operate.md
+      - Verify container evidence: how-to/verify-container-evidence.md
+      - Review container evidence: how-to/review-container-evidence.md
   - Reference:
       - Configuration: reference/configuration.md
       - Checks and evaluation: reference/checks.md
@@ -51,3 +53,4 @@ nav:
       - Architecture: explanation/architecture.md
       - Threat model: explanation/threat-model.md
       - Runtime base image decision: explanation/runtime-base.md
+      - Container distribution evidence: explanation/container-distribution-evidence.md

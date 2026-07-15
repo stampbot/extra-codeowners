@@ -44,6 +44,8 @@ If you operate a deployment:
 
 - Use the [deployment guide](how-to/deploy.md).
 - Keep the [operations and recovery guide](how-to/operate.md) close at hand.
+- Use the [container evidence verification guide](how-to/verify-container-evidence.md)
+  to locate notices and exact source for a released platform digest.
 - Consult the [checks](reference/checks.md),
   [configuration](reference/configuration.md), and
   [HTTP API](reference/http-api.md) references when you need exact behavior.
