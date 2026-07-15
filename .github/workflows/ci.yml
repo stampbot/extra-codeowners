@@ -4,8 +4,6 @@ on:
   pull_request:
     branches:
       - main
-      # Temporary stacked-PR base; remove after the runtime-base PR lands.
-      - chore/runtime-base-image
   push:
     branches:
       - main
@@ -438,6 +436,7 @@ jobs:
       - name: Set up uv for evidence collection
         uses: astral-sh/setup-uv@6ee6290f1cbc4156c0bdd66691b2c144ef8df19a # v7.4.0
         with:
+          version: "0.11.28" # uv runtime
           enable-cache: false
 
       - name: Install locked evidence dependencies

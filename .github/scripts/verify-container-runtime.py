@@ -10,6 +10,7 @@ import sys
 
 EXPECTED_PYTHON = (3, 14, 6)
 EXPECTED_MODULES = {
+    "alembic": "alembic",
     "annotated-doc": "annotated_doc",
     "annotated-types": "annotated_types",
     "anyio": "anyio",
@@ -24,7 +25,9 @@ EXPECTED_MODULES = {
     "httpcore": "httpcore",
     "httpx": "httpx",
     "idna": "idna",
+    "mako": "mako",
     "markdown-it-py": "markdown_it",
+    "markupsafe": "markupsafe",
     "mdurl": "mdurl",
     "prometheus-client": "prometheus_client",
     "psycopg": "psycopg",

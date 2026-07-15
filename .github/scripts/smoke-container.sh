@@ -38,12 +38,15 @@ docker run --rm \
   --network none \
   --read-only \
   --volume "$database_volume:/var/lib/extra-codeowners" \
-  --entrypoint python \
+  --cap-drop ALL \
+  --cap-add CHOWN \
+  --security-opt no-new-privileges \
+  --entrypoint /opt/venv/bin/python \
   "$image" -c '
 import os
 
-os.chown("/var/lib/extra-codeowners", 65532, 65532)
 os.chmod("/var/lib/extra-codeowners", 0o700)
+os.chown("/var/lib/extra-codeowners", 65532, 65532)
 '
 
 docker run --rm \

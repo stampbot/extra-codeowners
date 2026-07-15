@@ -57,9 +57,11 @@ FROM builder AS test
 RUN apk add --no-cache git=2.54.0-r0
 
 COPY tests/ ./tests/
+COPY .github/dependabot.yml ./.github/dependabot.yml
 COPY .github/scripts/container_evidence.py .github/scripts/release_readiness.py ./.github/scripts/
-COPY .github/workflows/ci.yml .github/workflows/release.yml ./.github/workflows/
+COPY .github/workflows/ ./.github/workflows/
 COPY .compliance/container-policy.json ./.compliance/container-policy.json
+COPY docs/reference/upgrade-notes.md ./docs/reference/upgrade-notes.md
 COPY Dockerfile mise.toml renovate.json ./
 
 RUN --mount=type=cache,target=/root/.cache/uv \
