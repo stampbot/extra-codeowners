@@ -342,8 +342,9 @@ class QueueStore:
         self.validate_schema()
 
     def validate_schema(self) -> None:
-        """Validate the Alembic head, compatibility marker, and required columns."""
+        """Validate the Alembic head, compatibility marker, and required schema."""
         inspector = inspect(self.engine)
+        dialect_name = self.engine.dialect.name
         tables = set(inspector.get_table_names())
         if "alembic_version" not in tables:
             raise RuntimeError(
@@ -360,6 +361,19 @@ class QueueStore:
                 f"required revision {DATABASE_MIGRATION_HEAD!r}; run "
                 "`extra-codeowners database migrate`"
             )
+        actual_serials: dict[tuple[str, str], str | None] = {}
+        if dialect_name == "postgresql":
+            with self.engine.connect() as connection:
+                for table in Base.metadata.sorted_tables:
+                    generated_column = table.autoincrement_column
+                    if generated_column is not None:
+                        actual_serials[(table.name, generated_column.name)] = connection.scalar(
+                            text("SELECT pg_get_serial_sequence(:table_name, :column_name)"),
+                            {
+                                "table_name": table.name,
+                                "column_name": generated_column.name,
+                            },
+                        )
         for table in Base.metadata.sorted_tables:
             if table.name not in tables:
                 raise RuntimeError(f"database schema is missing table {table.name!r}")
@@ -393,6 +407,57 @@ class QueueStore:
                         f"database column {table.name}.{expected_column.name} has incompatible "
                         f"nullable={actual_column['nullable']!r}; expected "
                         f"nullable={expected_column.nullable!r}"
+                    )
+                expected_timezone = getattr(expected_column.type, "timezone", None)
+                actual_timezone = getattr(actual_type, "timezone", None)
+                if (
+                    dialect_name == "postgresql"
+                    and expected_timezone is not None
+                    and actual_timezone != expected_timezone
+                ):
+                    raise RuntimeError(
+                        f"database column {table.name}.{expected_column.name} has incompatible "
+                        f"timezone={actual_timezone!r}; expected timezone={expected_timezone!r}"
+                    )
+                actual_default = actual_column.get("default")
+                actual_identity = actual_column.get("identity")
+                actual_computed = actual_column.get("computed")
+                actual_autoincrement = bool(actual_column.get("autoincrement"))
+                expected_generated = expected_column is table.autoincrement_column
+                generation_matches = (
+                    actual_default is None
+                    and actual_identity is None
+                    and actual_computed is None
+                    and not actual_autoincrement
+                )
+                if dialect_name == "postgresql" and expected_generated:
+                    sequence_name = f"{table.name}_{expected_column.name}_seq"
+                    default_schema = inspector.default_schema_name
+                    expected_serial = (
+                        f"{default_schema}.{sequence_name}" if default_schema else sequence_name
+                    )
+                    allowed_defaults = {
+                        f"nextval('{sequence_name}'::regclass)",
+                        f"nextval('{expected_serial}'::regclass)",
+                    }
+                    generation_matches = (
+                        actual_serials[(table.name, expected_column.name)] == expected_serial
+                        and actual_default in allowed_defaults
+                        and actual_identity is None
+                        and actual_computed is None
+                        and actual_autoincrement
+                    )
+                elif dialect_name == "sqlite" and expected_generated:
+                    generation_matches = (
+                        actual_default is None
+                        and actual_identity is None
+                        and actual_computed is None
+                    )
+                if not generation_matches:
+                    raise RuntimeError(
+                        f"database column {table.name}.{expected_column.name} has incompatible "
+                        "default, owned sequence, identity, computed value, or autoincrement "
+                        "behavior"
                     )
             expected_primary_key = {column.name for column in table.primary_key.columns}
             actual_primary_key = set(inspector.get_pk_constraint(table.name)["constrained_columns"])

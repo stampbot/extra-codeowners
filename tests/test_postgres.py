@@ -378,6 +378,43 @@ def test_postgres_revision_0001_matches_immutable_adoption_contract() -> None:
 
 
 @pytest.mark.parametrize(
+    ("alter_statement", "error_match"),
+    [
+        (
+            "ALTER TABLE evaluation_jobs ALTER COLUMN id DROP DEFAULT",
+            "owned sequence",
+        ),
+        (
+            "ALTER TABLE evaluation_jobs ALTER COLUMN requested_at "
+            "TYPE TIMESTAMP WITHOUT TIME ZONE",
+            "timezone",
+        ),
+    ],
+    ids=("missing-serial-default", "timestamp-without-timezone"),
+)
+def test_postgres_runtime_schema_validation_rejects_behavior_changes(
+    alter_statement: str, error_match: str
+) -> None:
+    url = postgres_url()
+    store = QueueStore(url)
+    Base.metadata.drop_all(store.engine)
+    with store.engine.begin() as connection:
+        connection.execute(text("DROP TABLE IF EXISTS alembic_version"))
+    try:
+        upgrade_database(url)
+        with store.engine.begin() as connection:
+            connection.execute(text(alter_statement))
+
+        with pytest.raises(RuntimeError, match=error_match):
+            store.initialize()
+    finally:
+        Base.metadata.drop_all(store.engine)
+        with store.engine.begin() as connection:
+            connection.execute(text("DROP TABLE IF EXISTS alembic_version"))
+        store.close()
+
+
+@pytest.mark.parametrize(
     ("alter_statements", "error_match"),
     [
         (
