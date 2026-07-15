@@ -10,7 +10,8 @@ import uvicorn
 
 from extra_codeowners.app import create_app
 from extra_codeowners.codeowners import validate_pattern
-from extra_codeowners.database import QueueStore
+from extra_codeowners.database import DATABASE_MIGRATION_HEAD, QueueStore
+from extra_codeowners.migrations import expected_revision, upgrade_database
 from extra_codeowners.models import OrganizationPolicy, RepositoryPolicy
 from extra_codeowners.policy import compile_policy
 from extra_codeowners.settings import Settings
@@ -20,6 +21,50 @@ cli = typer.Typer(
     help="Run and validate the Extra CODEOWNERS GitHub App.",
     no_args_is_help=True,
 )
+database_cli = typer.Typer(help="Migrate and verify the durable database schema.")
+cli.add_typer(database_cli, name="database")
+
+
+@database_cli.command("migrate")
+def database_migrate(
+    lock_timeout_seconds: Annotated[
+        float,
+        typer.Option(min=0.1, max=300, help="Maximum migration-lock wait in seconds."),
+    ] = 60.0,
+    adopt_pre_alembic_schema: Annotated[
+        bool,
+        typer.Option(
+            help=(
+                "From the 0.1.0 artifact only, adopt the provenance-verified schema that "
+                "exactly matches immutable revision 0001 after a verified backup."
+            )
+        ),
+    ] = False,
+) -> None:
+    """Upgrade the database transactionally to the bundled migration head."""
+    settings = Settings()
+    settings.validate_database()
+    database_url = settings.database_url.get_secret_value()
+    upgrade_database(
+        database_url,
+        lock_timeout_seconds=lock_timeout_seconds,
+        adopt_pre_alembic_schema=adopt_pre_alembic_schema,
+    )
+    typer.echo(f"Database is at migration {expected_revision()}.")
+
+
+@database_cli.command("check")
+def database_check() -> None:
+    """Verify that the database exactly matches this application release."""
+    settings = Settings()
+    settings.validate_database()
+    database_url = settings.database_url.get_secret_value()
+    store = QueueStore(database_url)
+    try:
+        store.initialize()
+        typer.echo(f"Database migration {DATABASE_MIGRATION_HEAD} is compatible.")
+    finally:
+        store.close()
 
 
 @cli.command()
@@ -75,6 +120,7 @@ def validate_policy(
 def queue_status() -> None:
     """Report pending jobs and any legacy terminal rows."""
     settings = Settings()
+    settings.validate_database()
     store = QueueStore(settings.database_url.get_secret_value())
     try:
         store.initialize()
@@ -89,6 +135,7 @@ def requeue_dead(
 ) -> None:
     """Recover a bounded batch of legacy/manual terminal rows."""
     settings = Settings()
+    settings.validate_database()
     store = QueueStore(settings.database_url.get_secret_value())
     try:
         store.initialize()

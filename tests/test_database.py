@@ -17,10 +17,13 @@ from extra_codeowners.database import (
     ServiceLease,
     utcnow,
 )
+from extra_codeowners.migrations import upgrade_database
 
 
 def make_store(tmp_path: Path) -> QueueStore:
-    store = QueueStore(f"sqlite:///{tmp_path / 'queue.db'}")
+    database_url = f"sqlite:///{tmp_path / 'queue.db'}"
+    upgrade_database(database_url)
+    store = QueueStore(database_url)
     store.initialize()
     return store
 
@@ -48,16 +51,18 @@ def test_legacy_schema_is_rejected_without_mutating_it(tmp_path: Path) -> None:
     try:
         store.initialize()
     except RuntimeError as error:
-        assert "predates versioned schemas" in str(error)
+        assert "has not been migrated" in str(error)
     else:  # pragma: no cover - legacy adoption would be unsafe
         raise AssertionError("legacy schema was adopted")
 
     assert SchemaMetadata.__tablename__ not in set(inspect(store.engine).get_table_names())
 
 
-def test_startup_reactivates_pre_release_dead_jobs(tmp_path: Path) -> None:
+def test_startup_does_not_mutate_pre_release_dead_jobs(tmp_path: Path) -> None:
     database_path = tmp_path / "retry-upgrade.db"
-    store = QueueStore(f"sqlite:///{database_path}")
+    database_url = f"sqlite:///{database_path}"
+    upgrade_database(database_url)
+    store = QueueStore(database_url)
     store.initialize()
     store.enqueue(request())
     with store.session() as session:
@@ -67,8 +72,8 @@ def test_startup_reactivates_pre_release_dead_jobs(tmp_path: Path) -> None:
     restarted = QueueStore(f"sqlite:///{database_path}")
     restarted.initialize()
 
-    assert restarted.pending_count() == 1
-    assert restarted.dead_count() == 0
+    assert restarted.pending_count() == 0
+    assert restarted.dead_count() == 1
 
 
 def request(*, reason: str = "pull_request.opened", head: str = "a" * 40) -> JobRequest:

@@ -5,7 +5,13 @@ import uvicorn
 from typer.testing import CliRunner
 
 from extra_codeowners import cli as cli_module
-from extra_codeowners.database import EvaluationJob, JobRequest, QueueStore
+from extra_codeowners.database import (
+    DATABASE_MIGRATION_HEAD,
+    EvaluationJob,
+    JobRequest,
+    QueueStore,
+)
+from extra_codeowners.migrations import upgrade_database
 
 
 def test_validate_policy_command(tmp_path: Path) -> None:
@@ -108,9 +114,25 @@ def test_serve_passes_safe_defaults_to_uvicorn(monkeypatch: Any) -> None:
     ]
 
 
-def test_queue_status_reactivates_pre_release_dead_rows(tmp_path: Path, monkeypatch: Any) -> None:
+def test_database_migrate_and_check_commands(tmp_path: Path, monkeypatch: Any) -> None:
+    database_url = f"sqlite:///{tmp_path / 'commands.db'}"
+    monkeypatch.setenv("EXTRA_CODEOWNERS_DATABASE_URL", database_url)
+
+    migrate = CliRunner().invoke(cli_module.cli, ["database", "migrate"])
+    check = CliRunner().invoke(cli_module.cli, ["database", "check"])
+
+    assert migrate.exit_code == 0
+    assert f"Database is at migration {DATABASE_MIGRATION_HEAD}." in migrate.stdout
+    assert check.exit_code == 0
+    assert f"Database migration {DATABASE_MIGRATION_HEAD} is compatible." in check.stdout
+
+
+def test_queue_status_is_read_only_and_manual_requeue_recovers_dead_rows(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
     database_url = f"sqlite:///{tmp_path / 'queue.db'}"
     monkeypatch.setenv("EXTRA_CODEOWNERS_DATABASE_URL", database_url)
+    upgrade_database(database_url)
     store = QueueStore(database_url)
     store.initialize()
     store.enqueue(
@@ -135,6 +157,6 @@ def test_queue_status_reactivates_pre_release_dead_rows(tmp_path: Path, monkeypa
     requeue = CliRunner().invoke(cli_module.cli, ["requeue-dead", "--limit", "1"])
     after = CliRunner().invoke(cli_module.cli, ["queue-status"])
 
-    assert before.stdout == "pending=1 dead=0\n"
-    assert requeue.stdout == "requeued=0\n"
+    assert before.stdout == "pending=0 dead=1\n"
+    assert requeue.stdout == "requeued=1\n"
     assert after.stdout == "pending=1 dead=0\n"

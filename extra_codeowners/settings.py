@@ -187,6 +187,11 @@ class Settings(BaseSettings):
             if self.github_api_url.scheme != "https":
                 msg = "production requires an HTTPS GitHub API URL"
                 raise ValueError(msg)
+        self.validate_database()
+
+    def validate_database(self) -> None:
+        """Reject database transports that are unsafe for production commands."""
+        if self.environment == "production":
             try:
                 database_url = make_url(self.database_url.get_secret_value())
             except ArgumentError as error:

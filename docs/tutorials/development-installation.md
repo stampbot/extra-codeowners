@@ -74,13 +74,18 @@ We'll replace the App ID, absolute private-key path, and webhook secret. The exa
 
 File-mounted secrets are the preferred deployment method. We use the inline webhook-secret variable only for this local tutorial; a deployment can set `EXTRA_CODEOWNERS_GITHUB_WEBHOOK_SECRET_FILE` instead.
 
-## 5. Start Extra CODEOWNERS
+## 5. Migrate and start Extra CODEOWNERS
 
-From the repository root, we'll start the service:
+From the repository root, we'll create or upgrade the local development schema
+explicitly, then start the service:
 
 ```bash
+uv run python -m extra_codeowners database migrate
 uv run python -m extra_codeowners serve
 ```
+
+Normal service startup never creates or upgrades tables. If the migration
+fails, we'll fix that error before starting the service.
 
 It listens on `127.0.0.1:8000` by default. We'll leave it running and open another terminal in the repository root.
 

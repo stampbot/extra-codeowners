@@ -29,9 +29,10 @@ EXTRA_CODEOWNERS_SETUP_STATE_SECRET=replace-with-a-high-entropy-setup-only-secre
 
 Replace the public origin and secret. Use HTTPS for the origin and at least 32 UTF-8 bytes for the state secret. Supply that secret through the deployment's secret manager, never through a command-line argument or committed file. Configure the proxy to omit query strings from access logs, especially for `/setup/callback`.
 
-Start the service:
+Migrate the setup database explicitly, then start the service:
 
 ```bash
+uv run python -m extra_codeowners database migrate
 uv run python -m extra_codeowners serve
 ```
 

@@ -19,6 +19,7 @@ from extra_codeowners.database import (
     utcnow,
 )
 from extra_codeowners.github import GitHubError, GitHubRateLimitError
+from extra_codeowners.migrations import upgrade_database
 from extra_codeowners.models import OrganizationPolicy
 from extra_codeowners.service import (
     AuthorityChangePendingError,
@@ -186,6 +187,13 @@ def settings() -> Settings:
     )
 
 
+def migrated_store(database_url: str) -> QueueStore:
+    upgrade_database(database_url)
+    store = QueueStore(database_url)
+    store.initialize()
+    return store
+
+
 def job(store: QueueStore) -> ClaimedJob:
     store.enqueue(
         JobRequest(
@@ -204,8 +212,7 @@ def job(store: QueueStore) -> ClaimedJob:
 @pytest.mark.asyncio
 async def test_allowed_application_approval_satisfies_owned_lockfile(tmp_path: Path) -> None:
     github = FakeGitHub(changed_path="uv.lock")
-    store = QueueStore(f"sqlite:///{tmp_path / 'audit.db'}")
-    store.initialize()
+    store = migrated_store(f"sqlite:///{tmp_path / 'audit.db'}")
     service = EvaluationService(settings(), github, store)  # type: ignore[arg-type]
 
     await service.evaluate_job(job(store))
@@ -232,8 +239,7 @@ async def test_stale_repository_alias_is_discarded_before_policy_or_check_access
     github.get_file_text = AsyncMock(  # type: ignore[method-assign]
         side_effect=AssertionError("stale repository alias reached policy content")
     )
-    store = QueueStore(f"sqlite:///{tmp_path / 'stale-alias.db'}")
-    store.initialize()
+    store = migrated_store(f"sqlite:///{tmp_path / 'stale-alias.db'}")
 
     await EvaluationService(settings(), github, store).evaluate_job(job(store))  # type: ignore[arg-type]
 
@@ -252,8 +258,7 @@ async def test_trailing_comment_does_not_replace_another_actors_approval(tmp_pat
             {"id": 6, "state": "COMMENTED", "user": None},
         ]
     )
-    store = QueueStore(f"sqlite:///{tmp_path / 'comment.db'}")
-    store.initialize()
+    store = migrated_store(f"sqlite:///{tmp_path / 'comment.db'}")
 
     await EvaluationService(settings(), github, store).evaluate_job(job(store))  # type: ignore[arg-type]
 
@@ -269,8 +274,7 @@ async def test_shared_head_commit_fails_closed_across_pull_requests(tmp_path: Pa
             {"number": 4, "state": "open", "head": {"sha": HEAD}},
         ]
     )
-    store = QueueStore(f"sqlite:///{tmp_path / 'shared-head.db'}")
-    store.initialize()
+    store = migrated_store(f"sqlite:///{tmp_path / 'shared-head.db'}")
 
     await EvaluationService(settings(), github, store).evaluate_job(job(store))  # type: ignore[arg-type]
 
@@ -291,8 +295,7 @@ async def test_direct_human_owner_without_write_access_is_not_accepted(tmp_path:
 
     github.get_file_text = direct_owner  # type: ignore[method-assign]
     github.user_can_own_repository = AsyncMock(return_value=False)  # type: ignore[method-assign]
-    store = QueueStore(f"sqlite:///{tmp_path / 'direct-permission.db'}")
-    store.initialize()
+    store = migrated_store(f"sqlite:///{tmp_path / 'direct-permission.db'}")
 
     await EvaluationService(settings(), github, store).evaluate_job(job(store))  # type: ignore[arg-type]
 
@@ -304,8 +307,7 @@ async def test_team_member_without_team_repository_write_is_not_accepted(tmp_pat
     github = FakeGitHub(changed_path="uv.lock", reviewer_type="User")
     github.user_can_own_repository = AsyncMock(return_value=False)  # type: ignore[method-assign]
     github.team_can_own_repository = AsyncMock(return_value=False)  # type: ignore[method-assign]
-    store = QueueStore(f"sqlite:///{tmp_path / 'team-permission.db'}")
-    store.initialize()
+    store = migrated_store(f"sqlite:///{tmp_path / 'team-permission.db'}")
 
     await EvaluationService(settings(), github, store).evaluate_job(job(store))  # type: ignore[arg-type]
 
@@ -316,8 +318,7 @@ async def test_team_member_without_team_repository_write_is_not_accepted(tmp_pat
 @pytest.mark.asyncio
 async def test_application_cannot_approve_builtin_workflow_path(tmp_path: Path) -> None:
     github = FakeGitHub(changed_path=".github/workflows/release.yml")
-    store = QueueStore(f"sqlite:///{tmp_path / 'audit.db'}")
-    store.initialize()
+    store = migrated_store(f"sqlite:///{tmp_path / 'audit.db'}")
     service = EvaluationService(settings(), github, store)  # type: ignore[arg-type]
 
     await service.evaluate_job(job(store))
@@ -332,8 +333,7 @@ async def test_human_team_member_can_approve_non_delegable_path(tmp_path: Path) 
         changed_path=".github/workflows/release.yml",
         reviewer_type="User",
     )
-    store = QueueStore(f"sqlite:///{tmp_path / 'audit.db'}")
-    store.initialize()
+    store = migrated_store(f"sqlite:///{tmp_path / 'audit.db'}")
     service = EvaluationService(settings(), github, store)  # type: ignore[arg-type]
 
     await service.evaluate_job(job(store))
@@ -344,8 +344,7 @@ async def test_human_team_member_can_approve_non_delegable_path(tmp_path: Path) 
 @pytest.mark.asyncio
 async def test_runtime_escape_hatch_is_disclosed_in_check(tmp_path: Path) -> None:
     github = FakeGitHub(changed_path=".github/workflows/release.yml")
-    store = QueueStore(f"sqlite:///{tmp_path / 'audit.db'}")
-    store.initialize()
+    store = migrated_store(f"sqlite:///{tmp_path / 'audit.db'}")
     insecure_settings = settings().model_copy(update={"allow_insecure_changes": True})
     service = EvaluationService(insecure_settings, github, store)  # type: ignore[arg-type]
 
@@ -368,8 +367,7 @@ async def test_disabled_repository_publishes_failing_check(tmp_path: Path) -> No
         return await original(*args, **kwargs)
 
     github.get_file_text = disabled_policy  # type: ignore[method-assign]
-    store = QueueStore(f"sqlite:///{tmp_path / 'audit.db'}")
-    store.initialize()
+    store = migrated_store(f"sqlite:///{tmp_path / 'audit.db'}")
 
     await EvaluationService(settings(), github, store).evaluate_job(job(store))  # type: ignore[arg-type]
 
@@ -387,8 +385,7 @@ async def test_missing_codeowners_fails_closed(tmp_path: Path) -> None:
         return await original(*args, **kwargs)
 
     github.get_file_text = without_codeowners  # type: ignore[method-assign]
-    store = QueueStore(f"sqlite:///{tmp_path / 'audit.db'}")
-    store.initialize()
+    store = migrated_store(f"sqlite:///{tmp_path / 'audit.db'}")
 
     await EvaluationService(settings(), github, store).evaluate_job(job(store))  # type: ignore[arg-type]
 
@@ -402,8 +399,7 @@ async def test_github_codeowners_errors_fail_closed(tmp_path: Path) -> None:
     github.get_codeowners_errors = AsyncMock(  # type: ignore[method-assign]
         return_value=[{"line": 2, "message": "Invalid owner"}]
     )
-    store = QueueStore(f"sqlite:///{tmp_path / 'audit.db'}")
-    store.initialize()
+    store = migrated_store(f"sqlite:///{tmp_path / 'audit.db'}")
 
     await EvaluationService(settings(), github, store).evaluate_job(job(store))  # type: ignore[arg-type]
 
@@ -422,8 +418,7 @@ async def test_missing_label_evidence_fails_closed(tmp_path: Path) -> None:
         return pull
 
     github.get_pull = pull_without_labels  # type: ignore[method-assign]
-    store = QueueStore(f"sqlite:///{tmp_path / 'audit.db'}")
-    store.initialize()
+    store = migrated_store(f"sqlite:///{tmp_path / 'audit.db'}")
 
     with pytest.raises(GitHubError, match="labels list"):
         await EvaluationService(settings(), github, store).evaluate_job(job(store))  # type: ignore[arg-type]
@@ -448,8 +443,7 @@ async def test_existing_success_is_revoked_before_policy_fetch_failure(tmp_path:
         return await original(installation_id, repository, path, **kwargs)
 
     github.get_file_text = broken_policy  # type: ignore[method-assign]
-    store = QueueStore(f"sqlite:///{tmp_path / 'policy-fetch.db'}")
-    store.initialize()
+    store = migrated_store(f"sqlite:///{tmp_path / 'policy-fetch.db'}")
 
     with pytest.raises(GitHubError, match="policy content is unavailable"):
         await EvaluationService(settings(), github, store).evaluate_job(job(store))  # type: ignore[arg-type]
@@ -461,8 +455,7 @@ async def test_existing_success_is_revoked_before_policy_fetch_failure(tmp_path:
 async def test_app_metadata_mismatch_does_not_authorize_bot(tmp_path: Path) -> None:
     github = FakeGitHub(changed_path="uv.lock")
     github.get_app = AsyncMock(return_value={"id": 999, "slug": "stampbot"})  # type: ignore[method-assign]
-    store = QueueStore(f"sqlite:///{tmp_path / 'audit.db'}")
-    store.initialize()
+    store = migrated_store(f"sqlite:///{tmp_path / 'audit.db'}")
 
     await EvaluationService(settings(), github, store).evaluate_job(job(store))  # type: ignore[arg-type]
 
@@ -486,8 +479,7 @@ async def test_revision_change_during_evaluation_is_requeued_without_stale_check
         return pull
 
     github.get_pull = changing_pull  # type: ignore[method-assign]
-    store = QueueStore(f"sqlite:///{tmp_path / 'audit.db'}")
-    store.initialize()
+    store = migrated_store(f"sqlite:///{tmp_path / 'audit.db'}")
 
     await EvaluationService(settings(), github, store).evaluate_job(job(store))  # type: ignore[arg-type]
 
@@ -512,8 +504,7 @@ async def test_label_change_during_evaluation_is_requeued_without_stale_check(
         return pull
 
     github.get_pull = changing_pull  # type: ignore[method-assign]
-    store = QueueStore(f"sqlite:///{tmp_path / 'audit.db'}")
-    store.initialize()
+    store = migrated_store(f"sqlite:///{tmp_path / 'audit.db'}")
 
     await EvaluationService(settings(), github, store).evaluate_job(job(store))  # type: ignore[arg-type]
 
@@ -524,8 +515,7 @@ async def test_label_change_during_evaluation_is_requeued_without_stale_check(
 @pytest.mark.asyncio
 async def test_new_generation_during_collection_prevents_stale_completion(tmp_path: Path) -> None:
     github = FakeGitHub(changed_path="uv.lock")
-    store = QueueStore(f"sqlite:///{tmp_path / 'audit.db'}")
-    store.initialize()
+    store = migrated_store(f"sqlite:///{tmp_path / 'audit.db'}")
     original = github.upsert_check_run
     triggered = False
 
@@ -555,8 +545,7 @@ async def test_new_generation_during_collection_prevents_stale_completion(tmp_pa
 @pytest.mark.asyncio
 async def test_new_generation_during_publish_restores_blocking_check(tmp_path: Path) -> None:
     github = FakeGitHub(changed_path="uv.lock")
-    store = QueueStore(f"sqlite:///{tmp_path / 'audit.db'}")
-    store.initialize()
+    store = migrated_store(f"sqlite:///{tmp_path / 'audit.db'}")
     original = github.upsert_check_run
 
     async def trigger_during_completion(*args: Any, **kwargs: Any) -> int:
@@ -587,8 +576,7 @@ async def test_new_generation_during_publish_restores_blocking_check(tmp_path: P
 @pytest.mark.asyncio
 async def test_revocation_is_ordered_after_inflight_stale_completion(tmp_path: Path) -> None:
     github = FakeGitHub(changed_path="uv.lock")
-    store = QueueStore(f"sqlite:///{tmp_path / 'ordered-check.db'}")
-    store.initialize()
+    store = migrated_store(f"sqlite:///{tmp_path / 'ordered-check.db'}")
     claimed = job(store)
     service = EvaluationService(settings(), github, store)  # type: ignore[arg-type]
     completion_entered = asyncio.Event()
@@ -650,8 +638,7 @@ async def test_malformed_opinionated_review_fails_closed() -> None:
 
 @pytest.mark.asyncio
 async def test_worker_completes_a_durable_job(tmp_path: Path) -> None:
-    store = QueueStore(f"sqlite:///{tmp_path / 'worker.db'}")
-    store.initialize()
+    store = migrated_store(f"sqlite:///{tmp_path / 'worker.db'}")
     store.enqueue(
         JobRequest(
             installation_id=2,
@@ -676,8 +663,7 @@ async def test_worker_completes_a_durable_job(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_worker_defers_rate_limit_without_spending_backoff_attempt(tmp_path: Path) -> None:
-    store = QueueStore(f"sqlite:///{tmp_path / 'worker-rate.db'}")
-    store.initialize()
+    store = migrated_store(f"sqlite:///{tmp_path / 'worker-rate.db'}")
     store.enqueue(
         JobRequest(
             installation_id=2,
@@ -705,8 +691,7 @@ async def test_worker_defers_rate_limit_without_spending_backoff_attempt(tmp_pat
 async def test_authority_work_preempts_evaluations_and_fans_out_open_pulls(
     tmp_path: Path,
 ) -> None:
-    store = QueueStore(f"sqlite:///{tmp_path / 'authority-worker.db'}")
-    store.initialize()
+    store = migrated_store(f"sqlite:///{tmp_path / 'authority-worker.db'}")
     store.enqueue(
         JobRequest(
             installation_id=2,
@@ -767,8 +752,7 @@ async def test_authority_work_preempts_evaluations_and_fans_out_open_pulls(
 @pytest.mark.asyncio
 async def test_accepted_authority_change_fences_inflight_success(tmp_path: Path) -> None:
     github = FakeGitHub(changed_path="uv.lock")
-    store = QueueStore(f"sqlite:///{tmp_path / 'authority-fence.db'}")
-    store.initialize()
+    store = migrated_store(f"sqlite:///{tmp_path / 'authority-fence.db'}")
     original_get_pull = github.get_pull
     calls = 0
 
@@ -804,8 +788,7 @@ async def test_authority_ingress_is_serialized_against_check_publication(
     tmp_path: Path,
 ) -> None:
     github = FakeGitHub(changed_path="uv.lock")
-    store = QueueStore(f"sqlite:///{tmp_path / 'authority-publish.db'}")
-    store.initialize()
+    store = migrated_store(f"sqlite:///{tmp_path / 'authority-publish.db'}")
     original_upsert = github.upsert_check_run
     acceptance: asyncio.Task[bool] | None = None
 
@@ -857,8 +840,7 @@ async def test_authority_ingress_is_serialized_against_check_publication(
 async def test_installation_authority_splits_into_normalized_repository_jobs(
     tmp_path: Path,
 ) -> None:
-    store = QueueStore(f"sqlite:///{tmp_path / 'authority-installation.db'}")
-    store.initialize()
+    store = migrated_store(f"sqlite:///{tmp_path / 'authority-installation.db'}")
     store.accept_delivery(
         "organization-1",
         "organization",
@@ -896,8 +878,7 @@ async def test_installation_authority_splits_into_normalized_repository_jobs(
 async def test_authority_rate_limit_defers_after_bounded_batch_and_keeps_fanout(
     tmp_path: Path,
 ) -> None:
-    store = QueueStore(f"sqlite:///{tmp_path / 'authority-rate.db'}")
-    store.initialize()
+    store = migrated_store(f"sqlite:///{tmp_path / 'authority-rate.db'}")
     store.accept_delivery(
         "push-1",
         "push",
@@ -938,8 +919,7 @@ async def test_authority_rate_limit_defers_after_bounded_batch_and_keeps_fanout(
 async def test_authority_fast_revocation_failure_keeps_durable_evaluation(
     tmp_path: Path,
 ) -> None:
-    store = QueueStore(f"sqlite:///{tmp_path / 'authority-revoke.db'}")
-    store.initialize()
+    store = migrated_store(f"sqlite:///{tmp_path / 'authority-revoke.db'}")
     store.accept_delivery(
         "label-1",
         "label",
@@ -972,8 +952,7 @@ async def test_authority_fast_revocation_failure_keeps_durable_evaluation(
 
 @pytest.mark.asyncio
 async def test_malformed_authority_fanout_remains_pending_fail_closed(tmp_path: Path) -> None:
-    store = QueueStore(f"sqlite:///{tmp_path / 'authority-malformed.db'}")
-    store.initialize()
+    store = migrated_store(f"sqlite:///{tmp_path / 'authority-malformed.db'}")
     store.accept_delivery(
         "member-1",
         "member",
@@ -1017,8 +996,7 @@ async def test_evaluation_failure_automatically_retries_until_prior_success_is_r
         return await original_get_pull(*args, **kwargs)
 
     github.get_pull = flaky_get_pull  # type: ignore[method-assign]
-    store = QueueStore(f"sqlite:///{tmp_path / 'automatic-evaluation-retry.db'}")
-    store.initialize()
+    store = migrated_store(f"sqlite:///{tmp_path / 'automatic-evaluation-retry.db'}")
     claimed = job(store)
     runtime = settings().model_copy(update={"worker_retry_max_seconds": 5})
     worker = Worker(
@@ -1067,8 +1045,7 @@ async def test_authority_failure_automatically_retries_until_prior_success_is_re
             }
         ]
     )
-    store = QueueStore(f"sqlite:///{tmp_path / 'automatic-authority-retry.db'}")
-    store.initialize()
+    store = migrated_store(f"sqlite:///{tmp_path / 'automatic-authority-retry.db'}")
     store.accept_delivery(
         "membership-removal",
         "membership",
@@ -1115,8 +1092,7 @@ async def test_authority_failure_automatically_retries_until_prior_success_is_re
 async def test_worker_keeps_deferred_or_failed_evaluation_pending(
     tmp_path: Path, error: Exception
 ) -> None:
-    store = QueueStore(f"sqlite:///{tmp_path / 'evaluation-retry.db'}")
-    store.initialize()
+    store = migrated_store(f"sqlite:///{tmp_path / 'evaluation-retry.db'}")
     store.enqueue(JobRequest(2, "example/project", 3, "test"))
     claimed = store.claim("worker", 60)
     assert claimed is not None
@@ -1146,8 +1122,7 @@ async def test_reconciler_enqueues_open_pull_requests(tmp_path: Path) -> None:
     github.list_open_pulls = AsyncMock(  # type: ignore[attr-defined]
         return_value=[{"number": 3, "head": {"sha": HEAD}}]
     )
-    store = QueueStore(f"sqlite:///{tmp_path / 'reconcile.db'}")
-    store.initialize()
+    store = migrated_store(f"sqlite:///{tmp_path / 'reconcile.db'}")
     reconciler = Reconciler(settings(), github, store, "reconciler")  # type: ignore[arg-type]
 
     queued = await reconciler.reconcile_once()
@@ -1182,8 +1157,7 @@ async def test_reconciler_recovers_missed_shared_head_open_and_fails_closed(
             {"number": 4, "state": "open", "head": {"sha": HEAD}},
         ]
     )
-    store = QueueStore(f"sqlite:///{tmp_path / 'missed-shared-head.db'}")
-    store.initialize()
+    store = migrated_store(f"sqlite:///{tmp_path / 'missed-shared-head.db'}")
     reconciler = Reconciler(settings(), github, store, "reconciler")  # type: ignore[arg-type]
     service = EvaluationService(settings(), github, store)  # type: ignore[arg-type]
 
@@ -1204,8 +1178,7 @@ async def test_reconciler_recovers_missed_shared_head_open_and_fails_closed(
 @pytest.mark.asyncio
 async def test_evaluator_skips_organization_config_repository(tmp_path: Path) -> None:
     github = FakeGitHub(changed_path="README.md")
-    store = QueueStore(f"sqlite:///{tmp_path / 'org-config.db'}")
-    store.initialize()
+    store = migrated_store(f"sqlite:///{tmp_path / 'org-config.db'}")
     store.enqueue(
         JobRequest(
             installation_id=2,

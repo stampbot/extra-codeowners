@@ -79,7 +79,7 @@ From a checkout or installed container configured with the same database URL, in
 uv run python -m extra_codeowners queue-status
 ```
 
-The command prints only `pending=N dead=N`. These counts combine pull-request evaluations and authority fan-out jobs. Normal failures stay pending, so `dead` should be `0`. Database initialization reactivates terminal rows left by an earlier build with a different retry contract. If a terminal row remains, treat it as incompatible or manually introduced state and investigate it.
+The command prints only `pending=N dead=N`. These counts combine pull-request evaluations and authority fan-out jobs. Normal failures stay pending, so `dead` should be `0`. The `0002_retry_dead_jobs` migration reactivates terminal rows left by an earlier pre-release retry contract. If a terminal row appears afterward, treat it as incompatible or manually introduced state and investigate it.
 
 ### 4. Recover without manufacturing success
 
@@ -196,13 +196,15 @@ An epoch fence can't revoke a check after GitHub removes the App's access. If ac
 
 ## Back up and restore durable state
 
-Back up PostgreSQL with the operator's tested database procedure. Reconciliation can reconstruct the queue, but delivery deduplication and audit evidence remain useful during an incident.
+Follow the [database backup and restore procedure](upgrade.md). Reconciliation
+can reconstruct the queue, but delivery deduplication and audit evidence remain
+useful during an incident.
 
 To test a restore:
 
 1. Restore into an isolated database.
 2. Start an instance with public ingress and workers disabled.
-3. Confirm that the schema is readable. Inspect queue counts without exposing repository data.
+3. Run `extra-codeowners database check` from the compatible application artifact. Inspect queue counts without exposing repository data.
 4. Enable a worker against a disposable installation only.
 5. Confirm that stale jobs fetch current GitHub evidence instead of trusting stored hints.
 

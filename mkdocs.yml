@@ -40,6 +40,7 @@ nav:
       - Prepare repository rules: how-to/prepare-repository-rules.md
       - Run the live GitHub contract: how-to/run-live-github-contract.md
       - Deploy: how-to/deploy.md
+      - Upgrade, back up, and restore: how-to/upgrade.md
       - Operate and recover: how-to/operate.md
   - Reference:
       - Configuration: reference/configuration.md
@@ -47,7 +48,9 @@ nav:
       - Command line: reference/cli.md
       - GitHub permissions and events: reference/github-permissions.md
       - HTTP API: reference/http-api.md
+      - Database upgrade notes: reference/upgrade-notes.md
   - Explanation:
       - Native CODEOWNERS comparison: explanation/native-codeowners.md
       - Architecture: explanation/architecture.md
+      - Database migrations: explanation/database-migrations.md
       - Threat model: explanation/threat-model.md
