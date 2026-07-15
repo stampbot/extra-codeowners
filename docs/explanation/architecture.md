@@ -26,24 +26,26 @@ Four properties govern the design:
 The data path begins with a signed GitHub event and ends with a Check Run on one
 exact head commit:
 
-```mermaid
-flowchart LR
-    GH[GitHub webhooks] -->|HTTPS and HMAC| IN[Webhook ingress]
-    IN -->|delivery ID and mapped work| DB[(Durable queues and audit store)]
-    IN -. bounded direct revocation .-> API[GitHub API]
-    RC[Scheduled reconciler] -->|open PR work| DB
-    DB --> AF[Authority fan-out worker]
-    AF -->|enumerate repositories and open PRs| API
-    AF -->|supersede affected PR work| DB
-    AF -->|bounded check invalidation| API
-    DB --> WK[Evaluation worker]
-    WK -->|installation token| API[GitHub API]
-    API -->|base, head, files, reviews, teams, policies| WK
-    WK --> EV[Pure policy evaluator]
-    EV -->|decision and evidence| WK
-    WK -->|Check Run for exact head| API
-    ORG[Organization policy] -. fetched by API .-> WK
-    REPO[CODEOWNERS and repository policy] -. fetched at base commit .-> WK
+```text
+GitHub signed webhook
+  -> webhook ingress
+       -> durable queues and audit store
+       -> bounded direct Check Run invalidation through the GitHub API
+
+scheduled reconciler
+  -> durable pull-request work
+
+durable authority work
+  -> authority fan-out worker
+       -> enumerate current repositories and open pull requests through GitHub
+       -> supersede affected pull-request work
+       -> bounded Check Run invalidation
+
+durable pull-request work
+  -> evaluation worker
+       -> fetch current base, head, files, reviews, teams, CODEOWNERS, and policy
+       -> pure network-free evaluator
+       -> publish one Check Run on the exact head through GitHub
 ```
 
 In prose, the same flow works like this:
@@ -261,53 +263,31 @@ would quietly create a second compatibility promise.
 A `202` webhook response means “the work is safe in the queue,” not “this pull
 request may merge.” The final decision comes later:
 
-```mermaid
-sequenceDiagram
-    participant G as GitHub
-    participant I as Ingress
-    participant D as Durable store
-    participant W as Worker
-    participant E as Evaluator
+```text
+GitHub          Ingress              Durable store        Worker / evaluator
+  |                |                       |                       |
+  | signed event   |                       |                       |
+  |--------------->| verify HMAC           |                       |
+  |                | record delivery       |                       |
+  |                |---------------------->| enqueue generation    |
+  |                | fetch current PR and managed check            |
+  |<---------------| set current-head check in progress            |
+  |                | accepted              |                       |
+  |<---------------|                       |                       |
+  |                |                       | lease newest work     |
+  |                |                       |---------------------->|
+  |<---------------------------------------------------------------| fetch current evidence
+  |--------------------------------------------------------------->| base, head, files, reviews, teams, policy
+  |                |                       |             evaluate immutable snapshot
+  |<---------------------------------------------------------------| re-fetch base and head
+  |                |                       |<----------------------| confirm generation and authority fences
+  |<---------------------------------------------------------------| complete check only when still current
+  |                |                       |<----------------------| confirm generation after publication
 
-    G->>I: Signed pull-request or review event
-    I->>I: Verify raw-body signature
-    I->>D: Record delivery and enqueue generation
-    I->>G: Fetch current PR and managed check
-    alt Policy exists or managed check exists and fast path succeeds
-        I->>G: Create or update current-head check as in progress
-        I->>D: Mark fast-path invalidation complete
-    else No policy and no managed check
-        Note over I,G: Deliberately skip unenrolled repository
-        I->>D: Mark fast-path invalidation complete
-    else Fast path times out or GitHub is unavailable
-        Note over I,D: Log deferral; durable job remains authoritative
-    end
-    I-->>G: Accepted
-    W->>D: Lease latest PR generation
-    W->>G: Fetch current base and head
-    W->>G: Set current-head check in progress
-    W->>D: Confirm generation is current
-    W->>G: Fetch installation-scoped current evidence
-    G-->>W: Base, head, files, reviews, teams, policy
-    W->>E: Typed immutable snapshot
-    E-->>W: Decision and evidence
-    W->>G: Re-fetch base and head
-    W->>D: Confirm generation is current and authority work is resolved
-    alt Base or head changed
-        W->>D: Request a newer generation
-    else Generation was already superseded
-        Note over W,G: Keep check in progress for newer work
-    else Relevant authority work is pending
-        Note over W,G: Keep check in progress until fan-out recovers
-    else Snapshot is current
-        W->>G: Complete Check Run on head
-        W->>D: Confirm generation after publication
-        alt Superseded during publication
-            W->>G: Restore check to in progress
-        else Generation is still current
-            W->>D: Complete job and record audit
-        end
-    end
+If policy is absent and no managed check exists, ingress deliberately skips the
+unenrolled repository. A fast-path timeout leaves durable work authoritative.
+Any base, head, generation, or authority race keeps the check in progress and
+queues or preserves newer work.
 ```
 
 In prose, ingress authenticates and stores the trigger. It then makes a bounded
@@ -346,16 +326,29 @@ operational surfaces, not public product APIs.
 ## Distribution boundaries
 
 The repository currently implements the GitHub App service and reusable Python
-evaluator. It also contains a dedicated Helm chart. After successful `main` CI,
-the project publishes signed, attested containers for `main` and the exact
-commit. These development builds are available for evaluation, but they are not
-supported releases.
+evaluator. It also contains a dedicated Helm chart. CI builds and scans
+multi-platform candidates, but the `main` publication job has been removed.
+Current container evidence remains incomplete in three ways: CPython is absent
+from the normalized top-level component and notice inventory; native wheel and
+embedded-SBOM contents are not expanded into component, notice, and source
+records; and ineffective historical Python installs do not have `RECORD`
+ownership replayed for their distributed lower-layer bytes.
 
-Exact semantic-version tags are wired to publish a signed versioned image, OCI
-chart, Python artifacts, provenance, and software-bill-of-material
-attestations. Workflow code is not proof that those artifacts exist; only a
-successful tagged release creates them. No supported release has been
-published.
+The tag workflow contains the intended versioned image, OCI chart, Python
+artifact, provenance, and software-bill-of-material publication jobs, but an
+unconditional validation failure keeps every one unreachable. Security issue
+[#28](https://github.com/stampbot/extra-codeowners/issues/28) requires a
+privilege-separated container-evidence pipeline before that block can be
+removed. Source-completeness issue
+[#18](https://github.com/stampbot/extra-codeowners/issues/18) requires all three
+gaps above to close, by expanding components and sources or using builds linked
+against separately inventoried packages.
+Build-isolation issue
+[#32](https://github.com/stampbot/extra-codeowners/issues/32) separately
+requires a hash-pinned PEP 517 environment and installation bound to the exact
+application wheel it produces.
+Workflow code is not proof that an artifact exists. No supported release has
+been published.
 
 Tested chart-upgrade guarantees and a reproducible Google Cloud deployment
 guide are still planned. The Marketplace Action will live separately as

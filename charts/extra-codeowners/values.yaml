@@ -8,10 +8,10 @@ revisionHistoryLimit: 3
 deploymentStrategy:
   type: Recreate
 
-# image configures the published Extra CODEOWNERS container.
+# image configures an operator-built Extra CODEOWNERS container.
 image:
-  # image.repository is the OCI image repository.
-  repository: ghcr.io/stampbot/extra-codeowners
+  # image.repository intentionally fails until an operator supplies a private repository.
+  repository: example.invalid/stampbot/extra-codeowners
   # image.pullPolicy controls when Kubernetes pulls the image.
   pullPolicy: IfNotPresent
   # image.tag defaults to the chart appVersion when empty.

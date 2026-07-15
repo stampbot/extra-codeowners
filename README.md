@@ -13,7 +13,20 @@ Routine automation can know that a pull request is safe while GitHub's code-owne
 [Stampbot](https://github.com/dannysauer/stampbot) is the first integration. A repository might let it approve a routine lockfile update, for example, while a human still has to approve application code.
 
 > [!IMPORTANT]
-> The self-hosted App and its documentation are available. CI publishes a signed `main` container, and the repository includes Helm chart source. No tagged release exists. There is no hosted service or Marketplace Action. The [commit-scoped check limitation](#the-current-production-blocker) must be resolved before this check can replace GitHub's code-owner rule on production repositories.
+> The self-hosted App and its documentation are available, and the repository
+> includes Helm chart source. The `main` publication job has been removed, and
+> tagged publication is blocked. [Source-completeness issue #18](https://github.com/stampbot/extra-codeowners/issues/18)
+> covers CPython normalization, native-wheel and embedded-SBOM expansion, and
+> historical Python `RECORD` replay.
+> [Hash-pinned build isolation](https://github.com/stampbot/extra-codeowners/issues/32)
+> and
+> [publication privilege separation](https://github.com/stampbot/extra-codeowners/issues/28)
+> also remain open. An [older public GHCR preview](https://github.com/stampbot/extra-codeowners/issues/30)
+> may still be discoverable; it is unsupported, incomplete, and must not be
+> deployed or mirrored. There is no hosted service or Marketplace Action. The
+> [commit-scoped check limitation](#the-current-production-blocker) must also be
+> resolved before this check can replace GitHub's code-owner rule on production
+> repositories.
 
 GitHub doesn't accept an App's bot account as a valid owner in `CODEOWNERS`. Keep the standard file for people and teams. Extra CODEOWNERS reads it alongside a separate policy for applications, then publishes `Extra CODEOWNERS / approval`.
 
@@ -108,6 +121,9 @@ Start runtime configuration from [`.env.example`](.env.example). Keep real crede
 - [Run the live GitHub contract fixture](docs/how-to/run-live-github-contract.md)
 - [Deploy the service](docs/how-to/deploy.md)
 - [Operate and recover the service](docs/how-to/operate.md)
+- [Review CI container evidence](docs/how-to/review-container-evidence.md)
+- [Container evidence policy reference](docs/reference/container-evidence-policy.md)
+- [Understand the future release evidence contract](docs/reference/container-evidence-release-contract.md)
 - [Configuration reference](docs/reference/configuration.md)
 - [Checks and evaluation reference](docs/reference/checks.md)
 - [Command-line reference](docs/reference/cli.md)
@@ -115,6 +131,7 @@ Start runtime configuration from [`.env.example`](.env.example). Keep real crede
 - [HTTP API reference](docs/reference/http-api.md)
 - [Architecture](docs/explanation/architecture.md)
 - [Threat model](docs/explanation/threat-model.md)
+- [Container distribution evidence design](docs/explanation/container-distribution-evidence.md)
 - [Helm chart](charts/extra-codeowners/README.md) (source only; no released OCI chart yet)
 - [Support](SUPPORT.md) and [security reporting](SECURITY.md)
 - [Contributing](CONTRIBUTING.md), [governance](GOVERNANCE.md), and the [code of conduct](CODE_OF_CONDUCT.md)

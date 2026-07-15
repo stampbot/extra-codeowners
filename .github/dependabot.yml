@@ -13,9 +13,6 @@ updates:
       - github-actions
     cooldown:
       default-days: 7
-      semver-major-days: 14
-      semver-minor-days: 7
-      semver-patch-days: 3
     open-pull-requests-limit: 5
     ignore:
       # Renovate owns this action so its digest can move with the uv runtime.
