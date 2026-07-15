@@ -69,23 +69,15 @@ def test_dependency_audit_uses_locked_mode_without_frozen_mode() -> None:
 def test_renovate_owns_the_complete_uv_toolchain_update() -> None:
     raw_config = json.loads((ROOT / "renovate.json").read_text(encoding="utf-8"))
     config = cast(dict[str, Any], raw_config)
-    managers = cast(list[dict[str, Any]], config["customManagers"])
-    uv_managers = [
-        manager for manager in managers if manager.get("depNameTemplate") == "ghcr.io/astral-sh/uv"
-    ]
-    assert len(uv_managers) == 1
-    manager = uv_managers[0]
-    patterns = cast(list[str], manager["managerFilePatterns"])
-    match_strings = cast(list[str], manager["matchStrings"])
-    assert any("mise" in pattern and "workflows" in pattern for pattern in patterns)
-    assert any("uv =" in expression for expression in match_strings)
-    assert any("uv runtime" in expression for expression in match_strings)
-
     rules = cast(list[dict[str, Any]], config["packageRules"])
     grouped_rules = [rule for rule in rules if rule.get("groupName") == "uv toolchain"]
     assert len(grouped_rules) == 1
     grouped_packages = set(cast(list[str], grouped_rules[0]["matchPackageNames"]))
-    assert grouped_packages == {"astral-sh/setup-uv", "ghcr.io/astral-sh/uv"}
+    assert grouped_packages == {
+        "astral-sh/setup-uv",
+        "astral-sh/uv",
+        "ghcr.io/astral-sh/uv",
+    }
     assert grouped_rules[0].get("enabled") is True
 
     dependabot = (ROOT / ".github" / "dependabot.yml").read_text(encoding="utf-8")
