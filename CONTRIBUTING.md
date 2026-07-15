@@ -84,6 +84,13 @@ git commit --signoff
 
 The sign-off says you have the right to submit the contribution under the project's license. It is separate from cryptographic commit signing.
 
+The only alternate identity accepted by CI is GitHub's canonical
+`dependabot[bot] <support@github.com>` trailer on an official, same-repository
+Dependabot update. CI verifies the bot account, branch and repository identity,
+single-commit history, parent and head SHAs, author and committer identities,
+and GitHub signature before accepting that trailer. This narrow exception is
+DCO handling only; it does not approve or authorize the dependency change.
+
 ## Open a pull request
 
 Open the pull request ready for review and complete its checklist. Explain the security and operational effects. Update the documentation and call out compatibility changes.

@@ -2950,9 +2950,9 @@ def test_container_build_toolchain_is_exactly_pinned_and_renovate_managed() -> N
     assert utility["versioningTemplate"] == "docker"
     assert utility["matchStrings"] == [
         r"(?<depName>ghcr.io/yannh/kubeconform):(?<currentValue>[^@\s]+)"
-        r"@(?<currentDigest>sha256:[a-f0-9]{64})",
+        + r"@(?<currentDigest>sha256:[a-f0-9]{64})",
         r"(?<depName>moby/buildkit):(?<currentValue>[^@\s]+)"
-        r"@(?<currentDigest>sha256:[a-f0-9]{64})",
+        + r"@(?<currentDigest>sha256:[a-f0-9]{64})",
     ]
 
     qemu_manager = managers["Update digest-pinned QEMU binfmt images"]
