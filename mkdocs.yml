@@ -38,6 +38,7 @@ nav:
       - Register a GitHub App: how-to/register-app.md
       - Configure policy: how-to/configure.md
       - Prepare repository rules: how-to/prepare-repository-rules.md
+      - Run the live GitHub contract: how-to/run-live-github-contract.md
       - Deploy: how-to/deploy.md
       - Operate and recover: how-to/operate.md
   - Reference:

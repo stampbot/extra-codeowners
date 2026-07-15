@@ -60,6 +60,12 @@ Confirm that the required check names the expected App as its source. A workflow
 
 After a successful test, open or retarget another disposable pull request to the same head commit. Observe the result before and after webhook handling. GitHub can initially display the prior commit-scoped success; the service invalidates it when the new event arrives.
 
+Use the [live GitHub contract fixture](run-live-github-contract.md) to make the
+Check Run transition, expected-source, shared-head, retargeting, optional App
+review, and delivery-shape observations repeatable. The fixture isolates
+GitHub's repository-rule contract; it does not replace a delayed-delivery and
+missed-delivery test against the deployed service.
+
 ## Roll back safely
 
 If evaluation is unavailable, incorrect, or being retired, restore GitHub's native **Require review from Code Owners** rule first. Wait until that protection applies, then remove the Extra CODEOWNERS check requirement. Only after both steps should you set repository policy to `enabled = false` or remove it.
