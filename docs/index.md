@@ -12,9 +12,20 @@ GitHub's native code-owner-review rule. Its ordinary approval count and every
 other required check stay in force.
 
 The repository contains an implemented self-hosted GitHub App, a reusable
-evaluator, an App Manifest setup flow, and a Helm chart. CI publishes signed
-images for `main` and its exact commit. There is no tagged supported release or
-hosted installation yet.
+evaluator, an App Manifest setup flow, and a Helm chart. CI builds and scans
+container candidates. The `main` publication job has been removed, and tagged
+publication is disabled pending three issues:
+[source completeness #18](https://github.com/stampbot/extra-codeowners/issues/18)
+covers CPython normalization, native-wheel and embedded-SBOM expansion, and
+historical Python `RECORD` replay;
+[privilege separation #28](https://github.com/stampbot/extra-codeowners/issues/28)
+isolates publication authority; and
+[build isolation #32](https://github.com/stampbot/extra-codeowners/issues/32)
+hash-pins the PEP 517 environment and exact application wheel.
+An [older public GHCR preview](https://github.com/stampbot/extra-codeowners/issues/30)
+may still be discoverable; it is unsupported, incomplete, and must not be
+deployed or mirrored.
+There is no supported release or hosted installation yet.
 
 > **Production blocker:** GitHub attaches Check Runs to commits, but Extra
 > CODEOWNERS evaluates evidence for one pull request. A newly opened or
@@ -44,6 +55,13 @@ If you operate a deployment:
 
 - Use the [deployment guide](how-to/deploy.md).
 - Keep the [operations and recovery guide](how-to/operate.md) close at hand.
+- Review the [container evidence policy](reference/container-evidence-policy.md)
+  and [future release contract](reference/container-evidence-release-contract.md).
+  No tagged evidence assets exist while
+  [source-completeness issue #18](https://github.com/stampbot/extra-codeowners/issues/18),
+  [privilege-separation issue #28](https://github.com/stampbot/extra-codeowners/issues/28),
+  and [build-isolation issue #32](https://github.com/stampbot/extra-codeowners/issues/32)
+  keep release publication denied.
 - Consult the [checks](reference/checks.md),
   [configuration](reference/configuration.md), and
   [HTTP API](reference/http-api.md) references when you need exact behavior.

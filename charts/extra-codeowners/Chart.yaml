@@ -13,9 +13,6 @@ maintainers:
     url: https://github.com/stampbot/extra-codeowners
 annotations:
   artifacthub.io/category: security
-  artifacthub.io/images: |
-    - name: extra-codeowners
-      image: ghcr.io/stampbot/extra-codeowners:0.1.0
   artifacthub.io/license: Apache-2.0
   artifacthub.io/links: |
     - name: Security policy

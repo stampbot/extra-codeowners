@@ -12,15 +12,65 @@ CI builds and scans separate `linux/amd64` and `linux/arm64` candidates. The rel
 
 CI saves a raw JSON inventory without applying VEX, including findings with no upstream fix. Narrowly reviewed OpenVEX dispositions are then applied to the blocking scan, and any remaining High or Critical finding blocks the candidate when the scanner knows of a fix. This keeps unresolved risk visible without pretending that an unavailable or inapplicable patch can be applied.
 
-For a tagged release, the image job first pushes a candidate tag named for the full commit. It scans each published platform digest, then signs and attests the verified index and its software bills of materials (SBOMs). Semantic-version tags are added last.
+The `main` container publication job has been removed, and tagged publication
+is currently disabled. Source-completeness issue #18 covers three gaps: CPython
+is not normalized into the top-level component and notice inventory; installed
+native-wheel and embedded-SBOM contents are not expanded into complete
+component, notice, and corresponding-source records; and `RECORD` ownership is
+not replayed for ineffective historical Python installs retained in lower
+layers.
 
-If an exact-artifact scan, signature, attestation, or metadata upload fails, the workflow does not create a release-version tag.
+Build-isolation issue
+[`#32`](https://github.com/stampbot/extra-codeowners/issues/32) separately tracks
+a hash-pinned PEP 517 backend and installation of the exact resulting
+application wheel. The current `[build-system]` range is not hash-locked by
+`uv.lock`; a successful candidate scan does not close that supply-chain gap.
 
-Each release publishes a signed SPDX SBOM for each supported architecture. An SBOM attestation names its platform digest. The multi-platform index gets a separate provenance attestation and signature, so one architecture's package list is never presented as evidence for the other.
+The release workflow unconditionally
+fails after validating its readiness milestone and before any job with image,
+chart, Python package, signing, attestation, or GitHub release authority can
+run. Security issue
+[`#28`](https://github.com/stampbot/extra-codeowners/issues/28) tracks the
+required privilege-separated container-evidence pipeline. Changing the
+component policy's approval value does not remove this structural block.
+
+The repository's `v*` tag ruleset restricts tag changes to an explicit
+maintainer bypass identity. The tag workflow also queries the configured release
+milestone number with read-only issue permission, verifies its expected title,
+and stops when any issue remains open. It records the milestone counts and
+release context in the workflow summary.
+This workflow gate cannot prevent an authorized user from pushing a Git tag; it
+prevents that unready tag from publishing release artifacts through the
+workflow.
+
+A future supported release must publish a signed SPDX SBOM for each supported
+architecture. Each SBOM attestation must name its platform digest, while the
+multi-platform index receives separate provenance and a signature. Evidence
+from one architecture must never be presented for the other.
+
+That release must also publish a deterministic notice and source-evidence
+archive for each platform digest. The required archive contains effective and
+all-layer inventories, commit-pinned Alpine recipes, checksum-verified
+distfiles, locked Python source, license texts, and a human-readable notice. It
+must close all three #18 gaps, including expanding every embedded wheel SBOM
+and native payload into exact component, notice, and corresponding-source
+coverage, or use wheels rebuilt against separately inventoried system packages.
+It must also build in the hash-pinned environment required by issue #32 and
+bind the installed application to that exact wheel.
+Publication requires reviewed component policy and explicit maintainer
+distribution approval after the collector is split into rootless, network-free
+parsing and separately privileged fetch and publication phases. The current CI
+archives are unsigned review inputs and are not substitutes. This evidence is
+not a legal-compliance determination. See the
+[container distribution evidence design](docs/explanation/container-distribution-evidence.md).
 
 A Vulnerability Exploitability eXchange (VEX) exception must name one vulnerability and the exact package version. It must also explain why the vulnerable code cannot run in this application. VEX dispositions are honored by the blocking scan even when another, unsupported release line contains a fix, so review them like any other security-sensitive change.
 
-Source statements live in [`.openvex.json`](.openvex.json). Release VEX documents are bound to the image digest, attached as OCI attestations, signed, and included with the release artifacts. If a usable fix exists, upgrade instead of adding a VEX statement.
+Source statements live in [`.openvex.json`](.openvex.json). No release VEX asset
+exists today. A future release must bind each release VEX document to the image
+digest, attach it as an OCI attestation, sign it, and include it with the
+release artifacts. If a usable fix exists, upgrade instead of adding a VEX
+statement.
 
 ## Report a vulnerability
 

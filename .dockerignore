@@ -1,5 +1,15 @@
 .git
 .github
+!.github/
+.github/*
+!.github/scripts/
+.github/scripts/*
+!.github/scripts/container_evidence.py
+!.github/scripts/release_readiness.py
+!.github/workflows/
+.github/workflows/*
+!.github/workflows/ci.yml
+!.github/workflows/release.yml
 .venv
 .env
 .env.*

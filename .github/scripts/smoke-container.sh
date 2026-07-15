@@ -69,8 +69,9 @@ docker run --detach \
   --security-opt no-new-privileges \
   "$image" >/dev/null
 
-docker exec "$container_name" python -c '
+docker exec "$container_name" /opt/venv/bin/python -c '
 import os
+import stat
 from pathlib import Path
 
 import extra_codeowners
@@ -85,24 +86,36 @@ assert not any(Path("/usr/local/bin").glob("pip*")), "runtime image must not inc
 assert not any(Path("/usr/local/lib/python3.14/site-packages").glob("pip*")), (
     "runtime image must not include the system pip package"
 )
+assert not any(
+    path.suffix in {".pyc", ".pyo"}
+    for path in Path("/opt/venv").rglob("*")
+    if path.is_file()
+), "runtime virtual environment must not contain executable bytecode caches"
+assert not Path("/opt/venv/lib/python3.14/site-packages/_virtualenv.py").exists()
+assert not Path("/opt/venv/lib/python3.14/site-packages/_virtualenv.pth").exists()
+assert not Path("/opt/venv/bin/activate").exists()
+assert not Path("/opt/venv/.lock").exists()
 
 license_path = Path("/usr/share/licenses/extra-codeowners/LICENSE")
 assert "Apache License" in license_path.read_text(encoding="utf-8")
 assert license_path.stat().st_uid == 0, "license must be root-owned"
+assert stat.S_IMODE(license_path.stat().st_mode) == 0o644
+for parent in (license_path.parent, license_path.parent.parent):
+    assert stat.S_IMODE(parent.stat().st_mode) == 0o755, f"unsafe license parent: {parent}"
 assert not os.access(license_path, os.W_OK), "runtime UID must not rewrite the license"
 '
 
-docker exec --interactive "$container_name" python - \
+docker exec --interactive "$container_name" /opt/venv/bin/python - \
   <"${script_directory}/verify-container-runtime.py"
 
 for _ in $(seq 1 45); do
-  if docker exec "$container_name" python -c '
+  if docker exec "$container_name" /opt/venv/bin/python -c '
 import urllib.request
 
 with urllib.request.urlopen("http://127.0.0.1:8000/health/live", timeout=3) as response:
     assert response.status == 200
 ' 2>/dev/null; then
-    if ! docker exec "$container_name" python -c '
+    if ! docker exec "$container_name" /opt/venv/bin/python -c '
 import urllib.error
 import urllib.request
 
