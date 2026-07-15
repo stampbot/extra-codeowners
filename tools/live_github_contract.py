@@ -205,6 +205,7 @@ class RestClient:
                 if isinstance(parsed, dict) and isinstance(parsed.get("message"), str):
                     message = f": {parsed['message'][:300]}"
             except ValueError:
+                # A non-JSON error body adds no safe detail beyond the status and API path.
                 pass
             raise ContractError(
                 f"GitHub API {method} {path} returned {response.status_code}{message}"

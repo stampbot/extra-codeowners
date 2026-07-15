@@ -62,28 +62,25 @@ class StubAuth:
         return cast(RestClient, self.clients.pop(0))
 
 
-class StubFixture(Fixture):
-    def __init__(self, merge_status: int) -> None:
-        self.repository = "fixture-org/fixture-repository"
-        self.operator = cast(RestClient, StubClient([merge_status]))
-        self.replacement_created = False
-
-    def _create_pull(self, *, head: str, base: str, title: str) -> int:
-        assert (head, base, title) == (
-            "shared-head",
-            "replacement",
-            "Replacement contract PR after unsafe merge",
-        )
-        self.replacement_created = True
-        return 2
-
-
 def fixture_without_network(selection_client: StubClient | None = None) -> Fixture:
     fixture = object.__new__(Fixture)
     fixture.repository = "fixture-org/fixture-repository"
     fixture.repository_id = 789
     fixture.repository_selection = cast(RestClient | None, selection_client)
     return fixture
+
+
+def fixture_for_merge_probe(merge_status: int) -> tuple[Fixture, list[tuple[str, str, str]]]:
+    fixture = fixture_without_network()
+    fixture.operator = cast(RestClient, StubClient([merge_status]))
+    replacements: list[tuple[str, str, str]] = []
+
+    def create_pull(*, head: str, base: str, title: str) -> int:
+        replacements.append((head, base, title))
+        return 2
+
+    fixture._create_pull = create_pull  # type: ignore[method-assign]
+    return fixture, replacements
 
 
 def test_expected_source_requires_context_and_integration() -> None:
@@ -155,23 +152,25 @@ def test_merge_attempt_rejects_indeterminate_response() -> None:
 
 
 def test_accepted_merge_uses_replacement_pull_and_remains_observed() -> None:
-    fixture = StubFixture(200)
+    fixture, replacements = fixture_for_merge_probe(200)
 
     blocked, pull_number = fixture._attempt_in_progress_merge(1)
 
     assert blocked is False
     assert pull_number == 2
-    assert fixture.replacement_created is True
+    assert replacements == [
+        ("shared-head", "replacement", "Replacement contract PR after unsafe merge")
+    ]
 
 
 def test_blocked_merge_keeps_original_pull() -> None:
-    fixture = StubFixture(405)
+    fixture, replacements = fixture_for_merge_probe(405)
 
     blocked, pull_number = fixture._attempt_in_progress_merge(1)
 
     assert blocked is True
     assert pull_number == 1
-    assert fixture.replacement_created is False
+    assert replacements == []
 
 
 @pytest.mark.parametrize(("state", "outcome"), [("clean", True), ("blocked", False)])
