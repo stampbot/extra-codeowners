@@ -45,5 +45,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Rel
 - Reproducible uv and mise development tasks.
 - A non-root container, Helm chart source, and supply-chain workflows.
 - Diátaxis documentation, a threat model, operating guides, and Read the Docs configuration.
+- Bounded pull-request and scheduled property tests for untrusted parsing and policy inputs.
+
+### Changed
+
+- GitHub API error messages are capped at 1,000 characters, and non-finite rate-limit hints use the bounded default delay.
 
 [Unreleased]: https://github.com/stampbot/extra-codeowners/commits/main

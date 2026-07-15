@@ -60,3 +60,4 @@ nav:
       - Threat model: explanation/threat-model.md
       - Runtime base image decision: explanation/runtime-base.md
       - Container distribution evidence: explanation/container-distribution-evidence.md
+      - Property testing: explanation/property-testing.md

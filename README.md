@@ -1,6 +1,7 @@
 # Extra CODEOWNERS
 
 [![CI](https://github.com/stampbot/extra-codeowners/actions/workflows/ci.yml/badge.svg)](https://github.com/stampbot/extra-codeowners/actions/workflows/ci.yml)
+[![Property testing](https://github.com/stampbot/extra-codeowners/actions/workflows/property-tests.yml/badge.svg)](https://github.com/stampbot/extra-codeowners/actions/workflows/property-tests.yml)
 [![Coverage report](https://github.com/stampbot/extra-codeowners/actions/workflows/coverage-pages.yml/badge.svg)](https://stampbot.github.io/extra-codeowners/)
 [![CodeQL](https://github.com/stampbot/extra-codeowners/actions/workflows/codeql.yml/badge.svg)](https://github.com/stampbot/extra-codeowners/actions/workflows/codeql.yml)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/stampbot/extra-codeowners/badge)](https://scorecard.dev/viewer/?uri=github.com/stampbot/extra-codeowners)
@@ -132,6 +133,7 @@ Start runtime configuration from [`.env.example`](.env.example). Keep real crede
 - [Architecture](docs/explanation/architecture.md)
 - [Threat model](docs/explanation/threat-model.md)
 - [Container distribution evidence design](docs/explanation/container-distribution-evidence.md)
+- [Property testing of untrusted inputs](docs/explanation/property-testing.md)
 - [Helm chart](charts/extra-codeowners/README.md) (source only; no released OCI chart yet)
 - [Support](SUPPORT.md) and [security reporting](SECURITY.md)
 - [Contributing](CONTRIBUTING.md), [governance](GOVERNANCE.md), and the [code of conduct](CODE_OF_CONDUCT.md)

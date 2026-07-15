@@ -1,0 +1,66 @@
+name: Property testing
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+  schedule:
+    - cron: "17 3 * * 3"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: property-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  HYPOTHESIS_PROFILE: ${{ github.event_name == 'schedule' && 'scheduled' || 'ci' }}
+  UV_FROZEN: "true"
+
+jobs:
+  property-tests:
+    name: Property and fuzz tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version-file: .python-version
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@6ee6290f1cbc4156c0bdd66691b2c144ef8df19a # v7.4.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install locked dependencies
+        run: uv sync --all-groups --frozen
+
+      - name: Run bounded generative tests
+        shell: bash
+        run: |
+          ulimit -v 2097152
+          uv run pytest tests/test_security_properties.py \
+            --no-cov \
+            --hypothesis-show-statistics \
+            --junitxml=property-tests.xml
+
+      - name: Upload synthetic-input test report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: property-tests-${{ github.run_id }}
+          path: property-tests.xml
+          if-no-files-found: error
+          retention-days: 14
