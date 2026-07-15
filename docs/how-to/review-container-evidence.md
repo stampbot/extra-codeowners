@@ -81,11 +81,14 @@ gh api --paginate \
   --slurp | jq '{artifacts: map(.artifacts[]) }' > "$FETCH_ROOT/artifacts.json"
 ```
 
-Derive the historical pull-request head, base, and repository identities from
-the immutable run record, not the current mutable pull request. Then require
-the current pull request still to name those exact facts; if it moved, stop and
-review a new run. GitHub's run `head_sha` is the pull-request head SHA. It is
-**not** the synthetic merge SHA used by `GITHUB_SHA` in this workflow.
+Use the run's top-level `head_sha` as the historical pull-request head. GitHub
+can rewrite the head and base fields nested under `pull_requests` when the pull
+request moves, so those nested fields establish only the pull-request number;
+they are not historical evidence. Require the current pull request to retain
+the run head and repository identities, and bind its current base to the
+synthetic merge commit below. If any value moved, stop and review a new run.
+The top-level run `head_sha` is the pull-request head SHA. It is **not** the
+synthetic merge SHA used by `GITHUB_SHA` in this workflow.
 
 ```bash
 jq -e \
@@ -95,31 +98,34 @@ jq -e \
     and .conclusion == "success"
     and .status == "completed"
     and .path == ".github/workflows/ci.yml"
-    and (.pull_requests | length) == 1
-    and .pull_requests[0].number == $number
-    and .head_sha == .pull_requests[0].head.sha
-    and .repository.id == .pull_requests[0].base.repo.id
+    and (.head_sha | type == "string" and test("^[0-9a-f]{40}$"))
+    and (.repository.id | type == "number")
+    and (.head_repository.id | type == "number")
+    and (.pull_requests | type == "array")
+    and ([.pull_requests[].number] | index($number) != null)
   ' "$FETCH_ROOT/run.json" >/dev/null
 
 RUN_ATTEMPT="$(jq -er '.run_attempt | select(type == "number") | tostring' \
   "$FETCH_ROOT/run.json")"
-PR_HEAD_SHA="$(jq -er '.pull_requests[0].head.sha' "$FETCH_ROOT/run.json")"
-PR_BASE_SHA="$(jq -er '.pull_requests[0].base.sha' "$FETCH_ROOT/run.json")"
-REPOSITORY_ID="$(jq -er '.pull_requests[0].base.repo.id' "$FETCH_ROOT/run.json")"
-PR_HEAD_REPOSITORY_ID="$(jq -er '.pull_requests[0].head.repo.id' "$FETCH_ROOT/run.json")"
+RUN_HEAD_SHA="$(jq -er '.head_sha' "$FETCH_ROOT/run.json")"
+REPOSITORY_ID="$(jq -er '.repository.id' "$FETCH_ROOT/run.json")"
+RUN_HEAD_REPOSITORY_ID="$(jq -er '.head_repository.id' "$FETCH_ROOT/run.json")"
 
 jq -e \
   --argjson number "$PR_NUMBER" \
-  --arg head "$PR_HEAD_SHA" \
-  --arg base "$PR_BASE_SHA" \
+  --arg head "$RUN_HEAD_SHA" \
   --argjson repository "$REPOSITORY_ID" \
-  --argjson head_repository "$PR_HEAD_REPOSITORY_ID" '
+  --argjson head_repository "$RUN_HEAD_REPOSITORY_ID" '
     .number == $number
     and .head.sha == $head
-    and .base.sha == $base
+    and (.base.sha | type == "string" and test("^[0-9a-f]{40}$"))
     and .head.repo.id == $head_repository
     and .base.repo.id == $repository
   ' "$FETCH_ROOT/pr.json" >/dev/null
+
+PR_HEAD_SHA="$RUN_HEAD_SHA"
+PR_BASE_SHA="$(jq -er '.base.sha' "$FETCH_ROOT/pr.json")"
+PR_HEAD_REPOSITORY_ID="$(jq -er '.head.repo.id' "$FETCH_ROOT/pr.json")"
 
 gh api --paginate \
   "/repos/${REPOSITORY}/actions/runs/${RUN_ID}/attempts/${RUN_ATTEMPT}/jobs?per_page=100" \
@@ -249,12 +255,14 @@ existing directory chains for every input root and the extraction parent. They
 then create the extraction root as a private directory owned by the current
 user.
 
-Pull request #27 is the bootstrap exception because no earlier default-branch
-helper has this envelope contract. Its independent reviewers must freeze the
-exact helper bytes, run the hostile corpus and provider-envelope probe, and
-record that reviewed commit or file digest before executing it in this VM.
-After the helper merges, future reviews must use a previously reviewed
-default-branch commit, never the pull request's copy.
+The first default-branch integration of this envelope contract is a one-time
+bootstrap exception because no earlier trusted helper exists. For this
+repository, that integration is pull request #19, incorporating the work from
+pull request #27. Before executing the candidate helper, the maintainer must
+freeze its exact bytes, run the hostile corpus and provider-envelope probe, and
+record the reviewed commit or file digest. After that integration merges,
+future reviews must use a previously reviewed default-branch commit, never the
+pull request's copy.
 
 ```bash
 set -euo pipefail
@@ -423,17 +431,50 @@ architectures, require the extracted run metadata to match the REST run, pull
 request, artifact name, and exact merge commit:
 
 ```bash
-PR_NUMBER="$(jq -er '.pull_requests[0].number | tostring' "$INCOMING/run.json")"
-PR_HEAD_SHA="$(jq -er '.pull_requests[0].head.sha' "$INCOMING/run.json")"
-PR_BASE_SHA="$(jq -er '.pull_requests[0].base.sha' "$INCOMING/run.json")"
-REPOSITORY_ID="$(jq -er '.pull_requests[0].base.repo.id | tostring' "$INCOMING/run.json")"
-PR_HEAD_REPOSITORY_ID="$(jq -er '.pull_requests[0].head.repo.id | tostring' \
+PR_NUMBER="$(jq -er '.number | tostring' "$INCOMING/pr.json")"
+PR_HEAD_SHA="$(jq -er '.head_sha' "$INCOMING/run.json")"
+PR_BASE_SHA="$(jq -er '.base.sha' "$INCOMING/pr.json")"
+REPOSITORY_ID="$(jq -er '.repository.id | tostring' "$INCOMING/run.json")"
+PR_HEAD_REPOSITORY_ID="$(jq -er '.head_repository.id | tostring' \
   "$INCOMING/run.json")"
 RUN_ID="$(jq -er '.id | tostring' "$INCOMING/run.json")"
 RUN_ATTEMPT="$(jq -er '.run_attempt' "$INCOMING/run.json")"
 MERGE_SHA="$(jq -er '[.[].identity.merge] | unique | if length == 1 then .[0] else error end' \
   "$INCOMING/selected-artifacts.json")"
 EXPECTED_WORKFLOW_REF="stampbot/extra-codeowners/.github/workflows/ci.yml@refs/pull/${PR_NUMBER}/merge"
+
+jq -e \
+  --argjson number "$PR_NUMBER" \
+  --arg head "$PR_HEAD_SHA" \
+  --argjson repository "$REPOSITORY_ID" \
+  --argjson head_repository "$PR_HEAD_REPOSITORY_ID" '
+    .event == "pull_request"
+    and .head_sha == $head
+    and .repository.id == $repository
+    and .head_repository.id == $head_repository
+    and ([.pull_requests[].number] | index($number) != null)
+  ' "$INCOMING/run.json" >/dev/null
+jq -e \
+  --argjson number "$PR_NUMBER" \
+  --arg head "$PR_HEAD_SHA" \
+  --arg base "$PR_BASE_SHA" \
+  --argjson repository "$REPOSITORY_ID" \
+  --argjson head_repository "$PR_HEAD_REPOSITORY_ID" '
+    .number == $number
+    and .head.sha == $head
+    and .base.sha == $base
+    and .head.repo.id == $head_repository
+    and .base.repo.id == $repository
+  ' "$INCOMING/pr.json" >/dev/null
+jq -e \
+  --arg merge "$MERGE_SHA" \
+  --arg base "$PR_BASE_SHA" \
+  --arg head "$PR_HEAD_SHA" '
+    .sha == $merge
+    and (.parents | length) == 2
+    and .parents[0].sha == $base
+    and .parents[1].sha == $head
+  ' "$INCOMING/merge-commit.json" >/dev/null
 
 for architecture in amd64 arm64; do
   metadata="$REVIEW_PARENT/${architecture}/run-metadata-${architecture}.json"
@@ -650,7 +691,62 @@ The staging procedure already required both exact container matrix jobs in
 partially uploaded job is not review evidence, even if its diagnostic artifact
 can be parsed.
 
-## 7. Keep distribution denied
+## 7. Revalidate the pull request before deciding
+
+The pull request can move while the offline review runs. On a new credentialed
+staging host, inject another short-lived read-only token and query the pull
+request again immediately before recording a review decision or merging. Do
+not run pull-request code on this host. Populate every expected value from the
+verified identity packet, not from the new response:
+
+```bash
+set -euo pipefail
+umask 077
+
+export REPOSITORY='stampbot/extra-codeowners'
+export PR_NUMBER='REPLACE_WITH_REVIEWED_PR_NUMBER'
+export EXPECTED_PR_HEAD_SHA='REPLACE_WITH_REVIEWED_40_CHARACTER_HEAD'
+export EXPECTED_PR_BASE_SHA='REPLACE_WITH_REVIEWED_40_CHARACTER_BASE'
+export EXPECTED_REPOSITORY_ID='REPLACE_WITH_REVIEWED_REPOSITORY_ID'
+export EXPECTED_HEAD_REPOSITORY_ID='REPLACE_WITH_REVIEWED_HEAD_REPOSITORY_ID'
+
+case "$PR_NUMBER" in (*[!0-9]*|'') exit 1 ;; esac
+case "$EXPECTED_PR_HEAD_SHA" in (*[!0-9a-f]*|'') exit 1 ;; esac
+case "$EXPECTED_PR_BASE_SHA" in (*[!0-9a-f]*|'') exit 1 ;; esac
+test "${#EXPECTED_PR_HEAD_SHA}" -eq 40
+test "${#EXPECTED_PR_BASE_SHA}" -eq 40
+case "$EXPECTED_REPOSITORY_ID" in (*[!0-9]*|'') exit 1 ;; esac
+case "$EXPECTED_HEAD_REPOSITORY_ID" in (*[!0-9]*|'') exit 1 ;; esac
+: "${GH_TOKEN:?inject a fresh short-lived read-only token}"
+
+FINAL_ROOT="$(mktemp -d)"
+chmod 0700 "$FINAL_ROOT"
+gh api "/repos/${REPOSITORY}/pulls/${PR_NUMBER}" > "$FINAL_ROOT/pr-final.json"
+jq -e \
+  --argjson number "$PR_NUMBER" \
+  --arg head "$EXPECTED_PR_HEAD_SHA" \
+  --arg base "$EXPECTED_PR_BASE_SHA" \
+  --argjson repository "$EXPECTED_REPOSITORY_ID" \
+  --argjson head_repository "$EXPECTED_HEAD_REPOSITORY_ID" '
+    .number == $number
+    and .state == "open"
+    and .head.sha == $head
+    and .base.sha == $base
+    and .head.repo.id == $head_repository
+    and .base.repo.id == $repository
+  ' "$FINAL_ROOT/pr-final.json" >/dev/null
+sha256sum "$FINAL_ROOT/pr-final.json"
+unset GH_TOKEN
+```
+
+Record the query time and final response digest with the review. If validation
+fails, discard the decision and review a successful run for the new head and
+base. Destroy the staging host after revoking the token. Keep strict
+up-to-date required checks enabled. If an accepted review is merged with the
+GitHub CLI, bind that operation to the same head with
+`--match-head-commit "$EXPECTED_PR_HEAD_SHA"`; do not merge after another push.
+
+## 8. Keep distribution denied
 
 Keep `distribution_approval.approved` set to `false`. The current executable
 schema requires source completeness to remain false and rejects an attempt to

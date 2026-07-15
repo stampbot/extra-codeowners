@@ -36,4 +36,4 @@ artifacts are unsigned, untrusted review inputs, not release assets.
 
 Run the documented workflow in
 [`docs/how-to/review-container-evidence.md`](../docs/how-to/review-container-evidence.md)
-to inspect or update this evidence.
+to inspect this evidence.
