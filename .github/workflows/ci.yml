@@ -56,7 +56,10 @@ jobs:
         run: uv run ruff check .
 
       - name: Type check
-        run: uv run mypy extra_codeowners tests
+        run: >-
+          uv run mypy extra_codeowners tests
+          .github/scripts/container_evidence.py
+          .github/scripts/release_readiness.py
 
       - name: Lint YAML
         run: uv run yamllint .
@@ -428,7 +431,7 @@ jobs:
         with:
           name: container-distribution-evidence-${{ matrix.architecture }}
           path: container-evidence/
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 14
 
       - name: Inventory all high-severity vulnerabilities

@@ -17,6 +17,7 @@ import io
 import json
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tarfile
@@ -27,6 +28,7 @@ import urllib.parse
 import urllib.request
 import zipfile
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -37,11 +39,13 @@ MAX_ARCHIVE_MEMBERS = 250_000
 MAX_ARCHIVE_TOTAL_BYTES = 1024 * 1024 * 1024
 MAX_IMAGE_TOTAL_BYTES = 2 * 1024 * 1024 * 1024
 MAX_LICENSE_BYTES = 2 * 1024 * 1024
+MAX_REDIRECTS = 5
 LICENSE_NAME = re.compile(
     r"(^|/)(copying|copyright|licen[cs]es?|notice|authors?)([._-].*)?$", re.IGNORECASE
 )
 SHA256 = re.compile(r"^sha256:[0-9a-f]{64}$")
 SHA512_LINE = re.compile(r"^([0-9a-f]{128})  (\S.*)$")
+SHELL_VARIABLE = re.compile(r"\$[A-Za-z_][A-Za-z0-9_]*|\$\{[^{}]+\}")
 DIST_INFO = re.compile(r"(?:^|/)site-packages/([^/]+)\.dist-info/METADATA$")
 NORMALIZE_NAME = re.compile(r"[-_.]+")
 
@@ -50,10 +54,72 @@ class EvidenceError(RuntimeError):
     """Fail-closed evidence collection error."""
 
 
+@dataclass(frozen=True)
+class Download:
+    content: bytes
+    urls: tuple[str, ...]
+
+
+class AuditedRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def __init__(self, initial_url: str) -> None:
+        super().__init__()
+        self.urls = [initial_url]
+
+    def redirect_request(
+        self,
+        request: urllib.request.Request,
+        file_pointer: Any,
+        code: int,
+        message: str,
+        headers: Any,
+        new_url: str,
+    ) -> urllib.request.Request | None:
+        if len(self.urls) > MAX_REDIRECTS:
+            raise EvidenceError(f"source exceeded {MAX_REDIRECTS} redirects")
+        resolved = urllib.parse.urljoin(request.full_url, new_url)
+        require_https_source_url(resolved)
+        self.urls.append(resolved)
+        return super().redirect_request(request, file_pointer, code, message, headers, resolved)
+
+
 def canonical_json(value: object) -> bytes:
     """Return stable UTF-8 JSON with a final newline."""
 
-    return (json.dumps(value, indent=2, sort_keys=True, ensure_ascii=False) + "\n").encode()
+    return (
+        json.dumps(
+            value,
+            allow_nan=False,
+            indent=2,
+            sort_keys=True,
+            ensure_ascii=False,
+        )
+        + "\n"
+    ).encode()
+
+
+def strict_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise EvidenceError(f"duplicate JSON object key: {key!r}")
+        result[key] = value
+    return result
+
+
+def reject_json_constant(value: str) -> None:
+    raise EvidenceError(f"non-finite JSON number is not allowed: {value}")
+
+
+def strict_json_loads(value: str | bytes, source: str) -> object:
+    try:
+        parsed: object = json.loads(
+            value,
+            object_pairs_hook=strict_json_object,
+            parse_constant=reject_json_constant,
+        )
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise EvidenceError(f"cannot parse JSON from {source}: {exc}") from exc
+    return parsed
 
 
 def sha256_bytes(value: bytes) -> str:
@@ -67,7 +133,9 @@ def normalize_package_name(value: str) -> str:
 def checked_path(value: str) -> PurePosixPath:
     """Normalize an archive path and reject traversal or ambiguous names."""
 
-    if "\x00" in value or "\\" in value:
+    if "\\" in value or any(
+        ord(character) < 32 or 0x7F <= ord(character) <= 0x9F for character in value
+    ):
         raise EvidenceError(f"unsafe archive path: {value!r}")
     raw = value.removeprefix("./")
     comparable = raw[:-1] if raw.endswith("/") else raw
@@ -84,7 +152,9 @@ def checked_path(value: str) -> PurePosixPath:
 
 
 def checked_link_target(value: str) -> None:
-    if "\x00" in value or "\\" in value:
+    if "\\" in value or any(
+        ord(character) < 32 or 0x7F <= ord(character) <= 0x9F for character in value
+    ):
         raise EvidenceError(f"unsafe archive link target: {value!r}")
     target = PurePosixPath(value)
     if (
@@ -117,8 +187,8 @@ def executable(name: str) -> str:
 
 def load_json(path: Path) -> dict[str, Any]:
     try:
-        value = json.loads(path.read_text())
-    except (OSError, json.JSONDecodeError) as exc:
+        value = strict_json_loads(path.read_text(), str(path))
+    except OSError as exc:
         raise EvidenceError(f"cannot read JSON {path}: {exc}") from exc
     if not isinstance(value, dict):
         raise EvidenceError(f"expected a JSON object in {path}")
@@ -144,6 +214,25 @@ def read_member(archive: tarfile.TarFile, member: tarfile.TarInfo) -> bytes:
     return value
 
 
+def hash_member(archive: tarfile.TarFile, member: tarfile.TarInfo) -> str:
+    """Hash one bounded regular tar member without retaining it in memory."""
+
+    if not member.isfile():
+        raise EvidenceError(f"expected regular file: {member.name}")
+    stream = archive.extractfile(member)
+    if stream is None:
+        raise EvidenceError(f"cannot read archive member: {member.name}")
+    digest = hashlib.sha256()
+    remaining = member.size
+    while remaining:
+        chunk = stream.read(min(1024 * 1024, remaining))
+        if not chunk:
+            raise EvidenceError(f"truncated archive member: {member.name}")
+        digest.update(chunk)
+        remaining -= len(chunk)
+    return digest.hexdigest()
+
+
 def image_inventory(
     image: str,
     platform: str,
@@ -155,10 +244,12 @@ def image_inventory(
 
     if not SHA256.fullmatch(subject_digest):
         raise EvidenceError("subject digest must be sha256:<64 lowercase hex characters>")
-    inspect = json.loads(run(["docker", "image", "inspect", image]))
+    inspect = strict_json_loads(run(["docker", "image", "inspect", image]), "docker inspect")
     if not isinstance(inspect, list) or len(inspect) != 1:
         raise EvidenceError("docker image inspect did not return exactly one image")
     info = inspect[0]
+    if not isinstance(info, dict):
+        raise EvidenceError("docker image inspect entry is not an object")
     expected_arch = platform.removeprefix("linux/")
     if info.get("Os") != "linux" or info.get("Architecture") != expected_arch:
         raise EvidenceError(
@@ -174,16 +265,20 @@ def image_inventory(
         saved = Path(temporary) / "image.tar"
         with saved.open("wb") as output:
             process = subprocess.run(  # noqa: S603
-                [executable("docker"), "image", "save", image],
+                [executable("docker"), "image", "save", image_id],
                 check=False,
                 stdout=output,
                 stderr=subprocess.PIPE,
             )
         if process.returncode:
             raise EvidenceError(process.stderr.decode(errors="replace").strip())
-        inventory, files = _inventory_saved_image(saved, platform, subject_digest)
+        inventory, files = _inventory_saved_image(
+            saved,
+            platform,
+            subject_digest,
+            expected_config_digest=image_id,
+        )
 
-    inventory["image_config_digest"] = image_id
     return inventory, files
 
 
@@ -222,23 +317,40 @@ def verify_local_image_subject(
 
 
 def _inventory_saved_image(
-    saved: Path, platform: str, subject_digest: str
+    saved: Path,
+    platform: str,
+    subject_digest: str,
+    *,
+    expected_config_digest: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     effective: dict[str, dict[str, Any]] = {}
     occurrences: list[dict[str, Any]] = []
     metadata_occurrences: list[dict[str, Any]] = []
-    apk_databases: list[tuple[int, bytes]] = []
+    apk_database_contents: dict[tuple[int, str], bytes] = {}
     layer_digests: list[str] = []
+    saved_layers_total = 0
+    image_regular_total = 0
 
     with tarfile.open(saved, mode="r:") as outer:
-        if len(outer.getmembers()) > MAX_ARCHIVE_MEMBERS:
+        outer_members = outer.getmembers()
+        if len(outer_members) > MAX_ARCHIVE_MEMBERS:
             raise EvidenceError("docker save archive has too many entries")
+        outer_names: set[str] = set()
+        for member in outer_members:
+            name = str(checked_path(member.name))
+            if name in outer_names:
+                raise EvidenceError(f"docker save archive repeats path: {name}")
+            outer_names.add(name)
         try:
             manifest_member = outer.getmember("manifest.json")
         except KeyError as exc:
             raise EvidenceError("docker save archive has no manifest.json") from exc
-        manifest = json.loads(read_member(outer, manifest_member))
-        if not isinstance(manifest, list) or len(manifest) != 1:
+        manifest = strict_json_loads(read_member(outer, manifest_member), "docker manifest")
+        if (
+            not isinstance(manifest, list)
+            or len(manifest) != 1
+            or not isinstance(manifest[0], dict)
+        ):
             raise EvidenceError("docker save archive must contain exactly one image")
         layers = manifest[0].get("Layers")
         if not isinstance(layers, list) or not layers:
@@ -246,14 +358,31 @@ def _inventory_saved_image(
         config_name = manifest[0].get("Config")
         if not isinstance(config_name, str):
             raise EvidenceError("docker save manifest has no image configuration")
+        config_path = checked_path(config_name)
+        if len(config_path.parts) != 3 or config_path.parts[:2] != ("blobs", "sha256"):
+            raise EvidenceError(f"unexpected image configuration location: {config_name}")
+        config_digest = f"sha256:{config_path.name}"
+        if not SHA256.fullmatch(config_digest):
+            raise EvidenceError(f"invalid image configuration digest: {config_digest}")
         try:
-            config = json.loads(read_member(outer, outer.getmember(config_name)))
-        except (KeyError, json.JSONDecodeError) as exc:
+            config_member = outer.getmember(config_name)
+        except KeyError as exc:
             raise EvidenceError("docker save archive has an invalid image configuration") from exc
-        labels = config.get("config", {}).get("Labels", {})
+        config_content = read_member(outer, config_member)
+        if sha256_bytes(config_content) != config_path.name:
+            raise EvidenceError("docker save image configuration digest does not match its bytes")
+        if expected_config_digest is not None and config_digest != expected_config_digest:
+            raise EvidenceError(
+                "docker save image configuration does not match the inspected image"
+            )
+        config = strict_json_loads(config_content, "docker image configuration")
+        if not isinstance(config, dict) or not isinstance(config.get("config"), dict):
+            raise EvidenceError("docker save archive has an invalid image configuration")
+        labels = config["config"].get("Labels", {})
         if not isinstance(labels, dict):
             raise EvidenceError("image labels are invalid")
 
+        seen_layers: set[str] = set()
         for layer_index, layer_name in enumerate(layers):
             if not isinstance(layer_name, str):
                 raise EvidenceError("invalid layer name")
@@ -263,6 +392,9 @@ def _inventory_saved_image(
             layer_digest = f"sha256:{layer_path.name}"
             if not SHA256.fullmatch(layer_digest):
                 raise EvidenceError(f"invalid layer digest: {layer_digest}")
+            if layer_digest in seen_layers:
+                raise EvidenceError(f"docker save manifest repeats layer: {layer_digest}")
+            seen_layers.add(layer_digest)
             layer_digests.append(layer_digest)
             try:
                 member = outer.getmember(layer_name)
@@ -270,12 +402,16 @@ def _inventory_saved_image(
                 raise EvidenceError(f"missing image layer: {layer_name}") from exc
             if member.size > MAX_IMAGE_TOTAL_BYTES:
                 raise EvidenceError(f"image layer exceeds size limit: {layer_digest}")
+            saved_layers_total += member.size
+            if saved_layers_total > MAX_IMAGE_TOTAL_BYTES:
+                raise EvidenceError("saved image layers exceed the cumulative size limit")
+            if hash_member(outer, member) != layer_path.name:
+                raise EvidenceError(f"image layer digest does not match its bytes: {layer_digest}")
             layer_stream = outer.extractfile(member)
             if layer_stream is None:
                 raise EvidenceError(f"cannot read image layer: {layer_name}")
             with tarfile.open(fileobj=layer_stream, mode="r|") as layer:
                 count = 0
-                layer_total = 0
                 for entry in layer:
                     count += 1
                     if count > MAX_ARCHIVE_MEMBERS:
@@ -285,27 +421,39 @@ def _inventory_saved_image(
                     if basename == ".wh..wh..opq":
                         parent = str(path.parent)
                         prefix = "" if parent == "." else f"{parent}/"
-                        for candidate in list(effective):
-                            if candidate.startswith(prefix):
+                        for candidate, candidate_record in list(effective.items()):
+                            if (
+                                candidate.startswith(prefix)
+                                and candidate_record["layer"] < layer_index
+                            ):
                                 effective.pop(candidate)
                         continue
                     if basename.startswith(".wh."):
                         target = path.parent / basename.removeprefix(".wh.")
                         target_text = str(target)
-                        for candidate in list(effective):
-                            if candidate == target_text or candidate.startswith(f"{target_text}/"):
+                        for candidate, candidate_record in list(effective.items()):
+                            if candidate_record["layer"] < layer_index and (
+                                candidate == target_text or candidate.startswith(f"{target_text}/")
+                            ):
                                 effective.pop(candidate)
                         continue
-                    if not entry.isfile():
-                        continue
-                    layer_total += entry.size
-                    if layer_total > MAX_IMAGE_TOTAL_BYTES:
-                        raise EvidenceError(
-                            f"image layer contents exceed size limit: {layer_digest}"
-                        )
-                    content = read_member(layer, entry)
                     path_text = str(path)
-                    record = {
+                    if not entry.isfile():
+                        if path_text == "lib/apk/db/installed" or DIST_INFO.search(path_text):
+                            raise EvidenceError(
+                                f"package metadata path is not a regular file: {path_text}"
+                            )
+                        effective.pop(path_text, None)
+                        if not entry.isdir():
+                            for candidate in list(effective):
+                                if candidate.startswith(f"{path_text}/"):
+                                    effective.pop(candidate)
+                        continue
+                    image_regular_total += entry.size
+                    if image_regular_total > MAX_IMAGE_TOTAL_BYTES:
+                        raise EvidenceError("image contents exceed the cumulative size limit")
+                    content = read_member(layer, entry)
+                    record: dict[str, Any] = {
                         "layer": layer_index,
                         "layer_digest": layer_digest,
                         "path": path_text,
@@ -315,22 +463,44 @@ def _inventory_saved_image(
                     occurrences.append(record)
                     effective[path_text] = record
                     if path_text == "lib/apk/db/installed":
-                        apk_databases.append((layer_index, content))
+                        apk_database_contents[(layer_index, record["sha256"])] = content
                     if DIST_INFO.search(path_text):
                         package = parse_python_metadata(content, path_text)
                         package["layer"] = layer_index
                         package["path"] = path_text
                         metadata_occurrences.append(package)
 
-    if not apk_databases:
-        raise EvidenceError("image has no Alpine installed-package database")
-    latest_apk = max(apk_databases, key=lambda item: item[0])[1]
+    apk_record = effective.get("lib/apk/db/installed")
+    if apk_record is None:
+        raise EvidenceError("image has no effective Alpine installed-package database")
+    latest_apk = apk_database_contents.get((apk_record["layer"], apk_record["sha256"]))
+    if latest_apk is None:
+        raise EvidenceError("cannot bind the effective Alpine package database content")
     alpine = parse_apk_database(latest_apk)
+    expected_apk_arch = {"linux/amd64": "x86_64", "linux/arm64": "aarch64"}[platform]
+    wrong_architectures = sorted(
+        {
+            package["architecture"]
+            for package in alpine
+            if package["architecture"] != expected_apk_arch
+            and not (package["name"].startswith(".") and package["architecture"] == "noarch")
+        }
+    )
+    if wrong_architectures:
+        raise EvidenceError(
+            f"Alpine package architecture does not match {platform}: "
+            f"{', '.join(wrong_architectures)}"
+        )
 
     python_by_key: dict[tuple[str, str], dict[str, Any]] = {}
     for package in metadata_occurrences:
         key = (package["name"], package["version"])
         current = python_by_key.get(key)
+        if current is not None and current["metadata_sha256"] != package["metadata_sha256"]:
+            raise EvidenceError(
+                "image contains conflicting Python metadata for "
+                f"{package['name']} {package['version']}"
+            )
         if current is None or package["layer"] >= current["layer"]:
             python_by_key[key] = package
     for package in python_by_key.values():
@@ -367,6 +537,7 @@ def _inventory_saved_image(
         "schema_version": SCHEMA_VERSION,
         "platform": platform,
         "subject_digest": subject_digest,
+        "image_config_digest": config_digest,
         "image_revision": labels.get("org.opencontainers.image.revision", ""),
         "image_version": labels.get("org.opencontainers.image.version", ""),
         "components": sorted(components, key=component_sort_key),
@@ -383,6 +554,9 @@ def _inventory_saved_image(
 
 def parse_python_metadata(content: bytes, path: str) -> dict[str, Any]:
     message = email.parser.BytesParser().parsebytes(content)
+    for field in ("Name", "Version", "License-Expression", "License"):
+        if len(message.get_all(field, [])) > 1:
+            raise EvidenceError(f"Python metadata repeats {field}: {path}")
     name = message.get("Name", "").strip()
     version = message.get("Version", "").strip()
     if not name or not version:
@@ -402,11 +576,15 @@ def parse_apk_database(content: bytes) -> list[dict[str, Any]]:
     except UnicodeDecodeError as exc:
         raise EvidenceError("Alpine package database is not UTF-8") from exc
     packages: list[dict[str, Any]] = []
+    authoritative = {"P", "V", "A", "L", "o", "c"}
     for paragraph in text.split("\n\n"):
         fields: dict[str, str] = {}
         for line in paragraph.splitlines():
             if len(line) >= 2 and line[1] == ":":
-                fields.setdefault(line[0], line[2:])
+                key = line[0]
+                if key in authoritative and key in fields:
+                    raise EvidenceError(f"Alpine package record repeats field {key}")
+                fields.setdefault(key, line[2:])
         if not fields:
             continue
         missing = [key for key in ("P", "V", "A") if not fields.get(key)]
@@ -459,6 +637,101 @@ def policy_components(policy: Mapping[str, Any], platform: str) -> list[dict[str
     return sorted(platforms[platform], key=component_sort_key)
 
 
+def validated_custom_license_evidence(
+    components: Sequence[Mapping[str, Any]], policy: Mapping[str, Any]
+) -> dict[str, set[str]]:
+    required: dict[str, set[str]] = {}
+    for component in components:
+        key = component_key(component)
+        for identifier in re.findall(
+            r"LicenseRef-[A-Za-z0-9][A-Za-z0-9.+-]*",
+            resolved_license(component, policy),
+        ):
+            required.setdefault(identifier, set()).add(key)
+    configured = policy.get("custom_license_evidence")
+    if not isinstance(configured, dict) or set(configured) != set(required):
+        raise EvidenceError(
+            "custom-license evidence does not exactly cover resolved LicenseRef identifiers"
+        )
+    for identifier, expected_components in required.items():
+        requirement = configured.get(identifier)
+        if not isinstance(requirement, dict):
+            raise EvidenceError(f"invalid custom-license requirement: {identifier}")
+        rationale = requirement.get("rationale")
+        configured_components = requirement.get("components")
+        configured_evidence = requirement.get("evidence")
+        if requirement.get("require_source_notice") is not True:
+            raise EvidenceError(f"custom-license requirement must require a notice: {identifier}")
+        if not isinstance(rationale, str) or not rationale.strip():
+            raise EvidenceError(f"custom-license requirement has no rationale: {identifier}")
+        if not isinstance(configured_components, list) or not all(
+            isinstance(item, str) for item in configured_components
+        ):
+            raise EvidenceError(f"custom-license components are invalid: {identifier}")
+        if len(configured_components) != len(set(configured_components)):
+            raise EvidenceError(f"custom-license components contain duplicates: {identifier}")
+        if set(configured_components) != expected_components:
+            raise EvidenceError(
+                f"custom-license components do not exactly match {identifier} resolutions"
+            )
+        if (
+            not isinstance(configured_evidence, dict)
+            or set(configured_evidence) != expected_components
+        ):
+            raise EvidenceError(
+                f"custom-license pinned evidence does not exactly match {identifier} resolutions"
+            )
+        for component_policy_key, evidence in configured_evidence.items():
+            if not isinstance(evidence, dict):
+                raise EvidenceError(
+                    f"custom-license evidence is invalid: {identifier}/{component_policy_key}"
+                )
+            path = evidence.get("path")
+            expected_hash = evidence.get("sha256")
+            if not isinstance(path, str):
+                raise EvidenceError(
+                    f"custom-license evidence path is invalid: {identifier}/{component_policy_key}"
+                )
+            checked_path(path)
+            if not isinstance(expected_hash, str) or not re.fullmatch(
+                r"[0-9a-f]{64}", expected_hash
+            ):
+                raise EvidenceError(
+                    f"custom-license evidence hash is invalid: {identifier}/{component_policy_key}"
+                )
+    return required
+
+
+def verify_pinned_custom_license_records(
+    components: Sequence[Mapping[str, Any]],
+    policy: Mapping[str, Any],
+    license_records: Sequence[Mapping[str, Any]],
+) -> None:
+    required = validated_custom_license_evidence(components, policy)
+    custom_policy = policy["custom_license_evidence"]
+    inventory_by_key = {component_key(item): item for item in components}
+    for identifier, component_keys in required.items():
+        for component_policy_key in component_keys:
+            inventory_component = inventory_by_key[component_policy_key]
+            if inventory_component["ecosystem"] == "alpine":
+                evidence_component = f"alpine-{inventory_component['origin']}"
+            else:
+                evidence_component = (
+                    f"python-{inventory_component['name']}-{inventory_component['version']}"
+                )
+            pinned = custom_policy[identifier]["evidence"][component_policy_key]
+            if not any(
+                record.get("component") == evidence_component
+                and record.get("path") == pinned["path"]
+                and record.get("sha256") == pinned["sha256"]
+                for record in license_records
+            ):
+                raise EvidenceError(
+                    "pinned source-carried notice was not retained for "
+                    f"{identifier} component {component_policy_key}"
+                )
+
+
 def verify_inventory(
     inventory: Mapping[str, Any], policy: Mapping[str, Any], *, require_approval: bool
 ) -> None:
@@ -497,6 +770,7 @@ def verify_inventory(
     missing_texts = required_license_texts - provided_license_texts
     if missing_texts:
         raise EvidenceError(f"policy has no standard text for: {', '.join(sorted(missing_texts))}")
+    validated_custom_license_evidence(actual, policy)
     expected_base = policy.get("base_image_index_digest")
     if not isinstance(expected_base, str) or not SHA256.fullmatch(expected_base):
         raise EvidenceError("policy base image index digest is invalid")
@@ -524,6 +798,44 @@ def verify_image_revision(
     if inventory.get("image_version") != version:
         raise EvidenceError(
             f"image version {inventory.get('image_version')!r} does not match {version!r}"
+        )
+
+
+def verify_base_layer_binding(files: Mapping[str, Any], policy: Mapping[str, Any]) -> None:
+    """Require the final image to begin with the reviewed platform base layers."""
+
+    platform = files.get("platform")
+    platforms = policy.get("base_image_platforms")
+    if not isinstance(platforms, dict) or set(platforms) != {
+        "linux/amd64",
+        "linux/arm64",
+    }:
+        raise EvidenceError("policy must pin both supported base-image platforms")
+    reviewed = platforms.get(platform)
+    if not isinstance(reviewed, dict) or set(reviewed) != {
+        "config_digest",
+        "layer_diff_ids",
+        "manifest_digest",
+    }:
+        raise EvidenceError(f"invalid reviewed base-image platform policy: {platform!r}")
+    for field in ("config_digest", "manifest_digest"):
+        if not isinstance(reviewed[field], str) or not SHA256.fullmatch(reviewed[field]):
+            raise EvidenceError(f"invalid reviewed base-image {field}: {platform!r}")
+    expected_layers = reviewed["layer_diff_ids"]
+    if (
+        not isinstance(expected_layers, list)
+        or not expected_layers
+        or not all(isinstance(item, str) and SHA256.fullmatch(item) for item in expected_layers)
+        or len(set(expected_layers)) != len(expected_layers)
+    ):
+        raise EvidenceError(f"invalid reviewed base-image layer list: {platform!r}")
+    layers = files.get("layers")
+    if not isinstance(layers, list) or not all(isinstance(item, dict) for item in layers):
+        raise EvidenceError("all-layer inventory has no valid layer list")
+    observed_layers = [item.get("digest") for item in layers]
+    if observed_layers[: len(expected_layers)] != expected_layers:
+        raise EvidenceError(
+            f"final image layers do not begin with the reviewed {platform} base image"
         )
 
 
@@ -580,7 +892,39 @@ def require_https_source_url(url: str) -> None:
         raise EvidenceError(f"source URL must be credential-free HTTPS: {url}")
 
 
-def fetch(url: str, expected_hash: str, algorithm: str = "sha256") -> bytes:
+def verify_cpython_source_binding(docker_recipe: bytes, cpython_source: Mapping[str, Any]) -> None:
+    """Bind the retained CPython archive to the pinned Official Image recipe."""
+
+    try:
+        recipe = docker_recipe.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise EvidenceError("Docker Official Python recipe is not UTF-8") from exc
+    version_matches = re.findall(
+        r"^ENV PYTHON_VERSION ([0-9]+\.[0-9]+\.[0-9]+[a-z0-9.]*)$",
+        recipe,
+        flags=re.MULTILINE,
+    )
+    hash_matches = re.findall(r"^ENV PYTHON_SHA256 ([0-9a-f]{64})$", recipe, flags=re.MULTILINE)
+    if len(version_matches) != 1 or len(hash_matches) != 1:
+        raise EvidenceError(
+            "Docker Official Python recipe must declare one literal "
+            "PYTHON_VERSION and PYTHON_SHA256"
+        )
+    version = version_matches[0]
+    expected_hash = hash_matches[0]
+    release_directory = re.split(r"[a-z]", version, maxsplit=1)[0]
+    expected_url = f"https://www.python.org/ftp/python/{release_directory}/Python-{version}.tar.xz"
+    if cpython_source.get("url") != expected_url:
+        raise EvidenceError(
+            "CPython source URL does not match the Docker Official Python recipe version"
+        )
+    if cpython_source.get("sha256") != expected_hash:
+        raise EvidenceError(
+            "CPython source SHA-256 does not match the Docker Official Python recipe"
+        )
+
+
+def fetch(url: str, expected_hash: str, algorithm: str = "sha256") -> Download:
     hash_lengths = {"sha256": 64, "sha512": 128}
     expected_length = hash_lengths.get(algorithm)
     if expected_length is None or not re.fullmatch(
@@ -593,13 +937,20 @@ def fetch(url: str, expected_hash: str, algorithm: str = "sha256") -> bytes:
     request = urllib.request.Request(  # noqa: S310 - scheme and authority checked above
         url, headers={"User-Agent": "curl/8.0 extra-codeowners-evidence/1"}
     )
+    redirects = AuditedRedirectHandler(url)
+    opener = urllib.request.build_opener(redirects)
     try:
-        with urllib.request.urlopen(request, timeout=60) as response:  # noqa: S310
-            require_https_source_url(response.geturl())
+        with opener.open(request, timeout=60) as response:
+            final_url = response.geturl()
+            require_https_source_url(final_url)
+            if final_url != redirects.urls[-1]:
+                if len(redirects.urls) > MAX_REDIRECTS:
+                    raise EvidenceError(f"source exceeded {MAX_REDIRECTS} redirects")
+                redirects.urls.append(final_url)
             length = response.headers.get("Content-Length")
             if length is not None and int(length) > MAX_DOWNLOAD_BYTES:
                 raise EvidenceError(f"source exceeds download limit: {url}")
-            content = response.read(MAX_DOWNLOAD_BYTES + 1)
+            content = bytes(response.read(MAX_DOWNLOAD_BYTES + 1))
     except (OSError, urllib.error.URLError, ValueError) as exc:
         raise EvidenceError(f"cannot fetch {url}: {exc}") from exc
     if len(content) > MAX_DOWNLOAD_BYTES:
@@ -609,7 +960,7 @@ def fetch(url: str, expected_hash: str, algorithm: str = "sha256") -> bytes:
         raise EvidenceError(
             f"{algorithm} mismatch for {url}: expected {expected_hash}, got {actual}"
         )
-    return content
+    return Download(content=content, urls=tuple(redirects.urls))
 
 
 def parse_lock_sources(lock_path: Path) -> dict[tuple[str, str], dict[str, Any]]:
@@ -635,9 +986,54 @@ def parse_lock_sources(lock_path: Path) -> dict[tuple[str, str], dict[str, Any]]
     return sources
 
 
-def recipe_checksums(archive: bytes, origin: str) -> tuple[dict[str, str], set[str]]:
-    local_files: set[str] = set()
+def source_filename_pattern(source: str, origin: str) -> re.Pattern[str]:
+    if any(character in source for character in ('"', "'", "`", ";")) or "$(" in source:
+        raise EvidenceError(f"unsupported APKBUILD source token for {origin}: {source!r}")
+    parts = source.split("::")
+    if len(parts) > 2:
+        raise EvidenceError(f"unsupported APKBUILD source alias for {origin}: {source!r}")
+    selected = parts[0] if len(parts) == 2 else source.rsplit("/", maxsplit=1)[-1]
+    if not selected or "/" in selected:
+        raise EvidenceError(f"APKBUILD source has no safe basename for {origin}: {source!r}")
+    fragments: list[str] = []
+    position = 0
+    for match in SHELL_VARIABLE.finditer(selected):
+        fragments.append(re.escape(selected[position : match.start()]))
+        fragments.append(r"[^/]+")
+        position = match.end()
+    fragments.append(re.escape(selected[position:]))
+    if "$" in SHELL_VARIABLE.sub("", selected):
+        raise EvidenceError(f"unsupported APKBUILD variable form for {origin}: {source!r}")
+    return re.compile("".join(fragments))
+
+
+def recipe_checksums(
+    archive: bytes,
+    origin: str,
+    *,
+    allow_dynamic_sources: bool = False,
+    allowed_links: Sequence[Mapping[str, str]] = (),
+) -> tuple[dict[str, str], dict[str, bytes]]:
+    expected_links: set[tuple[str, str, str]] = set()
+    for entry in allowed_links:
+        if set(entry) != {"path", "target", "type"}:
+            raise EvidenceError(f"invalid allowed recipe link policy for {origin}")
+        expected_path = str(checked_path(entry["path"]))
+        target = entry["target"]
+        checked_link_target(target)
+        link_type = entry["type"]
+        if link_type not in {"symlink", "hardlink"}:
+            raise EvidenceError(f"invalid allowed recipe link type for {origin}: {link_type}")
+        record = (expected_path, target, link_type)
+        if record in expected_links:
+            raise EvidenceError(
+                f"duplicate allowed recipe link policy for {origin}: {expected_path}"
+            )
+        expected_links.add(record)
+
+    regular_files: dict[str, bytes] = {}
     apkbuild: bytes | None = None
+    observed_links: set[tuple[str, str, str]] = set()
     try:
         with tarfile.open(fileobj=io.BytesIO(archive), mode="r:*") as source:
             count = 0
@@ -649,7 +1045,13 @@ def recipe_checksums(archive: bytes, origin: str) -> tuple[dict[str, str], set[s
                 path = checked_path(member.name)
                 if member.issym() or member.islnk():
                     checked_link_target(member.linkname)
-                    local_files.add(path.name)
+                    observed_links.add(
+                        (
+                            str(path),
+                            member.linkname,
+                            "symlink" if member.issym() else "hardlink",
+                        )
+                    )
                     continue
                 if not member.isfile():
                     continue
@@ -657,7 +1059,11 @@ def recipe_checksums(archive: bytes, origin: str) -> tuple[dict[str, str], set[s
                 if total > MAX_ARCHIVE_TOTAL_BYTES:
                     raise EvidenceError(f"recipe archive is too large: {origin}")
                 content = read_member(source, member)
-                local_files.add(path.name)
+                if path.name in regular_files:
+                    raise EvidenceError(
+                        f"recipe archive repeats regular-file basename: {path.name}"
+                    )
+                regular_files[path.name] = content
                 if path.name == "APKBUILD":
                     if apkbuild is not None:
                         raise EvidenceError(
@@ -666,6 +1072,13 @@ def recipe_checksums(archive: bytes, origin: str) -> tuple[dict[str, str], set[s
                     apkbuild = content
     except tarfile.TarError as exc:
         raise EvidenceError(f"invalid recipe archive for {origin}: {exc}") from exc
+    if observed_links != expected_links:
+        unexpected = sorted(observed_links - expected_links)
+        missing = sorted(expected_links - observed_links)
+        raise EvidenceError(
+            f"recipe archive links are not allowed unless exactly pinned for {origin}; "
+            f"unexpected={unexpected!r}, missing={missing!r}"
+        )
     if apkbuild is None:
         raise EvidenceError(f"recipe archive has no APKBUILD: {origin}")
     try:
@@ -673,8 +1086,12 @@ def recipe_checksums(archive: bytes, origin: str) -> tuple[dict[str, str], set[s
     except UnicodeDecodeError as exc:
         raise EvidenceError(f"APKBUILD is not UTF-8: {origin}") from exc
     matches = re.findall(r'^sha512sums="\n(.*?)\n"$', text, flags=re.MULTILINE | re.DOTALL)
-    if not matches and not re.search(r"^source=", text, flags=re.MULTILINE):
-        return {}, local_files
+    source_matches = re.findall(r'^source="(.*?)"$', text, flags=re.MULTILINE | re.DOTALL)
+    has_source_assignment = re.search(r"^source=", text, flags=re.MULTILINE) is not None
+    if not matches and not has_source_assignment:
+        return {}, {}
+    if len(source_matches) != 1 and not allow_dynamic_sources:
+        raise EvidenceError(f"APKBUILD must have exactly one literal source block: {origin}")
     if len(matches) != 1:
         raise EvidenceError(f"APKBUILD must have exactly one literal sha512sums block: {origin}")
     checksums: dict[str, str] = {}
@@ -691,7 +1108,39 @@ def recipe_checksums(archive: bytes, origin: str) -> tuple[dict[str, str], set[s
         checksums[filename] = digest
     if not checksums:
         raise EvidenceError(f"APKBUILD source list has no checksummed files: {origin}")
-    return checksums, local_files
+    if not allow_dynamic_sources:
+        sources = source_matches[0].split()
+        if len(sources) != len(checksums):
+            raise EvidenceError(
+                f"APKBUILD source and checksum counts differ for {origin}: "
+                f"{len(sources)} source(s), {len(checksums)} checksum(s)"
+            )
+        for source_token, filename in zip(sources, checksums, strict=True):
+            if source_filename_pattern(source_token, origin).fullmatch(filename) is None:
+                raise EvidenceError(
+                    f"APKBUILD checksum filename {filename!r} does not match "
+                    f"source {source_token!r} for {origin}"
+                )
+    link_basenames = {PurePosixPath(path).name for path, _target, _type in observed_links}
+    conflicts = sorted(link_basenames & ({"APKBUILD"} | set(checksums)))
+    if conflicts:
+        raise EvidenceError(
+            f"allowed recipe links conflict with authoritative source files for {origin}: "
+            f"{', '.join(conflicts)}"
+        )
+    local_sources: dict[str, bytes] = {}
+    for filename, expected in checksums.items():
+        local_content = regular_files.get(filename)
+        if local_content is None:
+            continue
+        actual = hashlib.sha512(local_content).hexdigest()
+        if actual != expected:
+            raise EvidenceError(
+                f"local recipe source checksum mismatch for {origin}/{filename}: "
+                f"expected {expected}, got {actual}"
+            )
+        local_sources[filename] = local_content
+    return checksums, local_sources
 
 
 def source_policy_entry(policy: Mapping[str, Any], name: str, version: str) -> dict[str, Any]:
@@ -704,6 +1153,33 @@ def source_policy_entry(policy: Mapping[str, Any], name: str, version: str) -> d
         ):
             return entry
     raise EvidenceError(f"no reviewed source policy for Python component {name} {version}")
+
+
+def alpine_recipe_exception(
+    policy: Mapping[str, Any], key: str
+) -> tuple[bool, tuple[Mapping[str, str], ...]]:
+    exceptions = policy.get("alpine_recipe_exceptions", {})
+    if not isinstance(exceptions, dict):
+        raise EvidenceError("invalid Alpine recipe exception policy")
+    raw = exceptions.get(key)
+    if raw is None:
+        return False, ()
+    if not isinstance(raw, dict) or not raw:
+        raise EvidenceError(f"invalid Alpine recipe exception for {key}")
+    if set(raw) - {"allow_dynamic_sources", "allowed_links", "rationale"}:
+        raise EvidenceError(f"unknown Alpine recipe exception field for {key}")
+    rationale = raw.get("rationale")
+    if not isinstance(rationale, str) or not rationale.strip():
+        raise EvidenceError(f"Alpine recipe exception has no rationale for {key}")
+    dynamic = raw.get("allow_dynamic_sources", False)
+    if not isinstance(dynamic, bool):
+        raise EvidenceError(f"invalid dynamic-source exception for {key}")
+    links = raw.get("allowed_links", [])
+    if not isinstance(links, list) or not all(isinstance(item, dict) for item in links):
+        raise EvidenceError(f"invalid allowed recipe links for {key}")
+    if not dynamic and not links:
+        raise EvidenceError(f"Alpine recipe exception grants nothing for {key}")
+    return dynamic, tuple(links)
 
 
 def safe_filename(value: str) -> str:
@@ -732,35 +1208,45 @@ def extract_license_files(archive: bytes, component: str, root: Path) -> list[st
                 members = source.infolist()
                 if len(members) > MAX_ARCHIVE_MEMBERS:
                     raise EvidenceError(f"source archive has too many entries: {component}")
-                if sum(member.file_size for member in members) > MAX_ARCHIVE_TOTAL_BYTES:
+                if sum(zip_member.file_size for zip_member in members) > MAX_ARCHIVE_TOTAL_BYTES:
                     raise EvidenceError(f"source archive is too large: {component}")
-                for member in members:
-                    path = checked_path(member.filename)
-                    if member.is_dir() or not LICENSE_NAME.search(str(path)):
+                for zip_member in members:
+                    path = checked_path(zip_member.filename)
+                    if zip_member.is_dir():
                         continue
-                    if member.file_size > MAX_LICENSE_BYTES:
-                        raise EvidenceError(f"license file exceeds limit: {member.filename}")
-                    content = source.read(member, pwd=None)
+                    unix_mode = zip_member.external_attr >> 16
+                    file_type = stat.S_IFMT(unix_mode)
+                    if file_type not in {0, stat.S_IFREG}:
+                        raise EvidenceError(
+                            f"source ZIP contains non-regular entry: {zip_member.filename}"
+                        )
+                    if not LICENSE_NAME.search(str(path)):
+                        continue
+                    if zip_member.file_size > MAX_LICENSE_BYTES:
+                        raise EvidenceError(f"license file exceeds limit: {zip_member.filename}")
+                    content = source.read(zip_member, pwd=None)
                     found.append((str(path), content))
         else:
             with tarfile.open(fileobj=io.BytesIO(archive), mode="r:*") as source:
                 count = 0
                 total = 0
-                for member in source:
+                for tar_member in source:
                     count += 1
                     if count > MAX_ARCHIVE_MEMBERS:
                         raise EvidenceError(f"source archive has too many entries: {component}")
-                    path = checked_path(member.name)
-                    if not member.isfile():
+                    path = checked_path(tar_member.name)
+                    if not tar_member.isfile():
                         continue
-                    total += member.size
+                    total += tar_member.size
                     if total > MAX_ARCHIVE_TOTAL_BYTES:
                         raise EvidenceError(f"source archive is too large: {component}")
                     if not LICENSE_NAME.search(str(path)):
                         continue
-                    if member.size > MAX_LICENSE_BYTES:
-                        raise EvidenceError(f"license file exceeds limit: {member.name}")
-                    found.append((str(path), read_member(source, member)))
+                    if tar_member.size > MAX_LICENSE_BYTES:
+                        raise EvidenceError(f"license file exceeds limit: {tar_member.name}")
+                    found.append((str(path), read_member(source, tar_member)))
+    except EvidenceError:
+        raise
     except (tarfile.TarError, zipfile.BadZipFile, RuntimeError) as exc:
         # Raw patches and text sources legitimately are not archives.
         if archive.startswith((b"PK\x03\x04", b"\x1f\x8b", b"BZh", b"\xfd7zXZ")):
@@ -817,6 +1303,7 @@ def build_bundle(
         "subject_digest"
     ) != inventory.get("subject_digest"):
         raise EvidenceError("component and all-layer inventories describe different images")
+    verify_base_layer_binding(files, policy)
 
     with tempfile.TemporaryDirectory(prefix="extra-codeowners-evidence-") as temporary:
         root = Path(temporary) / "evidence"
@@ -846,14 +1333,17 @@ def build_bundle(
 
         docker_recipe = policy.get("docker_python_recipe")
         cpython = policy.get("cpython_source")
+        base_source_content: dict[str, bytes] = {}
         for component, entry in (("docker-python-recipe", docker_recipe), ("cpython", cpython)):
             if not isinstance(entry, dict):
                 raise EvidenceError(f"policy is missing {component}")
-            content = fetch(str(entry.get("url", "")), str(entry.get("sha256", "")))
+            download = fetch(str(entry.get("url", "")), str(entry.get("sha256", "")))
+            content = download.content
+            base_source_content[component] = content
             filename = safe_filename(str(entry["url"]))
             relative = f"sources/base/{component}/{filename}"
             write_file(root, relative, content)
-            source_records.append(source_record(component, entry["url"], content, relative))
+            source_records.append(source_record(component, download.urls, content, relative))
             license_records.extend(
                 {"component": component, "path": license_path}
                 for license_path in extract_license_files(content, component, root)
@@ -863,15 +1353,22 @@ def build_bundle(
             if license_url is not None or license_hash is not None:
                 if not isinstance(license_url, str) or not isinstance(license_hash, str):
                     raise EvidenceError(f"invalid license source for {component}")
-                license_content = fetch(license_url, license_hash)
+                license_download = fetch(license_url, license_hash)
+                license_content = license_download.content
                 license_relative = f"licenses/from-source/{component}/LICENSE"
                 write_file(root, license_relative, license_content)
                 source_records.append(
                     source_record(
-                        f"{component}-license", license_url, license_content, license_relative
+                        f"{component}-license",
+                        license_download.urls,
+                        license_content,
+                        license_relative,
                     )
                 )
                 license_records.append({"component": component, "path": license_relative})
+        if not isinstance(cpython, dict):
+            raise EvidenceError("policy is missing cpython")
+        verify_cpython_source_binding(base_source_content["docker-python-recipe"], cpython)
 
         lock_sources = parse_lock_sources(lock_path)
         python_components = [
@@ -888,14 +1385,15 @@ def build_bundle(
             expected = source.get("sha256")
             if not isinstance(url, str) or not isinstance(expected, str):
                 raise EvidenceError(f"invalid Python source record: {key[0]} {key[1]}")
-            content = fetch(url, expected)
+            download = fetch(url, expected)
+            content = download.content
             expected_size = source.get("size")
             if expected_size is not None and len(content) != expected_size:
                 raise EvidenceError(f"size mismatch for Python source {key[0]} {key[1]}")
             component_id = f"python-{key[0]}-{key[1]}"
             relative = f"sources/python/{key[0]}/{key[1]}/{safe_filename(url)}"
             write_file(root, relative, content)
-            source_records.append(source_record(component_id, url, content, relative))
+            source_records.append(source_record(component_id, download.urls, content, relative))
             found = extract_license_files(content, component_id, root)
             if not found:
                 raise EvidenceError(
@@ -914,37 +1412,63 @@ def build_bundle(
         alpine_release = policy.get("alpine_distfiles_release")
         if not isinstance(alpine_release, str) or not re.fullmatch(r"v\d+\.\d+", alpine_release):
             raise EvidenceError("invalid Alpine distfiles release in policy")
+        expected_recipes = policy.get("alpine_recipe_archives", {})
+        recipe_exceptions = policy.get("alpine_recipe_exceptions", {})
+        if not isinstance(expected_recipes, dict) or not isinstance(recipe_exceptions, dict):
+            raise EvidenceError("invalid Alpine recipe policy")
+        unknown_exceptions = sorted(set(recipe_exceptions) - set(expected_recipes))
+        if unknown_exceptions:
+            raise EvidenceError(
+                "Alpine recipe exceptions have no pinned archive: " + ", ".join(unknown_exceptions)
+            )
         for (origin, commit), packages in sorted(origins.items()):
             recipe_url = (
                 "https://gitlab.alpinelinux.org/alpine/aports/-/archive/"
                 f"{commit}/aports-{commit}.tar.gz?path=main/{origin}"
             )
-            expected_recipes = policy.get("alpine_recipe_archives", {})
-            expected_recipe_hash = expected_recipes.get(f"{origin}@{commit}")
+            recipe_key = f"{origin}@{commit}"
+            expected_recipe_hash = expected_recipes.get(recipe_key)
             if not isinstance(expected_recipe_hash, str):
                 raise EvidenceError(f"no reviewed recipe archive hash for {origin}@{commit}")
-            recipe = fetch(recipe_url, expected_recipe_hash)
+            recipe_download = fetch(recipe_url, expected_recipe_hash)
+            recipe = recipe_download.content
             recipe_relative = f"sources/alpine/{origin}/{commit}/recipe.tar.gz"
             write_file(root, recipe_relative, recipe)
             source_records.append(
-                source_record(f"alpine-{origin}-recipe", recipe_url, recipe, recipe_relative)
+                source_record(
+                    f"alpine-{origin}-recipe",
+                    recipe_download.urls,
+                    recipe,
+                    recipe_relative,
+                )
             )
-            checksums, local_files = recipe_checksums(recipe, origin)
+            allow_dynamic_sources, allowed_links = alpine_recipe_exception(policy, recipe_key)
+            checksums, local_sources = recipe_checksums(
+                recipe,
+                origin,
+                allow_dynamic_sources=allow_dynamic_sources,
+                allowed_links=allowed_links,
+            )
             upstream_count = 0
             for filename, expected_sha512 in sorted(checksums.items()):
-                if filename in local_files:
+                if filename in local_sources:
                     continue
                 upstream_count += 1
                 url = (
                     f"https://distfiles.alpinelinux.org/distfiles/{alpine_release}/"
                     f"{urllib.parse.quote(filename, safe='')}"
                 )
-                content = fetch(url, expected_sha512, "sha512")
+                download = fetch(url, expected_sha512, "sha512")
+                content = download.content
                 relative = f"sources/alpine/{origin}/{commit}/distfiles/{filename}"
                 write_file(root, relative, content)
                 source_records.append(
                     source_record(
-                        f"alpine-{origin}", url, content, relative, sha512=expected_sha512
+                        f"alpine-{origin}",
+                        download.urls,
+                        content,
+                        relative,
+                        sha512=expected_sha512,
                     )
                 )
                 found = extract_license_files(content, f"alpine-{origin}", root)
@@ -966,37 +1490,24 @@ def build_bundle(
             identifier = entry.get("id")
             if not isinstance(identifier, str) or not re.fullmatch(r"[A-Za-z0-9.+-]+", identifier):
                 raise EvidenceError("invalid license identifier")
-            content = fetch(str(entry.get("url", "")), str(entry.get("sha256", "")))
+            download = fetch(str(entry.get("url", "")), str(entry.get("sha256", "")))
+            content = download.content
             relative = f"licenses/standard/{identifier}.txt"
             write_file(root, relative, content)
             license_records.append({"component": f"license:{identifier}", "path": relative})
+            source_records.append(
+                source_record(f"license:{identifier}", download.urls, content, relative)
+            )
 
         unique_license_records = {
             (record["component"], record["path"]): record for record in license_records
         }
         license_records = list(unique_license_records.values())
-        custom_evidence = policy.get("custom_license_evidence", {})
-        if not isinstance(custom_evidence, dict):
-            raise EvidenceError("invalid custom-license evidence policy")
-        inventory_by_key = {component_key(item): item for item in inventory["components"]}
-        for identifier, requirement in custom_evidence.items():
-            if (
-                not isinstance(requirement, dict)
-                or requirement.get("require_source_notice") is not True
-            ):
-                raise EvidenceError(f"invalid custom-license requirement: {identifier}")
-            for key in requirement.get("components", []):
-                component = inventory_by_key.get(key)
-                if component is None:
-                    raise EvidenceError(f"custom-license component is not in inventory: {key}")
-                if component["ecosystem"] == "alpine":
-                    evidence_component = f"alpine-{component['origin']}"
-                else:
-                    evidence_component = f"python-{component['name']}-{component['version']}"
-                if not any(record["component"] == evidence_component for record in license_records):
-                    raise EvidenceError(
-                        f"no source-carried notice found for {identifier} component {key}"
-                    )
+        for record in license_records:
+            retained_content = (root / record["path"]).read_bytes()
+            record["sha256"] = sha256_bytes(retained_content)
+            record["size"] = len(retained_content)
+        verify_pinned_custom_license_records(inventory["components"], policy, license_records)
 
         notices = [
             "# Third-party notices\n\n",
@@ -1061,11 +1572,22 @@ def build_bundle(
 
 
 def source_record(
-    component: str, url: str, content: bytes, path: str, *, sha512: str | None = None
+    component: str,
+    urls: str | Sequence[str],
+    content: bytes,
+    path: str,
+    *,
+    sha512: str | None = None,
 ) -> dict[str, Any]:
+    url_chain = (urls,) if isinstance(urls, str) else tuple(urls)
+    if not url_chain:
+        raise EvidenceError(f"source record for {component} has no URL")
+    for url in url_chain:
+        require_https_source_url(url)
     result = {
         "component": component,
-        "url": url,
+        "url": url_chain[0],
+        "urls": list(url_chain),
         "path": path,
         "size": len(content),
         "sha256": sha256_bytes(content),

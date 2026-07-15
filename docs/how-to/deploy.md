@@ -44,14 +44,20 @@ docker build --tag extra-codeowners:review .
 
 Record the resulting image digest. A local build isn't signed or attested merely because the repository workflow can produce such artifacts. Never deploy a mutable tag without recording its digest and source commit.
 
-The checked-in tag-release pipeline can publish signed, attestable versioned images. None exists before the first successful release.
+The checked-in tag-release workflow is structurally disabled before every
+publication job. Security issue
+[`#28`](https://github.com/stampbot/extra-codeowners/issues/28) must be resolved
+before it can publish a versioned image. A policy approval change alone cannot
+enable it.
 
 The [runtime base image decision](../explanation/runtime-base.md) records the selected upstream image, architecture evidence, vulnerability dispositions, update contract, and residual risk.
 
-For a tagged release, also verify the platform-specific notice and source
-archive with the
-[container distribution evidence procedure](verify-container-evidence.md).
+A future tagged release must also provide a platform-specific notice and source
+archive that satisfies the
+[container distribution evidence contract](verify-container-evidence.md).
 Image provenance and a software bill of materials do not replace that archive.
+Current pull-request CI evidence is unsigned and intended only for maintainer
+review.
 
 ## 2. Provision durable state
 
@@ -170,7 +176,10 @@ Keep one replica. Don't switch to `RollingUpdate` until you've tested the versio
 
 ## Release and planned supported paths
 
-The initial Helm chart source lives at `charts/extra-codeowners`. A successful exact semantic-version tag release is configured to publish:
+The initial Helm chart source lives at `charts/extra-codeowners`. Tagged
+publication is currently blocked by issue `#28`; the workflow cannot publish
+the items below. After the privilege-separated evidence pipeline is implemented
+and reviewed, the intended exact semantic-version release contract is:
 
 - a signed multi-architecture image at `ghcr.io/stampbot/extra-codeowners:<version>`
 - a signed OCI chart at `oci://ghcr.io/stampbot/charts/extra-codeowners`, using the release version
@@ -179,6 +188,9 @@ The initial Helm chart source lives at `charts/extra-codeowners`. A successful e
 - signed, attested notice and corresponding-source evidence for each platform
   digest.
 
-Workflow source doesn't prove that an artifact was published. Confirm the artifact exists after successful CI or a GitHub release. Until the repository announces a supported release, none exists.
+Workflow source does not prove an artifact was published, especially while its
+publication jobs are unreachable. Confirm each artifact on the registry or
+GitHub release after a successful future release. Until the repository
+announces a supported release, none exists.
 
 Tested chart upgrade guarantees and a reproducible Google Cloud deployment guide remain planned. Their workload-identity behavior will be documented from published artifacts rather than inferred here.

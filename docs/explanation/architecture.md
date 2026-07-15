@@ -351,11 +351,13 @@ the project publishes signed, attested containers for `main` and the exact
 commit. These development builds are available for evaluation, but they are not
 supported releases.
 
-Exact semantic-version tags are wired to publish a signed versioned image, OCI
-chart, Python artifacts, provenance, and software-bill-of-material
-attestations. Workflow code is not proof that those artifacts exist; only a
-successful tagged release creates them. No supported release has been
-published.
+The tag workflow contains the intended versioned image, OCI chart, Python
+artifact, provenance, and software-bill-of-material publication jobs, but an
+unconditional validation failure keeps every one unreachable. Security issue
+[#28](https://github.com/stampbot/extra-codeowners/issues/28) requires a
+privilege-separated container-evidence pipeline before that block can be
+removed. Workflow code is not proof that an artifact exists. No supported
+release has been published.
 
 Tested chart-upgrade guarantees and a reproducible Google Cloud deployment
 guide are still planned. The Marketplace Action will live separately as

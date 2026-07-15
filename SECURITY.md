@@ -12,9 +12,13 @@ CI builds and scans separate `linux/amd64` and `linux/arm64` candidates. The rel
 
 CI saves a raw JSON inventory without applying VEX, including findings with no upstream fix. Narrowly reviewed OpenVEX dispositions are then applied to the blocking scan, and any remaining High or Critical finding blocks the candidate when the scanner knows of a fix. This keeps unresolved risk visible without pretending that an unavailable or inapplicable patch can be applied.
 
-For a tagged release, the image job first pushes a candidate tag named for the full commit. It scans each published platform digest, then signs and attests the verified index and its software bills of materials (SBOMs). Semantic-version tags are added last.
-
-If an exact-artifact scan, signature, attestation, or metadata upload fails, the workflow does not create a release-version tag.
+Tagged publication is currently disabled. The release workflow unconditionally
+fails after validating its readiness milestone and before any job with image,
+chart, Python package, signing, attestation, or GitHub release authority can
+run. Security issue
+[`#28`](https://github.com/stampbot/extra-codeowners/issues/28) tracks the
+required privilege-separated container-evidence pipeline. Changing the
+component policy's approval value does not remove this structural block.
 
 The repository's `v*` tag ruleset restricts tag changes to an explicit
 maintainer bypass identity. The tag workflow also queries the configured release
@@ -25,14 +29,20 @@ This workflow gate cannot prevent an authorized user from pushing a Git tag; it
 prevents that unready tag from publishing release artifacts through the
 workflow.
 
-Each release publishes a signed SPDX SBOM for each supported architecture. An SBOM attestation names its platform digest. The multi-platform index gets a separate provenance attestation and signature, so one architecture's package list is never presented as evidence for the other.
+A future supported release must publish a signed SPDX SBOM for each supported
+architecture. Each SBOM attestation must name its platform digest, while the
+multi-platform index receives separate provenance and a signature. Evidence
+from one architecture must never be presented for the other.
 
-Each release must also publish a deterministic notice and source-evidence
-archive for each platform digest. The archive includes effective and all-layer
-inventories, commit-pinned Alpine recipes, checksum-verified distfiles, locked
-Python source, license texts, and a human-readable notice file. A reviewed
-component policy and explicit maintainer distribution approval gate the release.
-This evidence is not a legal-compliance determination. See the
+That release must also publish a deterministic notice and source-evidence
+archive for each platform digest. The required archive contains effective and
+all-layer inventories, commit-pinned Alpine recipes, checksum-verified
+distfiles, locked Python source, license texts, and a human-readable notice.
+Publication requires reviewed component policy and explicit maintainer
+distribution approval after the collector is split into rootless, network-free
+parsing and separately privileged fetch and publication phases. The current CI
+archives are unsigned review inputs and are not substitutes. This evidence is
+not a legal-compliance determination. See the
 [container distribution evidence design](docs/explanation/container-distribution-evidence.md).
 
 A Vulnerability Exploitability eXchange (VEX) exception must name one vulnerability and the exact package version. It must also explain why the vulnerable code cannot run in this application. VEX dispositions are honored by the blocking scan even when another, unsupported release line contains a fix, so review them like any other security-sensitive change.

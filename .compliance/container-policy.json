@@ -22,8 +22,54 @@
     "zlib@f248b33b5943c7dc69bf691031d7612ab2e8ed93": "9f5cf0c421b163101e322d4c9673f471ee0732a954f0735a06d0b03c9c251f93",
     "zstd@3c6e2ee2b16f403d53eab39c4426eb61f003c322": "4f1b292b0152a4e52b94b05bd357c8612c080ff55914ad6e6285365e01566b21"
   },
+  "alpine_recipe_exceptions": {
+    "alpine-baselayout@60a7585bbab2fa0f762504eb617dbca90216e31f": {
+      "allowed_links": [
+        {
+          "path": "aports-60a7585bbab2fa0f762504eb617dbca90216e31f-main-alpine-baselayout/main/alpine-baselayout/alpine-baselayout.post-upgrade",
+          "target": "alpine-baselayout.post-install",
+          "type": "symlink"
+        }
+      ],
+      "rationale": "The commit-pinned recipe subtree contains one non-source maintainer-script alias; its exact safe relative target is reviewed and it cannot replace APKBUILD or a checksummed source."
+    },
+    "alpine-keys@b9f23becced4d7b3ccc0fa0f28530243ccd314a0": {
+      "allow_dynamic_sources": true,
+      "rationale": "APKBUILD constructs its source list from a static architecture-key table; every resulting key is a regular file in the commit-pinned recipe and is verified against sha512sums."
+    },
+    "busybox@c3ef5d10e6ef6528852c51f0564963e2f8c1be19": {
+      "allow_dynamic_sources": true,
+      "rationale": "APKBUILD expands three static filename-list variables in its source block; every sha512sums entry is retained and either verified against a regular recipe file or downloaded and verified from the pinned Alpine distfiles release."
+    },
+    "readline@a854c03acdac188901fb012f7acbee70a36e8041": {
+      "allow_dynamic_sources": true,
+      "rationale": "APKBUILD generates its upstream patch source aliases with a bounded shell loop; every sha512sums entry is retained and either verified against a regular recipe file or downloaded and verified from the pinned Alpine distfiles release."
+    }
+  },
   "base_image": "python:3.14.6-alpine3.24",
   "base_image_index_digest": "sha256:26730869004e2b9c4b9ad09cab8625e81d256d1ce97e72df5520e806b1709f92",
+  "base_image_platforms": {
+    "linux/amd64": {
+      "config_digest": "sha256:7ff4111a89e61a65f2246d5687bbba5c735c6d9e0ba7d488cf9b404154fec262",
+      "layer_diff_ids": [
+        "sha256:34884abbe92863fce933ed7c39c0e045631af0ed86d5cc0dfbdf9fdca426ce3c",
+        "sha256:460337c1ba7e527ed7b05b71c37014059ba6b0a49b89073b152a6cc80586866c",
+        "sha256:d1acd644bdb683fa2347c9f7ba0ad074ec0cfa9f11b933fecab47e5eeb06428a",
+        "sha256:92a229ac48b6a870f271c0bc8b312b5dbf2e8957ea42dbc843e96daa68811f8e"
+      ],
+      "manifest_digest": "sha256:47f36929d95852c8aa959380eeeea761ba7411ebe793d090da4cd518ac3af237"
+    },
+    "linux/arm64": {
+      "config_digest": "sha256:86bc78aef1279ab7ef2a0b98a4affba90e16f6d782c0143dd0d1cd307ccec3ac",
+      "layer_diff_ids": [
+        "sha256:b2848c02ac6ff53d265469b5b30f649f335e546a83330cd8916d54e65e640409",
+        "sha256:15fc7fbc6cefcfb3047537e9358cbb953dc6e664040062c5192972e6393f4662",
+        "sha256:e65178efb902c981db1458214da2df47179e0ecc435084fa169543c1283b11f6",
+        "sha256:4c6347b5384b9a4ca034bfa626e5cb9de279b81ead0b7d793a7e032542943428"
+      ],
+      "manifest_digest": "sha256:ea1c84f6f8fd70586985617ca87516c75e583748885d70515d83c7f3c8e94174"
+    }
+  },
   "cpython_source": {
     "sha256": "143b1dddefaec3bd2e21e3b839b34a2b7fb9842272883c576420d605e9f30c63",
     "url": "https://www.python.org/ftp/python/3.14.6/Python-3.14.6.tar.xz"
@@ -34,6 +80,16 @@
         "alpine:tzdata@2026b-r0",
         "alpine:xz-libs@5.8.3-r0"
       ],
+      "evidence": {
+        "alpine:tzdata@2026b-r0": {
+          "path": "licenses/from-source/alpine-tzdata/061340856888-LICENSE",
+          "sha256": "0613408568889f5739e5ae252b722a2659c02002839ad970a63dc5e9174b27cf"
+        },
+        "alpine:xz-libs@5.8.3-r0": {
+          "path": "licenses/from-source/alpine-xz/616a3ad264ce-COPYING",
+          "sha256": "616a3ad264ce29b8f1cb97e53037b139d406899ca8d1f799651e17bfa09830b8"
+        }
+      },
       "rationale": "Upstream public-domain notices are retained verbatim from the exact sources.",
       "require_source_notice": true
     }

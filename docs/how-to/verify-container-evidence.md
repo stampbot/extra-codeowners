@@ -1,11 +1,15 @@
 # Verify container distribution evidence
 
-Use this procedure to identify the notices and exact source evidence for a
-released Extra CODEOWNERS container. Complete it separately for every platform
-you deploy. An amd64 archive is not evidence for an arm64 manifest.
+This is the recipient contract for a future supported Extra CODEOWNERS
+container release. It is not currently runnable: no supported release exists,
+and tagged publication is structurally disabled pending security issue
+[`#28`](https://github.com/stampbot/extra-codeowners/issues/28).
 
-No supported release exists yet. These commands apply after a release page
-contains the files described below.
+After that issue is resolved and the project announces a release, use this
+procedure to identify its notices and exact source evidence. Complete it
+separately for every platform you deploy. An amd64 archive is not evidence for
+an arm64 manifest. Do not infer that the described assets exist from this
+document or from unreachable workflow steps; verify them on the release page.
 
 ## Prerequisites
 
@@ -75,9 +79,11 @@ jq -e --arg digest "$platform_digest" \
   "evidence-predicate-${ARCHITECTURE}.json"
 ```
 
-The final `jq` command must print `true`. The predicate is also attached as a
-signed OCI attestation to that platform digest. Verify its workflow identity,
-extract the one signed predicate, and compare it with the downloaded copy:
+The final `jq` command must print `true`. The future publication contract also
+requires the predicate as a signed OCI attestation on that platform digest.
+Verify its workflow identity, deduplicate identical predicates from workflow
+reruns, reject distinct predicates, and compare the unique value with the
+downloaded copy:
 
 ```bash
 evidence_type='https://github.com/stampbot/extra-codeowners/attestations/container-evidence/v1'
@@ -87,10 +93,17 @@ cosign verify-attestation \
   --certificate-oidc-issuer='https://token.actions.githubusercontent.com' \
   "${IMAGE}@${platform_digest}" > verified-attestations.json
 jq -es --arg type "$evidence_type" '
+  def canonical:
+    if type == "object" then
+      to_entries | sort_by(.key) | map(.value |= canonical) | from_entries
+    elif type == "array" then map(canonical)
+    else .
+    end;
   map(.payload | @base64d | fromjson)
-  | map(select(.predicateType == $type))
-  | if length == 1 then .[0].predicate
-    else error("expected exactly one verified evidence predicate") end
+  | map(select(.predicateType == $type) | .predicate | canonical)
+  | unique_by(tojson)
+  | if length == 1 then .[0]
+    else error("expected exactly one distinct verified evidence predicate") end
 ' verified-attestations.json > attested-predicate.json
 jq --sort-keys . "evidence-predicate-${ARCHITECTURE}.json" > downloaded-predicate.json
 jq --sort-keys . attested-predicate.json > signed-predicate.json
@@ -131,7 +144,8 @@ Use these entry points:
 - `THIRD_PARTY_NOTICES.md` lists every observed component, whether it remains
   in the effective filesystem, and the reviewed license expression.
 - `MANIFEST.json` binds the archive to the platform digest and records every
-  retained source URL, hash, and path.
+  retained source hash and path. `url` is the requested URL; `urls` is the
+  complete ordered HTTPS redirect chain.
 - `inventory/components.json` is the normalized package and license inventory.
 - `inventory/all-layer-files.json` records every regular file occurrence in
   every distributed layer, including content later hidden by a whiteout.
@@ -151,7 +165,9 @@ subject platform digest together.
 
 ## Troubleshooting
 
-If `gh release download` finds no file, confirm that you selected an actual
+Before issue `#28` is closed and a supported release is announced, missing
+assets are expected; stop instead of substituting CI artifacts. Afterwards, if
+`gh release download` finds no file, confirm that you selected an actual
 released version and supported architecture. If a signature identity differs,
 do not weaken the identity regular expression; inspect the release workflow and
 repository security history. If the OCI attestation is absent but the release

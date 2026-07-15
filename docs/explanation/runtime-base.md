@@ -128,16 +128,16 @@ series change must confirm its support end date and repeat the candidate
 comparison where materially different. A digest-only refresh must prove that
 the readable tag still resolves to the reviewed Python and Alpine versions.
 
-The release workflow signs and attests the application image; it does not
-currently verify an upstream signature for the Docker Official Image. The
-digest prevents substitution after review, while Renovate and the build review
-are the trust path for new base content. Published per-platform SBOMs enumerate
-the aggregate packages and their declared licenses; they are inventory, not
-proof that redistribution duties have been satisfied. The application is
-Apache-2.0, but the base includes copyleft and notice-bearing packages such as
-BusyBox, GNU readline, and the Mozilla CA certificate bundle. The application's
-license does not relicense those components. A supported release must also
-produce the digest-bound
+Main-branch CI signs and attests its development image; it does not verify an
+upstream signature for the Docker Official Image. Tagged publication is
+structurally disabled pending security issue `#28`. The reviewed digest prevents
+substitution after review, while Renovate and build review are the trust path
+for new base content. Per-platform SBOMs enumerate aggregate packages and their
+declared licenses; they are inventory, not proof that redistribution duties
+have been satisfied. The application is Apache-2.0, but the base includes
+copyleft and notice-bearing packages such as BusyBox, GNU readline, and the
+Mozilla CA certificate bundle. The application's license does not relicense
+those components. A future supported release must also produce the digest-bound
 [container distribution evidence](container-distribution-evidence.md) and pass
 its separate human approval gate.
 

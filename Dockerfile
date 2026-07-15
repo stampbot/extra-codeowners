@@ -22,6 +22,10 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 FROM builder AS test
 
 COPY tests/ ./tests/
+COPY .github/scripts/container_evidence.py .github/scripts/release_readiness.py ./.github/scripts/
+COPY .github/workflows/ci.yml .github/workflows/release.yml ./.github/workflows/
+COPY .compliance/container-policy.json ./.compliance/container-policy.json
+COPY Dockerfile mise.toml ./
 
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --group dev --no-editable --reinstall-package extra-codeowners

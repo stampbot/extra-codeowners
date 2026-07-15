@@ -26,6 +26,31 @@ class ReadinessError(RuntimeError):
     """The release milestone cannot be proven ready."""
 
 
+def strict_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ReadinessError(f"duplicate JSON object key: {key!r}")
+        result[key] = value
+    return result
+
+
+def reject_json_constant(value: str) -> None:
+    raise ReadinessError(f"non-finite JSON number is not allowed: {value}")
+
+
+def strict_json_loads(value: str | bytes, source: str) -> object:
+    try:
+        parsed: object = json.loads(
+            value,
+            object_pairs_hook=strict_json_object,
+            parse_constant=reject_json_constant,
+        )
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise ReadinessError(f"cannot parse JSON from {source}: {exc}") from exc
+    return parsed
+
+
 def validate_milestone(
     milestone: object, required_number: int, required_title: str
 ) -> dict[str, Any]:
@@ -69,8 +94,8 @@ def require_ready(milestone: Mapping[str, Any]) -> None:
 
 def configured_milestone(path: Path) -> tuple[int, str]:
     try:
-        policy = json.loads(path.read_text())
-    except (OSError, json.JSONDecodeError) as exc:
+        policy = strict_json_loads(path.read_text(), str(path))
+    except OSError as exc:
         raise ReadinessError(f"cannot read release policy {path}: {exc}") from exc
     if not isinstance(policy, dict) or policy.get("schema_version") != 1:
         raise ReadinessError("unsupported release-readiness policy schema")
@@ -103,10 +128,12 @@ def github_milestone(repository: str, number: int, token: str) -> dict[str, Any]
         with urllib.request.urlopen(request, timeout=30) as response:  # noqa: S310
             if response.status != 200:
                 raise ReadinessError(f"GitHub milestone query returned HTTP {response.status}")
-            value = json.loads(response.read(MAX_RESPONSE_BYTES))
+            value = strict_json_loads(
+                response.read(MAX_RESPONSE_BYTES), "GitHub milestone response"
+            )
             if response.read(1):
                 raise ReadinessError("GitHub milestone response exceeds the size limit")
-    except (OSError, urllib.error.URLError, json.JSONDecodeError) as exc:
+    except (OSError, urllib.error.URLError) as exc:
         raise ReadinessError(f"cannot query GitHub milestones: {exc}") from exc
     if not isinstance(value, dict):
         raise ReadinessError("GitHub milestone response is not an object")
