@@ -18,8 +18,9 @@ The first properties cover these trust-boundary contracts:
 - malformed or incorrectly signed webhook bodies are rejected;
 - CODEOWNERS parsing has an explicit valid document or structured failure
   outcome, and unsupported patterns cannot silently become rules;
-- generated TOML policies preserve label narrowing, cross-scope enrollment,
-  and the 1,000-pattern complexity limit;
+- generated repository TOML policies preserve label narrowing when composed
+  with an enrolled organization App and enforce the 1,000-pattern complexity
+  limit;
 - renames retain both old-path and new-path ownership requirements;
 - GitHub list pagination stops only at a short page and fails when a caller's
   item limit is exceeded;
@@ -37,11 +38,15 @@ are at most 64 KiB and arbitrary CODEOWNERS text is at most 16,384 Unicode code
 points in the generative suite. Existing boundary tests separately exercise the
 application limits.
 
-| Profile | Examples per property | Deadline per example | Use |
+| Profile | Maximum generated examples (`max_examples`) | Deadline per example | Use |
 | --- | ---: | ---: | --- |
 | `dev` | 50 | 500 ms | Normal local and full-suite runs |
 | `ci` | 250 | 750 ms | Pull requests and pushes to `main` |
 | `scheduled` | 2,000 | 1,000 ms | Weekly non-deterministic search |
+
+`max_examples` is a ceiling. Hypothesis may stop earlier when a finite strategy
+is exhausted, and explicit `@example` regression cases run in addition to the
+generated examples.
 
 The dedicated GitHub Actions job has a 45-minute job limit and a 2 GiB virtual
 memory limit. A timeout, out-of-memory exit, unexpected exception, or violated
