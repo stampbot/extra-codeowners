@@ -1,20 +1,39 @@
 # Extra CODEOWNERS documentation
 
-Extra CODEOWNERS evaluates whether each owned path in a pull request has been approved by either an appropriate human code owner or an explicitly delegated GitHub App. It publishes the result as a GitHub Check Run so repositories can replace only GitHub's native code-owner-review rule while retaining ordinary review counts and other protections.
+GitHub's code-owner rule answers a useful but narrow question: did a person or
+team named in `CODEOWNERS` approve this change? Extra CODEOWNERS keeps that
+human ownership model and adds one carefully bounded alternative. An
+organization can let an enrolled GitHub App approve particular paths, while a
+human code owner can still approve everything they own.
 
-> **Project status:** early development. No production release or hosted installation is available. Pages that describe an unshipped interface say so explicitly.
+The service evaluates each owned path in a pull request and publishes its
+decision as a GitHub Check Run. A repository can require that check in place of
+GitHub's native code-owner-review rule. Its ordinary approval count and every
+other required check stay in force.
 
-**Production blocker:** GitHub Check Runs are commit-scoped while this policy is pull-request-scoped. See [eventual consistency](reference/checks.md#eventual-consistency).
+The repository contains an implemented self-hosted GitHub App, a reusable
+evaluator, an App Manifest setup flow, and a Helm chart. CI publishes signed
+images for `main` and its exact commit. There is no tagged supported release or
+hosted installation yet.
+
+> **Production blocker:** GitHub attaches Check Runs to commits, but Extra
+> CODEOWNERS evaluates evidence for one pull request. A newly opened or
+> retargeted pull request can briefly inherit an earlier result for the same
+> commit. Don't replace native production enforcement until the
+> [eventual-consistency contract](reference/checks.md#eventual-consistency) has
+> been resolved and tested against live GitHub behavior.
 
 ## Choose your task
 
-If you are evaluating the project:
+If you are deciding whether the model fits your repository:
 
 - Read [how Extra CODEOWNERS differs from native CODEOWNERS](explanation/native-codeowners.md).
-- Review the [architecture](explanation/architecture.md) and [threat model](explanation/threat-model.md).
-- Check the [GitHub permissions](reference/github-permissions.md) before installing an App build.
+- Follow the reasoning in the [architecture](explanation/architecture.md) and
+  [threat model](explanation/threat-model.md).
+- Check the [GitHub permissions](reference/github-permissions.md) before you
+  install an App build.
 
-If you are trying the development version:
+If you want to run the current implementation:
 
 - Follow the [development installation tutorial](tutorials/development-installation.md).
 - [Register a development App with the setup URL](how-to/register-app.md).
@@ -24,17 +43,38 @@ If you are trying the development version:
 If you operate a deployment:
 
 - Use the [deployment guide](how-to/deploy.md).
-- Use the [operations and recovery guide](how-to/operate.md).
-- Consult the [checks](reference/checks.md), [configuration](reference/configuration.md), and [HTTP API](reference/http-api.md) references.
+- Keep the [operations and recovery guide](how-to/operate.md) close at hand.
+- Consult the [checks](reference/checks.md),
+  [configuration](reference/configuration.md), and
+  [HTTP API](reference/http-api.md) references when you need exact behavior.
 
-## Security boundary in one paragraph
+## Where trust lives
 
-`CODEOWNERS` remains the source of human ownership. Organization policy enrolls trusted applications by immutable identifiers; repository policy delegates paths to those applications. The evaluator reads pull-request policy from the exact base commit, accepts approvals only for the current head commit, evaluates both names of a renamed file, and fails closed when required evidence is incomplete. For sensitive paths that `CODEOWNERS` assigns to humans, built-in non-delegable rules prevent application substitution unless the operator deliberately enables the deployment-wide insecure-changes escape hatch.
+`CODEOWNERS` still says which humans own a path. Organization policy enrolls a
+trusted application by immutable identity, and repository policy delegates a
+limited set of paths to it. The evaluator reads policy from the pull request's
+exact base commit and accepts approvals only for its current head. It checks
+both names of a renamed file and fails closed when evidence is missing,
+truncated, stale, or contradictory.
 
-## Roadmap boundaries
+Some files can grant or expand an application's authority. Built-in rules keep
+an application from substituting for a human on those sensitive paths. An
+operator can disable that protection with the deployment-wide insecure-changes
+escape hatch, but doing so is a deliberate change to the trust boundary, not a
+convenience setting.
 
-The GitHub App is the first deliverable. The repository includes preview Helm chart and App Manifest setup code, but neither has a supported published release. A separately packaged Marketplace Action and public hosted service remain roadmap distribution options.
+## What comes next
+
+The GitHub App is the first distribution. A packaged Marketplace Action and a
+hosted service are separate roadmap items; neither exists yet. The Helm chart
+and App Manifest code are available now, but the project has not published a
+supported release.
 
 ## Project help
 
-Use the repository's [support policy](https://github.com/stampbot/extra-codeowners/blob/main/SUPPORT.md) for questions and operational incidents. Report security issues through the [private security policy](https://github.com/stampbot/extra-codeowners/security/policy), never through a public issue or discussion. Contributions follow the [contributor guide](https://github.com/stampbot/extra-codeowners/blob/main/CONTRIBUTING.md).
+Use the repository's
+[support policy](https://github.com/stampbot/extra-codeowners/blob/main/SUPPORT.md)
+for questions and operational incidents. Report security issues through the
+[private security policy](https://github.com/stampbot/extra-codeowners/security/policy),
+never through a public issue or discussion. Contributions follow the
+[contributor guide](https://github.com/stampbot/extra-codeowners/blob/main/CONTRIBUTING.md).

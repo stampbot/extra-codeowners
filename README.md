@@ -8,34 +8,38 @@
 [![Python 3.12–3.14](https://img.shields.io/badge/python-3.12%E2%80%933.14-blue.svg)](https://www.python.org/)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-Extra CODEOWNERS is a GitHub App that lets a trusted application satisfy code-owner policy for explicitly delegated files. It is intended for repositories where automation such as [Stampbot](https://github.com/dannysauer/stampbot) can approve routine, constrained changes while ordinary changes still require a human code owner.
+Routine automation can know that a pull request is safe while GitHub's code-owner rule still waits for a person. Extra CODEOWNERS adds a separate required check so a human or an enrolled GitHub App can satisfy ownership for specific files.
+
+[Stampbot](https://github.com/dannysauer/stampbot) is the first integration. A repository might let it approve a routine lockfile update, for example, while a human still has to approve application code.
 
 > [!IMPORTANT]
-> Extra CODEOWNERS is in early development. There is no supported hosted service, release, or Marketplace Action yet. The documentation describes the security contract being implemented; interfaces may change before the first release.
+> The self-hosted App and its documentation are available. CI publishes a signed `main` container, and the repository includes Helm chart source. No tagged release exists. There is no hosted service or Marketplace Action. The [commit-scoped check limitation](#the-current-production-blocker) must be resolved before this check can replace GitHub's code-owner rule on production repositories.
 
-GitHub's native **Require review from Code Owners** rule does not treat an application account as a valid entry in `CODEOWNERS`. Extra CODEOWNERS leaves the standard file unchanged, evaluates human reviews and separately configured application delegations, then publishes the `Extra CODEOWNERS / approval` check.
+GitHub doesn't accept an App's bot account as a valid owner in `CODEOWNERS`. Keep the standard file for people and teams. Extra CODEOWNERS reads it alongside a separate policy for applications, then publishes `Extra CODEOWNERS / approval`.
 
 ## Why use it?
 
-Use Extra CODEOWNERS when all of these are true:
+Extra CODEOWNERS fits a repository when:
 
-- human ownership is already expressed in the standard `CODEOWNERS` file;
-- an installed application has a narrow, auditable reason to approve some paths;
-- application authority must be limited by path, owner group, and optionally labels; and
-- repository rules must continue to require the ordinary numeric review count and other checks.
+- human ownership is already expressed in the standard `CODEOWNERS` file
+- an installed application has a narrow, auditable reason to approve some paths
+- application authority must be limited by path, owner group, and optional labels
+- repository rules must continue to require the ordinary numeric review count and other checks
 
-Extra CODEOWNERS does not grant an application write access, approve a pull request, or change `CODEOWNERS` syntax. It only evaluates existing reviews and publishes a check result.
+The checker does not approve pull requests or grant write access. It evaluates reviews that already exist and publishes one check result.
 
-Enrollment is explicit at both levels: organization policy defines which applications may ever be trusted, and each target repository must add its own enabled policy before Extra CODEOWNERS begins publishing checks. Organization configuration alone does not enroll every repository.
+Trust has two gates. Organization policy enrolls an application by its App ID, bot user ID, and slug. Each repository then opts in and delegates paths to one of those enrolled applications. Organization policy alone never opts in a repository.
 
 ## Repository rules
 
-Keep the ordinary minimum approval count and any desired stale-review or latest-push rules. Disable only GitHub's native **Require review from Code Owners** rule, then require `Extra CODEOWNERS / approval` from the Extra CODEOWNERS App as an expected source.
+While the [commit-scoped check limitation](#the-current-production-blocker) remains open, keep GitHub's native code-owner rule on production repositories. Test the following composition only in a disposable repository.
+
+In that repository, keep the ordinary approval count and any stale-review or latest-push rules you use. Disable only **Require review from Code Owners**, then require `Extra CODEOWNERS / approval` from the Extra CODEOWNERS App as the expected source.
 
 > [!WARNING]
-> Before removing a target or organization-policy repository from the App, suspending an installation, or uninstalling the App, restore GitHub's native code-owner requirement and remove Extra CODEOWNERS as a required expected-source check from every affected target. Removing the policy repository triggers conservative fencing for targets that remain accessible, but after target access is gone the App cannot revoke an earlier success. This project does not assume GitHub invalidates it.
+> Restore GitHub's native code-owner rule before you suspend or uninstall the App, or remove a repository from its installation. Remove the Extra CODEOWNERS required check from every affected repository as well. Once the App loses access, it may be unable to revoke an earlier success.
 
-This produces the intended conjunction:
+The repository rules now require:
 
 ```text
 ordinary required approvals
@@ -43,19 +47,37 @@ AND (human code-owner approval OR an eligible application approval for every own
 AND all other required checks
 ```
 
-> [!CAUTION]
-> GitHub Check Runs are commit-scoped, but code-owner evidence is pull-request-scoped. Extra CODEOWNERS refuses success when it sees the same head on multiple open pull requests. A new or retargeted pull request created after success can nevertheless inherit that commit's result until GitHub delivers the new event and the service moves the check back to `in_progress`. This preview limitation is not equivalent to native code-owner enforcement and must not protect production merges.
+## The current production blocker
 
-Application delegation is disabled by default for `CODEOWNERS`, the effective repository-policy path (`.github/extra-codeowners.toml` under default settings), Stampbot's root `/stampbot.toml`, GitHub Actions workflows, and repository-local actions under `.github/actions/`. The deployment-wide `EXTRA_CODEOWNERS_ALLOW_INSECURE_CHANGES=true` escape hatch removes only those built-in protections and emits a prominent warning. It does not create a delegation or bypass any organization-defined restriction. See the [threat model](docs/explanation/threat-model.md#insecure-changes-escape-hatch) before enabling it.
+GitHub stores a Check Run on a commit. Extra CODEOWNERS makes its decision from pull-request evidence such as the base branch, labels, changed paths, and reviews.
 
-## Local development
+The service refuses success when it can already see two open pull requests with the same head commit. It cannot stop a second pull request from appearing after a success was published. That pull request can inherit the old result until GitHub delivers its event and the service moves the check back to `in_progress`.
 
-From the repository root on a POSIX-compatible system:
+This gap is [tracked as a release blocker](https://github.com/stampbot/extra-codeowners/issues/1). Keep GitHub's native code-owner rule on production repositories until the live contract test and design work close it.
+
+## Files that applications cannot approve
+
+By default, an application cannot satisfy ownership for:
+
+- any supported `CODEOWNERS` file
+- the repository's Extra CODEOWNERS policy
+- `/stampbot.toml`
+- workflows under `.github/workflows/`
+- local actions under `.github/actions/`
+
+These files can still mention or invoke applications. "Cannot approve" describes the review path, not the file contents.
+
+`EXTRA_CODEOWNERS_ALLOW_INSECURE_CHANGES=true` removes this built-in list for every installation served by the process. It emits a warning and a metric. Organization guardrails still apply. Read the [threat model](docs/explanation/threat-model.md#insecure-changes-escape-hatch) before you enable it.
+
+## Run it locally
+
+Install Git and [mise](https://mise.jdx.dev/) on a POSIX-compatible system. From the repository root, run:
 
 ```bash
+mise trust
 mise install
-uv sync --all-groups
-uv run python -m extra_codeowners serve
+mise run bootstrap
+mise exec -- uv run python -m extra_codeowners serve
 ```
 
 The development server listens on `127.0.0.1:8000`. In another terminal, verify it is alive:
@@ -64,9 +86,17 @@ The development server listens on `127.0.0.1:8000`. In another terminal, verify 
 curl --fail-with-body http://127.0.0.1:8000/health/live
 ```
 
-This starts the service for local inspection. Functional GitHub processing also requires an App ID, private key, webhook secret, and public HTTPS URL. Follow the [development installation tutorial](docs/tutorials/development-installation.md) for that setup. Run the fast local quality gate with `mise run check`; the tutorial also shows the PostgreSQL-backed coverage task.
+This starts the service for local inspection. GitHub processing also needs a configured App and a public HTTPS URL. The App configuration includes its ID, private key, and webhook secret. The [development installation tutorial](docs/tutorials/development-installation.md) walks through that setup.
 
-Use the checked-in [`.env.example`](.env.example) as the safe starting point for local runtime configuration; keep real credentials out of Git.
+Run the local quality gate with:
+
+```bash
+mise run check
+```
+
+The tutorial also covers the PostgreSQL-backed coverage suite.
+
+Start runtime configuration from [`.env.example`](.env.example). Keep real credentials out of Git.
 
 ## Documentation
 
@@ -83,9 +113,13 @@ Use the checked-in [`.env.example`](.env.example) as the safe starting point for
 - [HTTP API reference](docs/reference/http-api.md)
 - [Architecture](docs/explanation/architecture.md)
 - [Threat model](docs/explanation/threat-model.md)
-- [Helm chart](charts/extra-codeowners/README.md) (preview source; not published)
-- [Support](SUPPORT.md), [security reporting](SECURITY.md), [contributing](CONTRIBUTING.md), [governance](GOVERNANCE.md), [code of conduct](CODE_OF_CONDUCT.md), [changelog](CHANGELOG.md), and [license](LICENSE)
+- [Helm chart](charts/extra-codeowners/README.md) (source only; no released OCI chart yet)
+- [Support](SUPPORT.md) and [security reporting](SECURITY.md)
+- [Contributing](CONTRIBUTING.md), [governance](GOVERNANCE.md), and the [code of conduct](CODE_OF_CONDUCT.md)
+- [Changelog](CHANGELOG.md) and [license](LICENSE)
 
 ## Project shape
 
-This repository contains the GitHub App, the shared policy evaluator intended to support future distributions, and the initial Helm chart source. Python imports are not a stable public API before 1.0. A separate `extra-codeowners-action` repository is on the roadmap for users who need a workflow-based deployment backed by a prebuilt, signed container. The Action does not exist yet and is not required by the App design.
+This repository contains the GitHub App, its policy evaluator, and the Helm chart source. Python imports are not a stable public API before 1.0.
+
+A separate `extra-codeowners-action` distribution is [planned](https://github.com/stampbot/extra-codeowners/issues/2) for repositories that cannot run an App service. It does not exist yet.

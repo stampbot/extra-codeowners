@@ -1,21 +1,17 @@
 # Contributing to Extra CODEOWNERS
 
-Extra CODEOWNERS is pre-1.0 security-sensitive infrastructure. Small,
-well-tested changes are easier to review than broad changes that mix behavior,
-refactoring, and documentation.
+Extra CODEOWNERS participates in pull-request authorization. Keep changes small enough for a reviewer to follow, and don't mix new behavior with an unrelated refactor.
 
 ## Before you begin
 
 - Read the [Code of Conduct](CODE_OF_CONDUCT.md).
 - Search existing issues and pull requests before proposing duplicate work.
-- Use a private vulnerability report instead of an issue for security findings;
-  see [SECURITY.md](SECURITY.md).
+- Use a private vulnerability report for security findings. See [SECURITY.md](SECURITY.md).
 - Open an issue before investing in a large feature or compatibility change.
 
 ## Prepare a development environment
 
-You need Git, [mise](https://mise.jdx.dev/), and a POSIX-compatible shell. From
-the repository root:
+You need Git, [mise](https://mise.jdx.dev/), and a POSIX-compatible shell. Run these commands from the repository root:
 
 ```shell
 mise trust
@@ -23,29 +19,33 @@ mise install
 mise run bootstrap
 ```
 
-The last command installs dependencies exactly as recorded in `uv.lock`. A
-successful run exits with status 0 and creates `.venv/`.
+The last command installs dependencies exactly as recorded in `uv.lock`. It exits with status 0 and creates `.venv/`.
 
 ## Make and verify a change
 
-Add tests for behavior changes, including failure and authorization boundaries.
-Then run:
+Add tests for behavior changes. Cover failure paths and authorization boundaries, then run:
 
 ```shell
 mise run format
 mise run check
 ```
 
-`mise run check` runs Python linting and type checking, tests, strict
-documentation builds, workflow linting, and Helm linting. Its test task does not
-enforce coverage, and PostgreSQL-specific integration tests are skipped unless
-`TEST_POSTGRES_URL` points to a disposable test database. Run
-`mise run test:coverage` with that variable set to execute the complete database
-suite and enforce the project coverage threshold; follow the
-[development installation tutorial][database-tests] for a safe setup. Never
-point it at a production or shared database.
-Docker is also needed to reproduce the container build performed in continuous
-integration (CI):
+`mise run check` runs:
+
+- Python linting and type checking
+- the locally available tests
+- the strict documentation build
+- workflow and YAML linting
+- Helm linting and rendering
+
+It does not enforce coverage. PostgreSQL tests are skipped unless `TEST_POSTGRES_URL` points to a disposable test database.
+
+Set that variable and run `mise run test:coverage` for the complete suite and coverage gate. The [development installation tutorial][database-tests] shows a safe setup.
+
+> [!WARNING]
+> Never point `TEST_POSTGRES_URL` at a production or shared database. The test suite drops and recreates project tables.
+
+Docker is required to build the Dockerfile locally:
 
 ```shell
 docker build --tag extra-codeowners:dev .
@@ -56,37 +56,38 @@ private repository content into tests. Use clearly fictional fixtures.
 
 ## Sign off commits
 
-This project uses the [Developer Certificate of Origin][dco], not a contributor
-license agreement. Sign off every commit:
+This project uses the [Developer Certificate of Origin][dco], not a contributor license agreement. Sign off every commit:
 
 ```shell
 git commit --signoff
 ```
 
-The sign-off records that you have the right to submit the contribution under
-the project's license. It is separate from cryptographic commit signing.
+The sign-off says you have the right to submit the contribution under the project's license. It is separate from cryptographic commit signing.
 
 ## Open a pull request
 
-Open the pull request ready for review and complete its checklist. Explain the
-security and operational effects, add or update documentation, and call out any
-compatibility change. Maintainers may ask for commits to be reorganized before
-merge so that the history remains reviewable.
+Open the pull request ready for review and complete its checklist. Explain the security and operational effects. Update the documentation and call out compatibility changes.
 
-All required checks and reviews must pass. Application approvals cannot replace
-human CODEOWNER review for changes to `CODEOWNERS`, Extra CODEOWNERS policy, or
-GitHub Actions workflows or repository-local actions under `.github/actions/`
-unless an operator has explicitly enabled the documented insecure override.
+Maintainers may ask you to reorganize commits when that makes the history easier to review.
+
+All required checks and reviews must pass. By default, application approvals cannot replace human CODEOWNER review for:
+
+- `CODEOWNERS`
+- Extra CODEOWNERS policy
+- GitHub Actions workflows
+- local actions under `.github/actions/`
+
+The documented insecure override removes that built-in restriction for operators who explicitly accept the risk.
 
 ## Review priorities
 
 Reviewers consider these properties in order:
 
-1. authorization and fail-closed behavior;
-2. correctness under retries, stale events, and concurrent updates;
-3. test evidence and operational recoverability;
-4. compatibility and configuration migration; and
-5. maintainability and documentation.
+1. authorization and fail-closed behavior
+2. correctness under retries, stale events, and concurrent updates
+3. test evidence and operational recoverability
+4. compatibility and configuration migration
+5. maintainability and documentation
 
 [dco]: https://developercertificate.org/
 [database-tests]: docs/tutorials/development-installation.md#7-run-the-project-checks

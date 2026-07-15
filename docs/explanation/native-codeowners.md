@@ -1,10 +1,20 @@
 # How Extra CODEOWNERS differs from native CODEOWNERS
 
-Extra CODEOWNERS does not replace the standard `CODEOWNERS` file or extend its syntax. It replaces one repository-rule decision: whether code-owner policy has been satisfied.
+Extra CODEOWNERS leaves the standard `CODEOWNERS` file alone. It neither
+replaces that file nor invents new syntax for it. Instead, it answers one
+repository-rule question differently: has each applicable owner set approved
+this pull request?
 
 ## The gap
 
-GitHub's native **Require review from Code Owners** setting is designed around users and teams named in `CODEOWNERS`. GitHub [documents that a line containing invalid CODEOWNERS syntax is skipped](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners#codeowners-syntax), and its [CODEOWNERS errors endpoint](https://docs.github.com/en/rest/repos/repos#list-codeowners-errors) reports a mixed line containing an App bot account as `Invalid owner`. Taken together, an entry such as `@example-app[bot]` makes the affected line unusable; do not assume human owners on the same line are partially salvaged.
+GitHub's native **Require review from Code Owners** setting speaks in users and
+teams. A GitHub App's bot account does not fit that model. GitHub
+[skips a line with invalid CODEOWNERS syntax](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners#codeowners-syntax),
+and the
+[CODEOWNERS errors endpoint](https://docs.github.com/en/rest/repos/repos#list-codeowners-errors)
+reports an App bot on a mixed line as `Invalid owner`. Put
+`@example-app[bot]` on a line and the whole line is unusable. The human owners
+beside it are not a fallback.
 
 Check a repository after every ownership change:
 
@@ -12,11 +22,17 @@ Check a repository after every ownership change:
 gh api repos/OWNER/REPOSITORY/codeowners/errors --jq '.errors'
 ```
 
-An empty array is the expected result. GitHub also highlights errors while viewing the CODEOWNERS file in the web interface.
+The expected result is an empty array. GitHub also highlights errors when you
+view the CODEOWNERS file in its web interface.
 
-That limitation is useful for most repositories, but it prevents narrowly trusted review automation from satisfying code-owner policy even when another system has already constrained what that automation may approve.
+For most repositories, refusing bot owners is a sound default. The gap appears
+when an organization has already decided to trust an App within a narrow scope.
+GitHub still cannot express “Stampbot may approve these dependency files, but
+nothing else.”
 
-Extra CODEOWNERS keeps human ownership in `CODEOWNERS` and places application authority in a separate, explicit policy:
+Extra CODEOWNERS separates the two kinds of authority. Humans stay in
+`CODEOWNERS`; an App's immutable identity and delegated paths live in explicit
+Extra CODEOWNERS policy.
 
 ```text
 CODEOWNERS                         extra-codeowners.toml
@@ -27,7 +43,9 @@ human ownership                   trusted App identity + delegated paths
              required GitHub check
 ```
 
-Text equivalent: the evaluator combines human ownership from `CODEOWNERS` with application identity and path delegation from Extra CODEOWNERS policy, then publishes one required check.
+In prose, the evaluator starts with human ownership from `CODEOWNERS`. It adds
+only the App identities and paths that policy delegates, then publishes one
+required check.
 
 ## Behavior comparison
 
@@ -44,7 +62,11 @@ Text equivalent: the evaluator combines human ownership from `CODEOWNERS` with a
 
 ## Repository-rule composition
 
-Extra CODEOWNERS is not an alternative to an ordinary pull-request approval count. Keep that numeric requirement enabled. Disable only native **Require review from Code Owners**, then require the expected-source `Extra CODEOWNERS / approval` check.
+There are two different questions here. Has the pull request collected enough
+approvals overall? And has each code-owner obligation been satisfied? Keep the
+ordinary numeric approval requirement for the first question. For the second,
+disable only native **Require review from Code Owners** and require the
+expected-source `Extra CODEOWNERS / approval` check.
 
 The result is:
 
@@ -54,12 +76,28 @@ AND Extra CODEOWNERS / approval == success
 AND every other required check == success
 ```
 
-A delegated application's approving review may satisfy the ordinary numeric review count and the Extra CODEOWNERS check for its eligible paths. A human can satisfy both as well. This integration behavior must be contract-tested in each GitHub deployment because GitHub's public documentation does not explicitly guarantee how every third-party App review interacts with numeric review rules.
+A delegated App's approving review may count toward the numeric rule and
+satisfy Extra CODEOWNERS for eligible paths. A human approval may satisfy both
+rules too. Test that composition against each GitHub deployment before relying
+on it. GitHub's public documentation does not promise how every third-party App
+review interacts with the numeric approval rule.
 
-The required check is attached to a head commit, not uniquely to one pull request. Extra CODEOWNERS checks for other open pull requests using the head before publishing success, but it cannot prevent a later pull request from briefly displaying that existing success before its opening or retargeting event is processed. This is a material preview limitation rather than native-equivalent enforcement.
+GitHub attaches the required check to a head commit, not uniquely to a pull
+request. Before publishing success, Extra CODEOWNERS looks for another open pull
+request that uses the same head. It cannot see the future: a pull request opened
+or retargeted afterward can briefly display the existing success until its
+event is processed. This unresolved platform mismatch blocks
+production-equivalent enforcement.
 
 ## Why separate policy is safer
 
-An App name in `CODEOWNERS` would not describe which automation is trusted, how its immutable identity is verified, or which labels constrain it. Separate organization and repository policy provides those controls without inventing syntax that GitHub itself would misinterpret.
+A bot login looks like an owner, but it says too little. It does not tell the
+evaluator which immutable App identity the organization enrolled, where that
+App may act, or which labels narrow its authority.
+
+Separate policy makes that trust visible. Organization policy enrolls the App;
+repository policy delegates a subset of the organization's grant. Standard
+`CODEOWNERS` continues to mean what GitHub says it means, with no private syntax
+for GitHub to reject or another tool to misunderstand.
 
 For native behavior, see GitHub's [About code owners](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners) and [List CODEOWNERS errors](https://docs.github.com/en/rest/repos/repos#list-codeowners-errors) documentation.

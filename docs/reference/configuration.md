@@ -1,29 +1,39 @@
 # Configuration reference
 
-This page describes the checked-in typed settings and policy models. Those models, their validation tests, and the current schema are the source of truth; the contract remains pre-1.0.
+This page defines the typed settings and policy models for version 0.1. The checked-in models, validation tests, and current schema are authoritative. Compatibility may change before 1.0.
 
-Extra CODEOWNERS deliberately separates service settings from repository trust policy:
+Configuration has three scopes:
 
 - **Runtime settings** configure an operator's deployment.
 - **Organization policy** enrolls applications and defines guardrails.
 - **Repository policy** opts a repository in and delegates specific paths.
 
-The runtime `EXTRA_CODEOWNERS_GITHUB_APP_ID` identifies the checker that publishes the required Check Run. Entries under organization `apps` identify different applications whose existing pull-request approvals may substitute for humans, such as Stampbot. Do not copy the checker App ID into an enrollment unless that same App independently submits reviews; Extra CODEOWNERS itself does not.
+The runtime `EXTRA_CODEOWNERS_GITHUB_APP_ID` identifies the checker that publishes the required Check Run. Entries under organization `apps` identify applications whose existing pull-request approvals may substitute for humans, such as Stampbot. The checker App ID belongs in an enrollment only if that App also submits reviews independently. Extra CODEOWNERS does not submit reviews.
 
 ## Policy locations
 
-The default policy path is `.github/extra-codeowners.toml`. An operator may change it
-deployment-wide with `EXTRA_CODEOWNERS_POLICY_PATH`; the same validated literal path is
-then used in both scopes below. This is not a per-repository override.
+The default policy path is `.github/extra-codeowners.toml`. `EXTRA_CODEOWNERS_POLICY_PATH` changes it for the entire deployment. Both policy scopes use the same validated literal path. A repository cannot override it.
 
 | Scope | Repository and revision | Purpose |
 | --- | --- | --- |
 | Organization | `<organization>/.github`, default branch | Enroll immutable application identities and add organization guardrails. |
 | Repository | Pull request's base repository, exact base commit | Enable evaluation and delegate paths to an enrolled application. |
 
-Organization policy is not copied into each repository and does not opt repositories in automatically. Every target repository needs its own enabled repository policy. That policy may narrow organization authority, but it cannot enroll a new application or weaken an organization guardrail.
+Organization policy is not copied into target repositories and does not opt them in. Every target repository needs an enabled repository policy. Repository policy may narrow organization authority. It cannot enroll an application or weaken an organization guardrail.
 
-The initial service uses one configured policy path for both scopes. The configured organization-policy repository (by default, the organization's `.github` repository) therefore uses that path for organization policy and cannot simultaneously use it as its own repository policy. Extra CODEOWNERS deliberately does not reconcile, evaluate pull requests, or publish checks for that repository. Its pull-request webhooks are authenticated and acknowledged without retention. A relevant default-branch policy push, default-branch change, rename, transfer, deletion, removal from the App's repository selection, or malformed repository-removal event is retained and fans out reevaluation to installed target repositories. Retain GitHub's native human code-owner enforcement for the organization-policy repository, and do not make Extra CODEOWNERS a required check there in v0.1. Separate organization and repository policy paths remain a pre-1.0 design option, not a supported setting.
+Version 0.1 uses one configured policy path for both scopes. The organization-policy repository uses that path for organization policy, so it cannot also use the path as its own repository policy. The default organization-policy repository is the organization's `.github` repository.
+
+Extra CODEOWNERS does not reconcile or evaluate pull requests for the organization-policy repository. It does not publish checks there. Pull-request webhooks for that repository are authenticated and acknowledged without retention.
+
+The following organization-policy repository events are retained and fan out reevaluation to installed target repositories:
+
+- a relevant policy push to the default branch
+- a default-branch change
+- rename, transfer, or deletion
+- removal from the App's repository selection
+- a malformed repository-removal event.
+
+The organization-policy repository must retain GitHub's native human code-owner enforcement. Extra CODEOWNERS must not be a required check there in version 0.1. Separate organization and repository policy paths are not supported.
 
 ## Organization policy
 
@@ -47,7 +57,7 @@ non_delegable_paths = [
 
 | Field | Type | Required | Meaning |
 | --- | --- | --- | --- |
-| `schema_version` | integer | yes | Policy schema. The initial schema accepts `1`. Unknown versions fail closed. |
+| `schema_version` | integer | yes | Policy schema. Version `1` is accepted. Unknown versions fail closed. |
 | `apps` | table | no | Map of at most 50 local aliases to trusted application identities. Aliases contain letters, digits, internal hyphens or underscores, are normalized to lowercase, and are referenced by repository policy. Defaults to an empty table. |
 | `apps.<alias>.slug` | string | yes | GitHub App slug containing letters, digits, and internal hyphens, normalized to lowercase. Slugs must be unique across entries and are used for independent identity verification, not by themselves as authentication. |
 | `apps.<alias>.app_id` | positive integer | yes | Immutable GitHub App ID recorded by the organization administrator. IDs must be unique across entries. Boolean and string values are rejected. |
@@ -78,7 +88,7 @@ forbidden_labels = ["needs-security-review"]
 
 | Field | Type | Required | Meaning |
 | --- | --- | --- | --- |
-| `schema_version` | integer | yes | Policy schema. The initial schema accepts `1`. Unknown versions fail closed. |
+| `schema_version` | integer | yes | Policy schema. Version `1` is accepted. Unknown versions fail closed. |
 | `enabled` | boolean | yes | Explicitly opts the repository in or out. A committed policy that omits `enabled` is invalid. An absent file in a repository with no managed check produces no check and no noise. An explicitly disabled file produces failure; removing policy after a check exists also updates that managed check to failure when evaluated. |
 | `delegations` | array of tables | no | At most 100 application delegations. With no entries, only appropriate human approvals can satisfy owned paths. |
 | `delegations[].app` | string | yes | Alias from the organization's `apps` table. Repository policy cannot introduce an application. |
@@ -87,7 +97,9 @@ forbidden_labels = ["needs-security-review"]
 | `delegations[].required_labels` | array of strings | no | At most 50 labels that must all be present before this delegation is eligible. Matching is case-insensitive. Labels restrict authority; they never approve a pull request on their own. |
 | `delegations[].forbidden_labels` | array of strings | no | At most 50 labels that must all be absent. Matching is case-insensitive and defaults to an empty array. A label cannot be both required and forbidden. |
 
-Multiple delegation entries are additive alternatives. When entries for the same application overlap on a path and owner set, any one entry whose label conditions are met makes that application eligible; restrictions from separate entries are not combined. Put every label condition that must apply together in the same entry, and do not add a broader overlapping entry expecting a narrower entry to constrain it. Every entry must independently identify an enrolled application, eligible path, applicable owner, and label conditions. A broad entry still cannot override a non-delegable path.
+Multiple delegation entries are additive alternatives. For entries that overlap on an application, path, and owner set, any one entry with satisfied label conditions makes the application eligible. Restrictions from separate entries are not combined.
+
+Every condition that must apply together belongs in one entry. A broader overlapping entry is not constrained by a narrower entry. Each entry must independently identify an enrolled application, eligible path, applicable owner, and label conditions. No entry can override a non-delegable path.
 
 ## Path pattern rules
 
@@ -105,9 +117,9 @@ Delegation and guardrail patterns follow standard `CODEOWNERS`-compatible matchi
 
 An ownerless CODEOWNERS rule is valid and clears ownership for its matched path when it is the last matching rule. Extra CODEOWNERS therefore creates no code-owner requirement for that path, although ordinary review counts and other checks still apply.
 
-GitHub supports some CODEOWNERS email identities, but the initial Extra CODEOWNERS evaluator does not. Email entries cannot be resolved safely to a review actor, so a relevant email owner fails closed. Use `@user` or `@organization/team` identities in repositories adopting the check.
+GitHub supports some CODEOWNERS email identities. Extra CODEOWNERS version 0.1 does not. The evaluator cannot safely resolve an email entry to a review actor, so a relevant email owner fails closed. Supported identities are `@user` and `@organization/team`.
 
-Policy files are limited to 1,000,000 bytes, must be UTF-8 TOML, and reject unknown fields. Keep policy substantially smaller so reviewers can inspect the complete authorization boundary. Standard `CODEOWNERS` is separately limited to GitHub's 3 MiB maximum; a larger file fails evaluation because GitHub does not use it.
+Policy files must be UTF-8 TOML and cannot exceed 1,000,000 bytes. Unknown fields are rejected. Policy should remain small enough for reviewers to inspect the complete authorization boundary. Standard `CODEOWNERS` has a separate 3 MiB maximum. A larger file fails evaluation because GitHub does not use it.
 
 For a rename, Extra CODEOWNERS evaluates both the old and new path. A delegation must cover both names; otherwise the uncovered name requires an appropriate human approval.
 
@@ -127,21 +139,30 @@ The following paths reject application substitution by default:
 /.github/actions/**
 ```
 
-The restriction applies to who may satisfy review policy for a change, not to file contents. The policy file may list applications, and workflows or local actions may invoke applications.
+The restriction controls who may satisfy review policy for a change. It does not restrict file contents. Policy may list applications. Workflows and local actions may invoke applications.
 
 The `.github/extra-codeowners.toml` entry above is the default value of `EXTRA_CODEOWNERS_POLICY_PATH`. If an operator configures another validated literal path, that actual repository-policy path replaces the default entry in the built-in list and remains non-delegable.
 
-Non-delegable patterns do not assign ownership. Standard `CODEOWNERS` must give these paths an effective human user or team owner; otherwise Extra CODEOWNERS reports the path as unowned and creates no code-owner requirement for it. Protect the CODEOWNERS file itself and verify ownership with GitHub's CODEOWNERS error view before relying on this boundary.
+Non-delegable patterns do not assign ownership. Standard `CODEOWNERS` must give these paths an effective human user or team owner. Otherwise, Extra CODEOWNERS reports the path as unowned and creates no code-owner requirement. The CODEOWNERS file itself must be protected. GitHub's CODEOWNERS error view reports ownership errors that would weaken this boundary.
 
 Organization `guardrails.non_delegable_paths` entries are added to this list. Repository policy cannot remove either list.
 
-The built-in root `/stampbot.toml` entry protects Stampbot's repository policy because Stampbot is the initial integration. Built-ins cannot discover every other enrolled application's repository-local control files. Organization operators must add each such application's policy, configuration, rules, prompts, generated-policy inputs, and transitive decision code to `guardrails.non_delegable_paths`; otherwise that application could approve a change which expands its own future authority.
+The built-in root `/stampbot.toml` entry protects Stampbot's repository policy because Stampbot is the first supported integration. Built-ins cannot discover every control file used by other enrolled applications. Organization policy must add these paths to `guardrails.non_delegable_paths` for each application:
 
-Also add every repository-specific release, deployment, or helper path that can alter privileged workflow behavior. A workflow can invoke code outside `.github/actions/**`, and Extra CODEOWNERS cannot infer that transitive execution graph.
+- policy and configuration
+- rules and prompts
+- generated-policy inputs
+- transitive decision code.
+
+Without these guardrails, an application could approve a change that expands its future authority.
+
+Organization guardrails must also cover repository-specific release, deployment, and helper paths that can alter privileged workflow behavior. A workflow can invoke code outside `.github/actions/**`. Extra CODEOWNERS cannot infer that transitive execution graph.
 
 ## Runtime settings
 
-Runtime settings use Pydantic Settings. Environment variables have the `EXTRA_CODEOWNERS_` prefix, and a local `.env` file is loaded when present. Command-line `serve` options can override the host and port. Unknown keys loaded from `.env` and values outside documented bounds are rejected; unrelated or unrecognized process environment variables are ignored.
+Runtime settings use Pydantic Settings. Environment variables use the `EXTRA_CODEOWNERS_` prefix. A local `.env` file is loaded when present. The `serve` command can override the host and port.
+
+Unknown keys loaded from `.env` are rejected. Values outside documented bounds are also rejected. Unrelated or unrecognized process environment variables are ignored.
 
 ### Service settings
 
@@ -154,9 +175,17 @@ Runtime settings use Pydantic Settings. Environment variables have the `EXTRA_CO
 | `EXTRA_CODEOWNERS_PUBLIC_URL` | absolute HTTP(S) URL or null | null | Public origin used to construct App Manifest webhook, callback, and completion URLs. Setup mode requires an `https://` origin with no credentials, non-root path, query, or fragment; otherwise this setting is optional. |
 | `EXTRA_CODEOWNERS_DATABASE_URL` | SQLAlchemy URL | `sqlite:///./extra-codeowners.db` | Durable queue and audit store. Production requires PostgreSQL. Every non-local connection must set `sslmode=verify-full`, which verifies both the certificate chain and database hostname; `require` and `verify-ca` are rejected. An effective `localhost`, `127.0.0.1`, `::1`, or Unix-socket `host` may omit TLS. Any `hostaddr` or `service` routing override requires `verify-full`. SQLite remains available for development and tests. Treat the complete value as a secret. |
 
-Locality is determined from the effective libpq route, not only the URL authority. A query-string `host` takes precedence over the authority host, so a remote override requires `sslmode=verify-full` even when the authority looks local. `hostaddr` and `service` are always treated as routing overrides that require verified TLS.
+Locality is determined from the effective libpq route, not only the URL authority. A query-string `host` takes precedence over the authority host. A remote override therefore requires `sslmode=verify-full` even when the authority looks local. `hostaddr` and `service` always count as routing overrides and require verified TLS.
 
-PostgreSQL access has fixed fail-fast budgets in the preview: 3 seconds to establish a connection, 2 seconds to obtain a pooled connection, and 3 seconds for an ordinary statement. Advisory-lock acquisition replaces the statement timeout with that operation's bounded guard wait. These values are not runtime settings. A database path that cannot reliably meet them will cause webhook acceptance or worker operations to fail closed and retry where applicable.
+PostgreSQL access has fixed fail-fast budgets:
+
+| Operation | Timeout |
+| --- | --- |
+| Establish a connection | 3 seconds |
+| Obtain a pooled connection | 2 seconds |
+| Execute an ordinary statement | 3 seconds |
+
+Advisory-lock acquisition replaces the statement timeout with that operation's bounded guard wait. These values are not runtime settings. A database path that cannot reliably meet them causes webhook acceptance or worker operations to fail closed and retry where applicable.
 
 ### GitHub settings
 
@@ -216,4 +245,10 @@ Do not place App private keys or webhook secrets in TOML committed to a reposito
 - Production service startup requires complete GitHub credentials, a webhook secret of at least 32 bytes, an HTTPS GitHub API URL, and PostgreSQL using `sslmode=verify-full` over every non-local connection or an operator-controlled loopback or Unix-socket transport.
 - Setup-mode startup requires an HTTPS public URL and a setup-state secret of at least 32 bytes.
 
-To disable Extra CODEOWNERS safely, first restore GitHub's native **Require review from Code Owners** rule, then remove the expected-source Extra CODEOWNERS required check, and only then set `enabled = false` or remove repository policy. A disabled file intentionally leaves a still-required gate failing; a missing required check also does not satisfy the gate.
+Safe disablement has this order:
+
+1. Restore GitHub's native **Require review from Code Owners** rule.
+2. Remove the expected-source Extra CODEOWNERS required check.
+3. Set `enabled = false` or remove repository policy.
+
+A disabled file leaves a still-required gate failing. A missing required check also does not satisfy the gate.
