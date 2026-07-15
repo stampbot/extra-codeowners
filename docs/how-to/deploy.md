@@ -1,26 +1,29 @@
 # Deploy the GitHub App service
 
-Extra CODEOWNERS does not yet have a supported production release or hosted service. Successful `main` CI builds are configured to publish signed, attested multi-architecture preview containers, but no tagged release or versioned chart exists until a release workflow succeeds. This guide defines the deployment requirements and a preview path for reviewers. Do not use a preview artifact to authorize production merges.
+Extra CODEOWNERS has no supported production release or hosted service. Successful `main` builds publish signed, attested multi-architecture containers. A tagged release and versioned chart won't exist until the release workflow succeeds. Use this guide only for a disposable review deployment, and don't let the current check authorize production merges.
 
 ## Prerequisites
 
 You need:
 
-- a reviewed Extra CODEOWNERS commit;
-- Docker for a local source build, or current GitHub CLI and Cosign releases for verifying a CI-published preview;
-- a GitHub App registered with the [documented permissions and events](../reference/github-permissions.md);
-- a public HTTPS origin with a valid certificate;
-- PostgreSQL with hostname-verified TLS for remote connections, or an operator-controlled local proxy or Unix socket, plus backup and restricted credentials;
-- a secret manager for the App private key and webhook secret;
-- outbound HTTPS access to the configured GitHub API;
-- reliable UTC clock synchronization on every service node, for GitHub App JWTs, setup-state expiry, and durable leases; and
+- a reviewed Extra CODEOWNERS commit
+- Docker for a local source build, or current GitHub CLI and Cosign releases for a CI-published image
+- a GitHub App with the [documented permissions and events](../reference/github-permissions.md)
+- a public HTTPS origin with a valid certificate
+- PostgreSQL with hostname-verified TLS for remote connections, or an operator-controlled local proxy or Unix socket
+- PostgreSQL backups and restricted database credentials
+- a secret manager for the App private key and webhook secret
+- outbound HTTPS access to the configured GitHub API
+- reliable UTC clock synchronization on every service node, which GitHub App JWTs, setup-state expiry, and durable leases need
 - monitoring access to readiness and Prometheus metrics.
 
-SQLite is for a single-process development installation only. It is not an acceptable production durable queue.
+Use SQLite only for a single-process development installation. It isn't a production durable queue.
 
-## 1. Select an immutable preview image
+## 1. Select an immutable image
 
-After a successful build on `main`, CI publishes `ghcr.io/stampbot/extra-codeowners:main` and a commit-specific `sha-*` tag. The `main` tag is mutable. For a disposable review deployment, select the commit-specific tag, resolve it to a registry digest, and record the source commit. Replace the digest placeholder below, then verify both GitHub provenance and the keyless workflow signature:
+After a successful `main` build, CI publishes `ghcr.io/stampbot/extra-codeowners:main` and a commit-specific `sha-*` tag. The `main` tag is mutable.
+
+For a disposable review deployment, select the commit-specific tag and resolve it to a registry digest. Record its source commit. Replace the placeholder below, then verify both GitHub provenance and the keyless workflow signature:
 
 ```bash
 export IMAGE='ghcr.io/stampbot/extra-codeowners@sha256:REPLACE_WITH_DIGEST'
@@ -31,40 +34,54 @@ cosign verify \
   "$IMAGE"
 ```
 
-Both commands must succeed, and the attested source repository and commit must match the reviewed revision. See GitHub's [artifact-attestation verification guide](https://docs.github.com/en/actions/how-tos/secure-your-work/use-artifact-attestations/use-artifact-attestations) and Sigstore's [Cosign verification guide](https://docs.sigstore.dev/quickstart/quickstart-cosign/) for tool installation and trust details. If the preview package is not yet available, build from the reviewed source as shown below.
+Both commands must succeed. The attested source repository and commit must match the reviewed revision. Consult GitHub's [artifact-attestation verification guide](https://docs.github.com/en/actions/how-tos/secure-your-work/use-artifact-attestations/use-artifact-attestations) and Sigstore's [Cosign verification guide](https://docs.sigstore.dev/quickstart/quickstart-cosign/) for tool installation and trust details.
 
-From the repository root, build the image from the reviewed commit:
+If the package isn't available, build from the reviewed source. From the repository root, run:
 
 ```bash
-docker build --tag extra-codeowners:preview .
+docker build --tag extra-codeowners:review .
 ```
 
-Record the resulting image digest. A local source build is not signed or attested merely because the repository workflow can produce those artifacts. Do not deploy a mutable tag without recording its digest and source commit. The checked-in tag-release pipeline is configured to publish signed, attestable versioned images, but none exists until the first successful release.
+Record the resulting image digest. A local build isn't signed or attested merely because the repository workflow can produce such artifacts. Never deploy a mutable tag without recording its digest and source commit.
+
+The checked-in tag-release pipeline can publish signed, attestable versioned images. None exists before the first successful release.
 
 ## 2. Provision durable state
 
-Create a dedicated PostgreSQL database and role. The role should own only the Extra CODEOWNERS database and should not have cluster-administrator or unrelated-database privileges.
+Create a dedicated PostgreSQL database and role. Give the role ownership only of the Extra CODEOWNERS database; don't grant cluster-administrator or unrelated-database privileges.
 
-Supply a SQLAlchemy URL using the psycopg driver, for example:
+Supply a SQLAlchemy URL through the psycopg driver:
 
 ```text
 postgresql+psycopg://DB_USER:DB_PASSWORD@DB_HOST:5432/DB_NAME?sslmode=verify-full
 ```
 
-Replace every uppercase placeholder and percent-encode reserved characters in URL components. For a remote database, retain `sslmode=verify-full` and add the provider's CA parameters, such as `sslrootcert`, when required. The `require` and `verify-ca` modes are rejected because neither verifies the database hostname. Query-string routing cannot bypass this check: `host` takes precedence over the URL authority, and any `hostaddr` or `service` override requires `verify-full`. Treat the complete URL as a secret. Before upgrading, back up the database and review release notes for schema compatibility; a migration and rollback contract will be added before the first supported release.
+Replace every uppercase placeholder and percent-encode reserved characters in URL components. Treat the complete URL as a secret.
 
-The preview deliberately fails fast after 3 seconds while connecting to PostgreSQL, 2 seconds while waiting for its application connection pool, or 3 seconds for an ordinary statement. These budgets are not configurable. Test the complete service-to-database path, including a proxy when used, under expected peak latency and concurrency. Do not deploy it as merge infrastructure when normal operation approaches those limits; a timeout blocks or retries work rather than inferring approval.
+For a remote database, keep `sslmode=verify-full`. Add provider CA parameters such as `sslrootcert` when needed. Extra CODEOWNERS rejects `require` and `verify-ca` because neither verifies the database hostname. Query routing can't bypass this rule: `host` takes precedence over the URL authority, and a `hostaddr` or `service` override requires `verify-full`.
+
+Before upgrading, back up the database and review release notes for schema compatibility. A migration and rollback contract will be added before the first supported release.
+
+The service stops a database operation after these fixed budgets:
+
+- 3 seconds to connect to PostgreSQL
+- 2 seconds to obtain a connection from the application pool
+- 3 seconds for an ordinary statement.
+
+Test the entire path from service to database, including any proxy, under expected peak latency and concurrency. If normal operation approaches those limits, don't use this service as merge infrastructure. A timeout blocks or retries work; it never infers approval.
 
 ## 3. Mount secrets
 
-Mount the GitHub App private key and webhook secret as read-only files readable only by the container's runtime user. Configure:
+Don't bake secrets into the image, put them in command-line arguments, or commit them to an environment file.
+
+Mount the GitHub App private key and webhook secret as read-only files. Only the container's runtime user should be able to read them. Configure:
 
 ```text
 EXTRA_CODEOWNERS_GITHUB_PRIVATE_KEY_FILE=/run/secrets/github-private-key
 EXTRA_CODEOWNERS_GITHUB_WEBHOOK_SECRET_FILE=/run/secrets/github-webhook-secret
 ```
 
-Do not bake secrets into the image, place them in command-line arguments, or commit them to an environment file. Supply the database URL through the platform's secret-injection mechanism.
+Supply the database URL through the platform's secret-injection mechanism.
 
 ## 4. Configure the service
 
@@ -80,65 +97,79 @@ EXTRA_CODEOWNERS_WORKER_RETRY_MAX_SECONDS=60
 EXTRA_CODEOWNERS_WEBHOOK_DELIVERY_RETENTION_DAYS=30
 ```
 
-Replace the example App ID and database placeholders. Production startup rejects SQLite and other non-PostgreSQL database URLs, non-local database connections without `sslmode=verify-full`, webhook secrets shorter than 32 UTF-8 bytes, and non-HTTPS GitHub API origins. An effective `localhost`, `127.0.0.1`, `::1`, or Unix-socket database proxy may omit `sslmode`; `hostaddr` and `service` overrides never qualify for that exception. The operator remains responsible for authenticating and protecting a local proxy's upstream connection. Keep `EXTRA_CODEOWNERS_ALLOW_INSECURE_CHANGES=false`. Setup mode is disabled by default and should remain disabled after App registration. `EXTRA_CODEOWNERS_PUBLIC_URL` is required only for a separate setup-mode process, where it must use HTTPS.
+Replace the example App ID and database placeholders. Keep `EXTRA_CODEOWNERS_ALLOW_INSECURE_CHANGES=false`. Leave setup mode disabled after App registration; it is disabled by default. Set `EXTRA_CODEOWNERS_PUBLIC_URL` only for a separate setup process, and use HTTPS.
 
-Choose a delivery-ID retention period that covers GitHub redelivery and the operator's incident-investigation window. Automatic pruning runs as part of the elected reconciler, so keep reconciliation enabled or provide an independently reviewed retention procedure. Pruning a delivery ID permits that old ID to be accepted again, but it can only coalesce a fresh evaluation that re-fetches current GitHub evidence.
+Production startup rejects:
 
-Evaluation and authority failures retry indefinitely because abandoned revocation work could leave a stale success visible. `EXTRA_CODEOWNERS_WORKER_RETRY_MAX_SECONDS` caps the ordinary exponential delay, not the number of attempts. GitHub rate-limit responses use the provider's separate bounded `Retry-After` delay. Alert on a pending queue that remains above its normal baseline and repeated failure logs; do not use manual requeue as normal recovery.
+- SQLite and every other non-PostgreSQL database URL
+- a non-local database connection without `sslmode=verify-full`
+- a webhook secret shorter than 32 UTF-8 bytes
+- a non-HTTPS GitHub API origin.
 
-The full settings table and bounds are in the [configuration reference](../reference/configuration.md#runtime-settings).
+An effective `localhost`, `127.0.0.1`, `::1`, or Unix-socket database proxy may omit `sslmode`. A `hostaddr` or `service` override never qualifies for this exception. Authenticate and protect the local proxy's upstream connection yourself.
+
+Choose a delivery-ID retention period that covers GitHub redelivery and your incident-investigation window. The elected reconciler prunes expired IDs. Keep reconciliation enabled, or provide a separately reviewed retention procedure. Once pruned, an old delivery ID may be accepted again, but it can only coalesce a fresh evaluation that fetches current GitHub evidence.
+
+Evaluation and authority failures retry indefinitely because abandoned revocation work could leave a stale success visible. `EXTRA_CODEOWNERS_WORKER_RETRY_MAX_SECONDS` caps the normal exponential delay, not the attempt count. GitHub rate-limit responses use a separate bounded `Retry-After` delay from the provider. Alert when the pending queue stays above its normal baseline and when failure logs repeat. Don't use manual requeue as normal recovery.
+
+See the [configuration reference](../reference/configuration.md#runtime-settings) for every setting and bound.
 
 ## 5. Configure ingress
 
-Route public GitHub traffic only to `POST /webhooks/github`. Preserve the raw body and the `X-Hub-Signature-256`, `X-GitHub-Event`, and `X-GitHub-Delivery` headers.
+Route public GitHub traffic only to `POST /webhooks/github`. Preserve the raw body and these headers:
 
-Apply:
+- `X-Hub-Signature-256`
+- `X-GitHub-Event`
+- `X-GitHub-Delivery`.
 
-- TLS termination with current protocols;
-- a request-body limit of 10 MiB, or a lower limit only after testing legitimate delivery sizes, enforced before request buffering;
-- rate limiting that allows normal GitHub bursts and redeliveries; and
-- no response caching.
+Apply current TLS protocols and disable response caching. Limit request bodies to 10 MiB before buffering. You may use a lower limit only after testing legitimate delivery sizes. Rate-limit requests without blocking normal GitHub bursts or redeliveries.
 
-Disable query-string logging for `/setup/callback`; its single-use App Manifest conversion code is sensitive. Keep application setup disabled in normal service operation so the route returns `404`.
+Disable query-string logging for `/setup/callback` because its one-use App Manifest conversion code is sensitive. Keep setup disabled during normal operation so that route returns `404`.
 
-Keep `/metrics`, `/health/live`, `/health/ready`, and `/setup` on operator-controlled routes. If the ingress cannot route by path, require network or proxy authentication for everything except `/webhooks/github`.
+Keep `/metrics`, `/health/live`, `/health/ready`, and `/setup` on operator-controlled routes. If the ingress can't route by path, require network or proxy authentication everywhere except `/webhooks/github`.
 
 ## 6. Verify before receiving production events
 
-Verify liveness and readiness from the same network used by the orchestrator:
+Treat these as deployment acceptance checks. Passing them doesn't resolve the commit-scoped Check Run limitation, so they don't make this deployment suitable for production merge authorization.
+
+From the orchestrator's network, verify liveness and readiness:
 
 ```bash
 curl --fail-with-body https://operator-endpoint.example.com/health/live
 curl --fail-with-body https://operator-endpoint.example.com/health/ready
 ```
 
-Verify the metrics scraper can read `/metrics` and that `extra_codeowners_insecure_changes_enabled` is `0`.
+Confirm that each health response reports `worker` and `reconciler` as `true`, and that the deployment enables both tasks. Verify that the metrics scraper can read `/metrics` and `extra_codeowners_insecure_changes_enabled` is `0`.
 
-Confirm this deployment enables the worker and reconciler, and that both fields are `true` in each health response. After the initial reconciliation, verify `extra_codeowners_reconciliations_total{result="success"}` increased and `extra_codeowners_reconciliation_last_success_timestamp_seconds` contains a recent Unix timestamp.
+After the first reconciliation, confirm that `extra_codeowners_reconciliations_total{result="success"}` increased. Verify that `extra_codeowners_reconciliation_last_success_timestamp_seconds` contains a recent Unix timestamp.
 
-Send a GitHub test delivery, confirm it is accepted exactly once, and confirm a test repository receives a check from the expected App source. Complete every negative test in [Prepare repository rules](prepare-repository-rules.md#3-verify-the-conjunction) before changing a production ruleset.
+In a disposable repository covered by test policy, open a pull request that changes an owned path. In the App's **Advanced** settings, confirm that **Recent deliveries** shows a successful `pull_request` delivery for the `opened` action. Verify that the repository receives a check from the expected App source. Redeliver the same delivery and confirm that deduplication does not create duplicate work. Complete every negative test in [Prepare repository rules](prepare-repository-rules.md#3-verify-the-conjunction) before changing a production ruleset.
 
 ## Roll back or mitigate
 
 If a rollout produces incorrect results:
 
 1. Stop routing new webhook traffic to the bad version.
-2. Restore the previous image by recorded digest without rolling the database backward.
-3. Confirm the old version's readiness and queue processing.
-4. Redeliver deliveries that were never accepted, then allow pending work to retry and reconciliation to enqueue open pull requests with no existing job.
+2. Restore the previous image by its recorded digest without rolling back the database.
+3. Confirm the previous version's readiness and queue processing.
+4. Redeliver deliveries that the service never accepted. Let pending work retry, and let reconciliation enqueue open pull requests that have no existing job.
 5. Verify current-head checks in a test repository.
 
-If the previous version cannot safely use the current database, stop application delegation: restore native **Require review from Code Owners** on affected repositories before removing the Extra CODEOWNERS required check. Preserve database and logs for investigation.
+If the previous version can't safely use the current database, restore native **Require review from Code Owners** on every affected repository. Only then remove the Extra CODEOWNERS required check. Preserve the database and logs for investigation.
 
-The preview Helm chart defaults to a `Recreate` Deployment strategy because this pre-1.0 service has no mixed-version database compatibility contract. That avoids old and new application versions running together, but creates a brief webhook-processing outage. GitHub does not automatically redeliver failed webhooks: after the service is ready, inspect failed deliveries, manually redeliver them, and confirm scheduled reconciliation is converging open pull requests. Keep one replica and do not switch to `RollingUpdate` until the versions, schema, and lease behavior have been tested together. The chart's [preview installation and recovery guide](https://github.com/stampbot/extra-codeowners/blob/main/charts/extra-codeowners/README.md) provides the complete Kubernetes procedure.
+The Helm chart uses a `Recreate` Deployment strategy because this pre-1.0 service has no mixed-version database compatibility contract. This prevents old and new versions from running together, but briefly interrupts webhook processing. GitHub doesn't automatically redeliver failed webhooks. Once the service is ready, inspect failed deliveries, redeliver them manually, and confirm that scheduled reconciliation is converging open pull requests.
+
+Keep one replica. Don't switch to `RollingUpdate` until you've tested the versions, schema, and lease behavior together. Follow the chart's [installation and recovery guide](https://github.com/stampbot/extra-codeowners/blob/main/charts/extra-codeowners/README.md) for the complete Kubernetes procedure.
 
 ## Release and planned supported paths
 
-Initial Helm chart source is available at `charts/extra-codeowners`. A successful exact semantic-version tag release is configured to publish:
+The initial Helm chart source lives at `charts/extra-codeowners`. A successful exact semantic-version tag release is configured to publish:
 
-- a signed multi-architecture image at `ghcr.io/stampbot/extra-codeowners:<version>`;
-- a signed OCI chart at `oci://ghcr.io/stampbot/charts/extra-codeowners`, versioned with the release number;
-- Python wheel and source artifacts; and
+- a signed multi-architecture image at `ghcr.io/stampbot/extra-codeowners:<version>`
+- a signed OCI chart at `oci://ghcr.io/stampbot/charts/extra-codeowners`, using the release version
+- Python wheel and source artifacts
 - build provenance and software-bill-of-material attestations.
 
-Artifact existence follows successful CI or a successful GitHub release; workflow source alone is not proof that an artifact was published. There is no supported release until one is announced in the repository. Tested chart upgrade guarantees and a reproducible Google Cloud deployment guide remain planned; their workload-identity behavior will be documented from published artifacts rather than inferred here.
+Workflow source doesn't prove that an artifact was published. Confirm the artifact exists after successful CI or a GitHub release. Until the repository announces a supported release, none exists.
+
+Tested chart upgrade guarantees and a reproducible Google Cloud deployment guide remain planned. Their workload-identity behavior will be documented from published artifacts rather than inferred here.

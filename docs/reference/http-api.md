@@ -1,6 +1,6 @@
 # HTTP API reference
 
-Extra CODEOWNERS exposes a small service surface for GitHub and operators. It is not a general-purpose public API. FastAPI generates the current schema at `/api/openapi.json`; the application and schema remain pre-1.0.
+Extra CODEOWNERS exposes an HTTP interface for GitHub and operators. It is not a general-purpose public API. FastAPI publishes the current schema at `/api/openapi.json`. The API is version 0.1 and may make incompatible changes before 1.0.
 
 ## Routes
 
@@ -9,7 +9,7 @@ Extra CODEOWNERS exposes a small service surface for GitHub and operators. It is
 | `GET` | `/` | Operator or discovery client | No application authentication. Returns product name, version, and documentation URL. |
 | `GET` | `/health/live` | Container orchestrator | No application authentication. Expose only through an operator-controlled health path. |
 | `GET` | `/health/ready` | Container orchestrator | No application authentication. Expose only through an operator-controlled health path. |
-| `GET` | `/metrics` | Prometheus-compatible scraper | No application authentication in the initial service. Restrict at the network or proxy layer. |
+| `GET` | `/metrics` | Prometheus-compatible scraper | No application authentication. Restrict at the network or proxy layer. |
 | `GET` | `/api/docs` | Developer or operator | Interactive Swagger UI for the schema-listed routes. Restrict outside development environments. |
 | `GET` | `/api/openapi.json` | Documentation tooling | OpenAPI document for schema-listed routes. Restrict outside development environments. |
 | `GET` | `/docs/oauth2-redirect` | Swagger UI | Framework-provided OAuth redirect helper. Extra CODEOWNERS does not use end-user OAuth, but FastAPI registers this route with Swagger UI. |
@@ -36,7 +36,7 @@ The version reflects the installed package and may differ from this example.
 
 ## `GET /health/live`
 
-Liveness answers whether the process can serve requests and whether its configured in-process worker and reconciler tasks are still running. An orchestrator may restart the container after repeated liveness failures.
+Liveness reports whether the process can serve requests. It also reports whether its configured in-process worker and reconciler tasks are running. An orchestrator may restart the container after repeated liveness failures.
 
 Liveness is not proof that GitHub credentials, the durable store, queue processing, or reconciliation are operating correctly. Use readiness and service metrics for those checks.
 
@@ -50,7 +50,9 @@ A successful response is `200 application/json`:
 }
 ```
 
-If either expected background task has stopped, the response is `503`, `status` is `not_alive`, and that task's field is `false`. A disabled task, or one that is not expected because this instance lacks GitHub processing configuration, reports `true`; this endpoint cannot prove that a worker or reconciler running in another process is healthy.
+If either expected background task has stopped, the response is `503`. The `status` is `not_alive`, and that task's field is `false`.
+
+A disabled task reports `true`. A task that is not expected because this instance lacks GitHub processing configuration also reports `true`. The endpoint cannot prove that a worker or reconciler in another process is healthy.
 
 ## `GET /health/ready`
 
@@ -70,11 +72,13 @@ The response is `200` when ready or `503` otherwise:
 }
 ```
 
-Each boolean identifies the corresponding local readiness condition. The status is `not_ready` if credentials or the database are unavailable, or if either configured local background task has stopped. A deliberately disabled worker or reconciler reports `true`; readiness cannot prove that a corresponding task in another process is healthy.
+Each boolean identifies the corresponding local readiness condition. The status is `not_ready` when credentials or the database are unavailable. It is also `not_ready` when a configured local background task has stopped.
+
+A disabled worker or reconciler reports `true`. Readiness cannot prove that a corresponding task in another process is healthy.
 
 ## `GET /metrics`
 
-The service exposes Prometheus text format. Initial application metrics include:
+The service exposes Prometheus text format. Application metrics include:
 
 | Metric | Type | Meaning |
 | --- | --- | --- |
@@ -88,7 +92,7 @@ The service exposes Prometheus text format. Initial application metrics include:
 | `extra_codeowners_reconciliations_total` | counter | Completed reconciliation attempts labeled by `result="success"` or `result="failure"`. |
 | `extra_codeowners_reconciliation_last_success_timestamp_seconds` | gauge | Unix timestamp of the latest successful open-pull-request reconciliation. |
 
-Prometheus runtime and process collectors may add metrics beyond this table. Avoid labels containing repository names, pull-request titles, actor names, paths, or delivery IDs because those create unbounded cardinality and can disclose private metadata.
+Prometheus runtime and process collectors may add metrics beyond this table. Metric labels must not contain repository names, pull-request titles, actor names, paths, or delivery IDs. Those values create unbounded cardinality and can disclose private metadata.
 
 ## `POST /webhooks/github`
 
@@ -100,32 +104,105 @@ GitHub sends a JSON payload with these required headers:
 | `X-GitHub-Event` | Event name used to select a scheduling handler. |
 | `X-GitHub-Delivery` | Unique delivery identifier used for replay-safe deduplication. |
 
-The service verifies the signature against the exact raw bytes before parsing JSON. An authenticated, relevant delivery is recorded transactionally with either pull-request evaluation work or broader authority fan-out work. For a direct pull-request, review, or rerequest trigger, ingress then makes a bounded attempt to fetch the current pull request and policy. It creates or updates the managed current-head check as `in_progress` when policy exists, and updates an already managed check when policy is absent. A repository with neither policy nor a managed check is deliberately skipped. Once a delivery ID is pruned, a redelivery can create or coalesce fresh work, which re-fetches current GitHub evidence.
+The service verifies the signature against the exact raw bytes before parsing JSON. An authenticated, relevant delivery is recorded in the same transaction as its pull-request evaluation or authority fan-out work.
 
-Full evaluation remains asynchronous. For a mapped trigger, a successful webhook response means durable work was recorded, not that a pull request passed or an invalidation reached GitHub. A `202` JSON response contains `accepted`, which is `false` for an already recorded mapped delivery. `queued` is `true` when this request either newly accepted mapped work or, for a direct pull-request trigger, successfully resumed pending invalidation and requested a superseding generation. A duplicate pull-request redelivery can therefore return `accepted: false, queued: true`; `queued` is not a live queue-state indicator. A duplicate redelivery otherwise leaves existing work unchanged.
+For a direct pull-request, review, or rerequest trigger, ingress makes a bounded attempt to fetch the current pull request and policy. It creates or updates the managed current-head check as `in_progress` when policy exists. When policy is absent, it updates an existing managed check. A repository with neither policy nor a managed check is skipped.
 
-An authenticated but unmapped event or action is acknowledged as `{"accepted":true,"queued":false}` without durable retention or deduplication. Pull-request events for the configured organization-policy repository are also ignored because that repository remains under native human enforcement. A relevant default-branch organization-policy push, organization-policy repository lifecycle event, target-repository rename, transfer, or unarchive event, or removal of the configured organization-policy repository from App selection is retained and creates installation-wide fan-out work. Missing or malformed `repositories_removed` evidence is handled as conservative policy-source loss and also fans out; a well-formed removal containing only ordinary targets is acknowledged without work because App access is already gone. Malformed JSON or headers return `400`, signature failures return `401`, and a body larger than 10 MiB returns `413` whether or not `Content-Length` was supplied. A receiver without a webhook secret returns `503`; a retained direct pull-request trigger also returns `503` after storage when no evaluator is configured to attempt revocation. A durable-store failure or timeout while ordering an authority event against an in-flight Check Run returns `503` before the delivery is recorded. Restore the service, then use GitHub's **Redeliver** control; GitHub does not retry it automatically. The service bounds the streamed body as it reads it; ingress should enforce the same limit as an additional control. Durable-store failures for mapped work are not acknowledged as successful ingestion.
+After a delivery ID is pruned, redelivery can create or coalesce fresh work. That work fetches current GitHub evidence again.
 
-After durable acceptance of a direct pull-request trigger, a GitHub API failure or `EXTRA_CODEOWNERS_WEBHOOK_INVALIDATION_TIMEOUT_SECONDS` expiry leaves the invalidation marker pending but returns `202`; the durable job performs the authoritative blocking evaluation, and manual redelivery can retry the fast path. Authority-change acceptance uses that same timeout while it waits for an in-flight final Check Run to finish under the installation publication guard. In the acceptance transaction, an installation-wide event advances a persistent installation authority epoch and records the fan-out job. Because every evaluation row stores the epoch from enqueue time, work queued before the change cannot publish even after fan-out completes. The authority worker then splits installation scope into repository fences when needed, enumerates affected open pull requests, supersedes each evaluation generation, and attempts bounded invalidation. Installation-wide and repository-wide work is claimed before base-specific push work; repository-wide work replaces older base-specific rows, and a 101st distinct base-ref row for one installation and repository collapses the set into one conservative repository-wide job. Evaluation and authority failures remain pending and retry indefinitely with a bounded ordinary backoff, while GitHub rate limits use their separately bounded provider delay. GitHub [requires a response within 10 seconds and does not automatically redeliver failures](https://docs.github.com/en/webhooks/using-webhooks/handling-failed-webhook-deliveries), so synchronous work is bounded; a direct-trigger fast-path failure does not undo durable acceptance, while an authority-guard timeout deliberately prevents acceptance and requires manual redelivery.
+Full evaluation is asynchronous. For a mapped trigger, a successful webhook response means the service recorded durable work. It does not mean that the pull request passed or that an invalidation reached GitHub.
+
+| `202` response field | Meaning |
+| --- | --- |
+| `accepted` | `false` for an already recorded mapped delivery; otherwise `true`. |
+| `queued` | `true` when this request accepted new mapped work. For a direct pull-request trigger, it is also `true` when the request resumed pending invalidation and requested a superseding generation. This is not a live queue-state indicator. |
+
+A duplicate pull-request redelivery can return `accepted: false, queued: true`. Other duplicate redeliveries leave existing work unchanged.
+
+An authenticated but unmapped event or action returns `{"accepted":true,"queued":false}`. It is not retained or deduplicated. Pull-request events for the configured organization-policy repository are also ignored because that repository remains under native human enforcement.
+
+These events are retained and create installation-wide fan-out work:
+
+- a relevant organization-policy push to the default branch
+- an organization-policy repository lifecycle event
+- a target-repository rename, transfer, or unarchive
+- removal of the configured organization-policy repository from App selection
+- missing or malformed `repositories_removed` evidence, treated as loss of the policy source.
+
+A well-formed removal containing only ordinary targets is acknowledged without work because App access is already gone.
+
+| Condition | Status | Behavior |
+| --- | --- | --- |
+| Missing or malformed `X-Hub-Signature-256`, or a signature mismatch | `401` | Reject the request before parsing JSON. |
+| Missing or malformed `X-GitHub-Delivery` or `X-GitHub-Event`, or malformed JSON | `400` | Reject the request. |
+| Body larger than 10 MiB | `413` | Reject the request, with or without `Content-Length`. The service enforces the limit while streaming the body. Ingress should enforce the same limit. |
+| No configured webhook secret | `503` | Reject the request. |
+| Retained direct pull-request trigger with no configured evaluator | `503` | Store the trigger, but report that revocation could not be attempted. |
+| Durable-store failure for mapped work | `503` | Do not acknowledge successful ingestion. |
+| Timeout or durable-store failure while ordering an authority event against an in-flight Check Run | `503` | Do not record the delivery. Restore the service and use GitHub's **Redeliver** control; GitHub does not retry automatically. |
+
+After durable acceptance of a direct pull-request trigger, a GitHub API failure or `EXTRA_CODEOWNERS_WEBHOOK_INVALIDATION_TIMEOUT_SECONDS` expiry leaves the invalidation marker pending. The response remains `202`. The durable job performs the authoritative blocking evaluation, and manual redelivery can retry the fast path.
+
+Authority-change acceptance uses the same timeout while waiting for an in-flight final Check Run under the installation publication guard. The acceptance transaction advances a persistent installation authority epoch for an installation-wide event. It records the fan-out job in the same transaction. Every evaluation row stores the epoch from enqueue time. Work queued before the authority change therefore cannot publish, even after fan-out completes.
+
+The authority worker performs these operations:
+
+1. Split installation scope into repository fences when needed.
+2. Enumerate affected open pull requests.
+3. Supersede each evaluation generation.
+4. Attempt bounded invalidation.
+
+Installation-wide and repository-wide work is claimed before base-specific push work. Repository-wide work replaces older base-specific rows. A 101st distinct base-ref row for one installation and repository collapses the set into one conservative repository-wide job.
+
+Evaluation and authority failures remain pending and retry indefinitely with bounded ordinary backoff. GitHub rate limits use their separately bounded provider delay. GitHub [requires a response within 10 seconds and does not automatically redeliver failures](https://docs.github.com/en/webhooks/using-webhooks/handling-failed-webhook-deliveries), so synchronous work is bounded. A direct-trigger fast-path failure does not undo durable acceptance. An authority-guard timeout prevents acceptance and requires manual redelivery.
 
 GitHub documents signature validation in [Validating webhook deliveries](https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries).
 
 ## App Manifest setup routes
 
-Setup mode is disabled unless `EXTRA_CODEOWNERS_SETUP_ENABLED=true`, an HTTPS `EXTRA_CODEOWNERS_PUBLIC_URL` is configured, and `EXTRA_CODEOWNERS_SETUP_STATE_SECRET` contains at least 32 bytes. The state secret protects the short-lived setup exchange and is independent of the GitHub webhook secret.
+Setup mode requires all three settings:
+
+- `EXTRA_CODEOWNERS_SETUP_ENABLED=true`
+- an HTTPS `EXTRA_CODEOWNERS_PUBLIC_URL`
+- `EXTRA_CODEOWNERS_SETUP_STATE_SECRET` containing at least 32 bytes.
+
+When `EXTRA_CODEOWNERS_SETUP_ENABLED` is `false`, the setup routes return `404` and the other two settings are not required. When it is `true`, missing or invalid setup settings prevent the service configuration from loading. The state secret protects the short-lived setup exchange and is independent of the GitHub webhook secret.
 
 `GET /setup` accepts an optional `organization` query parameter. When supplied, GitHub creates the App under that organization; otherwise GitHub uses the administrator's personal App settings. The route returns `200 text/html`, or `404` when setup is disabled.
 
-GitHub redirects the one-time conversion `code` and signed `state` query parameters to `GET /setup/callback`. Both are required. The service validates state, exchanges the code, and displays the complete App Manifest conversion response once with no-store response headers. That response includes the App ID and sensitive credential material such as the private key, webhook secret, and any client secret GitHub returns. The route returns `400` for an invalid, expired, or rejected exchange, `422` when a required query parameter is absent, and `404` when setup is disabled and both query parameters are otherwise valid.
+GitHub redirects the one-time conversion `code` and signed `state` query parameters to `GET /setup/callback`. Both are required. The service validates state and exchanges the code. It displays the complete App Manifest conversion response once with no-store response headers.
+
+The response contains the App ID and sensitive credential material:
+
+- the private key
+- the webhook secret
+- any client secret returned by GitHub.
+
+| Callback condition | Status |
+| --- | --- |
+| Invalid, expired, or rejected exchange | `400` |
+| Missing required query parameter | `422` |
+| Setup disabled, with both query parameters otherwise valid | `404` |
 
 GitHub uses `GET /setup/complete` after installation or permission updates. It returns a `200` configuration pointer only while setup mode is enabled, and `404` otherwise.
 
-Copy the one-time credentials directly into a secret manager, then close the result page. The service does not retain them. Configure reverse proxies to omit callback query strings from access logs because the conversion code is sensitive. Do not capture the result page in screenshots, browser synchronization, support tickets, terminal transcripts, or logs.
+The service does not retain the one-time credentials. They must be copied directly into a secret manager before the result page is closed. Reverse proxies must omit callback query strings from access logs because the conversion code is sensitive. The result page must not appear in screenshots, browser synchronization, support tickets, terminal transcripts, or logs.
 
-The setup flow creates a private App by default and requests Checks write, Statuses write, Contents read, Metadata read, Members read, and Pull requests read. Statuses is required for expected-source selection in organization-level rulesets but is removed from runtime installation tokens. The App's explicit subscriptions and the automatically delivered installation events it handles are listed in the [GitHub permissions reference](github-permissions.md#webhook-subscriptions).
+The setup flow creates a private App by default. It requests these permissions:
+
+| Permission | Access |
+| --- | --- |
+| Checks | Write |
+| Statuses | Write |
+| Contents | Read |
+| Metadata | Read |
+| Members | Read |
+| Pull requests | Read |
+
+Statuses is required for expected-source selection in organization-level rulesets. Runtime installation tokens omit it. The App's explicit subscriptions and automatically delivered installation events appear in the [GitHub permissions reference](github-permissions.md#webhook-subscriptions).
 
 Operators who do not need to register Apps through this service should keep setup mode disabled.
 
 ## Errors and compatibility
 
-Clients must interpret HTTP status codes rather than response text. The JSON error envelope and OpenAPI compatibility policy are pre-1.0 and may change with release notes. Repeated or manually redelivered webhooks are idempotent while the delivery ID remains in the deduplication store.
+Clients must interpret HTTP status codes rather than response text. The JSON error envelope and OpenAPI compatibility policy may change before 1.0. Such changes appear in release notes. Repeated or manually redelivered webhooks are idempotent while the delivery ID remains in the deduplication store.
