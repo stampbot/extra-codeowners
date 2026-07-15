@@ -50,3 +50,4 @@ nav:
       - Native CODEOWNERS comparison: explanation/native-codeowners.md
       - Architecture: explanation/architecture.md
       - Threat model: explanation/threat-model.md
+      - Runtime base image decision: explanation/runtime-base.md

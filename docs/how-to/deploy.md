@@ -46,6 +46,8 @@ Record the resulting image digest. A local build isn't signed or attested merely
 
 The checked-in tag-release pipeline can publish signed, attestable versioned images. None exists before the first successful release.
 
+The [runtime base image decision](../explanation/runtime-base.md) records the selected upstream image, architecture evidence, vulnerability dispositions, update contract, and residual risk.
+
 ## 2. Provision durable state
 
 Create a dedicated PostgreSQL database and role. Give the role ownership only of the Extra CODEOWNERS database; don't grant cluster-administrator or unrelated-database privileges.

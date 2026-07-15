@@ -175,7 +175,6 @@ jobs:
           output-file: vulnerability-report-${{ matrix.architecture }}.json
           output-format: json
           severity-cutoff: high
-          vex: .openvex.json
 
       - name: Upload vulnerability inventory
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -361,17 +360,19 @@ jobs:
             --arg timestamp "$timestamp" \
             '.["@id"] = $document_id
              | .timestamp = $timestamp
-             | .statements[0].timestamp = $timestamp
-             | .statements[0].products = [
-                 {
-                   "@id": $amd64_product,
-                   "subcomponents": [{"@id": "pkg:generic/python@3.14.6"}]
-                 },
-                 {
-                   "@id": $arm64_product,
-                   "subcomponents": [{"@id": "pkg:generic/python@3.14.6"}]
-                 }
-               ]' \
+             | .statements |= map(
+                 .timestamp = $timestamp
+                 | .products = [
+                     {
+                       "@id": $amd64_product,
+                       "subcomponents": [{"@id": "pkg:generic/python@3.14.6"}]
+                     },
+                     {
+                       "@id": $arm64_product,
+                       "subcomponents": [{"@id": "pkg:generic/python@3.14.6"}]
+                     }
+                   ]
+               )' \
             .openvex.json > release-scan.openvex.json
 
       - name: Scan published amd64 candidate digest
@@ -403,16 +404,18 @@ jobs:
           product="pkg:oci/extra-codeowners@${DIGEST}"
           jq \
             --arg document_id \
-              "https://github.com/stampbot/extra-codeowners/security/vex/v${VERSION}/CVE-2026-15308" \
+              "https://github.com/stampbot/extra-codeowners/security/vex/v${VERSION}/python-3.14.6" \
             --arg product "$product" \
             --arg timestamp "$timestamp" \
             '.["@id"] = $document_id
              | .timestamp = $timestamp
-             | .statements[0].timestamp = $timestamp
-             | .statements[0].products = [{
-                 "@id": $product,
-                 "subcomponents": [{"@id": "pkg:generic/python@3.14.6"}]
-               }]' \
+             | .statements |= map(
+                 .timestamp = $timestamp
+                 | .products = [{
+                     "@id": $product,
+                     "subcomponents": [{"@id": "pkg:generic/python@3.14.6"}]
+                   }]
+               )' \
             .openvex.json > "extra-codeowners-${VERSION}.openvex.json"
 
       - name: Attest image provenance

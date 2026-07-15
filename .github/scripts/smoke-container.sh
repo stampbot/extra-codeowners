@@ -5,6 +5,7 @@ set -euo pipefail
 image="${1:?usage: smoke-container.sh IMAGE ARCHITECTURE CONTAINER_NAME}"
 expected_architecture="${2:?usage: smoke-container.sh IMAGE ARCHITECTURE CONTAINER_NAME}"
 container_name="${3:?usage: smoke-container.sh IMAGE ARCHITECTURE CONTAINER_NAME}"
+script_directory="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
 cleanup() {
   docker rm --force "$container_name" >/dev/null 2>&1 || true
@@ -43,12 +44,22 @@ import extra_codeowners
 path = Path(extra_codeowners.__file__)
 assert path.stat().st_uid == 0, "application code must be root-owned"
 assert not os.access(path, os.W_OK), "runtime UID must not be able to rewrite application code"
+assert not Path("/build").exists(), "builder and test sources must not enter the runtime image"
+assert not Path("/sbin/apk").exists(), "runtime image must not include the apk executable"
+assert not Path("/usr/local/lib/python3.14/ensurepip").exists(), "runtime image must not bootstrap pip"
+assert not any(Path("/usr/local/bin").glob("pip*")), "runtime image must not include pip entry points"
+assert not any(Path("/usr/local/lib/python3.14/site-packages").glob("pip*")), (
+    "runtime image must not include the system pip package"
+)
 
 license_path = Path("/usr/share/licenses/extra-codeowners/LICENSE")
 assert "Apache License" in license_path.read_text(encoding="utf-8")
 assert license_path.stat().st_uid == 0, "license must be root-owned"
 assert not os.access(license_path, os.W_OK), "runtime UID must not rewrite the license"
 '
+
+docker exec --interactive "$container_name" python - \
+  <"${script_directory}/verify-container-runtime.py"
 
 for _ in $(seq 1 45); do
   if docker exec "$container_name" python -c '
