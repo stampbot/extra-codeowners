@@ -22,16 +22,81 @@ jobs:
       - name: Verify every commit sign-off
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BASE_REPOSITORY_ID: ${{ github.event.pull_request.base.repo.id }}
+          GH_TOKEN: ${{ github.token }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          HEAD_REPOSITORY_ID: ${{ github.event.pull_request.head.repo.id }}
+          PR_AUTHOR_ID: ${{ github.event.pull_request.user.id }}
+          PR_AUTHOR_LOGIN: ${{ github.event.pull_request.user.login }}
+          PR_AUTHOR_TYPE: ${{ github.event.pull_request.user.type }}
+          PR_COMMIT_COUNT: ${{ github.event.pull_request.commits }}
+          REPOSITORY: ${{ github.repository }}
+          REPOSITORY_ID: ${{ github.repository_id }}
         run: |
+          set -euo pipefail
+
+          official_dependabot_pr=false
+          if [[ "$PR_AUTHOR_LOGIN" == 'dependabot[bot]' \
+            && "$PR_AUTHOR_ID" == '49699333' \
+            && "$PR_AUTHOR_TYPE" == 'Bot' \
+            && "$BASE_REPOSITORY_ID" == "$REPOSITORY_ID" \
+            && "$HEAD_REPOSITORY_ID" == "$REPOSITORY_ID" \
+            && "$HEAD_REF" == dependabot/* \
+            && "$PR_COMMIT_COUNT" == '1' ]]; then
+            official_dependabot_pr=true
+          fi
+
           failed=0
           while IFS= read -r commit; do
             author="$(git show --no-patch --format='%an <%ae>' "$commit")"
-            if ! git show --no-patch --format='%B' "$commit" \
+            if git show --no-patch --format='%B' "$commit" \
               | grep --fixed-strings --ignore-case --line-regexp \
                 "Signed-off-by: $author" >/dev/null; then
-              printf 'Commit %s lacks a Signed-off-by line matching its author.\n' "$commit" >&2
-              failed=1
+              continue
             fi
+
+            # GitHub's canonical Dependabot trailer uses support@github.com
+            # rather than the bot account's noreply author address. Accept that
+            # one alternate identity only when both the PR and its sole commit
+            # match the complete, signed GitHub provenance contract below.
+            if [[ "$official_dependabot_pr" == true && "$commit" == "$HEAD_SHA" ]]; then
+              metadata=''
+              if metadata="$(
+                gh api \
+                  --header 'X-GitHub-Api-Version: 2026-03-10' \
+                  "repos/${REPOSITORY}/commits/${commit}"
+              )" && jq --exit-status --arg commit "$commit" --arg base "$BASE_SHA" '
+                .sha == $commit
+                and (.parents | length) == 1
+                and .parents[0].sha == $base
+                and .author.login == "dependabot[bot]"
+                and .author.id == 49699333
+                and .author.type == "Bot"
+                and .committer.login == "web-flow"
+                and .committer.id == 19864447
+                and .committer.type == "User"
+                and .commit.author.name == "dependabot[bot]"
+                and .commit.author.email == "49699333+dependabot[bot]@users.noreply.github.com"
+                and .commit.committer.name == "GitHub"
+                and .commit.committer.email == "noreply@github.com"
+                and .commit.verification.verified == true
+                and .commit.verification.reason == "valid"
+                and ((.commit.verification.signature // "") | length > 0)
+                and ((.commit.verification.payload // "") | length > 0)
+                and ((.commit.verification.verified_at // "") | length > 0)
+                and (
+                  .commit.message
+                  | split("\n")
+                  | index("Signed-off-by: dependabot[bot] <support@github.com>") != null
+                )
+              ' <<<"$metadata" >/dev/null; then
+                printf 'Accepted provenance-constrained Dependabot sign-off for %s.\n' "$commit"
+                continue
+              fi
+            fi
+
+            printf 'Commit %s lacks a valid Signed-off-by line matching its author.\n' "$commit" >&2
+            failed=1
           done < <(git rev-list "${BASE_SHA}..${HEAD_SHA}")
           exit "$failed"
