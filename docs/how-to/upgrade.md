@@ -181,11 +181,13 @@ artifact and run once:
 extra-codeowners database migrate --adopt-pre-alembic-schema
 ```
 
-Adoption succeeds only when every expected table, column, primary key, named
-unique constraint, index, and compatibility marker matches the immutable 0001
-contract, with no unexpected application table, index, foreign key, check, or
-unique constraint. It stamps the baseline and then runs the remaining 0.1.0
-revision.
+Adoption succeeds only when every expected table, column type, length,
+nullability, PostgreSQL time-zone mode, server default, owned sequence,
+identity/computed behavior, primary key, named unique constraint, plain index,
+and compatibility marker matches the immutable 0001 contract. Included
+columns, expressions, ordering, predicates, unexpected dialect options,
+foreign keys, checks, and additional application objects are rejected. It
+stamps the baseline and then runs the remaining 0.1.0 revision.
 
 Later application artifacts reject this adoption flag. Establish the
 database's pre-release provenance before using 0.1.0; structural inspection

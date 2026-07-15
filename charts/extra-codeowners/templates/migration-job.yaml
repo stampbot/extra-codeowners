@@ -24,6 +24,7 @@ spec:
         {{- include "extra-codeowners.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: database-migration
     spec:
+      enableServiceLinks: false
       automountServiceAccountToken: false
       serviceAccountName: {{ .Values.migrations.serviceAccountName | default "default" }}
       restartPolicy: Never

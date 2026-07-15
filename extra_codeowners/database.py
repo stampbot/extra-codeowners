@@ -69,7 +69,12 @@ class SchemaMetadata(Base):
 
     __tablename__ = "schema_metadata"
 
-    singleton_id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    singleton_id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        autoincrement=False,
+        default=1,
+    )
     version: Mapped[int] = mapped_column(Integer, nullable=False)
 
 

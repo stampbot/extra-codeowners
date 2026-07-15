@@ -52,6 +52,11 @@ The migration Job does not inherit `existingSecret`, `extraEnvFrom`,
 inputs under `migrations`. Never attach the App private key or webhook secret
 to that Job.
 
+The application and migration pods set `enableServiceLinks: false`. Kubernetes
+would otherwise inject a Service variable named `EXTRA_CODEOWNERS_PORT` with a
+URL-like value, which conflicts with the application's integer port setting.
+Use Kubernetes DNS for service discovery instead of injected Service variables.
+
 ## Build an image from source
 
 Run these commands from the repository root. `IMAGE_REPOSITORY` must name an
@@ -493,6 +498,7 @@ Security-relevant defaults are:
 - no chart-managed Secret or credential value
 - separate runtime and migration credential inputs
 - a Service selector that excludes migration hooks
+- Kubernetes Service environment-variable injection disabled
 - a NetworkPolicy that covers both application and migration pod labels after
   ordinary chart resources are installed.
 

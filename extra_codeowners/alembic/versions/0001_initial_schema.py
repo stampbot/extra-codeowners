@@ -17,7 +17,7 @@ def upgrade() -> None:
     """Create the durable queue, audit, lease, and compatibility tables."""
     op.create_table(
         "schema_metadata",
-        sa.Column("singleton_id", sa.Integer(), nullable=False),
+        sa.Column("singleton_id", sa.Integer(), autoincrement=False, nullable=False),
         sa.Column("version", sa.Integer(), nullable=False),
         sa.PrimaryKeyConstraint("singleton_id"),
     )

@@ -109,6 +109,11 @@ INSERT INTO authority_epochs (installation_id, generation, changed_at) VALUES (
 SELECT setval(pg_get_serial_sequence('evaluation_jobs', 'id'), 410, TRUE);
 SELECT setval(pg_get_serial_sequence('evaluation_audits', 'id'), 730, TRUE);
 SELECT setval(pg_get_serial_sequence('authority_jobs', 'id'), 290, TRUE);
+SELECT setval(
+  pg_get_serial_sequence('authority_epochs', 'installation_id'),
+  2000,
+  TRUE
+);
 COMMIT;
 SQL
 
@@ -136,6 +141,7 @@ capture_state() {
         'service_leases', (SELECT jsonb_agg(to_jsonb(t) ORDER BY name) FROM service_leases AS t),
         'webhook_deliveries', (SELECT jsonb_agg(to_jsonb(t) ORDER BY delivery_id) FROM webhook_deliveries AS t),
         'sequences', jsonb_build_object(
+          'authority_epochs', (SELECT jsonb_build_object('last_value', last_value, 'is_called', is_called) FROM authority_epochs_installation_id_seq),
           'authority_jobs', (SELECT jsonb_build_object('last_value', last_value, 'is_called', is_called) FROM authority_jobs_id_seq),
           'evaluation_audits', (SELECT jsonb_build_object('last_value', last_value, 'is_called', is_called) FROM evaluation_audits_id_seq),
           'evaluation_jobs', (SELECT jsonb_build_object('last_value', last_value, 'is_called', is_called) FROM evaluation_jobs_id_seq)
@@ -201,9 +207,9 @@ next_values="$(
     --no-align \
     --tuples-only \
     --set ON_ERROR_STOP=1 \
-    --command "SELECT nextval('evaluation_jobs_id_seq'), nextval('evaluation_audits_id_seq'), nextval('authority_jobs_id_seq');"
+    --command "SELECT nextval('evaluation_jobs_id_seq'), nextval('evaluation_audits_id_seq'), nextval('authority_jobs_id_seq'), nextval('authority_epochs_installation_id_seq');"
 )"
-if [[ "$next_values" != "411|731|291" ]]; then
+if [[ "$next_values" != "411|731|291|2001" ]]; then
   printf 'Restored sequences did not generate the exact expected next values.\n' >&2
   exit 1
 fi

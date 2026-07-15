@@ -295,12 +295,28 @@ jobs:
             --show-only templates/service.yaml > rendered-service.yaml
           helm template extra-codeowners charts/extra-codeowners \
             --show-only templates/networkpolicy.yaml > rendered-network-policy.yaml
+          helm template extra-codeowners charts/extra-codeowners \
+            --show-only templates/deployment.yaml > rendered-deployment.yaml
+          deployment_selector="$(awk '
+            /^  selector:$/ { capture = 1 }
+            capture { print }
+            /^  template:$/ { exit }
+          ' rendered-deployment.yaml)"
           grep -Fq 'app.kubernetes.io/instance: extra-codeowners' rendered-migration-job.yaml
           grep -Fq 'app.kubernetes.io/component: database-migration' rendered-migration-job.yaml
+          grep -Fq 'enableServiceLinks: false' rendered-migration-job.yaml
           grep -Fq 'name: extra-codeowners-database' rendered-migration-job.yaml
           grep -Fq 'name: database-ca' rendered-migration-job.yaml
           grep -Fq 'app.kubernetes.io/component: application' rendered-service.yaml
+          grep -Fq 'app.kubernetes.io/name: extra-codeowners' <<< "$deployment_selector"
+          grep -Fq 'app.kubernetes.io/instance: extra-codeowners' <<< "$deployment_selector"
+          grep -Fq 'app.kubernetes.io/component: application' rendered-deployment.yaml
+          grep -Fq 'enableServiceLinks: false' rendered-deployment.yaml
           grep -Fq 'app.kubernetes.io/instance: extra-codeowners' rendered-network-policy.yaml
+          if grep -Fq 'app.kubernetes.io/component:' <<< "$deployment_selector"; then
+            echo 'Deployment immutable selector no longer matches the legacy release selector.' >&2
+            exit 1
+          fi
           if grep -Fq 'app.kubernetes.io/component:' rendered-network-policy.yaml; then
             echo 'NetworkPolicy no longer covers both application and migration pods.' >&2
             exit 1

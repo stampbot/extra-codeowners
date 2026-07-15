@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -51,6 +51,8 @@ class _BaselineColumn:
     type_affinity: type[object]
     length: int | None
     nullable: bool
+    timezone: bool | None
+    generated_sequence: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,8 +80,17 @@ def _column(
     *,
     length: int | None = None,
     nullable: bool = False,
+    timezone: bool | None = None,
+    generated_sequence: str | None = None,
 ) -> _BaselineColumn:
-    return _BaselineColumn(name, type_affinity, length, nullable)
+    return _BaselineColumn(
+        name,
+        type_affinity,
+        length,
+        nullable,
+        timezone,
+        generated_sequence,
+    )
 
 
 # Do not derive this contract from Base.metadata. This is the exact schema made
@@ -97,7 +108,7 @@ _PRE_ALEMBIC_0_1_BASELINE = (
     _BaselineTable(
         "evaluation_jobs",
         (
-            _column("id", Integer),
+            _column("id", Integer, generated_sequence="evaluation_jobs_id_seq"),
             _column("installation_id", Integer),
             _column("repository_full_name", String, length=512),
             _column("pull_number", Integer),
@@ -108,10 +119,10 @@ _PRE_ALEMBIC_0_1_BASELINE = (
             _column("authority_generation", Integer),
             _column("state", String, length=16),
             _column("attempts", Integer),
-            _column("requested_at", DateTime),
-            _column("available_at", DateTime),
+            _column("requested_at", DateTime, timezone=True),
+            _column("available_at", DateTime, timezone=True),
             _column("lease_owner", String, length=128, nullable=True),
-            _column("lease_until", DateTime, nullable=True),
+            _column("lease_until", DateTime, nullable=True, timezone=True),
             _column("last_error", String, length=2000, nullable=True),
         ),
         frozenset({"id"}),
@@ -128,9 +139,9 @@ _PRE_ALEMBIC_0_1_BASELINE = (
         (
             _column("delivery_id", String, length=128),
             _column("event", String, length=128),
-            _column("received_at", DateTime),
+            _column("received_at", DateTime, timezone=True),
             _column("invalidation_required", Boolean),
-            _column("invalidation_completed_at", DateTime, nullable=True),
+            _column("invalidation_completed_at", DateTime, nullable=True, timezone=True),
         ),
         frozenset({"delivery_id"}),
         (_BaselineKey("ix_webhook_deliveries_received_at", ("received_at",)),),
@@ -138,13 +149,13 @@ _PRE_ALEMBIC_0_1_BASELINE = (
     _BaselineTable(
         "evaluation_audits",
         (
-            _column("id", Integer),
+            _column("id", Integer, generated_sequence="evaluation_audits_id_seq"),
             _column("repository_full_name", String, length=512),
             _column("pull_number", Integer),
             _column("head_sha", String, length=64),
             _column("conclusion", String, length=32),
             _column("details", JSON),
-            _column("evaluated_at", DateTime),
+            _column("evaluated_at", DateTime, timezone=True),
         ),
         frozenset({"id"}),
         unique_constraints=(
@@ -159,14 +170,14 @@ _PRE_ALEMBIC_0_1_BASELINE = (
         (
             _column("name", String, length=128),
             _column("owner", String, length=128),
-            _column("lease_until", DateTime),
+            _column("lease_until", DateTime, timezone=True),
         ),
         frozenset({"name"}),
     ),
     _BaselineTable(
         "authority_jobs",
         (
-            _column("id", Integer),
+            _column("id", Integer, generated_sequence="authority_jobs_id_seq"),
             _column("installation_id", Integer),
             _column("scope_key", String, length=512),
             _column("base_ref", String, length=255),
@@ -174,10 +185,10 @@ _PRE_ALEMBIC_0_1_BASELINE = (
             _column("generation", Integer),
             _column("state", String, length=16),
             _column("attempts", Integer),
-            _column("requested_at", DateTime),
-            _column("available_at", DateTime),
+            _column("requested_at", DateTime, timezone=True),
+            _column("available_at", DateTime, timezone=True),
             _column("lease_owner", String, length=128, nullable=True),
-            _column("lease_until", DateTime, nullable=True),
+            _column("lease_until", DateTime, nullable=True, timezone=True),
             _column("last_error", String, length=2000, nullable=True),
         ),
         frozenset({"id"}),
@@ -192,9 +203,13 @@ _PRE_ALEMBIC_0_1_BASELINE = (
     _BaselineTable(
         "authority_epochs",
         (
-            _column("installation_id", Integer),
+            _column(
+                "installation_id",
+                Integer,
+                generated_sequence="authority_epochs_installation_id_seq",
+            ),
             _column("generation", Integer),
-            _column("changed_at", DateTime),
+            _column("changed_at", DateTime, timezone=True),
         ),
         frozenset({"installation_id"}),
     ),
@@ -307,6 +322,20 @@ def _baseline_tables() -> frozenset[str]:
     return frozenset(table.name for table in _PRE_ALEMBIC_0_1_BASELINE)
 
 
+def _has_unexpected_index_options(index: Mapping[str, object]) -> bool:
+    """Return whether an inspected index has non-baseline behavior."""
+    if index.get("include_columns") or index.get("column_sorting") or index.get("expressions"):
+        return True
+    dialect_options = index.get("dialect_options")
+    if not isinstance(dialect_options, Mapping):
+        return dialect_options is not None
+    for name, value in dialect_options.items():
+        if name == "postgresql_include" and (value is None or value == [] or value == ()):
+            continue
+        return True
+    return False
+
+
 def _adopt_pre_alembic_schema(connection: Connection, config: Config) -> None:
     if __version__ != PRE_ALEMBIC_ADOPTION_RELEASE:
         raise RuntimeError(
@@ -314,6 +343,11 @@ def _adopt_pre_alembic_schema(connection: Connection, config: Config) -> None:
             "use that artifact to adopt the immutable baseline before upgrading"
         )
     inspector = inspect(connection)
+    dialect_name = connection.dialect.name
+    if dialect_name not in {"postgresql", "sqlite"}:
+        raise RuntimeError(
+            f"pre-Alembic adoption does not support database dialect {dialect_name!r}"
+        )
     actual_tables = set(inspector.get_table_names())
     baseline_tables = _baseline_tables()
     if actual_tables != baseline_tables:
@@ -337,14 +371,65 @@ def _adopt_pre_alembic_schema(connection: Connection, config: Config) -> None:
             actual_column = actual_by_name[expected_column.name]
             actual_type = actual_column["type"]
             actual_length = getattr(actual_type, "length", None)
+            actual_timezone = getattr(actual_type, "timezone", None)
             if (
                 not isinstance(actual_type, expected_column.type_affinity)
                 or expected_column.length != actual_length
                 or bool(actual_column["nullable"]) != expected_column.nullable
+                or (
+                    dialect_name == "postgresql"
+                    and expected_column.timezone is not None
+                    and actual_timezone != expected_column.timezone
+                )
             ):
                 raise RuntimeError(
                     f"refusing to adopt pre-Alembic column "
-                    f"{table.name}.{expected_column.name}: type, length, or nullability differs"
+                    f"{table.name}.{expected_column.name}: type, length, timezone, or "
+                    "nullability differs"
+                )
+            actual_default = actual_column.get("default")
+            actual_identity = actual_column.get("identity")
+            actual_computed = actual_column.get("computed")
+            actual_autoincrement = bool(actual_column.get("autoincrement"))
+            generation_matches = (
+                actual_default is None
+                and actual_identity is None
+                and actual_computed is None
+                and not actual_autoincrement
+            )
+            if dialect_name == "postgresql" and expected_column.generated_sequence is not None:
+                default_schema = inspector.default_schema_name
+                expected_serial = (
+                    f"{default_schema}.{expected_column.generated_sequence}"
+                    if default_schema
+                    else expected_column.generated_sequence
+                )
+                actual_serial = connection.scalar(
+                    text("SELECT pg_get_serial_sequence(:table_name, :column_name)"),
+                    {"table_name": table.name, "column_name": expected_column.name},
+                )
+                allowed_defaults = {
+                    f"nextval('{expected_column.generated_sequence}'::regclass)",
+                    f"nextval('{expected_serial}'::regclass)",
+                }
+                generation_matches = (
+                    actual_serial == expected_serial
+                    and actual_default in allowed_defaults
+                    and actual_identity is None
+                    and actual_computed is None
+                    and actual_autoincrement
+                )
+            elif dialect_name == "sqlite" and expected_column.generated_sequence is not None:
+                # SQLite represents integer-primary-key generation without a
+                # reflected server default or identity object.
+                generation_matches = (
+                    actual_default is None and actual_identity is None and actual_computed is None
+                )
+            if not generation_matches:
+                raise RuntimeError(
+                    f"refusing to adopt pre-Alembic column "
+                    f"{table.name}.{expected_column.name}: default, owned sequence, identity, "
+                    "computed value, or autoincrement behavior differs"
                 )
         actual_primary_key = set(inspector.get_pk_constraint(table.name)["constrained_columns"])
         if actual_primary_key != table.primary_key:
@@ -353,14 +438,20 @@ def _adopt_pre_alembic_schema(connection: Connection, config: Config) -> None:
                 f"{sorted(table.primary_key)!r}, found {sorted(actual_primary_key)!r}"
             )
         expected_indexes = {index.name: (index.columns, False) for index in table.indexes}
-        actual_indexes = {
-            str(index["name"]): (
+        actual_indexes: dict[str, tuple[tuple[str, ...], bool]] = {}
+        for index in inspector.get_indexes(table.name):
+            if index["name"] is None or index.get("duplicates_constraint") is not None:
+                continue
+            if _has_unexpected_index_options(index):
+                raise RuntimeError(
+                    f"refusing to adopt pre-Alembic index {index['name']!r} on "
+                    f"table {table.name!r}: included columns, expressions, ordering, "
+                    "predicates, or dialect options differ"
+                )
+            actual_indexes[str(index["name"])] = (
                 tuple(str(column) for column in index["column_names"]),
                 bool(index["unique"]),
             )
-            for index in inspector.get_indexes(table.name)
-            if index["name"] is not None and index.get("duplicates_constraint") is None
-        }
         if actual_indexes != expected_indexes:
             raise RuntimeError(
                 f"refusing to adopt pre-Alembic table {table.name!r}: expected indexes "

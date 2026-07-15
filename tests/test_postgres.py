@@ -15,7 +15,12 @@ from sqlalchemy.exc import DBAPIError
 
 import extra_codeowners.migrations as migrations
 from extra_codeowners.database import Base, ClaimedJob, EvaluationJob, JobRequest, QueueStore
-from extra_codeowners.migrations import MIGRATION_LOCK_KEY, current_revision, upgrade_database
+from extra_codeowners.migrations import (
+    BASELINE_REVISION,
+    MIGRATION_LOCK_KEY,
+    current_revision,
+    upgrade_database,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -333,3 +338,89 @@ def test_postgres_pre_alembic_schema_adoption_is_strict_and_usable() -> None:
     with store.engine.begin() as connection:
         connection.execute(text("DROP TABLE IF EXISTS alembic_version"))
     store.close()
+
+
+def test_postgres_revision_0001_matches_immutable_adoption_contract() -> None:
+    url = postgres_url()
+    store = QueueStore(url)
+    Base.metadata.drop_all(store.engine)
+    with store.engine.begin() as connection:
+        connection.execute(text("DROP TABLE IF EXISTS alembic_version"))
+    try:
+        upgrade_database(url, revision=BASELINE_REVISION)
+        with store.engine.connect() as connection:
+            sequences = tuple(
+                connection.execute(
+                    text(
+                        "SELECT sequence_name FROM information_schema.sequences "
+                        "WHERE sequence_schema = current_schema() ORDER BY sequence_name"
+                    )
+                ).scalars()
+            )
+        assert sequences == (
+            "authority_epochs_installation_id_seq",
+            "authority_jobs_id_seq",
+            "evaluation_audits_id_seq",
+            "evaluation_jobs_id_seq",
+        )
+        with store.engine.begin() as connection:
+            connection.execute(text("DROP TABLE alembic_version"))
+
+        upgrade_database(url, adopt_pre_alembic_schema=True)
+
+        store.initialize()
+        assert current_revision(url) == "0002_retry_dead_jobs"
+    finally:
+        Base.metadata.drop_all(store.engine)
+        with store.engine.begin() as connection:
+            connection.execute(text("DROP TABLE IF EXISTS alembic_version"))
+        store.close()
+
+
+@pytest.mark.parametrize(
+    ("alter_statements", "error_match"),
+    [
+        (
+            ("ALTER TABLE evaluation_jobs ALTER COLUMN id DROP DEFAULT",),
+            "default, owned sequence",
+        ),
+        (
+            (
+                "ALTER TABLE evaluation_jobs ALTER COLUMN requested_at "
+                "TYPE TIMESTAMP WITHOUT TIME ZONE",
+            ),
+            "timezone",
+        ),
+        (
+            (
+                "DROP INDEX ix_evaluation_jobs_claim",
+                "CREATE INDEX ix_evaluation_jobs_claim ON evaluation_jobs "
+                "(state, available_at, lease_until) WHERE state = 'pending'",
+            ),
+            "predicates",
+        ),
+    ],
+    ids=("missing-serial-default", "timestamp-without-timezone", "partial-index"),
+)
+def test_postgres_pre_alembic_adoption_rejects_behavior_changes(
+    alter_statements: tuple[str, ...], error_match: str
+) -> None:
+    url = postgres_url()
+    store = QueueStore(url)
+    Base.metadata.drop_all(store.engine)
+    with store.engine.begin() as connection:
+        connection.execute(text("DROP TABLE IF EXISTS alembic_version"))
+    Base.metadata.create_all(store.engine)
+    try:
+        with store.engine.begin() as connection:
+            connection.execute(text("INSERT INTO schema_metadata VALUES (1, 1)"))
+            for statement in alter_statements:
+                connection.execute(text(statement))
+
+        with pytest.raises(RuntimeError, match=error_match):
+            upgrade_database(url, adopt_pre_alembic_schema=True)
+    finally:
+        Base.metadata.drop_all(store.engine)
+        with store.engine.begin() as connection:
+            connection.execute(text("DROP TABLE IF EXISTS alembic_version"))
+        store.close()

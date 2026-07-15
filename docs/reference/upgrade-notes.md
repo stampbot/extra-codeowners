@@ -26,6 +26,8 @@ There is no supported application release before `0.1.0`. A database produced
 by a pre-release build has no Alembic revision. The explicit
 `--adopt-pre-alembic-schema` path is available only in the 0.1.0 artifact. It
 accepts only the immutable 0001 table, column, index, constraint, and
-compatibility-marker contract after the operator has verified a backup.
+compatibility-marker contract after the operator has verified a backup. Column
+defaults, owned sequences, identity/computed behavior, PostgreSQL timestamp
+time-zone mode, and index predicates/options are part of that contract.
 Modified, partial, provenance-ambiguous, or other unversioned schemas require a
 separately reviewed recovery plan.

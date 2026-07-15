@@ -14,7 +14,7 @@ spec:
     {{- toYaml .Values.deploymentStrategy | nindent 4 }}
   selector:
     matchLabels:
-      {{- include "extra-codeowners.applicationSelectorLabels" . | nindent 6 }}
+      {{- include "extra-codeowners.selectorLabels" . | nindent 6 }}
   template:
     metadata:
       {{- with .Values.podAnnotations }}
@@ -27,6 +27,7 @@ spec:
         {{- toYaml . | nindent 8 }}
         {{- end }}
     spec:
+      enableServiceLinks: false
       serviceAccountName: {{ include "extra-codeowners.serviceAccountName" . }}
       automountServiceAccountToken: {{ .Values.serviceAccount.automountServiceAccountToken }}
       securityContext:
