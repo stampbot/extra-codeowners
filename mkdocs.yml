@@ -42,6 +42,7 @@ nav:
       - Deploy: how-to/deploy.md
       - Upgrade, back up, and restore: how-to/upgrade.md
       - Operate and recover: how-to/operate.md
+      - Respond to dependency audit: how-to/respond-to-dependency-audit.md
   - Reference:
       - Configuration: reference/configuration.md
       - Checks and evaluation: reference/checks.md
