@@ -1157,8 +1157,7 @@ async def test_reconciler_recovers_missed_shared_head_open_and_fails_closed(
             {"number": 4, "state": "open", "head": {"sha": HEAD}},
         ]
     )
-    store = QueueStore(f"sqlite:///{tmp_path / 'missed-shared-head.db'}")
-    store.initialize()
+    store = migrated_store(f"sqlite:///{tmp_path / 'missed-shared-head.db'}")
     reconciler = Reconciler(settings(), github, store, "reconciler")  # type: ignore[arg-type]
     service = EvaluationService(settings(), github, store)  # type: ignore[arg-type]
 
