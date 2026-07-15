@@ -6,10 +6,25 @@ Verify the rollout:
 Run the chart test after the pod becomes ready:
   helm test {{ .Release.Name }} --namespace {{ .Release.Namespace }}
 
+{{- if .Values.migrations.enabled }}
+The pre-install/pre-upgrade migration Job completed before application pods
+were changed. Preserve its logs with the release evidence before the Job TTL
+expires, and verify the database backup separately before every upgrade.
+{{- else }}
+The chart migration Job is disabled. Verify that a separately controlled
+migrator applied the exact target head before application startup.
+{{- end }}
+
 {{- if not .Values.existingSecret }}
 
 WARNING: existingSecret is empty. The application requires GitHub App and
 persistence configuration before its readiness probe can succeed.
+{{- end }}
+{{- if and .Values.migrations.enabled (not .Values.migrations.existingSecret) (not .Values.migrations.extraEnvFrom) (not .Values.migrations.extraEnv) }}
+
+WARNING: no migration database configuration is set. The migration Job needs a
+PostgreSQL URL from migration-only Secret or environment values. Do not attach
+runtime GitHub App credentials to it.
 {{- end }}
 {{- if .Values.allowInsecureChanges }}
 

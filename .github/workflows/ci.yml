@@ -65,6 +65,7 @@ jobs:
           --volume "${PWD}:/mnt:ro"
           koalaman/shellcheck:v0.11.0@sha256:61862eba1fcf09a484ebcc6feea46f1782532571a34ed51fedf90dd25f925a8d
           /mnt/.github/scripts/smoke-container.sh
+          /mnt/.github/scripts/test-postgres-backup-restore.sh
 
   test:
     name: Test (Python ${{ matrix.python-version }})
@@ -140,6 +141,21 @@ jobs:
       - name: Run Python compatibility tests
         if: ${{ !matrix.coverage }}
         run: uv run pytest --no-cov
+
+      - name: Verify native PostgreSQL backup and restore
+        if: matrix.postgres
+        env:
+          EXTRA_CODEOWNERS_DATABASE_URL: ${{ matrix.test-postgres-url }}
+          PGHOST: 127.0.0.1
+          PGPASSWORD: extra_codeowners
+          PGPORT: "5432"
+          PGUSER: extra_codeowners
+          RESTORE_DATABASE: extra_codeowners_restore_test
+          SOURCE_DATABASE: extra_codeowners_test
+        run: |
+          uv run python -m extra_codeowners database migrate
+          .github/scripts/test-postgres-backup-restore.sh \
+            'postgres:17.7-alpine@sha256:bb377b7239d2774ac8cc76f481596ce96c5a6b5e9d141f6d0a0ee371a6e7c0f2'
 
       - name: Upload coverage report
         if: matrix.coverage
@@ -253,7 +269,63 @@ jobs:
           --set extraVolumeMounts[0].name=github-credentials
           --set extraVolumeMounts[0].mountPath=/run/secrets/extra-codeowners
           --set extraVolumeMounts[0].readOnly=true
+          --set migrations.existingSecret=extra-codeowners-database
+          --set migrations.extraVolumes[0].name=database-ca
+          --set migrations.extraVolumes[0].secret.secretName=extra-codeowners-database-ca
+          --set migrations.extraVolumeMounts[0].name=database-ca
+          --set migrations.extraVolumeMounts[0].mountPath=/run/secrets/database-ca
+          --set migrations.extraVolumeMounts[0].readOnly=true
           > rendered-credentials.yaml
+
+      - name: Verify workload selector and credential isolation
+        run: |
+          helm template extra-codeowners charts/extra-codeowners \
+            --set existingSecret=extra-codeowners-runtime \
+            --set extraVolumes[0].name=github-credentials \
+            --set extraVolumes[0].secret.secretName=extra-codeowners-github \
+            --set extraVolumeMounts[0].name=github-credentials \
+            --set extraVolumeMounts[0].mountPath=/run/secrets/extra-codeowners \
+            --set migrations.existingSecret=extra-codeowners-database \
+            --set migrations.extraVolumes[0].name=database-ca \
+            --set migrations.extraVolumes[0].secret.secretName=extra-codeowners-database-ca \
+            --set migrations.extraVolumeMounts[0].name=database-ca \
+            --set migrations.extraVolumeMounts[0].mountPath=/run/secrets/database-ca \
+            --show-only templates/migration-job.yaml > rendered-migration-job.yaml
+          helm template extra-codeowners charts/extra-codeowners \
+            --show-only templates/service.yaml > rendered-service.yaml
+          helm template extra-codeowners charts/extra-codeowners \
+            --show-only templates/networkpolicy.yaml > rendered-network-policy.yaml
+          helm template extra-codeowners charts/extra-codeowners \
+            --show-only templates/deployment.yaml > rendered-deployment.yaml
+          deployment_selector="$(awk '
+            /^  selector:$/ { capture = 1 }
+            capture { print }
+            /^  template:$/ { exit }
+          ' rendered-deployment.yaml)"
+          grep -Fq 'app.kubernetes.io/instance: extra-codeowners' rendered-migration-job.yaml
+          grep -Fq 'app.kubernetes.io/component: database-migration' rendered-migration-job.yaml
+          grep -Fq 'enableServiceLinks: false' rendered-migration-job.yaml
+          grep -Fq 'name: extra-codeowners-database' rendered-migration-job.yaml
+          grep -Fq 'name: database-ca' rendered-migration-job.yaml
+          grep -Fq 'app.kubernetes.io/component: application' rendered-service.yaml
+          grep -Fq 'app.kubernetes.io/name: extra-codeowners' <<< "$deployment_selector"
+          grep -Fq 'app.kubernetes.io/instance: extra-codeowners' <<< "$deployment_selector"
+          grep -Fq 'app.kubernetes.io/component: application' rendered-deployment.yaml
+          grep -Fq 'enableServiceLinks: false' rendered-deployment.yaml
+          grep -Fq 'app.kubernetes.io/instance: extra-codeowners' rendered-network-policy.yaml
+          if grep -Fq 'app.kubernetes.io/component:' <<< "$deployment_selector"; then
+            echo 'Deployment immutable selector no longer matches the legacy release selector.' >&2
+            exit 1
+          fi
+          if grep -Fq 'app.kubernetes.io/component:' rendered-network-policy.yaml; then
+            echo 'NetworkPolicy no longer covers both application and migration pods.' >&2
+            exit 1
+          fi
+          if grep -Eq 'extra-codeowners-(runtime|github)|github-credentials' \
+            rendered-migration-job.yaml; then
+            echo 'Migration Job inherited runtime GitHub credentials.' >&2
+            exit 1
+          fi
 
       - name: Render rolling-update opt-in
         run: >-
@@ -281,8 +353,21 @@ jobs:
           reject_values "runtime-environment override" \
             --set-string extraEnv[0].name=EXTRA_CODEOWNERS_ENVIRONMENT \
             --set-string extraEnv[0].value=development
+          reject_values "migration hook override" \
+            --set-string migrations.annotations.helm\\.sh/hook=post-install
+          reject_values "migration environment override" \
+            --set-string migrations.extraEnv[0].name=EXTRA_CODEOWNERS_ENVIRONMENT \
+            --set-string migrations.extraEnv[0].value=development
+          reject_values "migration temporary-volume override" \
+            --set-string migrations.extraVolumes[0].name=tmp \
+            --set-string migrations.extraVolumes[0].emptyDir={}
+          reject_values "migration temporary-mount override" \
+            --set-string migrations.extraVolumeMounts[0].name=other \
+            --set-string migrations.extraVolumeMounts[0].mountPath=/tmp
           reject_values "pod selector-label override" \
             --set-string podLabels.app\\.kubernetes\\.io/name=hijack
+          reject_values "pod component-label override" \
+            --set-string podLabels.app\\.kubernetes\\.io/component=database-migration
           reject_values "temporary-volume override" \
             --set-string extraVolumes[0].name=tmp \
             --set-string extraVolumes[0].emptyDir={}

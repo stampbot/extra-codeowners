@@ -155,8 +155,8 @@ these controls can repair a transfer or installation change that removes the
 App's access before it can update an existing check.
 
 The elected reconciler prunes delivery IDs after the configured retention
-period. Database initialization also reactivates terminal rows left by an older
-retry contract.
+period. An explicit versioned migration, not application startup, reactivates
+terminal rows left by the older pre-release retry contract.
 
 Audit evidence is sensitive. It can name private repositories, paths, owners,
 and decision details, and the service does not automatically expire audit rows.

@@ -16,4 +16,4 @@ spec:
       targetPort: http
       protocol: TCP
   selector:
-    {{- include "extra-codeowners.selectorLabels" . | nindent 4 }}
+    {{- include "extra-codeowners.applicationSelectorLabels" . | nindent 4 }}

@@ -36,6 +36,12 @@ app.kubernetes.io/name: {{ include "extra-codeowners.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
+{{/* Application-only labels keep one-shot hooks out of Services and PDBs. */}}
+{{- define "extra-codeowners.applicationSelectorLabels" -}}
+{{ include "extra-codeowners.selectorLabels" . }}
+app.kubernetes.io/component: application
+{{- end }}
+
 {{/* Service account name. */}}
 {{- define "extra-codeowners.serviceAccountName" -}}
 {{- if .Values.serviceAccount.create }}
@@ -56,8 +62,8 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 
 {{/* Reject extension values that shadow chart-owned security contracts. */}}
 {{- define "extra-codeowners.validateValues" -}}
-{{- if or (hasKey .Values.podLabels "app.kubernetes.io/name") (hasKey .Values.podLabels "app.kubernetes.io/instance") -}}
-{{- fail "podLabels must not override app.kubernetes.io/name or app.kubernetes.io/instance" -}}
+{{- if or (hasKey .Values.podLabels "app.kubernetes.io/name") (hasKey .Values.podLabels "app.kubernetes.io/instance") (hasKey .Values.podLabels "app.kubernetes.io/component") -}}
+{{- fail "podLabels must not override app.kubernetes.io/name, app.kubernetes.io/instance, or app.kubernetes.io/component" -}}
 {{- end -}}
 {{- range .Values.extraEnv -}}
 {{- if or (eq .name "EXTRA_CODEOWNERS_ENVIRONMENT") (eq .name "EXTRA_CODEOWNERS_ALLOW_INSECURE_CHANGES") -}}
@@ -72,6 +78,26 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- range .Values.extraVolumeMounts -}}
 {{- if or (eq .name "tmp") (eq .mountPath "/tmp") -}}
 {{- fail "extraVolumeMounts must not override the chart-managed /tmp mount" -}}
+{{- end -}}
+{{- end -}}
+{{- range .Values.migrations.extraEnv -}}
+{{- if eq .name "EXTRA_CODEOWNERS_ENVIRONMENT" -}}
+{{- fail "migrations.extraEnv must not override chart-managed variable EXTRA_CODEOWNERS_ENVIRONMENT" -}}
+{{- end -}}
+{{- end -}}
+{{- range .Values.migrations.extraVolumes -}}
+{{- if eq .name "tmp" -}}
+{{- fail "migrations.extraVolumes must not override the chart-managed tmp volume" -}}
+{{- end -}}
+{{- end -}}
+{{- range .Values.migrations.extraVolumeMounts -}}
+{{- if or (eq .name "tmp") (eq .mountPath "/tmp") -}}
+{{- fail "migrations.extraVolumeMounts must not override the chart-managed /tmp mount" -}}
+{{- end -}}
+{{- end -}}
+{{- range $name, $_ := .Values.migrations.annotations -}}
+{{- if or (eq $name "helm.sh/hook") (eq $name "helm.sh/hook-weight") (eq $name "helm.sh/hook-delete-policy") -}}
+{{- fail (printf "migrations.annotations must not override chart-managed annotation %s" $name) -}}
 {{- end -}}
 {{- end -}}
 {{- end }}

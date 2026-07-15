@@ -23,6 +23,7 @@
     "extraVolumes",
     "extraVolumeMounts",
     "extraArgs",
+    "migrations",
     "service",
     "ingress",
     "resources",
@@ -253,6 +254,117 @@
       "type": "array",
       "items": {
         "type": "string"
+      }
+    },
+    "migrations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "lockTimeoutSeconds",
+        "activeDeadlineSeconds",
+        "backoffLimit",
+        "ttlSecondsAfterFinished",
+        "annotations",
+        "serviceAccountName",
+        "existingSecret",
+        "extraEnvFrom",
+        "extraEnv",
+        "extraVolumes",
+        "extraVolumeMounts"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "lockTimeoutSeconds": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 300
+        },
+        "activeDeadlineSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3600
+        },
+        "backoffLimit": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10
+        },
+        "ttlSecondsAfterFinished": {
+          "type": "integer",
+          "minimum": 60,
+          "maximum": 604800
+        },
+        "annotations": {
+          "$ref": "#/definitions/stringMap"
+        },
+        "serviceAccountName": {
+          "type": "string"
+        },
+        "existingSecret": {
+          "type": "string"
+        },
+        "extraEnvFrom": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "extraEnv": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "name"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "value": {
+                "type": "string"
+              },
+              "valueFrom": {
+                "type": "object"
+              }
+            },
+            "oneOf": [
+              {
+                "required": [
+                  "value"
+                ]
+              },
+              {
+                "required": [
+                  "valueFrom"
+                ]
+              }
+            ]
+          }
+        },
+        "extraVolumes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "name"
+            ]
+          }
+        },
+        "extraVolumeMounts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "name",
+              "mountPath"
+            ]
+          }
+        }
       }
     },
     "service": {

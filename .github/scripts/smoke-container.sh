@@ -5,12 +5,17 @@ set -euo pipefail
 image="${1:?usage: smoke-container.sh IMAGE ARCHITECTURE CONTAINER_NAME}"
 expected_architecture="${2:?usage: smoke-container.sh IMAGE ARCHITECTURE CONTAINER_NAME}"
 container_name="${3:?usage: smoke-container.sh IMAGE ARCHITECTURE CONTAINER_NAME}"
+database_volume="${container_name}-database"
+database_url="sqlite:////var/lib/extra-codeowners/extra-codeowners.db"
 
 cleanup() {
   docker rm --force "$container_name" >/dev/null 2>&1 || true
+  docker volume rm --force "$database_volume" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 cleanup
+
+docker volume create "$database_volume" >/dev/null
 
 actual_architecture="$(docker image inspect --format '{{.Architecture}}' "$image")"
 if [[ "$actual_architecture" != "$expected_architecture" ]]; then
@@ -24,12 +29,41 @@ if [[ "$(docker image inspect --format '{{.Config.User}}' "$image")" != "65532:6
   exit 1
 fi
 
+# Docker user-namespace remapping makes host-directory ownership unreliable.
+# Prepare an isolated named volume without network access, then run both real
+# application commands as the image's default non-root UID/GID.
+docker run --rm \
+  --user 0:0 \
+  --network none \
+  --read-only \
+  --volume "$database_volume:/var/lib/extra-codeowners" \
+  --entrypoint python \
+  "$image" -c '
+import os
+
+os.chown("/var/lib/extra-codeowners", 65532, 65532)
+os.chmod("/var/lib/extra-codeowners", 0o700)
+'
+
+docker run --rm \
+  --platform "linux/${expected_architecture}" \
+  --network none \
+  --read-only \
+  --tmpfs /tmp:rw,noexec,nosuid,size=64m \
+  --volume "$database_volume:/var/lib/extra-codeowners" \
+  --env "EXTRA_CODEOWNERS_DATABASE_URL=$database_url" \
+  --cap-drop ALL \
+  --security-opt no-new-privileges \
+  "$image" database migrate >/dev/null
+
 docker run --detach \
   --name "$container_name" \
   --platform "linux/${expected_architecture}" \
   --network none \
   --read-only \
   --tmpfs /tmp:rw,noexec,nosuid,size=64m \
+  --volume "$database_volume:/var/lib/extra-codeowners" \
+  --env "EXTRA_CODEOWNERS_DATABASE_URL=$database_url" \
   --cap-drop ALL \
   --security-opt no-new-privileges \
   "$image" >/dev/null
