@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
+import subprocess
 import tomllib
 from pathlib import Path
 from typing import Any, cast
@@ -51,6 +53,10 @@ def test_uv_version_is_identical_locally_in_containers_and_in_workflows() -> Non
     )
     assert image is not None, "Dockerfile must use a digest-pinned uv image"
     assert image.group("version") == reviewed_version
+    assert "COPY pyproject.toml uv.lock README.md mise.toml ./" in dockerfile
+    assert '["uv", "--version"]' in dockerfile
+    assert "if actual != expected:" in dockerfile
+    assert "digest-selected uv is" in dockerfile
 
     workflow_versions = _workflow_uv_versions()
     assert workflow_versions, "at least one setup-uv invocation is required"
@@ -64,6 +70,22 @@ def test_dependency_audit_uses_locked_mode_without_frozen_mode() -> None:
     assert "--no-cache" in workflow
     assert "--no-python-downloads" in workflow
     assert "--preview-features audit-command" in workflow
+
+
+def test_pinned_uv_exposes_the_scheduled_audit_interface_without_network() -> None:
+    uv = shutil.which("uv")
+    assert uv is not None, "the pinned uv executable must be available to the test suite"
+    result = subprocess.run(  # noqa: S603
+        [uv, "--preview-features", "audit-command", "audit", "--help"],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "Audit the project's dependencies" in result.stdout
+    assert "--locked" in result.stdout
+    assert "--python-version" in result.stdout
 
 
 def test_renovate_owns_the_complete_uv_toolchain_update() -> None:
