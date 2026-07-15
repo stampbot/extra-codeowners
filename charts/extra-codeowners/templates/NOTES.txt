@@ -6,6 +6,10 @@ Verify the rollout:
 Run the chart test after the pod becomes ready:
   helm test {{ .Release.Name }} --namespace {{ .Release.Namespace }}
 
+The pre-install/pre-upgrade migration Job completed before application pods
+were changed. Preserve its logs with the release evidence, and verify the
+database backup separately before every upgrade.
+
 {{- if not .Values.existingSecret }}
 
 WARNING: existingSecret is empty. The application requires GitHub App and

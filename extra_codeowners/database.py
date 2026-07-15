@@ -35,6 +35,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sess
 from sqlalchemy.pool import NullPool
 
 SCHEMA_VERSION = 1
+DATABASE_MIGRATION_HEAD = "0002_retry_dead_jobs"
 DATABASE_CONNECT_TIMEOUT_SECONDS = 3
 DATABASE_POOL_TIMEOUT_SECONDS = 2
 DATABASE_STATEMENT_TIMEOUT_MILLISECONDS = 3_000
@@ -332,85 +333,97 @@ class QueueStore:
         self._authority_locks = tuple(threading.Lock() for _ in range(256))
 
     def initialize(self) -> None:
-        """Create an empty schema or reject an incompatible existing database."""
-        guard = self.acquire_check_write_guard(
-            "__extra_codeowners_schema__", 0, timeout_seconds=60.0
-        )
-        if guard is None:
-            raise RuntimeError("timed out waiting for the database schema initializer")
-        try:
-            self._initialize_guarded()
-        finally:
-            self.release_check_write_guard(guard)
-
-    def _initialize_guarded(self) -> None:
-        """Initialize while holding the cross-replica schema guard."""
-        existing_tables = set(inspect(self.engine).get_table_names())
-        metadata_was_present = SchemaMetadata.__tablename__ in existing_tables
-        application_tables = {
-            table.name
-            for table in Base.metadata.sorted_tables
-            if table.name != SchemaMetadata.__tablename__
-        }
-        if not metadata_was_present and existing_tables & application_tables:
-            raise RuntimeError(
-                "database predates versioned schemas; migrate or recreate it before startup"
-            )
-        if metadata_was_present:
-            with self._sessions() as session:
-                version = session.scalar(
-                    select(SchemaMetadata.version).where(SchemaMetadata.singleton_id == 1)
-                )
-            if version != SCHEMA_VERSION:
-                raise RuntimeError(
-                    f"database schema version {version!r} is incompatible with required version "
-                    f"{SCHEMA_VERSION}"
-                )
-            self.validate_schema()
-            self._reactivate_legacy_dead_jobs()
-            return
-
-        Base.metadata.create_all(self.engine)
-        try:
-            with self.session() as session:
-                if session.get(SchemaMetadata, 1) is None:
-                    session.add(SchemaMetadata(singleton_id=1, version=SCHEMA_VERSION))
-        except IntegrityError:
-            # Another first-start replica may have inserted the singleton.
-            pass
+        """Reject a database that has not been explicitly migrated to this release."""
         self.validate_schema()
 
-    def _reactivate_legacy_dead_jobs(self) -> None:
-        """Resume rows created by pre-release builds that used terminal retries."""
-        now = utcnow()
-        with self.session() as session:
-            for model in (AuthorityJob, EvaluationJob):
-                session.execute(
-                    update(model)
-                    .where(model.state == "dead")
-                    .values(
-                        state="pending",
-                        attempts=0,
-                        available_at=now,
-                        lease_owner=None,
-                        lease_until=None,
-                        last_error=None,
-                    )
-                )
-
     def validate_schema(self) -> None:
-        """Validate the version marker and every required table column."""
+        """Validate the Alembic head, compatibility marker, and required columns."""
         inspector = inspect(self.engine)
         tables = set(inspector.get_table_names())
+        if "alembic_version" not in tables:
+            raise RuntimeError(
+                "database has not been migrated; run `extra-codeowners database migrate`"
+            )
+        with self.engine.connect() as connection:
+            revisions = connection.execute(
+                text("SELECT version_num FROM alembic_version")
+            ).scalars()
+            current_revisions = tuple(revisions)
+        if current_revisions != (DATABASE_MIGRATION_HEAD,):
+            raise RuntimeError(
+                f"database migration revision {current_revisions!r} is incompatible with "
+                f"required revision {DATABASE_MIGRATION_HEAD!r}; run "
+                "`extra-codeowners database migrate`"
+            )
         for table in Base.metadata.sorted_tables:
             if table.name not in tables:
                 raise RuntimeError(f"database schema is missing table {table.name!r}")
-            actual_columns = {column["name"] for column in inspector.get_columns(table.name)}
+            inspected_columns = inspector.get_columns(table.name)
+            actual_columns = {column["name"] for column in inspected_columns}
             expected_columns = {column.name for column in table.columns}
             missing = expected_columns - actual_columns
             if missing:
                 raise RuntimeError(
                     f"database table {table.name!r} is missing columns {sorted(missing)!r}"
+                )
+            actual_by_name = {column["name"]: column for column in inspected_columns}
+            for expected_column in table.columns:
+                actual_column = actual_by_name[expected_column.name]
+                actual_type = actual_column["type"]
+                expected_affinity = expected_column.type._type_affinity
+                if expected_affinity is None or not isinstance(actual_type, expected_affinity):
+                    raise RuntimeError(
+                        f"database column {table.name}.{expected_column.name} has incompatible "
+                        f"type {actual_type!s}; expected {expected_column.type!s}"
+                    )
+                expected_length = getattr(expected_column.type, "length", None)
+                actual_length = getattr(actual_type, "length", None)
+                if expected_length != actual_length:
+                    raise RuntimeError(
+                        f"database column {table.name}.{expected_column.name} has incompatible "
+                        f"length {actual_length!r}; expected {expected_length!r}"
+                    )
+                if bool(actual_column["nullable"]) != bool(expected_column.nullable):
+                    raise RuntimeError(
+                        f"database column {table.name}.{expected_column.name} has incompatible "
+                        f"nullable={actual_column['nullable']!r}; expected "
+                        f"nullable={expected_column.nullable!r}"
+                    )
+            expected_primary_key = {column.name for column in table.primary_key.columns}
+            actual_primary_key = set(inspector.get_pk_constraint(table.name)["constrained_columns"])
+            if actual_primary_key != expected_primary_key:
+                raise RuntimeError(
+                    f"database table {table.name!r} has incompatible primary key "
+                    f"{sorted(actual_primary_key)!r}; expected {sorted(expected_primary_key)!r}"
+                )
+            expected_indexes = {
+                str(index.name) for index in table.indexes if index.name is not None
+            }
+            actual_indexes = {
+                str(index["name"])
+                for index in inspector.get_indexes(table.name)
+                if index["name"] is not None
+            }
+            missing_indexes = expected_indexes - actual_indexes
+            if missing_indexes:
+                raise RuntimeError(
+                    f"database table {table.name!r} is missing indexes {sorted(missing_indexes)!r}"
+                )
+            expected_uniques = {
+                str(constraint.name)
+                for constraint in table.constraints
+                if isinstance(constraint, UniqueConstraint) and constraint.name is not None
+            }
+            actual_uniques = {
+                str(constraint["name"])
+                for constraint in inspector.get_unique_constraints(table.name)
+                if constraint["name"] is not None
+            }
+            missing_uniques = expected_uniques - actual_uniques
+            if missing_uniques:
+                raise RuntimeError(
+                    f"database table {table.name!r} is missing unique constraints "
+                    f"{sorted(missing_uniques)!r}"
                 )
         with self._sessions() as session:
             version = session.scalar(
@@ -1405,6 +1418,9 @@ class QueueStore:
         """Test connectivity and schema compatibility for readiness checks."""
         try:
             with self._sessions() as session:
+                revision = session.scalar(text("SELECT version_num FROM alembic_version"))
+                if revision != DATABASE_MIGRATION_HEAD:
+                    return False
                 version = session.scalar(
                     select(SchemaMetadata.version).where(SchemaMetadata.singleton_id == 1)
                 )

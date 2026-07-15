@@ -37,10 +37,11 @@ The chart does not provide these resources or operations:
 - a database
 - an ingress controller
 - TLS certificates
-- a pre-upgrade migration Job.
+- automated database backups or restore testing.
 
-The application initializes missing tables during startup. It has no supported
-schema migration or database rollback contract.
+The chart runs a bounded Alembic migration Job before install and upgrade. The
+application then validates the exact revision and table shape during startup;
+it never creates or upgrades tables implicitly.
 
 The chart sets `EXTRA_CODEOWNERS_ENVIRONMENT=production`. The runtime Secret
 must replace the container's development-only SQLite URL with a PostgreSQL URL.
@@ -201,9 +202,18 @@ port forwarding.
 
 ## Upgrade and roll back
 
-Before an upgrade, back up the database with its native tools and review the
-changed code and documentation for schema compatibility. The source chart has
-no migration hook. Helm rollback cannot reverse application startup changes.
+Before an upgrade, complete the documented [backup and isolated restore
+test][upgrade]. The chart's pre-upgrade hook uses the target image and database
+environment to run `extra-codeowners database migrate`. It waits at most 60
+seconds for the cross-replica PostgreSQL advisory lock, has no process retry,
+and has a 180-second Job deadline by default. A failed hook stops Helm before
+the application Deployment changes.
+
+Keep `migrations.enabled: true` unless a separately controlled process applies
+the exact target migration before Helm. Set `migrations.serviceAccountName` to
+a pre-existing ServiceAccount when database authentication needs a Kubernetes
+identity. The chart disables Kubernetes API token automounting for that pod;
+review any identity-provider admission mutation separately.
 
 The default `Recreate` strategy prevents old and new application versions from
 using the database concurrently. It causes a short pause in webhook processing.
@@ -234,8 +244,10 @@ helm rollback extra-codeowners REVISION --namespace extra-codeowners --wait
 ```
 
 `REVISION` is the known-good revision shown by `helm history`. Helm rollback
-does not reverse database changes. A non-backward-compatible migration requires
-the recovery procedure for that application version.
+does not reverse database changes or run Alembic downgrade. Roll back only when
+the target release's [database upgrade notes][upgrade-notes] declare the old
+application compatible with the new schema. Otherwise restore the verified
+backup under native GitHub code-owner protection.
 
 `--reset-then-reuse-values` starts with the new chart defaults before applying
 the release's existing overrides. Plain `--reuse-values` can omit new safety
@@ -375,6 +387,12 @@ validates types, bounds, accepted enums, and unknown top-level properties during
 | `extraVolumes` | array | `[]` | Additional pod volumes, including externally managed Secret volumes; the name `tmp` is reserved. |
 | `extraVolumeMounts` | array | `[]` | Additional application mounts; the name `tmp` and path `/tmp` are reserved. |
 | `extraArgs` | array | `[]` | Override image command arguments without replacing its entrypoint. |
+| `migrations.enabled` | boolean | `true` | Run the explicit pre-install and pre-upgrade Alembic Job. |
+| `migrations.lockTimeoutSeconds` | number | `60` | Maximum PostgreSQL migration advisory-lock wait. |
+| `migrations.activeDeadlineSeconds` | integer | `180` | Complete migration Job deadline. |
+| `migrations.backoffLimit` | integer | `0` | Kubernetes retries after migration process failure. |
+| `migrations.annotations` | object | `{}` | Additional non-hook Job annotations. |
+| `migrations.serviceAccountName` | string | empty | Pre-existing migration identity; empty uses the namespace's default account. |
 | `service.type` | enum | `ClusterIP` | Service type. |
 | `service.port` | integer | `80` | In-cluster HTTP Service port. |
 | `service.annotations` | object | `{}` | Service annotations. |
@@ -425,3 +443,5 @@ Security-relevant defaults are:
 - an ingress NetworkPolicy limited to the application port.
 
 [configuration]: https://github.com/stampbot/extra-codeowners/blob/main/docs/reference/configuration.md
+[upgrade]: https://extra-codeowners.readthedocs.io/en/latest/how-to/upgrade/
+[upgrade-notes]: https://extra-codeowners.readthedocs.io/en/latest/reference/upgrade-notes/

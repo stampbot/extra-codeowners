@@ -85,6 +85,21 @@ extraVolumeMounts: []
 # extraArgs overrides the image's default command arguments but not its entrypoint.
 extraArgs: []
 
+# migrations configures the bounded pre-install and pre-upgrade schema Job.
+migrations:
+  # migrations.enabled runs the explicit Alembic upgrade before application pods change.
+  enabled: true
+  # migrations.lockTimeoutSeconds bounds the PostgreSQL advisory-lock wait.
+  lockTimeoutSeconds: 60
+  # migrations.activeDeadlineSeconds bounds the complete Kubernetes Job.
+  activeDeadlineSeconds: 180
+  # migrations.backoffLimit controls retries after a failed migration process.
+  backoffLimit: 0
+  # migrations.annotations adds non-hook annotations to the migration Job.
+  annotations: {}
+  # migrations.serviceAccountName selects a pre-existing identity for database access.
+  serviceAccountName: ""
+
 # service configures the in-cluster HTTP service.
 service:
   # service.type is the Kubernetes Service type.

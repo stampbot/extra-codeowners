@@ -46,6 +46,44 @@ The weaker `require` and `verify-ca` modes are rejected because they do not veri
 
 Setup mode rejects a non-HTTPS or missing public URL and a setup-state secret shorter than 32 bytes.
 
+## `database migrate`
+
+Upgrade the configured database to the single Alembic head bundled with the
+installed application:
+
+```bash
+uv run python -m extra_codeowners database migrate \
+  --lock-timeout-seconds 60
+```
+
+| Option | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `--lock-timeout-seconds` | number | `60` | Wait longer than `0` and at most `300` seconds for the migration lock. |
+| `--adopt-pre-alembic-schema` | flag | off | After a verified backup, adopt only the exact schema produced by documented pre-release builds. |
+| `--help` | flag | off | Show command help and exit. |
+
+Production mode applies the same PostgreSQL and transport validation as the
+service. PostgreSQL migration calls obtain a session advisory lock and limit
+each statement to 60 seconds. Another migrator can wait only for the selected
+lock timeout. A failed or interrupted process releases the lock when its
+connection closes.
+
+Normal application startup never runs this command. Read the [upgrade and
+restore procedure](../how-to/upgrade.md) before using the adoption flag.
+
+## `database check`
+
+Verify the configured database without changing it:
+
+```bash
+uv run python -m extra_codeowners database check
+```
+
+Success prints the compatible Alembic revision. Missing or mismatched
+revisions, tables, columns, primary keys, named unique constraints, indexes, or
+the application compatibility marker exit nonzero. The database URL and stored
+repository metadata are not printed.
+
 ## `validate-policy`
 
 Parse and validate repository policy and, optionally, organization policy without contacting GitHub:
@@ -96,18 +134,22 @@ pending=3 dead=0
 
 The command uses `EXTRA_CODEOWNERS_DATABASE_URL`. It does not display repository names, pull-request numbers, errors, or delivery IDs.
 
-The command initializes missing database tables. Running it against a new database therefore creates schema. Initialization also reactivates terminal `dead` rows created by an incompatible pre-1.0 build because current runtime failures retry indefinitely.
+The command is read-only. It fails when the database has not been migrated to
+the exact revision required by this application.
 
 | Exit status | Meaning |
 | --- | --- |
 | `0` | The database was reachable and counts were returned. |
-| Nonzero | Settings validation, connection, or schema initialization failed. |
+| Nonzero | Settings validation, connection, or schema compatibility failed. |
 
 ## `requeue-dead`
 
-`requeue-dead` requeues a bounded batch of legacy or manually created terminal rows. Current workers do not create this state. Evaluation and authority failures remain pending and retry indefinitely. Database initialization automatically reactivates rows left by the earlier pre-1.0 retry contract.
+`requeue-dead` requeues a bounded batch of legacy or manually created terminal rows. Current workers do not create this state. Evaluation and authority failures remain pending and retry indefinitely. Migration `0002_retry_dead_jobs` reactivates rows left by the earlier pre-release retry contract.
 
-The command remains as a compatibility recovery hook. If terminal rows appear after initialization, it selects the oldest authority fan-out rows first. It then selects the oldest pull-request evaluation rows until the batch is full. This order resumes broad revocation work first.
+The command remains as a compatibility recovery hook. If terminal rows appear
+after migration, it selects the oldest authority fan-out rows first. It then
+selects the oldest pull-request evaluation rows until the batch is full. This
+order resumes broad revocation work first.
 
 ```bash
 uv run python -m extra_codeowners requeue-dead --limit 100

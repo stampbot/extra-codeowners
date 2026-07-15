@@ -77,6 +77,7 @@ Install Git and [mise](https://mise.jdx.dev/) on a POSIX-compatible system. From
 mise trust
 mise install
 mise run bootstrap
+mise exec -- uv run python -m extra_codeowners database migrate
 mise exec -- uv run python -m extra_codeowners serve
 ```
 

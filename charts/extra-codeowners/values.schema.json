@@ -23,6 +23,7 @@
     "extraVolumes",
     "extraVolumeMounts",
     "extraArgs",
+    "migrations",
     "service",
     "ingress",
     "resources",
@@ -253,6 +254,44 @@
       "type": "array",
       "items": {
         "type": "string"
+      }
+    },
+    "migrations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "lockTimeoutSeconds",
+        "activeDeadlineSeconds",
+        "backoffLimit",
+        "annotations",
+        "serviceAccountName"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "lockTimeoutSeconds": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 300
+        },
+        "activeDeadlineSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3600
+        },
+        "backoffLimit": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10
+        },
+        "annotations": {
+          "$ref": "#/definitions/stringMap"
+        },
+        "serviceAccountName": {
+          "type": "string"
+        }
       }
     },
     "service": {

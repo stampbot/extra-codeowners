@@ -74,4 +74,9 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- fail "extraVolumeMounts must not override the chart-managed /tmp mount" -}}
 {{- end -}}
 {{- end -}}
+{{- range $name, $_ := .Values.migrations.annotations -}}
+{{- if or (eq $name "helm.sh/hook") (eq $name "helm.sh/hook-weight") (eq $name "helm.sh/hook-delete-policy") -}}
+{{- fail (printf "migrations.annotations must not override chart-managed annotation %s" $name) -}}
+{{- end -}}
+{{- end -}}
 {{- end }}

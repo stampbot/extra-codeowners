@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 import extra_codeowners.app as app_module
 from extra_codeowners.database import QueueStore
 from extra_codeowners.manifest import ManifestService
+from extra_codeowners.migrations import upgrade_database
 from extra_codeowners.settings import Settings
 
 
@@ -74,6 +75,13 @@ def configured_settings() -> Settings:
     )
 
 
+def migrated_store(database_url: str) -> QueueStore:
+    upgrade_database(database_url)
+    store = QueueStore(database_url)
+    store.initialize()
+    return store
+
+
 def webhook_headers(body: bytes, delivery: str = "delivery-1") -> dict[str, str]:
     digest = hmac.new(b"webhook-secret", body, hashlib.sha256).hexdigest()
     return {
@@ -85,7 +93,7 @@ def webhook_headers(body: bytes, delivery: str = "delivery-1") -> dict[str, str]
 
 
 def test_health_and_signed_webhook_ingestion(tmp_path: Path) -> None:
-    store = QueueStore(f"sqlite:///{tmp_path / 'app.db'}")
+    store = migrated_store(f"sqlite:///{tmp_path / 'app.db'}")
     github = StubGitHub()
     app = app_module.create_app(configured_settings(), github=github, store=store)  # type: ignore[arg-type]
     payload: dict[str, Any] = {
@@ -111,7 +119,7 @@ def test_health_and_signed_webhook_ingestion(tmp_path: Path) -> None:
 
 
 def test_webhook_fast_path_failure_is_durable_and_replayable(tmp_path: Path) -> None:
-    store = QueueStore(f"sqlite:///{tmp_path / 'app.db'}")
+    store = migrated_store(f"sqlite:///{tmp_path / 'app.db'}")
     github = StubGitHub()
     github.fail_next_check = True
     app = app_module.create_app(configured_settings(), github=github, store=store)  # type: ignore[arg-type]
@@ -144,7 +152,7 @@ def test_webhook_fast_path_failure_is_durable_and_replayable(tmp_path: Path) -> 
 
 
 def test_liveness_fails_when_enabled_worker_task_has_died(tmp_path: Path) -> None:
-    store = QueueStore(f"sqlite:///{tmp_path / 'app.db'}")
+    store = migrated_store(f"sqlite:///{tmp_path / 'app.db'}")
     runtime = configured_settings().model_copy(
         update={"worker_enabled": True, "worker_poll_seconds": 0.05}
     )
@@ -168,7 +176,7 @@ def test_liveness_fails_when_enabled_worker_task_has_died(tmp_path: Path) -> Non
 
 
 def test_liveness_fails_when_enabled_reconciler_task_has_died(tmp_path: Path) -> None:
-    store = QueueStore(f"sqlite:///{tmp_path / 'app.db'}")
+    store = migrated_store(f"sqlite:///{tmp_path / 'app.db'}")
     runtime = configured_settings().model_copy(update={"reconcile_enabled": True})
     app = app_module.create_app(runtime, github=StubGitHub(), store=store)  # type: ignore[arg-type]
 
@@ -190,7 +198,7 @@ def test_liveness_fails_when_enabled_reconciler_task_has_died(tmp_path: Path) ->
 
 
 def test_org_config_repository_webhook_is_acknowledged_but_not_queued(tmp_path: Path) -> None:
-    store = QueueStore(f"sqlite:///{tmp_path / 'app.db'}")
+    store = migrated_store(f"sqlite:///{tmp_path / 'app.db'}")
     app = app_module.create_app(configured_settings(), github=StubGitHub(), store=store)  # type: ignore[arg-type]
     payload: dict[str, Any] = {
         "action": "opened",
@@ -209,7 +217,7 @@ def test_org_config_repository_webhook_is_acknowledged_but_not_queued(tmp_path: 
 
 
 def test_authority_webhook_is_durably_queued_without_pr_fast_path(tmp_path: Path) -> None:
-    store = QueueStore(f"sqlite:///{tmp_path / 'authority-app.db'}")
+    store = migrated_store(f"sqlite:///{tmp_path / 'authority-app.db'}")
     github = StubGitHub()
     app = app_module.create_app(configured_settings(), github=github, store=store)  # type: ignore[arg-type]
     payload: dict[str, Any] = {
@@ -239,7 +247,7 @@ def test_authority_webhook_is_durably_queued_without_pr_fast_path(tmp_path: Path
 def test_authority_guard_failure_returns_retryable_service_error(
     tmp_path: Path, monkeypatch: Any
 ) -> None:
-    store = QueueStore(f"sqlite:///{tmp_path / 'authority-failure.db'}")
+    store = migrated_store(f"sqlite:///{tmp_path / 'authority-failure.db'}")
     monkeypatch.setattr(store, "acquire_authority_guard", lambda *args, **kwargs: None)
     app = app_module.create_app(configured_settings(), github=StubGitHub(), store=store)  # type: ignore[arg-type]
     payload: dict[str, Any] = {
@@ -260,7 +268,7 @@ def test_authority_guard_failure_returns_retryable_service_error(
 
 
 def test_invalid_signature_returns_unauthorized(tmp_path: Path) -> None:
-    store = QueueStore(f"sqlite:///{tmp_path / 'app.db'}")
+    store = migrated_store(f"sqlite:///{tmp_path / 'app.db'}")
     app = app_module.create_app(configured_settings(), github=StubGitHub(), store=store)  # type: ignore[arg-type]
 
     with TestClient(app) as client:
@@ -281,7 +289,7 @@ def test_streamed_webhook_is_bounded_without_content_length(
     tmp_path: Path, monkeypatch: Any
 ) -> None:
     monkeypatch.setattr(app_module, "MAX_WEBHOOK_BYTES", 4)
-    store = QueueStore(f"sqlite:///{tmp_path / 'app.db'}")
+    store = migrated_store(f"sqlite:///{tmp_path / 'app.db'}")
     app = app_module.create_app(configured_settings(), github=StubGitHub(), store=store)  # type: ignore[arg-type]
 
     with TestClient(app) as client:
@@ -299,7 +307,7 @@ def test_streamed_webhook_is_bounded_without_content_length(
 
 
 def test_setup_routes_are_hidden_when_disabled(tmp_path: Path) -> None:
-    store = QueueStore(f"sqlite:///{tmp_path / 'app.db'}")
+    store = migrated_store(f"sqlite:///{tmp_path / 'app.db'}")
     app = app_module.create_app(configured_settings(), github=StubGitHub(), store=store)  # type: ignore[arg-type]
 
     with TestClient(app) as client:
@@ -310,7 +318,7 @@ def test_setup_routes_are_hidden_when_disabled(tmp_path: Path) -> None:
 def test_setup_manifest_flow_is_no_store_and_escapes_credentials(
     tmp_path: Path, monkeypatch: Any
 ) -> None:
-    store = QueueStore(f"sqlite:///{tmp_path / 'app.db'}")
+    store = migrated_store(f"sqlite:///{tmp_path / 'app.db'}")
     settings = Settings(
         _env_file=None,
         environment="test",
@@ -344,7 +352,7 @@ def test_setup_manifest_flow_is_no_store_and_escapes_credentials(
 
 
 def test_readiness_fails_without_github_credentials(tmp_path: Path) -> None:
-    store = QueueStore(f"sqlite:///{tmp_path / 'app.db'}")
+    store = migrated_store(f"sqlite:///{tmp_path / 'app.db'}")
     settings = Settings(
         _env_file=None,
         environment="test",

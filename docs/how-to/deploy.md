@@ -60,13 +60,18 @@ Replace every uppercase placeholder and percent-encode reserved characters in UR
 
 For a remote database, keep `sslmode=verify-full`. Add provider CA parameters such as `sslrootcert` when needed. Extra CODEOWNERS rejects `require` and `verify-ca` because neither verifies the database hostname. Query routing can't bypass this rule: `host` takes precedence over the URL authority, and a `hostaddr` or `service` override requires `verify-full`.
 
-Before upgrading, back up the database and review release notes for schema compatibility. A migration and rollback contract will be added before the first supported release.
+Before first startup or every upgrade, follow the [database upgrade, backup,
+restore, and rollback procedure](upgrade.md). Normal service startup validates
+the exact migration head and table shape but never creates or changes schema.
 
 The service stops a database operation after these fixed budgets:
 
 - 3 seconds to connect to PostgreSQL
 - 2 seconds to obtain a connection from the application pool
 - 3 seconds for an ordinary statement.
+
+The separate migration command waits at most 60 seconds for its PostgreSQL
+advisory lock by default and limits each migration statement to 60 seconds.
 
 Test the entire path from service to database, including any proxy, under expected peak latency and concurrency. If normal operation approaches those limits, don't use this service as merge infrastructure. A timeout blocks or retries work; it never infers approval.
 
@@ -157,7 +162,13 @@ If a rollout produces incorrect results:
 
 If the previous version can't safely use the current database, restore native **Require review from Code Owners** on every affected repository. Only then remove the Extra CODEOWNERS required check. Preserve the database and logs for investigation.
 
-The Helm chart uses a `Recreate` Deployment strategy because this pre-1.0 service has no mixed-version database compatibility contract. This prevents old and new versions from running together, but briefly interrupts webhook processing. GitHub doesn't automatically redeliver failed webhooks. Once the service is ready, inspect failed deliveries, redeliver them manually, and confirm that scheduled reconciliation is converging open pull requests.
+The Helm chart runs a bounded pre-upgrade migration Job and uses a `Recreate`
+Deployment strategy. Each released migration must remain compatible with the
+immediately previous application while that Job runs. Recreate then prevents
+old and new application pods from overlapping, but briefly interrupts webhook
+processing. GitHub doesn't automatically redeliver failed webhooks. Once the
+service is ready, inspect failed deliveries, redeliver them manually, and
+confirm that scheduled reconciliation is converging open pull requests.
 
 Keep one replica. Don't switch to `RollingUpdate` until you've tested the versions, schema, and lease behavior together. Follow the chart's [installation and recovery guide](https://github.com/stampbot/extra-codeowners/blob/main/charts/extra-codeowners/README.md) for the complete Kubernetes procedure.
 
@@ -172,4 +183,6 @@ The initial Helm chart source lives at `charts/extra-codeowners`. A successful e
 
 Workflow source doesn't prove that an artifact was published. Confirm the artifact exists after successful CI or a GitHub release. Until the repository announces a supported release, none exists.
 
-Tested chart upgrade guarantees and a reproducible Google Cloud deployment guide remain planned. Their workload-identity behavior will be documented from published artifacts rather than inferred here.
+Environment-specific chart upgrade evidence and a reproducible Google Cloud
+deployment guide remain planned. Their workload-identity behavior will be
+documented from published artifacts rather than inferred here.

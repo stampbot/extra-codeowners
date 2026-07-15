@@ -59,6 +59,12 @@ must never need GitHub credentials.
 Do not paste real GitHub payloads, credentials, organization identifiers, or
 private repository content into tests. Use clearly fictional fixtures.
 
+Database schema changes require an explicit Alembic revision, fresh-install
+and previous-revision upgrade tests, PostgreSQL concurrency or interruption
+coverage where relevant, and a versioned entry in
+[`docs/reference/upgrade-notes.md`](docs/reference/upgrade-notes.md). Normal
+application startup must remain migration-free.
+
 ## Sign off commits
 
 This project uses the [Developer Certificate of Origin][dco], not a contributor license agreement. Sign off every commit:
