@@ -178,6 +178,7 @@ def _stacked_repository(tmp_path: Path) -> tuple[Path, str, str]:
     return repo, base_sha, _git(repo, "rev-parse", "HEAD")
 
 
+@pytest.mark.skipif(BASH is None, reason="the hardened runtime intentionally contains no shell")
 def test_dco_script_accepts_an_exact_stacked_range(tmp_path: Path) -> None:
     source = (WORKFLOWS / "dco.yml").read_text(encoding="utf-8")
     script = _run_script(source, "Verify every commit sign-off")
@@ -197,6 +198,7 @@ def test_dco_script_accepts_an_exact_stacked_range(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("failure", ("missing-base", "commit-count"))
+@pytest.mark.skipif(BASH is None, reason="the hardened runtime intentionally contains no shell")
 def test_dco_script_fails_closed_when_the_range_cannot_be_proven(
     failure: str, tmp_path: Path
 ) -> None:
