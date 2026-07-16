@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import csv
 import gzip
 import importlib.util
@@ -32,6 +33,7 @@ SDIST_POLICY = {
     "requirements-build.txt": b"hatchling==1.31.0\n",
 }
 ENTRY_POINTS = b"[console_scripts]\nextra-codeowners = extra_codeowners.cli:main\n"
+PROOF_REVISION = "1" * 40
 
 
 def load_script() -> ModuleType:
@@ -224,6 +226,85 @@ def installed_wheel(tmp_path: Path) -> tuple[Path, Any]:
     )
 
 
+def write_distribution_proof(
+    directory: Path,
+    architecture: str,
+    *,
+    source_revision: str = PROOF_REVISION,
+) -> dict[str, object]:
+    """Write one small but fully valid canonical native-build proof fixture."""
+
+    directory.mkdir()
+    wheel_path = directory / WHEEL_NAME
+    write_wheel(
+        wheel_path,
+        additions={
+            "extra_codeowners/cli.py": b"def main():\n    return 0\n",
+            f"{DIST_INFO}/entry_points.txt": ENTRY_POINTS,
+        },
+    )
+    policy = {
+        "pyproject.toml": (ROOT / "pyproject.toml").read_bytes(),
+        "requirements-build.txt": (ROOT / "requirements-build.txt").read_bytes(),
+    }
+    files = sdist_files()
+    root = "extra_codeowners-0.1.0"
+    files[f"{root}/pyproject.toml"] = policy["pyproject.toml"]
+    files[f"{root}/requirements-build.txt"] = policy["requirements-build.txt"]
+    sdist_path = directory / "extra_codeowners-0.1.0.tar.gz"
+    write_sdist(sdist_path, files=files)
+
+    requirements = build.parse_build_constraints(ROOT / "requirements-build.txt")
+    project = build.validate_project(ROOT / "pyproject.toml", requirements)
+    wheel = build.verify_wheel(
+        wheel_path, expected_name=PROJECT_NAME, expected_version=PROJECT_VERSION
+    )
+    sdist = build.verify_sdist(
+        sdist_path,
+        expected_name=PROJECT_NAME,
+        expected_version=PROJECT_VERSION,
+        expected_policy=policy,
+    )
+    machine = build.ARCHITECTURE_MACHINES[architecture]
+    record: dict[str, object] = {
+        "schema_version": build.SCHEMA_VERSION,
+        "source_revision": source_revision,
+        "source_dirty": False,
+        "source_date_epoch": 1_700_000_000,
+        "source_tree": {
+            "blob_count": 100,
+            "byte_count": 1_000_000,
+            "identity_sha256": "2" * 64,
+        },
+        "project": project,
+        "toolchain": {
+            "uv": f"uv 0.11.28 ({machine}-unknown-linux-gnu)",
+            "uv_version": "0.11.28",
+            "python": "3.14.6",
+            "python_implementation": "CPython",
+            "python_major_minor": "3.14",
+            "python_machine": machine,
+        },
+        "build_constraints": {
+            "path": "requirements-build.txt",
+            "sha256": build.sha256_bytes(policy["requirements-build.txt"]),
+            "requirements": [requirement.record() for requirement in requirements],
+        },
+        "artifacts": {"sdist": sdist.record, "wheel": wheel.record},
+        "reproducibility": {
+            "clean_build_count": 2,
+            "byte_identical": True,
+            "semantic_identity_checked": True,
+        },
+    }
+    build.write_record(directory / build.BUILD_RECORD_NAME, record)
+    return record
+
+
+def replace_proof_record(directory: Path, record: Mapping[str, object]) -> None:
+    build.write_record(directory / build.BUILD_RECORD_NAME, record)
+
+
 def test_reviewed_build_constraints_and_project_pin_are_bound_together() -> None:
     requirements = build.parse_build_constraints(ROOT / "requirements-build.txt")
     assert [requirement.name for requirement in requirements] == [
@@ -337,6 +418,251 @@ def test_git_source_listing_rejects_gitlinks_and_oversized_paths(
     monkeypatch.setattr(build, "run_command", lambda *args, **kwargs: listing)
     with pytest.raises(build.BuildError, match=message):
         build.git_source_entries(tmp_path, "0" * 40)
+
+
+def test_selects_and_reverifies_exact_native_distribution_proofs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    amd64 = tmp_path / "amd64"
+    arm64 = tmp_path / "arm64"
+    write_distribution_proof(amd64, "amd64")
+    write_distribution_proof(arm64, "arm64")
+    output = tmp_path / "selected"
+
+    result = build.select_distributions(
+        amd64,
+        arm64,
+        source_revision=PROOF_REVISION,
+        output=output,
+    )
+
+    assert {path.name for path in output.iterdir()} == {
+        build.SELECTED_BUILD_RECORD_NAMES["amd64"],
+        build.SELECTED_BUILD_RECORD_NAMES["arm64"],
+        build.SELECTION_RECORD_NAME,
+        WHEEL_NAME,
+        "extra_codeowners-0.1.0.tar.gz",
+    }
+    assert (output / WHEEL_NAME).read_bytes() == (amd64 / WHEEL_NAME).read_bytes()
+    assert (output / "extra_codeowners-0.1.0.tar.gz").read_bytes() == (
+        amd64 / "extra_codeowners-0.1.0.tar.gz"
+    ).read_bytes()
+    selection_path = output / build.SELECTION_RECORD_NAME
+    selection = json.loads(selection_path.read_text(encoding="utf-8"))
+    assert selection_path.read_bytes() == build.canonical_json(selection) + b"\n"
+    assert selection["selected_architecture"] == "amd64"
+    assert selection["proofs"]["amd64"]["record_sha256"] == build.sha256_file(
+        output / build.SELECTED_BUILD_RECORD_NAMES["amd64"]
+    )
+    assert selection["proofs"]["arm64"]["record_sha256"] == build.sha256_file(
+        output / build.SELECTED_BUILD_RECORD_NAMES["arm64"]
+    )
+    assert result["wheel_sha256"] == build.sha256_file(output / WHEEL_NAME)
+
+    monkeypatch.setattr(
+        build,
+        "git_executable",
+        lambda: (_ for _ in ()).throw(AssertionError("verify-selection consulted Git")),
+    )
+    assert (
+        build.verify_selection(
+            output,
+            source_revision=PROOF_REVISION,
+            wheel_sha256=cast(str, result["wheel_sha256"]),
+        )
+        == result
+    )
+
+
+def test_proof_directory_rejects_missing_extra_symlink_and_noncanonical_files(
+    tmp_path: Path,
+) -> None:
+    missing = tmp_path / "missing"
+    write_distribution_proof(missing, "amd64")
+    (missing / WHEEL_NAME).unlink()
+    with pytest.raises(build.BuildError, match="exactly 3 files"):
+        build.load_distribution_proof(
+            missing,
+            architecture="amd64",
+            expected_source_revision=PROOF_REVISION,
+        )
+
+    extra = tmp_path / "extra"
+    write_distribution_proof(extra, "amd64")
+    (extra / "unexpected").write_text("unexpected\n", encoding="utf-8")
+    with pytest.raises(build.BuildError, match="exactly 3 files"):
+        build.load_distribution_proof(
+            extra,
+            architecture="amd64",
+            expected_source_revision=PROOF_REVISION,
+        )
+
+    linked = tmp_path / "linked"
+    write_distribution_proof(linked, "amd64")
+    record = linked / build.BUILD_RECORD_NAME
+    retained = tmp_path / "retained-record.json"
+    retained.write_bytes(record.read_bytes())
+    record.unlink()
+    record.symlink_to(retained)
+    with pytest.raises(build.BuildError, match="non-symlink regular file"):
+        build.load_distribution_proof(
+            linked,
+            architecture="amd64",
+            expected_source_revision=PROOF_REVISION,
+        )
+
+    noncanonical = tmp_path / "noncanonical"
+    proof = write_distribution_proof(noncanonical, "amd64")
+    (noncanonical / build.BUILD_RECORD_NAME).write_text(
+        json.dumps(proof, indent=2) + "\n", encoding="utf-8"
+    )
+    with pytest.raises(build.BuildError, match="not canonical JSON"):
+        build.load_distribution_proof(
+            noncanonical,
+            architecture="amd64",
+            expected_source_revision=PROOF_REVISION,
+        )
+
+    wrong_schema = tmp_path / "wrong-schema"
+    schema_record = write_distribution_proof(wrong_schema, "amd64")
+    schema_record["schema_version"] = True
+    replace_proof_record(wrong_schema, schema_record)
+    with pytest.raises(build.BuildError, match="wrong schema version"):
+        build.load_distribution_proof(
+            wrong_schema,
+            architecture="amd64",
+            expected_source_revision=PROOF_REVISION,
+        )
+
+
+def test_select_rejects_swapped_architectures_and_source_drift(tmp_path: Path) -> None:
+    amd64 = tmp_path / "amd64"
+    arm64 = tmp_path / "arm64"
+    write_distribution_proof(amd64, "amd64")
+    write_distribution_proof(arm64, "arm64")
+
+    with pytest.raises(build.BuildError, match=r"amd64 .*wrong target"):
+        build.select_distributions(
+            arm64,
+            amd64,
+            source_revision=PROOF_REVISION,
+            output=tmp_path / "swapped",
+        )
+    with pytest.raises(build.BuildError, match="wrong source revision"):
+        build.select_distributions(
+            amd64,
+            arm64,
+            source_revision="3" * 40,
+            output=tmp_path / "wrong-source",
+        )
+
+
+def test_select_rejects_unreviewed_toolchain_and_source_tree_differences(
+    tmp_path: Path,
+) -> None:
+    amd64 = tmp_path / "amd64"
+    arm64 = tmp_path / "arm64"
+    write_distribution_proof(amd64, "amd64")
+    arm_record = write_distribution_proof(arm64, "arm64")
+    changed_toolchain = copy.deepcopy(arm_record)
+    cast(dict[str, object], changed_toolchain["toolchain"])["python"] = "3.14.7"
+    replace_proof_record(arm64, changed_toolchain)
+    with pytest.raises(build.BuildError, match="outside reviewed toolchain fields"):
+        build.select_distributions(
+            amd64,
+            arm64,
+            source_revision=PROOF_REVISION,
+            output=tmp_path / "toolchain-drift",
+        )
+
+    replace_proof_record(arm64, arm_record)
+    changed_source = copy.deepcopy(arm_record)
+    cast(dict[str, object], changed_source["source_tree"])["identity_sha256"] = "4" * 64
+    replace_proof_record(arm64, changed_source)
+    with pytest.raises(build.BuildError, match="outside reviewed toolchain fields"):
+        build.select_distributions(
+            amd64,
+            arm64,
+            source_revision=PROOF_REVISION,
+            output=tmp_path / "source-tree-drift",
+        )
+
+
+@pytest.mark.parametrize("archive_name", [WHEEL_NAME, "extra_codeowners-0.1.0.tar.gz"])
+def test_select_rejects_altered_archives(tmp_path: Path, archive_name: str) -> None:
+    amd64 = tmp_path / "amd64"
+    arm64 = tmp_path / "arm64"
+    write_distribution_proof(amd64, "amd64")
+    write_distribution_proof(arm64, "arm64")
+    archive = arm64 / archive_name
+    archive.write_bytes(archive.read_bytes() + b"tampered")
+
+    with pytest.raises(build.BuildError, match="artifact record differs"):
+        build.select_distributions(
+            amd64,
+            arm64,
+            source_revision=PROOF_REVISION,
+            output=tmp_path / "altered",
+        )
+
+
+def test_select_rejects_preexisting_output_and_verify_binds_expected_values(
+    tmp_path: Path,
+) -> None:
+    amd64 = tmp_path / "amd64"
+    arm64 = tmp_path / "arm64"
+    write_distribution_proof(amd64, "amd64")
+    write_distribution_proof(arm64, "arm64")
+    output = tmp_path / "selected"
+    output.mkdir()
+    with pytest.raises(build.BuildError, match="output directory must be absent"):
+        build.select_distributions(
+            amd64,
+            arm64,
+            source_revision=PROOF_REVISION,
+            output=output,
+        )
+
+    output.rmdir()
+    result = build.select_distributions(
+        amd64,
+        arm64,
+        source_revision=PROOF_REVISION,
+        output=output,
+    )
+    with pytest.raises(build.BuildError, match="wrong source revision"):
+        build.verify_selection(
+            output,
+            source_revision="3" * 40,
+            wheel_sha256=cast(str, result["wheel_sha256"]),
+        )
+    with pytest.raises(build.BuildError, match="expected digest"):
+        build.verify_selection(
+            output,
+            source_revision=PROOF_REVISION,
+            wheel_sha256="5" * 64,
+        )
+    selected_arm_record = output / build.SELECTED_BUILD_RECORD_NAMES["arm64"]
+    retained_arm_record = selected_arm_record.read_bytes()
+    selected_arm_record.write_bytes(
+        (output / build.SELECTED_BUILD_RECORD_NAMES["amd64"]).read_bytes()
+    )
+    with pytest.raises(build.BuildError, match=r"arm64 .*wrong target"):
+        build.verify_selection(
+            output,
+            source_revision=PROOF_REVISION,
+            wheel_sha256=cast(str, result["wheel_sha256"]),
+        )
+    selected_arm_record.write_bytes(retained_arm_record)
+    selection_path = output / build.SELECTION_RECORD_NAME
+    selection = json.loads(selection_path.read_text(encoding="utf-8"))
+    selection_path.write_text(json.dumps(selection, indent=2) + "\n", encoding="utf-8")
+    with pytest.raises(build.BuildError, match="not canonical JSON"):
+        build.verify_selection(
+            output,
+            source_revision=PROOF_REVISION,
+            wheel_sha256=cast(str, result["wheel_sha256"]),
+        )
 
 
 @pytest.mark.parametrize(

@@ -54,6 +54,13 @@ MAX_PROCESS_OUTPUT_BYTES = 64 * 1024
 MAX_SOURCE_PATH_BYTES = 4096
 MAX_SOURCE_COMPONENT_BYTES = 255
 BUILD_TIMEOUT_SECONDS = 300
+BUILD_RECORD_NAME = "python-build-record.json"
+SELECTION_RECORD_NAME = "python-selection-record.json"
+ARCHITECTURE_MACHINES = {"amd64": "x86_64", "arm64": "aarch64"}
+SELECTED_BUILD_RECORD_NAMES = {
+    "amd64": "python-build-record-amd64.json",
+    "arm64": "python-build-record-arm64.json",
+}
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 COMMIT = re.compile(r"^[0-9a-f]{40}$")
 GIT_OBJECT = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
@@ -118,6 +125,21 @@ class ArtifactVerification:
     members: tuple[tuple[str, str, int], ...] = ()
     scripts: tuple[tuple[str, str, str], ...] = ()
     dist_info: str | None = None
+
+
+@dataclass(frozen=True)
+class DistributionProof:
+    """One independently built and fully reverified architecture proof."""
+
+    architecture: str
+    directory: Path
+    record_path: Path
+    record_bytes: bytes
+    record: dict[str, Any]
+    wheel_path: Path
+    wheel: ArtifactVerification
+    sdist_path: Path
+    sdist: ArtifactVerification
 
 
 def canonical_name(value: str) -> str:
@@ -1483,6 +1505,679 @@ def write_record(path: Path, value: object) -> None:
         raise
 
 
+def require_exact_dict(value: object, keys: set[str], description: str) -> dict[str, Any]:
+    """Return an object with exactly the reviewed string keys."""
+
+    if not isinstance(value, dict) or any(not isinstance(key, str) for key in value):
+        raise BuildError(f"{description} must be a JSON object")
+    result: dict[str, Any] = value
+    if set(result) != keys:
+        raise BuildError(f"{description} has unexpected or missing fields")
+    return result
+
+
+def require_string(value: object, description: str) -> str:
+    if not isinstance(value, str) or not value:
+        raise BuildError(f"{description} must be a non-empty string")
+    return value
+
+
+def require_sha256(value: object, description: str) -> str:
+    candidate = require_string(value, description)
+    if SHA256.fullmatch(candidate) is None:
+        raise BuildError(f"{description} must be a lowercase SHA-256 digest")
+    return candidate
+
+
+def require_integer(value: object, description: str, *, minimum: int, maximum: int) -> int:
+    if type(value) is not int or not minimum <= value <= maximum:
+        raise BuildError(f"{description} is outside its reviewed integer range")
+    return value
+
+
+def read_canonical_json_object(path: Path, description: str) -> tuple[dict[str, Any], bytes]:
+    """Read one bounded canonical JSON object with its exact digestable bytes."""
+
+    content = bounded_bytes(path, MAX_RECORD_BYTES, description)
+    try:
+        value: Any = json.loads(
+            content.decode("utf-8"),
+            parse_constant=lambda constant: (_ for _ in ()).throw(
+                ValueError(f"unsupported JSON constant {constant}")
+            ),
+        )
+        canonical = canonical_json(value) + b"\n"
+    except (
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+        RecursionError,
+        TypeError,
+        ValueError,
+    ) as exc:
+        raise BuildError(f"{description} is not valid canonical JSON") from exc
+    if content != canonical or not isinstance(value, dict):
+        raise BuildError(f"{description} is not canonical JSON")
+    if any(not isinstance(key, str) for key in value):
+        raise BuildError(f"{description} contains a non-string key")
+    return value, content
+
+
+def distribution_directory_files(
+    directory: Path, *, selected: bool, architecture: str
+) -> tuple[Path, Path, Path, Path | None]:
+    """Require exactly the reviewed regular files in one proof directory."""
+
+    root = Path(os.path.abspath(directory))
+    try:
+        root_metadata = root.lstat()
+    except OSError as exc:
+        raise BuildError(f"cannot inspect Python distribution directory: {root}") from exc
+    if not stat.S_ISDIR(root_metadata.st_mode):
+        raise BuildError("Python distribution directory must be a non-symlink directory")
+    if architecture not in ARCHITECTURE_MACHINES:
+        raise BuildError("unsupported proof architecture")
+    expected_count = 5 if selected else 3
+    children: list[Path] = []
+    try:
+        with os.scandir(root) as iterator:
+            for entry in iterator:
+                children.append(Path(entry.path))
+                if len(children) > expected_count:
+                    raise BuildError(
+                        f"Python distribution directory must contain exactly {expected_count} files"
+                    )
+    except OSError as exc:
+        raise BuildError(f"cannot list Python distribution directory: {root}") from exc
+    if len(children) != expected_count:
+        raise BuildError(
+            f"Python distribution directory must contain exactly {expected_count} files"
+        )
+    by_name: dict[str, Path] = {}
+    for child in children:
+        try:
+            metadata = child.lstat()
+        except OSError as exc:
+            raise BuildError(f"cannot inspect Python distribution file: {child.name}") from exc
+        if not stat.S_ISREG(metadata.st_mode):
+            raise BuildError(
+                f"Python distribution file must be a non-symlink regular file: {child.name}"
+            )
+        if child.name in by_name:
+            raise BuildError(f"Python distribution directory repeats file: {child.name}")
+        by_name[child.name] = child
+
+    record_name = SELECTED_BUILD_RECORD_NAMES[architecture] if selected else BUILD_RECORD_NAME
+    record_path = by_name.get(record_name)
+    selection_path = by_name.get(SELECTION_RECORD_NAME)
+    if (
+        record_path is None
+        or (selected and selection_path is None)
+        or (not selected and selection_path is not None)
+    ):
+        raise BuildError("Python distribution directory lacks the required record files")
+    record_names = (
+        {*SELECTED_BUILD_RECORD_NAMES.values(), SELECTION_RECORD_NAME}
+        if selected
+        else {BUILD_RECORD_NAME}
+    )
+    if not record_names.issubset(by_name):
+        raise BuildError("Python distribution directory lacks the required record files")
+    archive_names = set(by_name).difference(record_names)
+    wheel_names = [name for name in archive_names if WHEEL_FILENAME.fullmatch(name) is not None]
+    sdist_names = [name for name in archive_names if name.endswith(".tar.gz")]
+    if len(wheel_names) != 1 or len(sdist_names) != 1 or len(archive_names) != 2:
+        raise BuildError("Python distribution directory must contain one wheel and one sdist")
+    return (
+        record_path,
+        by_name[wheel_names[0]],
+        by_name[sdist_names[0]],
+        selection_path,
+    )
+
+
+def read_sdist_policy(path: Path, *, expected_name: str, expected_version: str) -> dict[str, bytes]:
+    """Read reviewed build-policy files from a bounded, untrusted sdist."""
+
+    try:
+        metadata = path.lstat()
+    except OSError as exc:
+        raise BuildError(f"cannot inspect source distribution: {exc}") from exc
+    if not stat.S_ISREG(metadata.st_mode) or not 0 < metadata.st_size <= MAX_ARCHIVE_BYTES:
+        raise BuildError("source distribution must be a bounded non-symlink regular file")
+    expected_filename = f"{expected_name.replace('-', '_')}-{expected_version}.tar.gz"
+    if path.name != expected_filename:
+        raise BuildError("source distribution filename has the wrong identity")
+    expected_root = expected_filename.removesuffix(".tar.gz")
+    policy: dict[str, bytes] = {}
+    seen: set[str] = set()
+    member_count = 0
+    total_size = 0
+    try:
+        with tarfile.open(path, mode="r:gz") as archive:
+            for member in archive:
+                member_count += 1
+                if member_count > MAX_ARCHIVE_MEMBERS:
+                    raise BuildError("source distribution has too many members")
+                name = checked_archive_name(member.name, directory=member.isdir())
+                if name in seen:
+                    raise BuildError(f"source distribution repeats member {name}")
+                seen.add(name)
+                parts = PurePosixPath(name).parts
+                if not parts or parts[0] != expected_root:
+                    raise BuildError("source distribution member escapes its versioned root")
+                if member.isdir():
+                    continue
+                if not member.isreg():
+                    raise BuildError(f"source distribution contains a special member: {name}")
+                if not 0 <= member.size <= MAX_MEMBER_BYTES:
+                    raise BuildError(f"source distribution member exceeds its size limit: {name}")
+                total_size += member.size
+                if total_size > MAX_EXPANDED_BYTES:
+                    raise BuildError("source distribution exceeds its expansion limit")
+                relative = name.removeprefix(f"{expected_root}/")
+                if relative not in {"pyproject.toml", "requirements-build.txt"}:
+                    continue
+                if member.size > MAX_CONSTRAINT_BYTES:
+                    raise BuildError(f"source distribution policy file is too large: {relative}")
+                extracted = archive.extractfile(member)
+                if extracted is None:
+                    raise BuildError(f"cannot read source distribution policy: {relative}")
+                content = extracted.read(MAX_CONSTRAINT_BYTES + 1)
+                if len(content) != member.size:
+                    raise BuildError(f"source distribution policy size disagrees: {relative}")
+                policy[relative] = content
+    except (OSError, tarfile.TarError) as exc:
+        if isinstance(exc, BuildError):
+            raise
+        raise BuildError(f"cannot read source distribution policy: {exc}") from exc
+    if set(policy) != {"pyproject.toml", "requirements-build.txt"}:
+        raise BuildError("source distribution omits reviewed build-policy files")
+    return policy
+
+
+def validate_embedded_build_policy(
+    policy: Mapping[str, bytes],
+) -> tuple[dict[str, str], list[dict[str, object]]]:
+    """Validate embedded policy with the same parser used by the build command."""
+
+    with tempfile.TemporaryDirectory(prefix="extra-codeowners-selection-policy-") as raw:
+        root = Path(raw)
+        project_path = root / "pyproject.toml"
+        constraints_path = root / "requirements-build.txt"
+        try:
+            project_path.write_bytes(policy["pyproject.toml"])
+            constraints_path.write_bytes(policy["requirements-build.txt"])
+            os.chmod(project_path, 0o600)
+            os.chmod(constraints_path, 0o600)
+        except (KeyError, OSError) as exc:
+            raise BuildError("cannot stage embedded build policy") from exc
+        requirements = parse_build_constraints(constraints_path)
+        project = validate_project(project_path, requirements)
+    return project, [requirement.record() for requirement in requirements]
+
+
+def validate_toolchain_record(value: object, architecture: str) -> dict[str, Any]:
+    """Validate one architecture-specific toolchain identity."""
+
+    machine = ARCHITECTURE_MACHINES[architecture]
+    record = require_exact_dict(
+        value,
+        {
+            "uv",
+            "uv_version",
+            "python",
+            "python_implementation",
+            "python_major_minor",
+            "python_machine",
+        },
+        f"{architecture} toolchain",
+    )
+    uv_version = require_string(record["uv_version"], f"{architecture} uv version")
+    if re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", uv_version) is None:
+        raise BuildError(f"{architecture} uv version is not exact")
+    if record["uv"] != f"uv {uv_version} ({machine}-unknown-linux-gnu)":
+        raise BuildError(f"{architecture} uv identity has the wrong target")
+    python_version = require_string(record["python"], f"{architecture} Python version")
+    match = re.fullmatch(r"(3)\.(12|13|14)\.([0-9]+)", python_version)
+    if match is None:
+        raise BuildError(f"{architecture} Python version is outside the reviewed matrix")
+    major_minor = f"{match.group(1)}.{match.group(2)}"
+    if (
+        record["python_implementation"] != "CPython"
+        or record["python_major_minor"] != major_minor
+        or record["python_machine"] != machine
+    ):
+        raise BuildError(f"{architecture} Python identity has the wrong target")
+    return record
+
+
+def validate_build_record(
+    value: object,
+    *,
+    architecture: str,
+    expected_source_revision: str,
+    wheel: ArtifactVerification,
+    sdist: ArtifactVerification,
+    project: Mapping[str, str],
+    requirements: Sequence[Mapping[str, object]],
+    policy: Mapping[str, bytes],
+) -> dict[str, Any]:
+    """Validate the complete canonical proof record against reverified artifacts."""
+
+    record = require_exact_dict(
+        value,
+        {
+            "schema_version",
+            "source_revision",
+            "source_dirty",
+            "source_date_epoch",
+            "source_tree",
+            "project",
+            "toolchain",
+            "build_constraints",
+            "artifacts",
+            "reproducibility",
+        },
+        f"{architecture} build record",
+    )
+    if type(record["schema_version"]) is not int or record["schema_version"] != SCHEMA_VERSION:
+        raise BuildError(f"{architecture} build record has the wrong schema version")
+    if record["source_revision"] != expected_source_revision:
+        raise BuildError(f"{architecture} build record has the wrong source revision")
+    if record["source_dirty"] is not False:
+        raise BuildError(f"{architecture} proof was not built from a clean worktree")
+    require_integer(
+        record["source_date_epoch"],
+        f"{architecture} source date epoch",
+        minimum=315532800,
+        maximum=2**63 - 1,
+    )
+    source_tree = require_exact_dict(
+        record["source_tree"],
+        {"blob_count", "byte_count", "identity_sha256"},
+        f"{architecture} source tree",
+    )
+    require_integer(
+        source_tree["blob_count"],
+        f"{architecture} source blob count",
+        minimum=1,
+        maximum=MAX_ARCHIVE_MEMBERS,
+    )
+    require_integer(
+        source_tree["byte_count"],
+        f"{architecture} source byte count",
+        minimum=0,
+        maximum=MAX_EXPANDED_BYTES,
+    )
+    require_sha256(source_tree["identity_sha256"], f"{architecture} source-tree identity")
+    if record["project"] != dict(project):
+        raise BuildError(f"{architecture} project record differs from embedded policy")
+    validate_toolchain_record(record["toolchain"], architecture)
+    constraints = require_exact_dict(
+        record["build_constraints"],
+        {"path", "sha256", "requirements"},
+        f"{architecture} build constraints",
+    )
+    if (
+        constraints["path"] != "requirements-build.txt"
+        or constraints["sha256"] != sha256_bytes(policy["requirements-build.txt"])
+        or constraints["requirements"] != list(requirements)
+    ):
+        raise BuildError(f"{architecture} build constraints differ from embedded policy")
+    artifacts = require_exact_dict(
+        record["artifacts"], {"sdist", "wheel"}, f"{architecture} artifact record"
+    )
+    if canonical_json(artifacts["wheel"]) != canonical_json(wheel.record) or canonical_json(
+        artifacts["sdist"]
+    ) != canonical_json(sdist.record):
+        raise BuildError(f"{architecture} artifact record differs from the verified archives")
+    reproducibility = require_exact_dict(
+        record["reproducibility"],
+        {"clean_build_count", "byte_identical", "semantic_identity_checked"},
+        f"{architecture} reproducibility record",
+    )
+    if (
+        type(reproducibility["clean_build_count"]) is not int
+        or reproducibility["clean_build_count"] != 2
+        or reproducibility["byte_identical"] is not True
+        or reproducibility["semantic_identity_checked"] is not True
+    ):
+        raise BuildError(f"{architecture} reproducibility proof is incomplete")
+    return record
+
+
+def load_distribution_proof(
+    directory: Path,
+    *,
+    architecture: str,
+    expected_source_revision: str,
+    selected: bool = False,
+) -> DistributionProof:
+    """Load and independently verify one architecture's three-file proof."""
+
+    if architecture not in ARCHITECTURE_MACHINES:
+        raise BuildError("unsupported proof architecture")
+    if COMMIT.fullmatch(expected_source_revision) is None:
+        raise BuildError("expected source revision must be a lowercase 40-character Git object ID")
+    record_path, wheel_path, sdist_path, _selection_path = distribution_directory_files(
+        directory, selected=selected, architecture=architecture
+    )
+    record, record_bytes = read_canonical_json_object(record_path, f"{architecture} build record")
+    project_record = require_exact_dict(
+        record.get("project"),
+        {"name", "version", "build_backend", "build_requirement", "requires_python"},
+        f"{architecture} project record",
+    )
+    project_name = require_string(project_record["name"], f"{architecture} project name")
+    project_version = require_string(project_record["version"], f"{architecture} project version")
+    policy = read_sdist_policy(
+        sdist_path, expected_name=project_name, expected_version=project_version
+    )
+    project, requirements = validate_embedded_build_policy(policy)
+    wheel = verify_wheel(
+        wheel_path, expected_name=project["name"], expected_version=project["version"]
+    )
+    sdist = verify_sdist(
+        sdist_path,
+        expected_name=project["name"],
+        expected_version=project["version"],
+        expected_policy=policy,
+    )
+    validated = validate_build_record(
+        record,
+        architecture=architecture,
+        expected_source_revision=expected_source_revision,
+        wheel=wheel,
+        sdist=sdist,
+        project=project,
+        requirements=requirements,
+        policy=policy,
+    )
+    artifacts = require_exact_dict(
+        validated["artifacts"], {"sdist", "wheel"}, f"{architecture} artifact record"
+    )
+    wheel_record = require_exact_dict(
+        artifacts["wheel"], set(wheel.record), f"{architecture} wheel record"
+    )
+    sdist_record = require_exact_dict(
+        artifacts["sdist"], set(sdist.record), f"{architecture} sdist record"
+    )
+    if wheel_record["filename"] != wheel_path.name or sdist_record["filename"] != sdist_path.name:
+        raise BuildError(f"{architecture} archive filenames differ from the build record")
+    return DistributionProof(
+        architecture=architecture,
+        directory=Path(os.path.abspath(directory)),
+        record_path=record_path,
+        record_bytes=record_bytes,
+        record=validated,
+        wheel_path=wheel_path,
+        wheel=wheel,
+        sdist_path=sdist_path,
+        sdist=sdist,
+    )
+
+
+def comparable_build_record(proof: DistributionProof) -> dict[str, Any]:
+    """Normalize only the two reviewed architecture-specific fields."""
+
+    result = dict(proof.record)
+    toolchain = dict(
+        require_exact_dict(
+            result["toolchain"],
+            {
+                "uv",
+                "uv_version",
+                "python",
+                "python_implementation",
+                "python_major_minor",
+                "python_machine",
+            },
+            f"{proof.architecture} toolchain",
+        )
+    )
+    toolchain["uv"] = "<architecture-specific uv target>"
+    toolchain["python_machine"] = "<architecture-specific machine>"
+    result["toolchain"] = toolchain
+    return result
+
+
+def regular_files_are_identical(first: Path, second: Path, description: str) -> None:
+    """Require exact bytes without trusting record hashes alone."""
+
+    try:
+        first_metadata = first.lstat()
+        second_metadata = second.lstat()
+        if (
+            not stat.S_ISREG(first_metadata.st_mode)
+            or not stat.S_ISREG(second_metadata.st_mode)
+            or first_metadata.st_size != second_metadata.st_size
+        ):
+            raise BuildError(f"{description} bytes differ across architecture proofs")
+        with first.open("rb") as left, second.open("rb") as right:
+            while True:
+                left_block = left.read(1024 * 1024)
+                right_block = right.read(1024 * 1024)
+                if left_block != right_block:
+                    raise BuildError(f"{description} bytes differ across architecture proofs")
+                if not left_block:
+                    break
+    except OSError as exc:
+        raise BuildError(f"cannot compare {description} architecture proofs") from exc
+
+
+def artifact_binding(path: Path, verification: ArtifactVerification) -> dict[str, object]:
+    return {
+        "filename": path.name,
+        "sha256": verification.record["sha256"],
+        "size": verification.record["size"],
+    }
+
+
+def selection_record_for(amd64: DistributionProof, arm64: DistributionProof) -> dict[str, object]:
+    """Return the canonical cross-architecture selection record."""
+
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "source_revision": amd64.record["source_revision"],
+        "selected_architecture": "amd64",
+        "proofs": {
+            "amd64": {
+                "record_filename": SELECTED_BUILD_RECORD_NAMES["amd64"],
+                "record_sha256": sha256_bytes(amd64.record_bytes),
+                "python_machine": ARCHITECTURE_MACHINES["amd64"],
+            },
+            "arm64": {
+                "record_filename": SELECTED_BUILD_RECORD_NAMES["arm64"],
+                "record_sha256": sha256_bytes(arm64.record_bytes),
+                "python_machine": ARCHITECTURE_MACHINES["arm64"],
+            },
+        },
+        "artifacts": {
+            "wheel": artifact_binding(amd64.wheel_path, amd64.wheel),
+            "sdist": artifact_binding(amd64.sdist_path, amd64.sdist),
+        },
+    }
+
+
+def validate_selection_record(
+    value: object,
+    *,
+    amd64: DistributionProof,
+    arm64: DistributionProof,
+    expected_source_revision: str,
+    expected_wheel_sha256: str,
+) -> dict[str, Any]:
+    """Bind both retained architecture proofs to their original record digests."""
+
+    record = require_exact_dict(
+        value,
+        {"schema_version", "source_revision", "selected_architecture", "proofs", "artifacts"},
+        "Python selection record",
+    )
+    if (
+        type(record["schema_version"]) is not int
+        or record["schema_version"] != SCHEMA_VERSION
+        or record["source_revision"] != expected_source_revision
+        or record["selected_architecture"] != "amd64"
+    ):
+        raise BuildError("Python selection record has the wrong identity")
+    proofs = require_exact_dict(record["proofs"], {"amd64", "arm64"}, "selection proofs")
+    retained_proofs = {"amd64": amd64, "arm64": arm64}
+    proof_digests: dict[str, str] = {}
+    for architecture, machine in ARCHITECTURE_MACHINES.items():
+        architecture_record = require_exact_dict(
+            proofs[architecture],
+            {"record_filename", "record_sha256", "python_machine"},
+            f"{architecture} selection proof",
+        )
+        if (
+            architecture_record["record_filename"] != SELECTED_BUILD_RECORD_NAMES[architecture]
+            or architecture_record["python_machine"] != machine
+        ):
+            raise BuildError(f"{architecture} selection proof has the wrong identity")
+        proof_digests[architecture] = require_sha256(
+            architecture_record["record_sha256"], f"{architecture} proof-record digest"
+        )
+        if proof_digests[architecture] != sha256_bytes(retained_proofs[architecture].record_bytes):
+            raise BuildError(f"retained {architecture} build record differs from its proof digest")
+    if proof_digests["amd64"] == proof_digests["arm64"]:
+        raise BuildError("architecture proof records must have distinct digests")
+
+    artifacts = require_exact_dict(record["artifacts"], {"wheel", "sdist"}, "selected artifacts")
+    expected_artifacts = {
+        "wheel": artifact_binding(amd64.wheel_path, amd64.wheel),
+        "sdist": artifact_binding(amd64.sdist_path, amd64.sdist),
+    }
+    if canonical_json(artifacts) != canonical_json(expected_artifacts):
+        raise BuildError("Python selection record differs from the selected artifacts")
+    if amd64.wheel.record["sha256"] != expected_wheel_sha256:
+        raise BuildError("selected wheel digest differs from the expected digest")
+    return record
+
+
+def selection_result(record_bytes: bytes, proof: DistributionProof) -> dict[str, object]:
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "source_revision": proof.record["source_revision"],
+        "selection_record_sha256": sha256_bytes(record_bytes),
+        "wheel_filename": proof.wheel_path.name,
+        "wheel_sha256": proof.wheel.record["sha256"],
+        "sdist_filename": proof.sdist_path.name,
+        "sdist_sha256": proof.sdist.record["sha256"],
+    }
+
+
+def verify_selection(
+    directory: Path, *, source_revision: str, wheel_sha256: str
+) -> dict[str, object]:
+    """Reverify a selected proof without consulting Git or a working tree."""
+
+    if COMMIT.fullmatch(source_revision) is None:
+        raise BuildError("expected source revision must be a lowercase 40-character Git object ID")
+    if SHA256.fullmatch(wheel_sha256) is None:
+        raise BuildError("expected wheel digest must be a lowercase SHA-256 digest")
+    _record, _wheel, _sdist, selection_path = distribution_directory_files(
+        directory, selected=True, architecture="amd64"
+    )
+    if selection_path is None:
+        raise BuildError("selected distribution lacks its selection record")
+    amd64 = load_distribution_proof(
+        directory,
+        architecture="amd64",
+        expected_source_revision=source_revision,
+        selected=True,
+    )
+    arm64 = load_distribution_proof(
+        directory,
+        architecture="arm64",
+        expected_source_revision=source_revision,
+        selected=True,
+    )
+    if comparable_build_record(amd64) != comparable_build_record(arm64):
+        raise BuildError("retained architecture proofs differ outside reviewed toolchain fields")
+    selection, selection_bytes = read_canonical_json_object(
+        selection_path, "Python selection record"
+    )
+    validate_selection_record(
+        selection,
+        amd64=amd64,
+        arm64=arm64,
+        expected_source_revision=source_revision,
+        expected_wheel_sha256=wheel_sha256,
+    )
+    return selection_result(selection_bytes, amd64)
+
+
+def select_distributions(
+    amd64_directory: Path,
+    arm64_directory: Path,
+    *,
+    source_revision: str,
+    output: Path,
+) -> dict[str, object]:
+    """Select byte-identical amd64 artifacts after native cross-architecture proof."""
+
+    if COMMIT.fullmatch(source_revision) is None:
+        raise BuildError("expected source revision must be a lowercase 40-character Git object ID")
+    amd64 = load_distribution_proof(
+        amd64_directory,
+        architecture="amd64",
+        expected_source_revision=source_revision,
+    )
+    arm64 = load_distribution_proof(
+        arm64_directory,
+        architecture="arm64",
+        expected_source_revision=source_revision,
+    )
+    if comparable_build_record(amd64) != comparable_build_record(arm64):
+        raise BuildError("architecture proof records differ outside reviewed toolchain fields")
+    regular_files_are_identical(amd64.wheel_path, arm64.wheel_path, "wheel")
+    regular_files_are_identical(amd64.sdist_path, arm64.sdist_path, "source distribution")
+    selection = selection_record_for(amd64, arm64)
+    expected_wheel_sha256 = require_sha256(amd64.wheel.record["sha256"], "selected wheel digest")
+
+    destination = Path(os.path.abspath(output))
+    if os.path.lexists(destination):
+        raise BuildError("selection output directory must be absent")
+    try:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        staging = Path(
+            tempfile.mkdtemp(prefix=f".{destination.name}.select-", dir=destination.parent)
+        )
+    except OSError as exc:
+        raise BuildError(f"cannot stage selected Python distributions: {exc}") from exc
+    try:
+        retained_records = {
+            amd64.record_path: SELECTED_BUILD_RECORD_NAMES["amd64"],
+            arm64.record_path: SELECTED_BUILD_RECORD_NAMES["arm64"],
+        }
+        for source, retained_name in retained_records.items():
+            retained = staging / retained_name
+            shutil.copyfile(source, retained)
+            os.chmod(retained, 0o600)
+        for source in (amd64.wheel_path, amd64.sdist_path):
+            retained = staging / source.name
+            shutil.copyfile(source, retained)
+            os.chmod(retained, 0o600)
+        write_record(staging / SELECTION_RECORD_NAME, selection)
+        result = verify_selection(
+            staging,
+            source_revision=source_revision,
+            wheel_sha256=expected_wheel_sha256,
+        )
+        if os.path.lexists(destination):
+            raise BuildError("selection output directory appeared during publication")
+        os.replace(staging, destination)
+    except BaseException as exc:
+        shutil.rmtree(staging, ignore_errors=True)
+        if isinstance(exc, BuildError):
+            raise
+        if isinstance(exc, OSError):
+            raise BuildError(f"cannot publish selected Python distributions: {exc}") from exc
+        raise
+    return result
+
+
 def build_artifacts(args: argparse.Namespace) -> dict[str, object]:
     """Execute two clean builds and retain only identical verified artifacts."""
 
@@ -1716,6 +2411,19 @@ def parser() -> argparse.ArgumentParser:
     installed.add_argument("--wheel", required=True)
     installed.add_argument("--project-name", required=True)
     installed.add_argument("--project-version", required=True)
+
+    select = commands.add_parser("select", help="select byte-identical native architecture proofs")
+    select.add_argument("--amd64-directory", required=True)
+    select.add_argument("--arm64-directory", required=True)
+    select.add_argument("--source-revision", required=True)
+    select.add_argument("--output", required=True)
+
+    verify_selected = commands.add_parser(
+        "verify-selection", help="reverify a selected distribution without Git"
+    )
+    verify_selected.add_argument("--directory", required=True)
+    verify_selected.add_argument("--source-revision", required=True)
+    verify_selected.add_argument("--wheel-sha256", required=True)
     return result
 
 
@@ -1754,13 +2462,26 @@ def main(arguments: Sequence[str] | None = None) -> int:
                     ),
                 },
             ).record
-        else:
+        elif args.command == "verify-installed":
             wheel = verify_wheel(
                 Path(args.wheel),
                 expected_name=args.project_name,
                 expected_version=args.project_version,
             )
             value = verify_installed_record(Path(args.record), Path(args.environment_root), wheel)
+        elif args.command == "select":
+            value = select_distributions(
+                Path(args.amd64_directory),
+                Path(args.arm64_directory),
+                source_revision=args.source_revision,
+                output=Path(args.output),
+            )
+        else:
+            value = verify_selection(
+                Path(args.directory),
+                source_revision=args.source_revision,
+                wheel_sha256=args.wheel_sha256,
+            )
     except BuildError as exc:
         sys.stderr.write(f"Python build error: {exc}\n")
         return 1
