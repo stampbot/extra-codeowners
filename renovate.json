@@ -80,6 +80,38 @@
   "osvVulnerabilityAlerts": true,
   "packageRules": [
     {
+      "description": "Update the complete isolated Python build toolchain together",
+      "matchManagers": [
+        "pip_requirements"
+      ],
+      "matchFileNames": [
+        "requirements-build.txt"
+      ],
+      "groupName": "Python build toolchain",
+      "groupSlug": "python-build-toolchain",
+      "rangeStrategy": "replace",
+      "separateMajorMinor": false
+    },
+    {
+      "description": "Keep the project backend pin with its hashed build closure",
+      "matchManagers": [
+        "pep621"
+      ],
+      "matchFileNames": [
+        "pyproject.toml"
+      ],
+      "matchDepTypes": [
+        "build-system.requires"
+      ],
+      "matchPackageNames": [
+        "hatchling"
+      ],
+      "groupName": "Python build toolchain",
+      "groupSlug": "python-build-toolchain",
+      "rangeStrategy": "replace",
+      "separateMajorMinor": false
+    },
+    {
       "description": "Group non-major Python development dependency updates",
       "matchDepTypes": [
         "dependency-groups"
