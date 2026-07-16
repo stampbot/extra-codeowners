@@ -37,6 +37,11 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 ARG APPLICATION_SOURCE_REVISION
 ARG APPLICATION_WHEEL_SHA256
+ARG APPLICATION_SELECTION_RECORD_SHA256
+
+LABEL org.opencontainers.image.revision="${APPLICATION_SOURCE_REVISION}" \
+      org.stampbot.extra-codeowners.application-wheel.sha256="${APPLICATION_WHEEL_SHA256}" \
+      org.stampbot.extra-codeowners.python-selection-record.sha256="${APPLICATION_SELECTION_RECORD_SHA256}"
 
 # Verify and install the selected application wheel without network access or a
 # project build. UV_NO_INSTALLER_METADATA keeps installer-owned, time-varying
@@ -46,7 +51,8 @@ RUN --mount=from=verified-python,target=/verified-python,ro \
     python .github/scripts/build_python_artifacts.py verify-selection \
       --directory /verified-python \
       --source-revision "${APPLICATION_SOURCE_REVISION}" \
-      --wheel-sha256 "${APPLICATION_WHEEL_SHA256}" >/dev/null && \
+      --wheel-sha256 "${APPLICATION_WHEEL_SHA256}" \
+      --selection-record-sha256 "${APPLICATION_SELECTION_RECORD_SHA256}" >/dev/null && \
     wheel="$(find /verified-python -maxdepth 1 -type f -name 'extra_codeowners-*.whl' -print)" && \
     test -n "$wheel" && test "$(printf '%s\n' "$wheel" | wc -l)" -eq 1 && \
     uv pip install \
@@ -126,15 +132,19 @@ CMD ["/opt/venv/bin/python", "-m", "pytest", "--no-cov"]
 
 FROM python:3.14.6-alpine3.24@sha256:26730869004e2b9c4b9ad09cab8625e81d256d1ce97e72df5520e806b1709f92 AS runtime
 
-ARG VCS_REF="unknown"
 ARG VERSION="0.0.0"
+ARG APPLICATION_SOURCE_REVISION
+ARG APPLICATION_WHEEL_SHA256
+ARG APPLICATION_SELECTION_RECORD_SHA256
 
 LABEL org.opencontainers.image.title="Extra CODEOWNERS" \
       org.opencontainers.image.description="Delegated GitHub App approvals for CODEOWNERS policy" \
       org.opencontainers.image.licenses="Apache-2.0" \
       org.opencontainers.image.source="https://github.com/stampbot/extra-codeowners" \
-      org.opencontainers.image.revision="${VCS_REF}" \
-      org.opencontainers.image.version="${VERSION}"
+      org.opencontainers.image.revision="${APPLICATION_SOURCE_REVISION}" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.stampbot.extra-codeowners.application-wheel.sha256="${APPLICATION_WHEEL_SHA256}" \
+      org.stampbot.extra-codeowners.python-selection-record.sha256="${APPLICATION_SELECTION_RECORD_SHA256}"
 
 ENV PATH="/opt/venv/bin:${PATH}" \
     EXTRA_CODEOWNERS_DATABASE_URL="sqlite:////tmp/extra-codeowners.db" \

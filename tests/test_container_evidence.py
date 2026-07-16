@@ -238,6 +238,8 @@ def standalone_inventory(component: dict[str, Any]) -> dict[str, Any]:
         "image_config_digest": "sha256:" + "b" * 64,
         "image_revision": "c" * 40,
         "image_version": "1.0",
+        "application_wheel_sha256": "e" * 64,
+        "application_selection_record_sha256": "f" * 64,
         "apk_database_sha256": "d" * 64,
         "components": [component],
         "embedded_sboms": [],
@@ -292,6 +294,8 @@ def saved_image_layers(path: Path, layers: list[bytes], *, architecture: str = "
                 "Labels": {
                     "org.opencontainers.image.revision": "a" * 40,
                     "org.opencontainers.image.version": "1.0",
+                    evidence.APPLICATION_WHEEL_LABEL: "e" * 64,
+                    evidence.APPLICATION_SELECTION_LABEL: "f" * 64,
                 }
             },
             "os": "linux",
@@ -363,6 +367,11 @@ def ci_artifact_files(tmp_path: Path, architecture: str = "amd64") -> dict[str, 
         "architecture": architecture,
         "inventory_subject_digest": inventory["subject_digest"],
         "inventory_image_config_digest": inventory["image_config_digest"],
+        "python_distribution_artifact_id": "9012",
+        "python_distribution_artifact_digest": "d" * 64,
+        "application_source_revision": "a" * 40,
+        "application_wheel_sha256": "e" * 64,
+        "application_selection_record_sha256": "f" * 64,
     }
     predicate = {
         "schema_version": 1,
@@ -2029,6 +2038,194 @@ def test_image_revision_and_version_must_match_source() -> None:
         evidence.verify_image_revision(inventory, version="1.2.4", source_revision=revision)
 
 
+def test_application_artifact_labels_require_exact_proof_binding() -> None:
+    inventory = standalone_inventory(
+        {
+            "ecosystem": "python",
+            "name": "demo",
+            "version": "1",
+            "observed_license": "MIT",
+            "effective": True,
+            "metadata_sha256": "a" * 64,
+        }
+    )
+    evidence.verify_application_artifact_labels(
+        inventory,
+        source_revision="c" * 40,
+        wheel_sha256="e" * 64,
+        selection_record_sha256="f" * 64,
+    )
+
+    for field, value in (
+        ("image_revision", "d" * 40),
+        ("application_wheel_sha256", "1" * 64),
+        ("application_selection_record_sha256", "2" * 64),
+    ):
+        changed = copy.deepcopy(inventory)
+        changed[field] = value
+        with pytest.raises(evidence.EvidenceError, match="does not match selected"):
+            evidence.verify_application_artifact_labels(
+                changed,
+                source_revision="c" * 40,
+                wheel_sha256="e" * 64,
+                selection_record_sha256="f" * 64,
+            )
+
+    for field in ("application_wheel_sha256", "application_selection_record_sha256"):
+        changed = copy.deepcopy(inventory)
+        changed[field] = ""
+        with pytest.raises(evidence.EvidenceError, match=f"invalid {field}"):
+            evidence.validate_component_inventory(changed)
+
+
+def test_selected_wheel_contract_binds_every_application_owned_file() -> None:
+    component = {
+        "ecosystem": "python",
+        "name": "extra-codeowners",
+        "version": "1",
+        "observed_license": "Apache-2.0",
+        "effective": True,
+        "metadata_sha256": "a" * 64,
+    }
+    inventory = standalone_inventory(component)
+    alternatives: list[dict[str, Any]] = []
+    for index, interpreter in enumerate(("python", "python3", "python3.14"), start=1):
+        alternatives.append(
+            {
+                "launcher_interpreter": interpreter,
+                "files": [
+                    {
+                        "path": "bin/extra-codeowners",
+                        "sha256": str(index) * 64,
+                        "size": 300 + index,
+                        "mode": 0o755,
+                    },
+                    {
+                        "path": "lib/python3.14/site-packages/extra_codeowners-1.dist-info/RECORD",
+                        "sha256": str(index + 3) * 64,
+                        "size": 500 + index,
+                        "mode": 0o644,
+                    },
+                    {
+                        "path": "lib/python3.14/site-packages/extra_codeowners/app.py",
+                        "sha256": "a" * 64,
+                        "size": 10,
+                        "mode": 0o644,
+                    },
+                ],
+            }
+        )
+    contract = {
+        "environment_root": "/opt/venv",
+        "project": "extra-codeowners",
+        "version": "1",
+        "python_directory": "python3.14",
+        "alternatives": alternatives,
+    }
+    selected = alternatives[1]["files"]
+    inventory["python_record_ownership"] = [
+        {
+            "owner": "extra-codeowners",
+            "effective": True,
+            "layer": 1,
+            "path": f"opt/venv/{record['path']}",
+            "sha256": record["sha256"],
+            "size": record["size"],
+            "mode": record["mode"],
+            "uid": 0,
+            "gid": 0,
+        }
+        for record in selected
+    ]
+
+    assert evidence.verify_selected_application_installation(inventory, contract) == "python3"
+
+    for path_suffix in ("app.py", "bin/extra-codeowners", ".dist-info/RECORD"):
+        changed = copy.deepcopy(inventory)
+        owned = next(
+            record
+            for record in changed["python_record_ownership"]
+            if record["path"].endswith(path_suffix)
+        )
+        owned["sha256"] = "f" * 64
+        with pytest.raises(evidence.EvidenceError, match="differs from every"):
+            evidence.verify_selected_application_installation(changed, contract)
+
+    self_consistent_rewrite = copy.deepcopy(inventory)
+    application = next(
+        record
+        for record in self_consistent_rewrite["python_record_ownership"]
+        if record["path"].endswith("app.py")
+    )
+    installed_record = next(
+        record
+        for record in self_consistent_rewrite["python_record_ownership"]
+        if record["path"].endswith(".dist-info/RECORD")
+    )
+    application.update({"sha256": "e" * 64, "size": 11})
+    installed_record.update({"sha256": "d" * 64, "size": 502})
+    with pytest.raises(evidence.EvidenceError, match="differs from every"):
+        evidence.verify_selected_application_installation(self_consistent_rewrite, contract)
+
+    historical_occurrence = copy.deepcopy(inventory)
+    hidden = copy.deepcopy(historical_occurrence["python_record_ownership"][0])
+    hidden.update({"effective": False, "layer": 0, "sha256": "c" * 64})
+    historical_occurrence["python_record_ownership"].append(hidden)
+    with pytest.raises(evidence.EvidenceError, match="invalid runtime identity"):
+        evidence.verify_selected_application_installation(historical_occurrence, contract)
+
+    def historical_installation(
+        files: list[dict[str, Any]],
+        *,
+        layer: int,
+        effective: bool,
+        owner: str = "python:extra-codeowners@1",
+    ) -> dict[str, Any]:
+        entries = []
+        for file in files:
+            occurrence = {
+                "effective": effective,
+                "layer": layer,
+                "path": f"opt/venv/{file['path']}",
+                "sha256": file["sha256"],
+                "size": file["size"],
+                "mode": file["mode"],
+                "uid": 0,
+                "gid": 0,
+            }
+            entries.append({"path": occurrence["path"], "occurrence": occurrence})
+        record = next(
+            entry["occurrence"] for entry in entries if entry["path"].endswith(".dist-info/RECORD")
+        )
+        return {"owner": owner, "record": record, "entries": entries}
+
+    occurrence_inventory = copy.deepcopy(inventory)
+    occurrence_inventory["python_record_installations"] = [
+        historical_installation(alternatives[0]["files"], layer=1, effective=False),
+        historical_installation(alternatives[1]["files"], layer=2, effective=True),
+    ]
+    assert (
+        evidence.verify_selected_application_installation(occurrence_inventory, contract)
+        == "python3"
+    )
+
+    rewritten_history = copy.deepcopy(occurrence_inventory)
+    historical_entries = rewritten_history["python_record_installations"][0]["entries"]
+    historical_app = next(entry for entry in historical_entries if entry["path"].endswith("app.py"))
+    historical_record = next(
+        entry for entry in historical_entries if entry["path"].endswith(".dist-info/RECORD")
+    )
+    historical_app["occurrence"].update({"sha256": "b" * 64, "size": 12})
+    historical_record["occurrence"].update({"sha256": "c" * 64, "size": 503})
+    with pytest.raises(evidence.EvidenceError, match="distributed application installation"):
+        evidence.verify_selected_application_installation(rewritten_history, contract)
+
+    old_application = copy.deepcopy(occurrence_inventory)
+    old_application["python_record_installations"][0]["owner"] = "python:extra-codeowners@0.9"
+    with pytest.raises(evidence.EvidenceError, match="selected version"):
+        evidence.verify_selected_application_installation(old_application, contract)
+
+
 def test_dockerfile_builder_and_final_runtime_match_reviewed_base(tmp_path: Path) -> None:
     digest = "sha256:" + "b" * 64
     policy = {"base_image": "python:3.14-alpine", "base_image_index_digest": digest}
@@ -3640,12 +3837,20 @@ def test_run_metadata_binds_event_checkout_and_inventory(tmp_path: Path) -> None
         workflow_sha="d" * 40,
         platform="linux/amd64",
         architecture="amd64",
+        python_distribution_artifact_id="9012",
+        python_distribution_artifact_digest="d" * 64,
+        application_source_revision="c" * 40,
+        application_wheel_sha256="e" * 64,
+        application_selection_record_sha256="f" * 64,
     )
     evidence.command_run_metadata(arguments)
     metadata_record = json.loads(output.read_text())
     assert metadata_record["checkout_sha"] == "c" * 40
     assert metadata_record["pr_head_sha"] == "a" * 40
     assert metadata_record["inventory_subject_digest"] == "sha256:" + "a" * 64
+    assert metadata_record["python_distribution_artifact_id"] == "9012"
+    assert metadata_record["python_distribution_artifact_digest"] == "d" * 64
+    assert metadata_record["application_selection_record_sha256"] == "f" * 64
 
     arguments.github_sha = "e" * 40
     with pytest.raises(evidence.EvidenceError, match="does not match"):
@@ -3666,6 +3871,27 @@ def test_run_metadata_binds_event_checkout_and_inventory(tmp_path: Path) -> None
     evidence.command_run_metadata(arguments)
     arguments.pr_number = "27"
     with pytest.raises(evidence.EvidenceError, match="event and pull-request"):
+        evidence.command_run_metadata(arguments)
+
+    arguments.event_name = "pull_request"
+    for field in (
+        "python_distribution_artifact_digest",
+        "application_wheel_sha256",
+        "application_selection_record_sha256",
+    ):
+        original = getattr(arguments, field)
+        setattr(arguments, field, "0")
+        with pytest.raises(evidence.EvidenceError, match=field):
+            evidence.command_run_metadata(arguments)
+        setattr(arguments, field, original)
+
+    arguments.python_distribution_artifact_id = "0"
+    with pytest.raises(evidence.EvidenceError, match="python_distribution_artifact_id"):
+        evidence.command_run_metadata(arguments)
+    arguments.python_distribution_artifact_id = "9012"
+
+    arguments.application_source_revision = "a" * 40
+    with pytest.raises(evidence.EvidenceError, match="application source revision"):
         evidence.command_run_metadata(arguments)
 
 
@@ -3742,6 +3968,52 @@ def test_ci_artifact_pair_requires_one_shared_workflow_context(tmp_path: Path) -
     metadata_record = json.loads(metadata_path.read_text())
     metadata_record["run_attempt"] = 3
     metadata_path.write_bytes(evidence.canonical_json(metadata_record))
+    with pytest.raises(evidence.EvidenceError, match="one exact workflow context"):
+        evidence.validate_ci_artifact_pair(roots["amd64"], roots["arm64"])
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "python_distribution_artifact_id",
+        "python_distribution_artifact_digest",
+        "application_wheel_sha256",
+        "application_selection_record_sha256",
+        "application_source_revision",
+    ],
+)
+def test_ci_artifact_pair_rejects_cross_platform_application_proof_mismatch(
+    field: str, tmp_path: Path
+) -> None:
+    roots: dict[str, Path] = {}
+    for architecture in ("amd64", "arm64"):
+        archive = tmp_path / f"{architecture}.zip"
+        write_ci_artifact_zip(archive, ci_artifact_files(tmp_path, architecture))
+        roots[architecture] = tmp_path / architecture
+        evidence.extract_ci_artifact(archive, architecture, roots[architecture])
+
+    metadata_path = roots["arm64"] / "run-metadata-arm64.json"
+    inventory_path = roots["arm64"] / "components-arm64.json"
+    metadata = json.loads(metadata_path.read_text())
+    inventory = json.loads(inventory_path.read_text())
+    if field == "python_distribution_artifact_id":
+        metadata[field] = "9013"
+    elif field == "python_distribution_artifact_digest":
+        metadata[field] = "0" * 64
+    elif field in {
+        "application_wheel_sha256",
+        "application_selection_record_sha256",
+    }:
+        metadata[field] = "0" * 64
+        inventory[field] = "0" * 64
+    else:
+        metadata["application_source_revision"] = "0" * 40
+        metadata["github_sha"] = "0" * 40
+        metadata["checkout_sha"] = "0" * 40
+        inventory["image_revision"] = "0" * 40
+    metadata_path.write_bytes(evidence.canonical_json(metadata))
+    inventory_path.write_bytes(evidence.canonical_json(inventory))
+
     with pytest.raises(evidence.EvidenceError, match="one exact workflow context"):
         evidence.validate_ci_artifact_pair(roots["amd64"], roots["arm64"])
 
@@ -4242,6 +4514,147 @@ def test_python_component_identity_is_bounded(field: str) -> None:
         evidence.validate_component_inventory(standalone_inventory(component))
 
 
+def selected_retention_fixture(
+    command: list[str], *, mutation: str = ""
+) -> tuple[dict[str, Any], bytes]:
+    output = Path(command[command.index("--output") + 1])
+    output.mkdir(parents=True)
+    payloads = {
+        "extra_codeowners-1-py3-none-any.whl": b"wheel",
+        "extra_codeowners-1.tar.gz": b"source",
+        "python-build-record-amd64.json": b"amd64-record",
+        "python-build-record-arm64.json": b"arm64-record",
+        "python-selection-record.json": b"selection-record",
+    }
+    for name, content in payloads.items():
+        (output / name).write_bytes(content)
+    files = [
+        {
+            "filename": name,
+            "sha256": evidence.sha256_bytes(content),
+            "size": len(content),
+        }
+        for name, content in sorted(payloads.items())
+    ]
+    result = {
+        "schema_version": 1,
+        "source_revision": "a" * 40,
+        "selection_record_sha256": evidence.sha256_bytes(payloads["python-selection-record.json"]),
+        "wheel_filename": "extra_codeowners-1-py3-none-any.whl",
+        "wheel_sha256": evidence.sha256_bytes(payloads["extra_codeowners-1-py3-none-any.whl"]),
+        "sdist_filename": "extra_codeowners-1.tar.gz",
+        "sdist_sha256": evidence.sha256_bytes(payloads["extra_codeowners-1.tar.gz"]),
+        "files": files,
+        "installation": {"contract": "opaque to retention"},
+    }
+    if mutation == "schema":
+        result["schema_version"] = 2
+    elif mutation == "missing":
+        result["files"] = files[:-1]
+        (output / files[-1]["filename"]).unlink()
+    elif mutation == "extra":
+        extra = output / "unreviewed"
+        extra.write_bytes(b"extra")
+        result["files"] = [
+            *files,
+            {
+                "filename": extra.name,
+                "sha256": evidence.sha256_bytes(b"extra"),
+                "size": 5,
+            },
+        ]
+    elif mutation == "symlink":
+        name = "python-build-record-arm64.json"
+        linked = output / name
+        content = linked.read_bytes()
+        target = output.parent / "outside-record"
+        target.write_bytes(content)
+        linked.unlink()
+        linked.symlink_to(target)
+    elif mutation == "tampered":
+        cast(list[dict[str, Any]], result["files"])[0]["sha256"] = "0" * 64
+    compact = json.dumps(
+        result,
+        allow_nan=False,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode()
+    if mutation == "noncanonical":
+        compact = json.dumps(result, indent=2, sort_keys=True).encode()
+    return result, compact + b"\n"
+
+
+def test_retains_exact_selected_proof_for_manifest(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    result: dict[str, Any] = {}
+
+    def fake_run(command: list[str], **_kwargs: Any) -> bytes:
+        nonlocal result
+        result, output = selected_retention_fixture(command)
+        return output
+
+    monkeypatch.setattr(evidence, "run", fake_run)
+    budget = evidence.BundleBudget()
+    expected_payloads = {
+        "wheel": evidence.sha256_bytes(b"wheel"),
+        "selection": evidence.sha256_bytes(b"selection-record"),
+    }
+    binding, installation = evidence.retain_selected_application_artifacts(
+        directory=tmp_path / "incoming",
+        output=tmp_path / "bundle" / "artifacts" / "application",
+        repo=tmp_path,
+        source_revision="a" * 40,
+        wheel_sha256=expected_payloads["wheel"],
+        selection_record_sha256=expected_payloads["selection"],
+        budget=budget,
+    )
+
+    assert len(binding["files"]) == 5
+    assert {record["path"] for record in binding["files"]} == {
+        f"artifacts/application/{record['filename']}" for record in result["files"]
+    }
+    assert binding["wheel_sha256"] == expected_payloads["wheel"]
+    assert binding["selection_record_sha256"] == expected_payloads["selection"]
+    assert installation == {"contract": "opaque to retention"}
+    assert budget.retained_file_count == 5
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        ("noncanonical", "noncanonical JSON"),
+        ("schema", "unsupported schema"),
+        ("missing", "exactly five"),
+        ("extra", "exactly five"),
+        ("symlink", "cannot read retained"),
+        ("tampered", "differs from its canonical hash"),
+    ],
+)
+def test_selected_proof_retention_fails_closed(
+    mutation: str,
+    message: str,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    def fake_run(command: list[str], **_kwargs: Any) -> bytes:
+        _result, output = selected_retention_fixture(command, mutation=mutation)
+        return output
+
+    monkeypatch.setattr(evidence, "run", fake_run)
+    with pytest.raises(evidence.EvidenceError, match=message):
+        evidence.retain_selected_application_artifacts(
+            directory=tmp_path / "incoming",
+            output=tmp_path / "bundle" / "artifacts" / "application",
+            repo=tmp_path,
+            source_revision="a" * 40,
+            wheel_sha256=evidence.sha256_bytes(b"wheel"),
+            selection_record_sha256=evidence.sha256_bytes(b"selection-record"),
+            budget=evidence.BundleBudget(),
+        )
+
+
 def test_bundle_budget_enforces_cumulative_download_and_retained_limits(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -4610,6 +5023,10 @@ def test_bundle_command_forwards_image_revision_requirement(
         predicate_output="predicate.json",
         version="1.2.3",
         source_date_epoch=123,
+        selected_python_directory="selected-python",
+        application_source_revision="a" * 40,
+        application_wheel_sha256="b" * 64,
+        application_selection_record_sha256="c" * 64,
         require_distribution_approval=True,
         require_image_revision=True,
     )
@@ -4618,3 +5035,26 @@ def test_bundle_command_forwards_image_revision_requirement(
 
     assert observed["require_approval"] is True
     assert observed["require_image_revision"] is True
+    assert observed["selected_python_directory"] == Path("selected-python")
+    assert observed["application_selection_record_sha256"] == "c" * 64
+
+
+def test_evidence_cli_requires_selected_proof_identity() -> None:
+    with pytest.raises(SystemExit):
+        evidence.parser().parse_args(
+            [
+                "bundle",
+                "--inventory",
+                "inventory.json",
+                "--files-inventory",
+                "files.json",
+                "--output",
+                "bundle.tar.gz",
+                "--predicate-output",
+                "predicate.json",
+                "--version",
+                "1.0.0",
+                "--source-date-epoch",
+                "1",
+            ]
+        )

@@ -477,6 +477,7 @@ jobs:
       artifact-id: ${{ steps.upload-selected.outputs.artifact-id }}
       artifact-digest: ${{ steps.upload-selected.outputs.artifact-digest }}
       wheel-sha256: ${{ steps.select.outputs.wheel-sha256 }}
+      selection-record-sha256: ${{ steps.select.outputs.selection-record-sha256 }}
     steps:
       - name: Require both native distribution proofs
         env:
@@ -525,7 +526,10 @@ jobs:
             --output "${RUNNER_TEMP}/python-distributions-selected" \
             >"$result"
           wheel_sha256="$(jq -er '.wheel_sha256' "$result")"
+          selection_record_sha256="$(jq -er '.selection_record_sha256' "$result")"
           printf 'wheel-sha256=%s\n' "$wheel_sha256" >>"$GITHUB_OUTPUT"
+          printf 'selection-record-sha256=%s\n' "$selection_record_sha256" \
+            >>"$GITHUB_OUTPUT"
 
       - name: Upload selected distribution
         id: upload-selected
@@ -598,11 +602,14 @@ jobs:
         env:
           DISTRIBUTION_DIRECTORY: ${{ steps.python-distribution.outputs.download-path }}
           WHEEL_SHA256: ${{ needs.python-distribution.outputs.wheel-sha256 }}
+          SELECTION_RECORD_SHA256: >-
+            ${{ needs.python-distribution.outputs.selection-record-sha256 }}
         run: >-
           python .github/scripts/build_python_artifacts.py verify-selection
           --directory "$DISTRIBUTION_DIRECTORY"
           --source-revision "$GITHUB_SHA"
           --wheel-sha256 "$WHEEL_SHA256"
+          --selection-record-sha256 "$SELECTION_RECORD_SHA256"
 
       - name: Set up uv for evidence collection
         uses: astral-sh/setup-uv@6ee6290f1cbc4156c0bdd66691b2c144ef8df19a # v7.4.0
@@ -635,6 +642,7 @@ jobs:
           build-args: |
             APPLICATION_SOURCE_REVISION=${{ github.sha }}
             APPLICATION_WHEEL_SHA256=${{ needs.python-distribution.outputs.wheel-sha256 }}
+            APPLICATION_SELECTION_RECORD_SHA256=${{ needs.python-distribution.outputs.selection-record-sha256 }}
           context: .
           load: true
           platforms: ${{ matrix.platform }}
@@ -666,7 +674,7 @@ jobs:
           build-args: |
             APPLICATION_SOURCE_REVISION=${{ github.sha }}
             APPLICATION_WHEEL_SHA256=${{ needs.python-distribution.outputs.wheel-sha256 }}
-            VCS_REF=${{ github.sha }}
+            APPLICATION_SELECTION_RECORD_SHA256=${{ needs.python-distribution.outputs.selection-record-sha256 }}
             VERSION=0.0.0-ci
 
       - name: Smoke test hardened container
@@ -689,6 +697,12 @@ jobs:
           REPOSITORY_ID: ${{ github.repository_id }}
           WORKFLOW_REF: ${{ github.workflow_ref }}
           WORKFLOW_SHA: ${{ github.workflow_sha }}
+          PYTHON_DISTRIBUTION_DIRECTORY: ${{ steps.python-distribution.outputs.download-path }}
+          PYTHON_DISTRIBUTION_ARTIFACT_ID: ${{ needs.python-distribution.outputs.artifact-id }}
+          PYTHON_DISTRIBUTION_ARTIFACT_DIGEST: ${{ needs.python-distribution.outputs.artifact-digest }}
+          APPLICATION_WHEEL_SHA256: ${{ needs.python-distribution.outputs.wheel-sha256 }}
+          APPLICATION_SELECTION_RECORD_SHA256: >-
+            ${{ needs.python-distribution.outputs.selection-record-sha256 }}
         run: |
           set -euo pipefail
           mkdir -p container-evidence
@@ -722,7 +736,13 @@ jobs:
             --workflow-ref "$WORKFLOW_REF" \
             --workflow-sha "$WORKFLOW_SHA" \
             --platform "$PLATFORM" \
-            --architecture "$ARCHITECTURE"
+            --architecture "$ARCHITECTURE" \
+            --python-distribution-artifact-id "$PYTHON_DISTRIBUTION_ARTIFACT_ID" \
+            --python-distribution-artifact-digest "$PYTHON_DISTRIBUTION_ARTIFACT_DIGEST" \
+            --application-source-revision "$GITHUB_SHA" \
+            --application-wheel-sha256 "$APPLICATION_WHEEL_SHA256" \
+            --application-selection-record-sha256 \
+              "$APPLICATION_SELECTION_RECORD_SHA256"
           uv run --frozen python .github/scripts/container_evidence.py verify \
             --inventory "$inventory"
           uv run --frozen python .github/scripts/container_evidence.py bundle \
@@ -732,6 +752,11 @@ jobs:
             --predicate-output "$predicate" \
             --version 0.0.0-ci \
             --source-date-epoch "$(git show -s --format=%ct HEAD)" \
+            --selected-python-directory "$PYTHON_DISTRIBUTION_DIRECTORY" \
+            --application-source-revision "$GITHUB_SHA" \
+            --application-wheel-sha256 "$APPLICATION_WHEEL_SHA256" \
+            --application-selection-record-sha256 \
+              "$APPLICATION_SELECTION_RECORD_SHA256" \
             --require-image-revision
 
       - name: Upload container distribution evidence

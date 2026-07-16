@@ -21,11 +21,17 @@ Security issue
 [`#28`](https://github.com/stampbot/extra-codeowners/issues/28) tracks the
 required privilege-separated release implementation.
 
-Issue [`#32`](https://github.com/stampbot/extra-codeowners/issues/32) separately
-tracks a hash-pinned PEP 517 build environment and exact application-wheel
-installation. `uv.lock` covers runtime dependencies; it does not hash-lock the
-isolated build backend selected from `[build-system]`. No current collector
-success overrides that release blocker.
+Pull-request CI now builds the application twice on each native architecture
+with the hash-pinned PEP 517 closure, requires byte-identical architecture
+proofs, and selects one exact five-file proof. Both container candidates install
+that wheel without rebuilding it. Their stable OCI labels bind the source
+revision, wheel SHA-256, and selection-record SHA-256; run metadata separately
+binds the selected GitHub Actions artifact ID and archive digest. Run-scoped
+artifact identity never enters an image label, so a rerun does not change image
+bytes for that reason. Issue
+[`#32`](https://github.com/stampbot/extra-codeowners/issues/32) remains open for
+the release and ad-hoc build paths, which do not yet consume this proof. No CI
+collector success overrides that release blocker.
 
 The current archive is intentionally incomplete as distribution evidence.
 Issue `#18` tracks two remaining gaps: CPython is not normalized into the
@@ -58,7 +64,11 @@ actual member bytes before parsing them. It then:
    platform-specific Docker Official Python base
 6. compares the normalized top-level component inventory byte-for-byte with the
    reviewed platform policy
-7. retrieves hash-pinned source and license material for those top-level
+7. reverifies the exact selected proof, requires every application-owned
+   runtime file (including the installer-generated `RECORD` and reviewed
+   launcher aliases) to match one complete selected-wheel layout, and retains
+   all five proof files under `artifacts/application/`
+8. retrieves hash-pinned source and license material for those top-level
    components and produces a deterministic, explicitly incomplete review
    archive.
 
@@ -206,7 +216,10 @@ current public-domain resolutions bind these exact records:
 The deterministic review archive normalizes member order, ownership, mode, and
 timestamps. It includes checksums, canonical manifests, raw inventories, the
 reviewed policy, retained top-level source, notices, and license material. Its
-manifest preserves the incomplete source-coverage status.
+manifest preserves the incomplete source-coverage status. Its
+`application_artifacts` record binds the source, selected wheel, selection
+record, accepted launcher form, and SHA-256 and size of every one of the five
+files retained under `artifacts/application/`.
 
 ## Required release architecture
 

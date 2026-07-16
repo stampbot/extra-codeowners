@@ -12,9 +12,11 @@ with package-write, signing, attestation, or release authority. Issue
 [#18](https://github.com/stampbot/extra-codeowners/issues/18) tracks three
 source-completeness gaps. Issue
 [#28](https://github.com/stampbot/extra-codeowners/issues/28) tracks the
-privilege-separated release pipeline and recipient verifier. Issue
-[#32](https://github.com/stampbot/extra-codeowners/issues/32) tracks the
-hash-pinned PEP 517 environment and exact application-wheel installation.
+privilege-separated release pipeline and recipient verifier. Pull-request CI
+already binds its hash-pinned PEP 517 proof and exact installed application
+wheel into both platform artifacts. Issue
+[#32](https://github.com/stampbot/extra-codeowners/issues/32) remains open for
+release and ad-hoc build consumption of that selected proof.
 
 ## Prerequisites and trust boundary
 
@@ -442,6 +444,21 @@ RUN_ATTEMPT="$(jq -er '.run_attempt' "$INCOMING/run.json")"
 MERGE_SHA="$(jq -er '[.[].identity.merge] | unique | if length == 1 then .[0] else error end' \
   "$INCOMING/selected-artifacts.json")"
 EXPECTED_WORKFLOW_REF="stampbot/extra-codeowners/.github/workflows/ci.yml@refs/pull/${PR_NUMBER}/merge"
+PYTHON_ARTIFACT_NAME="python-distributions-selected-${MERGE_SHA}-attempt-${RUN_ATTEMPT}"
+PYTHON_ARTIFACT_ID="$(jq -er --arg name "$PYTHON_ARTIFACT_NAME" '
+  [.artifacts[] | select(.name == $name and (.expired | not))]
+  | if length == 1
+    then .[0].id | tostring
+    else error("selected Python artifact mismatch")
+    end
+' "$INCOMING/artifacts.json")"
+PYTHON_ARTIFACT_DIGEST="$(jq -er --arg name "$PYTHON_ARTIFACT_NAME" '
+  [.artifacts[] | select(.name == $name and (.expired | not))]
+  | if length == 1
+    then .[0].digest | capture("^sha256:(?<value>[0-9a-f]{64})$").value
+    else error("selected Python artifact mismatch")
+    end
+' "$INCOMING/artifacts.json")"
 
 jq -e \
   --argjson number "$PR_NUMBER" \
@@ -488,6 +505,8 @@ for architecture in amd64 arm64; do
     --arg head_repository "$PR_HEAD_REPOSITORY_ID" \
     --arg merge "$MERGE_SHA" \
     --arg workflow_ref "$EXPECTED_WORKFLOW_REF" \
+    --arg python_artifact_id "$PYTHON_ARTIFACT_ID" \
+    --arg python_artifact_digest "$PYTHON_ARTIFACT_DIGEST" \
     --arg architecture "$architecture" '
       .run_id == $run
       and .run_attempt == $attempt
@@ -501,14 +520,23 @@ for architecture in amd64 arm64; do
       and .checkout_sha == $merge
       and .workflow_ref == $workflow_ref
       and (.workflow_sha | test("^[0-9a-f]{40}$"))
+      and .python_distribution_artifact_id == $python_artifact_id
+      and .python_distribution_artifact_digest == $python_artifact_digest
+      and .application_source_revision == $merge
+      and (.application_wheel_sha256 | test("^[0-9a-f]{64}$"))
+      and (.application_selection_record_sha256 | test("^[0-9a-f]{64}$"))
       and .platform == ("linux/" + $architecture)
       and .architecture == $architecture
     ' "$metadata" >/dev/null
 done
 ```
 
-The helper also requires the image revision, inventory subject, and local image
-configuration digest to match each metadata record. Current GitHub REST run and
+The helper also requires the image revision, selected-wheel and selection-record
+labels, inventory subject, and local image configuration digest to match each
+metadata record. It requires both platforms to share the source, wheel,
+selection, selected-artifact ID, and selected-artifact digest. The selected
+artifact's REST digest includes a `sha256:` prefix; the upload action output
+recorded by the workflow is the 64-character value. Current GitHub REST run and
 artifact responses do not independently expose `github.workflow_sha`; record
 and compare it across platforms, but do not describe that field alone as a
 signature or external provenance statement.
@@ -619,8 +647,9 @@ lower-layer status, applicable notices, and corresponding source.
 Review source policy with these precise boundaries:
 
 - `uv.lock` supplies immutable top-level Python source URLs, sizes, and hashes;
-  wheel-only or lower-layer packages need exact fallback records, and the
-  isolated build backend remains outside that lock until issue #32 closes
+  wheel-only or lower-layer packages need exact fallback records; pull-request
+  CI separately hash-pins and retains its isolated-build proof, while issue #32
+  remains open for release and ad-hoc consumers of that proof
 - Alpine policy pins every `ORIGIN@APORTS_COMMIT`, recipe-subtree hash, verified
   `sha512sums` input, and any narrow parser exception; never execute an
   `APKBUILD`

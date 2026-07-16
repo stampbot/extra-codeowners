@@ -130,6 +130,7 @@ The archive must contain at least these entry points:
 | `inventory/components.json` | Exact normalized component, package-record, native-payload, SBOM, wheel-identity, historical RECORD-installation, effective RECORD-ownership, and source-completeness inventory. |
 | `inventory/all-layer-files.json` | Every regular, directory, non-regular, and whiteout occurrence in every distributed layer, including security metadata; regular and directory records also carry effective state. |
 | `policy/container-policy.json` | The exact reviewed policy used to accept the candidate. |
+| `artifacts/application/` | The exact selected wheel, sdist, both native build records, and cross-architecture selection record; every file is hash-bound by `MANIFEST.json`. |
 | `licenses/standard/` | Hash-pinned standard license texts required by reviewed expressions. |
 | `licenses/from-source/` | Hash-pinned notices retained from exact source archives. |
 | `sources/application/` | Exact tracked Extra CODEOWNERS source blobs and Git modes at the image revision. |

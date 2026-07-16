@@ -48,6 +48,8 @@ SCHEMA_VERSION = 1
 APPLICATION_NAME = "extra-codeowners"
 EXPECTED_RUNTIME_PYTHON = "3.14.6"
 EXPECTED_UV_VERSION = "0.11.28"
+APPLICATION_WHEEL_LABEL = "org.stampbot.extra-codeowners.application-wheel.sha256"
+APPLICATION_SELECTION_LABEL = "org.stampbot.extra-codeowners.python-selection-record.sha256"
 SOURCE_COMPLETENESS_REASON = (
     "CPython runtime normalization into the top-level component and notice inventory, native "
     "wheel payload and embedded-SBOM component/source expansion remain open in issue #18; "
@@ -82,6 +84,7 @@ MAX_BUNDLE_FILES = 100_000
 MAX_BUNDLE_RETAINED_BYTES = 1024 * 1024 * 1024
 MAX_BUNDLE_OUTPUT_BYTES = 1024 * 1024 * 1024
 MAX_APPLICATION_SOURCE_ARCHIVE_BYTES = 64 * 1024 * 1024
+MAX_SELECTED_HELPER_OUTPUT_BYTES = 4 * 1024 * 1024
 MAX_REDIRECTS = 5
 MAX_CI_ARTIFACT_CENTRAL_DIRECTORY_BYTES = 64 * 1024
 MAX_CI_ARTIFACT_EXPANDED_BYTES = MAX_BUNDLE_OUTPUT_BYTES + 4 * MAX_JSON_BYTES
@@ -353,6 +356,24 @@ def canonical_json(value: object) -> bytes:
     except UnicodeEncodeError as exc:
         raise EvidenceError("JSON contains invalid Unicode") from exc
     return output.finish()
+
+
+def compact_canonical_json(value: object, *, max_bytes: int) -> bytes:
+    """Encode compact canonical JSON used by the isolated Python proof helper."""
+
+    try:
+        content = json.dumps(
+            value,
+            allow_nan=False,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode()
+    except (TypeError, ValueError, UnicodeEncodeError) as exc:
+        raise EvidenceError("selected Python helper JSON cannot be canonically encoded") from exc
+    if len(content) > max_bytes:
+        raise EvidenceError("selected Python helper JSON exceeds its output limit")
+    return content
 
 
 def strict_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -2459,6 +2480,8 @@ def _inventory_saved_image(
         "image_config_digest": config_digest,
         "image_revision": labels.get("org.opencontainers.image.revision", ""),
         "image_version": labels.get("org.opencontainers.image.version", ""),
+        "application_wheel_sha256": labels.get(APPLICATION_WHEEL_LABEL, ""),
+        "application_selection_record_sha256": labels.get(APPLICATION_SELECTION_LABEL, ""),
         "apk_database_sha256": apk_record["sha256"],
         "apk_database_occurrences": apk_database_occurrences,
         "components": sorted(components, key=component_sort_key),
@@ -3373,6 +3396,8 @@ def validate_component_inventory(inventory: Mapping[str, Any]) -> list[dict[str,
         "image_config_digest",
         "image_revision",
         "image_version",
+        "application_wheel_sha256",
+        "application_selection_record_sha256",
         "apk_database_sha256",
         "apk_database_occurrences",
         "components",
@@ -3398,6 +3423,13 @@ def validate_component_inventory(inventory: Mapping[str, Any]) -> list[dict[str,
     if not isinstance(version, str):
         raise EvidenceError("component inventory has an invalid image version")
     checked_scalar(version, "component inventory image version")
+    for field in (
+        "application_wheel_sha256",
+        "application_selection_record_sha256",
+    ):
+        value = inventory.get(field)
+        if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
+            raise EvidenceError(f"component inventory has an invalid {field}")
     apk_digest = inventory.get("apk_database_sha256")
     if not isinstance(apk_digest, str) or re.fullmatch(r"[0-9a-f]{64}", apk_digest) is None:
         raise EvidenceError("component inventory has an invalid APK database digest")
@@ -3569,6 +3601,404 @@ def verify_image_revision(
         raise EvidenceError(
             f"image version {inventory.get('image_version')!r} does not match {version!r}"
         )
+
+
+def verify_application_artifact_labels(
+    inventory: Mapping[str, Any],
+    *,
+    source_revision: str,
+    wheel_sha256: str,
+    selection_record_sha256: str,
+) -> None:
+    """Bind stable image labels to one selected application proof."""
+
+    if re.fullmatch(r"[0-9a-f]{40}", source_revision) is None:
+        raise EvidenceError("application source revision must be a lowercase Git SHA-1")
+    for value, description in (
+        (wheel_sha256, "application wheel digest"),
+        (selection_record_sha256, "application selection-record digest"),
+    ):
+        if re.fullmatch(r"[0-9a-f]{64}", value) is None:
+            raise EvidenceError(f"{description} must be a lowercase SHA-256 digest")
+    expected = {
+        "image_revision": source_revision,
+        "application_wheel_sha256": wheel_sha256,
+        "application_selection_record_sha256": selection_record_sha256,
+    }
+    for field, value in expected.items():
+        if inventory.get(field) != value:
+            raise EvidenceError(f"image {field} label does not match selected application proof")
+
+
+def validate_selected_installation_contract(value: object) -> list[dict[str, Any]]:
+    """Validate exact installed layouts emitted by the selected-wheel verifier."""
+
+    contract = require_exact_fields(
+        value,
+        {
+            "environment_root",
+            "project",
+            "version",
+            "python_directory",
+            "alternatives",
+        },
+        "selected installation contract",
+    )
+    if (
+        contract["environment_root"] != "/opt/venv"
+        or contract["project"] != APPLICATION_NAME
+        or contract["python_directory"] != "python3.14"
+        or not isinstance(contract["version"], str)
+    ):
+        raise EvidenceError("selected installation contract has the wrong identity")
+    checked_scalar(contract["version"], "selected installation version")
+    alternatives = contract["alternatives"]
+    if not isinstance(alternatives, list) or len(alternatives) != 3:
+        raise EvidenceError("selected installation contract has invalid alternatives")
+    expected_interpreters = ("python", "python3", "python3.14")
+    normalized: list[dict[str, Any]] = []
+    for index, alternative in enumerate(alternatives):
+        record = require_exact_fields(
+            alternative,
+            {"launcher_interpreter", "files"},
+            "selected installation alternative",
+        )
+        if record["launcher_interpreter"] != expected_interpreters[index]:
+            raise EvidenceError("selected installation alternatives have the wrong identity")
+        files = record["files"]
+        if not isinstance(files, list) or not 1 <= len(files) <= MAX_RECORD_ENTRIES:
+            raise EvidenceError("selected installation alternative has an invalid file list")
+        checked_files: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for item in files:
+            selected = require_exact_fields(
+                item,
+                {"path", "sha256", "size", "mode"},
+                "selected installed file",
+            )
+            path_value = selected["path"]
+            digest = selected["sha256"]
+            size = selected["size"]
+            mode = selected["mode"]
+            if not isinstance(path_value, str):
+                raise EvidenceError("selected installed file has no path")
+            path = str(checked_canonical_path(path_value, "selected installed application path"))
+            if (
+                path in seen
+                or not path.startswith(("lib/python3.14/site-packages/", "bin/"))
+                or not isinstance(digest, str)
+                or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+                or not isinstance(size, int)
+                or isinstance(size, bool)
+                or not 0 <= size <= MAX_ARCHIVE_MEMBER_BYTES
+                or mode not in {0o644, 0o755}
+                or (path.startswith("bin/")) != (mode == 0o755)
+            ):
+                raise EvidenceError("selected installation alternative has an invalid file")
+            seen.add(path)
+            checked_files.append({"path": path, "sha256": digest, "size": size, "mode": mode})
+        if checked_files != sorted(checked_files, key=lambda item: item["path"]):
+            raise EvidenceError("selected installation files are not canonically ordered")
+        normalized.append(
+            {
+                "launcher_interpreter": expected_interpreters[index],
+                "files": checked_files,
+            }
+        )
+    return normalized
+
+
+def verify_selected_application_installation(
+    inventory: Mapping[str, Any], installation: object
+) -> str:
+    """Match every distributed application installation to a verified wheel layout."""
+
+    alternatives = validate_selected_installation_contract(installation)
+    contract = installation
+    if not isinstance(contract, dict):
+        raise EvidenceError("selected installation contract is not an object")
+    version = contract["version"]
+    matching_components = [
+        component
+        for component in inventory.get("components", [])
+        if component.get("ecosystem") == "python"
+        and component.get("name") == APPLICATION_NAME
+        and component.get("version") == version
+        and component.get("effective") is True
+    ]
+    if len(matching_components) != 1:
+        raise EvidenceError("selected wheel does not match one effective application component")
+
+    historical = inventory.get("python_record_installations")
+    if historical is not None:
+        if not isinstance(historical, list):
+            raise EvidenceError("component inventory has invalid historical Python installations")
+        expected_owner = f"python:{APPLICATION_NAME}@{version}"
+        application_installations: list[Mapping[str, Any]] = []
+        for item in historical:
+            if not isinstance(item, dict):
+                raise EvidenceError(
+                    "component inventory has invalid historical Python installation"
+                )
+            owner = item.get("owner")
+            if isinstance(owner, str) and owner.startswith(f"python:{APPLICATION_NAME}@"):
+                if owner != expected_owner:
+                    raise EvidenceError(
+                        "distributed application installation differs from the selected version"
+                    )
+                application_installations.append(item)
+        if not application_installations:
+            raise EvidenceError("component inventory has no selected application installation")
+        active_interpreters: list[str] = []
+        for item in application_installations:
+            entries = item.get("entries")
+            if not isinstance(entries, list):
+                raise EvidenceError("application installation has invalid RECORD entries")
+            occurrence_files: list[dict[str, Any]] = []
+            for entry in entries:
+                occurrence = entry.get("occurrence") if isinstance(entry, dict) else None
+                if not isinstance(occurrence, dict):
+                    raise EvidenceError("application installation has invalid RECORD occurrence")
+                path_value = occurrence.get("path")
+                if (
+                    not isinstance(path_value, str)
+                    or not path_value.startswith("opt/venv/")
+                    or occurrence.get("uid") != 0
+                    or occurrence.get("gid") != 0
+                ):
+                    raise EvidenceError(
+                        "application RECORD occurrence has an invalid runtime identity"
+                    )
+                occurrence_files.append(
+                    {
+                        "path": path_value.removeprefix("opt/venv/"),
+                        "sha256": occurrence.get("sha256"),
+                        "size": occurrence.get("size"),
+                        "mode": occurrence.get("mode"),
+                    }
+                )
+            occurrence_files.sort(key=lambda candidate: str(candidate["path"]))
+            interpreter = next(
+                (
+                    str(alternative["launcher_interpreter"])
+                    for alternative in alternatives
+                    if canonical_json(occurrence_files) == canonical_json(alternative["files"])
+                ),
+                None,
+            )
+            if interpreter is None:
+                raise EvidenceError(
+                    "distributed application installation differs from every selected-wheel layout"
+                )
+            record = item.get("record")
+            if isinstance(record, dict) and record.get("effective") is True:
+                active_interpreters.append(interpreter)
+        if len(active_interpreters) != 1:
+            raise EvidenceError(
+                "selected wheel does not identify one effective application installation"
+            )
+        return active_interpreters[0]
+
+    ownership = inventory.get("python_record_ownership")
+    if not isinstance(ownership, list):
+        raise EvidenceError("component inventory has no Python RECORD ownership")
+    actual: list[dict[str, Any]] = []
+    for item in ownership:
+        if not isinstance(item, dict) or item.get("owner") != APPLICATION_NAME:
+            continue
+        path_value = item.get("path")
+        if (
+            not isinstance(path_value, str)
+            or not path_value.startswith("opt/venv/")
+            or item.get("effective") is not True
+            or item.get("uid") != 0
+            or item.get("gid") != 0
+        ):
+            raise EvidenceError("application RECORD ownership has an invalid runtime identity")
+        actual.append(
+            {
+                "path": path_value.removeprefix("opt/venv/"),
+                "sha256": item.get("sha256"),
+                "size": item.get("size"),
+                "mode": item.get("mode"),
+            }
+        )
+    actual.sort(key=lambda item: str(item["path"]))
+    for alternative in alternatives:
+        if canonical_json(actual) == canonical_json(alternative["files"]):
+            return str(alternative["launcher_interpreter"])
+    raise EvidenceError(
+        "effective application installation differs from every selected-wheel layout"
+    )
+
+
+def read_retained_regular_file(path: Path, *, max_bytes: int) -> bytes:
+    """Read one retained proof file without following a link or blocking on a FIFO."""
+
+    if not hasattr(os, "O_NOFOLLOW"):
+        raise EvidenceError("selected proof retention requires O_NOFOLLOW support")
+    descriptor = -1
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode) or not 0 <= metadata.st_size <= max_bytes:
+            raise EvidenceError(f"retained selected proof file is not bounded and regular: {path}")
+        with os.fdopen(descriptor, "rb") as source:
+            descriptor = -1
+            content = source.read(max_bytes + 1)
+    except OSError as exc:
+        raise EvidenceError(f"cannot read retained selected proof file {path}: {exc}") from exc
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+    if len(content) > max_bytes:
+        raise EvidenceError(f"retained selected proof file exceeds its limit: {path}")
+    return content
+
+
+def retain_selected_application_artifacts(
+    *,
+    directory: Path,
+    output: Path,
+    repo: Path,
+    source_revision: str,
+    wheel_sha256: str,
+    selection_record_sha256: str,
+    budget: BundleBudget,
+) -> tuple[dict[str, Any], object]:
+    """Use the Python verifier to retain and describe the exact five-file proof."""
+
+    helper = repo / ".github" / "scripts" / "build_python_artifacts.py"
+    raw_result = run(
+        [
+            sys.executable,
+            str(helper),
+            "retain-selection",
+            "--directory",
+            str(directory),
+            "--output",
+            str(output),
+            "--source-revision",
+            source_revision,
+            "--wheel-sha256",
+            wheel_sha256,
+            "--selection-record-sha256",
+            selection_record_sha256,
+        ],
+        cwd=repo,
+        max_output_bytes=MAX_SELECTED_HELPER_OUTPUT_BYTES,
+    )
+    parsed = strict_json_loads(raw_result, "selected Python retention helper")
+    if (
+        not isinstance(parsed, dict)
+        or raw_result
+        != compact_canonical_json(parsed, max_bytes=MAX_SELECTED_HELPER_OUTPUT_BYTES - 1) + b"\n"
+    ):
+        raise EvidenceError("selected Python retention helper returned noncanonical JSON")
+    if type(parsed.get("schema_version")) is not int or parsed["schema_version"] != 1:
+        raise EvidenceError("selected Python retention result has an unsupported schema")
+    result = require_exact_fields(
+        parsed,
+        {
+            "schema_version",
+            "source_revision",
+            "selection_record_sha256",
+            "wheel_filename",
+            "wheel_sha256",
+            "sdist_filename",
+            "sdist_sha256",
+            "files",
+            "installation",
+        },
+        "selected Python retention result",
+    )
+    if (
+        result["source_revision"] != source_revision
+        or result["wheel_sha256"] != wheel_sha256
+        or result["selection_record_sha256"] != selection_record_sha256
+    ):
+        raise EvidenceError("selected Python retention result has the wrong identity")
+    for field, suffix in (("wheel_filename", ".whl"), ("sdist_filename", ".tar.gz")):
+        value = result[field]
+        if (
+            not isinstance(value, str)
+            or len(checked_canonical_path(value, f"selected Python {field}").parts) != 1
+            or not value.endswith(suffix)
+        ):
+            raise EvidenceError(f"selected Python retention result has an invalid {field}")
+    sdist_sha256 = result["sdist_sha256"]
+    if not isinstance(sdist_sha256, str) or re.fullmatch(r"[0-9a-f]{64}", sdist_sha256) is None:
+        raise EvidenceError("selected Python retention result has an invalid sdist digest")
+    files = result["files"]
+    if not isinstance(files, list) or len(files) != 5:
+        raise EvidenceError("selected Python retention result must describe exactly five files")
+    expected_names: set[str] = set()
+    manifest_files: list[dict[str, Any]] = []
+    for item in files:
+        record = require_exact_fields(
+            item,
+            {"filename", "sha256", "size"},
+            "selected Python retained file",
+        )
+        filename = record["filename"]
+        digest = record["sha256"]
+        size = record["size"]
+        if not isinstance(filename, str):
+            raise EvidenceError("selected Python retained file has no filename")
+        path = checked_canonical_path(filename, "selected Python retained filename")
+        if (
+            len(path.parts) != 1
+            or filename in expected_names
+            or not isinstance(digest, str)
+            or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+            or not isinstance(size, int)
+            or isinstance(size, bool)
+            or not 0 <= size <= MAX_ARCHIVE_MEMBER_BYTES
+        ):
+            raise EvidenceError("selected Python retention result has an invalid file")
+        expected_names.add(filename)
+        retained = output / filename
+        content = read_retained_regular_file(retained, max_bytes=MAX_ARCHIVE_MEMBER_BYTES)
+        if len(content) != size or sha256_bytes(content) != digest:
+            raise EvidenceError("retained selected Python proof differs from its canonical hash")
+        budget.record_retained(content)
+        manifest_files.append(
+            {
+                "path": f"artifacts/application/{filename}",
+                "sha256": digest,
+                "size": size,
+            }
+        )
+    try:
+        actual_names = {entry.name for entry in os.scandir(output)}
+    except OSError as exc:
+        raise EvidenceError("cannot enumerate retained selected Python proof") from exc
+    if actual_names != expected_names:
+        raise EvidenceError("retained selected Python proof does not contain exactly five files")
+    required_names = {
+        str(result["wheel_filename"]),
+        str(result["sdist_filename"]),
+        "python-build-record-amd64.json",
+        "python-build-record-arm64.json",
+        "python-selection-record.json",
+    }
+    if expected_names != required_names:
+        raise EvidenceError("selected Python proof does not have the exact five-file identity")
+    file_digests = {Path(record["path"]).name: record["sha256"] for record in manifest_files}
+    if (
+        file_digests[result["wheel_filename"]] != wheel_sha256
+        or file_digests[result["sdist_filename"]] != sdist_sha256
+        or file_digests["python-selection-record.json"] != selection_record_sha256
+    ):
+        raise EvidenceError("selected Python proof artifact identities disagree")
+    manifest_files.sort(key=lambda item: item["path"])
+    binding = {
+        "source_revision": source_revision,
+        "wheel_sha256": wheel_sha256,
+        "selection_record_sha256": selection_record_sha256,
+        "files": manifest_files,
+    }
+    return binding, result["installation"]
 
 
 def verify_base_layer_binding(files: Mapping[str, Any], policy: Mapping[str, Any]) -> None:
@@ -3991,6 +4421,8 @@ def validate_all_layer_inventory(files: Mapping[str, Any], inventory: Mapping[st
         "image_config_digest",
         "image_revision",
         "image_version",
+        "application_wheel_sha256",
+        "application_selection_record_sha256",
         "apk_database_sha256",
         "apk_database_occurrences",
         "components",
@@ -4017,6 +4449,13 @@ def validate_all_layer_inventory(files: Mapping[str, Any], inventory: Mapping[st
     if not isinstance(image_version, str):
         raise EvidenceError("component inventory has an invalid image version")
     checked_scalar(image_version, "component inventory image version")
+    for field in (
+        "application_wheel_sha256",
+        "application_selection_record_sha256",
+    ):
+        value = inventory.get(field)
+        if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
+            raise EvidenceError(f"component inventory has an invalid {field}")
     expected_completeness = {
         "complete": False,
         "reason": SOURCE_COMPLETENESS_REASON,
@@ -5732,6 +6171,10 @@ def build_bundle(
     predicate_output: Path,
     version: str,
     source_date_epoch: int,
+    selected_python_directory: Path,
+    application_source_revision: str,
+    application_wheel_sha256: str,
+    application_selection_record_sha256: str,
     require_approval: bool,
     require_image_revision: bool,
 ) -> None:
@@ -5741,8 +6184,18 @@ def build_bundle(
     validate_all_layer_inventory(files, inventory)
     verify_inventory(inventory, policy, require_approval=require_approval)
     verify_dockerfile_base(repo / "Dockerfile", policy)
+    head = run(["git", "rev-parse", "HEAD"], cwd=repo, max_output_bytes=128).decode().strip()
+    if application_source_revision != head:
+        raise EvidenceError(
+            "selected application source revision does not match the evidence checkout"
+        )
+    verify_application_artifact_labels(
+        inventory,
+        source_revision=application_source_revision,
+        wheel_sha256=application_wheel_sha256,
+        selection_record_sha256=application_selection_record_sha256,
+    )
     if require_image_revision:
-        head = run(["git", "rev-parse", "HEAD"], cwd=repo, max_output_bytes=128).decode().strip()
         verify_image_revision(inventory, version=version, source_revision=head)
     verify_base_layer_binding(files, policy)
     verify_post_base_provenance(inventory, files, policy, repo)
@@ -5756,6 +6209,19 @@ def build_bundle(
         root = Path(temporary) / "evidence"
         root.mkdir()
         budget = BundleBudget()
+        application_artifacts, installation_contract = retain_selected_application_artifacts(
+            directory=selected_python_directory,
+            output=root / "artifacts" / "application",
+            repo=repo,
+            source_revision=application_source_revision,
+            wheel_sha256=application_wheel_sha256,
+            selection_record_sha256=application_selection_record_sha256,
+            budget=budget,
+        )
+        launcher_interpreter = verify_selected_application_installation(
+            inventory, installation_contract
+        )
+        application_artifacts["launcher_interpreter"] = launcher_interpreter
 
         def bounded_fetch(
             url: str,
@@ -6057,6 +6523,7 @@ def build_bundle(
             "subject_digest": inventory["subject_digest"],
             "base_image_index_digest": policy["base_image_index_digest"],
             "policy_sha256": sha256_bytes(canonical_json(policy)),
+            "application_artifacts": application_artifacts,
             "source_completeness": inventory["source_completeness"],
             "source_records": sorted(source_records, key=lambda item: item["path"]),
             "license_records": sorted(
@@ -6728,6 +7195,10 @@ def command_bundle(args: argparse.Namespace) -> None:
         predicate_output=Path(args.predicate_output),
         version=args.version,
         source_date_epoch=args.source_date_epoch,
+        selected_python_directory=Path(args.selected_python_directory),
+        application_source_revision=args.application_source_revision,
+        application_wheel_sha256=args.application_wheel_sha256,
+        application_selection_record_sha256=args.application_selection_record_sha256,
         require_approval=args.require_distribution_approval,
         require_image_revision=args.require_image_revision,
     )
@@ -6765,6 +7236,11 @@ def validate_run_metadata(metadata: Mapping[str, Any], inventory: Mapping[str, A
             "architecture",
             "inventory_subject_digest",
             "inventory_image_config_digest",
+            "python_distribution_artifact_id",
+            "python_distribution_artifact_digest",
+            "application_source_revision",
+            "application_wheel_sha256",
+            "application_selection_record_sha256",
         },
         "run metadata",
     )
@@ -6784,10 +7260,29 @@ def validate_run_metadata(metadata: Mapping[str, Any], inventory: Mapping[str, A
         raise EvidenceError("GitHub workflow SHA does not match the checked-out commit")
     if inventory.get("image_revision") != metadata["checkout_sha"]:
         raise EvidenceError("container revision does not match run metadata checkout SHA")
+    if metadata["application_source_revision"] != metadata["checkout_sha"]:
+        raise EvidenceError("application source revision does not match run metadata checkout SHA")
+    if inventory.get("image_revision") != metadata["application_source_revision"]:
+        raise EvidenceError("application source revision does not match the container label")
+    for field in (
+        "python_distribution_artifact_digest",
+        "application_wheel_sha256",
+        "application_selection_record_sha256",
+    ):
+        value = metadata[field]
+        if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
+            raise EvidenceError(f"run metadata has an invalid {field}")
+    if metadata["application_wheel_sha256"] != inventory.get("application_wheel_sha256"):
+        raise EvidenceError("application wheel digest does not match the container label")
+    if metadata["application_selection_record_sha256"] != inventory.get(
+        "application_selection_record_sha256"
+    ):
+        raise EvidenceError("application selection digest does not match the container label")
     positive_identifier_fields = {
         "run_id",
         "repository_id",
         "pr_head_repository_id",
+        "python_distribution_artifact_id",
     }
     for field in positive_identifier_fields:
         value = metadata[field]
@@ -6857,6 +7352,11 @@ def command_run_metadata(args: argparse.Namespace) -> None:
         "architecture": args.architecture,
         "inventory_subject_digest": inventory["subject_digest"],
         "inventory_image_config_digest": inventory["image_config_digest"],
+        "python_distribution_artifact_id": args.python_distribution_artifact_id,
+        "python_distribution_artifact_digest": args.python_distribution_artifact_digest,
+        "application_source_revision": args.application_source_revision,
+        "application_wheel_sha256": args.application_wheel_sha256,
+        "application_selection_record_sha256": args.application_selection_record_sha256,
     }
     validate_run_metadata(metadata, inventory)
     Path(args.output).write_bytes(canonical_json(metadata))
@@ -6913,6 +7413,10 @@ def parser() -> argparse.ArgumentParser:
     bundle.add_argument("--predicate-output", required=True)
     bundle.add_argument("--version", required=True)
     bundle.add_argument("--source-date-epoch", required=True, type=int)
+    bundle.add_argument("--selected-python-directory", required=True)
+    bundle.add_argument("--application-source-revision", required=True)
+    bundle.add_argument("--application-wheel-sha256", required=True)
+    bundle.add_argument("--application-selection-record-sha256", required=True)
     bundle.add_argument("--require-distribution-approval", action="store_true")
     bundle.add_argument("--require-image-revision", action="store_true")
     bundle.set_defaults(function=command_bundle)
@@ -6953,6 +7457,11 @@ def parser() -> argparse.ArgumentParser:
     run_metadata.add_argument("--workflow-sha", required=True)
     run_metadata.add_argument("--platform", choices=("linux/amd64", "linux/arm64"), required=True)
     run_metadata.add_argument("--architecture", choices=("amd64", "arm64"), required=True)
+    run_metadata.add_argument("--python-distribution-artifact-id", required=True)
+    run_metadata.add_argument("--python-distribution-artifact-digest", required=True)
+    run_metadata.add_argument("--application-source-revision", required=True)
+    run_metadata.add_argument("--application-wheel-sha256", required=True)
+    run_metadata.add_argument("--application-selection-record-sha256", required=True)
     run_metadata.set_defaults(function=command_run_metadata)
     return result
 
