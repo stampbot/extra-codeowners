@@ -54,6 +54,12 @@ def test_uv_version_is_identical_locally_in_containers_and_in_workflows() -> Non
     assert image is not None, "Dockerfile must use a digest-pinned uv image"
     assert image.group("version") == reviewed_version
     assert "COPY pyproject.toml uv.lock README.md mise.toml ./" in dockerfile
+    assert "COPY requirements-build.txt ./" in dockerfile
+    assert (
+        "COPY .github/scripts/build_python_artifacts.py "
+        ".github/scripts/container_evidence.py .github/scripts/release_readiness.py "
+        "./.github/scripts/"
+    ) in dockerfile
     assert '["uv", "--version"]' in dockerfile
     assert "if actual != expected:" in dockerfile
     assert "digest-selected uv is" in dockerfile
@@ -106,3 +112,32 @@ def test_renovate_owns_the_complete_uv_toolchain_update() -> None:
     assert re.search(r"(?m)^\s+- dependency-name: astral-sh/setup-uv$", dependabot), (
         "Dependabot must not compete with Renovate for setup-uv"
     )
+
+
+def test_renovate_groups_the_hash_locked_python_build_closure() -> None:
+    raw_config = json.loads((ROOT / "renovate.json").read_text(encoding="utf-8"))
+    config = cast(dict[str, Any], raw_config)
+    rules = cast(list[dict[str, Any]], config["packageRules"])
+    grouped_rules = [rule for rule in rules if rule.get("groupSlug") == "python-build-toolchain"]
+    assert grouped_rules == [
+        {
+            "description": "Update the complete isolated Python build toolchain together",
+            "matchManagers": ["pip_requirements"],
+            "matchFileNames": ["requirements-build.txt"],
+            "groupName": "Python build toolchain",
+            "groupSlug": "python-build-toolchain",
+            "rangeStrategy": "replace",
+            "separateMajorMinor": False,
+        },
+        {
+            "description": "Keep the project backend pin with its hashed build closure",
+            "matchManagers": ["pep621"],
+            "matchFileNames": ["pyproject.toml"],
+            "matchDepTypes": ["build-system.requires"],
+            "matchPackageNames": ["hatchling"],
+            "groupName": "Python build toolchain",
+            "groupSlug": "python-build-toolchain",
+            "rangeStrategy": "replace",
+            "separateMajorMinor": False,
+        },
+    ]

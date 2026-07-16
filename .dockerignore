@@ -5,6 +5,7 @@
 !.github/dependabot.yml
 !.github/scripts/
 .github/scripts/*
+!.github/scripts/build_python_artifacts.py
 !.github/scripts/container_evidence.py
 !.github/scripts/release_readiness.py
 !.github/workflows/
