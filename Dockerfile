@@ -94,7 +94,7 @@ COPY .github/scripts/container_evidence.py .github/scripts/release_readiness.py 
 COPY .github/workflows/ ./.github/workflows/
 COPY .compliance/container-policy.json ./.compliance/container-policy.json
 COPY docs/reference/upgrade-notes.md ./docs/reference/upgrade-notes.md
-COPY Dockerfile mise.toml renovate.json ./
+COPY .dockerignore Dockerfile mise.toml renovate.json ./
 
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --group dev --no-install-project --inexact --no-build
