@@ -146,6 +146,58 @@ def wheel_record(files: dict[str, bytes], record_path: str) -> bytes:
     return "".join(rows).encode()
 
 
+def cyclonedx_sbom(
+    *,
+    components: list[dict[str, Any]] | None = None,
+    metadata_component: dict[str, Any] | None = None,
+) -> bytes:
+    document: dict[str, Any] = {
+        "bomFormat": "CycloneDX",
+        "specVersion": "1.5",
+        "serialNumber": "urn:uuid:12345678-1234-4234-9234-123456789abc",
+        "version": 1,
+        "components": components
+        if components is not None
+        else [
+            {
+                "type": "library",
+                "name": "libdemo",
+                "version": "1.2.3",
+                "purl": "pkg:generic/libdemo@1.2.3",
+                "bom-ref": "pkg:generic/libdemo@1.2.3",
+            }
+        ],
+    }
+    if metadata_component is not None:
+        document["metadata"] = {"component": metadata_component}
+    return json.dumps(document, sort_keys=True).encode()
+
+
+def elf64_payload(architecture: str = "amd64") -> bytes:
+    machine = {"amd64": 62, "arm64": 183}[architecture]
+    ident = b"\x7fELF" + bytes((2, 1, 1, 0, 0)) + b"\0" * 7
+    return cast(
+        bytes,
+        evidence.ELF64_HEADER.pack(
+            ident,
+            3,
+            machine,
+            1,
+            0,
+            0,
+            0,
+            0,
+            evidence.ELF64_HEADER.size,
+            0,
+            0,
+            0,
+            0,
+            0,
+        )
+        + b"native payload",
+    )
+
+
 def empty_unexpanded_payload_policy() -> dict[str, dict[str, list[dict[str, Any]]]]:
     return {
         platform: {
@@ -2488,8 +2540,8 @@ def test_inventory_reports_unexpanded_wheel_sboms_and_native_payloads(
         "demo-1.0.dist-info/WHEEL": (
             b"Wheel-Version: 1.0\nRoot-Is-Purelib: false\nTag: py3-none-any\n"
         ),
-        "demo-1.0.dist-info/sboms/auditwheel.cdx.json": b"{}",
-        "demo.libs/libdemo.so.1": b"native",
+        "demo-1.0.dist-info/sboms/auditwheel.cdx.json": cyclonedx_sbom(),
+        "demo.libs/libdemo.so.1": elf64_payload(),
     }
     installed["demo-1.0.dist-info/RECORD"] = wheel_record(installed, "demo-1.0.dist-info/RECORD")
     layer = tar_bytes(
@@ -2512,6 +2564,22 @@ def test_inventory_reports_unexpanded_wheel_sboms_and_native_payloads(
     assert [item["path"] for item in inventory["native_payloads"]] == [
         f"{site}/demo.libs/libdemo.so.1"
     ]
+    assert inventory["embedded_sboms"][0]["owner"] == "python:demo@1.0"
+    assert inventory["embedded_sboms"][0]["cyclonedx"]["components"] == [
+        {
+            "type": "library",
+            "name": "libdemo",
+            "version": "1.2.3",
+            "purl": "pkg:generic/libdemo@1.2.3",
+        }
+    ]
+    assert inventory["native_payloads"][0]["owner"] == "python:demo@1.0"
+    assert inventory["native_payloads"][0]["elf"] == {
+        "bits": 64,
+        "endianness": "little",
+        "machine": "x86_64",
+        "machine_id": 62,
+    }
     assert {item["path"] for item in inventory["wheel_identity_files"]} == {
         f"{site}/demo-1.0.dist-info/RECORD",
         f"{site}/demo-1.0.dist-info/WHEEL",
@@ -2525,7 +2593,12 @@ def test_inventory_reports_unexpanded_wheel_sboms_and_native_payloads(
 
     payload_policy = {"unexpanded_python_payloads": empty_unexpanded_payload_policy()}
     payload_policy["unexpanded_python_payloads"]["linux/amd64"] = {
-        category: copy.deepcopy(inventory[category])
+        category: [
+            evidence.payload_record_projection(record)
+            if category in {"embedded_sboms", "native_payloads"}
+            else copy.deepcopy(record)
+            for record in inventory[category]
+        ]
         for category in ("embedded_sboms", "native_payloads", "wheel_identity_files")
     }
     evidence.verify_unexpanded_payload_policy(inventory, payload_policy)
@@ -2544,6 +2617,258 @@ def test_inventory_reports_unexpanded_wheel_sboms_and_native_payloads(
     changed_wheel["wheel_identity_files"][0]["sha256"] = "c" * 64
     with pytest.raises(evidence.EvidenceError, match="differ from policy"):
         evidence.verify_unexpanded_payload_policy(changed_wheel, payload_policy)
+
+
+def test_cyclonedx_projection_deduplicates_exact_components_and_rejects_conflicts() -> None:
+    component = {
+        "type": "library",
+        "name": "libdemo",
+        "version": "1.2.3",
+        "purl": "pkg:generic/libdemo@1.2.3",
+        "bom-ref": "libdemo",
+    }
+    parsed = evidence.parse_cyclonedx_sbom(
+        cyclonedx_sbom(components=[component, copy.deepcopy(component)]), "demo.cdx.json"
+    )
+    assert parsed["components"] == [
+        {
+            "type": "library",
+            "name": "libdemo",
+            "version": "1.2.3",
+            "purl": "pkg:generic/libdemo@1.2.3",
+        }
+    ]
+
+    conflicting_purl = copy.deepcopy(component)
+    conflicting_purl["purl"] = "pkg:generic/libdemo@9.9.9"
+    with pytest.raises(evidence.EvidenceError, match="conflicting purls"):
+        evidence.parse_cyclonedx_sbom(
+            cyclonedx_sbom(components=[component, conflicting_purl]), "conflict.cdx.json"
+        )
+
+    conflicting_identity = copy.deepcopy(component)
+    conflicting_identity["name"] = "other"
+    with pytest.raises(evidence.EvidenceError, match="conflicting component identities"):
+        evidence.parse_cyclonedx_sbom(
+            cyclonedx_sbom(components=[component, conflicting_identity]), "conflict.cdx.json"
+        )
+
+    exact_documents = [{"cyclonedx": parsed}, {"cyclonedx": copy.deepcopy(parsed)}]
+    evidence.validate_cross_sbom_component_consistency(exact_documents, "test SBOMs")
+    second_document = evidence.parse_cyclonedx_sbom(
+        cyclonedx_sbom(components=[conflicting_purl]), "second.cdx.json"
+    )
+    with pytest.raises(evidence.EvidenceError, match="cross-SBOM component identity/PURL"):
+        evidence.validate_cross_sbom_component_consistency(
+            [{"cyclonedx": parsed}, {"cyclonedx": second_document}], "test SBOMs"
+        )
+
+
+@pytest.mark.parametrize(
+    ("content", "message"),
+    (
+        (b"{}", "not CycloneDX"),
+        (
+            b'{"bomFormat":"CycloneDX","bomFormat":"CycloneDX"}',
+            "duplicate JSON object key",
+        ),
+        (
+            b'{"bomFormat":"CycloneDX","specVersion":"1.5","version":1.5}',
+            "floating-point",
+        ),
+    ),
+)
+def test_cyclonedx_parser_rejects_malformed_documents(content: bytes, message: str) -> None:
+    with pytest.raises(evidence.EvidenceError, match=message):
+        evidence.parse_cyclonedx_sbom(content, "malformed.cdx.json")
+
+
+@pytest.mark.parametrize(
+    ("offset", "value", "message"),
+    (
+        (4, 1, "not ELF64"),
+        (5, 2, "not little-endian"),
+        (6, 0, "identity version"),
+        (52, 0, "malformed ELF header"),
+    ),
+)
+def test_elf_parser_rejects_wrong_class_endianness_and_header(
+    offset: int, value: int, message: str
+) -> None:
+    payload = bytearray(elf64_payload())
+    payload[offset] = value
+    with pytest.raises(evidence.EvidenceError, match=message):
+        evidence.parse_elf_identity(bytes(payload), "linux/amd64", "demo/native")
+
+
+def test_inventory_detects_extensionless_elf_and_binds_payload_owners(tmp_path: Path) -> None:
+    site = "opt/venv/lib/python3.14/site-packages"
+    native = elf64_payload()
+    installed = {
+        "demo-1.0.dist-info/METADATA": metadata("demo", "1.0"),
+        "demo-1.0.dist-info/WHEEL": (
+            b"Wheel-Version: 1.0\nRoot-Is-Purelib: false\nTag: py3-none-any\n"
+        ),
+        "demo-1.0.dist-info/sboms/demo.cdx.json": cyclonedx_sbom(),
+    }
+    installed["demo-1.0.dist-info/RECORD"] = wheel_record(
+        {**installed, "../../../bin/extensionless-native": native},
+        "demo-1.0.dist-info/RECORD",
+    )
+    image = tmp_path / "extensionless.tar"
+    saved_image_layers(
+        image,
+        [
+            tar_bytes(
+                {
+                    "lib/apk/db/installed": apk_database(),
+                    "opt/venv/pyvenv.cfg": PYVENV_CONFIG,
+                    **{f"{site}/{path}": content for path, content in installed.items()},
+                    "opt/venv/bin/extensionless-native": native,
+                },
+                links=VENV_LINKS,
+            )
+        ],
+    )
+
+    inventory, files = evidence._inventory_saved_image(image, "linux/amd64", "sha256:" + "a" * 64)
+    assert [record["path"] for record in inventory["native_payloads"]] == [
+        "opt/venv/bin/extensionless-native"
+    ]
+    assert {record["owner"] for record in inventory["embedded_sboms"]} == {"python:demo@1.0"}
+    assert {record["owner"] for record in inventory["native_payloads"]} == {"python:demo@1.0"}
+    evidence.validate_component_inventory(inventory)
+    evidence.validate_all_layer_inventory(files, inventory)
+
+
+@pytest.mark.parametrize(
+    ("payload_path", "payload", "message"),
+    (
+        ("demo/native.so", b"not ELF", "not ELF"),
+        ("demo/native.so", elf64_payload("arm64"), "architecture does not match"),
+        ("demo/native.so", b"\x7fELF", "truncated ELF"),
+        (
+            "demo-1.0.dist-info/sboms/demo.cdx.json",
+            b"{}",
+            "not CycloneDX",
+        ),
+    ),
+)
+def test_inventory_rejects_malformed_structured_wheel_payloads(
+    tmp_path: Path, payload_path: str, payload: bytes, message: str
+) -> None:
+    site = "opt/venv/lib/python3.14/site-packages"
+    installed = {
+        "demo-1.0.dist-info/METADATA": metadata("demo", "1.0"),
+        "demo-1.0.dist-info/WHEEL": (
+            b"Wheel-Version: 1.0\nRoot-Is-Purelib: false\nTag: py3-none-any\n"
+        ),
+        payload_path: payload,
+    }
+    installed["demo-1.0.dist-info/RECORD"] = wheel_record(installed, "demo-1.0.dist-info/RECORD")
+    image = tmp_path / "malformed.tar"
+    saved_image_layers(
+        image,
+        [
+            tar_bytes(
+                {
+                    "lib/apk/db/installed": apk_database(),
+                    "opt/venv/pyvenv.cfg": PYVENV_CONFIG,
+                    **{f"{site}/{path}": content for path, content in installed.items()},
+                },
+                links=VENV_LINKS,
+            )
+        ],
+    )
+    with pytest.raises(evidence.EvidenceError, match=message):
+        evidence._inventory_saved_image(image, "linux/amd64", "sha256:" + "a" * 64)
+
+
+@pytest.mark.parametrize(
+    ("payload_path", "payload"),
+    (
+        ("demo/unowned-native", elf64_payload()),
+        ("demo-1.0.dist-info/sboms/unowned.cdx.json", cyclonedx_sbom()),
+    ),
+)
+def test_inventory_rejects_unowned_structured_payload_occurrences(
+    tmp_path: Path, payload_path: str, payload: bytes
+) -> None:
+    site = "opt/venv/lib/python3.14/site-packages"
+    installed = {
+        "demo-1.0.dist-info/METADATA": metadata("demo", "1.0"),
+        "demo-1.0.dist-info/WHEEL": (
+            b"Wheel-Version: 1.0\nRoot-Is-Purelib: false\nTag: py3-none-any\n"
+        ),
+    }
+    installed["demo-1.0.dist-info/RECORD"] = wheel_record(installed, "demo-1.0.dist-info/RECORD")
+    image = tmp_path / "unowned.tar"
+    saved_image_layers(
+        image,
+        [
+            tar_bytes(
+                {
+                    "lib/apk/db/installed": apk_database(),
+                    "opt/venv/pyvenv.cfg": PYVENV_CONFIG,
+                    **{f"{site}/{path}": content for path, content in installed.items()},
+                    f"{site}/{payload_path}": payload,
+                },
+                links=VENV_LINKS,
+            )
+        ],
+    )
+    with pytest.raises(evidence.EvidenceError, match="not owned by a wheel RECORD"):
+        evidence._inventory_saved_image(image, "linux/amd64", "sha256:" + "a" * 64)
+
+
+def test_structured_payload_validation_rejects_owner_and_identity_tampering(
+    tmp_path: Path,
+) -> None:
+    site = "opt/venv/lib/python3.14/site-packages"
+    installed = {
+        "demo-1.0.dist-info/METADATA": metadata("demo", "1.0"),
+        "demo-1.0.dist-info/WHEEL": (
+            b"Wheel-Version: 1.0\nRoot-Is-Purelib: false\nTag: py3-none-any\n"
+        ),
+        "demo-1.0.dist-info/sboms/demo.cdx.json": cyclonedx_sbom(),
+        "demo/native.so": elf64_payload(),
+    }
+    installed["demo-1.0.dist-info/RECORD"] = wheel_record(installed, "demo-1.0.dist-info/RECORD")
+    image = tmp_path / "image.tar"
+    saved_image_layers(
+        image,
+        [
+            tar_bytes(
+                {
+                    "lib/apk/db/installed": apk_database(),
+                    "opt/venv/pyvenv.cfg": PYVENV_CONFIG,
+                    **{f"{site}/{path}": content for path, content in installed.items()},
+                },
+                links=VENV_LINKS,
+            )
+        ],
+    )
+    inventory, files = evidence._inventory_saved_image(image, "linux/amd64", "sha256:" + "a" * 64)
+
+    wrong_owner = copy.deepcopy(inventory)
+    wrong_owner["embedded_sboms"][0]["owner"] = "python:other@1.0"
+    with pytest.raises(evidence.EvidenceError, match="invalid Python RECORD owner"):
+        evidence.validate_component_inventory(wrong_owner)
+
+    wrong_component_digest = copy.deepcopy(inventory)
+    wrong_component_digest["embedded_sboms"][0]["cyclonedx"]["component_identity_sha256"] = "0" * 64
+    with pytest.raises(evidence.EvidenceError, match="component-identity digest"):
+        evidence.validate_all_layer_inventory(files, wrong_component_digest)
+
+    wrong_elf = copy.deepcopy(inventory)
+    wrong_elf["native_payloads"][0]["elf"] = {
+        "bits": 64,
+        "endianness": "little",
+        "machine": "aarch64",
+        "machine_id": 183,
+    }
+    with pytest.raises(evidence.EvidenceError, match="ELF architecture mismatch"):
+        evidence.validate_all_layer_inventory(files, wrong_elf)
 
 
 def test_wheel_record_binds_effective_files_and_policy_detects_consistent_rewrite(
@@ -3895,6 +4220,8 @@ def test_standalone_inventory_enforces_platform_and_python_ownership_invariants(
     noncanonical = standalone_inventory(first)
     payload = copy.deepcopy(noncanonical["apk_database_occurrences"][0])
     payload["path"] = "./embedded/sbom.json"
+    payload["owner"] = "python:first@1"
+    payload["cyclonedx"] = evidence.parse_cyclonedx_sbom(cyclonedx_sbom(), "embedded/sbom.json")
     noncanonical["embedded_sboms"] = [payload]
     with pytest.raises(evidence.EvidenceError, match="canonical archive path"):
         evidence.validate_component_inventory(noncanonical)

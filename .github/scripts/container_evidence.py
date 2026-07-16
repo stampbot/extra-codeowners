@@ -72,6 +72,7 @@ MAX_COMPONENTS = 10_000
 MAX_RECORD_BYTES = 8 * 1024 * 1024
 MAX_RECORD_ENTRIES = 100_000
 MAX_HISTORICAL_RECORD_ENTRIES = MAX_RECORD_ENTRIES
+MAX_CYCLONEDX_COMPONENTS = 10_000
 MAX_COMPONENT_FIELD_LENGTH = 512
 MAX_COMPONENT_KEY_LENGTH = 2 * MAX_COMPONENT_FIELD_LENGTH + 32
 MAX_LICENSE_FIELD_LENGTH = 16 * 1024
@@ -113,6 +114,14 @@ INTERPRETER_BYTECODE_ROOTS = (
 )
 WHEEL_TAG = re.compile(r"^[A-Za-z0-9_.]+-[A-Za-z0-9_.]+-[A-Za-z0-9_.]+$")
 NATIVE_LIBRARY = re.compile(r"(?:\.so(?:\.[0-9]+)*|\.dylib|\.dll)$", re.IGNORECASE)
+CYCLONEDX_SERIAL_NUMBER = re.compile(
+    r"^urn:uuid:[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
+PACKAGE_URL = re.compile(
+    r"^pkg:[a-z][a-z0-9.+-]*/[^\s/?#]+(?:/[^\s/?#]+)*(?:@[^\s/?#]+)?"
+    r"(?:\?[^\s#]+)?(?:#[^\s]+)?$"
+)
 NORMALIZE_NAME = re.compile(r"[-_.]+")
 APK_PACKAGE_NAME = re.compile(r"^(?:[a-z0-9]|\.[a-z0-9])[a-z0-9+_.-]{0,199}$")
 APK_ORIGIN = re.compile(r"^[a-z0-9][a-z0-9+_.-]{0,199}$")
@@ -123,6 +132,28 @@ VENV_LINKS = {
     "opt/venv/bin/python": "/usr/local/bin/python3",
     "opt/venv/bin/python3": "python",
     "opt/venv/bin/python3.14": "python",
+}
+ELF_MAGIC = b"\x7fELF"
+ELF64_HEADER = struct.Struct("<16sHHIQQQIHHHHHH")
+ELF_MACHINES = {
+    "linux/amd64": (62, "x86_64"),
+    "linux/arm64": (183, "aarch64"),
+}
+CYCLONEDX_SPEC_VERSIONS = {"1.4", "1.5", "1.6"}
+CYCLONEDX_COMPONENT_TYPES = {
+    "application",
+    "container",
+    "cryptographic-asset",
+    "data",
+    "device",
+    "device-driver",
+    "file",
+    "firmware",
+    "framework",
+    "library",
+    "machine-learning-model",
+    "operating-system",
+    "platform",
 }
 
 
@@ -461,10 +492,292 @@ def markdown_cell(value: object) -> str:
 
 
 def is_native_payload_path(path: str) -> bool:
-    parts = PurePosixPath(path).parts
-    if "site-packages" not in parts:
+    if not path.startswith("opt/venv/"):
         return False
+    parts = PurePosixPath(path).parts
     return any(part.endswith(".libs") for part in parts) or NATIVE_LIBRARY.search(path) is not None
+
+
+def is_python_virtual_environment_path(path: str) -> bool:
+    """Return whether a path is inside the reviewed runtime virtual environment."""
+
+    return path.startswith("opt/venv/")
+
+
+def checked_cyclonedx_scalar(
+    value: object,
+    field: str,
+    *,
+    max_length: int = MAX_COMPONENT_FIELD_LENGTH,
+    allow_empty: bool = False,
+) -> str:
+    """Validate one exact CycloneDX scalar without normalizing hostile whitespace."""
+
+    if not isinstance(value, str):
+        raise EvidenceError(f"CycloneDX {field} is not a string")
+    checked = checked_scalar(
+        value, f"CycloneDX {field}", max_length=max_length, allow_empty=allow_empty
+    )
+    if checked != value:
+        raise EvidenceError(f"CycloneDX {field} is not canonical")
+    return checked
+
+
+def normalized_cyclonedx_component(value: object, source: str) -> tuple[dict[str, str], str]:
+    """Project one hostile CycloneDX component to its stable package identity."""
+
+    if not isinstance(value, dict):
+        raise EvidenceError(f"CycloneDX component is not an object: {source}")
+    component_type = checked_cyclonedx_scalar(value.get("type"), f"component type in {source}")
+    if component_type not in CYCLONEDX_COMPONENT_TYPES:
+        raise EvidenceError(f"CycloneDX component has an unsupported type: {source}")
+    name = checked_cyclonedx_scalar(value.get("name"), f"component name in {source}")
+    version = checked_cyclonedx_scalar(
+        value.get("version", ""), f"component version in {source}", allow_empty=True
+    )
+    purl = checked_cyclonedx_scalar(
+        value.get("purl"),
+        f"component purl in {source}",
+        max_length=MAX_LICENSE_FIELD_LENGTH,
+    )
+    if PACKAGE_URL.fullmatch(purl) is None:
+        raise EvidenceError(f"CycloneDX component has an invalid purl: {source}")
+    bom_ref_value = value.get("bom-ref", "")
+    bom_ref = checked_cyclonedx_scalar(
+        bom_ref_value,
+        f"component bom-ref in {source}",
+        max_length=MAX_LICENSE_FIELD_LENGTH,
+        allow_empty=True,
+    )
+    return {
+        "type": component_type,
+        "name": name,
+        "version": version,
+        "purl": purl,
+    }, bom_ref
+
+
+def validate_cyclonedx_component_projection(
+    metadata_component: object,
+    components: object,
+    source: str,
+) -> tuple[dict[str, str] | None, list[dict[str, str]]]:
+    """Validate, de-duplicate, and canonically order normalized component identities."""
+
+    if metadata_component is not None and (
+        not isinstance(metadata_component, dict)
+        or set(metadata_component) != {"type", "name", "version", "purl"}
+    ):
+        raise EvidenceError(f"CycloneDX metadata component projection is invalid: {source}")
+    if not isinstance(components, list) or len(components) > MAX_CYCLONEDX_COMPONENTS:
+        raise EvidenceError(f"CycloneDX component projection is invalid: {source}")
+
+    projected: list[dict[str, str]] = []
+    if metadata_component is not None:
+        projected.append(metadata_component)
+    for component in components:
+        if not isinstance(component, dict) or set(component) != {
+            "type",
+            "name",
+            "version",
+            "purl",
+        }:
+            raise EvidenceError(f"CycloneDX component projection is invalid: {source}")
+        projected.append(component)
+
+    identities: dict[tuple[str, str, str], str] = {}
+    purls: dict[str, tuple[str, str, str]] = {}
+    seen: set[tuple[str, str, str, str]] = set()
+    for component in projected:
+        component_type = checked_cyclonedx_scalar(
+            component.get("type"), f"projected component type in {source}"
+        )
+        if component_type not in CYCLONEDX_COMPONENT_TYPES:
+            raise EvidenceError(f"CycloneDX component has an unsupported type: {source}")
+        name = checked_cyclonedx_scalar(
+            component.get("name"), f"projected component name in {source}"
+        )
+        version = checked_cyclonedx_scalar(
+            component.get("version"),
+            f"projected component version in {source}",
+            allow_empty=True,
+        )
+        purl = checked_cyclonedx_scalar(
+            component.get("purl"),
+            f"projected component purl in {source}",
+            max_length=MAX_LICENSE_FIELD_LENGTH,
+        )
+        if PACKAGE_URL.fullmatch(purl) is None:
+            raise EvidenceError(f"CycloneDX component has an invalid purl: {source}")
+        identity = (component_type, name, version)
+        previous_purl = identities.setdefault(identity, purl)
+        if previous_purl != purl:
+            raise EvidenceError(f"CycloneDX component identity has conflicting purls: {source}")
+        previous_identity = purls.setdefault(purl, identity)
+        if previous_identity != identity:
+            raise EvidenceError(f"CycloneDX purl has conflicting component identities: {source}")
+        exact = (*identity, purl)
+        if exact in seen:
+            raise EvidenceError(f"CycloneDX component projection repeats an identity: {source}")
+        seen.add(exact)
+
+    expected = sorted(
+        components, key=lambda item: (item["type"], item["name"], item["version"], item["purl"])
+    )
+    if components != expected:
+        raise EvidenceError(f"CycloneDX component projection is not canonical: {source}")
+    return metadata_component, components
+
+
+def parse_cyclonedx_sbom(content: bytes, path: str) -> dict[str, Any]:
+    """Parse one bounded CycloneDX JSON document into a canonical identity projection."""
+
+    document = strict_json_loads(content, f"embedded CycloneDX SBOM {path}")
+    if not isinstance(document, dict):
+        raise EvidenceError(f"embedded CycloneDX SBOM is not an object: {path}")
+    if document.get("bomFormat") != "CycloneDX":
+        raise EvidenceError(f"embedded SBOM is not CycloneDX: {path}")
+    spec_version = checked_cyclonedx_scalar(document.get("specVersion"), f"specVersion in {path}")
+    if spec_version not in CYCLONEDX_SPEC_VERSIONS:
+        raise EvidenceError(f"embedded CycloneDX SBOM has an unsupported specVersion: {path}")
+    document_version = document.get("version")
+    if (
+        not isinstance(document_version, int)
+        or isinstance(document_version, bool)
+        or not 1 <= document_version <= MAX_TAR_ID
+    ):
+        raise EvidenceError(f"embedded CycloneDX SBOM has an invalid version: {path}")
+    serial_value = document.get("serialNumber", "")
+    serial_number = checked_cyclonedx_scalar(
+        serial_value,
+        f"serialNumber in {path}",
+        max_length=128,
+        allow_empty=True,
+    )
+    if serial_number and CYCLONEDX_SERIAL_NUMBER.fullmatch(serial_number) is None:
+        raise EvidenceError(f"embedded CycloneDX SBOM has an invalid serialNumber: {path}")
+    serial_number = serial_number.lower()
+
+    metadata = document.get("metadata", {})
+    if not isinstance(metadata, dict):
+        raise EvidenceError(f"embedded CycloneDX SBOM has invalid metadata: {path}")
+    raw_metadata_component = metadata.get("component")
+    raw_components = document.get("components", [])
+    if not isinstance(raw_components, list):
+        raise EvidenceError(f"embedded CycloneDX SBOM has an invalid component list: {path}")
+
+    flattened: list[tuple[dict[str, str], str, bool]] = []
+    component_count = 0
+
+    def walk(raw: object, location: str, *, metadata_root: bool = False) -> None:
+        nonlocal component_count
+        component_count += 1
+        if component_count > MAX_CYCLONEDX_COMPONENTS:
+            raise EvidenceError(f"embedded CycloneDX SBOM has too many components: {path}")
+        projection, bom_ref = normalized_cyclonedx_component(raw, location)
+        flattened.append((projection, bom_ref, metadata_root))
+        assert isinstance(raw, dict)
+        children = raw.get("components", [])
+        if not isinstance(children, list):
+            raise EvidenceError(f"CycloneDX component has invalid nested components: {location}")
+        for index, child in enumerate(children):
+            walk(child, f"{location}.components[{index}]")
+
+    if raw_metadata_component is not None:
+        walk(raw_metadata_component, f"{path}.metadata.component", metadata_root=True)
+    for index, raw_component in enumerate(raw_components):
+        walk(raw_component, f"{path}.components[{index}]")
+    if not flattened:
+        raise EvidenceError(f"embedded CycloneDX SBOM has no component identities: {path}")
+
+    identities: dict[tuple[str, str, str], str] = {}
+    purls: dict[str, tuple[str, str, str]] = {}
+    references: dict[str, tuple[str, str, str, str]] = {}
+    unique: dict[tuple[str, str, str, str], dict[str, str]] = {}
+    metadata_component: dict[str, str] | None = None
+    for projection, bom_ref, metadata_root in flattened:
+        identity = (projection["type"], projection["name"], projection["version"])
+        purl = projection["purl"]
+        existing_purl = identities.setdefault(identity, purl)
+        if existing_purl != purl:
+            raise EvidenceError(f"CycloneDX component identity has conflicting purls: {path}")
+        existing_identity = purls.setdefault(purl, identity)
+        if existing_identity != identity:
+            raise EvidenceError(f"CycloneDX purl has conflicting component identities: {path}")
+        exact = (*identity, purl)
+        if bom_ref:
+            existing_reference = references.setdefault(bom_ref, exact)
+            if existing_reference != exact:
+                raise EvidenceError(f"CycloneDX bom-ref has conflicting identities: {path}")
+        unique.setdefault(exact, projection)
+        if metadata_root:
+            if metadata_component is not None:
+                raise EvidenceError(f"embedded CycloneDX SBOM repeats metadata component: {path}")
+            metadata_component = projection
+
+    if metadata_component is not None:
+        metadata_exact = (
+            metadata_component["type"],
+            metadata_component["name"],
+            metadata_component["version"],
+            metadata_component["purl"],
+        )
+        unique.pop(metadata_exact, None)
+    components = sorted(
+        unique.values(),
+        key=lambda item: (item["type"], item["name"], item["version"], item["purl"]),
+    )
+    validate_cyclonedx_component_projection(metadata_component, components, path)
+    component_identity = {
+        "metadata_component": metadata_component,
+        "components": components,
+    }
+    return {
+        "bom_format": "CycloneDX",
+        "spec_version": spec_version,
+        "serial_number": serial_number,
+        "version": document_version,
+        **component_identity,
+        "component_identity_sha256": sha256_bytes(canonical_json(component_identity)),
+    }
+
+
+def parse_elf_identity(content: bytes, platform: str, path: str) -> dict[str, Any]:
+    """Validate one Linux ELF payload and return its reviewed architecture identity."""
+
+    expected = ELF_MACHINES.get(platform)
+    if expected is None:
+        raise EvidenceError(f"unsupported ELF platform: {platform}")
+    if not content.startswith(ELF_MAGIC):
+        raise EvidenceError(f"native Python payload is not ELF: {path}")
+    if len(content) < ELF64_HEADER.size:
+        raise EvidenceError(f"native Python payload has a truncated ELF header: {path}")
+    if content[4] != 2:
+        raise EvidenceError(f"native Python payload is not ELF64: {path}")
+    if content[5] != 1:
+        raise EvidenceError(f"native Python payload is not little-endian ELF: {path}")
+    if content[6] != 1:
+        raise EvidenceError(f"native Python payload has an invalid ELF identity version: {path}")
+    try:
+        header = ELF64_HEADER.unpack_from(content)
+    except struct.error as exc:
+        raise EvidenceError(f"native Python payload has a malformed ELF header: {path}") from exc
+    machine = header[2]
+    elf_version = header[3]
+    header_size = header[8]
+    if elf_version != 1 or header_size != ELF64_HEADER.size:
+        raise EvidenceError(f"native Python payload has a malformed ELF header: {path}")
+    expected_machine, machine_name = expected
+    if machine != expected_machine:
+        raise EvidenceError(
+            f"native Python payload ELF architecture does not match {platform}: {path}"
+        )
+    return {
+        "bits": 64,
+        "endianness": "little",
+        "machine": machine_name,
+        "machine_id": machine,
+    }
 
 
 def checked_path(value: str) -> PurePosixPath:
@@ -1480,6 +1793,7 @@ def _inventory_saved_image(
     active_python_installations: dict[str, PythonRecordInstallation] = {}
     historically_managed_paths: set[str] = set()
     historical_record_entry_count = 0
+    payload_details: dict[tuple[int, str, str], dict[str, Any]] = {}
     effective_types: dict[str, dict[str, Any]] = {}
     layer_digests: list[str] = []
     saved_layers_total = 0
@@ -1836,6 +2150,26 @@ def _inventory_saved_image(
                             )
                     if WHEEL_IDENTITY_FILE.search(path_text) or path_text == "opt/venv/pyvenv.cfg":
                         identity_contents[(layer_index, path_text, record["sha256"])] = content
+                    payload_key = (layer_index, path_text, record["sha256"])
+                    if DIST_INFO_SBOM.search(path_text):
+                        payload_details[payload_key] = {
+                            "kind": "cyclonedx",
+                            "identity": parse_cyclonedx_sbom(content, path_text),
+                        }
+                    native_path = is_native_payload_path(path_text)
+                    native_magic = is_python_virtual_environment_path(
+                        path_text
+                    ) and content.startswith(ELF_MAGIC)
+                    if native_path or native_magic:
+                        if payload_key in payload_details:
+                            raise EvidenceError(
+                                "Python payload is ambiguously both an SBOM and native: "
+                                f"{path_text}"
+                            )
+                        payload_details[payload_key] = {
+                            "kind": "elf",
+                            "identity": parse_elf_identity(content, platform, path_text),
+                        }
                     if is_venv_record_path(path_text):
                         current_layer_record_paths.add(path_text)
 
@@ -1995,18 +2329,66 @@ def _inventory_saved_image(
         active_python_installations,
     )
 
+    component_owner_keys = {
+        component_key(component)
+        for component in components
+        if component.get("ecosystem") == "python"
+    }
+    owner_occurrences: dict[tuple[int, str, str], str] = {}
+    for installation in python_record_installations:
+        if installation.owner not in component_owner_keys:
+            raise EvidenceError(
+                f"cannot bind Python RECORD owner identity: {installation.owner}"
+            )
+        for owner_path, (_digest, _size, owner_record) in installation.entries.items():
+            owner_occurrence = (
+                int(owner_record["layer"]),
+                owner_path,
+                str(owner_record["sha256"]),
+            )
+            previous_owner = owner_occurrences.get(owner_occurrence)
+            if previous_owner is not None and previous_owner != installation.owner:
+                raise EvidenceError(
+                    f"Python RECORD occurrence has conflicting owners: {owner_path}"
+                )
+            owner_occurrences[owner_occurrence] = installation.owner
+
     def observed_payload(record: Mapping[str, Any]) -> dict[str, Any]:
         return {
             field: record[field]
             for field in ("effective", "layer", "path", "sha256", "size", "mode", "uid", "gid")
         }
 
+    def structured_payload(record: Mapping[str, Any], kind: str) -> dict[str, Any]:
+        key = (record["layer"], record["path"], record["sha256"])
+        detail = payload_details.get(key)
+        if detail is None or detail.get("kind") != kind:
+            raise EvidenceError(f"cannot bind structured Python payload identity: {record['path']}")
+        owner = owner_occurrences.get(key)
+        if owner is None:
+            raise EvidenceError(
+                f"Python {kind} payload occurrence is not owned by a valid wheel RECORD: "
+                f"{record['path']}"
+            )
+        field = "cyclonedx" if kind == "cyclonedx" else "elf"
+        return {
+            **observed_payload(record),
+            "owner": owner,
+            field: detail["identity"],
+        }
+
     embedded_sboms = [
-        observed_payload(record) for record in occurrences if DIST_INFO_SBOM.search(record["path"])
+        structured_payload(record, "cyclonedx")
+        for record in occurrences
+        if DIST_INFO_SBOM.search(record["path"])
     ]
     native_payloads = [
-        observed_payload(record) for record in occurrences if is_native_payload_path(record["path"])
+        structured_payload(record, "elf")
+        for record in occurrences
+        if payload_details.get((record["layer"], record["path"], record["sha256"]), {}).get("kind")
+        == "elf"
     ]
+    validate_cross_sbom_component_consistency(embedded_sboms, "collected embedded SBOMs")
     wheel_identity_files = [
         observed_payload(record)
         for record in occurrences
@@ -2539,7 +2921,7 @@ def validate_unexpanded_payload_policy_schema(
 def verify_unexpanded_payload_policy(
     inventory: Mapping[str, Any], policy: Mapping[str, Any]
 ) -> None:
-    """Bind every known incomplete wheel surface to a reviewed platform baseline."""
+    """Bind every wheel surface's raw occurrence to a reviewed platform baseline."""
 
     categories = {"embedded_sboms", "native_payloads", "wheel_identity_files"}
     baselines = validate_unexpanded_payload_policy_schema(policy)
@@ -2549,7 +2931,20 @@ def verify_unexpanded_payload_policy(
         raise EvidenceError("inventory platform is missing")
     if platform not in baselines:
         raise EvidenceError(f"policy has no unexpanded payload baseline for {platform}")
-    observed = {category: inventory.get(category) for category in categories}
+    observed: dict[str, object] = {}
+    for category in categories:
+        records = inventory.get(category)
+        if category in {"embedded_sboms", "native_payloads"}:
+            if not isinstance(records, list) or not all(
+                isinstance(record, dict) and PAYLOAD_RECORD_FIELDS.issubset(record)
+                for record in records
+            ):
+                raise EvidenceError(f"inventory has invalid structured {category}")
+            observed[category] = [
+                payload_record_projection(record) for record in records if isinstance(record, dict)
+            ]
+        else:
+            observed[category] = records
     if canonical_json(observed) != canonical_json(baselines[platform]):
         raise EvidenceError(
             "unexpanded native, SBOM, or installed-wheel identity files differ from policy"
@@ -2602,6 +2997,161 @@ def validate_payload_records(value: object, source: str) -> list[dict[str, Any]]
     return records
 
 
+PAYLOAD_RECORD_FIELDS = {
+    "effective",
+    "layer",
+    "path",
+    "sha256",
+    "size",
+    "mode",
+    "uid",
+    "gid",
+}
+
+
+def payload_record_projection(record: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the raw occurrence fields shared by every structured payload record."""
+
+    return {field: record[field] for field in PAYLOAD_RECORD_FIELDS}
+
+
+def validate_retained_cyclonedx_identity(value: object, source: str) -> None:
+    """Validate a canonical CycloneDX projection retained without its raw bytes."""
+
+    if not isinstance(value, dict) or set(value) != {
+        "bom_format",
+        "spec_version",
+        "serial_number",
+        "version",
+        "metadata_component",
+        "components",
+        "component_identity_sha256",
+    }:
+        raise EvidenceError(f"{source} has an invalid CycloneDX identity")
+    if value.get("bom_format") != "CycloneDX":
+        raise EvidenceError(f"{source} has an invalid CycloneDX format")
+    spec_version = value.get("spec_version")
+    if spec_version not in CYCLONEDX_SPEC_VERSIONS:
+        raise EvidenceError(f"{source} has an unsupported CycloneDX spec version")
+    document_version = value.get("version")
+    if (
+        not isinstance(document_version, int)
+        or isinstance(document_version, bool)
+        or not 1 <= document_version <= MAX_TAR_ID
+    ):
+        raise EvidenceError(f"{source} has an invalid CycloneDX document version")
+    serial_number = value.get("serial_number")
+    if (
+        not isinstance(serial_number, str)
+        or serial_number != serial_number.lower()
+        or (serial_number and CYCLONEDX_SERIAL_NUMBER.fullmatch(serial_number) is None)
+    ):
+        raise EvidenceError(f"{source} has an invalid CycloneDX serial number")
+    metadata_component, components = validate_cyclonedx_component_projection(
+        value.get("metadata_component"), value.get("components"), source
+    )
+    identity = {
+        "metadata_component": metadata_component,
+        "components": components,
+    }
+    digest = value.get("component_identity_sha256")
+    if (
+        not isinstance(digest, str)
+        or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+        or digest != sha256_bytes(canonical_json(identity))
+    ):
+        raise EvidenceError(f"{source} has an invalid CycloneDX component-identity digest")
+
+
+def validate_retained_elf_identity(value: object, platform: str, source: str) -> None:
+    """Validate a retained normalized ELF identity against its image platform."""
+
+    expected = ELF_MACHINES.get(platform)
+    if expected is None:
+        raise EvidenceError(f"{source} has an unsupported ELF platform")
+    expected_machine, expected_name = expected
+    if not isinstance(value, dict) or value != {
+        "bits": 64,
+        "endianness": "little",
+        "machine": expected_name,
+        "machine_id": expected_machine,
+    }:
+        raise EvidenceError(f"{source} has an ELF architecture mismatch")
+
+
+def validate_cross_sbom_component_consistency(
+    records: Sequence[Mapping[str, Any]], source: str
+) -> None:
+    """Reject identity/PURL conflicts spread across distinct embedded SBOM documents."""
+
+    identities: dict[tuple[str, str, str], str] = {}
+    purls: dict[str, tuple[str, str, str]] = {}
+    for record in records:
+        cyclonedx = record.get("cyclonedx")
+        if not isinstance(cyclonedx, dict):
+            raise EvidenceError(f"{source} has an invalid CycloneDX record")
+        metadata_component = cyclonedx.get("metadata_component")
+        components = cyclonedx.get("components")
+        if not isinstance(components, list):
+            raise EvidenceError(f"{source} has an invalid CycloneDX component projection")
+        projected = [
+            *([metadata_component] if isinstance(metadata_component, dict) else []),
+            *components,
+        ]
+        for component in projected:
+            if not isinstance(component, dict):
+                raise EvidenceError(f"{source} has an invalid CycloneDX component projection")
+            identity = (
+                str(component.get("type")),
+                str(component.get("name")),
+                str(component.get("version")),
+            )
+            purl = str(component.get("purl"))
+            previous_purl = identities.setdefault(identity, purl)
+            if previous_purl != purl:
+                raise EvidenceError(f"{source} has cross-SBOM component identity/PURL conflicts")
+            previous_identity = purls.setdefault(purl, identity)
+            if previous_identity != identity:
+                raise EvidenceError(f"{source} has cross-SBOM PURL/component identity conflicts")
+
+
+def validate_structured_python_payloads(
+    value: object,
+    source: str,
+    *,
+    identity_field: str,
+    platform: str,
+    component_owners: set[str],
+) -> list[dict[str, Any]]:
+    """Validate occurrence-bound SBOM or ELF evidence from installed wheels."""
+
+    if not isinstance(value, list) or len(value) > MAX_IMAGE_MEMBERS:
+        raise EvidenceError(f"invalid {source} payload list")
+    records: list[dict[str, Any]] = []
+    seen: set[tuple[int, str]] = set()
+    expected_fields = PAYLOAD_RECORD_FIELDS | {"owner", identity_field}
+    for record in value:
+        if not isinstance(record, dict) or set(record) != expected_fields:
+            raise EvidenceError(f"invalid {source} payload record")
+        raw = payload_record_projection(record)
+        validate_payload_records([raw], source)
+        occurrence = (raw["layer"], raw["path"])
+        if occurrence in seen:
+            raise EvidenceError(f"duplicate {source} payload occurrence")
+        seen.add(occurrence)
+        owner = record.get("owner")
+        if not isinstance(owner, str) or owner not in component_owners:
+            raise EvidenceError(f"{source} payload has an invalid Python RECORD owner")
+        if identity_field == "cyclonedx":
+            validate_retained_cyclonedx_identity(record.get(identity_field), source)
+        elif identity_field == "elf":
+            validate_retained_elf_identity(record.get(identity_field), platform, source)
+        else:
+            raise EvidenceError(f"unsupported structured Python payload identity: {identity_field}")
+        records.append(record)
+    return records
+
+
 def validate_header_identity(record: Mapping[str, Any], source: str) -> None:
     """Validate the normalized security metadata retained for a tar entry."""
 
@@ -2645,7 +3195,7 @@ def validate_python_record_installations(
     value: object,
     components: Sequence[Mapping[str, Any]],
     occurrence_payloads: Mapping[tuple[int, str], Mapping[str, Any]] | None = None,
-) -> None:
+) -> dict[tuple[int, str, str], str]:
     """Validate explicit historical RECORD replay evidence."""
 
     if not isinstance(value, list) or len(value) > MAX_IMAGE_MEMBERS:
@@ -2658,6 +3208,8 @@ def validate_python_record_installations(
     seen_records: set[tuple[int, str]] = set()
     active_owners: set[str] = set()
     occurrence_owners: dict[tuple[int, str], str] = {}
+    occurrence_records: dict[tuple[int, str], dict[str, Any]] = {}
+    occurrence_bindings: dict[tuple[int, str, str], str] = {}
     total_entries = 0
     ordering: list[tuple[int, str]] = []
     for installation in value:
@@ -2766,7 +3318,12 @@ def validate_python_record_installations(
             previous_owner = occurrence_owners.get(key)
             if previous_owner is not None and previous_owner != owner:
                 raise EvidenceError("historical Python RECORD occurrence has conflicting owners")
+            previous_occurrence = occurrence_records.get(key)
+            if previous_occurrence is not None and previous_occurrence != occurrence:
+                raise EvidenceError("historical Python RECORD occurrence has conflicting identity")
             occurrence_owners[key] = str(owner)
+            occurrence_records[key] = occurrence
+            occurrence_bindings[(occurrence["layer"], path, occurrence["sha256"])] = str(owner)
             recorded_hash = entry.get("recorded_sha256")
             recorded_size = entry.get("recorded_size")
             if path == record_path:
@@ -2802,6 +3359,7 @@ def validate_python_record_installations(
                 )
     if ordering != sorted(ordering):
         raise EvidenceError("historical Python installations are not normalized")
+    return occurrence_bindings
 
 
 def validate_component_inventory(inventory: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -2845,14 +3403,35 @@ def validate_component_inventory(inventory: Mapping[str, Any]) -> list[dict[str,
         raise EvidenceError("component inventory has an invalid APK database digest")
     components = validate_component_records(inventory.get("components"), "component inventory")
     validate_platform_component_invariants(components, str(platform), "component inventory")
-    for category in (
-        "apk_database_occurrences",
-        "embedded_sboms",
-        "native_payloads",
-        "wheel_identity_files",
-    ):
+    for category in ("apk_database_occurrences", "wheel_identity_files"):
         validate_payload_records(inventory.get(category), f"component inventory {category}")
-    validate_python_record_installations(inventory.get("python_record_installations"), components)
+    historical_occurrences = validate_python_record_installations(
+        inventory.get("python_record_installations"), components
+    )
+    python_component_owners = {
+        component_key(component)
+        for component in components
+        if component.get("ecosystem") == "python"
+    }
+    embedded_sboms = validate_structured_python_payloads(
+        inventory.get("embedded_sboms"),
+        "component inventory embedded_sboms",
+        identity_field="cyclonedx",
+        platform=str(platform),
+        component_owners=python_component_owners,
+    )
+    validate_cross_sbom_component_consistency(embedded_sboms, "component inventory embedded_sboms")
+    if any(DIST_INFO_SBOM.search(record["path"]) is None for record in embedded_sboms):
+        raise EvidenceError("component inventory has an SBOM outside wheel SBOM directories")
+    native_payloads = validate_structured_python_payloads(
+        inventory.get("native_payloads"),
+        "component inventory native_payloads",
+        identity_field="elf",
+        platform=str(platform),
+        component_owners=python_component_owners,
+    )
+    if any(not is_python_virtual_environment_path(record["path"]) for record in native_payloads):
+        raise EvidenceError("component inventory has a native payload outside /opt/venv")
     ownership = inventory.get("python_record_ownership")
     if not isinstance(ownership, list) or len(ownership) > MAX_RECORD_ENTRIES:
         raise EvidenceError("component inventory has invalid Python RECORD ownership")
@@ -2895,6 +3474,12 @@ def validate_component_inventory(inventory: Mapping[str, Any]) -> list[dict[str,
             [{field: record[field] for field in record if field != "owner"}],
             "component inventory Python RECORD ownership",
         )
+    for payload in (*embedded_sboms, *native_payloads):
+        occurrence = (payload["layer"], payload["path"], payload["sha256"])
+        if historical_occurrences.get(occurrence) != payload["owner"]:
+            raise EvidenceError(
+                "structured Python payload is not linked to its RECORD ownership occurrence"
+            )
     apk_occurrences = inventory["apk_database_occurrences"]
     apk_matches = [
         record
@@ -3710,22 +4295,61 @@ def validate_all_layer_inventory(files: Mapping[str, Any], inventory: Mapping[st
     expected_embedded_sboms = [
         expected_payload(record) for record in records if DIST_INFO_SBOM.search(record["path"])
     ]
-    expected_native_payloads = [
+    required_native_payloads = [
         expected_payload(record) for record in records if is_native_payload_path(record["path"])
     ]
     expected_wheel_identity_files = [
         expected_payload(record) for record in records if WHEEL_IDENTITY_FILE.search(record["path"])
     ]
-    if inventory.get("embedded_sboms") != expected_embedded_sboms:
+    python_component_owners = {
+        component_key(component)
+        for component in components
+        if component.get("ecosystem") == "python"
+    }
+    embedded_sboms = validate_structured_python_payloads(
+        inventory.get("embedded_sboms"),
+        "component inventory embedded_sboms",
+        identity_field="cyclonedx",
+        platform=str(platform),
+        component_owners=python_component_owners,
+    )
+    validate_cross_sbom_component_consistency(embedded_sboms, "component inventory embedded_sboms")
+    observed_embedded_sboms = [payload_record_projection(record) for record in embedded_sboms]
+    if observed_embedded_sboms != expected_embedded_sboms:
         raise EvidenceError("component inventory omits or alters embedded wheel SBOMs")
-    if inventory.get("native_payloads") != expected_native_payloads:
-        raise EvidenceError("component inventory omits or alters native Python payloads")
+    native_payloads = validate_structured_python_payloads(
+        inventory.get("native_payloads"),
+        "component inventory native_payloads",
+        identity_field="elf",
+        platform=str(platform),
+        component_owners=python_component_owners,
+    )
+    observed_native_payloads = [payload_record_projection(record) for record in native_payloads]
+    all_record_occurrences = {
+        (record["layer"], record["path"], record["sha256"]): expected_payload(record)
+        for record in records
+    }
+    observed_native_occurrences: set[tuple[int, str, str]] = set()
+    for payload in observed_native_payloads:
+        native_occurrence = (payload["layer"], payload["path"], payload["sha256"])
+        if (
+            native_occurrence in observed_native_occurrences
+            or all_record_occurrences.get(native_occurrence) != payload
+            or not is_python_virtual_environment_path(payload["path"])
+        ):
+            raise EvidenceError("component inventory alters a native Python payload occurrence")
+        observed_native_occurrences.add(native_occurrence)
+    if any(
+        (payload["layer"], payload["path"], payload["sha256"]) not in observed_native_occurrences
+        for payload in required_native_payloads
+    ):
+        raise EvidenceError("component inventory omits a path-classified native Python payload")
     if inventory.get("wheel_identity_files") != expected_wheel_identity_files:
         raise EvidenceError("component inventory omits or alters installed wheel identity files")
     occurrence_payloads = {
         (record["layer"], record["path"]): expected_payload(record) for record in records
     }
-    validate_python_record_installations(
+    historical_occurrences = validate_python_record_installations(
         inventory.get("python_record_installations"), components, occurrence_payloads
     )
     installation_value = inventory.get("python_record_installations")
@@ -3803,6 +4427,12 @@ def validate_all_layer_inventory(files: Mapping[str, Any], inventory: Mapping[st
         }
         if observed_payload_record != expected_payload_record:
             raise EvidenceError("Python RECORD ownership does not match all-layer inventory")
+    for payload in (*embedded_sboms, *native_payloads):
+        payload_occurrence = (payload["layer"], payload["path"], payload["sha256"])
+        if historical_occurrences.get(payload_occurrence) != payload["owner"]:
+            raise EvidenceError(
+                "structured Python payload is not linked to its RECORD ownership occurrence"
+            )
 
     apk_hash = inventory.get("apk_database_sha256")
     if not isinstance(apk_hash, str) or not re.fullmatch(r"[0-9a-f]{64}", apk_hash):
