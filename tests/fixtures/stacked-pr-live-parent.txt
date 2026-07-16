@@ -1,0 +1,5 @@
+Disposable live fixture for the parent of a stacked pull request.
+
+This file validates that repository security workflows run for a child pull
+request whose base is this feature branch. The fixture pull requests will be
+closed without merging and their branches will be deleted after validation.
