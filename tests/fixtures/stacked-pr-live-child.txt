@@ -1,0 +1,5 @@
+Disposable live fixture for the child of a stacked pull request.
+
+The child pull request initially targets the fixture parent branch. It will be
+retargeted and rewritten to prove that GitHub runs a fresh, base-aware check
+set before the pull request could merge to main.
