@@ -328,11 +328,11 @@ operational surfaces, not public product APIs.
 The repository currently implements the GitHub App service and reusable Python
 evaluator. It also contains a dedicated Helm chart. CI builds and scans
 multi-platform candidates, but the `main` publication job has been removed.
-Current container evidence remains incomplete in three ways: CPython is absent
+Current container evidence remains incomplete in two ways: CPython is absent
 from the normalized top-level component and notice inventory; native wheel and
 embedded-SBOM contents are not expanded into component, notice, and source
-records; and ineffective historical Python installs do not have `RECORD`
-ownership replayed for their distributed lower-layer bytes.
+records. Historical Python installs are replayed from each layer's `RECORD`
+against that layer's complete filesystem snapshot.
 
 The tag workflow contains the intended versioned image, OCI chart, Python
 artifact, provenance, and software-bill-of-material publication jobs, but an
@@ -340,9 +340,9 @@ unconditional validation failure keeps every one unreachable. Security issue
 [#28](https://github.com/stampbot/extra-codeowners/issues/28) requires a
 privilege-separated container-evidence pipeline before that block can be
 removed. Source-completeness issue
-[#18](https://github.com/stampbot/extra-codeowners/issues/18) requires all three
-gaps above to close, by expanding components and sources or using builds linked
-against separately inventoried packages.
+[#18](https://github.com/stampbot/extra-codeowners/issues/18) requires both
+remaining gaps to close, by expanding components and sources or using builds
+linked against separately inventoried packages.
 Build-isolation issue
 [#32](https://github.com/stampbot/extra-codeowners/issues/32) separately
 requires a hash-pinned PEP 517 environment and installation bound to the exact

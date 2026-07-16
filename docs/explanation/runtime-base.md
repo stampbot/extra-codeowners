@@ -90,15 +90,18 @@ from every distribution, and starts the service as UID/GID 65532 with a
 read-only root, no capabilities, and no network. Helm rendering and validation
 run as a separate required job.
 
-The collector also verifies every effective installed wheel `RECORD` against
-the files it names, rejects unowned files and executable `.pyc`/`.pyo` caches in
-the runtime virtual environment, and compares third-party `WHEEL`, `RECORD`,
+The collector replays every installed wheel `RECORD` after applying a layer's
+whiteouts and entries. It retains the exact METADATA, WHEEL, RECORD, tags,
+purelib state, and owned file occurrences even when a later layer removes the
+installation. It rejects overlapping owners, replacements without a matching
+same-layer RECORD, unowned effective files, every `.pyc`/`.pyo` occurrence in
+the distributed runtime virtual environment, and effective interpreter-path
+bytecode. The collector also compares third-party `WHEEL`, `RECORD`,
 embedded-SBOM, and ELF path/hash records with reviewed per-platform baselines.
 That is a drift and installation-integrity gate. It does not normalize CPython
-into the top-level component and notice inventory, expand vendored native and
-embedded-SBOM components into notices and corresponding sources, or replay
-`RECORD` ownership for ineffective historical Python installs. Issue `#18`
-remains the closure gate for all three gaps.
+into the top-level component and notice inventory or expand vendored native and
+embedded-SBOM components into notices and corresponding sources. Issue `#18`
+remains the closure gate for both source-completeness gaps.
 
 The first scan uploads raw JSON without applying VEX, including findings for
 which no fix exists. The narrowly reviewed

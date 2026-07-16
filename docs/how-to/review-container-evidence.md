@@ -640,24 +640,29 @@ inventories, collector change, and workflow logs; keep release publication
 blocked until issue #28 supplies the tested tar verifier and runnable recipient
 procedure.
 
-## 5. Confirm all three source-completeness gaps remain explicit
+## 5. Confirm both remaining source-completeness gaps remain explicit
 
 Both component inventories must contain exactly:
 
 ```json
 {
   "complete": false,
-  "reason": "CPython runtime normalization into the top-level component and notice inventory, native wheel payload and embedded-SBOM component/source expansion, plus RECORD replay for ineffective historical Python installs, remain open in issue #18; public distribution remains blocked pending issue #28."
+  "reason": "CPython runtime normalization into the top-level component and notice inventory, native wheel payload and embedded-SBOM component/source expansion remain open in issue #18; public distribution remains blocked pending issue #28."
 }
 ```
 
-Do not weaken or remove that state. Issue #18 must close all three gaps:
+Do not weaken or remove that state. Issue #18 must close both remaining gaps:
 
 1. normalize CPython into the top-level component and notice inventory
 2. expand native wheel payloads and embedded SBOMs into components, notices,
-   and corresponding sources
-3. replay `RECORD` ownership for ineffective historical Python installs whose
-   bytes remain in distributed lower layers.
+   and corresponding sources.
+
+The trusted helper has already validated `python_record_installations` against
+the all-layer file inventory. It requires every historical installation to bind
+its canonical owner, METADATA, WHEEL, RECORD, tags, purelib state, and normalized
+owned occurrences. It also preserves the effective-only
+`python_record_ownership` projection. Do not treat that attribution evidence as
+component expansion or corresponding-source delivery.
 
 Current path/hash baselines make those incomplete surfaces visible; they do
 not satisfy source delivery.

@@ -28,12 +28,11 @@ isolated build backend selected from `[build-system]`. No current collector
 success overrides that release blocker.
 
 The current archive is intentionally incomplete as distribution evidence.
-Issue `#18` tracks three gaps: CPython is not normalized into the top-level
-component and notice inventory; native wheel payloads and embedded SBOMs are
-not expanded into component, notice, and corresponding-source records; and
-`RECORD` ownership is not replayed for ineffective historical Python installs
-whose bytes remain in lower layers. The collector records the known surfaces
-and sets `source_completeness.complete` to `false`; it rejects distribution
+Issue `#18` tracks two remaining gaps: CPython is not normalized into the
+top-level component and notice inventory, and native wheel payloads and embedded
+SBOMs are not expanded into component, notice, and corresponding-source records.
+The collector records the known surfaces and sets
+`source_completeness.complete` to `false`; it rejects distribution
 approval while that status remains false. Issue `#28` independently keeps
 every tagged publication path blocked.
 
@@ -50,7 +49,7 @@ actual member bytes before parsing them. It then:
    effective
 3. records every regular-file, directory, non-regular, and whiteout occurrence,
    plus embedded wheel SBOMs, native Python payloads, installed wheel identity
-   files, and effective Python `RECORD` ownership
+   files, effective Python `RECORD` ownership, and historical RECORD replay
 4. rejects duplicate paths, malformed whiteouts, unsafe ancestor topology,
    conflicting authoritative metadata, and an APK architecture that does not
    match the requested platform
@@ -62,6 +61,41 @@ actual member bytes before parsing them. It then:
 7. retrieves hash-pinned source and license material for those top-level
    components and produces a deterministic, explicitly incomplete review
    archive.
+
+### Historical Python installation replay
+
+For each layer, the collector applies every whiteout before ordinary entries,
+then evaluates the completed layer snapshot. Tar member order cannot make an
+incomplete installation appear valid. Every newly introduced virtual-environment
+`RECORD` must bind regular METADATA, WHEEL, and RECORD occurrences and every
+normalized path it claims. The component inventory retains that relationship in
+`python_record_installations` with:
+
+- a canonical owner such as `python:demo@1.0`
+- the exact METADATA, WHEEL, and RECORD occurrence identities
+- normalized wheel tags and `Root-Is-Purelib` state
+- each normalized RECORD entry, its declared digest and size, and the exact
+  layer occurrence it owned.
+
+The historical list remains after a later whiteout; each retained occurrence
+still reports whether it is effective in the final filesystem. The existing
+`python_record_ownership` array is the effective-only compatibility view.
+Active installations cannot repeat an owner or claim the same path. A later
+regular-file occurrence at any historically managed path requires a valid
+replacement RECORD introduced in that same layer, even when another layer later
+removes the replacement.
+
+RECORD input is limited to 8 MiB and 100,000 rows, and the complete historical
+output is limited to 100,000 entries. Paths are canonicalized inside
+`/opt/venv`; aliases, escapes, non-regular targets, malformed CSV, and conflicting
+occurrence identities fail collection. Every `.pyc` or `.pyo` occurrence under
+`/opt/venv` fails even if a later whiteout hides it. Effective bytecode under
+`/usr/local/lib/python3.14/` also fails.
+
+This replay establishes file attribution and executable-byte correspondence. It
+does not expand embedded native components, supply corresponding source, or
+normalize CPython into the top-level notice inventory. Source completeness
+therefore remains false.
 
 CI uploads the artifact even after a collection failure when any partial files
 exist. That upload is diagnostic only: the required collection step still

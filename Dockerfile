@@ -81,7 +81,8 @@ RUN --mount=from=verified-python,target=/verified-python,ro \
     chown -R 0:0 /opt/venv && \
     find /opt/venv -type d -exec chmod 0755 {} + && \
     find /opt/venv -type f -exec chmod 0644 {} + && \
-    find /opt/venv/bin -type f -exec chmod 0755 {} +
+    find /opt/venv/bin -type f -exec chmod 0755 {} + && \
+    test -z "$(find /opt/venv \( -name '*.pyc' -o -name '*.pyo' \) -print -quit)"
 
 FROM builder AS test
 

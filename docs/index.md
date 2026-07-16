@@ -16,8 +16,7 @@ evaluator, an App Manifest setup flow, and a Helm chart. CI builds and scans
 container candidates. The `main` publication job has been removed, and tagged
 publication is disabled pending three issues:
 [source completeness #18](https://github.com/stampbot/extra-codeowners/issues/18)
-covers CPython normalization, native-wheel and embedded-SBOM expansion, and
-historical Python `RECORD` replay;
+covers CPython normalization plus native-wheel and embedded-SBOM expansion;
 [privilege separation #28](https://github.com/stampbot/extra-codeowners/issues/28)
 isolates publication authority; and
 [build isolation #32](https://github.com/stampbot/extra-codeowners/issues/32)

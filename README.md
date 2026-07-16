@@ -17,8 +17,7 @@ Routine automation can know that a pull request is safe while GitHub's code-owne
 > The self-hosted App and its documentation are available, and the repository
 > includes Helm chart source. The `main` publication job has been removed, and
 > tagged publication is blocked. [Source-completeness issue #18](https://github.com/stampbot/extra-codeowners/issues/18)
-> covers CPython normalization, native-wheel and embedded-SBOM expansion, and
-> historical Python `RECORD` replay.
+> covers CPython normalization plus native-wheel and embedded-SBOM expansion.
 > [Hash-pinned build isolation](https://github.com/stampbot/extra-codeowners/issues/32)
 > and
 > [publication privilege separation](https://github.com/stampbot/extra-codeowners/issues/28)

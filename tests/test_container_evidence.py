@@ -192,6 +192,7 @@ def standalone_inventory(component: dict[str, Any]) -> dict[str, Any]:
         "native_payloads": [],
         "wheel_identity_files": [],
         "apk_database_occurrences": [apk_record],
+        "python_record_installations": [],
         "python_record_ownership": [],
         "source_completeness": {
             "complete": False,
@@ -2599,6 +2600,22 @@ def test_wheel_record_binds_effective_files_and_policy_detects_consistent_rewrit
     consistent_inventory, _consistent_files = evidence._inventory_saved_image(
         consistent_image, "linux/amd64", "sha256:" + "a" * 64
     )
+    installations = consistent_inventory["python_record_installations"]
+    assert [item["owner"] for item in installations] == [
+        "python:demo@1.0",
+        "python:demo@1.0",
+    ]
+    assert [item["record"]["effective"] for item in installations] == [False, True]
+    first_demo = next(
+        item for item in installations[0]["entries"] if item["path"].endswith("demo.py")
+    )
+    replacement_demo = next(
+        item for item in installations[1]["entries"] if item["path"].endswith("demo.py")
+    )
+    assert first_demo["occurrence"]["layer"] == 0
+    assert first_demo["occurrence"]["effective"] is False
+    assert replacement_demo["occurrence"]["layer"] == 1
+    assert replacement_demo["occurrence"]["effective"] is True
     payload_policy = {"unexpanded_python_payloads": empty_unexpanded_payload_policy()}
     payload_policy["unexpanded_python_payloads"]["linux/amd64"] = {
         category: copy.deepcopy(base_inventory[category])
@@ -2606,6 +2623,178 @@ def test_wheel_record_binds_effective_files_and_policy_detects_consistent_rewrit
     }
     with pytest.raises(evidence.EvidenceError, match="differ from policy"):
         evidence.verify_unexpanded_payload_policy(consistent_inventory, payload_policy)
+
+
+def test_historical_record_replay_survives_complete_whiteout(tmp_path: Path) -> None:
+    site = "opt/venv/lib/python3.14/site-packages"
+    installed = {
+        "demo-1.0.dist-info/METADATA": metadata("demo", "1.0"),
+        "demo-1.0.dist-info/WHEEL": (
+            b"Wheel-Version: 1.0\nRoot-Is-Purelib: true\n"
+            b"Tag: py3-none-any\nTag: cp314-cp314-musllinux_1_2_x86_64\n"
+        ),
+        "demo.py": b"VALUE = 1\n",
+    }
+    installed["demo-1.0.dist-info/RECORD"] = wheel_record(installed, "demo-1.0.dist-info/RECORD")
+    base = tar_bytes(
+        {
+            "lib/apk/db/installed": apk_database(),
+            "opt/venv/pyvenv.cfg": PYVENV_CONFIG,
+            **{f"{site}/{path}": content for path, content in installed.items()},
+        },
+        links=VENV_LINKS,
+    )
+    removal = tar_bytes(
+        {
+            f"{site}/.wh.demo.py": b"",
+            f"{site}/demo-1.0.dist-info/.wh.METADATA": b"",
+            f"{site}/demo-1.0.dist-info/.wh.WHEEL": b"",
+            f"{site}/demo-1.0.dist-info/.wh.RECORD": b"",
+        }
+    )
+    image = tmp_path / "image.tar"
+    saved_image_layers(image, [base, removal])
+
+    inventory, files = evidence._inventory_saved_image(image, "linux/amd64", "sha256:" + "a" * 64)
+
+    installation = inventory["python_record_installations"][0]
+    assert installation["owner"] == "python:demo@1.0"
+    assert installation["record"]["effective"] is False
+    assert installation["root_is_purelib"] is True
+    assert installation["tags"] == [
+        "cp314-cp314-musllinux_1_2_x86_64",
+        "py3-none-any",
+    ]
+    assert {entry["path"] for entry in installation["entries"]} == {
+        f"{site}/demo.py",
+        f"{site}/demo-1.0.dist-info/METADATA",
+        f"{site}/demo-1.0.dist-info/WHEEL",
+        f"{site}/demo-1.0.dist-info/RECORD",
+    }
+    assert all(entry["occurrence"]["effective"] is False for entry in installation["entries"])
+    assert inventory["python_record_ownership"] == []
+    evidence.validate_all_layer_inventory(files, inventory)
+
+    tampered = copy.deepcopy(inventory)
+    tampered["python_record_installations"][0]["entries"][0]["occurrence"]["sha256"] = "f" * 64
+    with pytest.raises(evidence.EvidenceError, match=r"conflicting identity|all-layer inventory"):
+        evidence.validate_all_layer_inventory(files, tampered)
+
+    omitted = copy.deepcopy(inventory)
+    omitted["python_record_installations"] = []
+    with pytest.raises(evidence.EvidenceError, match="omits a historical Python RECORD"):
+        evidence.validate_all_layer_inventory(files, omitted)
+
+
+def test_record_replay_uses_complete_layer_snapshot_not_tar_order(tmp_path: Path) -> None:
+    site = "opt/venv/lib/python3.14/site-packages"
+    installed = {
+        "demo-1.0.dist-info/METADATA": metadata("demo", "1.0"),
+        "demo-1.0.dist-info/WHEEL": (
+            b"Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n"
+        ),
+        "demo.py": b"VALUE = 1\n",
+    }
+    record = wheel_record(installed, "demo-1.0.dist-info/RECORD")
+    layer = tar_bytes(
+        {
+            "lib/apk/db/installed": apk_database(),
+            "opt/venv/pyvenv.cfg": PYVENV_CONFIG,
+            f"{site}/demo-1.0.dist-info/RECORD": record,
+            f"{site}/demo.py": installed["demo.py"],
+            f"{site}/demo-1.0.dist-info/WHEEL": installed["demo-1.0.dist-info/WHEEL"],
+            f"{site}/demo-1.0.dist-info/METADATA": installed["demo-1.0.dist-info/METADATA"],
+        },
+        links=VENV_LINKS,
+    )
+    image = tmp_path / "image.tar"
+    saved_image_layers(image, [layer])
+
+    inventory, files = evidence._inventory_saved_image(image, "linux/amd64", "sha256:" + "a" * 64)
+
+    assert inventory["python_record_installations"][0]["owner"] == "python:demo@1.0"
+    evidence.validate_all_layer_inventory(files, inventory)
+
+
+def test_replacement_requires_same_layer_record_before_later_whiteout(tmp_path: Path) -> None:
+    site = "opt/venv/lib/python3.14/site-packages"
+    installed = {
+        "demo-1.0.dist-info/METADATA": metadata("demo", "1.0"),
+        "demo-1.0.dist-info/WHEEL": (
+            b"Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n"
+        ),
+        "demo.py": b"VALUE = 1\n",
+    }
+    installed["demo-1.0.dist-info/RECORD"] = wheel_record(installed, "demo-1.0.dist-info/RECORD")
+    base = tar_bytes(
+        {
+            "lib/apk/db/installed": apk_database(),
+            "opt/venv/pyvenv.cfg": PYVENV_CONFIG,
+            **{f"{site}/{path}": content for path, content in installed.items()},
+        },
+        links=VENV_LINKS,
+    )
+    replacement = tar_bytes({f"{site}/demo.py": b"VALUE = 2\n"})
+    later_removal = tar_bytes({f"{site}/.wh.demo.py": b""})
+    image = tmp_path / "image.tar"
+    saved_image_layers(image, [base, replacement, later_removal])
+
+    with pytest.raises(evidence.EvidenceError, match="matching replacement RECORD"):
+        evidence._inventory_saved_image(image, "linux/amd64", "sha256:" + "a" * 64)
+
+
+def test_record_replay_rejects_duplicate_active_owner(tmp_path: Path) -> None:
+    sites = [
+        "opt/venv/lib/python3.14/site-packages",
+        "opt/venv/alternate/site-packages",
+    ]
+    files: dict[str, bytes] = {
+        "lib/apk/db/installed": apk_database(),
+        "opt/venv/pyvenv.cfg": PYVENV_CONFIG,
+    }
+    for index, site in enumerate(sites):
+        installed = {
+            "demo-1.0.dist-info/METADATA": metadata("demo", "1.0"),
+            "demo-1.0.dist-info/WHEEL": (
+                b"Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n"
+            ),
+            f"demo_{index}.py": str(index).encode(),
+        }
+        installed["demo-1.0.dist-info/RECORD"] = wheel_record(
+            installed, "demo-1.0.dist-info/RECORD"
+        )
+        files.update({f"{site}/{path}": content for path, content in installed.items()})
+    image = tmp_path / "image.tar"
+    saved_image_layers(image, [tar_bytes(files, links=VENV_LINKS)])
+
+    with pytest.raises(evidence.EvidenceError, match="duplicate Python owner"):
+        evidence._inventory_saved_image(image, "linux/amd64", "sha256:" + "a" * 64)
+
+
+def test_record_replay_rejects_overlapping_distribution_ownership(tmp_path: Path) -> None:
+    site = "opt/venv/lib/python3.14/site-packages"
+    shared = b"VALUE = 1\n"
+    files: dict[str, bytes] = {
+        "lib/apk/db/installed": apk_database(),
+        "opt/venv/pyvenv.cfg": PYVENV_CONFIG,
+        f"{site}/shared.py": shared,
+    }
+    for name in ("demo", "other"):
+        installed = {
+            f"{name}-1.0.dist-info/METADATA": metadata(name, "1.0"),
+            f"{name}-1.0.dist-info/WHEEL": (
+                b"Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n"
+            ),
+            "shared.py": shared,
+        }
+        record_path = f"{name}-1.0.dist-info/RECORD"
+        files.update({f"{site}/{path}": content for path, content in installed.items()})
+        files[f"{site}/{record_path}"] = wheel_record(installed, record_path)
+    image = tmp_path / "image.tar"
+    saved_image_layers(image, [tar_bytes(files, links=VENV_LINKS)])
+
+    with pytest.raises(evidence.EvidenceError, match="claim the same RECORD path"):
+        evidence._inventory_saved_image(image, "linux/amd64", "sha256:" + "a" * 64)
 
 
 @pytest.mark.parametrize(
@@ -2668,6 +2857,109 @@ def test_wheel_record_parser_rejects_traversal_and_invalid_hash() -> None:
             site_root,
             record_path,
         )
+
+
+def test_wheel_record_parser_rejects_aliases_malformed_and_oversized_csv(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    site_root = evidence.PurePosixPath("opt/venv/lib/python3.14/site-packages")
+    record_path = f"{site_root}/demo-1.0.dist-info/RECORD"
+    digest = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+
+    with pytest.raises(evidence.EvidenceError, match="repeats path"):
+        evidence.parse_wheel_record(
+            (
+                f"demo.py,sha256={digest},1\n"
+                f"subdir/../demo.py,sha256={digest},1\n"
+                "demo-1.0.dist-info/RECORD,,\n"
+            ).encode(),
+            site_root,
+            record_path,
+        )
+    with pytest.raises(evidence.EvidenceError, match="cannot parse Python RECORD"):
+        evidence.parse_wheel_record(
+            b'"unterminated,sha256=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA,1\n',
+            site_root,
+            record_path,
+        )
+    monkeypatch.setattr(evidence, "MAX_RECORD_BYTES", 16)
+    with pytest.raises(evidence.EvidenceError, match="exceeds its size limit"):
+        evidence.parse_wheel_record(b"x" * 17, site_root, record_path)
+
+
+def test_record_replay_rejects_symlink_owned_as_regular_file(tmp_path: Path) -> None:
+    site = "opt/venv/lib/python3.14/site-packages"
+    installed = {
+        "demo-1.0.dist-info/METADATA": metadata("demo", "1.0"),
+        "demo-1.0.dist-info/WHEEL": (
+            b"Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n"
+        ),
+        "demo.py": b"VALUE = 1\n",
+    }
+    record = wheel_record(installed, "demo-1.0.dist-info/RECORD")
+    image = tmp_path / "image.tar"
+    saved_image_layers(
+        image,
+        [
+            tar_bytes(
+                {
+                    "lib/apk/db/installed": apk_database(),
+                    "opt/venv/pyvenv.cfg": PYVENV_CONFIG,
+                    f"{site}/demo-1.0.dist-info/METADATA": installed["demo-1.0.dist-info/METADATA"],
+                    f"{site}/demo-1.0.dist-info/WHEEL": installed["demo-1.0.dist-info/WHEEL"],
+                    f"{site}/demo-1.0.dist-info/RECORD": record,
+                },
+                links={**VENV_LINKS, f"{site}/demo.py": "elsewhere.py"},
+            )
+        ],
+    )
+
+    with pytest.raises(evidence.EvidenceError, match="target is not a regular file"):
+        evidence._inventory_saved_image(image, "linux/amd64", "sha256:" + "a" * 64)
+
+
+@pytest.mark.parametrize("suffix", ("pyc", "pyo"))
+def test_historical_venv_bytecode_is_rejected_before_whiteout(tmp_path: Path, suffix: str) -> None:
+    bytecode_path = f"opt/venv/lib/python3.14/site-packages/demo.{suffix}"
+    image = tmp_path / "image.tar"
+    saved_image_layers(
+        image,
+        [
+            tar_bytes(
+                {
+                    "lib/apk/db/installed": apk_database(),
+                    bytecode_path: b"executable",
+                }
+            ),
+            tar_bytes(
+                {
+                    f"{PurePosixPath(bytecode_path).parent}/"
+                    f".wh.{PurePosixPath(bytecode_path).name}": b""
+                }
+            ),
+        ],
+    )
+
+    with pytest.raises(evidence.EvidenceError, match="executable bytecode"):
+        evidence._inventory_saved_image(image, "linux/amd64", "sha256:" + "a" * 64)
+
+
+def test_effective_interpreter_bytecode_is_rejected(tmp_path: Path) -> None:
+    image = tmp_path / "image.tar"
+    saved_image_layers(
+        image,
+        [
+            tar_bytes(
+                {
+                    "lib/apk/db/installed": apk_database(),
+                    "usr/local/lib/python3.14/__pycache__/site.cpython-314.pyc": b"executable",
+                }
+            )
+        ],
+    )
+
+    with pytest.raises(evidence.EvidenceError, match="effective interpreter path"):
+        evidence._inventory_saved_image(image, "linux/amd64", "sha256:" + "a" * 64)
 
 
 @pytest.mark.parametrize(
@@ -2898,6 +3190,9 @@ def test_runtime_identity_expectations_match_dockerfile_and_mise() -> None:
         dockerfile.count(f"FROM python:{evidence.EXPECTED_RUNTIME_PYTHON}-alpine3.24@sha256:") == 2
     )
     assert "ENV UV_COMPILE_BYTECODE=0" in dockerfile
+    assert (
+        "test -z \"$(find /opt/venv \\( -name '*.pyc' -o -name '*.pyo' \\) -print -quit)\""
+    ) in builder_stage
     assert dockerfile.count("UV_NO_INSTALLER_METADATA=1") == 1
     assert builder_stage.index("UV_NO_INSTALLER_METADATA=1") < builder_stage.index("uv sync")
     assert "RUN apk add --no-cache git=2.54.0-r0" in test_stage

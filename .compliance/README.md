@@ -15,9 +15,9 @@ collector records the package metadata, embedded wheel SBOM files, native
 payload paths, retained sources, and reviewed policy it observed. It does not
 yet normalize CPython into the top-level inventory, expand native wheel and
 embedded-SBOM components into complete notice and corresponding-source
-coverage, or replay `RECORD` ownership for ineffective historical Python
-installs. The inventory and manifest therefore mark source completeness
-`false`.
+coverage. It does replay `RECORD` ownership for ineffective historical Python
+installs, but attribution does not supply the still-missing component and source
+closure. The inventory and manifest therefore mark source completeness `false`.
 
 Do not set `distribution_approval.approved` to `true` while that status remains
 false. Normal inventory verification does not treat that policy field as a

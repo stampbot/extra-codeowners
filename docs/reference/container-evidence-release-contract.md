@@ -9,14 +9,18 @@ exact canonical JSON encoding, gzip and tar envelope and member order,
 requirements, and SBOM and provenance predicate contracts before publication.
 
 Issue [#18](https://github.com/stampbot/extra-codeowners/issues/18) must close
-three source-completeness gaps before an inventory may report complete:
+two remaining source-completeness gaps before an inventory may report complete:
 
 - normalize the CPython runtime into the top-level component and notice
   inventory
 - expand native wheel payloads and embedded software bills of materials
-  (SBOMs) into component, notice, and corresponding-source records
-- replay wheel `RECORD` ownership for ineffective historical Python installs
-  whose bytes remain in distributed lower layers.
+  (SBOMs) into component, notice, and corresponding-source records.
+
+The current collector already replays wheel `RECORD` ownership for ineffective
+historical Python installs whose bytes remain in distributed lower layers. A
+future release inventory must retain that `python_record_installations` evidence
+and its effective-only `python_record_ownership` projection; source closure must
+not remove or weaken the attribution gate.
 
 Issue [#28](https://github.com/stampbot/extra-codeowners/issues/28) must then
 provide privilege-separated collection and publication. That issue will also
@@ -123,7 +127,7 @@ The archive must contain at least these entry points:
 | `MANIFEST.json` | Canonical archive identity, platform subject, reviewed policy digest, complete source status, and every retained source and license record. |
 | `SHA256SUMS` | SHA-256 for every other retained member, with exact one-to-one path coverage. |
 | `THIRD_PARTY_NOTICES.md` | Human-readable observed and reviewed license expressions for every effective and lower-layer component. |
-| `inventory/components.json` | Exact normalized component, package-record, native-payload, SBOM, wheel-identity, and source-completeness inventory. |
+| `inventory/components.json` | Exact normalized component, package-record, native-payload, SBOM, wheel-identity, historical RECORD-installation, effective RECORD-ownership, and source-completeness inventory. |
 | `inventory/all-layer-files.json` | Every regular, directory, non-regular, and whiteout occurrence in every distributed layer, including security metadata; regular and directory records also carry effective state. |
 | `policy/container-policy.json` | The exact reviewed policy used to accept the candidate. |
 | `licenses/standard/` | Hash-pinned standard license texts required by reviewed expressions. |
@@ -135,7 +139,8 @@ The archive must contain at least these entry points:
 
 `MANIFEST.json` and `inventory/components.json` must both report
 `source_completeness.complete: true`. Their reason text and the complete source
-set must demonstrate closure of all three #18 gaps. Merely removing the
+set must demonstrate closure of both remaining #18 gaps while retaining
+historical RECORD replay. Merely removing the
 current `false` value is not sufficient.
 
 ## Collection and publication boundary

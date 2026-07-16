@@ -2,7 +2,7 @@
 
 Extra CODEOWNERS has no supported production release or hosted service. The
 `main` publication job has been removed, and tagged publication is blocked
-while three container source-completeness gaps, hash-pinned build isolation,
+while two container source-completeness gaps, hash-pinned build isolation,
 and publication isolation remain incomplete. Use this guide only for a
 disposable source-built review deployment, and don't let the current check
 authorize production merges.
@@ -120,8 +120,9 @@ build-isolation issue
 resolved before it can publish a versioned image. A policy approval change
 alone cannot enable it.
 
-Issue #18 covers CPython top-level normalization, native-wheel and embedded-SBOM
-component/source expansion, and historical ineffective Python `RECORD` replay.
+Issue #18 covers CPython top-level normalization plus native-wheel and
+embedded-SBOM component/source expansion. Current candidates also retain
+historical ineffective Python `RECORD` replay as attribution evidence.
 The [runtime base image decision](../explanation/runtime-base.md) records the
 selected upstream image, architecture evidence, vulnerability dispositions,
 update contract, and residual risk.
@@ -131,7 +132,7 @@ archive that satisfies the
 [container evidence release contract](../reference/container-evidence-release-contract.md).
 Image provenance and a software bill of materials do not replace that archive.
 Current pull-request CI evidence is unsigned and intended only for maintainer
-review; it explicitly reports all three source-completeness gaps.
+review; it explicitly reports both remaining source-completeness gaps.
 
 ## 2. Provision durable state
 

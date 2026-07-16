@@ -6,8 +6,7 @@ production release, or hosted service is available.
 
 The `main` publication job has been removed, and tagged-release publication is
 blocked while CPython normalization, native-wheel and embedded-SBOM expansion,
-historical Python `RECORD` replay, hash-pinned build isolation, and privilege
-separation remain unresolved.
+hash-pinned build isolation, and privilege separation remain unresolved.
 An older public `main` image may still exist in GHCR; it is unsupported,
 unapproved for distribution, and must not be used by this guide. Build the
 reviewed commit into an access-restricted, non-public temporary registry. No versioned chart is
