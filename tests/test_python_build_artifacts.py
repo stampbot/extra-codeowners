@@ -174,6 +174,7 @@ def write_installed_record(
     *,
     digest_override: str | None = None,
     extra_rows: list[tuple[str, str, str]] | None = None,
+    launcher_interpreter: str = "python",
 ) -> Path:
     site_packages = root / "lib" / "python3.12" / "site-packages"
     dist_info_name = cast(str, wheel.dist_info)
@@ -197,11 +198,22 @@ def write_installed_record(
         if digest_override is not None and index == 0:
             digest = digest_override
         rows.append((name, digest, str(len(content))))
+    bin_directory = root / "bin"
+    bin_directory.mkdir(parents=True, exist_ok=True)
+    canonical_python = bin_directory / "python"
+    canonical_python.write_bytes(b"reviewed fixture interpreter\n")
+    canonical_python.chmod(0o755)
+    for alias in ("python3", "python3.12"):
+        (bin_directory / alias).hardlink_to(canonical_python)
     for name, module, callable_name in wheel.scripts:
         raw_path = f"../../../bin/{name}"
         destination = root / "bin" / name
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        content = build.expected_launcher(root, module, callable_name)
+        content = build.expected_launcher(
+            root,
+            module,
+            callable_name,
+            interpreter_name=launcher_interpreter,
+        )
         destination.write_bytes(content)
         destination.chmod(0o755)
         rows.append((raw_path, f"sha256={build.record_digest(content)}", str(len(content))))
@@ -934,6 +946,25 @@ def test_installed_record_supports_scripts_and_verifies_every_owned_file(tmp_pat
     assert result["entry_count"] == 7
     assert result["wheel_sha256"] == wheel.record["sha256"]
     assert len(cast(str, result["record_identity_sha256"])) == 64
+
+
+def test_installed_record_accepts_only_equivalent_reviewed_python_aliases(tmp_path: Path) -> None:
+    wheel_path, wheel = installed_wheel(tmp_path)
+    root = tmp_path / "venv"
+    record = write_installed_record(
+        root,
+        wheel_path,
+        wheel,
+        launcher_interpreter="python3",
+    )
+    build.verify_installed_record(record, root, wheel)
+
+    python3 = root / "bin" / "python3"
+    python3.unlink()
+    python3.write_bytes(b"different interpreter\n")
+    python3.chmod(0o755)
+    with pytest.raises(build.BuildError, match="launcher differs"):
+        build.verify_installed_record(record, root, wheel)
 
 
 def test_installed_record_rejects_digest_escape_alias_and_symlink(

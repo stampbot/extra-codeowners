@@ -738,10 +738,18 @@ def checked_installed_file(candidate: Path, root: Path, raw_path: str) -> os.sta
     return metadata
 
 
-def expected_launcher(root: Path, module: str, callable_name: str) -> bytes:
+def expected_launcher(
+    root: Path,
+    module: str,
+    callable_name: str,
+    *,
+    interpreter_name: str = "python",
+) -> bytes:
     """Return the reviewed uv/distlib POSIX launcher for one entry point."""
 
-    python = root / "bin" / "python"
+    if interpreter_name not in {"python", "python3", "python3.12", "python3.13", "python3.14"}:
+        raise BuildError("launcher interpreter name is outside the reviewed CPython aliases")
+    python = root / "bin" / interpreter_name
     if any(character.isspace() for character in str(python)) or len(str(python)) > 120:
         raise BuildError("environment path cannot use the reviewed launcher form")
     return (
@@ -756,6 +764,29 @@ def expected_launcher(root: Path, module: str, callable_name: str) -> bytes:
         "        sys.argv[0] = sys.argv[0][:-4]\n"
         f"    sys.exit({callable_name}())\n"
     ).encode()
+
+
+def reviewed_launcher_interpreters(root: Path, python_directory: str) -> tuple[str, ...]:
+    """Return executable in-environment aliases for the canonical venv Python."""
+
+    canonical = root / "bin" / "python"
+    try:
+        if not canonical.is_file() or not os.access(canonical, os.X_OK):
+            raise BuildError("installed environment lacks its canonical Python executable")
+        aliases: list[str] = []
+        for name in ("python", "python3", python_directory):
+            candidate = root / "bin" / name
+            if (
+                candidate.is_file()
+                and os.access(candidate, os.X_OK)
+                and os.path.samefile(canonical, candidate)
+            ):
+                aliases.append(name)
+    except OSError as exc:
+        raise BuildError("cannot inspect installed Python launcher aliases") from exc
+    if not aliases:
+        raise BuildError("installed environment has no reviewed Python launcher alias")
+    return tuple(aliases)
 
 
 def verify_installed_record(
@@ -855,8 +886,17 @@ def verify_installed_record(
     expected_members = {
         name: (digest, size) for name, digest, size in wheel.members if name != wheel_record
     }
+    launcher_interpreters = reviewed_launcher_interpreters(root, site_relative.parts[1])
     expected_scripts = {
-        f"../../../bin/{name}": expected_launcher(root, module, callable_name)
+        f"../../../bin/{name}": tuple(
+            expected_launcher(
+                root,
+                module,
+                callable_name,
+                interpreter_name=interpreter,
+            )
+            for interpreter in launcher_interpreters
+        )
         for name, module, callable_name in wheel.scripts
     }
     expected_paths = set(expected_members) | set(expected_scripts) | {wheel_record}
@@ -866,9 +906,9 @@ def verify_installed_record(
         payload = installed_payloads[name]
         if sha256_bytes(payload) != digest or len(payload) != size:
             raise BuildError(f"installed file differs from the verified wheel: {name}")
-    for name, expected_content in expected_scripts.items():
+    for name, expected_contents in expected_scripts.items():
         candidate = Path(os.path.normpath(site_packages / PurePosixPath(name)))
-        if installed_payloads[name] != expected_content:
+        if installed_payloads[name] not in expected_contents:
             raise BuildError(f"installed launcher differs from the verified wheel: {name}")
         if not candidate.stat().st_mode & 0o111:
             raise BuildError(f"installed launcher is not executable: {name}")
