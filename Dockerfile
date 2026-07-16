@@ -12,7 +12,8 @@ ENV UV_COMPILE_BYTECODE=0 \
 WORKDIR /build
 
 COPY --from=uv /uv /uvx /bin/
-COPY pyproject.toml uv.lock README.md mise.toml ./
+COPY pyproject.toml uv.lock README.md mise.toml requirements-build.txt ./
+COPY .github/scripts/build_python_artifacts.py ./.github/scripts/
 
 # Bind the reviewed version to the executable selected by the immutable image digest.
 RUN python - <<'PY'
@@ -27,14 +28,46 @@ if actual != expected:
     raise SystemExit(f"digest-selected uv is {actual!r}; reviewed version is {expected!r}")
 PY
 
-COPY extra_codeowners/ ./extra_codeowners/
-
 RUN python -c 'import sys; assert sys.version_info[:3] == (3, 14, 6), sys.version'
 
-# Suppress uv's installer-only metadata. In particular, uv_cache.json records
-# source ctime and would make the RECORD identity vary across clean checkouts.
+# Resolve only the reviewed runtime graph. The application itself must come from
+# the cross-architecture artifact proof, never from this ambient build context.
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev --no-editable --reinstall-package extra-codeowners && \
+    uv sync --frozen --no-dev --no-install-project --no-build
+
+ARG APPLICATION_SOURCE_REVISION
+ARG APPLICATION_WHEEL_SHA256
+
+# Verify and install the selected application wheel without network access or a
+# project build. UV_NO_INSTALLER_METADATA keeps installer-owned, time-varying
+# files out of the installed RECORD that is bound back to the reviewed wheel.
+RUN --mount=from=verified-python,target=/verified-python,ro \
+    --network=none \
+    python .github/scripts/build_python_artifacts.py verify-selection \
+      --directory /verified-python \
+      --source-revision "${APPLICATION_SOURCE_REVISION}" \
+      --wheel-sha256 "${APPLICATION_WHEEL_SHA256}" >/dev/null && \
+    wheel="$(find /verified-python -maxdepth 1 -type f -name 'extra_codeowners-*.whl' -print)" && \
+    test -n "$wheel" && test "$(printf '%s\n' "$wheel" | wc -l)" -eq 1 && \
+    uv pip install \
+      --python /opt/venv \
+      --offline \
+      --no-index \
+      --no-deps \
+      --no-build \
+      --strict \
+      "$wheel" && \
+    record="$(find /opt/venv/lib/python3.14/site-packages \
+      -path '*/extra_codeowners-*.dist-info/RECORD' -type f -print)" && \
+    test -n "$record" && test "$(printf '%s\n' "$record" | wc -l)" -eq 1 && \
+    version="$(python -c \
+      'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')" && \
+    python .github/scripts/build_python_artifacts.py verify-installed \
+      --record "$record" \
+      --environment-root /opt/venv \
+      --wheel "$wheel" \
+      --project-name extra-codeowners \
+      --project-version "$version" >/dev/null && \
     rm -f \
       /opt/venv/.gitignore \
       /opt/venv/.lock \
@@ -56,18 +89,37 @@ FROM builder AS test
 # copied into or published as the runtime image.
 RUN apk add --no-cache git=2.54.0-r0
 
-COPY tests/ ./tests/
-COPY tools/ ./tools/
-COPY requirements-build.txt ./
 COPY .github/dependabot.yml ./.github/dependabot.yml
-COPY .github/scripts/build_python_artifacts.py .github/scripts/container_evidence.py .github/scripts/release_readiness.py ./.github/scripts/
+COPY .github/scripts/container_evidence.py .github/scripts/release_readiness.py ./.github/scripts/
 COPY .github/workflows/ ./.github/workflows/
 COPY .compliance/container-policy.json ./.compliance/container-policy.json
 COPY docs/reference/upgrade-notes.md ./docs/reference/upgrade-notes.md
 COPY Dockerfile mise.toml renovate.json ./
 
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --group dev --no-editable --reinstall-package extra-codeowners
+    uv sync --frozen --group dev --no-install-project --inexact --no-build
+
+# Adding development tools must not replace or mutate the selected wheel.
+RUN --mount=from=verified-python,target=/verified-python,ro \
+    --network=none \
+    wheel="$(find /verified-python -maxdepth 1 -type f -name 'extra_codeowners-*.whl' -print)" && \
+    record="$(find /opt/venv/lib/python3.14/site-packages \
+      -path '*/extra_codeowners-*.dist-info/RECORD' -type f -print)" && \
+    version="$(python -c \
+      'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')" && \
+    python .github/scripts/build_python_artifacts.py verify-installed \
+      --record "$record" \
+      --environment-root /opt/venv \
+      --wheel "$wheel" \
+      --project-name extra-codeowners \
+      --project-version "$version" >/dev/null
+
+RUN test ! -e /build/extra_codeowners && \
+    /opt/venv/bin/python -c \
+      'from pathlib import Path; import extra_codeowners; Path(extra_codeowners.__file__).resolve().relative_to(Path("/opt/venv/lib/python3.14/site-packages"))'
+
+COPY tests/ ./tests/
+COPY tools/ ./tools/
 
 CMD ["/opt/venv/bin/python", "-m", "pytest", "--no-cov"]
 

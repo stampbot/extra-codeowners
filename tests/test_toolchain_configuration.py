@@ -53,11 +53,10 @@ def test_uv_version_is_identical_locally_in_containers_and_in_workflows() -> Non
     )
     assert image is not None, "Dockerfile must use a digest-pinned uv image"
     assert image.group("version") == reviewed_version
-    assert "COPY pyproject.toml uv.lock README.md mise.toml ./" in dockerfile
-    assert "COPY requirements-build.txt ./" in dockerfile
+    assert "COPY pyproject.toml uv.lock README.md mise.toml requirements-build.txt ./" in dockerfile
+    assert "COPY .github/scripts/build_python_artifacts.py ./.github/scripts/" in dockerfile
     assert (
-        "COPY .github/scripts/build_python_artifacts.py "
-        ".github/scripts/container_evidence.py .github/scripts/release_readiness.py "
+        "COPY .github/scripts/container_evidence.py .github/scripts/release_readiness.py "
         "./.github/scripts/"
     ) in dockerfile
     assert '["uv", "--version"]' in dockerfile
@@ -141,3 +140,80 @@ def test_renovate_groups_the_hash_locked_python_build_closure() -> None:
             "separateMajorMinor": False,
         },
     ]
+
+
+def test_ci_proves_and_selects_one_native_cross_architecture_distribution() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    proof = workflow.split("  python-distribution-proof:\n", 1)[1].split(
+        "  python-distribution:\n", 1
+    )[0]
+    selector = workflow.split("  python-distribution:\n", 1)[1].split("  container:\n", 1)[0]
+    container = workflow.split("  container:\n", 1)[1]
+
+    assert "name: Python distribution proof (${{ matrix.architecture }})" in proof
+    assert proof.count("runner: ubuntu-24.04\n") == 1
+    assert proof.count("runner: ubuntu-24.04-arm\n") == 1
+    assert 'python-version: "3.14.6"' in proof
+    assert "timeout-minutes: 20" in proof
+    assert '--source-revision "$GITHUB_SHA"' in proof
+    assert '--scratch-directory "$scratch"' in proof
+    assert "compression-level: 0" in proof
+    assert "python-distributions-${{ matrix.architecture }}-${{ github.sha }}-attempt-" in proof
+    assert "${{ github.run_attempt }}" in proof
+
+    assert "name: Python distribution reproducibility" in selector
+    assert "needs: python-distribution-proof" in selector
+    assert "if: ${{ always() }}" in selector
+    assert 'if [ "$PROOF_RESULT" != success ]; then' in selector
+    assert selector.count("actions/download-artifact@3e5f45b2") == 2
+    assert "python-distributions-amd64-${{ github.sha }}-attempt-" in selector
+    assert "python-distributions-arm64-${{ github.sha }}-attempt-" in selector
+    assert "merge-multiple" not in selector
+    assert "digest-mismatch: error" in selector
+    assert "artifact-id: ${{ steps.upload-selected.outputs.artifact-id }}" in selector
+    assert "artifact-digest: ${{ steps.upload-selected.outputs.artifact-digest }}" in selector
+    assert "wheel-sha256: ${{ steps.select.outputs.wheel-sha256 }}" in selector
+
+    assert "needs: python-distribution" in container
+    assert "if: ${{ always() }}" in container
+    assert 'if [ "$DISTRIBUTION_RESULT" != success ]; then' in container
+    assert "artifact-ids: ${{ needs.python-distribution.outputs.artifact-id }}" in container
+    assert (
+        container.count("verified-python=${{ steps.python-distribution.outputs.download-path }}")
+        == 2
+    )
+    assert container.count("APPLICATION_SOURCE_REVISION=${{ github.sha }}") == 2
+    assert (
+        container.count(
+            "APPLICATION_WHEEL_SHA256=${{ needs.python-distribution.outputs.wheel-sha256 }}"
+        )
+        == 2
+    )
+
+
+def test_dockerfile_can_only_install_the_selected_application_wheel() -> None:
+    dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+    dockerignore = (ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines()
+    builder = dockerfile.split(" AS builder\n", 1)[1].split("\nFROM builder AS test", 1)[0]
+    test_stage = dockerfile.split("FROM builder AS test\n", 1)[1].split("\nFROM python:", 1)[0]
+
+    assert "COPY extra_codeowners/" not in builder
+    assert "extra_codeowners" in dockerignore
+    assert "uv build" not in dockerfile
+    assert "reinstall-package extra-codeowners" not in dockerfile
+    assert "uv sync --frozen --no-dev --no-install-project --no-build" in builder
+    assert "--mount=from=verified-python,target=/verified-python,ro" in builder
+    assert "--network=none" in builder
+    assert "verify-selection" in builder
+    assert "uv pip install" in builder
+    assert "--offline" in builder
+    assert "--no-index" in builder
+    assert "--no-deps" in builder
+    assert "--no-build" in builder
+    assert "--strict" in builder
+    assert "verify-installed" in builder
+    assert "uv sync --frozen --group dev --no-install-project --inexact --no-build" in test_stage
+    assert "verify-installed" in test_stage
+    assert "COPY extra_codeowners/" not in test_stage
+    assert "test ! -e /build/extra_codeowners" in test_stage
+    assert 'Path("/opt/venv/lib/python3.14/site-packages")' in test_stage

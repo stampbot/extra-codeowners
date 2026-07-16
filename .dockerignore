@@ -12,6 +12,7 @@
 .github/workflows/*
 !.github/workflows/*
 .venv
+extra_codeowners
 .env
 .env.*
 .pytest_cache
