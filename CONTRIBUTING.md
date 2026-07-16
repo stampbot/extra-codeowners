@@ -97,6 +97,8 @@ Open the pull request ready for review and complete its checklist. Explain the s
 
 Maintainers may ask you to reorganize commits when that makes the history easier to review.
 
+Stacked pull requests receive the DCO, CodeQL, dependency-review, and workflow-security checks even when they target another feature branch. Merge the stack from the bottom. Because this repository squash-merges, rebase each child onto the new `main` while dropping the parent commits, retarget it, push a rewritten head with `--force-with-lease`, and wait for required checks on that exact SHA. Follow the [stacked pull-request review procedure](docs/how-to/review-stacked-pull-requests.md); a green check stored on an unchanged head can describe the previous base, and moving only the base branch does not synchronize the child.
+
 All required checks and reviews must pass. By default, application approvals cannot replace human CODEOWNER review for:
 
 - `CODEOWNERS`
