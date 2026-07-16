@@ -2,8 +2,11 @@ name: DCO
 
 on:
   pull_request:
-    branches:
-      - main
+    types: [opened, reopened, synchronize, edited]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -12,6 +15,7 @@ jobs:
   signoff:
     name: Developer Certificate of Origin
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Check out repository history
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -47,8 +51,35 @@ jobs:
             official_dependabot_pr=true
           fi
 
+          if ! git cat-file -e "${BASE_SHA}^{commit}"; then
+            printf 'Pull-request base %s is not an available commit.\n' "$BASE_SHA" >&2
+            exit 1
+          fi
+          if ! git cat-file -e "${HEAD_SHA}^{commit}"; then
+            printf 'Pull-request head %s is not an available commit.\n' "$HEAD_SHA" >&2
+            exit 1
+          fi
+
+          commit_list=''
+          if ! commit_list="$(git rev-list "${BASE_SHA}..${HEAD_SHA}" --)"; then
+            printf 'Unable to enumerate pull-request commits for %s..%s.\n' \
+              "$BASE_SHA" "$HEAD_SHA" >&2
+            exit 1
+          fi
+
+          commits=()
+          if [[ -n "$commit_list" ]]; then
+            mapfile -t commits <<<"$commit_list"
+          fi
+          if [[ ! "$PR_COMMIT_COUNT" =~ ^[0-9]+$ ]] \
+            || (( ${#commits[@]} != 10#$PR_COMMIT_COUNT )); then
+            printf 'Event commit count %s does not match enumerated range count %s.\n' \
+              "$PR_COMMIT_COUNT" "${#commits[@]}" >&2
+            exit 1
+          fi
+
           failed=0
-          while IFS= read -r commit; do
+          for commit in "${commits[@]}"; do
             author="$(git show --no-patch --format='%an <%ae>' "$commit")"
             if git show --no-patch --format='%B' "$commit" \
               | grep --fixed-strings --ignore-case --line-regexp \
@@ -98,5 +129,5 @@ jobs:
 
             printf 'Commit %s lacks a valid Signed-off-by line matching its author.\n' "$commit" >&2
             failed=1
-          done < <(git rev-list "${BASE_SHA}..${HEAD_SHA}")
+          done
           exit "$failed"

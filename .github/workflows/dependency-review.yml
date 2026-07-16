@@ -2,8 +2,11 @@ name: Dependency review
 
 on:
   pull_request:
-    branches:
-      - main
+    types: [opened, reopened, synchronize, edited]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -12,6 +15,7 @@ jobs:
   dependency-review:
     name: Dependency review
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Check out repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -23,8 +27,43 @@ jobs:
         with:
           fail-on-severity: moderate
           license-check: true
+          retry-on-snapshot-warnings: true
+          retry-on-snapshot-warnings-timeout: 120
           deny-licenses: >-
             GPL-2.0-only, GPL-2.0-or-later,
             GPL-3.0-only, GPL-3.0-or-later,
             AGPL-1.0-only, AGPL-1.0-or-later,
             AGPL-3.0-only, AGPL-3.0-or-later
+
+      - name: Require a complete dependency snapshot comparison
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          response="$(mktemp)"
+          trap 'rm -f "$response"' EXIT
+          gh api --include \
+            --header 'X-GitHub-Api-Version: 2026-03-10' \
+            "repos/${REPOSITORY}/dependency-graph/compare/${BASE_SHA}...${HEAD_SHA}?per_page=100" \
+            >"$response"
+          snapshot_warning="$(
+            awk '
+              tolower($0) ~ /^x-github-dependency-graph-snapshot-warnings:/ {
+                sub(/^[^:]*:[[:space:]]*/, "")
+                sub(/\r$/, "")
+                print
+                exit
+              }
+            ' "$response"
+          )"
+          if [[ -n "$snapshot_warning" ]]; then
+            printf 'Dependency graph comparison is incomplete: ' >&2
+            if ! printf '%s' "$snapshot_warning" | base64 --decode >&2; then
+              printf '<unreadable snapshot warning>' >&2
+            fi
+            printf '\n' >&2
+            exit 1
+          fi

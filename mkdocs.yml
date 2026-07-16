@@ -43,6 +43,7 @@ nav:
       - Upgrade, back up, and restore: how-to/upgrade.md
       - Operate and recover: how-to/operate.md
       - Respond to dependency audit: how-to/respond-to-dependency-audit.md
+      - Review stacked pull requests: how-to/review-stacked-pull-requests.md
       - Review CI container evidence: how-to/review-container-evidence.md
   - Reference:
       - Configuration: reference/configuration.md
