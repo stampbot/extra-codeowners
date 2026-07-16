@@ -58,8 +58,9 @@ RUN apk add --no-cache git=2.54.0-r0
 
 COPY tests/ ./tests/
 COPY tools/ ./tools/
+COPY requirements-build.txt ./
 COPY .github/dependabot.yml ./.github/dependabot.yml
-COPY .github/scripts/container_evidence.py .github/scripts/release_readiness.py ./.github/scripts/
+COPY .github/scripts/build_python_artifacts.py .github/scripts/container_evidence.py .github/scripts/release_readiness.py ./.github/scripts/
 COPY .github/workflows/ ./.github/workflows/
 COPY .compliance/container-policy.json ./.compliance/container-policy.json
 COPY docs/reference/upgrade-notes.md ./docs/reference/upgrade-notes.md
