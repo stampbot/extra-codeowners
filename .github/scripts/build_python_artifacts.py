@@ -1518,6 +1518,8 @@ def toolchain_identity(
         or (major, minor) not in SUPPORTED_BUILD_PYTHONS
     ):
         raise BuildError("Python executable is outside the reviewed CPython 3.12-3.14 matrix")
+    if uv_identity != f"uv {reviewed_uv} ({machine}-unknown-linux-gnu)":
+        raise BuildError("uv executable does not report the reviewed native target")
     return {
         "uv": uv_identity,
         "uv_version": reviewed_uv,

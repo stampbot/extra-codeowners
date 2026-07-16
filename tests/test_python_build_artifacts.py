@@ -1105,11 +1105,12 @@ def test_toolchain_identity_records_and_restricts_the_build_architecture(
         "minor": 14,
         "machine": "x86_64",
     }
+    uv_identity = "uv 0.11.28 (x86_64-unknown-linux-gnu)\n"
 
     def fake_run(command: Sequence[str], **kwargs: Any) -> str:
         del kwargs
         if command[1:] == ["--version"]:
-            return "uv 0.11.28 (x86_64-unknown-linux-gnu)\n"
+            return uv_identity
         return json.dumps(python_identity)
 
     monkeypatch.setattr(build, "run_command", fake_run)
@@ -1117,6 +1118,15 @@ def test_toolchain_identity_records_and_restricts_the_build_architecture(
     assert identity["python_machine"] == "x86_64"
     assert identity["python_major_minor"] == "3.14"
 
+    uv_identity = "uv 0.11.28\n"
+    with pytest.raises(build.BuildError, match="reviewed native target"):
+        build.toolchain_identity(Path("/uv"), Path("/python"), tmp_path, os.environ)
+
+    uv_identity = "uv 0.11.28 (aarch64-unknown-linux-gnu)\n"
+    with pytest.raises(build.BuildError, match="reviewed native target"):
+        build.toolchain_identity(Path("/uv"), Path("/python"), tmp_path, os.environ)
+
+    uv_identity = "uv 0.11.28 (x86_64-unknown-linux-gnu)\n"
     python_identity["machine"] = "sparc64"
     with pytest.raises(build.BuildError, match="reviewed CPython"):
         build.toolchain_identity(Path("/uv"), Path("/python"), tmp_path, os.environ)
