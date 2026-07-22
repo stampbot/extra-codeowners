@@ -54,11 +54,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Rel
   individual payload attribution. Roles are deterministic platform-neutral
   projections of the installed paths, so they cannot be reassigned while
   comparing the native set across platforms. Global package-URL semantics
-  reject conflicting nested identity, source, or license records. A per-owner
-  ledger also closes MarkupSafe with its exact wheel, 80,313-byte sdist,
-  single native role, and explicit empty SBOM and component sets. Those empty
-  sets describe the observed wheel; they do not claim the sdist explains every
-  binary byte. The other five native-wheel owners and overall source
+  reject conflicting nested identity, source, or license records.
+- Closed-world native-owner records for MarkupSafe and SQLAlchemy. MarkupSafe
+  binds its exact wheels, 80,313-byte sdist, single native role, and explicit
+  empty SBOM and component sets. SQLAlchemy binds its exact wheels,
+  9,912,201-byte sdist, five native roles, and the same explicit empty sets.
+  These records do not claim the sdists explain every binary byte or prove
+  reproducible builds. The other four native-wheel owners and overall source
   completeness remain explicitly unresolved.
 - Diátaxis documentation, a threat model, operating guides, and Read the Docs configuration.
 - Bounded pull-request and scheduled property tests for untrusted parsing and policy inputs.
