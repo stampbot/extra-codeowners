@@ -6450,6 +6450,24 @@
   "native_component_coverage": {
     "linux/amd64": [
       {
+        "components": [
+          {
+            "name": "libgcc",
+            "purl": "pkg:apk/alpine/libgcc@14.2.0-r6",
+            "reviewed_license": "GPL-3.0-or-later WITH GCC-exception-3.1",
+            "source": "alpine:gcc@14.2.0-r6",
+            "type": "library",
+            "version": "14.2.0-r6"
+          },
+          {
+            "name": "libstdc++",
+            "purl": "pkg:apk/alpine/libstdc%2B%2B@14.2.0-r6",
+            "reviewed_license": "GPL-3.0-or-later WITH GCC-exception-3.1",
+            "source": "alpine:gcc@14.2.0-r6",
+            "type": "library",
+            "version": "14.2.0-r6"
+          }
+        ],
         "native_payloads": [
           {
             "path": "opt/venv/lib/python3.14/site-packages/greenlet.libs/libgcc_s-0cd532bd.so.1",
@@ -6512,10 +6530,50 @@
           "size": 1684824,
           "url": "https://files.pythonhosted.org/packages/f7/22/c0a336ae4a1410fd5f5121098e5bfbf1865f64c5ef80b4b5412886c4a332/greenlet-3.5.3-cp314-cp314-musllinux_1_2_x86_64.whl"
         }
+      },
+      {
+        "components": [],
+        "native_payloads": [
+          {
+            "path": "opt/venv/lib/python3.14/site-packages/markupsafe/_speedups.cpython-314-x86_64-linux-musl.so",
+            "role": "markupsafe/_speedups.cpython-314.so",
+            "sha256": "d87beb24c0d907f39ac850f691eb87c262bba55530cb570269ae70b2fa19ae53"
+          }
+        ],
+        "owner": "python:markupsafe@3.0.3",
+        "owner_source": {
+          "sha256": "722695808f4b6457b320fdc131280796bdceb04ab50fe1795cd540799ebe1698",
+          "size": 80313,
+          "url": "https://files.pythonhosted.org/packages/7e/99/7690b6d4034fffd95959cbe0c02de8deb3098cc577c67bb6a24fe5d7caa7/markupsafe-3.0.3.tar.gz"
+        },
+        "sboms": [],
+        "wheel": {
+          "sha256": "2713baf880df847f2bece4230d4d094280f4e67b1e813eec43b4c0e144a34ffe",
+          "size": 23043,
+          "url": "https://files.pythonhosted.org/packages/ff/0e/53dfaca23a69fbfbbf17a4b64072090e70717344c52eaaaa9c5ddff1e5f0/markupsafe-3.0.3-cp314-cp314-musllinux_1_2_x86_64.whl"
+        }
       }
     ],
     "linux/arm64": [
       {
+        "components": [
+          {
+            "name": "libgcc",
+            "purl": "pkg:apk/alpine/libgcc@14.2.0-r6",
+            "reviewed_license": "GPL-3.0-or-later WITH GCC-exception-3.1",
+            "source": "alpine:gcc@14.2.0-r6",
+            "type": "library",
+            "version": "14.2.0-r6"
+          },
+          {
+            "name": "libstdc++",
+            "purl": "pkg:apk/alpine/libstdc%2B%2B@14.2.0-r6",
+            "reviewed_license": "GPL-3.0-or-later WITH GCC-exception-3.1",
+            "source": "alpine:gcc@14.2.0-r6",
+            "type": "library",
+            "version": "14.2.0-r6"
+          }
+        ],
         "native_payloads": [
           {
             "path": "opt/venv/lib/python3.14/site-packages/greenlet.libs/libgcc_s-2d945d6c.so.1",
@@ -6577,6 +6635,28 @@
           "sha256": "a1fad1d11e7d6aab184107baa8e4ece11ccba3ec9599cd7efa5ff4d70d43256a",
           "size": 1621252,
           "url": "https://files.pythonhosted.org/packages/d1/50/13efdbea246fe3d3b735e191fec08fb50809f53cd2383ebe123d0809e44b/greenlet-3.5.3-cp314-cp314-musllinux_1_2_aarch64.whl"
+        }
+      },
+      {
+        "components": [],
+        "native_payloads": [
+          {
+            "path": "opt/venv/lib/python3.14/site-packages/markupsafe/_speedups.cpython-314-aarch64-linux-musl.so",
+            "role": "markupsafe/_speedups.cpython-314.so",
+            "sha256": "7f9bf0b4fc7f302e400d54b8a07d3b6923ffcd09e5cbc5e0aacdf273b50daebc"
+          }
+        ],
+        "owner": "python:markupsafe@3.0.3",
+        "owner_source": {
+          "sha256": "722695808f4b6457b320fdc131280796bdceb04ab50fe1795cd540799ebe1698",
+          "size": 80313,
+          "url": "https://files.pythonhosted.org/packages/7e/99/7690b6d4034fffd95959cbe0c02de8deb3098cc577c67bb6a24fe5d7caa7/markupsafe-3.0.3.tar.gz"
+        },
+        "sboms": [],
+        "wheel": {
+          "sha256": "ec15a59cf5af7be74194f7ab02d0f59a62bdcf1a537677ce67a2537c9b87fcda",
+          "size": 23821,
+          "url": "https://files.pythonhosted.org/packages/9a/a7/591f592afdc734f47db08a75793a55d7fbcc6902a723ae4cfbab61010cc5/markupsafe-3.0.3-cp314-cp314-musllinux_1_2_aarch64.whl"
         }
       }
     ]
@@ -7966,5 +8046,5 @@
       "version": "3.3.4"
     }
   ],
-  "schema_version": 5
+  "schema_version": 6
 }

@@ -20,20 +20,23 @@ contract:
 
 | Issue | Work still required |
 | --- | --- |
-| [#18](https://github.com/stampbot/extra-codeowners/issues/18) | Complete notice and corresponding-source records for the six native-wheel owners that remain after Greenlet. |
+| [#18](https://github.com/stampbot/extra-codeowners/issues/18) | Complete notice and corresponding-source records for the five native-wheel owners that remain after Greenlet and MarkupSafe. |
 | [#28](https://github.com/stampbot/extra-codeowners/issues/28) | Separate unprivileged collection from publication authority, freeze the wire format, and ship an adversarially tested recipient verifier and how-to. |
 | [#32](https://github.com/stampbot/extra-codeowners/issues/32) | Retain the reproducible Python proof in release evidence and pass it to the isolated publication jobs, which must bind the exact selected wheel to the installed runtime. |
 
 The collector has completed the CPython identity and source portion of #18 and
-the Greenlet native-component portion on both platforms. It retains the exact
-locked platform wheel for every native-payload or embedded-SBOM owner and a
-separately addressed copy of each raw SBOM. For Greenlet, it also binds the
-owner sdist, the complete five-file native set, each embedded component, the
-exact Alpine GCC recipe and distfile, and reviewed source notices. These exact
+the Greenlet and MarkupSafe native-owner portions on both platforms. It retains
+the exact locked platform wheel for every native-payload or embedded-SBOM
+owner and a separately addressed copy of each raw SBOM. For Greenlet, it also
+binds the owner sdist, the complete five-file native set, each embedded
+component, the exact Alpine GCC recipe and distfile, and reviewed source
+notices. These exact
 sets prove co-membership in the wheel. The SBOM has no component-to-file map,
 so the evidence does not assign an individual native file to the owner source
-or a nested component. Six owners remain; those records make the gap
-inspectable but do not close it.
+or a nested component. MarkupSafe adds one exact native payload and explicit
+empty SBOM and component sets. Its exact sdist is source evidence, not proof
+that every binary byte came from that archive. Five owners remain; those
+records make the gap inspectable but do not close it.
 
 The collector also replays wheel `RECORD` ownership for historical Python
 installations whose bytes remain in lower layers. A release inventory must keep
@@ -91,8 +94,8 @@ The canonical JSON predicate has exactly these fields:
 
 | Field | Type | Requirement |
 | --- | --- | --- |
-| `schema_version` | integer | Exactly `5`. |
-| `media_type` | string | Exactly `application/vnd.stampbot.container-evidence.v5+tar+gzip`. |
+| `schema_version` | integer | Exactly `6`. |
+| `media_type` | string | Exactly `application/vnd.stampbot.container-evidence.v6+tar+gzip`. |
 | `platform` | string | `linux/amd64` or `linux/arm64`; it must match the selected manifest. |
 | `subject_digest` | string | Lowercase `sha256:` digest of the published platform manifest, never a local image configuration digest. |
 | `artifact` | object | Exactly `filename` and `sha256`. |
@@ -159,7 +162,7 @@ The archive must contain at least these entry points:
 
 ### Current native-wheel manifest records
 
-Until issue #28 freezes the recipient schema, this is the exact schema-v5
+Until issue #28 freezes the recipient schema, this is the exact schema-v6
 collector format for `MANIFEST.json.native_wheel_artifacts`. It is an inspection
 reference, not a promise that the unfinished release wire format will remain
 unchanged.
@@ -198,15 +201,19 @@ wheel, raw SBOM, and manifest bytes independently of these records.
 
 | Field | Requirement |
 | --- | --- |
-| `schema_version` | Exactly `5`. |
+| `schema_version` | Exactly `6`. |
 | `platform` | Exact inventory platform. |
 | `complete` | Derived boolean; `true` only when no native/SBOM owner remains unresolved. |
 | `resolved_owners` | Sorted exact owner records copied from the reviewed coverage policy after inventory and lock binding. |
 | `unresolved_owners` | Sorted observed owners with native path/hash pairs and embedded-SBOM path/hash/component projections. |
 
 Each resolved owner binds one exact wheel, one exact owner sdist, one complete
-owner-level native payload set, and every embedded SBOM. Every payload record
-has an exact path and digest. Its platform-independent role is derived from
+owner-level native payload set, every embedded SBOM, and the canonical union of
+the components represented by those SBOMs. The native, SBOM, and component
+sets must all be present. `native_payloads` and `sboms` may each be empty, but
+not both. `components` may be empty and must equal the canonical union of all
+`sboms[].components`. Every payload record has an exact path and digest. Its
+platform-independent role is derived from
 that path by removing the reviewed `site-packages` prefix and normalizing the
 platform ABI or auditwheel filename hash. A role cannot be reassigned to
 another payload, and both platforms must use the same derived role set. Each
@@ -218,9 +225,16 @@ not provide a relationship from a component to a file path, hash, or SONAME.
 The schema therefore does not attribute any individual payload to the owner
 source or to a nested component.
 
-The current per-platform ledger resolves `python:greenlet@3.5.3` and leaves six
-owners unresolved. Greenlet's nested `libgcc` and `libstdc++` records point to
-the exact Alpine GCC 14.2.0-r6 builder source retained under
+The current per-platform ledger resolves `python:greenlet@3.5.3` and
+`python:markupsafe@3.0.3`, leaving five owners unresolved. MarkupSafe's record
+has one native role and explicit empty SBOM and component sets. Its exact sdist
+is retained at
+`sources/python/markupsafe/3.0.3/markupsafe-3.0.3.tar.gz`. The source members
+`LICENSE.txt` and `docs/license.rst` are retained as
+`licenses/from-source/python-markupsafe-3.0.3/489a8e110850-LICENSE.txt` and
+`licenses/from-source/python-markupsafe-3.0.3/6fc7e80b75b5-license.rst`.
+Greenlet's nested `libgcc` and `libstdc++` records point to the exact Alpine GCC
+14.2.0-r6 builder source retained under
 `sources/native-components/gcc/14.2.0-r6/`. The shared source-carried notices
 are retained under `licenses/from-source/native-gcc-14.2.0-r6/` and attributed
 to both nested component package URLs in `license_records`.

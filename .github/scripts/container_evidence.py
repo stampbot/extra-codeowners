@@ -51,7 +51,7 @@ from packaging.utils import (
 )
 from packaging.version import InvalidVersion, Version
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 EVIDENCE_MEDIA_TYPE = f"application/vnd.stampbot.container-evidence.v{SCHEMA_VERSION}+tar+gzip"
 APPLICATION_NAME = "extra-codeowners"
 EXPECTED_RUNTIME_PYTHON = "3.14.6"
@@ -77,7 +77,7 @@ EXPECTED_UV_VERSION = "0.11.28"
 APPLICATION_WHEEL_LABEL = "org.stampbot.extra-codeowners.application-wheel.sha256"
 APPLICATION_SELECTION_LABEL = "org.stampbot.extra-codeowners.python-selection-record.sha256"
 SOURCE_COMPLETENESS_REASON = (
-    "Six native-wheel owners still lack closed-world component/source coverage in issue #18; "
+    "Five native-wheel owners still lack closed-world component/source coverage in issue #18; "
     "public distribution remains blocked pending issue #28."
 )
 MAX_DOWNLOAD_BYTES = 64 * 1024 * 1024
@@ -3832,6 +3832,69 @@ def native_component_sources(policy: Mapping[str, Any]) -> Mapping[str, Mapping[
     return sources
 
 
+def validate_reviewed_native_components(
+    value: object,
+    *,
+    sources: Mapping[str, Mapping[str, Any]],
+    source: str,
+    used_sources: set[str],
+    semantics_by_purl: dict[str, dict[str, str]],
+) -> list[Mapping[str, Any]]:
+    """Validate one canonical set of reviewed embedded-component identities."""
+
+    if not isinstance(value, list) or len(value) > MAX_CYCLONEDX_COMPONENTS:
+        raise EvidenceError(f"{source} has invalid components")
+    records: list[Mapping[str, Any]] = []
+    projections: list[dict[str, str]] = []
+    for component_index, raw_component in enumerate(value):
+        component = require_exact_fields(
+            raw_component,
+            {
+                "type",
+                "name",
+                "version",
+                "purl",
+                "source",
+                "reviewed_license",
+            },
+            f"{source} component {component_index}",
+        )
+        projection, _bom_ref = normalized_cyclonedx_component(
+            component, f"{source} component {component_index}"
+        )
+        projections.append(projection)
+        source_id = component["source"]
+        if not isinstance(source_id, str) or source_id not in sources:
+            raise EvidenceError(f"{source} has an unknown component source")
+        used_sources.add(source_id)
+        reviewed = component["reviewed_license"]
+        if not isinstance(reviewed, str) or not reviewed.strip():
+            raise EvidenceError(f"{source} has no reviewed component license")
+        normalized_reviewed = checked_scalar(
+            reviewed,
+            f"{source} reviewed license",
+            max_length=MAX_LICENSE_FIELD_LENGTH,
+        )
+        if "LicenseRef-" in normalized_reviewed:
+            raise EvidenceError(
+                "native-component reviewed licenses cannot use LicenseRef identifiers"
+            )
+        semantic = {
+            **projection,
+            "source": source_id,
+            "reviewed_license": normalized_reviewed,
+        }
+        previous_semantic = semantics_by_purl.setdefault(projection["purl"], semantic)
+        if previous_semantic != semantic:
+            raise EvidenceError(
+                "native-component PURL has conflicting identity, source, or reviewed "
+                f"license: {projection['purl']}"
+            )
+        records.append(component)
+    validate_cyclonedx_component_projection(None, projections, source)
+    return records
+
+
 def validate_native_component_policy_schema(policy: Mapping[str, Any]) -> None:
     """Validate the closed-world policy used to resolve selected native wheel owners."""
 
@@ -3851,7 +3914,7 @@ def validate_native_component_policy_schema(policy: Mapping[str, Any]) -> None:
         for owner_index, raw_owner in enumerate(raw_records):
             owner_record = require_exact_fields(
                 raw_owner,
-                {"owner", "wheel", "owner_source", "native_payloads", "sboms"},
+                {"owner", "wheel", "owner_source", "native_payloads", "sboms", "components"},
                 f"native-component coverage {platform} owner {owner_index}",
             )
             owner = owner_record["owner"]
@@ -3893,12 +3956,15 @@ def validate_native_component_policy_schema(policy: Mapping[str, Any]) -> None:
                 platform,
                 f"native-component coverage {owner}",
             )
-            if not native_payloads:
-                raise EvidenceError(f"native-component coverage {owner} has no native payloads")
             sboms = owner_record["sboms"]
-            if not isinstance(sboms, list) or not sboms or len(sboms) > MAX_IMAGE_MEMBERS:
+            if not isinstance(sboms, list) or len(sboms) > MAX_IMAGE_MEMBERS:
                 raise EvidenceError(f"native-component coverage {owner} has invalid SBOMs")
+            if not native_payloads and not sboms:
+                raise EvidenceError(
+                    f"native-component coverage {owner} has no native payload or SBOM surface"
+                )
             sbom_paths: set[str] = set()
+            nested_components_by_purl: dict[str, Mapping[str, Any]] = {}
             for sbom_index, raw_sbom in enumerate(sboms):
                 sbom = require_exact_fields(
                     raw_sbom,
@@ -3921,80 +3987,39 @@ def validate_native_component_policy_schema(policy: Mapping[str, Any]) -> None:
                         f"native-component coverage {owner} has invalid SBOM digest"
                     )
                 components = sbom["components"]
-                if (
-                    not isinstance(components, list)
-                    or not components
-                    or len(components) > MAX_CYCLONEDX_COMPONENTS
-                ):
-                    raise EvidenceError(
-                        f"native-component coverage {owner} has invalid SBOM components"
-                    )
-                projections: list[dict[str, str]] = []
-                for component_index, raw_component in enumerate(components):
-                    component = require_exact_fields(
-                        raw_component,
-                        {
-                            "type",
-                            "name",
-                            "version",
-                            "purl",
-                            "source",
-                            "reviewed_license",
-                        },
-                        (
-                            f"native-component coverage {owner} SBOM {sbom_index} "
-                            f"component {component_index}"
-                        ),
-                    )
-                    projection, _bom_ref = normalized_cyclonedx_component(
-                        component,
-                        (
-                            f"native-component coverage {owner} SBOM {sbom_index} "
-                            f"component {component_index}"
-                        ),
-                    )
-                    projections.append(projection)
-                    source_id = component["source"]
-                    if not isinstance(source_id, str) or source_id not in sources:
-                        raise EvidenceError(
-                            f"native-component coverage {owner} has an unknown component source"
-                        )
-                    used_sources.add(source_id)
-                    reviewed = component["reviewed_license"]
-                    if not isinstance(reviewed, str) or not reviewed.strip():
-                        raise EvidenceError(
-                            f"native-component coverage {owner} has no reviewed component license"
-                        )
-                    normalized_reviewed = checked_scalar(
-                        reviewed,
-                        f"native-component coverage {owner} reviewed license",
-                        max_length=MAX_LICENSE_FIELD_LENGTH,
-                    )
-                    if "LicenseRef-" in normalized_reviewed:
-                        raise EvidenceError(
-                            "native-component reviewed licenses cannot use LicenseRef identifiers"
-                        )
-                    semantic = {
-                        **projection,
-                        "source": source_id,
-                        "reviewed_license": normalized_reviewed,
-                    }
-                    previous_semantic = semantics_by_purl.setdefault(projection["purl"], semantic)
-                    if previous_semantic != semantic:
-                        raise EvidenceError(
-                            "native-component PURL has conflicting identity, source, or reviewed "
-                            f"license: {projection['purl']}"
-                        )
-                validate_cyclonedx_component_projection(
-                    None, projections, f"native-component coverage {owner} {path_value}"
+                validated_components = validate_reviewed_native_components(
+                    components,
+                    sources=sources,
+                    source=f"native-component coverage {owner} SBOM {sbom_index}",
+                    used_sources=used_sources,
+                    semantics_by_purl=semantics_by_purl,
                 )
+                for component in validated_components:
+                    nested_components_by_purl[str(component["purl"])] = component
             if [record["path"] for record in sboms] != sorted(sbom_paths):
                 raise EvidenceError(f"native-component coverage {owner} SBOMs are not canonical")
+            owner_components = validate_reviewed_native_components(
+                owner_record["components"],
+                sources=sources,
+                source=f"native-component coverage {owner} owner component set",
+                used_sources=used_sources,
+                semantics_by_purl=semantics_by_purl,
+            )
+            nested_components = sorted(
+                nested_components_by_purl.values(),
+                key=lambda item: (item["type"], item["name"], item["version"], item["purl"]),
+            )
+            if canonical_json(owner_components) != canonical_json(nested_components):
+                raise EvidenceError(
+                    f"native-component coverage {owner} owner components differ from embedded "
+                    "SBOM components"
+                )
             owner_semantics[owner] = {
                 "owner_source": owner_record["owner_source"],
                 "native_payload_roles": sorted(
                     record["role"] for record in owner_record["native_payloads"]
                 ),
+                "components": owner_record["components"],
                 "sboms": [
                     {
                         "path": sbom["path"],
@@ -4687,8 +4712,7 @@ def verify_inventory(
     reviewed_expressions.extend(
         component["reviewed_license"]
         for owner_record in native_coverage["resolved_owners"]
-        for sbom in owner_record["sboms"]
-        for component in sbom["components"]
+        for component in owner_record["components"]
     )
     for expression in reviewed_expressions:
         required_license_texts.update(
@@ -7189,8 +7213,7 @@ def validate_source_policy_coverage(
         component["reviewed_license"]
         for platform_records in raw_native_coverage.values()
         for owner_record in platform_records
-        for sbom in owner_record["sboms"]
-        for component in sbom["components"]
+        for component in owner_record["components"]
     )
     for expression in reviewed_expressions:
         required_license_texts.update(
@@ -8728,11 +8751,10 @@ def build_bundle(
         source_policies = native_component_sources(policy)
         native_components_by_source: dict[str, set[str]] = {}
         for owner_record in native_coverage["resolved_owners"]:
-            for sbom in owner_record["sboms"]:
-                for component in sbom["components"]:
-                    native_components_by_source.setdefault(component["source"], set()).add(
-                        f"native:{component['purl']}"
-                    )
+            for component in owner_record["components"]:
+                native_components_by_source.setdefault(component["source"], set()).add(
+                    f"native:{component['purl']}"
+                )
         for source_id in sorted(native_components_by_source):
             native_source = source_policies[source_id]
             recipe = native_source["recipe"]
@@ -8953,8 +8975,7 @@ def build_bundle(
                 component["reviewed_license"],
             )
             for owner_record in native_coverage["resolved_owners"]
-            for sbom in owner_record["sboms"]
-            for component in sbom["components"]
+            for component in owner_record["components"]
         }
         if nested_components:
             notices.append("\n## Native wheel components\n\n")
