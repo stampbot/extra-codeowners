@@ -72,7 +72,10 @@ actual member bytes before parsing them. It then:
    runtime file (including the installer-generated `RECORD` and reviewed
    launcher aliases) to match one complete selected-wheel layout, and retains
    all five proof files under `artifacts/application/`
-8. retrieves hash-pinned source and license material for those top-level
+8. selects one hash-locked platform wheel for each native or SBOM owner,
+   verifies its complete archive `RECORD` against the historical installation,
+   and retains the wheel and raw SBOM bytes under `artifacts/native-wheels/`
+9. retrieves hash-pinned source and license material for those top-level
    components and produces a deterministic, explicitly incomplete review
    archive.
 
@@ -87,7 +90,7 @@ normalized path it claims. The component inventory retains that relationship in
 
 - a canonical owner such as `python:demo@1.0`
 - the exact METADATA, WHEEL, and RECORD occurrence identities
-- normalized wheel tags and `Root-Is-Purelib` state
+- the exact wheel build tag, normalized tags, and `Root-Is-Purelib` state
 - each normalized RECORD entry, its declared digest and size, and the exact
   layer occurrence it owned.
 
@@ -98,6 +101,11 @@ Active installations cannot repeat an owner or claim the same path. A later
 regular-file occurrence at any historically managed path requires a valid
 replacement RECORD introduced in that same layer, even when another layer later
 removes the replacement.
+
+Native-wheel retention is deliberately narrower: an owner must have exactly
+one historical installation. A reinstall of the same owner is rejected rather
+than guessed at, even when the versions match. Supporting that case requires an
+explicit rule for choosing and proving the redistributed installation.
 
 RECORD input is limited to 8 MiB and 100,000 rows, and the complete historical
 output is limited to 100,000 entries. Paths are canonicalized inside
@@ -163,9 +171,14 @@ x86-64 for `linux/amd64` and AArch64 for `linux/arm64`.
 
 Each structured SBOM or ELF record retains its raw layer occurrence and the
 wheel owner established by historical `RECORD` replay. Reviewed policy still
-pins the raw path, digest, size, mode, UID, and GID. These identities make the
-known native and SBOM surfaces inspectable; they do not yet add their nested
-components to notices or retain corresponding source.
+pins the raw path, digest, size, mode, UID, and GID. Bundle generation now
+selects that owner's exact platform wheel from `uv.lock`, verifies its complete
+archive `RECORD`, and matches its installed files to the historical record.
+The bundle keeps the wheel and a separately addressed copy of every raw SBOM.
+
+This proves which distribution supplied the bytes. It does not yet add the
+SBOM's nested components to notices or retain their corresponding source, so
+source completeness remains false.
 
 CI uploads the artifact even after a collection failure when any partial files
 exist. That upload is diagnostic only: the required collection step still
