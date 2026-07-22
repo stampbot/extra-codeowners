@@ -13,11 +13,13 @@ CI builds and scans separate `linux/amd64` and `linux/arm64` candidates. The rel
 CI saves a raw JSON inventory without applying VEX, including findings with no upstream fix. Narrowly reviewed OpenVEX dispositions are then applied to the blocking scan, and any remaining High or Critical finding blocks the candidate when the scanner knows of a fix. This keeps unresolved risk visible without pretending that an unavailable or inapplicable patch can be applied.
 
 The `main` container publication job has been removed, and tagged publication
-is currently disabled. Source-completeness issue #18 covers two gaps: CPython
-is not normalized into the top-level component and notice inventory; installed
-native-wheel and embedded-SBOM contents are not expanded into complete
-component, notice, and corresponding-source records. The collector separately
-replays historical wheel `RECORD` ownership across every distributed layer.
+is currently disabled. The collector now normalizes CPython into the top-level
+component inventory. It binds the runtime record to exact identity files and
+retains the pinned build recipe, source archive, and source-carried `LICENSE`
+bytes. Source-completeness issue #18 remains open because native wheel payloads
+and embedded SBOMs are not expanded into complete component, notice, and
+corresponding-source records. The collector separately replays historical wheel
+`RECORD` ownership across every distributed layer.
 
 Pull-request CI now builds a hash-pinned PEP 517 proof on both native
 architectures and installs the exact selected application wheel. Build-proof
@@ -51,9 +53,9 @@ That release must also publish a deterministic notice and source-evidence
 archive for each platform digest. The required archive contains effective and
 all-layer inventories, commit-pinned Alpine recipes, checksum-verified
 distfiles, locked Python source, license texts, and a human-readable notice. It
-must close both remaining #18 gaps, including expanding every embedded wheel
-SBOM and native payload into exact component, notice, and corresponding-source
-coverage, or use wheels rebuilt against separately inventoried system packages.
+must close the remaining #18 gap by expanding every embedded wheel SBOM and
+native payload into exact component, notice, and corresponding-source coverage,
+or use wheels rebuilt against separately inventoried system packages.
 It must also consume the hash-pinned, cross-architecture application proof
 required by issue #32 and bind the installed application to that exact wheel.
 Publication requires reviewed component policy and explicit maintainer

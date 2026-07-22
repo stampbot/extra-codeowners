@@ -34,10 +34,11 @@ the release and ad-hoc build paths, which do not yet consume this proof. No CI
 collector success overrides that release blocker.
 
 The current archive is intentionally incomplete as distribution evidence.
-Issue `#18` tracks two remaining gaps: CPython is not normalized into the
-top-level component and notice inventory, and native wheel payloads and embedded
-SBOMs are not expanded into component, notice, and corresponding-source records.
-The collector records the known surfaces and sets
+CPython is now a normalized top-level runtime component with exact identity,
+recipe, source, and license evidence. Issue `#18` remains open because native
+wheel payloads and embedded SBOMs are not expanded into complete component,
+notice, and corresponding-source records. That is the sole remaining reason
+the collector sets
 `source_completeness.complete` to `false`; it rejects distribution
 approval while that status remains false. Issue `#28` independently keeps
 every tagged publication path blocked.
@@ -63,7 +64,7 @@ actual member bytes before parsing them. It then:
    layer and requires the initial diff IDs to match the reviewed
    platform-specific Docker Official Python base
 6. compares the normalized top-level component inventory byte-for-byte with the
-   reviewed platform policy
+   reviewed platform policy, including one exact CPython runtime identity
 7. reverifies the exact selected proof, requires every application-owned
    runtime file (including the installer-generated `RECORD` and reviewed
    launcher aliases) to match one complete selected-wheel layout, and retains
@@ -103,9 +104,41 @@ occurrence identities fail collection. Every `.pyc` or `.pyo` occurrence under
 `/usr/local/lib/python3.14/` also fails.
 
 This replay establishes file attribution and executable-byte correspondence. It
-does not expand embedded native components, supply corresponding source, or
-normalize CPython into the top-level notice inventory. Source completeness
-therefore remains false.
+does not expand embedded native components or supply their corresponding
+source. Source completeness therefore remains false.
+
+### CPython runtime identity and source binding
+
+The normalized component inventory contains exactly one effective
+`runtime:cpython@3.14.6` record per platform, with package URL
+`pkg:generic/python@3.14.6`. The record binds four effective, root-owned
+filesystem identities from one reviewed base layer:
+
+- `usr/local/include/python3.14/patchlevel.h`, whose bounded constants identify
+  the exact final runtime version
+- `usr/local/bin/python3`, a mode-`0777` symbolic link whose target is exactly
+  `python3.14`
+- `usr/local/bin/python3.14`, whose ELF header must match the selected platform
+- `usr/local/lib/libpython3.14.so.1.0`, whose ELF header must match the same
+  platform.
+
+The policy binds those per-platform file occurrences to the reviewed initial
+base-layer sequence. It also ties the readable base tag to one commit-pinned
+Docker Official Python recipe. That recipe's one literal version and source
+hash must select the configured CPython archive.
+
+Bundle generation downloads that exact archive and checks its size and
+SHA-256. It requires one regular source-carried `LICENSE` member and one regular
+`Include/patchlevel.h` member with their reviewed digests. The source
+`patchlevel.h` digest must equal the version-header digest in both platform
+runtime baselines. The bounded macro parser then confirms the version and final
+release state over those source-identical bytes. The bundle retains the archive
+and license bytes alongside the recipe. The reviewed license expression remains
+a policy judgment, not a legal-compliance determination.
+
+This evidence closes the CPython normalization part of issue `#18`. It does not
+close the remaining native-wheel and embedded-SBOM component/source work, and
+it does not approve distribution.
 
 ### Structured native and SBOM identities
 
@@ -205,8 +238,11 @@ downloaded build script:
    named by wheel SBOMs or their corresponding sources.
 4. The Docker Official Python recipe is pinned by commit and file hash. Its one
    literal `PYTHON_VERSION` and `PYTHON_SHA256` declaration must select the same
-   CPython URL and hash recorded by policy. The Dockerfile must use the exact
-   reviewed base index for its builder and final runtime stages.
+   CPython URL and hash recorded by policy. The source archive's exact size and
+   source-carried `LICENSE` and `Include/patchlevel.h` members are pinned
+   separately. The source patchlevel digest must equal both platform runtime
+   header digests. The Dockerfile must use the exact reviewed base index for
+   its builder and final runtime stages.
 5. Recursive `git ls-tree -rz HEAD` and `git show` retain every tracked regular
    Git blob and its executable mode at the revision recorded in the image
    label. Mutable working-tree files and untracked files are not evidence.

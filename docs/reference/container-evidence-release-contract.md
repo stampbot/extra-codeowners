@@ -8,13 +8,13 @@ exact canonical JSON encoding, gzip and tar envelope and member order,
 `MANIFEST.json` and source-record schemas, Sigstore issuer and transparency-log
 requirements, and SBOM and provenance predicate contracts before publication.
 
-Issue [#18](https://github.com/stampbot/extra-codeowners/issues/18) must close
-two remaining source-completeness gaps before an inventory may report complete:
-
-- normalize the CPython runtime into the top-level component and notice
-  inventory
-- expand native wheel payloads and embedded software bills of materials
-  (SBOMs) into component, notice, and corresponding-source records.
+The current collector has completed the CPython tranche of
+[#18](https://github.com/stampbot/extra-codeowners/issues/18). It normalizes the
+runtime as a top-level component, binds exact identity files on both platforms,
+and retains the pinned recipe, source archive, and source-carried license.
+Before an inventory may report complete, the remaining work in that issue must
+expand native wheel payloads and embedded software bills of materials (SBOMs)
+into complete component, notice, and corresponding-source records.
 
 The current collector already replays wheel `RECORD` ownership for ineffective
 historical Python installs whose bytes remain in distributed lower layers. A
@@ -78,8 +78,8 @@ The canonical JSON predicate has exactly these fields:
 
 | Field | Type | Requirement |
 | --- | --- | --- |
-| `schema_version` | integer | Exactly `2`. |
-| `media_type` | string | Exactly `application/vnd.stampbot.container-evidence.v2+tar+gzip`. |
+| `schema_version` | integer | Exactly `3`. |
+| `media_type` | string | Exactly `application/vnd.stampbot.container-evidence.v3+tar+gzip`. |
 | `platform` | string | `linux/amd64` or `linux/arm64`; it must match the selected manifest. |
 | `subject_digest` | string | Lowercase `sha256:` digest of the published platform manifest, never a local image configuration digest. |
 | `artifact` | object | Exactly `filename` and `sha256`. |
@@ -129,22 +129,23 @@ The archive must contain at least these entry points:
 | `MANIFEST.json` | Canonical archive identity, platform subject, reviewed policy digest, complete source status, and every retained source and license record. |
 | `SHA256SUMS` | SHA-256 for every other retained member, with exact one-to-one path coverage. |
 | `THIRD_PARTY_NOTICES.md` | Human-readable observed and reviewed license expressions for every effective and lower-layer component. |
-| `inventory/components.json` | Exact normalized component, package-record, structured native-payload, structured SBOM, raw wheel-identity, historical wheel-installation, effective RECORD-ownership, and source-completeness inventory. |
+| `inventory/components.json` | Exact normalized component inventory, including the CPython runtime and its identity files, package records, structured native payloads, structured SBOMs, raw wheel identities, historical wheel installations, effective RECORD ownership, and source-completeness status. |
 | `inventory/all-layer-files.json` | Every regular, directory, non-regular, and whiteout occurrence in every distributed layer, including security metadata; regular and directory records also carry effective state. |
 | `policy/container-policy.json` | The exact reviewed policy used to accept the candidate. |
 | `artifacts/application/` | The exact selected wheel, sdist, both native build records, and cross-architecture selection record; every file is hash-bound by `MANIFEST.json`. |
 | `licenses/standard/` | Hash-pinned standard license texts required by reviewed expressions. |
 | `licenses/from-source/` | Hash-pinned notices retained from exact source archives. |
 | `sources/application/` | Exact tracked Extra CODEOWNERS source blobs and Git modes at the image revision. |
-| `sources/base/` | Commit-pinned Docker Official Python recipe, CPython source, and required license evidence. |
+| `sources/base/` | Commit-pinned Docker Official Python recipe, exact recipe-selected CPython source archive, and required license evidence. |
 | `sources/python/` | Locked top-level Python sources plus corresponding sources for every expanded native or SBOM component. |
 | `sources/alpine/` | Commit-pinned recipe subtrees and every local or downloaded source named by their verified checksums. |
 
 `MANIFEST.json` and `inventory/components.json` must both report
 `source_completeness.complete: true`. Their reason text and the complete source
-set must demonstrate closure of both remaining #18 gaps while retaining
-historical RECORD replay. Merely removing the
-current `false` value is not sufficient.
+set must demonstrate closure of the remaining native-wheel and embedded-SBOM
+gap tracked by issue #18 while retaining CPython identity/source evidence and
+historical RECORD replay. Merely removing the current `false` value is not
+sufficient.
 
 ## Collection and publication boundary
 
