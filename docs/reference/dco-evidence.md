@@ -25,9 +25,9 @@ sequenceDiagram
 
   GitHub->>Caller: Verified pull-request event
   Caller->>GitHub: Fetch pull request (before)
-  Caller->>GitHub: Compare exact base SHA to head SHA
-  loop Every compared SHA
-    Caller->>GitHub: Fetch exact commit details
+  Caller->>GitHub: List snapshot-bound PR commit nodes
+  loop Every selected PR commit node
+    Caller->>GitHub: Fetch selected commit evidence
   end
   Caller->>GitHub: Fetch pull request (after)
   Caller->>Evaluator: Event, snapshots, comparison, commit details
@@ -40,9 +40,9 @@ In order, the caller must:
 1. Parse the event snapshot from the pull request and top-level repository in
    the verified webhook payload.
 2. Fetch the current pull request and parse the `before` snapshot.
-3. Compare the exact `before.base_sha` and `before.head_sha`, with 100 commits
-   per page.
-4. Fetch each compared commit by its full SHA and parse the fields the
+3. Page through the pull request's GraphQL commit connection. Require the
+   exact repository, pull request, base, and head identity on every page.
+4. Fetch each listed `PullRequestCommit` node and project only the fields the
    evaluator consumes.
 5. Fetch the pull request again and parse the `after` snapshot.
 6. Evaluate only when the event, `before`, and `after` snapshots match exactly.
@@ -55,64 +55,59 @@ state, base and head refs, base and head SHAs, author identity, and commit
 count. A force-push, retarget, repository change, or concurrent commit makes
 the evidence stale.
 
+An eligible REST snapshot is open, so every GraphQL response for it must report
+`OPEN`. GitHub's REST pull-request state folds merged pull requests into
+`closed`; for an already-ineligible closed snapshot, the adapter accepts either
+GraphQL `CLOSED` or `MERGED`. The evaluator cannot pass either one.
+
 A network, permission, rate-limit, parsing, or validation error does not
 produce a decision. The future caller must keep the required check blocking
 and retry from a fresh snapshot.
 
-## Exact comparison
+## Snapshot-bound commit listing
 
-The client uses GitHub's [compare two commits endpoint][compare-commits], which
-GitHub documents as equivalent to `git log BASE..HEAD`. Both selectors are the
-full SHAs from the validated `before` snapshot.
+The client uses GitHub's GraphQL [`PullRequest.commits` connection][pr-commits].
+The query selects commit node IDs and OIDs; it does not ask for files, patches,
+or change statistics. A large diff therefore cannot make an unrelated DCO read
+exceed its response limit.
 
-For a same-repository head, the request is:
+Every page repeats and validates:
 
-```text
-GET /repos/BASE_OWNER/REPOSITORY/compare/BASE_SHA...HEAD_SHA
-```
+- repository database ID and `nameWithOwner`
+- pull-request number and state
+- base and head ref names and OIDs
+- base and head repository identities
+- total commit count and pagination state.
 
-For a fork in the same repository network, GitHub documents an owner-qualified
-form:
+Each node must have a unique GraphQL ID and lowercase 40-character commit OID.
+Pages contain at most 100 nodes. The complete list contains at most 250 nodes,
+matches the snapshot count exactly, and ends at the snapshot head. A missing,
+repeated, malformed, or extra node fails collection.
 
-```text
-GET /repos/BASE_OWNER/REPOSITORY/compare/BASE_OWNER:BASE_SHA...HEAD_OWNER:HEAD_SHA
-```
+Keeping the commit connection and base/head identity in the same response lets
+the client detect returned identity drift. Evidence from an observably
+different target cannot match the snapshot, and the client checks the identity
+again with each commit node.
 
-The client takes both owners from the exact base and head repository identities
-in the snapshot. It rejects distinct repositories with the same owner because
-that URL cannot identify which repository supplied each side. A missing fork,
-lost access, repository outside the network, or other API ambiguity fails; the
-client does not fall back to a mutable endpoint.
-
-GitHub returns comparison commits in chronological order. The client requests
-exactly the number of pages implied by the snapshot count and validates every
-page:
-
-- `base_commit.sha` is the exact base SHA
-- `total_commits` and `ahead_by` are strict integers equal to the snapshot
-  count
-- those three metadata values remain identical across pages
-- `commits` is an array with the exact expected page length
-- every item is an object with a unique, lowercase 40-character SHA
-- the accumulated list contains the exact snapshot count
-- the final SHA is the exact head SHA.
-
-One page may contain at most 100 commits. The complete comparison may contain
-at most 250. Counts above 250 are rejected before they can become authorization
-evidence.
-
-This exact range closes a retarget ABA gap in the pull-request commit-list
-endpoint. If a pull request changes from base A to base B and back to A while
-keeping the same head and commit count, `A...HEAD` still identifies the intended
-range. Evidence collected for `B...HEAD` carries base B and cannot be reused for
-the A snapshot.
+GitHub does not document field-level snapshot isolation within a response or
+connection consistency between pages. Exact OIDs, graph checks, and the
+before/after snapshots still fail closed when the returned identity changes,
+but the provider behavior remains a live-contract assumption. Retarget and
+force-push races must pass that contract before rollout.
 
 ## Commit details and graph checks
 
-Each full commit comes from GitHub's [get a commit endpoint][get-commit], using
-the exact SHA from the comparison. The request asks for one file entry because
-GitHub repeats commit metadata on each changed-file page; file diffs are not
-DCO evidence.
+Each detail query addresses the `PullRequestCommit` node ID returned by the
+listing. The response must repeat the same pull-request identity, node ID, and
+commit OID. This keeps fork commits anchored to the base repository's pull
+request without requesting REST commit file data.
+
+The query selects parent OIDs, raw Git author and committer identity, the commit
+message, GitHub's author user, and compact signature facts. The parser reduces
+the message to ordinary and Dependabot sign-off booleans immediately. It never
+retains the full message, raw signature, or signed payload in `CommitEvidence`.
+At most two detail requests run concurrently, and the complete pull request has
+a 16 MiB decoded-message budget.
 
 The evaluator then requires:
 
@@ -124,12 +119,12 @@ The evaluator then requires:
 Merge commits are valid. Stacked pull requests are also valid: a parent outside
 the current comparison does not need to appear.
 
-GitHub documents chronological comparison order, not a topological-order
-guarantee. Requiring parents before children is therefore an additional
-fail-closed policy. Before rollout, the live contract fixture must cover merge
-graphs and deliberately skewed commit timestamps. It must also prove that the
-base repository can fetch exact commit details for private-fork heads. Failure
-of either contract blocks rollout.
+GitHub's public GraphQL reference does not promise an order for this
+connection. The evaluator adds a fail-closed parent-before-child requirement,
+so the live contract fixture must prove that behavior before rollout. Cover
+merge graphs and deliberately skewed commit timestamps. The fixture must also
+prove that the base repository can fetch exact commit details for private-fork
+heads. Failure of either contract blocks rollout.
 
 ## Ordinary sign-offs
 
@@ -182,11 +177,10 @@ when every predicate below matches.
 | Repository | Base and head repository IDs equal the evaluated repository ID |
 | Branch and history | Head ref starts with `dependabot/`; the pull request has one commit |
 | Commit position | Commit SHA is the exact head; its only parent is the exact base |
-| GitHub author | Login `dependabot[bot]`, user ID `49699333`, type `Bot` |
-| GitHub committer | Login `web-flow`, user ID `19864447`, type `User` |
+| GitHub commit author | Login `dependabot[bot]`, user ID `49699333` |
 | Raw Git author | `dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>` |
 | Raw Git committer | `GitHub <noreply@github.com>` |
-| Signature | Verified with reason `valid`; signature, payload, and verification time are nonempty |
+| Signature | `isValid`; state `VALID`; nonempty verification time; `wasSignedByGitHub`; signer login `web-flow`, user ID `19864447` |
 | Trailer | Exact, case-sensitive line `Signed-off-by: dependabot[bot] <support@github.com>` |
 
 The fallback stays case-sensitive and does not use Unicode case folding.
@@ -201,22 +195,41 @@ only fields used by the decision.
 | Field | Limit |
 | --- | --- |
 | Compared commits, detail responses, and results | 250 |
-| One compare API page | 16 MiB after HTTP decoding |
-| One individual commit response | 8 MiB after HTTP decoding |
+| One GraphQL commit-list page | 256 KiB after HTTP decoding |
+| One GraphQL commit-detail response | 8 MiB after HTTP decoding |
+| Concurrent commit-detail responses | 2 |
+| Pull-request commit node ID | 512 UTF-8 bytes; no whitespace, control, or formatting characters |
+| Pagination cursor | 4,096 UTF-8 bytes; nonempty and never repeated while another page is required |
+| JSON container nesting | 64 levels |
 | Parents per commit | 64 |
 | Commit message | 1,000,000 UTF-8 bytes |
+| All decoded commit messages in one collection | 16 MiB |
 | Git author or committer name and email | 1,024 UTF-8 bytes per field |
 | Base or head ref | 1,024 UTF-8 bytes |
 | GitHub actor login and type | 256 and 64 UTF-8 bytes, respectively |
 | Repository full name | 512 ASCII bytes |
-| Verification reason and timestamp | 128 UTF-8 bytes per field |
-| Verification signature or payload | 2,000,000 UTF-8 bytes per field |
+| Signature state and timestamp | 128 UTF-8 bytes per field |
 
 The bounded JSON reader decodes bytes strictly as UTF-8 before parsing. It
 rejects a UTF-8 byte-order mark, UTF-16, UTF-32, duplicate object keys,
 excessive nesting, and integers beyond Python's parser limit.
 
-Commit messages and signature material may contain newlines, but not NUL.
+A pull request at the 250-commit limit requires at most 253 GraphQL calls per
+collection attempt: three commit-list pages and 250 detail queries. Only two
+detail queries run at once. Any API, rate-limit, parsing, or validation failure
+discards the attempt; the future caller must restart from a fresh snapshot and
+budget for the same worst-case call count on retry. Token exchange and the
+surrounding REST snapshot and publication reads are additional calls.
+
+GitHub can report [GraphQL primary and secondary rate limits][graphql-rate]
+with HTTP 200 and a nonempty `errors` array. The client maps those responses to
+the same bounded rate-limit error used for REST. It honors `Retry-After` first,
+then `X-RateLimit-Reset`, and defaults to 60 seconds without usable timing
+metadata. The raised error uses a fixed message instead of copying provider
+error text into logs.
+
+Commit messages may contain newlines, but not NUL. The GraphQL query omits raw
+signature and payload fields entirely.
 Repository names keep their exact case and must match
 `[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+`; `.` and `..` are invalid components. Refs,
 actor fields, and Git identities reject control and formatting characters.
@@ -249,8 +262,8 @@ not include untrusted evidence:
 
 ## Rollout boundary
 
-`GitHubClient.compare_pull_commits` and `GitHubClient.get_commit` provide the
-read-only API operations. No runtime path calls them for DCO today.
+`GitHubClient.get_pull_commit_evidence` performs the bounded commit listing and
+detail collection. No runtime path calls it for DCO today.
 
 The independent integration still must:
 
@@ -268,6 +281,6 @@ Do not replace the current DCO check or change repository rules based on this
 dormant layer. Follow [issue #40][issue-40] for the remaining implementation
 and live evidence.
 
-[compare-commits]: https://docs.github.com/en/rest/commits/commits?apiVersion=2026-03-10#compare-two-commits
-[get-commit]: https://docs.github.com/en/rest/commits/commits?apiVersion=2026-03-10#get-a-commit
+[pr-commits]: https://docs.github.com/en/graphql/reference/pulls#object-pullrequestcommitconnection
+[graphql-rate]: https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api#exceeding-the-rate-limit
 [issue-40]: https://github.com/stampbot/extra-codeowners/issues/40

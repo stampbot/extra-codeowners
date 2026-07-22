@@ -12,7 +12,6 @@ from extra_codeowners.dco import (
     MAX_COMMIT_MESSAGE_BYTES,
     MAX_COMMIT_PARENTS,
     MAX_PULL_COMMITS,
-    MAX_VERIFICATION_TEXT_BYTES,
     CommitEvidence,
     CommitVerification,
     DcoCommitOutcome,
@@ -22,6 +21,7 @@ from extra_codeowners.dco import (
     DcoFailure,
     GitCommitIdentity,
     GitHubActor,
+    GitHubUserIdentity,
     PullCommit,
     PullCommitComparison,
     PullRequestSnapshot,
@@ -68,6 +68,15 @@ def pull_snapshot(
     )
 
 
+def _message_predicates(message: str, *, name: str, email: str) -> tuple[bool, bool]:
+    lines = message.split("\n")
+    author_signoff = f"Signed-off-by: {name} <{email}>".casefold()
+    return (
+        any(line.casefold() == author_signoff for line in lines),
+        "Signed-off-by: dependabot[bot] <support@github.com>" in lines,
+    )
+
+
 def signed_commit(
     commit_sha: str,
     parents: tuple[str, ...],
@@ -75,27 +84,37 @@ def signed_commit(
     name: str = "Test Contributor",
     email: str = "contributor@example.com",
     message: str | None = None,
-    github_author: GitHubActor | None = None,
-    github_committer: GitHubActor | None = None,
+    github_author: GitHubUserIdentity | None = None,
     verification: CommitVerification | None = None,
+    committer_name: str | None = None,
+    committer_email: str | None = None,
 ) -> CommitEvidence:
+    raw_message = (
+        message if message is not None else f"test: change\n\nSigned-off-by: {name} <{email}>\n"
+    )
+    author_signoff_present, dependabot_signoff_present = _message_predicates(
+        raw_message,
+        name=name,
+        email=email,
+    )
     return CommitEvidence(
         sha=commit_sha,
         parents=parents,
         author=GitCommitIdentity(name=name, email=email),
-        committer=GitCommitIdentity(name=name, email=email),
-        message=message or f"test: change\n\nSigned-off-by: {name} <{email}>\n",
-        github_author=github_author,
-        github_committer=github_committer,
-        verification=verification
-        or CommitVerification(
-            verified=False,
-            reason="unsigned",
-            signature=None,
-            payload=None,
-            verified_at=None,
+        committer=GitCommitIdentity(
+            name=committer_name or name,
+            email=committer_email or email,
         ),
+        author_signoff_present=author_signoff_present,
+        dependabot_signoff_present=dependabot_signoff_present,
+        github_author=github_author,
+        verification=verification,
     )
+
+
+def listed(commit: CommitEvidence | str, *, suffix: str = "") -> PullCommit:
+    commit_sha = commit.sha if isinstance(commit, CommitEvidence) else commit
+    return PullCommit(sha=commit_sha, node_id=f"PRC_{commit_sha}{suffix}")
 
 
 def comparison_for(
@@ -119,6 +138,21 @@ def comparison_for(
     )
 
 
+def evidence_for_commit(
+    commit: CommitEvidence,
+    *,
+    pull: PullRequestSnapshot | None = None,
+) -> DcoEvidenceInput:
+    current = pull or pull_snapshot(head_sha=commit.sha)
+    return DcoEvidenceInput(
+        event=current,
+        before=current,
+        after=current,
+        comparison=comparison_for(current, (listed(commit),)),
+        commits=(commit,),
+    )
+
+
 def linear_evidence(count: int) -> DcoEvidenceInput:
     commits: list[CommitEvidence] = []
     parent = BASE_SHA
@@ -131,12 +165,71 @@ def linear_evidence(count: int) -> DcoEvidenceInput:
         event=pull,
         before=pull,
         after=pull,
-        comparison=comparison_for(
-            pull,
-            tuple(PullCommit(sha=commit.sha) for commit in commits),
-        ),
+        comparison=comparison_for(pull, tuple(listed(commit) for commit in commits)),
         commits=tuple(commits),
     )
+
+
+def graphql_user(identity: GitHubUserIdentity) -> dict[str, object]:
+    return {
+        "login": identity.login,
+        "databaseId": identity.id,
+        "providerField": "ignored",
+    }
+
+
+def graphql_signature(verification: CommitVerification) -> dict[str, object]:
+    return {
+        "__typename": "GpgSignature",
+        "isValid": verification.is_valid,
+        "state": verification.state,
+        "verifiedAt": verification.verified_at,
+        "wasSignedByGitHub": verification.was_signed_by_github,
+        "signer": (None if verification.signer is None else graphql_user(verification.signer)),
+    }
+
+
+def graphql_commit_payload(
+    *,
+    commit_sha: str = sha(1),
+    parents: tuple[str, ...] = (BASE_SHA,),
+    name: str = "Test Contributor",
+    email: str = "contributor@example.com",
+    committer_name: str | None = None,
+    committer_email: str | None = None,
+    message: str | None = None,
+    github_author: GitHubUserIdentity | None = None,
+    verification: CommitVerification | None = None,
+) -> dict[str, Any]:
+    return {
+        "oid": commit_sha,
+        "parents": {
+            "totalCount": len(parents),
+            "nodes": [{"oid": parent, "ignored": True} for parent in parents],
+            "pageInfo": {"hasNextPage": False, "endCursor": None},
+        },
+        "message": (
+            message if message is not None else f"test: change\n\nSigned-off-by: {name} <{email}>\n"
+        ),
+        "author": {
+            "name": name,
+            "email": email,
+            "user": None if github_author is None else graphql_user(github_author),
+            "date": "ignored",
+        },
+        "committer": {
+            "name": committer_name or name,
+            "email": committer_email or email,
+            "user": {"login": "ignored-committer", "databaseId": 999},
+            "date": "ignored",
+        },
+        "signature": None if verification is None else graphql_signature(verification),
+        "tree": {"oid": sha(999)},
+    }
+
+
+def parsed_commit(**changes: Any) -> CommitEvidence:
+    return CommitEvidence.from_graphql(graphql_commit_payload(**changes))
 
 
 @pytest.mark.parametrize("count", (1, 101, MAX_PULL_COMMITS))
@@ -161,7 +254,7 @@ def test_rejects_commit_counts_over_githubs_pull_commit_limit() -> None:
     with pytest.raises(ValidationError, match="at most 250 items"):
         rebuild(
             evidence.comparison,
-            commits=(*evidence.comparison.commits, PullCommit(sha=sha(999))),
+            commits=(*evidence.comparison.commits, listed(sha(999))),
         )
 
 
@@ -244,7 +337,7 @@ def test_rejects_a_list_whose_last_sha_is_not_the_exact_head() -> None:
             evidence,
             comparison=rebuild(
                 evidence.comparison,
-                commits=(evidence.comparison.commits[0], PullCommit(sha=sha(999))),
+                commits=(evidence.comparison.commits[0], listed(sha(999))),
             ),
         )
     )
@@ -261,10 +354,7 @@ def test_rejects_commits_not_reachable_from_the_exact_head() -> None:
         event=pull,
         before=pull,
         after=pull,
-        comparison=comparison_for(
-            pull,
-            (PullCommit(sha=first.sha), PullCommit(sha=disconnected.sha)),
-        ),
+        comparison=comparison_for(pull, (listed(first), listed(disconnected))),
         commits=(first, disconnected),
     )
 
@@ -282,7 +372,7 @@ def test_accepts_merge_commit_topology_without_requiring_a_linear_history() -> N
         after=pull,
         comparison=comparison_for(
             pull,
-            tuple(PullCommit(sha=item.sha) for item in (left, right, merge)),
+            tuple(listed(item) for item in (left, right, merge)),
         ),
         commits=(left, right, merge),
     )
@@ -320,7 +410,7 @@ def test_accepts_a_stacked_pull_request_relative_to_its_current_base() -> None:
         event=pull,
         before=pull,
         after=pull,
-        comparison=comparison_for(pull, (PullCommit(sha=child.sha),)),
+        comparison=comparison_for(pull, (listed(child),)),
         commits=(child,),
     )
 
@@ -394,7 +484,7 @@ def test_exact_compare_binding_closes_same_head_same_count_retarget_aba_for_merg
     pull = pull_snapshot(count=3, head_sha=merge.sha)
     current = comparison_for(
         pull,
-        tuple(PullCommit(sha=item.sha) for item in (left, right, merge)),
+        tuple(listed(item) for item in (left, right, merge)),
     )
     retargeted_base = sha(900)
     comparison_collected_during_retarget = rebuild(
@@ -446,10 +536,10 @@ def test_author_signoff_requires_one_case_insensitive_whole_message_line(
     message: str,
     passes: bool,
 ) -> None:
-    evidence = linear_evidence(1)
-    commit = rebuild(evidence.commits[0], message=message)
-    result = evaluate_dco(rebuild(evidence, commits=(commit,)))
+    commit = parsed_commit(message=message)
+    result = evaluate_dco(evidence_for_commit(commit))
 
+    assert commit.author_signoff_present is passes
     assert result.passed is passes
     assert result.commits[0].outcome is (
         DcoCommitOutcome.AUTHOR_SIGNOFF if passes else DcoCommitOutcome.MISSING_SIGNOFF
@@ -468,10 +558,9 @@ def test_unicode_markdown_and_shell_like_identity_text_is_compared_as_data(
     name: str,
     email: str,
 ) -> None:
-    evidence = linear_evidence(1)
-    commit = signed_commit(evidence.event.head_sha, (BASE_SHA,), name=name, email=email)
+    commit = parsed_commit(name=name, email=email)
 
-    assert evaluate_dco(rebuild(evidence, commits=(commit,))).passed is True
+    assert evaluate_dco(evidence_for_commit(commit)).passed is True
 
 
 @pytest.mark.parametrize(
@@ -489,44 +578,39 @@ def test_unicode_markdown_and_shell_like_identity_text_is_compared_as_data(
     ),
     ids=("ascii", "accented-latin", "final-sigma", "dotted-i", "sharp-s"),
 )
-def test_author_signoff_uses_deterministic_unicode_casefold(
+def test_author_signoff_parser_uses_unicode_casefold_parity(
     name: str,
     email: str,
     trailer_identity: str,
 ) -> None:
-    evidence = linear_evidence(1)
-    commit = signed_commit(
-        evidence.event.head_sha,
-        (BASE_SHA,),
+    commit = parsed_commit(
         name=name,
         email=email,
         message=f"SIGNED-OFF-BY: {trailer_identity}",
     )
 
-    assert evaluate_dco(rebuild(evidence, commits=(commit,))).passed is True
+    assert commit.author_signoff_present is True
+    assert evaluate_dco(evidence_for_commit(commit)).passed is True
 
 
-def test_author_signoff_does_not_apply_unicode_normalization() -> None:
-    evidence = linear_evidence(1)
-    commit = signed_commit(
-        evidence.event.head_sha,
-        (BASE_SHA,),
+def test_author_signoff_parser_does_not_apply_unicode_normalization() -> None:
+    commit = parsed_commit(
         name="José",
         email="jose@example.com",
         message="Signed-off-by: Jose\u0301 <JOSE@EXAMPLE.COM>",
     )
 
-    assert evaluate_dco(rebuild(evidence, commits=(commit,))).failure is DcoFailure.MISSING_SIGNOFF
+    assert commit.author_signoff_present is False
+    assert evaluate_dco(evidence_for_commit(commit)).failure is DcoFailure.MISSING_SIGNOFF
 
 
 def test_control_characters_cannot_turn_a_nonmatching_line_into_a_signoff() -> None:
-    evidence = linear_evidence(1)
-    message = "\x1b[2KSigned-off-by: Test Contributor <contributor@example.com>"
-    result = evaluate_dco(
-        rebuild(evidence, commits=(rebuild(evidence.commits[0], message=message),))
+    commit = parsed_commit(
+        message="\x1b[2KSigned-off-by: Test Contributor <contributor@example.com>"
     )
 
-    assert result.failure is DcoFailure.MISSING_SIGNOFF
+    assert commit.author_signoff_present is False
+    assert evaluate_dco(evidence_for_commit(commit)).failure is DcoFailure.MISSING_SIGNOFF
 
 
 @pytest.mark.parametrize(
@@ -535,7 +619,9 @@ def test_control_characters_cannot_turn_a_nonmatching_line_into_a_signoff() -> N
         (GitCommitIdentity, {"name": "bad\nname", "email": "a@example.com"}, "control"),
         (GitCommitIdentity, {"name": "bad<name", "email": "a@example.com"}, "must not"),
         (GitHubActor, {"login": "bad login", "id": 1, "type": "User"}, "whitespace"),
-        (PullCommit, {"sha": "A" * 40}, "lowercase"),
+        (GitHubUserIdentity, {"login": "bad login", "id": 1}, "whitespace"),
+        (PullCommit, {"sha": "A" * 40, "node_id": "PRC_1"}, "lowercase"),
+        (PullCommit, {"sha": sha(1), "node_id": "bad id"}, "whitespace"),
         (RepositoryIdentity, {"id": 1, "full_name": "owner//repo"}, "owner/repository"),
         (RepositoryIdentity, {"id": 1, "full_name": "owner/repo?query"}, "owner/repository"),
         (RepositoryIdentity, {"id": 1, "full_name": "owner/repo#fragment"}, "owner/repository"),
@@ -553,11 +639,31 @@ def test_strict_models_reject_malformed_untrusted_fields(
         model(**changes)
 
 
+def test_projected_boolean_fields_remain_strict() -> None:
+    commit_values = parsed_commit().model_dump(mode="python")
+    verification_values = CommitVerification(
+        is_valid=True,
+        state="VALID",
+        verified_at="2026-07-22T00:00:00Z",
+        was_signed_by_github=True,
+        signer=None,
+    ).model_dump(mode="python")
+
+    with pytest.raises(ValidationError, match="valid boolean"):
+        CommitEvidence.model_validate({**commit_values, "author_signoff_present": 1})
+    with pytest.raises(ValidationError, match="valid boolean"):
+        CommitEvidence.model_validate({**commit_values, "dependabot_signoff_present": "true"})
+    with pytest.raises(ValidationError, match="valid boolean"):
+        CommitVerification.model_validate({**verification_values, "is_valid": 1})
+    with pytest.raises(ValidationError, match="valid boolean"):
+        CommitVerification.model_validate({**verification_values, "was_signed_by_github": "true"})
+
+
 def test_models_reject_unknown_fields_and_mutation() -> None:
     with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
-        PullCommit.model_validate({"sha": sha(1), "message": "hidden"})
+        PullCommit.model_validate({"sha": sha(1), "node_id": "PRC_1", "message": "hidden"})
 
-    item = PullCommit(sha=sha(1))
+    item = listed(sha(1))
     with pytest.raises(ValidationError, match="frozen"):
         item.sha = sha(2)  # type: ignore[misc]
 
@@ -573,41 +679,6 @@ def test_repository_name_case_remains_exact_race_evidence() -> None:
     )
 
     assert evaluate_dco(rebuild(evidence, after=after)).failure is DcoFailure.PULL_REQUEST_CHANGED
-
-
-def test_commit_evidence_applies_message_parent_and_verification_bounds() -> None:
-    evidence = linear_evidence(1)
-    values = evidence.commits[0].model_dump(mode="python")
-
-    with pytest.raises(ValidationError, match="message exceeds"):
-        CommitEvidence.model_validate(
-            {**values, "message": "é" * (MAX_COMMIT_MESSAGE_BYTES // 2 + 1)}
-        )
-    with pytest.raises(ValidationError, match="at most 64 items"):
-        CommitEvidence.model_validate(
-            {
-                **values,
-                "parents": tuple(sha(index + 100) for index in range(MAX_COMMIT_PARENTS + 1)),
-            }
-        )
-    with pytest.raises(ValidationError, match="parents must be unique"):
-        CommitEvidence.model_validate({**values, "parents": (BASE_SHA, BASE_SHA)})
-    with pytest.raises(ValidationError, match="parent SHA"):
-        CommitEvidence.model_validate({**values, "parents": ("not-a-sha",)})
-    with pytest.raises(ValidationError, match="must not contain NUL"):
-        CommitEvidence.model_validate({**values, "message": "bad\0message"})
-
-    verification = values["verification"]
-    with pytest.raises(ValidationError, match="verification text exceeds"):
-        CommitEvidence.model_validate(
-            {
-                **values,
-                "verification": {
-                    **verification,
-                    "signature": "x" * (MAX_VERIFICATION_TEXT_BYTES + 1),
-                },
-            }
-        )
 
 
 def github_pull_payload(pull: PullRequestSnapshot) -> dict[str, Any]:
@@ -630,42 +701,23 @@ def github_pull_payload(pull: PullRequestSnapshot) -> dict[str, Any]:
     }
 
 
-def github_commit_payload(commit: CommitEvidence) -> dict[str, Any]:
-    return {
-        "sha": commit.sha,
-        "parents": [{"sha": parent, "url": "ignored"} for parent in commit.parents],
-        "author": (
-            None
-            if commit.github_author is None
-            else commit.github_author.model_dump(mode="python") | {"node_id": "ignored"}
-        ),
-        "committer": (
-            None
-            if commit.github_committer is None
-            else commit.github_committer.model_dump(mode="python") | {"node_id": "ignored"}
-        ),
-        "commit": {
-            "author": commit.author.model_dump(mode="python") | {"date": "ignored"},
-            "committer": commit.committer.model_dump(mode="python") | {"date": "ignored"},
-            "message": commit.message,
-            "verification": commit.verification.model_dump(mode="python") | {"extra": "ignored"},
-            "tree": {"sha": sha(888)},
-        },
-        "files": [{"filename": "ignored"}],
-    }
-
-
-def test_github_payload_factories_copy_only_strict_consumed_fields() -> None:
+def test_payload_factories_copy_only_strict_consumed_fields() -> None:
     evidence = linear_evidence(1)
     pull = PullRequestSnapshot.from_github(
         github_pull_payload(evidence.event), repository=REPOSITORY
     )
-    listed = PullCommit.from_github({"sha": evidence.event.head_sha, "ignored": True})
-    commit = CommitEvidence.from_github(github_commit_payload(evidence.commits[0]))
+    pull_commit = PullCommit.from_graphql(
+        {
+            "id": evidence.comparison.commits[0].node_id,
+            "commit": {"oid": evidence.event.head_sha, "message": "ignored"},
+            "ignored": True,
+        }
+    )
+    commit = CommitEvidence.from_graphql(graphql_commit_payload())
 
     assert pull == evidence.event
-    assert listed == evidence.comparison.commits[0]
-    assert commit == evidence.commits[0]
+    assert pull_commit == evidence.comparison.commits[0]
+    assert commit == parsed_commit()
 
 
 @pytest.mark.parametrize(
@@ -691,71 +743,225 @@ def test_pull_payload_factory_fails_closed_on_missing_or_malformed_shapes(
 @pytest.mark.parametrize(
     "mutate",
     (
-        lambda payload: payload.pop("commit"),
-        lambda payload: payload.__setitem__("parents", {}),
-        lambda payload: payload["parents"].__setitem__(0, "bad"),
-        lambda payload: payload["commit"].pop("verification"),
-        lambda payload: payload["commit"].__setitem__("author", None),
-        lambda payload: payload["commit"]["committer"].pop("email"),
-        lambda payload: payload.__setitem__("author", {"login": "missing fields"}),
+        lambda payload: payload.pop("id"),
+        lambda payload: payload.__setitem__("commit", None),
+        lambda payload: payload["commit"].pop("oid"),
     ),
-    ids=(
-        "missing-commit",
-        "parents-not-list",
-        "parent-not-object",
-        "missing-verification",
-        "null-author",
-        "missing-committer-email",
-        "malformed-github-actor",
-    ),
+    ids=("missing-node-id", "null-commit", "missing-oid"),
 )
-def test_commit_payload_factory_fails_closed_on_missing_or_malformed_shapes(
+def test_pull_commit_graphql_factory_fails_closed(
     mutate: Callable[[dict[str, Any]], object],
 ) -> None:
-    payload = github_commit_payload(linear_evidence(1).commits[0])
+    payload: dict[str, Any] = {"id": "PRC_1", "commit": {"oid": sha(1)}}
     mutate(payload)
 
     with pytest.raises((ValueError, ValidationError)):
-        CommitEvidence.from_github(payload)
+        PullCommit.from_graphql(payload)
+
+
+def test_graphql_commit_parser_projects_large_text_without_retaining_raw_blobs() -> None:
+    trailer = "Signed-off-by: Test Contributor <contributor@example.com>"
+    prefix_bytes = MAX_COMMIT_MESSAGE_BYTES - len(trailer.encode()) - 1
+    message = f"{'m' * prefix_bytes}\n{trailer}"
+    verification = CommitVerification(
+        is_valid=True,
+        state="VALID",
+        verified_at="2026-07-22T00:00:00Z",
+        was_signed_by_github=True,
+        signer=GitHubUserIdentity(login="web-flow", id=19_864_447),
+    )
+    payload = graphql_commit_payload(message=message, verification=verification)
+    raw_signature = "s" * 500_000
+    raw_signed_payload = "p" * 500_000
+    payload["signature"].update({"signature": raw_signature, "payload": raw_signed_payload})
+
+    commit = CommitEvidence.from_graphql(payload)
+    projected_json = commit.model_dump_json()
+
+    assert commit.author_signoff_present is True
+    assert commit.verification == verification
+    assert "message" not in type(commit).model_fields
+    assert "github_committer" not in type(commit).model_fields
+    assert "signature" not in type(commit.verification).model_fields
+    assert "payload" not in type(commit.verification).model_fields
+    assert "m" * 100 not in projected_json
+    assert "s" * 100 not in projected_json
+    assert "p" * 100 not in projected_json
+    assert len(projected_json) < 2_000
+
+
+@pytest.mark.parametrize(
+    ("message", "match"),
+    (
+        ("é" * (MAX_COMMIT_MESSAGE_BYTES // 2 + 1), "message exceeds"),
+        ("bad\0message", "must not contain NUL"),
+        (123, "must be text"),
+    ),
+    ids=("utf8-byte-limit", "nul", "not-text"),
+)
+def test_graphql_commit_parser_rejects_malformed_or_oversized_messages(
+    message: object,
+    match: str,
+) -> None:
+    payload = graphql_commit_payload()
+    payload["message"] = message
+
+    with pytest.raises(ValueError, match=match):
+        CommitEvidence.from_graphql(payload)
+
+
+@pytest.mark.parametrize("count", (0, MAX_COMMIT_PARENTS))
+def test_graphql_commit_parser_accepts_complete_bounded_parent_pages(count: int) -> None:
+    parents = tuple(sha(20_000 + index) for index in range(count))
+
+    assert parsed_commit(parents=parents).parents == parents
+
+
+@pytest.mark.parametrize(
+    ("change", "match"),
+    (
+        ({"totalCount": MAX_COMMIT_PARENTS + 1}, "count exceeds"),
+        ({"totalCount": -1}, "count exceeds"),
+        ({"totalCount": True}, "count exceeds"),
+        ({"pageInfo": {"hasNextPage": True}}, "list exceeds"),
+        ({"pageInfo": {"hasNextPage": 0}}, "list exceeds"),
+        ({"nodes": []}, "complete list"),
+        ({"nodes": "not-a-list"}, "complete list"),
+    ),
+    ids=(
+        "over-limit",
+        "negative-count",
+        "boolean-count",
+        "next-page",
+        "non-boolean-page-flag",
+        "count-mismatch",
+        "nodes-not-list",
+    ),
+)
+def test_graphql_commit_parser_rejects_incomplete_or_unbounded_parent_pages(
+    change: dict[str, object],
+    match: str,
+) -> None:
+    payload = graphql_commit_payload()
+    payload["parents"].update(change)
+
+    with pytest.raises(ValueError, match=match):
+        CommitEvidence.from_graphql(payload)
+
+
+@pytest.mark.parametrize(
+    ("parents", "match"),
+    (
+        ((BASE_SHA, BASE_SHA), "parents must be unique"),
+        (("not-a-sha",), "parent SHA"),
+    ),
+)
+def test_graphql_commit_parser_rejects_invalid_projected_parents(
+    parents: tuple[str, ...],
+    match: str,
+) -> None:
+    with pytest.raises(ValidationError, match=match):
+        parsed_commit(parents=parents)
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    (
+        lambda payload: payload.pop("oid"),
+        lambda payload: payload.__setitem__("author", None),
+        lambda payload: payload["author"].pop("email"),
+        lambda payload: payload.__setitem__("committer", None),
+        lambda payload: payload["parents"].pop("pageInfo"),
+        lambda payload: payload["parents"]["nodes"].__setitem__(0, "bad"),
+        lambda payload: payload.__setitem__("signature", "bad"),
+        lambda payload: payload["author"].__setitem__("user", {"login": "missing-id"}),
+    ),
+    ids=(
+        "missing-oid",
+        "null-author",
+        "missing-author-email",
+        "null-committer",
+        "missing-parent-page-info",
+        "parent-not-object",
+        "signature-not-object",
+        "malformed-github-author",
+    ),
+)
+def test_commit_graphql_factory_fails_closed_on_missing_or_malformed_shapes(
+    mutate: Callable[[dict[str, Any]], object],
+) -> None:
+    payload = graphql_commit_payload()
+    mutate(payload)
+
+    with pytest.raises((ValueError, ValidationError)):
+        CommitEvidence.from_graphql(payload)
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    (
+        lambda payload: payload.pop("isValid"),
+        lambda payload: payload.pop("state"),
+        lambda payload: payload.pop("wasSignedByGitHub"),
+        lambda payload: payload.__setitem__("isValid", 1),
+        lambda payload: payload.__setitem__("wasSignedByGitHub", "true"),
+        lambda payload: payload.__setitem__("signer", {"login": "missing-id"}),
+    ),
+    ids=(
+        "missing-validity",
+        "missing-state",
+        "missing-github-signature-flag",
+        "non-boolean-validity",
+        "non-boolean-github-signature-flag",
+        "malformed-signer",
+    ),
+)
+def test_signature_graphql_factory_fails_closed_on_malformed_predicates(
+    mutate: Callable[[dict[str, Any]], object],
+) -> None:
+    verification = CommitVerification(
+        is_valid=True,
+        state="VALID",
+        verified_at="2026-07-22T00:00:00Z",
+        was_signed_by_github=True,
+        signer=GitHubUserIdentity(login="web-flow", id=19_864_447),
+    )
+    payload = graphql_signature(verification)
+    mutate(payload)
+
+    with pytest.raises((ValueError, ValidationError)):
+        CommitVerification.from_graphql(payload)
 
 
 def official_dependabot_evidence() -> DcoEvidenceInput:
-    author = GitHubActor(login="dependabot[bot]", id=49_699_333, type="Bot")
-    committer = GitHubActor(login="web-flow", id=19_864_447, type="User")
-    commit = signed_commit(
-        sha(1),
-        (BASE_SHA,),
+    pull_author = GitHubActor(login="dependabot[bot]", id=49_699_333, type="Bot")
+    commit_author = GitHubUserIdentity(login="dependabot[bot]", id=49_699_333)
+    verification = CommitVerification(
+        is_valid=True,
+        state="VALID",
+        verified_at="2026-07-22T00:00:00Z",
+        was_signed_by_github=True,
+        signer=GitHubUserIdentity(login="web-flow", id=19_864_447),
+    )
+    commit = parsed_commit(
+        commit_sha=sha(1),
+        parents=(BASE_SHA,),
         name="dependabot[bot]",
         email="49699333+dependabot[bot]@users.noreply.github.com",
+        committer_name="GitHub",
+        committer_email="noreply@github.com",
         message=(
             "build(deps): bump a dependency\n\nSigned-off-by: dependabot[bot] <support@github.com>"
         ),
-        github_author=author,
-        github_committer=committer,
-        verification=CommitVerification(
-            verified=True,
-            reason="valid",
-            signature="signed",
-            payload="payload",
-            verified_at="2026-07-22T00:00:00Z",
-        ),
-    )
-    commit = rebuild(
-        commit,
-        committer=GitCommitIdentity(name="GitHub", email="noreply@github.com"),
+        github_author=commit_author,
+        verification=verification,
     )
     pull = pull_snapshot(
         head_sha=commit.sha,
-        author=author,
+        author=pull_author,
         head_ref="dependabot/pip/example-1.2.3",
     )
-    return DcoEvidenceInput(
-        event=pull,
-        before=pull,
-        after=pull,
-        comparison=comparison_for(pull, (PullCommit(sha=commit.sha),)),
-        commits=(commit,),
-    )
+    return evidence_for_commit(commit, pull=pull)
 
 
 def test_accepts_only_the_provenance_constrained_dependabot_fallback() -> None:
@@ -815,7 +1021,7 @@ def test_dependabot_branch_prefix_and_single_commit_predicates_are_required() ->
         after=two_commit_pull,
         comparison=comparison_for(
             two_commit_pull,
-            (evidence.comparison.commits[0], PullCommit(sha=second.sha)),
+            (evidence.comparison.commits[0], listed(second)),
         ),
         commits=(evidence.commits[0], second),
     )
@@ -827,19 +1033,32 @@ def test_dependabot_branch_prefix_and_single_commit_predicates_are_required() ->
     (
         ("github_author", "login", "dependabot-copy[bot]"),
         ("github_author", "id", 49_699_334),
-        ("github_author", "type", "User"),
-        ("github_committer", "login", "github-actions[bot]"),
-        ("github_committer", "id", 19_864_448),
-        ("github_committer", "type", "Bot"),
         ("author", "name", "Dependabot"),
         ("author", "email", "other@github.com"),
         ("committer", "name", "github"),
         ("committer", "email", "web-flow@users.noreply.github.com"),
-        ("verification", "verified", False),
-        ("verification", "reason", "unknown_signature_type"),
-        ("verification", "signature", ""),
-        ("verification", "payload", ""),
+        ("verification", "is_valid", False),
+        ("verification", "state", "INVALID"),
+        ("verification", "verified_at", None),
         ("verification", "verified_at", ""),
+        ("verification", "was_signed_by_github", False),
+        ("signer", "login", "github-actions[bot]"),
+        ("signer", "id", 19_864_448),
+    ),
+    ids=(
+        "github-author-login",
+        "github-author-id",
+        "raw-author-name",
+        "raw-author-email",
+        "raw-committer-name",
+        "raw-committer-email",
+        "signature-validity",
+        "signature-state",
+        "missing-verification-time",
+        "empty-verification-time",
+        "github-created-signature",
+        "signer-login",
+        "signer-id",
     ),
 )
 def test_every_dependabot_commit_identity_predicate_is_required(
@@ -849,56 +1068,105 @@ def test_every_dependabot_commit_identity_predicate_is_required(
 ) -> None:
     evidence = official_dependabot_evidence()
     commit = evidence.commits[0]
-    nested = getattr(commit, component)
-    assert nested is not None
-    changed = rebuild(nested, **{field: value})
-    commit = rebuild(commit, **{component: changed})
+    if component == "signer":
+        verification = commit.verification
+        assert verification is not None
+        assert verification.signer is not None
+        signer = rebuild(verification.signer, **{field: value})
+        changed = rebuild(verification, signer=signer)
+        commit = rebuild(commit, verification=changed)
+    else:
+        nested = getattr(commit, component)
+        assert nested is not None
+        changed = rebuild(nested, **{field: value})
+        commit = rebuild(commit, **{component: changed})
 
     assert evaluate_dco(rebuild(evidence, commits=(commit,))).failure is DcoFailure.MISSING_SIGNOFF
 
 
 @pytest.mark.parametrize(
-    "change",
+    ("field", "value"),
     (
-        {"parents": (sha(999),)},
-        {"parents": (BASE_SHA, sha(999))},
-        {"message": ("build(deps): bump\n\nsigned-off-by: dependabot[bot] <support@github.com>")},
+        ("github_author", None),
+        ("verification", None),
+        ("dependabot_signoff_present", False),
     ),
-    ids=("wrong-parent", "multiple-parents", "signoff-case"),
+    ids=("missing-github-author", "missing-signature", "missing-canonical-trailer"),
 )
-def test_dependabot_parent_and_canonical_signoff_predicates_are_required(
-    change: dict[str, object],
+def test_optional_and_projected_dependabot_predicates_are_required(
+    field: str,
+    value: object,
 ) -> None:
     evidence = official_dependabot_evidence()
-    commit = rebuild(evidence.commits[0], **change)
+    commit = rebuild(evidence.commits[0], **{field: value})
 
+    assert evaluate_dco(rebuild(evidence, commits=(commit,))).failure is DcoFailure.MISSING_SIGNOFF
+
+
+def test_dependabot_signature_requires_a_github_signer_identity() -> None:
+    evidence = official_dependabot_evidence()
+    verification = evidence.commits[0].verification
+    assert verification is not None
+    commit = rebuild(evidence.commits[0], verification=rebuild(verification, signer=None))
+
+    assert evaluate_dco(rebuild(evidence, commits=(commit,))).failure is DcoFailure.MISSING_SIGNOFF
+
+
+@pytest.mark.parametrize(
+    "parents",
+    (
+        (sha(999),),
+        (BASE_SHA, sha(999)),
+        (),
+    ),
+    ids=("wrong-parent", "multiple-parents", "missing-parent"),
+)
+def test_dependabot_parent_must_be_exactly_the_current_base(
+    parents: tuple[str, ...],
+) -> None:
+    evidence = official_dependabot_evidence()
+    commit = rebuild(evidence.commits[0], parents=parents)
+
+    assert evaluate_dco(rebuild(evidence, commits=(commit,))).failure is DcoFailure.MISSING_SIGNOFF
+
+
+def test_dependabot_signoff_projection_is_exact_case_and_whole_line() -> None:
+    evidence = official_dependabot_evidence()
+    original = evidence.commits[0]
+    commit = parsed_commit(
+        commit_sha=original.sha,
+        parents=original.parents,
+        name=original.author.name,
+        email=original.author.email,
+        committer_name=original.committer.name,
+        committer_email=original.committer.email,
+        github_author=original.github_author,
+        verification=original.verification,
+        message="signed-off-by: dependabot[bot] <support@github.com>",
+    )
+
+    assert commit.dependabot_signoff_present is False
     assert evaluate_dco(rebuild(evidence, commits=(commit,))).failure is DcoFailure.MISSING_SIGNOFF
 
 
 def test_dependabot_commit_must_be_the_exact_head() -> None:
     evidence = official_dependabot_evidence()
-    changed_list = (PullCommit(sha=sha(999)),)
+    wrong_detail = rebuild(evidence.commits[0], sha=sha(999))
 
-    result = evaluate_dco(
-        rebuild(
-            evidence,
-            comparison=rebuild(evidence.comparison, commits=changed_list),
-        )
-    )
+    result = evaluate_dco(rebuild(evidence, commits=(wrong_detail,)))
 
-    assert result.failure is DcoFailure.HEAD_MISMATCH
+    assert result.passed is False
+    assert result.failure is DcoFailure.COMMIT_ORDER_MISMATCH
 
 
 def test_an_official_dependabot_commit_can_still_use_the_ordinary_author_route() -> None:
     evidence = official_dependabot_evidence()
+    verification = evidence.commits[0].verification
+    assert verification is not None
     commit = rebuild(
         evidence.commits[0],
-        message=(
-            "build(deps): bump\n\n"
-            "Signed-off-by: dependabot[bot] "
-            "<49699333+dependabot[bot]@users.noreply.github.com>"
-        ),
-        verification=rebuild(evidence.commits[0].verification, verified=False),
+        author_signoff_present=True,
+        verification=rebuild(verification, is_valid=False),
     )
 
     result = evaluate_dco(rebuild(evidence, commits=(commit,)))

@@ -18,7 +18,6 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator, 
 MAX_PULL_COMMITS = 250
 MAX_COMMIT_PARENTS = 64
 MAX_COMMIT_MESSAGE_BYTES = 1_000_000
-MAX_VERIFICATION_TEXT_BYTES = 2_000_000
 
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 _REPOSITORY_FULL_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
@@ -29,7 +28,6 @@ _DEPENDABOT_AUTHOR_EMAIL = "49699333+dependabot[bot]@users.noreply.github.com"
 _DEPENDABOT_SIGNOFF = "Signed-off-by: dependabot[bot] <support@github.com>"
 _DEPENDABOT_COMMITTER_LOGIN = "web-flow"
 _DEPENDABOT_COMMITTER_ID = 19_864_447
-_DEPENDABOT_COMMITTER_TYPE = "User"
 _DEPENDABOT_COMMITTER_NAME = "GitHub"
 _DEPENDABOT_COMMITTER_EMAIL = "noreply@github.com"
 
@@ -143,6 +141,31 @@ class GitHubActor(StrictFrozenModel):
         )
 
 
+class GitHubUserIdentity(StrictFrozenModel):
+    """Stable fields selected for a GitHub user attached to a commit."""
+
+    login: str
+    id: StrictPositiveInt
+
+    @field_validator("login")
+    @classmethod
+    def validate_login(cls, value: str) -> str:
+        return _validate_bounded_text(
+            value,
+            field="user login",
+            max_bytes=256,
+            forbid_whitespace=True,
+        )
+
+    @classmethod
+    def from_graphql(cls, payload: Mapping[str, Any]) -> Self:
+        """Read the selected GraphQL User fields."""
+        return cls(
+            login=_required(payload, "login", "GraphQL user"),
+            id=_required(payload, "databaseId", "GraphQL user"),
+        )
+
+
 class PullRequestSnapshot(StrictFrozenModel):
     """Current pull-request identity and revisions at one observation point."""
 
@@ -230,9 +253,10 @@ class PullRequestSnapshot(StrictFrozenModel):
 
 
 class PullCommit(StrictFrozenModel):
-    """One SHA from GitHub's chronological compare response."""
+    """One SHA from GitHub's pull-request commit connection."""
 
     sha: str
+    node_id: str
 
     @field_validator("sha")
     @classmethod
@@ -241,10 +265,27 @@ class PullCommit(StrictFrozenModel):
             raise ValueError("commit SHA must be exactly 40 lowercase hexadecimal characters")
         return value
 
+    @field_validator("node_id")
     @classmethod
-    def from_github(cls, payload: Mapping[str, Any]) -> Self:
-        """Parse one commit item from a compare response."""
-        return cls(sha=_required(payload, "sha", "compared commit"))
+    def validate_node_id(cls, value: str) -> str:
+        return _validate_bounded_text(
+            value,
+            field="pull-request commit node ID",
+            max_bytes=512,
+            forbid_whitespace=True,
+        )
+
+    @classmethod
+    def from_graphql(cls, payload: Mapping[str, Any]) -> Self:
+        """Parse one selected PullRequestCommit node."""
+        commit = _mapping(
+            _required(payload, "commit", "pull-request commit node"),
+            "pull-request commit",
+        )
+        return cls(
+            sha=_required(commit, "oid", "pull-request commit"),
+            node_id=_required(payload, "id", "pull-request commit node"),
+        )
 
 
 class PullCommitComparison(StrictFrozenModel):
@@ -283,36 +324,23 @@ class GitCommitIdentity(StrictFrozenModel):
 
 
 class CommitVerification(StrictFrozenModel):
-    """GitHub's commit-signature verification fields used for Dependabot."""
+    """Small GraphQL signature predicates used for the Dependabot exception."""
 
-    verified: StrictBool
-    reason: str
-    signature: str | None
-    payload: str | None
+    is_valid: StrictBool
+    state: str
     verified_at: str | None
+    was_signed_by_github: StrictBool
+    signer: GitHubUserIdentity | None
 
-    @field_validator("reason")
+    @field_validator("state")
     @classmethod
-    def validate_reason(cls, value: str) -> str:
+    def validate_state(cls, value: str) -> str:
         return _validate_bounded_text(
             value,
-            field="verification reason",
+            field="signature state",
             max_bytes=128,
             forbid_whitespace=True,
         )
-
-    @field_validator("signature", "payload")
-    @classmethod
-    def validate_verification_text(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        if "\0" in value:
-            raise ValueError("verification text must not contain NUL")
-        if _text_bytes(value) > MAX_VERIFICATION_TEXT_BYTES:
-            raise ValueError(
-                f"verification text exceeds the {MAX_VERIFICATION_TEXT_BYTES}-byte limit"
-            )
-        return value
 
     @field_validator("verified_at")
     @classmethod
@@ -326,18 +354,39 @@ class CommitVerification(StrictFrozenModel):
             forbid_whitespace=True,
         )
 
+    @classmethod
+    def from_graphql(cls, payload: Mapping[str, Any]) -> Self:
+        """Project a GitSignature without retaining its signature or payload."""
+        raw_signer = payload.get("signer")
+        signer = (
+            None
+            if raw_signer is None
+            else GitHubUserIdentity.from_graphql(_mapping(raw_signer, "signature signer"))
+        )
+        return cls(
+            is_valid=_required(payload, "isValid", "commit signature"),
+            state=_required(payload, "state", "commit signature"),
+            verified_at=payload.get("verifiedAt"),
+            was_signed_by_github=_required(
+                payload,
+                "wasSignedByGitHub",
+                "commit signature",
+            ),
+            signer=signer,
+        )
+
 
 class CommitEvidence(StrictFrozenModel):
-    """Bounded fields from one exact individual GitHub commit response."""
+    """Bounded predicates selected from one exact GraphQL Commit object."""
 
     sha: str
     parents: tuple[str, ...] = Field(max_length=MAX_COMMIT_PARENTS)
     author: GitCommitIdentity
     committer: GitCommitIdentity
-    message: str
-    github_author: GitHubActor | None
-    github_committer: GitHubActor | None
-    verification: CommitVerification
+    author_signoff_present: StrictBool
+    dependabot_signoff_present: StrictBool
+    github_author: GitHubUserIdentity | None
+    verification: CommitVerification | None
 
     @field_validator("sha")
     @classmethod
@@ -355,65 +404,83 @@ class CommitEvidence(StrictFrozenModel):
             raise ValueError("parent SHA must be exactly 40 lowercase hexadecimal characters")
         return value
 
-    @field_validator("message")
     @classmethod
-    def validate_message(cls, value: str) -> str:
-        if "\0" in value:
-            raise ValueError("commit message must not contain NUL")
-        if _text_bytes(value) > MAX_COMMIT_MESSAGE_BYTES:
-            raise ValueError(f"commit message exceeds the {MAX_COMMIT_MESSAGE_BYTES}-byte limit")
-        return value
-
-    @classmethod
-    def from_github(cls, payload: Mapping[str, Any]) -> Self:
-        """Parse the exact fields consumed from an individual commit response."""
-        commit = _mapping(_required(payload, "commit", "commit response"), "Git commit")
-        author = _mapping(_required(commit, "author", "Git commit"), "Git commit author")
-        committer = _mapping(_required(commit, "committer", "Git commit"), "Git commit committer")
-        verification = _mapping(
-            _required(commit, "verification", "Git commit"), "commit verification"
+    def from_graphql(cls, payload: Mapping[str, Any]) -> Self:
+        """Parse selected fields and discard raw message and signature blobs."""
+        author_payload = _mapping(
+            _required(payload, "author", "GraphQL Commit"),
+            "Git commit author",
         )
-        raw_parents = _required(payload, "parents", "commit response")
-        if not isinstance(raw_parents, list):
-            raise ValueError("commit parents must be a list")
+        committer_payload = _mapping(
+            _required(payload, "committer", "GraphQL Commit"),
+            "Git commit committer",
+        )
+        author = GitCommitIdentity(
+            name=_required(author_payload, "name", "Git commit author"),
+            email=_required(author_payload, "email", "Git commit author"),
+        )
+        committer = GitCommitIdentity(
+            name=_required(committer_payload, "name", "Git commit committer"),
+            email=_required(committer_payload, "email", "Git commit committer"),
+        )
+
+        message = _required(payload, "message", "GraphQL Commit")
+        if not isinstance(message, str):
+            raise ValueError("commit message must be text")
+        if "\0" in message:
+            raise ValueError("commit message must not contain NUL")
+        if _text_bytes(message) > MAX_COMMIT_MESSAGE_BYTES:
+            raise ValueError(f"commit message exceeds the {MAX_COMMIT_MESSAGE_BYTES}-byte limit")
+        message_lines = message.split("\n")
+        expected_signoff = f"Signed-off-by: {author.name} <{author.email}>".casefold()
+
+        parents_payload = _mapping(
+            _required(payload, "parents", "GraphQL Commit"),
+            "commit parents",
+        )
+        parent_count = _required(parents_payload, "totalCount", "commit parents")
+        raw_parents = _required(parents_payload, "nodes", "commit parents")
+        page_info = _mapping(
+            _required(parents_payload, "pageInfo", "commit parents"),
+            "commit parent page info",
+        )
+        has_next_page = _required(page_info, "hasNextPage", "commit parent page info")
+        if type(parent_count) is not int or not 0 <= parent_count <= MAX_COMMIT_PARENTS:
+            raise ValueError("commit parent count exceeds the supported limit")
+        if type(has_next_page) is not bool or has_next_page:
+            raise ValueError("commit parent list exceeds the supported limit")
+        if not isinstance(raw_parents, list) or len(raw_parents) != parent_count:
+            raise ValueError("commit parents must be a complete list")
         parents = tuple(
-            _required(_mapping(parent, "commit parent"), "sha", "commit parent")
+            _required(_mapping(parent, "commit parent"), "oid", "commit parent")
             for parent in raw_parents
         )
 
-        raw_github_author = payload.get("author")
-        raw_github_committer = payload.get("committer")
+        raw_github_author = author_payload.get("user")
         github_author = (
             None
             if raw_github_author is None
-            else GitHubActor.from_github(_mapping(raw_github_author, "GitHub author"))
+            else GitHubUserIdentity.from_graphql(
+                _mapping(raw_github_author, "GitHub commit author")
+            )
         )
-        github_committer = (
+        raw_signature = payload.get("signature")
+        verification = (
             None
-            if raw_github_committer is None
-            else GitHubActor.from_github(_mapping(raw_github_committer, "GitHub committer"))
+            if raw_signature is None
+            else CommitVerification.from_graphql(_mapping(raw_signature, "commit signature"))
         )
         return cls(
-            sha=_required(payload, "sha", "commit response"),
+            sha=_required(payload, "oid", "GraphQL Commit"),
             parents=parents,
-            author=GitCommitIdentity(
-                name=_required(author, "name", "Git commit author"),
-                email=_required(author, "email", "Git commit author"),
+            author=author,
+            committer=committer,
+            author_signoff_present=any(
+                line.casefold() == expected_signoff for line in message_lines
             ),
-            committer=GitCommitIdentity(
-                name=_required(committer, "name", "Git commit committer"),
-                email=_required(committer, "email", "Git commit committer"),
-            ),
-            message=_required(commit, "message", "Git commit"),
+            dependabot_signoff_present=_DEPENDABOT_SIGNOFF in message_lines,
             github_author=github_author,
-            github_committer=github_committer,
-            verification=CommitVerification(
-                verified=_required(verification, "verified", "commit verification"),
-                reason=_required(verification, "reason", "commit verification"),
-                signature=verification.get("signature"),
-                payload=verification.get("payload"),
-                verified_at=verification.get("verified_at"),
-            ),
+            verification=verification,
         )
 
 
@@ -508,11 +575,6 @@ def _failed(
     )
 
 
-def _has_author_signoff(commit: CommitEvidence) -> bool:
-    expected = f"Signed-off-by: {commit.author.name} <{commit.author.email}>".casefold()
-    return any(line.casefold() == expected for line in commit.message.split("\n"))
-
-
 def _is_official_dependabot_pull(pull: PullRequestSnapshot) -> bool:
     return (
         pull.author.login == _DEPENDABOT_AUTHOR_LOGIN
@@ -531,19 +593,13 @@ def _is_official_dependabot_commit(
 ) -> bool:
     verification = commit.verification
     return (
-        commit.sha == pull.head_sha
+        verification is not None
+        and commit.sha == pull.head_sha
         and commit.parents == (pull.base_sha,)
         and commit.github_author
-        == GitHubActor(
+        == GitHubUserIdentity(
             login=_DEPENDABOT_AUTHOR_LOGIN,
             id=_DEPENDABOT_AUTHOR_ID,
-            type=_DEPENDABOT_AUTHOR_TYPE,
-        )
-        and commit.github_committer
-        == GitHubActor(
-            login=_DEPENDABOT_COMMITTER_LOGIN,
-            id=_DEPENDABOT_COMMITTER_ID,
-            type=_DEPENDABOT_COMMITTER_TYPE,
         )
         and commit.author
         == GitCommitIdentity(
@@ -555,15 +611,17 @@ def _is_official_dependabot_commit(
             name=_DEPENDABOT_COMMITTER_NAME,
             email=_DEPENDABOT_COMMITTER_EMAIL,
         )
-        and verification.verified is True
-        and verification.reason == "valid"
-        and verification.signature is not None
-        and len(verification.signature) > 0
-        and verification.payload is not None
-        and len(verification.payload) > 0
+        and verification.is_valid is True
+        and verification.state == "VALID"
         and verification.verified_at is not None
         and len(verification.verified_at) > 0
-        and _DEPENDABOT_SIGNOFF in commit.message.split("\n")
+        and verification.was_signed_by_github is True
+        and verification.signer
+        == GitHubUserIdentity(
+            login=_DEPENDABOT_COMMITTER_LOGIN,
+            id=_DEPENDABOT_COMMITTER_ID,
+        )
+        and commit.dependabot_signoff_present is True
     )
 
 
@@ -633,7 +691,7 @@ def evaluate_dco(evidence: DcoEvidenceInput) -> DcoEvaluationResult:
     official_dependabot_pull = _is_official_dependabot_pull(pull)
     results: list[DcoCommitResult] = []
     for commit in evidence.commits:
-        if _has_author_signoff(commit):
+        if commit.author_signoff_present:
             outcome = DcoCommitOutcome.AUTHOR_SIGNOFF
         elif official_dependabot_pull and _is_official_dependabot_commit(commit, pull):
             outcome = DcoCommitOutcome.OFFICIAL_DEPENDABOT
