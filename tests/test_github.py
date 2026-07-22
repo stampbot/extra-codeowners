@@ -11,7 +11,6 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from pydantic import ValidationError
 
-import extra_codeowners.github as github_module
 from extra_codeowners.dco import (
     MAX_PULL_COMMITS,
     GitHubActor,
@@ -1622,7 +1621,7 @@ async def test_commit_evidence_enforces_the_aggregate_message_budget(
     private_key: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(github_module, "MAX_DCO_AGGREGATE_MESSAGE_BYTES", 10)
+    monkeypatch.setattr("extra_codeowners.github.MAX_DCO_AGGREGATE_MESSAGE_BYTES", 10)
     pull = dco_pull_snapshot(count=2, head_sha=commit_sha(2))
     shas = [commit_sha(1), commit_sha(2)]
 

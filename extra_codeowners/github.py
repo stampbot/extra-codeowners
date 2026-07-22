@@ -37,7 +37,6 @@ MAX_JSON_RESPONSE_DEPTH: Final = 64
 MAX_CONFIG_BYTES: Final = 1_000_000
 MAX_CODEOWNERS_BYTES: Final = 3 * 1024 * 1024
 
-_COMMIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 _REPOSITORY_FULL_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
 _DCO_PULL_COMMITS_QUERY: Final = """\
