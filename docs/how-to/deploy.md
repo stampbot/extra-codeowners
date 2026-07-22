@@ -2,17 +2,23 @@
 
 Extra CODEOWNERS has no supported production release or hosted service. The
 `main` publication job has been removed, and tagged publication is blocked
-while three container source-completeness gaps, hash-pinned build isolation,
-and publication isolation remain incomplete. Use this guide only for a
-disposable source-built review deployment, and don't let the current check
-authorize production merges.
+while two container source-completeness gaps, handoff of the selected build
+proof, and publication isolation remain incomplete. The current Dockerfile
+requires the application proof selected from both architectures, but no
+supported release or ad-hoc path provides that proof to an operator. You cannot
+complete this guide today.
+
+The remaining sections record the runtime requirements for the future supported
+image path. Don't improvise an image input or let the current check authorize
+production merges.
 
 ## Prerequisites
 
 You need:
 
-- a reviewed Extra CODEOWNERS commit
-- Docker for a local source build
+- a supported Extra CODEOWNERS image, pinned by platform digest and built from
+  the reviewed application proof; no such image exists yet
+- the exact chart source that belongs to that image version
 - a GitHub App with the [documented permissions and events](../reference/github-permissions.md)
 - a public HTTPS origin with a valid certificate
 - PostgreSQL with hostname-verified TLS for remote connections, or an operator-controlled local proxy or Unix socket
@@ -24,104 +30,43 @@ You need:
 
 Use SQLite only for a single-process development installation. It isn't a production durable queue.
 
-## 1. Build the reviewed source
+## 1. Obtain a supported image (currently blocked)
 
 An older public `ghcr.io/stampbot/extra-codeowners:main` image may still exist.
 It predates the publication block, is unsupported, and does not have complete
 CPython, native-wheel, embedded-SBOM, or historical `RECORD` evidence. Do not
 deploy or mirror it.
 
-The current `[build-system]` dependency range is not hash-locked by `uv.lock`.
-Issue [`#32`](https://github.com/stampbot/extra-codeowners/issues/32) must pin
-the isolated PEP 517 environment and bind installation to its exact wheel. This
-source build is suitable only for disposable review; it is not reproducible
-distribution evidence.
+Pull-request CI builds a hash-pinned PEP 517 proof twice on each native
+architecture, selects one byte-identical five-file proof, and passes it to the
+Dockerfile as the read-only `verified-python` build context. The Dockerfile
+also requires the exact source revision, application-wheel SHA-256, and
+selection-record SHA-256. It fails closed when any input is absent or changed.
 
-The Dockerfile and source at that commit execute during the build, with network
-access to base-image and package registries. Build only on a disposable host or
-VM with no production credentials, cloud metadata access, mounted secrets, or
-Docker access to other workloads. Destroy the builder after recording the
-result. Build from a fresh detached worktree at one explicit full commit. Set
-`TARGET_ARCH` to the architecture of the node that will run this image. This
-procedure requires a native builder of that architecture; QEMU and `binfmt`
-emulation are outside its reviewed boundary:
+Issue [`#32`](https://github.com/stampbot/extra-codeowners/issues/32) tracks a
+bounded, authenticated way for release and ad-hoc builds to consume that
+selected proof. Until that path exists, don't replace it with a generic ZIP
+extractor, an unverified wheel, empty build arguments, or a build of the project
+from the ambient Docker context. Stop here.
 
-```bash
-set -euo pipefail
-export REPOSITORY_ROOT="$(git rev-parse --show-toplevel)"
-export SOURCE_REVISION='REPLACE_WITH_REVIEWED_40_CHARACTER_COMMIT'
-export TARGET_ARCH='amd64'
-export GIT_NO_REPLACE_OBJECTS=1
-
-case "$SOURCE_REVISION" in (*[!0-9a-f]*|'') exit 1 ;; esac
-test "${#SOURCE_REVISION}" -eq 40
-case "$TARGET_ARCH" in (amd64|arm64) ;; (*) exit 1 ;; esac
-case "$(docker info --format '{{.Architecture}}')" in
-  (amd64|x86_64) BUILDER_ARCH=amd64 ;;
-  (arm64|aarch64) BUILDER_ARCH=arm64 ;;
-  (*) exit 1 ;;
-esac
-test "$BUILDER_ARCH" = "$TARGET_ARCH"
-test "$(git -C "$REPOSITORY_ROOT" rev-parse --verify "${SOURCE_REVISION}^{commit}")" = \
-  "$SOURCE_REVISION"
-
-WORKTREE_PARENT="$(mktemp -d)"
-WORKTREE="$WORKTREE_PARENT/source"
-cleanup() {
-  git -C "$REPOSITORY_ROOT" worktree remove --force "$WORKTREE" \
-    >/dev/null 2>&1 || true
-  rm -rf -- "$WORKTREE_PARENT"
-}
-trap cleanup EXIT
-
-git -C "$REPOSITORY_ROOT" worktree add --detach "$WORKTREE" "$SOURCE_REVISION"
-test "$(git -C "$WORKTREE" rev-parse HEAD)" = "$SOURCE_REVISION"
-test -z "$(git -C "$WORKTREE" -c core.fsmonitor=false \
-  status --porcelain=v1 --untracked-files=all)"
-
-IMAGE="extra-codeowners:review-${SOURCE_REVISION}-${TARGET_ARCH}"
-docker buildx build \
-  --platform "linux/${TARGET_ARCH}" \
-  --build-arg "VCS_REF=${SOURCE_REVISION}" \
-  --build-arg VERSION=0.0.0-review \
-  --load \
-  --tag "$IMAGE" \
-  "$WORKTREE"
-
-test -z "$(git -C "$WORKTREE" -c core.fsmonitor=false \
-  status --porcelain=v1 --untracked-files=all)"
-IMAGE_CONFIG_DIGEST="$(docker image inspect --format '{{.Id}}' "$IMAGE")"
-IMAGE_SOURCE_REVISION="$(docker image inspect \
-  --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$IMAGE")"
-IMAGE_ARCHITECTURE="$(docker image inspect --format '{{.Architecture}}' "$IMAGE")"
-[[ "$IMAGE_CONFIG_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
-test "$IMAGE_SOURCE_REVISION" = "$SOURCE_REVISION"
-test "$IMAGE_ARCHITECTURE" = "$TARGET_ARCH"
-printf 'config=%s source=%s architecture=%s\n' \
-  "$IMAGE_CONFIG_DIGEST" "$IMAGE_SOURCE_REVISION" "$IMAGE_ARCHITECTURE"
-```
-
-Record the resulting local image configuration digest and source commit. A
-local build is not signed, attested, or approved for redistribution merely
-because repository workflows contain future publication steps. Load it
-directly into a disposable local cluster when possible. If your cluster needs a
-registry, use an access-restricted, non-public temporary repository. Do not
-grant anonymous pull access. Delete the deployment and every registry copy of
-the review image after testing, then verify that its digest is no longer
-pullable.
+Once issue #32 closes, this section must identify the exact supported image
+reference, platform digest, source revision, wheel digest, selection-record
+digest, signature, and provenance verification command before the deployment
+steps below become runnable.
 
 The checked-in tag-release workflow is structurally disabled before every
 publication job. Source-completeness issue
 [`#18`](https://github.com/stampbot/extra-codeowners/issues/18) and
 privilege-separation issue
 [`#28`](https://github.com/stampbot/extra-codeowners/issues/28), plus
-build-isolation issue
+build-proof issue
 [`#32`](https://github.com/stampbot/extra-codeowners/issues/32), must all be
 resolved before it can publish a versioned image. A policy approval change
 alone cannot enable it.
 
-Issue #18 covers CPython top-level normalization, native-wheel and embedded-SBOM
-component/source expansion, and historical ineffective Python `RECORD` replay.
+Issue #18 covers CPython top-level normalization plus native-wheel and
+embedded-SBOM component/source expansion. Current candidates also retain
+historical ineffective Python `RECORD` replay as attribution evidence.
 The [runtime base image decision](../explanation/runtime-base.md) records the
 selected upstream image, architecture evidence, vulnerability dispositions,
 update contract, and residual risk.
@@ -131,7 +76,7 @@ archive that satisfies the
 [container evidence release contract](../reference/container-evidence-release-contract.md).
 Image provenance and a software bill of materials do not replace that archive.
 Current pull-request CI evidence is unsigned and intended only for maintainer
-review; it explicitly reports all three source-completeness gaps.
+review; it explicitly reports both remaining source-completeness gaps.
 
 ## 2. Provision durable state
 
@@ -243,8 +188,7 @@ In a disposable repository covered by test policy, open a pull request that chan
 ## Roll back or mitigate
 
 If a rollout produces incorrect results and the operator has a previously
-recorded source-built review image that is compatible with the current
-database:
+verified supported image that is compatible with the current database:
 
 1. Stop routing new webhook traffic to the bad version.
 2. Compare the current database head with the previous artifact's required
@@ -265,7 +209,7 @@ Every Alembic head change requires the restore in step 4. An additive physical
 change does not let an old exact-head artifact use the migrated database.
 
 No project-supported previous image currently exists. If the operator has no
-previously recorded source build, or that build cannot safely use the current
+previously verified image, or that image cannot safely use the current
 database, restore native **Require review from Code Owners** on every affected
 repository. Only then remove the Extra CODEOWNERS required check. Preserve the
 database and logs for investigation.
@@ -290,7 +234,7 @@ copy.
 
 The initial Helm chart source lives at `charts/extra-codeowners`. Tagged
 publication is currently blocked by source-completeness issue `#18`,
-privilege-separation issue `#28`, and build-isolation issue `#32`; the workflow
+privilege-separation issue `#28`, and build-proof issue `#32`; the workflow
 cannot publish the items below. After all three are resolved and the evidence
 pipeline is reviewed, the intended exact semantic-version release contract is:
 

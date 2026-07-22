@@ -4311,7 +4311,7 @@
           "layer": 5,
           "mode": 420,
           "path": "opt/venv/lib/python3.14/site-packages/extra_codeowners-0.1.0.dist-info/RECORD",
-          "sha256": "61e475abaad47f1218ae660058dc38cdd08547974d17ca970638daf28ae25a6f",
+          "sha256": "c72d4098f05a345a5361c24b6f1c98996f8323e837a8f68476821d0793ccaf4c",
           "size": 2647,
           "uid": 0
         },
@@ -5459,7 +5459,7 @@
           "layer": 5,
           "mode": 420,
           "path": "opt/venv/lib/python3.14/site-packages/extra_codeowners-0.1.0.dist-info/RECORD",
-          "sha256": "61e475abaad47f1218ae660058dc38cdd08547974d17ca970638daf28ae25a6f",
+          "sha256": "c72d4098f05a345a5361c24b6f1c98996f8323e837a8f68476821d0793ccaf4c",
           "size": 2647,
           "uid": 0
         },
@@ -6787,7 +6787,7 @@
       {
         "ecosystem": "python",
         "effective": true,
-        "metadata_sha256": "0d267ed38064df1f96936490e396beb29160feb012b7a5d97df9417434ddd5a8",
+        "metadata_sha256": "33b6ac48ab54ae7e571ef39d40af9cffe27468008881afbe5f954cc640218ed2",
         "name": "extra-codeowners",
         "observed_license": "Apache-2.0",
         "version": "0.1.0"
@@ -7391,7 +7391,7 @@
       {
         "ecosystem": "python",
         "effective": true,
-        "metadata_sha256": "0d267ed38064df1f96936490e396beb29160feb012b7a5d97df9417434ddd5a8",
+        "metadata_sha256": "33b6ac48ab54ae7e571ef39d40af9cffe27468008881afbe5f954cc640218ed2",
         "name": "extra-codeowners",
         "observed_license": "Apache-2.0",
         "version": "0.1.0"
@@ -7654,5 +7654,5 @@
       "version": "3.3.4"
     }
   ],
-  "schema_version": 1
+  "schema_version": 2
 }

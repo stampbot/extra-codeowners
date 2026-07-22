@@ -21,19 +21,24 @@ Security issue
 [`#28`](https://github.com/stampbot/extra-codeowners/issues/28) tracks the
 required privilege-separated release implementation.
 
-Issue [`#32`](https://github.com/stampbot/extra-codeowners/issues/32) separately
-tracks a hash-pinned PEP 517 build environment and exact application-wheel
-installation. `uv.lock` covers runtime dependencies; it does not hash-lock the
-isolated build backend selected from `[build-system]`. No current collector
-success overrides that release blocker.
+Pull-request CI now builds the application twice on each native architecture
+with the hash-pinned PEP 517 closure, requires byte-identical architecture
+proofs, and selects one exact five-file proof. Both container candidates install
+that wheel without rebuilding it. Their stable OCI labels bind the source
+revision, wheel SHA-256, and selection-record SHA-256; run metadata separately
+binds the selected GitHub Actions artifact ID and archive digest. Run-scoped
+artifact identity never enters an image label, so a rerun does not change image
+bytes for that reason. Issue
+[`#32`](https://github.com/stampbot/extra-codeowners/issues/32) remains open for
+the release and ad-hoc build paths, which do not yet consume this proof. No CI
+collector success overrides that release blocker.
 
 The current archive is intentionally incomplete as distribution evidence.
-Issue `#18` tracks three gaps: CPython is not normalized into the top-level
-component and notice inventory; native wheel payloads and embedded SBOMs are
-not expanded into component, notice, and corresponding-source records; and
-`RECORD` ownership is not replayed for ineffective historical Python installs
-whose bytes remain in lower layers. The collector records the known surfaces
-and sets `source_completeness.complete` to `false`; it rejects distribution
+Issue `#18` tracks two remaining gaps: CPython is not normalized into the
+top-level component and notice inventory, and native wheel payloads and embedded
+SBOMs are not expanded into component, notice, and corresponding-source records.
+The collector records the known surfaces and sets
+`source_completeness.complete` to `false`; it rejects distribution
 approval while that status remains false. Issue `#28` independently keeps
 every tagged publication path blocked.
 
@@ -50,7 +55,7 @@ actual member bytes before parsing them. It then:
    effective
 3. records every regular-file, directory, non-regular, and whiteout occurrence,
    plus embedded wheel SBOMs, native Python payloads, installed wheel identity
-   files, and effective Python `RECORD` ownership
+   files, effective Python `RECORD` ownership, and historical RECORD replay
 4. rejects duplicate paths, malformed whiteouts, unsafe ancestor topology,
    conflicting authoritative metadata, and an APK architecture that does not
    match the requested platform
@@ -59,9 +64,72 @@ actual member bytes before parsing them. It then:
    platform-specific Docker Official Python base
 6. compares the normalized top-level component inventory byte-for-byte with the
    reviewed platform policy
-7. retrieves hash-pinned source and license material for those top-level
+7. reverifies the exact selected proof, requires every application-owned
+   runtime file (including the installer-generated `RECORD` and reviewed
+   launcher aliases) to match one complete selected-wheel layout, and retains
+   all five proof files under `artifacts/application/`
+8. retrieves hash-pinned source and license material for those top-level
    components and produces a deterministic, explicitly incomplete review
    archive.
+
+### Historical Python installation replay
+
+For each layer, the collector applies every whiteout before ordinary entries,
+then evaluates the completed layer snapshot. Tar member order cannot make an
+incomplete installation appear valid. Every newly introduced virtual-environment
+`RECORD` must bind regular METADATA, WHEEL, and RECORD occurrences and every
+normalized path it claims. The component inventory retains that relationship in
+`wheel_installations` with:
+
+- a canonical owner such as `python:demo@1.0`
+- the exact METADATA, WHEEL, and RECORD occurrence identities
+- normalized wheel tags and `Root-Is-Purelib` state
+- each normalized RECORD entry, its declared digest and size, and the exact
+  layer occurrence it owned.
+
+The historical list remains after a later whiteout; each retained occurrence
+still reports whether it is effective in the final filesystem. The existing
+`python_record_ownership` array is the effective-only compatibility view.
+Active installations cannot repeat an owner or claim the same path. A later
+regular-file occurrence at any historically managed path requires a valid
+replacement RECORD introduced in that same layer, even when another layer later
+removes the replacement.
+
+RECORD input is limited to 8 MiB and 100,000 rows, and the complete historical
+output is limited to 100,000 entries. Paths are canonicalized inside
+`/opt/venv`; aliases, escapes, non-regular targets, malformed CSV, and conflicting
+occurrence identities fail collection. Every `.pyc` or `.pyo` occurrence under
+`/opt/venv` fails even if a later whiteout hides it. Effective bytecode under
+`/usr/local/lib/python3.14/` also fails.
+
+This replay establishes file attribution and executable-byte correspondence. It
+does not expand embedded native components, supply corresponding source, or
+normalize CPython into the top-level notice inventory. Source completeness
+therefore remains false.
+
+### Structured native and SBOM identities
+
+Path and hash baselines show that a payload changed, but they do not say what
+the bytes contain. The collector therefore parses every embedded CycloneDX JSON
+SBOM under a wheel's `.dist-info/sboms/` directory. It accepts specification
+versions 1.4 through 1.6, flattens nested components into canonical
+type/name/version/package-URL identities, and rejects conflicting identity or
+package-URL mappings within each SBOM. Identities remain scoped to their source
+document across wheels: independent builders can describe the same display
+identity with different package-URL namespaces. The exact SBOM bytes, path,
+digest, and `RECORD` owner preserve both observations without treating either
+document as a global identity authority.
+
+The collector also identifies every ELF payload anywhere under `/opt/venv`,
+including an executable without a shared-library suffix. It requires a
+64-bit, little-endian ELF header whose machine matches the image platform:
+x86-64 for `linux/amd64` and AArch64 for `linux/arm64`.
+
+Each structured SBOM or ELF record retains its raw layer occurrence and the
+wheel owner established by historical `RECORD` replay. Reviewed policy still
+pins the raw path, digest, size, mode, UID, and GID. These identities make the
+known native and SBOM surfaces inspectable; they do not yet add their nested
+components to notices or retain corresponding source.
 
 CI uploads the artifact even after a collection failure when any partial files
 exist. That upload is diagnostic only: the required collection step still
@@ -172,7 +240,10 @@ current public-domain resolutions bind these exact records:
 The deterministic review archive normalizes member order, ownership, mode, and
 timestamps. It includes checksums, canonical manifests, raw inventories, the
 reviewed policy, retained top-level source, notices, and license material. Its
-manifest preserves the incomplete source-coverage status.
+manifest preserves the incomplete source-coverage status. Its
+`application_artifacts` record binds the source, selected wheel, selection
+record, accepted launcher form, and SHA-256 and size of every one of the five
+files retained under `artifacts/application/`.
 
 ## Required release architecture
 

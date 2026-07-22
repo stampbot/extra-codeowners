@@ -173,6 +173,10 @@ def test_ci_proves_and_selects_one_native_cross_architecture_distribution() -> N
     assert "artifact-id: ${{ steps.upload-selected.outputs.artifact-id }}" in selector
     assert "artifact-digest: ${{ steps.upload-selected.outputs.artifact-digest }}" in selector
     assert "wheel-sha256: ${{ steps.select.outputs.wheel-sha256 }}" in selector
+    assert (
+        "selection-record-sha256: ${{ steps.select.outputs.selection-record-sha256 }}" in selector
+    )
+    assert "jq -er '.selection_record_sha256'" in selector
 
     assert "needs: python-distribution" in container
     assert "if: ${{ always() }}" in container
@@ -189,6 +193,17 @@ def test_ci_proves_and_selects_one_native_cross_architecture_distribution() -> N
         )
         == 2
     )
+    assert (
+        container.count(
+            "APPLICATION_SELECTION_RECORD_SHA256=${{ "
+            "needs.python-distribution.outputs.selection-record-sha256 }}"
+        )
+        == 2
+    )
+    assert "--python-distribution-artifact-id" in container
+    assert "--python-distribution-artifact-digest" in container
+    assert "--application-selection-record-sha256" in container
+    assert "--selected-python-directory" in container
 
 
 def test_dockerfile_can_only_install_the_selected_application_wheel() -> None:
@@ -205,6 +220,7 @@ def test_dockerfile_can_only_install_the_selected_application_wheel() -> None:
     assert "--mount=from=verified-python,target=/verified-python,ro" in builder
     assert "--network=none" in builder
     assert "verify-selection" in builder
+    assert "--selection-record-sha256" in builder
     assert "uv pip install" in builder
     assert "--offline" in builder
     assert "--no-index" in builder
@@ -217,3 +233,13 @@ def test_dockerfile_can_only_install_the_selected_application_wheel() -> None:
     assert "COPY extra_codeowners/" not in test_stage
     assert "test ! -e /build/extra_codeowners" in test_stage
     assert 'Path("/opt/venv/lib/python3.14/site-packages")' in test_stage
+    assert dockerfile.count("org.stampbot.extra-codeowners.application-wheel.sha256") == 2
+    assert dockerfile.count("org.stampbot.extra-codeowners.python-selection-record.sha256") == 2
+    assert "ARTIFACT_ID" not in dockerfile
+    assert "RUN_ATTEMPT" not in dockerfile
+    assert "VCS_REF" not in dockerfile
+
+
+def test_workflows_do_not_pass_the_removed_vcs_ref_build_argument() -> None:
+    workflows = "\n".join(path.read_text() for path in Path(".github/workflows").glob("*.yml"))
+    assert "VCS_REF" not in workflows

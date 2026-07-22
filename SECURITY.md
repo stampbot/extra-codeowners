@@ -13,18 +13,17 @@ CI builds and scans separate `linux/amd64` and `linux/arm64` candidates. The rel
 CI saves a raw JSON inventory without applying VEX, including findings with no upstream fix. Narrowly reviewed OpenVEX dispositions are then applied to the blocking scan, and any remaining High or Critical finding blocks the candidate when the scanner knows of a fix. This keeps unresolved risk visible without pretending that an unavailable or inapplicable patch can be applied.
 
 The `main` container publication job has been removed, and tagged publication
-is currently disabled. Source-completeness issue #18 covers three gaps: CPython
+is currently disabled. Source-completeness issue #18 covers two gaps: CPython
 is not normalized into the top-level component and notice inventory; installed
 native-wheel and embedded-SBOM contents are not expanded into complete
-component, notice, and corresponding-source records; and `RECORD` ownership is
-not replayed for ineffective historical Python installs retained in lower
-layers.
+component, notice, and corresponding-source records. The collector separately
+replays historical wheel `RECORD` ownership across every distributed layer.
 
-Build-isolation issue
-[`#32`](https://github.com/stampbot/extra-codeowners/issues/32) separately tracks
-a hash-pinned PEP 517 backend and installation of the exact resulting
-application wheel. The current `[build-system]` range is not hash-locked by
-`uv.lock`; a successful candidate scan does not close that supply-chain gap.
+Pull-request CI now builds a hash-pinned PEP 517 proof on both native
+architectures and installs the exact selected application wheel. Build-proof
+issue [`#32`](https://github.com/stampbot/extra-codeowners/issues/32) remains
+open because the release and ad-hoc build paths do not yet consume that selected
+proof. A successful candidate scan does not close that supply-chain gap.
 
 The release workflow unconditionally
 fails after validating its readiness milestone and before any job with image,
@@ -52,11 +51,11 @@ That release must also publish a deterministic notice and source-evidence
 archive for each platform digest. The required archive contains effective and
 all-layer inventories, commit-pinned Alpine recipes, checksum-verified
 distfiles, locked Python source, license texts, and a human-readable notice. It
-must close all three #18 gaps, including expanding every embedded wheel SBOM
-and native payload into exact component, notice, and corresponding-source
+must close both remaining #18 gaps, including expanding every embedded wheel
+SBOM and native payload into exact component, notice, and corresponding-source
 coverage, or use wheels rebuilt against separately inventoried system packages.
-It must also build in the hash-pinned environment required by issue #32 and
-bind the installed application to that exact wheel.
+It must also consume the hash-pinned, cross-architecture application proof
+required by issue #32 and bind the installed application to that exact wheel.
 Publication requires reviewed component policy and explicit maintainer
 distribution approval after the collector is split into rootless, network-free
 parsing and separately privileged fetch and publication phases. The current CI

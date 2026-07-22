@@ -9,12 +9,14 @@ understood. It does **not** approve distribution or make the evidence complete.
 There is no supported Extra CODEOWNERS container release. The `main`
 publication job has been removed, and the tag workflow stops before every job
 with package-write, signing, attestation, or release authority. Issue
-[#18](https://github.com/stampbot/extra-codeowners/issues/18) tracks three
+[#18](https://github.com/stampbot/extra-codeowners/issues/18) tracks two
 source-completeness gaps. Issue
 [#28](https://github.com/stampbot/extra-codeowners/issues/28) tracks the
-privilege-separated release pipeline and recipient verifier. Issue
-[#32](https://github.com/stampbot/extra-codeowners/issues/32) tracks the
-hash-pinned PEP 517 environment and exact application-wheel installation.
+privilege-separated release pipeline and recipient verifier. Pull-request CI
+already binds its hash-pinned PEP 517 proof and exact installed application
+wheel into both platform artifacts. Issue
+[#32](https://github.com/stampbot/extra-codeowners/issues/32) remains open for
+release and ad-hoc build consumption of that selected proof.
 
 ## Prerequisites and trust boundary
 
@@ -255,14 +257,16 @@ existing directory chains for every input root and the extraction parent. They
 then create the extraction root as a private directory owned by the current
 user.
 
-The first default-branch integration of this envelope contract is a one-time
-bootstrap exception because no earlier trusted helper exists. For this
-repository, that integration is pull request #19, incorporating the work from
-pull request #27. Before executing the candidate helper, the maintainer must
-freeze its exact bytes, run the hostile corpus and provider-envelope probe, and
-record the reviewed commit or file digest. After that integration merges,
-future reviews must use a previously reviewed default-branch commit, never the
-pull request's copy.
+An intentional schema or provider-envelope migration may have no earlier
+default-branch helper that can parse the new format. In that case, stop before
+opening an artifact. Review the candidate helper, workflow, bounds, and hostile
+corpus as security-sensitive code in a separate no-secret VM. Run its complete
+adversarial test suite, freeze the reviewed commit and helper bytes, and record
+that identity in the review ticket. Only then may that frozen candidate become
+`TRUSTED_ROOT` for its own one-time integration review. After the change merges,
+future reviews must return to a previously reviewed default-branch helper. If
+you cannot establish that bootstrap trust, do not review or merge the evidence
+change.
 
 ```bash
 set -euo pipefail
@@ -442,6 +446,40 @@ RUN_ATTEMPT="$(jq -er '.run_attempt' "$INCOMING/run.json")"
 MERGE_SHA="$(jq -er '[.[].identity.merge] | unique | if length == 1 then .[0] else error end' \
   "$INCOMING/selected-artifacts.json")"
 EXPECTED_WORKFLOW_REF="stampbot/extra-codeowners/.github/workflows/ci.yml@refs/pull/${PR_NUMBER}/merge"
+PYTHON_ARTIFACT_NAME="python-distributions-selected-${MERGE_SHA}-attempt-${RUN_ATTEMPT}"
+PYTHON_ARTIFACT="$REVIEW_PARENT/selected-python-artifact.json"
+jq -e \
+  --arg name "$PYTHON_ARTIFACT_NAME" \
+  --arg head "$PR_HEAD_SHA" \
+  --argjson run "$RUN_ID" \
+  --argjson repository "$REPOSITORY_ID" \
+  --argjson head_repository "$PR_HEAD_REPOSITORY_ID" '
+    [
+      .artifacts[]
+      | select(
+          .name == $name
+          and .expired == false
+          and (.id | type) == "number"
+          and .id > 0
+          and (.size_in_bytes | type) == "number"
+          and .size_in_bytes > 0
+          and (.digest | type) == "string"
+          and (.digest | test("^sha256:[0-9a-f]{64}$"))
+          and .workflow_run.id == $run
+          and .workflow_run.repository_id == $repository
+          and .workflow_run.head_repository_id == $head_repository
+          and .workflow_run.head_sha == $head
+        )
+    ]
+    | if length == 1
+      then .[0]
+      else error("selected Python artifact mismatch")
+      end
+  ' "$INCOMING/artifacts.json" > "$PYTHON_ARTIFACT"
+PYTHON_ARTIFACT_ID="$(jq -er '.id | tostring' "$PYTHON_ARTIFACT")"
+PYTHON_ARTIFACT_DIGEST="$(jq -er \
+  '.digest | capture("^sha256:(?<value>[0-9a-f]{64})$").value' \
+  "$PYTHON_ARTIFACT")"
 
 jq -e \
   --argjson number "$PR_NUMBER" \
@@ -488,6 +526,8 @@ for architecture in amd64 arm64; do
     --arg head_repository "$PR_HEAD_REPOSITORY_ID" \
     --arg merge "$MERGE_SHA" \
     --arg workflow_ref "$EXPECTED_WORKFLOW_REF" \
+    --arg python_artifact_id "$PYTHON_ARTIFACT_ID" \
+    --arg python_artifact_digest "$PYTHON_ARTIFACT_DIGEST" \
     --arg architecture "$architecture" '
       .run_id == $run
       and .run_attempt == $attempt
@@ -501,14 +541,23 @@ for architecture in amd64 arm64; do
       and .checkout_sha == $merge
       and .workflow_ref == $workflow_ref
       and (.workflow_sha | test("^[0-9a-f]{40}$"))
+      and .python_distribution_artifact_id == $python_artifact_id
+      and .python_distribution_artifact_digest == $python_artifact_digest
+      and .application_source_revision == $merge
+      and (.application_wheel_sha256 | test("^[0-9a-f]{64}$"))
+      and (.application_selection_record_sha256 | test("^[0-9a-f]{64}$"))
       and .platform == ("linux/" + $architecture)
       and .architecture == $architecture
     ' "$metadata" >/dev/null
 done
 ```
 
-The helper also requires the image revision, inventory subject, and local image
-configuration digest to match each metadata record. Current GitHub REST run and
+The helper also requires the image revision, selected-wheel and selection-record
+labels, inventory subject, and local image configuration digest to match each
+metadata record. It requires both platforms to share the source, wheel,
+selection, selected-artifact ID, and selected-artifact digest. The selected
+artifact's REST digest includes a `sha256:` prefix; the upload action output
+recorded by the workflow is the 64-character value. Current GitHub REST run and
 artifact responses do not independently expose `github.workflow_sha`; record
 and compare it across platforms, but do not describe that field alone as a
 signature or external provenance statement.
@@ -526,7 +575,7 @@ to the same read-only checkout of the exact synthetic merge commit used above:
 
 ```bash
 test "$POLICY" = "$REVIEWED_INPUTS/container-policy.json"
-PR_BASE_SHA="$(jq -er '.pull_requests[0].base.sha' "$INCOMING/run.json")"
+PR_BASE_SHA="$(jq -er '.base.sha' "$INCOMING/pr.json")"
 
 DIFF_ROOT="$REVIEW_PARENT/policy-diff"
 test ! -e "$DIFF_ROOT"
@@ -558,12 +607,31 @@ for architecture in amd64 arm64; do
       --arg platform "$platform" --arg category "$category" \
       '.unexpanded_python_payloads[$platform][$category]' "$POLICY" \
       > "$DIFF_ROOT/${architecture}-expected-${category}.json"
-    jq -e --ascii-output --sort-keys --arg category "$category" \
-      '.[$category]' "$inventory" \
+    jq -e --ascii-output --sort-keys --arg category "$category" '
+        if $category == "wheel_identity_files"
+        then .[$category]
+        else [.[$category][] | {
+          effective, layer, path, sha256, size, mode, uid, gid
+        }]
+        end
+      ' "$inventory" \
       > "$DIFF_ROOT/${architecture}-observed-${category}.json"
     diff --unified "$DIFF_ROOT/${architecture}-expected-${category}.json" \
       "$DIFF_ROOT/${architecture}-observed-${category}.json"
   done
+
+  jq -e --ascii-output --sort-keys '
+      {
+        embedded_sboms: [
+          .embedded_sboms[] | {owner, path, cyclonedx}
+        ],
+        native_payloads: [
+          .native_payloads[] | {owner, path, elf}
+        ]
+      }
+    ' "$inventory" > "$DIFF_ROOT/${architecture}-structured-wheel-payloads.json"
+  LC_ALL=C sed -n 'l' \
+    "$DIFF_ROOT/${architecture}-structured-wheel-payloads.json"
 
   jq -e --ascii-output --sort-keys --arg platform "$platform" \
     '.filesystem_baselines[$platform].apk_database_occurrences' "$POLICY" \
@@ -605,22 +673,28 @@ done
 
 No diff output means the exact ordered base diff IDs, top-level components,
 known wheel surfaces, APK database history, and canonical post-base directory
-effects and removals match reviewed policy. The projection validates all raw
-headers but omits only exporter-specific directory re-emissions and whiteout
-marker attributes that do not change filesystem state. Raw records and layer
-digests remain in `all-layer-files.json` for review. No diff does not mean the
-policy is correct. The manual diff does not independently re-run the post-base
-regular-file or link provenance gates, application source binding, or exact
-source-policy coverage; those still depend on the independently reviewed CI
-collector, workflow, and exact successful job. For every change, establish
-the upstream identity, why the bytes are distributed, their effective or
-lower-layer status, applicable notices, and corresponding source.
+effects and removals match reviewed policy. Review the printed structured wheel
+payloads as well. Each embedded SBOM and native payload must name the expected
+wheel owner, and its CycloneDX or ELF identity must agree with the upstream
+component and selected architecture.
+
+The filesystem projection validates all raw headers but omits only
+exporter-specific directory re-emissions and whiteout marker attributes that do
+not change filesystem state. Raw records and layer digests remain in
+`all-layer-files.json` for review. No diff does not mean the policy is correct.
+The manual diff does not independently re-run the post-base regular-file or
+link provenance gates, application source binding, or exact source-policy
+coverage; those still depend on the independently reviewed CI collector,
+workflow, and exact successful job. For every change, establish the upstream
+identity, why the bytes are distributed, their effective or lower-layer
+status, applicable notices, and corresponding source.
 
 Review source policy with these precise boundaries:
 
 - `uv.lock` supplies immutable top-level Python source URLs, sizes, and hashes;
-  wheel-only or lower-layer packages need exact fallback records, and the
-  isolated build backend remains outside that lock until issue #32 closes
+  wheel-only or lower-layer packages need exact fallback records; pull-request
+  CI separately hash-pins and retains its isolated-build proof, while issue #32
+  remains open for release and ad-hoc consumers of that proof
 - Alpine policy pins every `ORIGIN@APORTS_COMMIT`, recipe-subtree hash, verified
   `sha512sums` input, and any narrow parser exception; never execute an
   `APKBUILD`
@@ -640,27 +714,34 @@ inventories, collector change, and workflow logs; keep release publication
 blocked until issue #28 supplies the tested tar verifier and runnable recipient
 procedure.
 
-## 5. Confirm all three source-completeness gaps remain explicit
+## 5. Confirm both remaining source-completeness gaps remain explicit
 
 Both component inventories must contain exactly:
 
 ```json
 {
   "complete": false,
-  "reason": "CPython runtime normalization into the top-level component and notice inventory, native wheel payload and embedded-SBOM component/source expansion, plus RECORD replay for ineffective historical Python installs, remain open in issue #18; public distribution remains blocked pending issue #28."
+  "reason": "CPython runtime normalization into the top-level component and notice inventory, native wheel payload and embedded-SBOM component/source expansion remain open in issue #18; public distribution remains blocked pending issue #28."
 }
 ```
 
-Do not weaken or remove that state. Issue #18 must close all three gaps:
+Do not weaken or remove that state. Issue #18 must close both remaining gaps:
 
 1. normalize CPython into the top-level component and notice inventory
 2. expand native wheel payloads and embedded SBOMs into components, notices,
-   and corresponding sources
-3. replay `RECORD` ownership for ineffective historical Python installs whose
-   bytes remain in distributed lower layers.
+   and corresponding sources.
+
+The trusted helper has already validated `wheel_installations` against
+the all-layer file inventory. It requires every historical installation to bind
+its canonical owner, METADATA, WHEEL, RECORD, tags, purelib state, and normalized
+owned occurrences. It also preserves the effective-only
+`python_record_ownership` projection. Do not treat that attribution evidence as
+component expansion or corresponding-source delivery.
 
 Current path/hash baselines make those incomplete surfaces visible; they do
-not satisfy source delivery.
+not satisfy source delivery. The separate raw `wheel_identity_files` inventory
+also retains base-image WHEEL and RECORD occurrences outside `/opt/venv`; those
+records have no runtime virtual-environment installation to replay.
 
 ## 6. Run the repository gates
 
@@ -752,7 +833,7 @@ Keep `distribution_approval.approved` set to `false`. The current executable
 schema requires source completeness to remain false and rejects an attempt to
 require distribution approval. The tag workflow independently stops before
 privileged jobs, there is no `main` publication job to enable, and issue #32's
-hash-pinned build boundary remains a separate requirement.
+release and ad-hoc selected-proof handoff remains a separate requirement.
 
 A future supported release must satisfy the
 [container evidence release contract](../reference/container-evidence-release-contract.md),
