@@ -628,7 +628,7 @@ jobs:
             image=moby/buildkit:v0.30.0@sha256:0168606be2315b7c807a03b3d8aa79beefdb31c98740cebdffdfeebf31190c9f
 
       - name: Build container test target
-        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           build-contexts: |
             verified-python=${{ steps.python-distribution.outputs.download-path }}
@@ -654,7 +654,7 @@ jobs:
           extra-codeowners:test-${{ matrix.architecture }}
 
       - name: Build container without publishing
-        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           build-contexts: |
             verified-python=${{ steps.python-distribution.outputs.download-path }}
