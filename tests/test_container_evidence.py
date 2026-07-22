@@ -41,6 +41,7 @@ PYVENV_CONFIG = (
     b"include-system-site-packages = false\n"
     b"prompt = extra-codeowners\n"
 )
+CPYTHON_PATCHLEVEL_SHA256 = "1c61b149e1ce72a7f6328c58057970d37fcafb02bec805be071dc0ed4cf39a95"
 VENV_LINKS = {
     "opt/venv/bin/python": "/usr/local/bin/python3",
     "opt/venv/bin/python3": "python",
@@ -241,6 +242,14 @@ def with_cpython_runtime(layer: bytes, architecture: str) -> bytes:
             member.uid = 0
             member.gid = 0
             archive.addfile(member, io.BytesIO(content))
+        if evidence.CPYTHON_INTERPRETER_LINK not in existing:
+            link = tarfile.TarInfo(evidence.CPYTHON_INTERPRETER_LINK)
+            link.type = tarfile.SYMTYPE
+            link.linkname = evidence.CPYTHON_INTERPRETER_LINK_TARGET
+            link.mode = 0o777
+            link.uid = 0
+            link.gid = 0
+            archive.addfile(link)
     return output.getvalue()
 
 
@@ -295,10 +304,23 @@ def synthetic_runtime_component(platform: str = "linux/amd64") -> dict[str, Any]
         "observed_license": "",
         "effective": True,
         "identity_files": {
-            "version_header": occurrence(evidence.CPYTHON_VERSION_HEADER, "1", 512, 0o644),
+            "version_header": {
+                **occurrence(evidence.CPYTHON_VERSION_HEADER, "1", 512, 0o644),
+                "sha256": CPYTHON_PATCHLEVEL_SHA256,
+            },
             "interpreter": {
                 **occurrence(evidence.CPYTHON_INTERPRETER, "2", 64, 0o755),
                 "elf": copy.deepcopy(elf),
+            },
+            "interpreter_link": {
+                "effective": True,
+                "kind": "symlink",
+                "layer": 0,
+                "path": evidence.CPYTHON_INTERPRETER_LINK,
+                "target": evidence.CPYTHON_INTERPRETER_LINK_TARGET,
+                "mode": 0o777,
+                "uid": 0,
+                "gid": 0,
             },
             "shared_library": {
                 **occurrence(evidence.CPYTHON_SHARED_LIBRARY, "3", 64, 0o755),
@@ -363,16 +385,16 @@ def standalone_policy(
             "rationale": "Reviewed test fixture.",
         },
         "runtime:cpython@3.14.6": {
-            "expression": "Python-2.0",
+            "expression": "Python-2.0.1",
             "rationale": "Reviewed synthetic CPython fixture.",
         },
     }
     policy["license_texts"] = [
         *license_texts,
         {
-            "id": "Python-2.0",
+            "id": "Python-2.0.1",
             "sha256": "9" * 64,
-            "url": "https://example.com/Python-2.0.txt",
+            "url": "https://example.com/Python-2.0.1.txt",
         },
     ]
     policy["custom_license_evidence"] = {}
@@ -665,6 +687,12 @@ def test_schema_version_requires_exact_v3_integer_and_media_type() -> None:
 
 def test_cpython_patchlevel_parser_requires_one_exact_final_version() -> None:
     assert evidence.parse_cpython_patchlevel_header(cpython_patchlevel_header()) == "3.14.6"
+    guarded_header = (
+        b"#ifndef _Py_PATCHLEVEL_H\n#define _Py_PATCHLEVEL_H\n"
+        + cpython_patchlevel_header()
+        + b"#endif //_Py_PATCHLEVEL_H\n"
+    )
+    assert evidence.parse_cpython_patchlevel_header(guarded_header) == "3.14.6"
 
     mutations = (
         (
@@ -686,6 +714,20 @@ def test_cpython_patchlevel_parser_requires_one_exact_final_version() -> None:
             cpython_patchlevel_header().replace(b"3.14.6", b"3.14.6\x00"),
             "invalid control bytes",
         ),
+        (
+            cpython_patchlevel_header()
+            .replace(b"/*--start constants--*/", b"/*--start constants--*/\n#if 0")
+            .replace(b"/*--end constants--*/", b"#endif\n/*--end constants--*/"),
+            "constants are conditional",
+        ),
+        (
+            b"#if 0\n" + cpython_patchlevel_header() + b"#endif\n",
+            "constants are conditional",
+        ),
+        (
+            cpython_patchlevel_header() + b"#undef PY_VERSION\n",
+            "undefines a version constant",
+        ),
     )
     for content, message in mutations:
         with pytest.raises(evidence.EvidenceError, match=message):
@@ -699,6 +741,7 @@ def test_cpython_runtime_component_rejects_mutated_identity_fields() -> None:
         "mode": "invalid CPython shared_library identity",
         "layer": "span multiple layers",
         "architecture": "ELF architecture mismatch",
+        "link_target": "invalid CPython interpreter_link identity",
     }
     for mutation, message in mutations.items():
         component = synthetic_runtime_component()
@@ -711,13 +754,15 @@ def test_cpython_runtime_component_rejects_mutated_identity_fields() -> None:
             identities["shared_library"]["mode"] = 0o644
         elif mutation == "layer":
             identities["shared_library"]["layer"] = 1
-        else:
+        elif mutation == "architecture":
             identities["interpreter"]["elf"] = {
                 "bits": 64,
                 "endianness": "little",
                 "machine": "aarch64",
                 "machine_id": 183,
             }
+        else:
+            identities["interpreter_link"]["target"] = "python3.13"
         with pytest.raises(evidence.EvidenceError, match=message):
             evidence.validate_platform_component_invariants(
                 [component], "linux/amd64", "test inventory"
@@ -774,6 +819,18 @@ def test_saved_image_rejects_untrusted_cpython_runtime_identity(
         evidence._inventory_saved_image(image, "linux/amd64", "sha256:" + "a" * 64)
 
 
+def test_saved_image_rejects_untrusted_cpython_interpreter_link(tmp_path: Path) -> None:
+    image = tmp_path / "image.tar"
+    layer = tar_bytes(
+        {"lib/apk/db/installed": apk_database()},
+        links={evidence.CPYTHON_INTERPRETER_LINK: "python3.13"},
+    )
+    saved_image_layers(image, [layer])
+
+    with pytest.raises(evidence.EvidenceError, match="interpreter link has an invalid identity"):
+        evidence._inventory_saved_image(image, "linux/amd64", "sha256:" + "a" * 64)
+
+
 def test_saved_image_inventory_tracks_whiteouts_and_all_layers(tmp_path: Path) -> None:
     image = tmp_path / "image.tar"
     saved_image(image)
@@ -817,6 +874,16 @@ def test_saved_image_inventory_tracks_whiteouts_and_all_layers(tmp_path: Path) -
                     "machine": "x86_64",
                     "machine_id": 62,
                 },
+            },
+            "interpreter_link": {
+                "effective": True,
+                "kind": "symlink",
+                "layer": 0,
+                "path": evidence.CPYTHON_INTERPRETER_LINK,
+                "target": evidence.CPYTHON_INTERPRETER_LINK_TARGET,
+                "mode": 0o777,
+                "uid": 0,
+                "gid": 0,
             },
             "shared_library": {
                 "effective": True,
@@ -868,6 +935,82 @@ def test_all_layer_inventory_binds_cpython_component_to_exact_file_occurrences(
     interpreter["sha256"] = "0" * 64
     with pytest.raises(evidence.EvidenceError, match="not one exact all-layer"):
         evidence.validate_all_layer_inventory(mutated_files, inventory)
+
+    mutated_link = copy.deepcopy(files)
+    interpreter_link = next(
+        record
+        for record in mutated_link["non_regular_files"]
+        if record["path"] == evidence.CPYTHON_INTERPRETER_LINK
+    )
+    interpreter_link["target"] = "python3.13"
+    with pytest.raises(evidence.EvidenceError, match="interpreter link"):
+        evidence.validate_all_layer_inventory(mutated_link, inventory)
+
+
+@pytest.mark.parametrize("replacement", ["opaque", "regular", "symlink"])
+def test_all_layer_inventory_rejects_later_ancestor_replacement(
+    tmp_path: Path, replacement: str
+) -> None:
+    image = tmp_path / "image.tar"
+    saved_image(image)
+    inventory, files = evidence._inventory_saved_image(image, "linux/amd64", "sha256:" + "a" * 64)
+    mutated = copy.deepcopy(files)
+    layer_index = len(mutated["layers"])
+    digest_character = {"opaque": "c", "regular": "d", "symlink": "e"}[replacement]
+    layer_digest = "sha256:" + digest_character * 64
+    mutated["layers"].append(
+        {
+            "digest": layer_digest,
+            "index": layer_index,
+            "regular_file_count": int(replacement == "regular"),
+            "directory_count": 0,
+            "non_regular_file_count": int(replacement == "symlink"),
+            "whiteout_count": int(replacement == "opaque"),
+        }
+    )
+    if replacement == "opaque":
+        mutated["whiteouts"].append(
+            {
+                "kind": "opaque",
+                "layer": layer_index,
+                "layer_digest": layer_digest,
+                "path": "usr/local/bin/.wh..wh..opq",
+                "target": "usr/local/bin",
+                "mode": 0,
+                "uid": 0,
+                "gid": 0,
+            }
+        )
+    elif replacement == "regular":
+        mutated["regular_files"].append(
+            {
+                "effective": True,
+                "layer": layer_index,
+                "layer_digest": layer_digest,
+                "path": "usr/local/bin",
+                "sha256": "0" * 64,
+                "size": 0,
+                "mode": 0o755,
+                "uid": 0,
+                "gid": 0,
+            }
+        )
+    else:
+        mutated["non_regular_files"].append(
+            {
+                "kind": "symlink",
+                "layer": layer_index,
+                "layer_digest": layer_digest,
+                "path": "usr/local/bin",
+                "target": "elsewhere",
+                "mode": 0o777,
+                "uid": 0,
+                "gid": 0,
+            }
+        )
+
+    with pytest.raises(evidence.EvidenceError, match=r"CPython .* all-layer|interpreter link"):
+        evidence.validate_all_layer_inventory(mutated, inventory)
 
 
 def test_all_layer_validators_reject_cross_kind_path_duplicates(tmp_path: Path) -> None:
@@ -1689,10 +1832,13 @@ def test_cpython_source_is_bound_to_official_recipe_version_and_hash() -> None:
 
 def test_cpython_source_archive_binds_exact_archive_and_license_bytes() -> None:
     member = "Python-3.14.6/LICENSE"
+    patchlevel_member = "Python-3.14.6/Include/patchlevel.h"
     license_content = b"Python source license\n"
+    patchlevel_content = cpython_patchlevel_header()
     archive = tar_bytes(
         {
             member: license_content,
+            patchlevel_member: patchlevel_content,
             "Python-3.14.6/Include/Python.h": b"source",
         }
     )
@@ -1701,6 +1847,8 @@ def test_cpython_source_archive_binds_exact_archive_and_license_bytes() -> None:
         "sha256": evidence.sha256_bytes(archive),
         "license_member": member,
         "license_sha256": evidence.sha256_bytes(license_content),
+        "patchlevel_member": patchlevel_member,
+        "patchlevel_sha256": evidence.sha256_bytes(patchlevel_content),
     }
 
     assert evidence.verify_cpython_source_archive(archive, source) == license_content
@@ -1720,26 +1868,49 @@ def test_cpython_source_archive_binds_exact_archive_and_license_bytes() -> None:
             archive,
             {**source, "license_member": "Python-3.14.6/OTHER"},
         )
+    with pytest.raises(evidence.EvidenceError, match="patchlevel header does not match"):
+        evidence.verify_cpython_source_archive(
+            archive,
+            {**source, "patchlevel_sha256": "0" * 64},
+        )
+    with pytest.raises(evidence.EvidenceError, match="patchlevel header does not match"):
+        evidence.verify_cpython_source_archive(
+            archive,
+            {**source, "patchlevel_member": "Python-3.14.6/Include/other.h"},
+        )
 
 
 def test_cpython_source_archive_rejects_ambiguous_or_linked_license() -> None:
     member = "Python-3.14.6/LICENSE"
+    patchlevel_member = "Python-3.14.6/Include/patchlevel.h"
     license_content = b"Python source license\n"
-    duplicate = tar_sequence([(member, license_content), (member, license_content)])
+    patchlevel_content = cpython_patchlevel_header()
+    duplicate = tar_sequence(
+        [
+            (member, license_content),
+            (member, license_content),
+            (patchlevel_member, patchlevel_content),
+        ]
+    )
     source = {
         "size": len(duplicate),
         "sha256": evidence.sha256_bytes(duplicate),
         "license_member": member,
         "license_sha256": evidence.sha256_bytes(license_content),
+        "patchlevel_member": patchlevel_member,
+        "patchlevel_sha256": evidence.sha256_bytes(patchlevel_content),
     }
-    with pytest.raises(evidence.EvidenceError, match="not one regular archive member"):
+    with pytest.raises(evidence.EvidenceError, match="not one bounded regular archive member"):
         evidence.verify_cpython_source_archive(duplicate, source)
 
     linked = tar_bytes(
-        {"Python-3.14.6/OTHER": license_content},
+        {
+            "Python-3.14.6/OTHER": license_content,
+            patchlevel_member: patchlevel_content,
+        },
         links={member: "OTHER"},
     )
-    with pytest.raises(evidence.EvidenceError, match="not one regular archive member"):
+    with pytest.raises(evidence.EvidenceError, match="reviewed source member is not a regular"):
         evidence.verify_cpython_source_archive(
             linked,
             {
@@ -1748,6 +1919,103 @@ def test_cpython_source_archive_rejects_ambiguous_or_linked_license() -> None:
                 "sha256": evidence.sha256_bytes(linked),
             },
         )
+
+
+def test_cpython_source_archive_enforces_expansion_and_reviewed_member_bounds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    license_member = "Python-3.14.6/LICENSE"
+    patchlevel_member = "Python-3.14.6/Include/patchlevel.h"
+    license_content = b"Python source license\n"
+    patchlevel_content = cpython_patchlevel_header()
+
+    def source_for(archive: bytes) -> dict[str, Any]:
+        return {
+            "size": len(archive),
+            "sha256": evidence.sha256_bytes(archive),
+            "license_member": license_member,
+            "license_sha256": evidence.sha256_bytes(license_content),
+            "patchlevel_member": patchlevel_member,
+            "patchlevel_sha256": evidence.sha256_bytes(patchlevel_content),
+        }
+
+    largest_reviewed_member = max(len(license_content), len(patchlevel_content))
+    oversized_member = tar_bytes(
+        {
+            license_member: license_content,
+            patchlevel_member: patchlevel_content,
+            "Python-3.14.6/oversized": b"x" * (largest_reviewed_member + 1),
+        }
+    )
+    monkeypatch.setattr(evidence, "MAX_ARCHIVE_MEMBER_BYTES", largest_reviewed_member)
+    with pytest.raises(evidence.EvidenceError, match="member exceeds its size limit"):
+        evidence.verify_cpython_source_archive(oversized_member, source_for(oversized_member))
+
+    aggregate = tar_bytes(
+        {
+            license_member: license_content,
+            patchlevel_member: patchlevel_content,
+            "Python-3.14.6/extra": b"extra",
+        }
+    )
+    monkeypatch.setattr(evidence, "MAX_ARCHIVE_MEMBER_BYTES", 1024 * 1024)
+    monkeypatch.setattr(
+        evidence,
+        "MAX_ARCHIVE_TOTAL_BYTES",
+        len(license_content) + len(patchlevel_content) + len(b"extra") - 1,
+    )
+    with pytest.raises(evidence.EvidenceError, match="expanded-size limit"):
+        evidence.verify_cpython_source_archive(aggregate, source_for(aggregate))
+
+    monkeypatch.setattr(evidence, "MAX_ARCHIVE_TOTAL_BYTES", 1024 * 1024)
+    monkeypatch.setattr(evidence, "MAX_LICENSE_BYTES", len(license_content) - 1)
+    with pytest.raises(evidence.EvidenceError, match="LICENSE is not one bounded"):
+        evidence.verify_cpython_source_archive(aggregate, source_for(aggregate))
+
+    monkeypatch.setattr(evidence, "MAX_LICENSE_BYTES", 1024 * 1024)
+    monkeypatch.setattr(evidence, "MAX_CPYTHON_PATCHLEVEL_BYTES", len(patchlevel_content) - 1)
+    with pytest.raises(evidence.EvidenceError, match="patchlevel header is not one bounded"):
+        evidence.verify_cpython_source_archive(aggregate, source_for(aggregate))
+
+
+@pytest.mark.parametrize(
+    ("member_type", "message"),
+    ((tarfile.SYMTYPE, "link has a payload"), (tarfile.DIRTYPE, "directory has a payload")),
+)
+def test_cpython_source_archive_rejects_nonregular_payloads(
+    member_type: bytes, message: str
+) -> None:
+    license_member = "Python-3.14.6/LICENSE"
+    patchlevel_member = "Python-3.14.6/Include/patchlevel.h"
+    license_content = b"Python source license\n"
+    patchlevel_content = cpython_patchlevel_header()
+    output = io.BytesIO()
+    with tarfile.open(fileobj=output, mode="w") as archive:
+        for path, content in (
+            (license_member, license_content),
+            (patchlevel_member, patchlevel_content),
+        ):
+            member = tarfile.TarInfo(path)
+            member.size = len(content)
+            archive.addfile(member, io.BytesIO(content))
+        hostile = tarfile.TarInfo("Python-3.14.6/hostile")
+        hostile.type = member_type
+        hostile.size = 1
+        if member_type == tarfile.SYMTYPE:
+            hostile.linkname = "target"
+        archive.addfile(hostile, io.BytesIO(b"x"))
+    content = output.getvalue()
+    source = {
+        "size": len(content),
+        "sha256": evidence.sha256_bytes(content),
+        "license_member": license_member,
+        "license_sha256": evidence.sha256_bytes(license_content),
+        "patchlevel_member": patchlevel_member,
+        "patchlevel_sha256": evidence.sha256_bytes(patchlevel_content),
+    }
+
+    with pytest.raises(evidence.EvidenceError, match=message):
+        evidence.verify_cpython_source_archive(content, source)
 
 
 def test_fetch_records_every_https_redirect(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2420,6 +2688,41 @@ def test_license_refs_require_exact_pinned_custom_evidence() -> None:
     ]
     with pytest.raises(evidence.EvidenceError, match="pinned source-carried notice"):
         evidence.verify_pinned_custom_license_records(inventory["components"], policy, unrelated)
+
+
+def test_runtime_license_ref_uses_the_canonical_component_key() -> None:
+    runtime = synthetic_runtime_component()
+    component = "runtime:cpython@3.14.6"
+    path = "licenses/from-source/runtime-cpython-3.14.6/LICENSE"
+    digest = "a" * 64
+    policy = {
+        "license_resolutions": {
+            component: {
+                "expression": "LicenseRef-CPython",
+                "rationale": "Reviewed synthetic CPython license.",
+            }
+        },
+        "custom_license_evidence": {
+            "LicenseRef-CPython": {
+                "components": [component],
+                "evidence": {component: {"path": path, "sha256": digest}},
+                "rationale": "Exact source-carried CPython license reviewed.",
+                "require_source_notice": True,
+            }
+        },
+    }
+
+    evidence.verify_pinned_custom_license_records(
+        [runtime],
+        policy,
+        [{"component": component, "path": path, "sha256": digest}],
+    )
+    with pytest.raises(evidence.EvidenceError, match="pinned source-carried notice"):
+        evidence.verify_pinned_custom_license_records(
+            [runtime],
+            policy,
+            [{"component": "runtime-cpython-3.14.6", "path": path, "sha256": digest}],
+        )
 
 
 def test_image_revision_and_version_must_match_source() -> None:
@@ -4947,11 +5250,25 @@ def test_policy_binds_cpython_runtime_to_base_recipe_source_and_license() -> Non
         )
         assert {
             record["elf"]["machine"]
-            for role, record in runtime["identity_files"].items()
-            if role != "version_header"
+            for record in runtime["identity_files"].values()
+            if "elf" in record
         } == {machine}
-    assert policy["license_resolutions"]["runtime:cpython@3.14.6"]["expression"] == ("Python-2.0")
-    assert any(record["id"] == "Python-2.0" for record in policy["license_texts"])
+        assert (
+            runtime["identity_files"]["version_header"]["sha256"]
+            == (policy["cpython_source"]["patchlevel_sha256"])
+        )
+        assert runtime["identity_files"]["interpreter_link"] == {
+            "effective": True,
+            "kind": "symlink",
+            "layer": 2,
+            "path": "usr/local/bin/python3",
+            "target": "python3.14",
+            "mode": 0o777,
+            "uid": 0,
+            "gid": 0,
+        }
+    assert policy["license_resolutions"]["runtime:cpython@3.14.6"]["expression"] == ("Python-2.0.1")
+    assert any(record["id"] == "Python-2.0.1" for record in policy["license_texts"])
 
     outside_base = copy.deepcopy(policy)
     runtime = next(
@@ -4975,6 +5292,25 @@ def test_policy_binds_cpython_runtime_to_base_recipe_source_and_license() -> Non
     mismatched_source["cpython_source"]["license_member"] = "Python-3.14.5/LICENSE"
     with pytest.raises(evidence.EvidenceError, match="license member"):
         evidence.validate_policy_schema(mismatched_source)
+
+    mismatched_patchlevel = copy.deepcopy(policy)
+    mismatched_patchlevel["cpython_source"]["patchlevel_member"] = (
+        "Python-3.14.5/Include/patchlevel.h"
+    )
+    with pytest.raises(evidence.EvidenceError, match="patchlevel member"):
+        evidence.validate_policy_schema(mismatched_patchlevel)
+
+    mismatched_installed_header = copy.deepcopy(policy)
+    runtime = next(
+        component
+        for component in mismatched_installed_header["platforms"]["linux/arm64"]
+        if component["ecosystem"] == "runtime"
+    )
+    runtime["identity_files"]["version_header"]["sha256"] = "0" * 64
+    with pytest.raises(
+        evidence.EvidenceError, match="version header does not match reviewed source"
+    ):
+        evidence.validate_policy_schema(mismatched_installed_header)
 
 
 def test_policy_schema_rejects_malformed_nested_strings_and_recipe_links() -> None:

@@ -53,11 +53,18 @@ CPYTHON_RUNTIME_NAME = "cpython"
 CPYTHON_RUNTIME_PURL = f"pkg:generic/python@{EXPECTED_RUNTIME_PYTHON}"
 CPYTHON_VERSION_HEADER = f"usr/local/include/python{CPYTHON_RUNTIME_MINOR}/patchlevel.h"
 CPYTHON_INTERPRETER = f"usr/local/bin/python{CPYTHON_RUNTIME_MINOR}"
+CPYTHON_INTERPRETER_LINK = f"usr/local/bin/python{EXPECTED_RUNTIME_PYTHON.split('.')[0]}"
+CPYTHON_INTERPRETER_LINK_TARGET = f"python{CPYTHON_RUNTIME_MINOR}"
 CPYTHON_SHARED_LIBRARY = f"usr/local/lib/libpython{CPYTHON_RUNTIME_MINOR}.so.1.0"
-CPYTHON_IDENTITY_PATHS = {
+CPYTHON_REGULAR_IDENTITY_PATHS = {
     "version_header": CPYTHON_VERSION_HEADER,
     "interpreter": CPYTHON_INTERPRETER,
     "shared_library": CPYTHON_SHARED_LIBRARY,
+}
+CPYTHON_LINK_IDENTITY_PATHS = {"interpreter_link": CPYTHON_INTERPRETER_LINK}
+CPYTHON_IDENTITY_PATHS = {
+    **CPYTHON_REGULAR_IDENTITY_PATHS,
+    **CPYTHON_LINK_IDENTITY_PATHS,
 }
 EXPECTED_UV_VERSION = "0.11.28"
 APPLICATION_WHEEL_LABEL = "org.stampbot.extra-codeowners.application-wheel.sha256"
@@ -833,6 +840,23 @@ def parse_cpython_patchlevel_header(content: bytes, path: str = CPYTHON_VERSION_
     if start >= end:
         raise EvidenceError(f"CPython patchlevel header has invalid constant markers: {path}")
 
+    conditionals = list(
+        re.finditer(
+            r"^[ \t]*#[ \t]*(if|ifdef|ifndef|elif|else|endif)\b([^\n]*)$",
+            text,
+            flags=re.MULTILINE,
+        )
+    )
+    if conditionals and not (
+        len(conditionals) == 2
+        and conditionals[0].group(1) == "ifndef"
+        and conditionals[0].group(2).strip() == "_Py_PATCHLEVEL_H"
+        and conditionals[0].start() < start
+        and conditionals[1].group(1) == "endif"
+        and conditionals[1].start() > end
+    ):
+        raise EvidenceError(f"CPython patchlevel constants are conditional: {path}")
+
     expected_release_levels = {
         "PY_RELEASE_LEVEL_ALPHA": "0xA",
         "PY_RELEASE_LEVEL_BETA": "0xB",
@@ -848,6 +872,13 @@ def parse_cpython_patchlevel_header(content: bytes, path: str = CPYTHON_VERSION_
         "PY_VERSION": f'"{EXPECTED_RUNTIME_PYTHON}"',
     }
     expected = {**expected_release_levels, **expected_version_constants}
+    expected_names = "|".join(re.escape(name) for name in expected)
+    if re.search(
+        rf"^[ \t]*#[ \t]*undef[ \t]+(?:{expected_names})\b",
+        text,
+        flags=re.MULTILINE,
+    ):
+        raise EvidenceError(f"CPython patchlevel header undefines a version constant: {path}")
     for name, expected_value in expected.items():
         matches = re.findall(
             rf"^[ \t]*#[ \t]*define[ \t]+{re.escape(name)}[ \t]+([^\n]+)$",
@@ -886,6 +917,7 @@ def runtime_payload_projection(record: Mapping[str, Any]) -> dict[str, Any]:
 
 def collect_cpython_runtime_component(
     occurrences: Sequence[Mapping[str, Any]],
+    non_regular_occurrences: Sequence[Mapping[str, Any]],
     effective_types: Mapping[str, Mapping[str, Any]],
     identity_details: Mapping[tuple[int, str, str], bytes | Mapping[str, Any]],
     platform: str,
@@ -899,7 +931,7 @@ def collect_cpython_runtime_component(
         "shared_library": 0o755,
     }
     identity_layers: set[int] = set()
-    for role, path in CPYTHON_IDENTITY_PATHS.items():
+    for role, path in CPYTHON_REGULAR_IDENTITY_PATHS.items():
         matches = [record for record in occurrences if record.get("path") == path]
         if len(matches) != 1:
             raise EvidenceError(
@@ -939,6 +971,49 @@ def collect_cpython_runtime_component(
             projected["elf"] = dict(detail)
         identities[role] = projected
         identity_layers.add(layer)
+
+    link_matches = [
+        record
+        for record in non_regular_occurrences
+        if record.get("path") == CPYTHON_INTERPRETER_LINK
+    ]
+    if len(link_matches) != 1:
+        raise EvidenceError(
+            "image must contain exactly one CPython interpreter-link occurrence: "
+            f"{CPYTHON_INTERPRETER_LINK}"
+        )
+    link = link_matches[0]
+    link_layer = link.get("layer")
+    final_link = effective_types.get(CPYTHON_INTERPRETER_LINK)
+    if (
+        not isinstance(link_layer, int)
+        or isinstance(link_layer, bool)
+        or link.get("kind") != "symlink"
+        or link.get("target") != CPYTHON_INTERPRETER_LINK_TARGET
+        or link.get("uid") != 0
+        or link.get("gid") != 0
+        or link.get("mode") != 0o777
+        or final_link
+        != {
+            "kind": "symlink",
+            "layer": link_layer,
+            "target": CPYTHON_INTERPRETER_LINK_TARGET,
+        }
+    ):
+        raise EvidenceError(
+            f"CPython interpreter link has an invalid identity: {CPYTHON_INTERPRETER_LINK}"
+        )
+    identities["interpreter_link"] = {
+        "effective": True,
+        "kind": "symlink",
+        "layer": link_layer,
+        "path": CPYTHON_INTERPRETER_LINK,
+        "target": CPYTHON_INTERPRETER_LINK_TARGET,
+        "mode": 0o777,
+        "uid": 0,
+        "gid": 0,
+    }
+    identity_layers.add(link_layer)
     if len(identity_layers) != 1:
         raise EvidenceError("CPython runtime identity files do not share one base-layer footprint")
     return {
@@ -1696,17 +1771,32 @@ def validate_policy_schema(policy: Mapping[str, Any]) -> None:
 
     cpython_source = require_exact_fields(
         policy.get("cpython_source"),
-        {"url", "sha256", "size", "license_member", "license_sha256"},
+        {
+            "url",
+            "sha256",
+            "size",
+            "license_member",
+            "license_sha256",
+            "patchlevel_member",
+            "patchlevel_sha256",
+        },
         "policy cpython_source",
     )
-    for key in ("url", "sha256", "license_member", "license_sha256"):
+    for key in (
+        "url",
+        "sha256",
+        "license_member",
+        "license_sha256",
+        "patchlevel_member",
+        "patchlevel_sha256",
+    ):
         value = cpython_source[key]
         if not isinstance(value, str):
             raise EvidenceError(f"policy cpython_source has an invalid {key}")
         if key == "url":
             require_https_source_url(value)
-        elif key == "license_member":
-            checked_canonical_path(value, "CPython source license member")
+        elif key in {"license_member", "patchlevel_member"}:
+            checked_canonical_path(value, f"CPython source {key.removesuffix('_member')} member")
         elif re.fullmatch(r"[0-9a-f]{64}", value) is None:
             raise EvidenceError(f"policy cpython_source has an invalid {key}")
     cpython_size = cpython_source["size"]
@@ -2526,6 +2616,7 @@ def _inventory_saved_image(
     components.append(
         collect_cpython_runtime_component(
             occurrences,
+            non_regular_occurrences,
             effective_types,
             runtime_identity_details,
             platform,
@@ -2861,6 +2952,41 @@ def validate_cpython_runtime_component(
     layers: set[int] = set()
     for role, expected_path in CPYTHON_IDENTITY_PATHS.items():
         record = identities.get(role)
+        if role == "interpreter_link":
+            if not isinstance(record, dict) or set(record) != {
+                "effective",
+                "kind",
+                "layer",
+                "path",
+                "target",
+                "mode",
+                "uid",
+                "gid",
+            }:
+                raise EvidenceError(f"{source} has an invalid CPython {role} record")
+            layer = record.get("layer")
+            path_value = record.get("path")
+            target = record.get("target")
+            if isinstance(target, str):
+                checked_image_link_target(target)
+            if (
+                not isinstance(layer, int)
+                or isinstance(layer, bool)
+                or layer < 0
+                or not isinstance(path_value, str)
+                or str(checked_canonical_path(path_value, f"{source} CPython {role}"))
+                != expected_path
+                or record.get("effective") is not True
+                or record.get("kind") != "symlink"
+                or not isinstance(target, str)
+                or target != CPYTHON_INTERPRETER_LINK_TARGET
+                or record.get("uid") != 0
+                or record.get("gid") != 0
+                or record.get("mode") != 0o777
+            ):
+                raise EvidenceError(f"{source} has an invalid CPython {role} identity")
+            layers.add(layer)
+            continue
         expected_fields = (
             {
                 "effective",
@@ -3164,9 +3290,7 @@ def verify_pinned_custom_license_records(
                     f"python-{inventory_component['name']}-{inventory_component['version']}"
                 )
             elif inventory_component["ecosystem"] == "runtime":
-                evidence_component = (
-                    f"runtime-{inventory_component['name']}-{inventory_component['version']}"
-                )
+                evidence_component = component_key(inventory_component)
             else:
                 raise EvidenceError("custom-license component ecosystem is unsupported")
             pinned = custom_policy[identifier]["evidence"][component_policy_key]
@@ -5087,7 +5211,26 @@ def validate_all_layer_inventory(files: Mapping[str, Any], inventory: Mapping[st
     runtime_identities = runtime_components[0].get("identity_files")
     if not isinstance(runtime_identities, dict):
         raise EvidenceError("component inventory has invalid CPython runtime identity files")
-    for role, path in CPYTHON_IDENTITY_PATHS.items():
+
+    def later_ancestor_hides_identity(identity: Mapping[str, Any], path: str) -> bool:
+        layer = identity.get("layer")
+        if not isinstance(layer, int) or isinstance(layer, bool):
+            return True
+        ancestors = {str(parent) for parent in PurePosixPath(path).parents}
+        if any(
+            record.get("layer", -1) >= layer and record.get("path") in ancestors
+            for record in (*records, *non_regular)
+        ):
+            return True
+        hidden_paths = {path, *ancestors}
+        return any(
+            record.get("layer", -1) > layer
+            and record.get("target") in hidden_paths
+            and record.get("kind") in {"whiteout", "opaque"}
+            for record in whiteouts
+        )
+
+    for role, path in CPYTHON_REGULAR_IDENTITY_PATHS.items():
         identity = runtime_identities.get(role)
         if not isinstance(identity, dict):
             raise EvidenceError(f"component inventory has no CPython {role} identity")
@@ -5101,10 +5244,43 @@ def validate_all_layer_inventory(files: Mapping[str, Any], inventory: Mapping[st
             or any(
                 record.get("path") == path or record.get("target") == path for record in whiteouts
             )
+            or later_ancestor_hides_identity(identity, path)
         ):
             raise EvidenceError(
                 f"CPython {role} is not one exact all-layer regular-file occurrence"
             )
+
+    link_identity = runtime_identities.get("interpreter_link")
+    if not isinstance(link_identity, dict):
+        raise EvidenceError("component inventory has no CPython interpreter-link identity")
+    expected_link = {
+        "effective": True,
+        "kind": "symlink",
+        "layer": link_identity.get("layer"),
+        "path": CPYTHON_INTERPRETER_LINK,
+        "target": CPYTHON_INTERPRETER_LINK_TARGET,
+        "mode": 0o777,
+        "uid": 0,
+        "gid": 0,
+    }
+    link_occurrences = [
+        record for record in non_regular if record.get("path") == CPYTHON_INTERPRETER_LINK
+    ]
+    if (
+        link_identity != expected_link
+        or len(link_occurrences) != 1
+        or {field: link_occurrences[0][field] for field in expected_link if field != "effective"}
+        != {field: value for field, value in expected_link.items() if field != "effective"}
+        or any(record.get("path") == CPYTHON_INTERPRETER_LINK for record in records)
+        or any(record.get("path") == CPYTHON_INTERPRETER_LINK for record in directories)
+        or any(
+            record.get("path") == CPYTHON_INTERPRETER_LINK
+            or record.get("target") == CPYTHON_INTERPRETER_LINK
+            for record in whiteouts
+        )
+        or later_ancestor_hides_identity(link_identity, CPYTHON_INTERPRETER_LINK)
+    ):
+        raise EvidenceError("CPython interpreter link is not one exact effective symlink")
     observed_native_occurrences: set[tuple[int, str, str]] = set()
     for payload in observed_native_payloads:
         native_occurrence = (payload["layer"], payload["path"], payload["sha256"])
@@ -5381,10 +5557,16 @@ def validate_cpython_policy_relationships(policy: Mapping[str, Any]) -> None:
         f"Python-{EXPECTED_RUNTIME_PYTHON}.tar.xz"
     )
     expected_license_member = f"Python-{EXPECTED_RUNTIME_PYTHON}/LICENSE"
+    expected_patchlevel_member = f"Python-{EXPECTED_RUNTIME_PYTHON}/Include/patchlevel.h"
     if cpython_source.get("url") != expected_url:
         raise EvidenceError("CPython source URL does not match the runtime version")
     if cpython_source.get("license_member") != expected_license_member:
         raise EvidenceError("CPython source license member does not match the runtime version")
+    if cpython_source.get("patchlevel_member") != expected_patchlevel_member:
+        raise EvidenceError("CPython source patchlevel member does not match the runtime version")
+    patchlevel_sha256 = cpython_source.get("patchlevel_sha256")
+    if not isinstance(patchlevel_sha256, str):
+        raise EvidenceError("CPython source has no patchlevel digest")
 
     platforms = policy.get("platforms")
     base_platforms = policy.get("base_image_platforms")
@@ -5414,6 +5596,14 @@ def validate_cpython_policy_relationships(policy: Mapping[str, Any]) -> None:
         identities = runtime.get("identity_files")
         if not isinstance(reviewed_base, dict) or not isinstance(identities, dict):
             raise EvidenceError(f"policy has an invalid CPython base boundary for {platform}")
+        version_header = identities.get("version_header")
+        if (
+            not isinstance(version_header, dict)
+            or version_header.get("sha256") != patchlevel_sha256
+        ):
+            raise EvidenceError(
+                f"policy CPython version header does not match reviewed source for {platform}"
+            )
         base_layers = reviewed_base.get("layer_diff_ids")
         if not isinstance(base_layers, list) or any(
             not isinstance(record, dict)
@@ -5462,24 +5652,32 @@ def verify_cpython_source_binding(docker_recipe: bytes, cpython_source: Mapping[
 
 
 def verify_cpython_source_archive(content: bytes, cpython_source: Mapping[str, Any]) -> bytes:
-    """Validate the exact CPython source size and its source-carried LICENSE member."""
+    """Validate the exact source archive, LICENSE, and installed version header."""
 
     expected_size = cpython_source.get("size")
     expected_digest = cpython_source.get("sha256")
-    member_name = cpython_source.get("license_member")
+    license_member = cpython_source.get("license_member")
     expected_license_digest = cpython_source.get("license_sha256")
+    patchlevel_member = cpython_source.get("patchlevel_member")
+    expected_patchlevel_digest = cpython_source.get("patchlevel_sha256")
     if (
         not isinstance(expected_size, int)
         or isinstance(expected_size, bool)
         or len(content) != expected_size
         or not isinstance(expected_digest, str)
         or sha256_bytes(content) != expected_digest
-        or not isinstance(member_name, str)
+        or not isinstance(license_member, str)
         or not isinstance(expected_license_digest, str)
+        or not isinstance(patchlevel_member, str)
+        or not isinstance(expected_patchlevel_digest, str)
     ):
         raise EvidenceError("CPython source archive does not match its reviewed identity")
-    checked_canonical_path(member_name, "CPython source license member")
-    found: bytes | None = None
+    checked_canonical_path(license_member, "CPython source license member")
+    checked_canonical_path(patchlevel_member, "CPython source patchlevel member")
+    if license_member == patchlevel_member:
+        raise EvidenceError("CPython source members must be distinct")
+    found_license: bytes | None = None
+    found_patchlevel: bytes | None = None
     count = 0
     total = 0
     try:
@@ -5492,27 +5690,48 @@ def verify_cpython_source_archive(content: bytes, cpython_source: Mapping[str, A
                     raise EvidenceError("CPython source archive has too many entries")
                 path = str(checked_path(member.name))
                 if member.isfile():
+                    if not 0 <= member.size <= MAX_ARCHIVE_MEMBER_BYTES:
+                        raise EvidenceError("CPython source archive member exceeds its size limit")
                     total += member.size
                     if total > MAX_ARCHIVE_TOTAL_BYTES:
                         raise EvidenceError(
                             "CPython source archive exceeds its expanded-size limit"
                         )
                 elif member.issym() or member.islnk():
+                    if member.size != 0:
+                        raise EvidenceError("CPython source archive link has a payload")
                     checked_link_target(member.linkname)
-                elif not member.isdir():
+                elif member.isdir():
+                    if member.size != 0:
+                        raise EvidenceError("CPython source archive directory has a payload")
+                else:
                     raise EvidenceError("CPython source archive has an unsupported entry type")
-                if path != member_name:
+                if path not in {license_member, patchlevel_member}:
                     continue
-                if found is not None or not member.isfile():
-                    raise EvidenceError("CPython source LICENSE is not one regular archive member")
-                found = read_member(archive, member)
+                if not member.isfile():
+                    raise EvidenceError("CPython reviewed source member is not a regular file")
+                if path == license_member:
+                    if found_license is not None or member.size > MAX_LICENSE_BYTES:
+                        raise EvidenceError(
+                            "CPython source LICENSE is not one bounded regular archive member"
+                        )
+                    found_license = read_member(archive, member)
+                    continue
+                if found_patchlevel is not None or member.size > MAX_CPYTHON_PATCHLEVEL_BYTES:
+                    raise EvidenceError(
+                        "CPython source patchlevel header is not one bounded regular archive member"
+                    )
+                found_patchlevel = read_member(archive, member)
     except EvidenceError:
         raise
     except (tarfile.TarError, EOFError, OSError, ValueError) as exc:
         raise EvidenceError(f"invalid CPython source archive: {exc}") from exc
-    if found is None or sha256_bytes(found) != expected_license_digest:
+    if found_license is None or sha256_bytes(found_license) != expected_license_digest:
         raise EvidenceError("CPython source LICENSE does not match reviewed policy")
-    return found
+    if found_patchlevel is None or sha256_bytes(found_patchlevel) != expected_patchlevel_digest:
+        raise EvidenceError("CPython source patchlevel header does not match reviewed policy")
+    parse_cpython_patchlevel_header(found_patchlevel, patchlevel_member)
+    return found_license
 
 
 def fetch(
