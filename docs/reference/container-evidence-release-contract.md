@@ -25,13 +25,14 @@ not remove or weaken the attribution gate.
 Issue [#28](https://github.com/stampbot/extra-codeowners/issues/28) must then
 provide privilege-separated collection and publication. That issue will also
 add a shipped, adversarially tested verifier and a runnable recipient how-to.
-Issue [#32](https://github.com/stampbot/extra-codeowners/issues/32) must let
-release and ad-hoc consumers use the build proof that pull-request CI produces
-in hash-pinned environments on both architectures. Those consumers must bind
-the exact selected application wheel to the installed runtime. Until all three
-issues are closed and a supported release is announced, missing assets are
-expected. Do not substitute pull-request CI artifacts or the unsupported
-historical `main` image.
+CI, manual runs, and the tagged candidate scan use one reusable build-proof
+workflow. Each caller builds the proof in its own run. Issue
+[#32](https://github.com/stampbot/extra-codeowners/issues/32) must still retain
+that proof in release evidence and hand it to the future isolated publication
+jobs. Those jobs must bind the exact selected application wheel to the
+installed runtime. Until all three issues are closed and a supported release
+is announced, missing assets are expected. Do not substitute manual or
+pull-request CI artifacts, or the unsupported historical `main` image.
 
 ## Trust statements
 

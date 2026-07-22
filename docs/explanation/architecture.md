@@ -328,6 +328,24 @@ operational surfaces, not public product APIs.
 The repository currently implements the GitHub App service and reusable Python
 evaluator. It also contains a dedicated Helm chart. CI builds and scans
 multi-platform candidates, but the `main` publication job has been removed.
+
+The three callers share one proof workflow, but they never share artifacts
+across workflow runs:
+
+```mermaid
+flowchart LR
+    CI[Pull request or main CI] --> CIP[Reusable Python proof]
+    CIP --> CIC[CI containers and evidence]
+    Manual[Manual dispatch] --> MP[Reusable Python proof]
+    MP --> MA[Five-file proof artifact only]
+    Tag[Validated tag] --> TP[Reusable Python proof]
+    TP --> Scan[Read-only candidate scan]
+    Gate[Unconditional publication blocker] -. prevents .-> Publish[Privileged release jobs]
+```
+
+Each proof stays inside its caller's run. CI keeps its required-check wrapper,
+and the tagged scan downloads its selected artifact by immutable ID.
+
 Current container evidence normalizes CPython as one top-level runtime
 component. It binds that identity to the exact version header, interpreter
 link, interpreter, and shared library in each platform image. The retained
@@ -338,9 +356,11 @@ complete component, notice, and source records. Historical Python installs are
 replayed from each layer's `RECORD` against that layer's complete filesystem
 snapshot.
 
-The tag workflow contains the intended versioned image, OCI chart, Python
-artifact, provenance, and software-bill-of-material publication jobs, but an
-unconditional validation failure keeps every one unreachable. Security issue
+The tag workflow can run source checks, a native Python proof, and candidate
+scans with repository-read authority. It also contains the intended versioned
+image, OCI chart, Python artifact, provenance, and software-bill-of-material
+publication jobs, but a separate unconditional blocker keeps every privileged
+job unreachable. Security issue
 [#28](https://github.com/stampbot/extra-codeowners/issues/28) requires a
 privilege-separated container-evidence pipeline before that block can be
 removed. Source-completeness issue
@@ -349,10 +369,10 @@ remaining native-wheel and embedded-SBOM gap to close, either by expanding
 components and sources or by using builds linked against separately inventoried
 packages.
 Build-proof handoff issue
-[#32](https://github.com/stampbot/extra-codeowners/issues/32) separately
-requires release and ad-hoc builds to consume the proof that pull-request CI
-produces in hash-pinned environments on both architectures and bind the
-installed application to its exact wheel.
+[#32](https://github.com/stampbot/extra-codeowners/issues/32) tracks the
+remaining handoff into retained release evidence and the future publication
+jobs. CI, manual proof runs, and the tagged read-only scan already build and
+verify the same five-file proof without consulting another workflow run.
 Workflow code is not proof that an artifact exists. No supported release has
 been published.
 

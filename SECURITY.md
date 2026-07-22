@@ -22,15 +22,20 @@ corresponding-source records. The collector separately replays historical wheel
 `RECORD` ownership across every distributed layer.
 
 Pull-request CI now builds a hash-pinned PEP 517 proof on both native
-architectures and installs the exact selected application wheel. Build-proof
-issue [`#32`](https://github.com/stampbot/extra-codeowners/issues/32) remains
-open because the release and ad-hoc build paths do not yet consume that selected
-proof. A successful candidate scan does not close that supply-chain gap.
+architectures and installs the exact selected application wheel. The same
+workflow can run manually with only repository-read authority. The tagged
+release workflow builds a fresh proof in its own run. Its candidate scan
+downloads that proof by immutable artifact ID and verifies the source, wheel,
+and selection-record digests before building either candidate.
+Build-proof issue [`#32`](https://github.com/stampbot/extra-codeowners/issues/32)
+remains open because release evidence and future publication jobs do not yet
+consume that selected proof.
 
-The release workflow unconditionally
-fails after validating its readiness milestone and before any job with image,
-chart, Python package, signing, attestation, or GitHub release authority can
-run. Security issue
+The release workflow can run source checks, the distribution proof, and
+candidate scans with repository-read authority after the readiness milestone
+passes. A separate job then fails unconditionally. Every job with image, chart,
+Python package, signing, attestation, or GitHub release authority depends
+directly on that blocker and cannot run. Security issue
 [`#28`](https://github.com/stampbot/extra-codeowners/issues/28) tracks the
 required privilege-separated container-evidence pipeline. Changing the
 component policy's approval value does not remove this structural block.
@@ -56,8 +61,8 @@ distfiles, locked Python source, license texts, and a human-readable notice. It
 must close the remaining #18 gap by expanding every embedded wheel SBOM and
 native payload into exact component, notice, and corresponding-source coverage,
 or use wheels rebuilt against separately inventoried system packages.
-It must also consume the hash-pinned, cross-architecture application proof
-required by issue #32 and bind the installed application to that exact wheel.
+It must retain the hash-pinned, cross-architecture application proof required
+by issue #32 and bind every published application artifact to that exact wheel.
 Publication requires reviewed component policy and explicit maintainer
 distribution approval after the collector is split into rootless, network-free
 parsing and separately privileged fetch and publication phases. The current CI

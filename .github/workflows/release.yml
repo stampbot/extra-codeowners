@@ -68,10 +68,12 @@ jobs:
           --run-id "${GITHUB_RUN_ID}"
           --summary "${GITHUB_STEP_SUMMARY}"
 
-      - name: Keep tagged publication disabled pending isolated evidence collection
-        run: |
-          echo "::error::Tagged publication is blocked by https://github.com/stampbot/extra-codeowners/issues/28"
-          exit 1
+  python-distribution-proof:
+    name: Build release Python distribution proof
+    needs: validate
+    permissions:
+      contents: read
+    uses: ./.github/workflows/python-distribution.yml
 
   quality:
     name: Verify release source
@@ -161,7 +163,9 @@ jobs:
 
   security-scan:
     name: Scan release candidate (${{ matrix.architecture }})
-    needs: validate
+    needs:
+      - validate
+      - python-distribution-proof
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -176,6 +180,32 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
+
+      - name: Set up exact proof-verification Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.14.6"
+
+      - name: Download the selected Python distribution
+        id: python-distribution
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.python-distribution-proof.outputs.artifact-id }}
+          path: ${{ runner.temp }}/verified-python
+          digest-mismatch: error
+
+      - name: Verify the selected Python distribution
+        env:
+          DISTRIBUTION_DIRECTORY: ${{ steps.python-distribution.outputs.download-path }}
+          WHEEL_SHA256: ${{ needs.python-distribution-proof.outputs.wheel-sha256 }}
+          SELECTION_RECORD_SHA256: >-
+            ${{ needs.python-distribution-proof.outputs.selection-record-sha256 }}
+        run: >-
+          python .github/scripts/build_python_artifacts.py verify-selection
+          --directory "$DISTRIBUTION_DIRECTORY"
+          --source-revision "$GITHUB_SHA"
+          --wheel-sha256 "$WHEEL_SHA256"
+          --selection-record-sha256 "$SELECTION_RECORD_SHA256"
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
@@ -194,6 +224,8 @@ jobs:
       - name: Build release candidate without publishing
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
+          build-contexts: |
+            verified-python=${{ steps.python-distribution.outputs.download-path }}
           context: .
           load: true
           platforms: ${{ matrix.platform }}
@@ -201,6 +233,9 @@ jobs:
           tags: extra-codeowners:release-candidate-${{ matrix.architecture }}
           cache-from: type=gha,scope=main
           build-args: |
+            APPLICATION_SOURCE_REVISION=${{ github.sha }}
+            APPLICATION_WHEEL_SHA256=${{ needs.python-distribution-proof.outputs.wheel-sha256 }}
+            APPLICATION_SELECTION_RECORD_SHA256=${{ needs.python-distribution-proof.outputs.selection-record-sha256 }}
             VERSION=${{ needs.validate.outputs.version }}
 
       - name: Smoke test hardened release candidate
@@ -238,6 +273,18 @@ jobs:
           severity-cutoff: high
           vex: .openvex.json
 
+  publication-block:
+    name: Keep tagged publication disabled
+    needs: validate
+    permissions: {}
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - name: Keep tagged publication disabled pending isolated evidence collection
+        run: |
+          echo "::error::Tagged publication is blocked by https://github.com/stampbot/extra-codeowners/issues/28"
+          exit 1
+
   python:
     name: Build and attest Python artifacts
     needs:
@@ -245,6 +292,7 @@ jobs:
       - quality
       - security-scan
       - image
+      - publication-block
     runs-on: ubuntu-latest
     permissions:
       attestations: write
@@ -303,6 +351,7 @@ jobs:
       - validate
       - quality
       - security-scan
+      - publication-block
     runs-on: ubuntu-latest
     timeout-minutes: 120
     permissions:
@@ -584,6 +633,7 @@ jobs:
       - quality
       - security-scan
       - image
+      - publication-block
     runs-on: ubuntu-latest
     permissions:
       attestations: write
@@ -663,6 +713,7 @@ jobs:
       - python
       - image
       - chart
+      - publication-block
     runs-on: ubuntu-latest
     permissions:
       contents: write
