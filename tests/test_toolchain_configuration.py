@@ -142,15 +142,24 @@ def test_renovate_groups_the_hash_locked_python_build_closure() -> None:
     ]
 
 
-def test_ci_proves_and_selects_one_native_cross_architecture_distribution() -> None:
-    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
-    proof = workflow.split("  python-distribution-proof:\n", 1)[1].split(
-        "  python-distribution:\n", 1
-    )[0]
-    selector = workflow.split("  python-distribution:\n", 1)[1].split("  container:\n", 1)[0]
-    container = workflow.split("  container:\n", 1)[1]
+def test_reusable_workflow_proves_one_native_cross_architecture_distribution() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "python-distribution.yml").read_text(
+        encoding="utf-8"
+    )
+    proof = workflow.split("  native-proof:\n", 1)[1].split("  select:\n", 1)[0]
+    selector = workflow.split("  select:\n", 1)[1]
 
-    assert "name: Python distribution proof (${{ matrix.architecture }})" in proof
+    assert "  workflow_call:\n" in workflow
+    assert "  workflow_dispatch:\n" in workflow
+    for output in (
+        "artifact-id",
+        "artifact-digest",
+        "wheel-sha256",
+        "selection-record-sha256",
+    ):
+        assert f"value: ${{{{ jobs.select.outputs.{output} }}}}" in workflow
+
+    assert "name: Native proof (${{ matrix.architecture }})" in proof
     assert proof.count("runner: ubuntu-24.04\n") == 1
     assert proof.count("runner: ubuntu-24.04-arm\n") == 1
     assert 'python-version: "3.14.6"' in proof
@@ -161,15 +170,14 @@ def test_ci_proves_and_selects_one_native_cross_architecture_distribution() -> N
     assert "python-distributions-${{ matrix.architecture }}-${{ github.sha }}-attempt-" in proof
     assert "${{ github.run_attempt }}" in proof
 
-    assert "name: Python distribution reproducibility" in selector
-    assert "needs: python-distribution-proof" in selector
+    assert "needs: native-proof" in selector
     assert "if: ${{ always() }}" in selector
     assert 'if [ "$PROOF_RESULT" != success ]; then' in selector
     assert selector.count("actions/download-artifact@3e5f45b2") == 2
     assert "python-distributions-amd64-${{ github.sha }}-attempt-" in selector
     assert "python-distributions-arm64-${{ github.sha }}-attempt-" in selector
     assert "merge-multiple" not in selector
-    assert "digest-mismatch: error" in selector
+    assert selector.count("digest-mismatch: error") == 2
     assert "artifact-id: ${{ steps.upload-selected.outputs.artifact-id }}" in selector
     assert "artifact-digest: ${{ steps.upload-selected.outputs.artifact-digest }}" in selector
     assert "wheel-sha256: ${{ steps.select.outputs.wheel-sha256 }}" in selector
@@ -177,6 +185,38 @@ def test_ci_proves_and_selects_one_native_cross_architecture_distribution() -> N
         "selection-record-sha256: ${{ steps.select.outputs.selection-record-sha256 }}" in selector
     )
     assert "jq -er '.selection_record_sha256'" in selector
+
+
+def test_ci_calls_the_reusable_proof_and_preserves_the_required_check() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    caller = workflow.split("  python-distribution-proof:\n", 1)[1].split(
+        "  python-distribution:\n", 1
+    )[0]
+    required_check = workflow.split("  python-distribution:\n", 1)[1].split("  container:\n", 1)[0]
+    container = workflow.split("  container:\n", 1)[1]
+
+    assert "name: Build Python distribution proof" in caller
+    assert "permissions:\n      contents: read" in caller
+    assert "uses: ./.github/workflows/python-distribution.yml" in caller
+    assert "secrets:" not in caller
+
+    assert "name: Python distribution reproducibility" in required_check
+    assert "needs: python-distribution-proof" in required_check
+    assert "if: ${{ always() }}" in required_check
+    assert "id: accept" in required_check
+    assert 'if [ "$PROOF_RESULT" != success ]; then' in required_check
+    assert '[[ "$ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]]' in required_check
+    assert '[[ "$ARTIFACT_DIGEST" =~ ^[0-9a-f]{64}$ ]]' in required_check
+    assert '[[ "$WHEEL_SHA256" =~ ^[0-9a-f]{64}$ ]]' in required_check
+    assert '[[ "$SELECTION_RECORD_SHA256" =~ ^[0-9a-f]{64}$ ]]' in required_check
+    for output in (
+        "artifact-id",
+        "artifact-digest",
+        "wheel-sha256",
+        "selection-record-sha256",
+    ):
+        assert f"{output}: ${{{{ steps.accept.outputs.{output} }}}}" in required_check
+        assert f"printf '{output}=%s\\n'" in required_check
 
     assert "needs: python-distribution" in container
     assert "if: ${{ always() }}" in container
@@ -204,6 +244,48 @@ def test_ci_proves_and_selects_one_native_cross_architecture_distribution() -> N
     assert "--python-distribution-artifact-digest" in container
     assert "--application-selection-record-sha256" in container
     assert "--selected-python-directory" in container
+
+
+def test_release_scan_consumes_only_the_same_run_selected_distribution() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+    caller = workflow.split("  python-distribution-proof:\n", 1)[1].split("  quality:\n", 1)[0]
+    scan = workflow.split("  security-scan:\n", 1)[1].split("  publication-block:\n", 1)[0]
+    download = scan.split("      - name: Download the selected Python distribution\n", 1)[1].split(
+        "      - name: Verify the selected Python distribution\n", 1
+    )[0]
+
+    assert "needs: validate" in caller
+    assert "permissions:\n      contents: read" in caller
+    assert "uses: ./.github/workflows/python-distribution.yml" in caller
+    assert "secrets:" not in caller
+
+    assert "      - python-distribution-proof" in scan
+    assert "artifact-ids: ${{ needs.python-distribution-proof.outputs.artifact-id }}" in download
+    assert "digest-mismatch: error" in download
+    for mutable_input in ("name:", "pattern:", "run-id:", "repository:", "github-token:"):
+        assert mutable_input not in download
+    assert "verify-selection" in scan
+    assert '--source-revision "$GITHUB_SHA"' in scan
+    assert '--wheel-sha256 "$WHEEL_SHA256"' in scan
+    assert '--selection-record-sha256 "$SELECTION_RECORD_SHA256"' in scan
+    assert "verified-python=${{ steps.python-distribution.outputs.download-path }}" in scan
+    assert "APPLICATION_SOURCE_REVISION=${{ github.sha }}" in scan
+    assert (
+        "APPLICATION_WHEEL_SHA256=${{ needs.python-distribution-proof.outputs.wheel-sha256 }}"
+        in scan
+    )
+    assert (
+        "APPLICATION_SELECTION_RECORD_SHA256=${{ "
+        "needs.python-distribution-proof.outputs.selection-record-sha256 }}" in scan
+    )
+
+    privileged = workflow.split("  publication-block:\n", 1)[1]
+    assert (
+        "artifact-ids: ${{ needs.python-distribution-proof.outputs.artifact-id }}" not in privileged
+    )
+    assert (
+        "verified-python=${{ steps.python-distribution.outputs.download-path }}" not in privileged
+    )
 
 
 def test_dockerfile_can_only_install_the_selected_application_wheel() -> None:

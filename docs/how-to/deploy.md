@@ -4,9 +4,10 @@ Extra CODEOWNERS has no supported production release or hosted service. The
 `main` publication job has been removed, and tagged publication is blocked
 while native-wheel and embedded-SBOM source completeness, handoff of the
 selected build proof, and publication isolation remain incomplete. The current
-Dockerfile requires the application proof selected from both architectures,
-but no supported release or ad-hoc path provides that proof to an operator. You
-cannot complete this guide today.
+Dockerfile requires the application proof selected from both architectures. CI,
+a manual workflow, and the tagged candidate scan can produce or consume that
+proof, but no supported release provides it to an operator. You cannot complete
+this guide today.
 
 The remaining sections record the runtime requirements for the future supported
 image path. Don't improvise an image input or let the current check authorize
@@ -43,11 +44,18 @@ Dockerfile as the read-only `verified-python` build context. The Dockerfile
 also requires the exact source revision, application-wheel SHA-256, and
 selection-record SHA-256. It fails closed when any input is absent or changed.
 
-Issue [`#32`](https://github.com/stampbot/extra-codeowners/issues/32) tracks a
-bounded, authenticated way for release and ad-hoc builds to consume that
-selected proof. Until that path exists, don't replace it with a generic ZIP
-extractor, an unverified wheel, empty build arguments, or a build of the project
-from the ambient Docker context. Stop here.
+The `Python distribution proof` workflow can produce the selected five-file
+artifact for the commit resolved from a manually chosen ref. It has only
+repository-read authority. The tagged candidate scan builds and verifies a
+fresh proof in the same run. Neither path publishes an image or authorizes an
+operator build.
+
+Issue [`#32`](https://github.com/stampbot/extra-codeowners/issues/32) tracks
+retaining the proof in release evidence and handing it to future publication
+jobs after issue #28 separates parsing from publication. Until that path
+exists, don't replace it with a generic ZIP extractor, an unverified wheel,
+empty build arguments, or a build of the project from the ambient Docker
+context. Stop here.
 
 Once issue #32 closes, this section must identify the exact supported image
 reference, platform digest, source revision, wheel digest, selection-record

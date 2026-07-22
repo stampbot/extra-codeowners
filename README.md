@@ -20,10 +20,11 @@ Routine automation can know that a pull request is safe while GitHub's code-owne
 > now covers native-wheel and embedded-SBOM component/source expansion. CI
 > already normalizes CPython and retains its exact runtime identity, pinned
 > build recipe, source archive, and source-carried license evidence.
-> [Selected build-proof handoff](https://github.com/stampbot/extra-codeowners/issues/32)
-> and
-> [publication privilege separation](https://github.com/stampbot/extra-codeowners/issues/28)
-> also remain open. An [older public GHCR preview](https://github.com/stampbot/extra-codeowners/issues/30)
+> CI, manual runs, and the tagged release scan use the same Python proof
+> workflow. [Selected build-proof handoff](https://github.com/stampbot/extra-codeowners/issues/32)
+> remains open for retained release evidence and future publication consumers.
+> [Publication privilege separation](https://github.com/stampbot/extra-codeowners/issues/28)
+> also remains open. An [older public GHCR preview](https://github.com/stampbot/extra-codeowners/issues/30)
 > may still be discoverable; it is unsupported, incomplete, and must not be
 > deployed or mirrored. There is no hosted service or Marketplace Action. The
 > [commit-scoped check limitation](#the-current-production-blocker) must also be

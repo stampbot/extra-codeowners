@@ -63,6 +63,20 @@ def _run_script(source: str, step_name: str) -> str:
     return "\n".join(lines)
 
 
+def _workflow_jobs(source: str) -> dict[str, str]:
+    """Return top-level job bodies from one workflow source file."""
+    _, separator, jobs_source = source.partition("\njobs:\n")
+    assert separator, "missing jobs mapping"
+    matches = list(re.finditer(r"(?m)^  (?P<name>[A-Za-z_][A-Za-z0-9_-]*):\n", jobs_source))
+    assert matches, "workflow has no jobs"
+    return {
+        match.group("name"): jobs_source[
+            match.end() : matches[index + 1].start() if index + 1 < len(matches) else None
+        ]
+        for index, match in enumerate(matches)
+    }
+
+
 @pytest.mark.parametrize("workflow_name", SECURITY_WORKFLOWS)
 def test_security_workflows_run_for_every_pull_request_base_and_retarget(
     workflow_name: str,
@@ -244,3 +258,187 @@ def test_workflow_security_keeps_every_expected_gate() -> None:
     assert "raven-actions/actionlint@" in source
     assert "zgosalvez/github-actions-ensure-sha-pinned-actions@" in source
     assert "zizmorcore/zizmor-action@" in source
+
+
+def test_reusable_python_distribution_workflow_has_only_read_authority() -> None:
+    source = (WORKFLOWS / "python-distribution.yml").read_text(encoding="utf-8")
+
+    assert "  workflow_call:\n" in source
+    assert "  workflow_dispatch:\n" in source
+    assert (
+        "concurrency:\n"
+        "  group: python-distribution-${{ github.workflow }}-${{ github.ref }}\n"
+        "  cancel-in-progress: false\n" in source
+    )
+    assert source.count("\npermissions:\n") == 1
+    permission_block = source.split("\npermissions:\n", 1)[1].split("\nenv:\n", 1)[0]
+    assert permission_block == "  contents: read\n"
+    assert not re.search(r"(?m)^    permissions:", source)
+    assert "write-all" not in source
+    assert not re.search(r"(?m)^\s+[A-Za-z-]+:\s*write(?:\s*#.*)?$", source)
+    for forbidden in (
+        "secrets:",
+        "id-token: write",
+        "attestations: write",
+        "contents: write",
+        "packages: write",
+        "environment:",
+        "pull_request_target:",
+    ):
+        assert forbidden not in source
+    assert source.count("timeout-minutes:") == 2
+    assert source.count("persist-credentials: false") == source.count("actions/checkout@")
+    for line in source.splitlines():
+        if "uses:" in line:
+            assert FULL_SHA_ACTION.search(line.strip()), f"mutable action reference: {line}"
+
+
+def test_release_publication_authority_is_directly_blocked() -> None:
+    source = (WORKFLOWS / "release.yml").read_text(encoding="utf-8")
+    jobs = _workflow_jobs(source)
+    blocker = jobs["publication-block"]
+
+    assert "    needs: validate\n" in blocker
+    assert "    permissions: {}\n" in blocker
+    assert "    timeout-minutes: 1\n" in blocker
+    assert blocker.count("      - name:") == 1
+    assert "uses:" not in blocker
+    assert "${{" not in blocker
+    assert "secrets." not in blocker
+    assert "continue-on-error:" not in blocker
+    assert not re.search(r"(?m)^    if:|^        if:", blocker)
+    assert (
+        "Tagged publication is blocked by "
+        "https://github.com/stampbot/extra-codeowners/issues/28" in blocker
+    )
+    assert "exit 1" in blocker
+    assert "Keep tagged publication disabled" not in jobs["validate"]
+
+    privileged_jobs = {
+        name for name, body in jobs.items() if re.search(r"(?m)^      [a-z-]+: write$", body)
+    }
+    assert privileged_jobs == {"python", "image", "chart", "release"}
+    for name in privileged_jobs:
+        assert "      - publication-block\n" in jobs[name]
+        assert not re.search(r"(?m)^    if:", jobs[name])
+
+    for name in ("validate", "quality", "python-distribution-proof", "security-scan"):
+        assert not re.search(r"(?m)^      [a-z-]+: write$", jobs[name])
+
+
+@pytest.mark.skipif(BASH is None, reason="the hardened runtime intentionally contains no shell")
+def test_release_publication_blocker_exits_nonzero() -> None:
+    source = (WORKFLOWS / "release.yml").read_text(encoding="utf-8")
+    script = _run_script(
+        source, "Keep tagged publication disabled pending isolated evidence collection"
+    )
+
+    assert BASH is not None
+    result = subprocess.run(  # noqa: S603 - deliberately exercises the reviewed workflow script
+        [BASH, "-c", script],
+        cwd=ROOT,
+        env=os.environ,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "https://github.com/stampbot/extra-codeowners/issues/28" in (
+        result.stdout + result.stderr
+    )
+
+
+def test_python_proof_handoffs_never_query_mutable_workflow_artifacts() -> None:
+    proof = (WORKFLOWS / "python-distribution.yml").read_text(encoding="utf-8")
+    release = (WORKFLOWS / "release.yml").read_text(encoding="utf-8")
+    scan = _workflow_jobs(release)["security-scan"]
+    selected_download = scan.split("      - name: Download the selected Python distribution\n", 1)[
+        1
+    ].split("      - name: Verify the selected Python distribution\n", 1)[0]
+
+    for forbidden in (
+        "workflow_run",
+        "/actions/runs",
+        "gh run",
+        "latest",
+        "conclusion",
+        "github-token:",
+        "run-id:",
+    ):
+        assert forbidden not in proof
+        assert forbidden not in selected_download
+    assert "artifact-ids: ${{ needs.python-distribution-proof.outputs.artifact-id }}" in (
+        selected_download
+    )
+    assert "digest-mismatch: error" in selected_download
+
+
+def _distribution_wrapper_environment(output: Path) -> dict[str, str]:
+    return os.environ | {
+        "ARTIFACT_DIGEST": "a" * 64,
+        "ARTIFACT_ID": "12345",
+        "GITHUB_OUTPUT": str(output),
+        "PROOF_RESULT": "success",
+        "SELECTION_RECORD_SHA256": "b" * 64,
+        "WHEEL_SHA256": "c" * 64,
+    }
+
+
+@pytest.mark.skipif(BASH is None, reason="the hardened runtime intentionally contains no shell")
+def test_ci_distribution_wrapper_forwards_only_validated_outputs(tmp_path: Path) -> None:
+    source = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
+    script = _run_script(source, "Require a complete reusable distribution proof")
+    output = tmp_path / "github-output"
+
+    assert BASH is not None
+    result = subprocess.run(  # noqa: S603 - deliberately exercises the reviewed workflow script
+        [BASH, "-c", script],
+        cwd=ROOT,
+        env=_distribution_wrapper_environment(output),
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert output.read_text(encoding="utf-8").splitlines() == [
+        "artifact-id=12345",
+        f"artifact-digest={'a' * 64}",
+        f"wheel-sha256={'c' * 64}",
+        f"selection-record-sha256={'b' * 64}",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("PROOF_RESULT", "failure"),
+        ("ARTIFACT_ID", "01"),
+        ("ARTIFACT_DIGEST", f"sha256:{'a' * 64}"),
+        ("WHEEL_SHA256", "C" * 64),
+        ("SELECTION_RECORD_SHA256", "b" * 63),
+    ),
+)
+@pytest.mark.skipif(BASH is None, reason="the hardened runtime intentionally contains no shell")
+def test_ci_distribution_wrapper_rejects_incomplete_or_malformed_outputs(
+    field: str, value: str, tmp_path: Path
+) -> None:
+    source = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
+    script = _run_script(source, "Require a complete reusable distribution proof")
+    output = tmp_path / "github-output"
+    environment = _distribution_wrapper_environment(output)
+    environment[field] = value
+
+    assert BASH is not None
+    result = subprocess.run(  # noqa: S603 - deliberately exercises the reviewed workflow script
+        [BASH, "-c", script],
+        cwd=ROOT,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert not output.exists()

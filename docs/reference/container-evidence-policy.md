@@ -159,8 +159,9 @@ Approval is necessary but not sufficient. The collector also requires the
 inventory's exact complete-source status. Current code intentionally requires
 `complete: false` with the issue #18 reason, so the distribution gate cannot
 pass. Issue #28 independently prevents publication authority from entering
-the current collection path. Issue #32 separately requires release and ad-hoc
-builds to consume CI's hash-pinned selected proof and exact application wheel.
+the current collection path. Issue #32 separately requires release evidence
+and the future isolated publication jobs to retain and consume the hash-pinned
+selected proof and exact application wheel.
 
 ## License policy
 

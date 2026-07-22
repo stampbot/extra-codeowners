@@ -13,9 +13,10 @@ artifacts are review inputs. Their subject is the local image configuration
 digest because CI has not published a platform manifest.
 
 Public `main` image and tagged publication are deliberately disabled. The main
-publication job has been removed, and the release workflow exits after its
-milestone check and before every job that can publish an image, chart, Python
-package, or GitHub release. Setting
+publication job has been removed. The release workflow may run validation,
+proof, and candidate-scan jobs with repository-read authority, but a separate
+job fails before any job can publish an image, chart, Python package, or GitHub
+release. Setting
 `distribution_approval.approved=true` does not remove that structural block.
 Security issue
 [`#28`](https://github.com/stampbot/extra-codeowners/issues/28) tracks the
@@ -30,8 +31,10 @@ binds the selected GitHub Actions artifact ID and archive digest. Run-scoped
 artifact identity never enters an image label, so a rerun does not change image
 bytes for that reason. Issue
 [`#32`](https://github.com/stampbot/extra-codeowners/issues/32) remains open for
-the release and ad-hoc build paths, which do not yet consume this proof. No CI
-collector success overrides that release blocker.
+retaining this proof in release evidence and handing it to the future isolated
+publication path. The reusable workflow also supports a read-only manual run,
+and the tagged candidate scan consumes only the proof built in its own run. No
+CI collector success overrides the publication blocker.
 
 The current archive is intentionally incomplete as distribution evidence.
 CPython is now a normalized top-level runtime component with exact identity,
