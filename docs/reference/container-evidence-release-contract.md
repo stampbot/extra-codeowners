@@ -8,13 +8,13 @@ exact canonical JSON encoding, gzip and tar envelope and member order,
 `MANIFEST.json` and source-record schemas, Sigstore issuer and transparency-log
 requirements, and SBOM and provenance predicate contracts before publication.
 
-The current collector has completed the CPython tranche of
-[#18](https://github.com/stampbot/extra-codeowners/issues/18). It normalizes the
-runtime as a top-level component, binds exact identity files on both platforms,
-and retains the pinned recipe, source archive, and source-carried license.
-Before an inventory may report complete, the remaining work in that issue must
-expand native wheel payloads and embedded software bills of materials (SBOMs)
-into complete component, notice, and corresponding-source records.
+The current collector has completed the CPython identity and source tranche of
+[#18](https://github.com/stampbot/extra-codeowners/issues/18). It also retains
+the exact locked platform wheel for every native-payload or embedded-SBOM owner
+and keeps a separately addressed copy of each raw SBOM. Before an inventory may
+report complete, the remaining work in that issue must expand the components
+inside those wheels and SBOMs into complete notice and corresponding-source
+records.
 
 The current collector already replays wheel `RECORD` ownership for ineffective
 historical Python installs whose bytes remain in distributed lower layers. A
@@ -79,8 +79,8 @@ The canonical JSON predicate has exactly these fields:
 
 | Field | Type | Requirement |
 | --- | --- | --- |
-| `schema_version` | integer | Exactly `3`. |
-| `media_type` | string | Exactly `application/vnd.stampbot.container-evidence.v3+tar+gzip`. |
+| `schema_version` | integer | Exactly `4`. |
+| `media_type` | string | Exactly `application/vnd.stampbot.container-evidence.v4+tar+gzip`. |
 | `platform` | string | `linux/amd64` or `linux/arm64`; it must match the selected manifest. |
 | `subject_digest` | string | Lowercase `sha256:` digest of the published platform manifest, never a local image configuration digest. |
 | `artifact` | object | Exactly `filename` and `sha256`. |
@@ -134,12 +134,47 @@ The archive must contain at least these entry points:
 | `inventory/all-layer-files.json` | Every regular, directory, non-regular, and whiteout occurrence in every distributed layer, including security metadata; regular and directory records also carry effective state. |
 | `policy/container-policy.json` | The exact reviewed policy used to accept the candidate. |
 | `artifacts/application/` | The exact selected wheel, sdist, both native build records, and cross-architecture selection record; every file is hash-bound by `MANIFEST.json`. |
+| `artifacts/native-wheels/` | One exact locked platform wheel for every owner in the union of `native_payloads` and `embedded_sboms`, plus separately retained raw embedded-SBOM bytes. `MANIFEST.json` binds each owner, platform, requested URL and redirect chain, path, size, and SHA-256. |
 | `licenses/standard/` | Hash-pinned standard license texts required by reviewed expressions. |
 | `licenses/from-source/` | Hash-pinned notices retained from exact source archives. |
 | `sources/application/` | Exact tracked Extra CODEOWNERS source blobs and Git modes at the image revision. |
 | `sources/base/` | Commit-pinned Docker Official Python recipe, exact recipe-selected CPython source archive, and required license evidence. |
 | `sources/python/` | Locked top-level Python sources plus corresponding sources for every expanded native or SBOM component. |
 | `sources/alpine/` | Commit-pinned recipe subtrees and every local or downloaded source named by their verified checksums. |
+
+### Current native-wheel manifest records
+
+Until issue #28 freezes the recipient schema, this is the exact schema-v4
+collector format for `MANIFEST.json.native_wheel_artifacts`. It is an inspection
+reference, not a promise that the unfinished release wire format will remain
+unchanged.
+
+Each wheel record has exactly these fields:
+
+| Field | Requirement |
+| --- | --- |
+| `owner` | Canonical `python:NAME@VERSION` owner derived from the inventory. |
+| `platform` | Exact inventory platform. |
+| `url` | Requested lock-file URL. |
+| `urls` | Ordered requested URL and redirect chain; every URL is credential-free HTTPS. |
+| `filename` | Basename selected from the lock-file URL. |
+| `path` | `artifacts/native-wheels/NAME/VERSION/FILENAME`. |
+| `size`, `sha256` | Size and lowercase SHA-256 of the retained wheel bytes. |
+| `build`, `tags` | Exact WHEEL build value and sorted tag list used for selection. |
+| `generated_files` | Sorted records for reviewed installer-generated launchers. |
+| `embedded_sboms` | Sorted records for separately retained raw SBOM bytes. |
+
+Each `generated_files` item has exactly `name`, `kind`, `module`, `callable`,
+`source_path`, `launcher_interpreter`, and `installed_occurrence`. The
+occurrence has exactly `effective`, `layer`, `path`, `sha256`, `size`, `mode`,
+`uid`, and `gid`.
+
+Each `embedded_sboms` item has exactly `owner`, `platform`, `url`, `urls`,
+`archive_path`, `installed_occurrence`, `path`, `size`, and `sha256`. Its `path`
+is
+`artifacts/native-wheels/NAME/VERSION/embedded-sboms/ARCHIVE_PATH`, and its
+occurrence uses the same exact field set described above. `SHA256SUMS` binds the
+wheel, raw SBOM, and manifest bytes independently of these records.
 
 `MANIFEST.json` and `inventory/components.json` must both report
 `source_completeness.complete: true`. Their reason text and the complete source

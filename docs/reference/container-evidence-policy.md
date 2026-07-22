@@ -45,7 +45,7 @@ The policy has exactly these fields:
 
 | Field | Type | Meaning | Consuming gate |
 | --- | --- | --- | --- |
-| `schema_version` | integer | Policy schema; exactly `3`. | Every command through `validate_policy_schema`. |
+| `schema_version` | integer | Policy schema; exactly `4`. | Every command through `validate_policy_schema`. |
 | `base_image` | string | Nonempty bounded Dockerfile base reference; the schema rejects whitespace and `@`. The checked-in value is a tagged Docker Official Python reference. | Exact Dockerfile binding during `bundle` and `verify-ci-policy`. |
 | `base_image_index_digest` | `qualified_sha256` | Reviewed multi-platform base index. | Schema validation during `verify`; exact Dockerfile/index binding during `bundle` and `verify-ci-policy`. |
 | `base_image_platforms` | platform object | Exact ordered base layer diff IDs for both platforms. | Base-prefix and post-base provenance gates. |
@@ -235,6 +235,15 @@ covers base-image identities such as system `pip` WHEEL and RECORD files outside
 virtual environment. These baselines make known incomplete surfaces visible;
 they do not claim that the nested components and corresponding sources are
 complete.
+
+Each `wheel_installations` record preserves the exact WHEEL build tag as well
+as its tags and `Root-Is-Purelib` value. Bundle generation uses those fields to
+select one platform wheel from `uv.lock`; a merely compatible wheel is not an
+acceptable substitute.
+
+For native-wheel retention, an owner must appear in exactly one historical
+installation record. Repeated installation of the same owner fails closed;
+there is no last-match or effective-file fallback.
 
 `filesystem_baselines` also has both platform keys. Each value has exactly:
 

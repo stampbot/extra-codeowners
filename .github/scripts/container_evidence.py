@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import base64
 import binascii
+import configparser
 import csv
 import dataclasses
 import datetime
@@ -41,10 +42,16 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from packaging.utils import InvalidName, canonicalize_name
+from packaging.tags import cpython_tags
+from packaging.utils import (
+    InvalidName,
+    InvalidWheelFilename,
+    canonicalize_name,
+    parse_wheel_filename,
+)
 from packaging.version import InvalidVersion, Version
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 EVIDENCE_MEDIA_TYPE = f"application/vnd.stampbot.container-evidence.v{SCHEMA_VERSION}+tar+gzip"
 APPLICATION_NAME = "extra-codeowners"
 EXPECTED_RUNTIME_PYTHON = "3.14.6"
@@ -135,6 +142,11 @@ INTERPRETER_BYTECODE_ROOTS = (
     f"usr/local/lib/python{CPYTHON_RUNTIME_MINOR}/",
 )
 WHEEL_TAG = re.compile(r"^[A-Za-z0-9_.]+-[A-Za-z0-9_.]+-[A-Za-z0-9_.]+$")
+ENTRY_POINT = re.compile(
+    r"^(?P<module>[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)"
+    r":(?P<callable>[A-Za-z_]\w*)$"
+)
+SCRIPT_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 NATIVE_LIBRARY = re.compile(r"(?:\.so(?:\.[0-9]+)*|\.dylib|\.dll)$", re.IGNORECASE)
 CYCLONEDX_SERIAL_NUMBER = re.compile(
     r"^urn:uuid:[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
@@ -183,6 +195,13 @@ class EvidenceError(RuntimeError):
     """Fail-closed evidence collection error."""
 
 
+class CaseSensitiveConfigParser(configparser.ConfigParser):
+    """Preserve entry-point script names exactly as declared."""
+
+    def optionxform(self, optionstr: str) -> str:
+        return optionstr
+
+
 @dataclass(frozen=True)
 class PythonRecordInstallation:
     """One RECORD occurrence bound to the exact layer snapshot it described."""
@@ -194,6 +213,7 @@ class PythonRecordInstallation:
     wheel: dict[str, Any]
     record: dict[str, Any]
     root_is_purelib: bool
+    build: str
     tags: tuple[str, ...]
     entries: dict[str, tuple[str | None, int | None, dict[str, Any]]]
 
@@ -1219,6 +1239,73 @@ def parse_wheel_record(
     return result
 
 
+def parse_archive_wheel_record(
+    content: bytes, record_path: str
+) -> dict[str, tuple[str | None, int | None]]:
+    """Parse a wheel's pre-install RECORD using archive-member paths."""
+
+    if len(content) > MAX_RECORD_BYTES:
+        raise EvidenceError("native wheel archive RECORD exceeds its size limit")
+    try:
+        text = content.decode("utf-8")
+        rows = csv.reader(io.StringIO(text, newline=""), strict=True)
+        result: dict[str, tuple[str | None, int | None]] = {}
+        self_rows = 0
+        for row_number, row in enumerate(rows, start=1):
+            if row_number > MAX_RECORD_ENTRIES:
+                raise EvidenceError("native wheel archive RECORD has too many entries")
+            if len(row) != 3:
+                raise EvidenceError(
+                    f"native wheel archive RECORD row {row_number} has {len(row)} fields"
+                )
+            target = str(checked_canonical_path(row[0], "native wheel archive RECORD path"))
+            if target in result:
+                raise EvidenceError(f"native wheel archive RECORD repeats path: {target}")
+            hash_field, size_field = row[1:]
+            if target == record_path:
+                self_rows += 1
+                if hash_field or size_field:
+                    raise EvidenceError("native wheel archive RECORD self-entry must be blank")
+                result[target] = (None, None)
+                continue
+            if (
+                not hash_field.startswith("sha256=")
+                or re.fullmatch(r"(?:0|[1-9][0-9]*)", size_field) is None
+                or len(size_field) > 20
+            ):
+                raise EvidenceError(
+                    f"native wheel archive RECORD row {row_number} has an invalid identity"
+                )
+            size = int(size_field)
+            if size > MAX_ARCHIVE_MEMBER_BYTES:
+                raise EvidenceError(
+                    f"native wheel archive RECORD row {row_number} has an invalid size"
+                )
+            encoded = hash_field.removeprefix("sha256=")
+            if re.fullmatch(r"[A-Za-z0-9_-]{43}", encoded) is None:
+                raise EvidenceError(
+                    f"native wheel archive RECORD row {row_number} has an invalid hash"
+                )
+            try:
+                digest_bytes = base64.b64decode(encoded + "=", altchars=b"-_", validate=True)
+            except (binascii.Error, ValueError) as exc:
+                raise EvidenceError(
+                    f"native wheel archive RECORD row {row_number} has an invalid hash"
+                ) from exc
+            if len(digest_bytes) != hashlib.sha256().digest_size:
+                raise EvidenceError(
+                    f"native wheel archive RECORD row {row_number} has an invalid hash"
+                )
+            result[target] = (digest_bytes.hex(), size)
+    except UnicodeDecodeError as exc:
+        raise EvidenceError("native wheel archive RECORD is not UTF-8") from exc
+    except csv.Error as exc:
+        raise EvidenceError(f"cannot parse native wheel archive RECORD: {exc}") from exc
+    if not result or self_rows != 1:
+        raise EvidenceError("native wheel archive RECORD must contain one self-entry")
+    return result
+
+
 def validate_wheel_metadata(content: bytes, path: str) -> dict[str, Any]:
     """Validate and normalize the security-relevant fields in one WHEEL file."""
 
@@ -1250,9 +1337,12 @@ def validate_wheel_metadata(content: bytes, path: str) -> dict[str, Any]:
             raise EvidenceError(f"Python WHEEL has an invalid tag: {path}")
     build = message.get("Build")
     if build is not None:
-        checked_scalar(build, f"Build in {path}")
+        build = checked_scalar(build, f"Build in {path}")
+        if re.fullmatch(r"[0-9]+[A-Za-z0-9_.]*", build) is None:
+            raise EvidenceError(f"Python WHEEL has an invalid Build value: {path}")
     return {
         "root_is_purelib": pure == "true",
+        "build": build or "",
         "tags": sorted(checked_tags),
     }
 
@@ -1384,6 +1474,7 @@ def parse_python_record_installation(
         wheel=identity_records[wheel_path],
         record=identity_records[record_path],
         root_is_purelib=bool(wheel_identity["root_is_purelib"]),
+        build=str(wheel_identity["build"]),
         tags=tuple(wheel_identity["tags"]),
         entries=entries,
     )
@@ -2717,6 +2808,7 @@ def _inventory_saved_image(
             "wheel": observed_payload(installation.wheel),
             "record": observed_payload(installation.record),
             "root_is_purelib": installation.root_is_purelib,
+            "build": installation.build,
             "tags": list(installation.tags),
             "entries": [
                 {
@@ -3643,6 +3735,7 @@ def validate_wheel_installations(
             "wheel",
             "record",
             "root_is_purelib",
+            "build",
             "tags",
             "entries",
         }:
@@ -3653,6 +3746,11 @@ def validate_wheel_installations(
             raise EvidenceError("historical Python installation has an unknown owner")
         if not isinstance(installation.get("root_is_purelib"), bool):
             raise EvidenceError("historical Python installation has invalid purelib state")
+        build = installation.get("build")
+        if not isinstance(build, str) or (
+            build and re.fullmatch(r"[0-9]+[A-Za-z0-9_.]*", build) is None
+        ):
+            raise EvidenceError("historical Python installation has an invalid build tag")
         tags = installation.get("tags")
         if (
             not isinstance(tags, list)
@@ -5849,6 +5947,230 @@ def parse_lock_sources(lock_path: Path) -> dict[tuple[str, str], dict[str, Any]]
     return sources
 
 
+def native_wheel_contexts(inventory: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
+    """Return the exact installed-wheel owners exposing native or SBOM payloads."""
+
+    payloads: dict[str, dict[str, list[Mapping[str, Any]]]] = {}
+    for category in ("native_payloads", "embedded_sboms"):
+        records = inventory.get(category)
+        if not isinstance(records, list) or len(records) > MAX_IMAGE_MEMBERS:
+            raise EvidenceError(f"component inventory has invalid {category}")
+        for record in records:
+            owner = record.get("owner") if isinstance(record, dict) else None
+            if not isinstance(owner, str):
+                raise EvidenceError(f"component inventory {category} has no wheel owner")
+            payloads.setdefault(
+                owner,
+                {"native_payloads": [], "embedded_sboms": []},
+            )[category].append(record)
+
+    components: dict[str, Mapping[str, Any]] = {}
+    for component in inventory.get("components", []):
+        if not isinstance(component, dict) or component.get("ecosystem") != "python":
+            continue
+        owner = component_key(component)
+        if owner in components:
+            raise EvidenceError(f"component inventory repeats native-wheel owner: {owner}")
+        components[owner] = component
+
+    installations_by_owner: dict[str, list[Mapping[str, Any]]] = {}
+    installations = inventory.get("wheel_installations")
+    if not isinstance(installations, list) or len(installations) > MAX_IMAGE_MEMBERS:
+        raise EvidenceError("component inventory has invalid historical Python installations")
+    for installation in installations:
+        owner = installation.get("owner") if isinstance(installation, dict) else None
+        if isinstance(owner, str) and owner in payloads:
+            installations_by_owner.setdefault(owner, []).append(installation)
+
+    contexts: dict[str, dict[str, Any]] = {}
+    for owner in sorted(payloads):
+        component = components.get(owner)
+        if component is None:
+            raise EvidenceError(f"native-wheel payload has no Python component: {owner}")
+        matching_installations = installations_by_owner.get(owner, [])
+        if len(matching_installations) != 1:
+            raise EvidenceError(
+                f"native-wheel owner must have exactly one historical installation: {owner}"
+            )
+        contexts[owner] = {
+            "component": component,
+            "installation": matching_installations[0],
+            **payloads[owner],
+        }
+    return contexts
+
+
+def wheel_tag_matches_native_platform(tag: Any, platform: str) -> bool:
+    """Require the locked wheel to target the reviewed musl platform and architecture."""
+
+    architecture = {"linux/amd64": "x86_64", "linux/arm64": "aarch64"}.get(platform)
+    if architecture is None:
+        raise EvidenceError(f"unsupported native-wheel platform: {platform}")
+    wheel_platform = getattr(tag, "platform", None)
+    if not isinstance(wheel_platform, str):
+        return False
+    match = re.fullmatch(rf"musllinux_([0-9]+)_([0-9]+)_{architecture}", wheel_platform)
+    if match is None:
+        return False
+    required = (int(match.group(1)), int(match.group(2)))
+    if required not in {(1, 1), (1, 2)}:
+        return False
+    compatible = set(
+        cpython_tags(
+            python_version=(3, 14),
+            abis=["cp314"],
+            platforms=[
+                f"musllinux_1_2_{architecture}",
+                f"musllinux_1_1_{architecture}",
+            ],
+        )
+    )
+    return tag in compatible
+
+
+def raw_wheel_build_tag(filename: str, parsed_build: tuple[()] | tuple[int, str]) -> str:
+    """Return the exact filename Build field without packaging normalization."""
+
+    if not filename.endswith(".whl"):
+        raise EvidenceError(f"locked wheel has an invalid filename: {filename}")
+    fields = filename.removesuffix(".whl").split("-")
+    if len(fields) not in {5, 6}:
+        raise EvidenceError(f"locked wheel has an invalid filename: {filename}")
+    build = fields[2] if len(fields) == 6 else ""
+    if bool(parsed_build) != bool(build) or (
+        build and re.fullmatch(r"[0-9]+[A-Za-z0-9_.]*", build) is None
+    ):
+        raise EvidenceError(f"locked wheel has an invalid Build field: {filename}")
+    return build
+
+
+def select_locked_native_wheels(
+    lock_path: Path, inventory: Mapping[str, Any]
+) -> list[dict[str, Any]]:
+    """Select one exact locked wheel for every native/SBOM RECORD owner."""
+
+    contexts = native_wheel_contexts(inventory)
+    if not contexts:
+        return []
+    try:
+        lock = tomllib.loads(read_local_bytes(lock_path, max_bytes=MAX_JSON_BYTES).decode("utf-8"))
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
+        raise EvidenceError(f"cannot parse {lock_path}: {exc}") from exc
+    packages = lock.get("package")
+    if not isinstance(packages, list) or len(packages) > MAX_COMPONENTS:
+        raise EvidenceError("lock file has an invalid package list")
+
+    requested = {
+        (str(context["component"]["name"]), str(context["component"]["version"])): owner
+        for owner, context in contexts.items()
+    }
+    packages_by_key: dict[tuple[str, str], list[Mapping[str, Any]]] = {}
+    for package in packages:
+        if not isinstance(package, dict):
+            raise EvidenceError("lock file has an invalid package record")
+        raw_name = package.get("name")
+        version = package.get("version")
+        if not isinstance(raw_name, str) or not isinstance(version, str):
+            raise EvidenceError("lock file has invalid package identity fields")
+        name = normalize_package_name(raw_name)
+        key = (name, version)
+        if key in requested:
+            packages_by_key.setdefault(key, []).append(package)
+
+    platform = inventory.get("platform")
+    if platform not in {"linux/amd64", "linux/arm64"}:
+        raise EvidenceError("component inventory has an unsupported native-wheel platform")
+    selected: list[dict[str, Any]] = []
+    for key, owner in sorted(requested.items(), key=lambda item: item[1]):
+        matches = packages_by_key.get(key, [])
+        if len(matches) != 1:
+            raise EvidenceError(
+                f"lock file must contain exactly one native-wheel package: {key[0]} {key[1]}"
+            )
+        package = matches[0]
+        wheels = package.get("wheels")
+        if not isinstance(wheels, list) or not wheels or len(wheels) > MAX_SOURCE_ZIP_ENTRIES:
+            raise EvidenceError(f"locked package has an invalid wheel list: {key[0]} {key[1]}")
+        installation = contexts[owner]["installation"]
+        installed_tags = installation.get("tags")
+        installed_build = installation.get("build")
+        if (
+            not isinstance(installed_tags, list)
+            or not installed_tags
+            or any(not isinstance(tag, str) for tag in installed_tags)
+            or not isinstance(installed_build, str)
+        ):
+            raise EvidenceError(f"native-wheel installation has invalid tags or build: {owner}")
+
+        candidates: list[dict[str, Any]] = []
+        for wheel in wheels:
+            if not isinstance(wheel, dict) or set(wheel) not in (
+                {"url", "hash", "size"},
+                {"url", "hash", "size", "upload-time"},
+            ):
+                raise EvidenceError(f"locked wheel has an invalid record: {key[0]} {key[1]}")
+            upload_time = wheel.get("upload-time")
+            if upload_time is not None:
+                if not isinstance(upload_time, str):
+                    raise EvidenceError(
+                        f"locked wheel has an invalid upload time: {key[0]} {key[1]}"
+                    )
+                checked_scalar(upload_time, f"locked wheel upload time for {key[0]} {key[1]}")
+            url = wheel.get("url")
+            hash_value = wheel.get("hash")
+            size = wheel.get("size")
+            if not isinstance(url, str):
+                raise EvidenceError(f"locked wheel has no URL: {key[0]} {key[1]}")
+            require_https_source_url(url)
+            if (
+                not isinstance(hash_value, str)
+                or re.fullmatch(r"sha256:[0-9a-f]{64}", hash_value) is None
+            ):
+                raise EvidenceError(f"locked wheel has no SHA-256: {key[0]} {key[1]}")
+            if (
+                not isinstance(size, int)
+                or isinstance(size, bool)
+                or not 0 < size <= MAX_DOWNLOAD_BYTES
+            ):
+                raise EvidenceError(f"locked wheel has an invalid size: {key[0]} {key[1]}")
+            filename = safe_filename(url)
+            try:
+                parsed_name, parsed_version, build_tag, tags = parse_wheel_filename(filename)
+                expected_version = Version(key[1])
+            except (InvalidVersion, InvalidWheelFilename) as exc:
+                raise EvidenceError(f"locked wheel has an invalid filename: {filename}") from exc
+            if canonicalize_name(parsed_name) != key[0] or parsed_version != expected_version:
+                raise EvidenceError(f"locked wheel filename has the wrong owner: {filename}")
+            tag_strings = sorted(str(tag) for tag in tags)
+            build = raw_wheel_build_tag(filename, build_tag)
+            if (
+                tag_strings == installed_tags
+                and build == installed_build
+                and all(wheel_tag_matches_native_platform(tag, str(platform)) for tag in tags)
+            ):
+                candidates.append(
+                    {
+                        "owner": owner,
+                        "platform": platform,
+                        "url": url,
+                        "sha256": hash_value.removeprefix("sha256:"),
+                        "size": size,
+                        "filename": filename,
+                        "build": build,
+                        "tags": tag_strings,
+                    }
+                )
+        if len(candidates) != 1:
+            raise EvidenceError(
+                f"lock file must select exactly one installed native wheel for {owner}; "
+                f"found {len(candidates)}"
+            )
+        selected.append(candidates[0])
+    if {record["owner"] for record in selected} != set(contexts):
+        raise EvidenceError("locked native wheels do not exactly cover structured payload owners")
+    return selected
+
+
 def source_filename_pattern(source: str, origin: str) -> re.Pattern[str]:
     if any(character in source for character in ('"', "'", "`", ";")) or "$(" in source:
         raise EvidenceError(f"unsupported APKBUILD source token for {origin}: {source!r}")
@@ -6338,6 +6660,9 @@ def read_source_zip_central_directory(
     central_offset: int,
     central_size: int,
     expected_entries: int,
+    *,
+    allow_typeless_regular: bool = False,
+    allow_stored_extract_version_20: bool = False,
 ) -> list[SourceZipCentralEntry]:
     """Parse bounded raw central records before constructing ZipInfo objects."""
 
@@ -6406,11 +6731,15 @@ def read_source_zip_central_directory(
 
         create_system = version_made >> 8
         create_version = version_made & 0xFF
-        expected_extract_version = 10 if compress_type == zipfile.ZIP_STORED else 20
+        expected_extract_versions = (
+            {10, 20}
+            if allow_stored_extract_version_20 and compress_type == zipfile.ZIP_STORED
+            else {10 if compress_type == zipfile.ZIP_STORED else 20}
+        )
         if (
             create_system != 3
             or create_version not in {20, 30}
-            or extract_version != expected_extract_version
+            or extract_version not in expected_extract_versions
             or flag_bits != 0
             or compress_type not in {zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED}
             or disk_start != 0
@@ -6432,10 +6761,14 @@ def read_source_zip_central_directory(
         mode = external_attr >> 16
         expected_type = stat.S_IFDIR if is_directory else stat.S_IFREG
         expected_dos_attributes = 0x10 if is_directory else 0
+        observed_type = stat.S_IFMT(mode)
+        allowed_types = (
+            {stat.S_IFREG, 0} if allow_typeless_regular and not is_directory else {expected_type}
+        )
         if (
-            stat.S_IFMT(mode) != expected_type
+            observed_type not in allowed_types
             or external_attr & 0xFFFF != expected_dos_attributes
-            or mode & ~(expected_type | 0o777)
+            or mode & ~(observed_type | 0o777)
         ):
             raise EvidenceError(f"source ZIP has an unsupported entry type: {name}")
         if is_directory and (
@@ -6551,12 +6884,19 @@ def validate_source_zip_entries(
     return entries
 
 
-def read_source_zip_payload(content: bytes, entry: ValidatedSourceZipEntry) -> bytes:
-    """Read one license payload with an exact, allocation-bounded raw decoder."""
+def read_source_zip_payload(
+    content: bytes,
+    entry: ValidatedSourceZipEntry,
+    *,
+    max_bytes: int = MAX_LICENSE_BYTES,
+    purpose: str = "license payload",
+) -> bytes:
+    """Read one payload with an exact, allocation-bounded raw ZIP decoder."""
 
     metadata = entry.metadata
-    if metadata.file_size > MAX_LICENSE_BYTES:
-        raise EvidenceError(f"license file exceeds limit: {metadata.name}")
+    if metadata.file_size > max_bytes:
+        limit_subject = "license file" if purpose == "license payload" else purpose
+        raise EvidenceError(f"{limit_subject} exceeds limit: {metadata.name}")
     payload = content[entry.data_offset : entry.data_end]
     if len(payload) != metadata.compress_size:
         raise EvidenceError(f"source ZIP payload boundary disagrees: {metadata.name}")
@@ -6570,7 +6910,7 @@ def read_source_zip_payload(content: bytes, entry: ValidatedSourceZipEntry) -> b
             result = decoder.decompress(payload, metadata.file_size + 1)
         except zlib.error as exc:
             raise EvidenceError(
-                f"source ZIP license payload cannot be decompressed: {metadata.name}"
+                f"source ZIP {purpose} cannot be decompressed: {metadata.name}"
             ) from exc
         if (
             len(result) != metadata.file_size
@@ -6578,12 +6918,459 @@ def read_source_zip_payload(content: bytes, entry: ValidatedSourceZipEntry) -> b
             or decoder.unused_data
             or decoder.unconsumed_tail
         ):
-            raise EvidenceError(f"source ZIP license payload disagrees: {metadata.name}")
+            raise EvidenceError(f"source ZIP {purpose} disagrees: {metadata.name}")
     else:  # The raw central-directory parser rejects this before ranges are trusted.
         raise EvidenceError(f"source ZIP compression method is unsupported: {metadata.name}")
     if zlib.crc32(result) & 0xFFFFFFFF != metadata.crc:
-        raise EvidenceError(f"source ZIP license payload CRC disagrees: {metadata.name}")
+        raise EvidenceError(f"source ZIP {purpose} CRC disagrees: {metadata.name}")
     return result
+
+
+def wheel_member_install_path(
+    member_name: str,
+    site_root: PurePosixPath,
+    *,
+    data_directory: str,
+    component_name: str,
+) -> str:
+    """Map one regular wheel member to the reviewed venv layout.
+
+    Only the observed PEP 427 header relocation is supported. Failing closed
+    keeps provenance exact instead of guessing how an installer rewrote other
+    scripts, headers, or data paths.
+    """
+
+    member = checked_path(member_name)
+    if member.parts[0].endswith(".data"):
+        if (
+            member.parts[0] != data_directory
+            or len(member.parts) < 3
+            or member.parts[1] != "headers"
+        ):
+            raise EvidenceError(f"native wheel uses an unsupported .data relocation: {member_name}")
+        header_root = PurePosixPath(f"opt/venv/include/site/python{CPYTHON_RUNTIME_MINOR}")
+        return (header_root / component_name / PurePosixPath(*member.parts[2:])).as_posix()
+    return (site_root / member).as_posix()
+
+
+def console_script_installations(
+    archive_members: Mapping[str, bytes], entry_points_path: str
+) -> dict[str, dict[str, str]]:
+    """Derive the reviewed console and GUI launcher set from entry_points.txt."""
+
+    content = archive_members.get(entry_points_path)
+    if content is None:
+        return {}
+    if len(content) > 64 * 1024:
+        raise EvidenceError("native wheel entry_points.txt exceeds its size limit")
+    try:
+        text = content.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise EvidenceError("native wheel entry_points.txt is not UTF-8") from exc
+    parser = CaseSensitiveConfigParser(
+        interpolation=None,
+        strict=True,
+        delimiters=("=",),
+        comment_prefixes=("#", ";"),
+    )
+    try:
+        parser.read_string(text)
+    except configparser.Error as exc:
+        raise EvidenceError(f"cannot parse native wheel entry_points.txt: {exc}") from exc
+    if parser.defaults():
+        raise EvidenceError("native wheel entry_points.txt must not contain defaults")
+
+    scripts: dict[str, dict[str, str]] = {}
+    for section in ("console_scripts", "gui_scripts"):
+        if not parser.has_section(section):
+            continue
+        for name, raw_value in parser.items(section, raw=True):
+            if SCRIPT_NAME.fullmatch(name) is None:
+                raise EvidenceError("native wheel has an unsafe launcher name")
+            path = f"opt/venv/bin/{name}"
+            if path in scripts:
+                raise EvidenceError("native wheel repeats a launcher name")
+            value = raw_value.strip()
+            match = ENTRY_POINT.fullmatch(value)
+            if match is None:
+                raise EvidenceError("native wheel has an unsupported launcher entry point")
+            scripts[path] = {
+                "callable": match.group("callable"),
+                "kind": section,
+                "module": match.group("module"),
+                "name": name,
+                "source_path": entry_points_path,
+            }
+    return scripts
+
+
+def expected_native_launcher(module: str, callable_name: str, *, interpreter_name: str) -> bytes:
+    """Return the reviewed uv/distlib POSIX launcher for one native owner."""
+
+    if interpreter_name not in {"python", "python3", f"python{CPYTHON_RUNTIME_MINOR}"}:
+        raise EvidenceError("native-wheel launcher uses an unsupported interpreter alias")
+    python = f"/opt/venv/bin/{interpreter_name}"
+    return (
+        f"#!{python}\n"
+        "# -*- coding: utf-8 -*-\n"
+        "import sys\n"
+        f"from {module} import {callable_name}\n"
+        'if __name__ == "__main__":\n'
+        '    if sys.argv[0].endswith("-script.pyw"):\n'
+        "        sys.argv[0] = sys.argv[0][:-11]\n"
+        '    elif sys.argv[0].endswith(".exe"):\n'
+        "        sys.argv[0] = sys.argv[0][:-4]\n"
+        f"    sys.exit({callable_name}())\n"
+    ).encode()
+
+
+def verify_native_wheel_artifact(
+    inventory: Mapping[str, Any],
+    locked: Mapping[str, Any],
+    content: bytes,
+) -> tuple[dict[str, Any], list[tuple[dict[str, Any], bytes]]]:
+    """Bind one hostile locked wheel to its exact historical installation."""
+
+    expected_locked_fields = {
+        "owner",
+        "platform",
+        "url",
+        "sha256",
+        "size",
+        "filename",
+        "build",
+        "tags",
+    }
+    if set(locked) != expected_locked_fields:
+        raise EvidenceError("selected native wheel has an invalid record")
+    owner = locked.get("owner")
+    platform = locked.get("platform")
+    url = locked.get("url")
+    filename = locked.get("filename")
+    digest = locked.get("sha256")
+    expected_size = locked.get("size")
+    if (
+        not isinstance(owner, str)
+        or platform != inventory.get("platform")
+        or not isinstance(url, str)
+        or not isinstance(filename, str)
+        or not isinstance(digest, str)
+        or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+        or not isinstance(expected_size, int)
+        or isinstance(expected_size, bool)
+        or expected_size != len(content)
+        or sha256_bytes(content) != digest
+        or safe_filename(url) != filename
+    ):
+        raise EvidenceError(f"selected native wheel identity disagrees for {owner!r}")
+
+    contexts = native_wheel_contexts(inventory)
+    context = contexts.get(owner)
+    if context is None:
+        raise EvidenceError(f"selected native wheel has no structured payload owner: {owner}")
+    installation = context["installation"]
+    component = context["component"]
+    metadata_occurrence = installation.get("metadata")
+    wheel_occurrence = installation.get("wheel")
+    record_occurrence = installation.get("record")
+    if not all(
+        isinstance(item, dict)
+        for item in (metadata_occurrence, wheel_occurrence, record_occurrence)
+    ):
+        raise EvidenceError(f"native-wheel installation has invalid identities: {owner}")
+    assert isinstance(metadata_occurrence, dict)
+    assert isinstance(wheel_occurrence, dict)
+    assert isinstance(record_occurrence, dict)
+    metadata_path = metadata_occurrence.get("path")
+    wheel_path = wheel_occurrence.get("path")
+    record_path = record_occurrence.get("path")
+    if not all(isinstance(path, str) for path in (metadata_path, wheel_path, record_path)):
+        raise EvidenceError(f"native-wheel installation has invalid identity paths: {owner}")
+    assert isinstance(metadata_path, str)
+    assert isinstance(wheel_path, str)
+    assert isinstance(record_path, str)
+    site_root = PurePosixPath(record_path).parent.parent
+    expected_site_root = PurePosixPath(f"opt/venv/lib/python{CPYTHON_RUNTIME_MINOR}/site-packages")
+    if site_root != expected_site_root:
+        raise EvidenceError(f"native-wheel installation has an unexpected site root: {owner}")
+    component_name = component.get("name")
+    if not isinstance(component_name, str):
+        raise EvidenceError(f"native-wheel component has an invalid name: {owner}")
+    dist_info_directory = PurePosixPath(record_path).parent.name
+    if not dist_info_directory.endswith(".dist-info"):
+        raise EvidenceError(f"native-wheel installation has an invalid dist-info path: {owner}")
+    data_directory = f"{dist_info_directory.removesuffix('.dist-info')}.data"
+
+    central_offset, central_size, entry_count = preflight_source_zip(content)
+    central_entries = read_source_zip_central_directory(
+        content,
+        central_offset,
+        central_size,
+        entry_count,
+        allow_typeless_regular=True,
+        allow_stored_extract_version_20=True,
+    )
+    entries = validate_source_zip_entries(content, central_offset, central_entries)
+    archive_payloads: dict[str, bytes] = {}
+    installed_members: dict[str, tuple[str, bytes]] = {}
+    for entry in entries:
+        member_path = PurePosixPath(entry.metadata.name.removesuffix("/"))
+        dist_info_parts = [part for part in member_path.parts if part.endswith(".dist-info")]
+        if dist_info_parts and (
+            dist_info_parts != [dist_info_directory] or member_path.parts[0] != dist_info_directory
+        ):
+            raise EvidenceError(
+                f"native wheel contains a foreign dist-info path: {entry.metadata.name}"
+            )
+        if entry.metadata.name.endswith("/"):
+            continue
+        if BYTECODE_FILE.search(entry.metadata.name):
+            raise EvidenceError(f"native wheel contains bytecode: {entry.metadata.name}")
+        if member_path.parent.name == dist_info_directory and member_path.name in {
+            "INSTALLER",
+            "REQUESTED",
+            "direct_url.json",
+            "uv_cache.json",
+        }:
+            raise EvidenceError(
+                f"native wheel contains installer-generated metadata: {entry.metadata.name}"
+            )
+        payload = read_source_zip_payload(
+            content,
+            entry,
+            max_bytes=MAX_ARCHIVE_MEMBER_BYTES,
+            purpose="native wheel member",
+        )
+        archive_payloads[entry.metadata.name] = payload
+        installed_path = wheel_member_install_path(
+            entry.metadata.name,
+            site_root,
+            data_directory=data_directory,
+            component_name=component_name,
+        )
+        if installed_path in installed_members:
+            raise EvidenceError(f"native wheel repeats an installed path: {installed_path}")
+        installed_members[installed_path] = (entry.metadata.name, payload)
+
+    identity_paths = {metadata_path, wheel_path, record_path}
+    if not identity_paths <= set(installed_members):
+        raise EvidenceError(f"native wheel omits METADATA, WHEEL, or RECORD for {owner}")
+    archive_record_path = installed_members[record_path][0]
+    record_content = installed_members[record_path][1]
+    archive_record = parse_archive_wheel_record(record_content, archive_record_path)
+    if set(archive_record) != set(archive_payloads):
+        raise EvidenceError(f"native wheel RECORD does not exactly cover archive members: {owner}")
+    for archive_path, payload in archive_payloads.items():
+        recorded_digest, recorded_size = archive_record[archive_path]
+        if archive_path == archive_record_path:
+            if recorded_digest is not None or recorded_size is not None:
+                raise EvidenceError(f"native wheel RECORD self-entry is not blank: {owner}")
+        elif recorded_digest != sha256_bytes(payload) or recorded_size != len(payload):
+            raise EvidenceError(f"native wheel RECORD disagrees with member: {archive_path}")
+
+    installed_entries_value = installation.get("entries")
+    if not isinstance(installed_entries_value, list):
+        raise EvidenceError(f"native-wheel installation has invalid RECORD entries: {owner}")
+    installed_entries: dict[str, Mapping[str, Any]] = {}
+    for entry in installed_entries_value:
+        path = entry.get("path") if isinstance(entry, dict) else None
+        if not isinstance(path, str) or path in installed_entries:
+            raise EvidenceError(f"native-wheel installation repeats a RECORD path: {owner}")
+        installed_entries[path] = entry
+    entry_points_path = f"{dist_info_directory}/entry_points.txt"
+    generated_scripts = console_script_installations(archive_payloads, entry_points_path)
+    if set(installed_entries) != set(installed_members) | set(generated_scripts):
+        raise EvidenceError(
+            f"native wheel archive and installed RECORD have different member sets: {owner}"
+        )
+    for installed_path, (archive_path, payload) in installed_members.items():
+        installed_entry = installed_entries[installed_path]
+        occurrence = installed_entry.get("occurrence")
+        if not isinstance(occurrence, dict):
+            raise EvidenceError(
+                f"native-wheel RECORD has no installed occurrence: {installed_path}"
+            )
+        if installed_path != record_path and (
+            occurrence.get("sha256") != sha256_bytes(payload)
+            or occurrence.get("size") != len(payload)
+        ):
+            raise EvidenceError(
+                f"native wheel member differs from installed occurrence: {installed_path}"
+            )
+        if installed_path == record_path:
+            if (
+                installed_entry.get("recorded_sha256") is not None
+                or installed_entry.get("recorded_size") is not None
+            ):
+                raise EvidenceError(
+                    f"installed native-wheel RECORD self-entry is not blank: {owner}"
+                )
+        elif (
+            installed_entry.get("recorded_sha256") != archive_record[archive_path][0]
+            or installed_entry.get("recorded_size") != archive_record[archive_path][1]
+        ):
+            raise EvidenceError(
+                f"native wheel member differs from installed RECORD: {installed_path}"
+            )
+
+    generated_records: list[dict[str, Any]] = []
+    for path, script in sorted(generated_scripts.items()):
+        installed_entry = installed_entries[path]
+        occurrence = installed_entry.get("occurrence")
+        if (
+            not isinstance(occurrence, dict)
+            or installed_entry.get("recorded_sha256") != occurrence.get("sha256")
+            or installed_entry.get("recorded_size") != occurrence.get("size")
+            or occurrence.get("mode") != 0o755
+            or occurrence.get("uid") != 0
+            or occurrence.get("gid") != 0
+        ):
+            raise EvidenceError(f"generated console script has an invalid RECORD entry: {path}")
+        matching_interpreters = []
+        for interpreter in ("python", "python3", f"python{CPYTHON_RUNTIME_MINOR}"):
+            expected_launcher = expected_native_launcher(
+                script["module"],
+                script["callable"],
+                interpreter_name=interpreter,
+            )
+            if occurrence.get("sha256") == sha256_bytes(expected_launcher) and occurrence.get(
+                "size"
+            ) == len(expected_launcher):
+                matching_interpreters.append(interpreter)
+        if len(matching_interpreters) != 1:
+            raise EvidenceError(f"generated launcher differs from reviewed bytes: {path}")
+        generated_records.append(
+            {
+                **script,
+                "installed_occurrence": occurrence,
+                "launcher_interpreter": matching_interpreters[0],
+            }
+        )
+
+    for path, occurrence in (
+        (metadata_path, metadata_occurrence),
+        (wheel_path, wheel_occurrence),
+        (record_path, record_occurrence),
+    ):
+        if installed_entries[path].get("occurrence") != occurrence:
+            raise EvidenceError(f"native-wheel identity occurrence drifted: {path}")
+    parsed_metadata = parse_python_metadata(installed_members[metadata_path][1], metadata_path)
+    if parsed_metadata.get("name") != component.get("name") or parsed_metadata.get(
+        "version"
+    ) != component.get("version"):
+        raise EvidenceError(f"native wheel METADATA has the wrong owner: {owner}")
+    parsed_wheel = validate_wheel_metadata(installed_members[wheel_path][1], wheel_path)
+    if parsed_wheel != {
+        "root_is_purelib": installation.get("root_is_purelib"),
+        "build": installation.get("build"),
+        "tags": installation.get("tags"),
+    } or parsed_wheel != {
+        "root_is_purelib": installation.get("root_is_purelib"),
+        "build": locked.get("build"),
+        "tags": locked.get("tags"),
+    }:
+        raise EvidenceError(f"native wheel WHEEL identity disagrees with installation: {owner}")
+    if context["native_payloads"] and parsed_wheel["root_is_purelib"] is not False:
+        raise EvidenceError(f"native wheel with ELF payload claims Root-Is-Purelib: true: {owner}")
+
+    observed_payload_paths = {
+        "native_payloads": {
+            path
+            for path, (_archive_path, payload) in installed_members.items()
+            if is_native_payload_path(path)
+            or (is_python_virtual_environment_path(path) and payload.startswith(ELF_MAGIC))
+        },
+        "embedded_sboms": {
+            path for path in installed_members if DIST_INFO_SBOM.search(path) is not None
+        },
+    }
+    for category in ("native_payloads", "embedded_sboms"):
+        expected_records = context[category]
+        expected_paths = {str(record["path"]) for record in expected_records}
+        if observed_payload_paths[category] != expected_paths:
+            raise EvidenceError(
+                f"native wheel {category} do not exactly match installed owner {owner}"
+            )
+        for record in expected_records:
+            path = str(record["path"])
+            payload = installed_members[path][1]
+            occurrence = installed_entries[path].get("occurrence")
+            if occurrence != payload_record_projection(record):
+                raise EvidenceError(f"native wheel payload occurrence drifted: {path}")
+            if sha256_bytes(payload) != record.get("sha256") or len(payload) != record.get("size"):
+                raise EvidenceError(f"native wheel payload bytes drifted: {path}")
+
+    raw_sboms: list[tuple[dict[str, Any], bytes]] = []
+    expected_sboms = {str(record["path"]): record for record in context["embedded_sboms"]}
+    for installed_path in sorted(observed_payload_paths["embedded_sboms"]):
+        archive_path, payload = installed_members[installed_path]
+        occurrence = payload_record_projection(expected_sboms[installed_path])
+        raw_sboms.append(
+            (
+                {
+                    "owner": owner,
+                    "platform": platform,
+                    "url": url,
+                    "archive_path": archive_path,
+                    "installed_occurrence": occurrence,
+                    "size": len(payload),
+                    "sha256": sha256_bytes(payload),
+                },
+                payload,
+            )
+        )
+    return (
+        {
+            "owner": owner,
+            "platform": platform,
+            "url": url,
+            "filename": filename,
+            "size": len(content),
+            "sha256": digest,
+            "build": locked.get("build"),
+            "tags": locked.get("tags"),
+            "generated_files": generated_records,
+        },
+        raw_sboms,
+    )
+
+
+def retain_native_wheel_artifact(
+    root: Path,
+    inventory: Mapping[str, Any],
+    locked: Mapping[str, Any],
+    content: bytes,
+    *,
+    budget: BundleBudget,
+    urls: Sequence[str] | None = None,
+) -> dict[str, Any]:
+    """Retain an exact native wheel and separately addressable raw SBOM bytes."""
+
+    wheel_record, raw_sboms = verify_native_wheel_artifact(inventory, locked, content)
+    url_chain = tuple(urls) if urls is not None else (str(wheel_record["url"]),)
+    if not url_chain or len(url_chain) > MAX_REDIRECTS + 1 or url_chain[0] != wheel_record["url"]:
+        raise EvidenceError("native wheel has an invalid download URL chain")
+    for retained_url in url_chain:
+        require_https_source_url(retained_url)
+    wheel_record["urls"] = list(url_chain)
+    owner = str(wheel_record["owner"])
+    context = native_wheel_contexts(inventory)[owner]
+    component = context["component"]
+    directory = f"{component['name']}/{component['version']}"
+    wheel_path = f"artifacts/native-wheels/{directory}/{wheel_record['filename']}"
+    write_file(root, wheel_path, content, budget=budget)
+    wheel_record["path"] = wheel_path
+    retained_sboms: list[dict[str, Any]] = []
+    for sbom_record, payload in raw_sboms:
+        sbom_record["urls"] = list(url_chain)
+        relative = (
+            f"artifacts/native-wheels/{directory}/embedded-sboms/{sbom_record['archive_path']}"
+        )
+        write_file(root, relative, payload, budget=budget)
+        sbom_record["path"] = relative
+        retained_sboms.append(sbom_record)
+    wheel_record["embedded_sboms"] = retained_sboms
+    return wheel_record
 
 
 def extract_license_files(
@@ -6942,6 +7729,7 @@ def build_bundle(
     )
     lock_sources = parse_lock_sources(lock_path)
     validate_source_policy_coverage(inventory, policy, lock_sources)
+    locked_native_wheels = select_locked_native_wheels(lock_path, inventory)
 
     with tempfile.TemporaryDirectory(prefix="extra-codeowners-evidence-") as temporary:
         root = Path(temporary) / "evidence"
@@ -6971,6 +7759,25 @@ def build_bundle(
             download = fetch(url, expected_hash, algorithm, max_bytes=max_bytes)
             budget.record_download(download.content)
             return download
+
+        native_wheel_artifacts: list[dict[str, Any]] = []
+        for locked_wheel in locked_native_wheels:
+            wheel_download = bounded_fetch(
+                str(locked_wheel["url"]),
+                str(locked_wheel["sha256"]),
+            )
+            if len(wheel_download.content) != locked_wheel["size"]:
+                raise EvidenceError(f"size mismatch for native wheel {locked_wheel['owner']}")
+            native_wheel_artifacts.append(
+                retain_native_wheel_artifact(
+                    root,
+                    inventory,
+                    locked_wheel,
+                    wheel_download.content,
+                    budget=budget,
+                    urls=wheel_download.urls,
+                )
+            )
 
         write_file(root, "inventory/components.json", canonical_json(inventory), budget=budget)
         write_file(
@@ -7282,6 +8089,7 @@ def build_bundle(
             "base_image_index_digest": policy["base_image_index_digest"],
             "policy_sha256": sha256_bytes(canonical_json(policy)),
             "application_artifacts": application_artifacts,
+            "native_wheel_artifacts": native_wheel_artifacts,
             "source_completeness": inventory["source_completeness"],
             "source_records": sorted(source_records, key=lambda item: item["path"]),
             "license_records": sorted(
