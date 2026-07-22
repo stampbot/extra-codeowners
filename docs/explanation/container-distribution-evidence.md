@@ -114,7 +114,11 @@ the bytes contain. The collector therefore parses every embedded CycloneDX JSON
 SBOM under a wheel's `.dist-info/sboms/` directory. It accepts specification
 versions 1.4 through 1.6, flattens nested components into canonical
 type/name/version/package-URL identities, and rejects conflicting identity or
-package-URL mappings within or across SBOMs.
+package-URL mappings within each SBOM. Identities remain scoped to their source
+document across wheels: independent builders can describe the same display
+identity with different package-URL namespaces. The exact SBOM bytes, path,
+digest, and `RECORD` owner preserve both observations without treating either
+document as a global identity authority.
 
 The collector also identifies every ELF payload anywhere under `/opt/venv`,
 including an executable without a shared-library suffix. It requires a
