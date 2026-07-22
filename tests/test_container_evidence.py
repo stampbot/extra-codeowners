@@ -232,7 +232,7 @@ def standalone_inventory(component: dict[str, Any]) -> dict[str, Any]:
         "gid": 0,
     }
     return {
-        "schema_version": 1,
+        "schema_version": evidence.SCHEMA_VERSION,
         "platform": "linux/amd64",
         "subject_digest": "sha256:" + "a" * 64,
         "image_config_digest": "sha256:" + "b" * 64,
@@ -246,7 +246,7 @@ def standalone_inventory(component: dict[str, Any]) -> dict[str, Any]:
         "native_payloads": [],
         "wheel_identity_files": [],
         "apk_database_occurrences": [apk_record],
-        "python_record_installations": [],
+        "wheel_installations": [],
         "python_record_ownership": [],
         "source_completeness": {
             "complete": False,
@@ -350,7 +350,7 @@ def ci_artifact_files(tmp_path: Path, architecture: str = "amd64") -> dict[str, 
     bundle = b"bounded evidence bundle"
     bundle_hash = evidence.sha256_bytes(bundle)
     metadata_record = {
-        "schema_version": 1,
+        "schema_version": evidence.SCHEMA_VERSION,
         "run_id": "1234",
         "run_attempt": 2,
         "event_name": "pull_request",
@@ -374,8 +374,8 @@ def ci_artifact_files(tmp_path: Path, architecture: str = "amd64") -> dict[str, 
         "application_selection_record_sha256": "f" * 64,
     }
     predicate = {
-        "schema_version": 1,
-        "media_type": "application/vnd.stampbot.container-evidence.v1+tar+gzip",
+        "schema_version": evidence.SCHEMA_VERSION,
+        "media_type": evidence.EVIDENCE_MEDIA_TYPE,
         "platform": f"linux/{architecture}",
         "subject_digest": inventory["subject_digest"],
         "artifact": {"filename": bundle_name, "sha256": bundle_hash},
@@ -553,9 +553,14 @@ def test_strict_json_rejects_lone_unicode_surrogates() -> None:
         evidence.canonical_json({"value": "\ud800"})
 
 
-def test_schema_version_rejects_boolean_values() -> None:
-    with pytest.raises(evidence.EvidenceError, match="unsupported test schema"):
-        evidence.require_schema({"schema_version": True}, "test")
+def test_schema_version_requires_exact_v2_integer_and_media_type() -> None:
+    evidence.require_schema({"schema_version": 2}, "test")
+    for unsupported in (True, 1, 3):
+        with pytest.raises(evidence.EvidenceError, match="unsupported test schema"):
+            evidence.require_schema({"schema_version": unsupported}, "test")
+    assert evidence.EVIDENCE_MEDIA_TYPE == (
+        "application/vnd.stampbot.container-evidence.v2+tar+gzip"
+    )
 
 
 def test_saved_image_inventory_tracks_whiteouts_and_all_layers(tmp_path: Path) -> None:
@@ -570,6 +575,31 @@ def test_saved_image_inventory_tracks_whiteouts_and_all_layers(tmp_path: Path) -
     assert inventory["image_revision"] == "a" * 40
     assert [layer["regular_file_count"] for layer in files["layers"]] == [3, 1]
     assert len(files["regular_files"]) == 4
+
+
+def test_all_layer_validators_reject_cross_kind_path_duplicates(tmp_path: Path) -> None:
+    image = tmp_path / "image.tar"
+    saved_image(image)
+    inventory, files = evidence._inventory_saved_image(image, "linux/amd64", "sha256:" + "a" * 64)
+    duplicate = copy.deepcopy(files)
+    regular = duplicate["regular_files"][0]
+    duplicate["directories"].append(
+        {
+            "effective": regular["effective"],
+            "layer": regular["layer"],
+            "layer_digest": regular["layer_digest"],
+            "path": regular["path"],
+            "mode": 0o755,
+            "uid": 0,
+            "gid": 0,
+        }
+    )
+    duplicate["layers"][regular["layer"]]["directory_count"] += 1
+
+    with pytest.raises(evidence.EvidenceError, match="across entry categories"):
+        evidence.validate_all_layer_inventory(duplicate, inventory)
+    with pytest.raises(evidence.EvidenceError, match="across entry categories"):
+        evidence.validate_filesystem_policy_view_input(duplicate)
 
 
 def test_saved_image_binds_config_and_layer_blob_names_to_bytes(tmp_path: Path) -> None:
@@ -2137,6 +2167,9 @@ def test_selected_wheel_contract_binds_every_application_owned_file() -> None:
         }
         for record in selected
     ]
+    # Exercise the compatibility projection separately from the historical
+    # installation evidence asserted below.
+    inventory["wheel_installations"] = None
 
     assert evidence.verify_selected_application_installation(inventory, contract) == "python3"
 
@@ -2200,7 +2233,7 @@ def test_selected_wheel_contract_binds_every_application_owned_file() -> None:
         return {"owner": owner, "record": record, "entries": entries}
 
     occurrence_inventory = copy.deepcopy(inventory)
-    occurrence_inventory["python_record_installations"] = [
+    occurrence_inventory["wheel_installations"] = [
         historical_installation(alternatives[0]["files"], layer=1, effective=False),
         historical_installation(alternatives[1]["files"], layer=2, effective=True),
     ]
@@ -2210,7 +2243,7 @@ def test_selected_wheel_contract_binds_every_application_owned_file() -> None:
     )
 
     rewritten_history = copy.deepcopy(occurrence_inventory)
-    historical_entries = rewritten_history["python_record_installations"][0]["entries"]
+    historical_entries = rewritten_history["wheel_installations"][0]["entries"]
     historical_app = next(entry for entry in historical_entries if entry["path"].endswith("app.py"))
     historical_record = next(
         entry for entry in historical_entries if entry["path"].endswith(".dist-info/RECORD")
@@ -2221,7 +2254,7 @@ def test_selected_wheel_contract_binds_every_application_owned_file() -> None:
         evidence.verify_selected_application_installation(rewritten_history, contract)
 
     old_application = copy.deepcopy(occurrence_inventory)
-    old_application["python_record_installations"][0]["owner"] = "python:extra-codeowners@0.9"
+    old_application["wheel_installations"][0]["owner"] = "python:extra-codeowners@0.9"
     with pytest.raises(evidence.EvidenceError, match="selected version"):
         evidence.verify_selected_application_installation(old_application, contract)
 
@@ -2790,13 +2823,13 @@ def test_inventory_reports_unexpanded_wheel_sboms_and_native_payloads(
 
     payload_policy = {"unexpanded_python_payloads": empty_unexpanded_payload_policy()}
     payload_policy["unexpanded_python_payloads"]["linux/amd64"] = {
-        category: [
-            evidence.payload_record_projection(record)
-            if category in {"embedded_sboms", "native_payloads"}
-            else copy.deepcopy(record)
-            for record in inventory[category]
-        ]
-        for category in ("embedded_sboms", "native_payloads", "wheel_identity_files")
+        "embedded_sboms": [
+            evidence.payload_record_projection(record) for record in inventory["embedded_sboms"]
+        ],
+        "native_payloads": [
+            evidence.payload_record_projection(record) for record in inventory["native_payloads"]
+        ],
+        "wheel_identity_files": copy.deepcopy(inventory["wheel_identity_files"]),
     }
     evidence.verify_unexpanded_payload_policy(inventory, payload_policy)
 
@@ -3068,6 +3101,64 @@ def test_structured_payload_validation_rejects_owner_and_identity_tampering(
         evidence.validate_all_layer_inventory(files, wrong_elf)
 
 
+def test_effective_record_ownership_is_bound_to_historical_wheel_claims(
+    tmp_path: Path,
+) -> None:
+    site = "opt/venv/lib/python3.14/site-packages"
+
+    def installed(name: str) -> dict[str, bytes]:
+        files = {
+            f"{name}-1.0.dist-info/METADATA": metadata(name, "1.0"),
+            f"{name}-1.0.dist-info/WHEEL": (
+                b"Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n"
+            ),
+            f"{name}.py": f"NAME = {name!r}\n".encode(),
+        }
+        record_name = f"{name}-1.0.dist-info/RECORD"
+        files[record_name] = wheel_record(files, record_name)
+        return files
+
+    image = tmp_path / "image.tar"
+    saved_image_layers(
+        image,
+        [
+            tar_bytes(
+                {
+                    "lib/apk/db/installed": apk_database(),
+                    "opt/venv/pyvenv.cfg": PYVENV_CONFIG,
+                    **{
+                        f"{site}/{path}": content
+                        for path, content in {**installed("alpha"), **installed("beta")}.items()
+                    },
+                },
+                links=VENV_LINKS,
+            )
+        ],
+    )
+    inventory, files = evidence._inventory_saved_image(image, "linux/amd64", "sha256:" + "a" * 64)
+    evidence.validate_component_inventory(inventory)
+    evidence.validate_all_layer_inventory(files, inventory)
+
+    relabeled = copy.deepcopy(inventory)
+    alpha = next(
+        record
+        for record in relabeled["python_record_ownership"]
+        if record["path"].endswith("/alpha.py")
+    )
+    alpha["owner"] = "beta"
+    for validator in (
+        evidence.validate_component_inventory,
+        lambda candidate: evidence.validate_all_layer_inventory(files, candidate),
+    ):
+        with pytest.raises(evidence.EvidenceError, match="effective historical claim"):
+            validator(relabeled)
+
+    omitted = copy.deepcopy(inventory)
+    omitted["python_record_ownership"] = omitted["python_record_ownership"][1:]
+    with pytest.raises(evidence.EvidenceError, match="omits an effective historical claim"):
+        evidence.validate_component_inventory(omitted)
+
+
 def test_wheel_record_binds_effective_files_and_policy_detects_consistent_rewrite(
     tmp_path: Path,
 ) -> None:
@@ -3122,7 +3213,7 @@ def test_wheel_record_binds_effective_files_and_policy_detects_consistent_rewrit
     consistent_inventory, _consistent_files = evidence._inventory_saved_image(
         consistent_image, "linux/amd64", "sha256:" + "a" * 64
     )
-    installations = consistent_inventory["python_record_installations"]
+    installations = consistent_inventory["wheel_installations"]
     assert [item["owner"] for item in installations] == [
         "python:demo@1.0",
         "python:demo@1.0",
@@ -3140,8 +3231,15 @@ def test_wheel_record_binds_effective_files_and_policy_detects_consistent_rewrit
     assert replacement_demo["occurrence"]["effective"] is True
     payload_policy = {"unexpanded_python_payloads": empty_unexpanded_payload_policy()}
     payload_policy["unexpanded_python_payloads"]["linux/amd64"] = {
-        category: copy.deepcopy(base_inventory[category])
-        for category in ("embedded_sboms", "native_payloads", "wheel_identity_files")
+        "embedded_sboms": [
+            evidence.payload_record_projection(record)
+            for record in base_inventory["embedded_sboms"]
+        ],
+        "native_payloads": [
+            evidence.payload_record_projection(record)
+            for record in base_inventory["native_payloads"]
+        ],
+        "wheel_identity_files": copy.deepcopy(base_inventory["wheel_identity_files"]),
     }
     with pytest.raises(evidence.EvidenceError, match="differ from policy"):
         evidence.verify_unexpanded_payload_policy(consistent_inventory, payload_policy)
@@ -3179,7 +3277,7 @@ def test_historical_record_replay_survives_complete_whiteout(tmp_path: Path) -> 
 
     inventory, files = evidence._inventory_saved_image(image, "linux/amd64", "sha256:" + "a" * 64)
 
-    installation = inventory["python_record_installations"][0]
+    installation = inventory["wheel_installations"][0]
     assert installation["owner"] == "python:demo@1.0"
     assert installation["record"]["effective"] is False
     assert installation["root_is_purelib"] is True
@@ -3198,12 +3296,12 @@ def test_historical_record_replay_survives_complete_whiteout(tmp_path: Path) -> 
     evidence.validate_all_layer_inventory(files, inventory)
 
     tampered = copy.deepcopy(inventory)
-    tampered["python_record_installations"][0]["entries"][0]["occurrence"]["sha256"] = "f" * 64
+    tampered["wheel_installations"][0]["entries"][0]["occurrence"]["sha256"] = "f" * 64
     with pytest.raises(evidence.EvidenceError, match=r"conflicting identity|all-layer inventory"):
         evidence.validate_all_layer_inventory(files, tampered)
 
     omitted = copy.deepcopy(inventory)
-    omitted["python_record_installations"] = []
+    omitted["wheel_installations"] = []
     with pytest.raises(evidence.EvidenceError, match="omits a historical Python RECORD"):
         evidence.validate_all_layer_inventory(files, omitted)
 
@@ -3234,7 +3332,7 @@ def test_record_replay_uses_complete_layer_snapshot_not_tar_order(tmp_path: Path
 
     inventory, files = evidence._inventory_saved_image(image, "linux/amd64", "sha256:" + "a" * 64)
 
-    assert inventory["python_record_installations"][0]["owner"] == "python:demo@1.0"
+    assert inventory["wheel_installations"][0]["owner"] == "python:demo@1.0"
     evidence.validate_all_layer_inventory(files, inventory)
 
 

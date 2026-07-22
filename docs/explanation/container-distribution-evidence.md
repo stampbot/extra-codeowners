@@ -79,7 +79,7 @@ then evaluates the completed layer snapshot. Tar member order cannot make an
 incomplete installation appear valid. Every newly introduced virtual-environment
 `RECORD` must bind regular METADATA, WHEEL, and RECORD occurrences and every
 normalized path it claims. The component inventory retains that relationship in
-`python_record_installations` with:
+`wheel_installations` with:
 
 - a canonical owner such as `python:demo@1.0`
 - the exact METADATA, WHEEL, and RECORD occurrence identities
@@ -106,6 +106,26 @@ This replay establishes file attribution and executable-byte correspondence. It
 does not expand embedded native components, supply corresponding source, or
 normalize CPython into the top-level notice inventory. Source completeness
 therefore remains false.
+
+### Structured native and SBOM identities
+
+Path and hash baselines show that a payload changed, but they do not say what
+the bytes contain. The collector therefore parses every embedded CycloneDX JSON
+SBOM under a wheel's `.dist-info/sboms/` directory. It accepts specification
+versions 1.4 through 1.6, flattens nested components into canonical
+type/name/version/package-URL identities, and rejects conflicting identity or
+package-URL mappings within or across SBOMs.
+
+The collector also identifies every ELF payload anywhere under `/opt/venv`,
+including an executable without a shared-library suffix. It requires a
+64-bit, little-endian ELF header whose machine matches the image platform:
+x86-64 for `linux/amd64` and AArch64 for `linux/arm64`.
+
+Each structured SBOM or ELF record retains its raw layer occurrence and the
+wheel owner established by historical `RECORD` replay. Reviewed policy still
+pins the raw path, digest, size, mode, UID, and GID. These identities make the
+known native and SBOM surfaces inspectable; they do not yet add their nested
+components to notices or retain corresponding source.
 
 CI uploads the artifact even after a collection failure when any partial files
 exist. That upload is diagnostic only: the required collection step still

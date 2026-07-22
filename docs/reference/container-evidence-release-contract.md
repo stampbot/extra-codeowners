@@ -18,18 +18,20 @@ two remaining source-completeness gaps before an inventory may report complete:
 
 The current collector already replays wheel `RECORD` ownership for ineffective
 historical Python installs whose bytes remain in distributed lower layers. A
-future release inventory must retain that `python_record_installations` evidence
+future release inventory must retain that `wheel_installations` evidence
 and its effective-only `python_record_ownership` projection; source closure must
 not remove or weaken the attribution gate.
 
 Issue [#28](https://github.com/stampbot/extra-codeowners/issues/28) must then
 provide privilege-separated collection and publication. That issue will also
 add a shipped, adversarially tested verifier and a runnable recipient how-to.
-Issue [#32](https://github.com/stampbot/extra-codeowners/issues/32) must provide
-a hash-pinned isolated build environment and bind the exact application wheel
-to the installed runtime. Until all three issues are closed and a supported
-release is announced, missing assets are expected. Do not substitute
-pull-request CI artifacts or the unsupported historical `main` image.
+Issue [#32](https://github.com/stampbot/extra-codeowners/issues/32) must let
+release and ad-hoc consumers use the build proof that pull-request CI produces
+in hash-pinned environments on both architectures. Those consumers must bind
+the exact selected application wheel to the installed runtime. Until all three
+issues are closed and a supported release is announced, missing assets are
+expected. Do not substitute pull-request CI artifacts or the unsupported
+historical `main` image.
 
 ## Trust statements
 
@@ -76,8 +78,8 @@ The canonical JSON predicate has exactly these fields:
 
 | Field | Type | Requirement |
 | --- | --- | --- |
-| `schema_version` | integer | Exactly `1`. |
-| `media_type` | string | Exactly `application/vnd.stampbot.container-evidence.v1+tar+gzip`. |
+| `schema_version` | integer | Exactly `2`. |
+| `media_type` | string | Exactly `application/vnd.stampbot.container-evidence.v2+tar+gzip`. |
 | `platform` | string | `linux/amd64` or `linux/arm64`; it must match the selected manifest. |
 | `subject_digest` | string | Lowercase `sha256:` digest of the published platform manifest, never a local image configuration digest. |
 | `artifact` | object | Exactly `filename` and `sha256`. |
@@ -127,7 +129,7 @@ The archive must contain at least these entry points:
 | `MANIFEST.json` | Canonical archive identity, platform subject, reviewed policy digest, complete source status, and every retained source and license record. |
 | `SHA256SUMS` | SHA-256 for every other retained member, with exact one-to-one path coverage. |
 | `THIRD_PARTY_NOTICES.md` | Human-readable observed and reviewed license expressions for every effective and lower-layer component. |
-| `inventory/components.json` | Exact normalized component, package-record, native-payload, SBOM, wheel-identity, historical RECORD-installation, effective RECORD-ownership, and source-completeness inventory. |
+| `inventory/components.json` | Exact normalized component, package-record, structured native-payload, structured SBOM, raw wheel-identity, historical wheel-installation, effective RECORD-ownership, and source-completeness inventory. |
 | `inventory/all-layer-files.json` | Every regular, directory, non-regular, and whiteout occurrence in every distributed layer, including security metadata; regular and directory records also carry effective state. |
 | `policy/container-policy.json` | The exact reviewed policy used to accept the candidate. |
 | `artifacts/application/` | The exact selected wheel, sdist, both native build records, and cross-architecture selection record; every file is hash-bound by `MANIFEST.json`. |

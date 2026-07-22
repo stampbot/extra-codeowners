@@ -98,8 +98,10 @@ same-layer RECORD, unowned effective files, every `.pyc`/`.pyo` occurrence in
 the distributed runtime virtual environment, and effective interpreter-path
 bytecode. The collector also compares third-party `WHEEL`, `RECORD`,
 embedded-SBOM, and ELF path/hash records with reviewed per-platform baselines.
-That is a drift and installation-integrity gate. It does not normalize CPython
-into the top-level component and notice inventory or expand vendored native and
+It retains each SBOM's canonical CycloneDX identities and each native file's
+ELF architecture, bound to the owning historical RECORD occurrence. That is a
+drift and installation-integrity gate. It does not normalize CPython into the
+top-level component and notice inventory or expand vendored native and
 embedded-SBOM components into notices and corresponding sources. Issue `#18`
 remains the closure gate for both source-completeness gaps.
 
@@ -164,12 +166,12 @@ those components. A future supported release must also produce the digest-bound
 [container distribution evidence](container-distribution-evidence.md) and pass
 its separate human approval gate.
 
-To roll back a base refresh, an operator may deploy only its own previously
-recorded source-built review image by digest and verify readiness, queue
-processing, and a disposable current-head evaluation. No project-supported
-previous image exists yet. Otherwise restore native CODEOWNERS enforcement. Do
-not rebuild an old Dockerfile against a mutable tag. A container rollback makes
-no database-compatibility promise; follow the
+To roll back a base refresh, an operator may deploy only a previously verified,
+supported image by digest and verify readiness, queue processing, and a
+disposable current-head evaluation. No project-supported previous image exists
+yet. Otherwise restore native CODEOWNERS enforcement. Do not rebuild an old
+Dockerfile against a mutable tag. A container rollback makes no
+database-compatibility promise; follow the
 [deployment rollback procedure](../how-to/deploy.md#roll-back-or-mitigate) for
 the complete service decision.
 

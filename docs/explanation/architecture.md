@@ -343,10 +343,11 @@ removed. Source-completeness issue
 [#18](https://github.com/stampbot/extra-codeowners/issues/18) requires both
 remaining gaps to close, by expanding components and sources or using builds
 linked against separately inventoried packages.
-Build-isolation issue
+Build-proof handoff issue
 [#32](https://github.com/stampbot/extra-codeowners/issues/32) separately
-requires a hash-pinned PEP 517 environment and installation bound to the exact
-application wheel it produces.
+requires release and ad-hoc builds to consume the proof that pull-request CI
+produces in hash-pinned environments on both architectures and bind the
+installed application to its exact wheel.
 Workflow code is not proof that an artifact exists. No supported release has
 been published.
 

@@ -6,24 +6,27 @@ production release, or hosted service is available.
 
 The `main` publication job has been removed, and tagged-release publication is
 blocked while CPython normalization, native-wheel and embedded-SBOM expansion,
-hash-pinned build isolation, and privilege separation remain unresolved.
+handoff of the selected build proof to release and ad-hoc builds, and privilege
+separation remain unresolved.
 An older public `main` image may still exist in GHCR; it is unsupported,
-unapproved for distribution, and must not be used by this guide. Build the
-reviewed commit into an access-restricted, non-public temporary registry. No versioned chart is
-available. A future GitHub release and its attestations will define artifact
-availability; workflow definitions do not prove publication.
+unapproved for distribution, and must not be used by this guide. No versioned
+image or chart is available. A future GitHub release and its attestations will
+define artifact availability; workflow definitions do not prove publication.
 
 The current Check Run design has a documented commit-to-pull-request
 inheritance window. It does not provide native-equivalent production
-enforcement. The commands below test a specific checked-out commit and must not
-be used to authorize production merges.
+enforcement. The operational sections below record the future chart contract;
+they are not a runnable installation path until the image prerequisite is
+available, and they must not be used to authorize production merges.
 
 ## Prerequisites
 
 - Kubernetes 1.27 or later
 - Helm 3.14 or later
-- Docker and an access-restricted, non-public temporary container registry
-  reachable by the cluster when building an image from source
+- a supported Extra CODEOWNERS image pinned by platform digest; no such image
+  exists yet
+- registry access from the cluster, including a read-only pull credential when
+  the future image repository requires authentication
 - an installed Extra CODEOWNERS GitHub App
 - a durable database supported by the application
 - separate Kubernetes Secrets containing runtime settings, the database URL,
@@ -58,165 +61,25 @@ would otherwise inject a Service variable named `EXTRA_CODEOWNERS_PORT` with a
 URL-like value, which conflicts with the application's integer port setting.
 Use Kubernetes DNS for service discovery instead of injected Service variables.
 
-## Build an image from source
+## Obtain a supported image (currently blocked)
 
-The Dockerfile and source execute with network access during this build. Use a
-disposable no-secret builder with no cloud metadata access, production
-credentials, mounted secrets, or Docker access to other workloads. Build one
-architecture from a fresh detached worktree at an explicit full commit.
+The Dockerfile no longer builds the application from its ambient source
+context. It requires the exact five-file application proof selected from both
+architectures as a read-only `verified-python` build context. It also requires
+the source revision, application-wheel SHA-256, and selection-record SHA-256.
+Pull-request CI provides those inputs and fails closed when they disagree.
 
-The current `[build-system]` range is not hash-locked by `uv.lock`. Issue
-[`#32`](https://github.com/stampbot/extra-codeowners/issues/32) must pin the
-isolated PEP 517 environment and bind installation to its exact wheel. Treat
-this as a disposable review build, not reproducible distribution evidence.
+Issue [`#32`](https://github.com/stampbot/extra-codeowners/issues/32) tracks a
+bounded, authenticated handoff for release and ad-hoc consumers. No supported
+operator path supplies those inputs today. Do not substitute a generic artifact
+extractor, an unverified wheel, empty build arguments, or a project build from
+the ambient Docker context. The older public `main` image remains unsupported
+and unapproved for distribution.
 
-`IMAGE_REPOSITORY` must be an access-restricted, non-public temporary repository
-that the cluster can reach. This procedure requires a native builder of the
-target architecture; QEMU and `binfmt` emulation are outside its reviewed
-boundary. Do not inject any registry credential until the separate push step
-has rechecked the completed local image.
-
-```shell
-set -euo pipefail
-umask 077
-
-export REPOSITORY_ROOT="$(git rev-parse --show-toplevel)"
-export SOURCE_REVISION='REPLACE_WITH_REVIEWED_40_CHARACTER_COMMIT'
-export TARGET_ARCH='amd64'
-export IMAGE_REPOSITORY='registry.example.com/private/extra-codeowners'
-export GIT_NO_REPLACE_OBJECTS=1
-
-case "$SOURCE_REVISION" in (*[!0-9a-f]*|'') exit 1 ;; esac
-test "${#SOURCE_REVISION}" -eq 40
-case "$TARGET_ARCH" in (amd64|arm64) ;; (*) exit 1 ;; esac
-case "$(docker info --format '{{.Architecture}}')" in
-  (amd64|x86_64) BUILDER_ARCH=amd64 ;;
-  (arm64|aarch64) BUILDER_ARCH=arm64 ;;
-  (*) exit 1 ;;
-esac
-test "$BUILDER_ARCH" = "$TARGET_ARCH"
-test "$(git -C "$REPOSITORY_ROOT" rev-parse --verify "${SOURCE_REVISION}^{commit}")" = \
-  "$SOURCE_REVISION"
-
-WORKTREE_PARENT="$(mktemp -d)"
-WORKTREE="$WORKTREE_PARENT/source"
-cleanup() {
-  git -C "$REPOSITORY_ROOT" worktree remove --force "$WORKTREE" \
-    >/dev/null 2>&1 || true
-  rm -rf -- "$WORKTREE_PARENT"
-}
-trap cleanup EXIT
-
-git -C "$REPOSITORY_ROOT" worktree add --detach "$WORKTREE" "$SOURCE_REVISION"
-test "$(git -C "$WORKTREE" rev-parse HEAD)" = "$SOURCE_REVISION"
-test -z "$(git -C "$WORKTREE" -c core.fsmonitor=false \
-  status --porcelain=v1 --untracked-files=all)"
-
-IMAGE_TAG="${SOURCE_REVISION}-${TARGET_ARCH}"
-IMAGE_REFERENCE="${IMAGE_REPOSITORY}:${IMAGE_TAG}"
-docker buildx build \
-  --platform "linux/${TARGET_ARCH}" \
-  --build-arg "VCS_REF=${SOURCE_REVISION}" \
-  --build-arg VERSION=0.0.0-review \
-  --load \
-  --tag "$IMAGE_REFERENCE" \
-  "$WORKTREE"
-test -z "$(git -C "$WORKTREE" -c core.fsmonitor=false \
-  status --porcelain=v1 --untracked-files=all)"
-
-IMAGE_ARCHITECTURE="$(docker image inspect --format '{{.Architecture}}' "$IMAGE_REFERENCE")"
-IMAGE_SOURCE_REVISION="$(docker image inspect \
-  --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' \
-  "$IMAGE_REFERENCE")"
-IMAGE_CONFIG_DIGEST="$(docker image inspect --format '{{.Id}}' "$IMAGE_REFERENCE")"
-test "$IMAGE_ARCHITECTURE" = "$TARGET_ARCH"
-test "$IMAGE_SOURCE_REVISION" = "$SOURCE_REVISION"
-[[ "$IMAGE_CONFIG_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
-printf 'local-image=%s config=%s source=%s architecture=%s\n' \
-  "$IMAGE_REFERENCE" "$IMAGE_CONFIG_DIGEST" "$IMAGE_SOURCE_REVISION" \
-  "$IMAGE_ARCHITECTURE"
-cleanup
-trap - EXIT
-```
-
-Record the local image reference, configuration digest, source commit, and
-architecture. Keep the local image on the disposable builder for the push
-step. Give the builder a short-lived push credential scoped only to that
-repository; do not reuse the cluster's read-only pull credential. Re-export
-the exact recorded values if this is a new shell. The following commands check
-the local image before requesting the token. After the token is present, they
-run only the trusted Docker client, shell, and `awk`, not pull-request code.
-
-```shell
-set -euo pipefail
-umask 077
-
-export SOURCE_REVISION='REPLACE_WITH_REVIEWED_40_CHARACTER_COMMIT'
-export TARGET_ARCH='amd64'
-export IMAGE_REPOSITORY='registry.example.com/private/extra-codeowners'
-export REGISTRY_HOST='registry.example.com'
-export REGISTRY_PUSH_USER='REPLACE_WITH_EPHEMERAL_PUSH_USER'
-
-case "$SOURCE_REVISION" in (*[!0-9a-f]*|'') exit 1 ;; esac
-test "${#SOURCE_REVISION}" -eq 40
-case "$TARGET_ARCH" in (amd64|arm64) ;; (*) exit 1 ;; esac
-case "$IMAGE_REPOSITORY" in ("${REGISTRY_HOST}/"*) ;; (*) exit 1 ;; esac
-IMAGE_TAG="${SOURCE_REVISION}-${TARGET_ARCH}"
-IMAGE_REFERENCE="${IMAGE_REPOSITORY}:${IMAGE_TAG}"
-
-IMAGE_ARCHITECTURE="$(docker image inspect --format '{{.Architecture}}' "$IMAGE_REFERENCE")"
-IMAGE_SOURCE_REVISION="$(docker image inspect \
-  --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' \
-  "$IMAGE_REFERENCE")"
-IMAGE_CONFIG_DIGEST="$(docker image inspect --format '{{.Id}}' "$IMAGE_REFERENCE")"
-test "$IMAGE_ARCHITECTURE" = "$TARGET_ARCH"
-test "$IMAGE_SOURCE_REVISION" = "$SOURCE_REVISION"
-[[ "$IMAGE_CONFIG_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
-
-: "${REGISTRY_PUSH_TOKEN:?inject a short-lived repository-scoped push token}"
-PUSH_DOCKER_CONFIG="$(mktemp -d)"
-cleanup_push() {
-  docker --config "$PUSH_DOCKER_CONFIG" logout "$REGISTRY_HOST" \
-    >/dev/null 2>&1 || true
-  rm -rf -- "$PUSH_DOCKER_CONFIG"
-  unset REGISTRY_PUSH_TOKEN
-}
-trap cleanup_push EXIT
-
-printf '%s' "$REGISTRY_PUSH_TOKEN" | docker --config "$PUSH_DOCKER_CONFIG" login \
-  "$REGISTRY_HOST" --username "$REGISTRY_PUSH_USER" --password-stdin
-docker --config "$PUSH_DOCKER_CONFIG" image push "$IMAGE_REFERENCE"
-IMAGE_DIGEST="$(
-  docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' \
-    "$IMAGE_REFERENCE" \
-  | awk -v prefix="${IMAGE_REPOSITORY}@" \
-      'index($0, prefix) == 1 {sub(prefix, ""); print; exit}'
-)"
-[[ "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
-cleanup_push
-trap - EXIT
-printf 'image=%s@%s config=%s source=%s architecture=%s\n' \
-  "$IMAGE_REPOSITORY" "$IMAGE_DIGEST" "$IMAGE_CONFIG_DIGEST" \
-  "$IMAGE_SOURCE_REVISION" "$IMAGE_ARCHITECTURE"
-```
-
-Record the repository, registry digest, local configuration digest, source
-commit, and architecture outside the disposable builder. Revoke the push
-credential and destroy the builder. This source build is not signed, attested,
-or approved for redistribution.
-
-Do not enable anonymous pulls or copy the image to a shared registry. After the
-review deployment is removed, use the registry's API or CLI to delete the exact
-`IMAGE_REPOSITORY@IMAGE_DIGEST`, not only its tag. Verify that a pull by digest
-fails before destroying the audit record.
-
-Export the recorded values on the separate cluster-administration host:
-
-```shell
-export IMAGE_REPOSITORY='registry.example.com/private/extra-codeowners'
-export IMAGE_DIGEST='sha256:REPLACE_WITH_RECORDED_REGISTRY_DIGEST'
-export TARGET_ARCH='amd64'
-```
+Stop here until issue #32 closes and the project publishes an image-verification
+procedure. That procedure must provide the exact repository, platform digest,
+source revision, wheel digest, selection-record digest, signature, and
+provenance checks before the installation steps below become runnable.
 
 ## Install the source chart
 
@@ -240,10 +103,11 @@ Replace every database placeholder and percent-encode reserved URL characters.
 Both environment files and both credential source files must remain outside
 version control with restricted filesystem permissions. The deployment uses
 separate Secrets for runtime settings, the database URL, and mounted GitHub
-credential files:
+credential files.
 
-Use a separate
-read-only registry credential scoped to pulls from only `IMAGE_REPOSITORY`.
+The example below assumes the image repository requires authentication. Use a
+separate read-only registry credential scoped to pulls from only
+`IMAGE_REPOSITORY`.
 Keep the exact reviewed source in a clean detached worktree on the
 cluster-administration host. Do not install the chart from a mutable working
 tree.
@@ -455,8 +319,10 @@ GitHub does not automatically redeliver failed webhook deliveries. After
 recovery, inspect and manually redeliver failures. Periodic reconciliation is a
 separate convergence path for open pull requests.
 
-Build and push the reviewed commit under a new `IMAGE_TAG`. Record its new
-registry digest in `IMAGE_DIGEST`, then upgrade from the same checkout:
+After issue #32 closes, obtain the next supported image through the published
+verification procedure. Record its platform digest in `IMAGE_DIGEST`, keep the
+matching reviewed source in `CHART_SOURCE`, and upgrade from that checkout.
+Do not rebuild or retag an image as a substitute for the verified artifact:
 
 ```shell
 helm upgrade extra-codeowners \
@@ -592,9 +458,11 @@ Uninstalling does not delete:
 
 These resources can be removed after confirming that no other deployment uses
 them, retaining required audit data, and completing App-access cleanup in that
-order. After the last pod is gone, revoke the registry pull credential. Delete
-the exact temporary registry object by `IMAGE_REPOSITORY@IMAGE_DIGEST`, verify
-that a pull by digest fails, and only then remove any remaining tag.
+order. After the last pod is gone, revoke the registry pull credential. If the
+deployment used an operator-owned temporary registry copy, delete the exact
+object by `IMAGE_REPOSITORY@IMAGE_DIGEST`, verify that a pull by digest fails,
+and only then remove any remaining tag. Do not delete a shared upstream release
+artifact.
 
 ## Values
 
@@ -608,7 +476,7 @@ validates types, bounds, accepted enums, and unknown top-level properties during
 | `replicaCount` | integer | `1` | API/worker pods when autoscaling is off. |
 | `revisionHistoryLimit` | integer | `3` | Old ReplicaSets retained for rollback. |
 | `deploymentStrategy` | object | `Recreate` | Deployment replacement strategy; avoids overlapping application versions by default. |
-| `image.repository` | string | `example.invalid/stampbot/extra-codeowners` | Intentionally non-pullable placeholder; override it with the operator-controlled source build. |
+| `image.repository` | string | `example.invalid/stampbot/extra-codeowners` | Intentionally non-pullable placeholder; override it with the verified supported image repository once one exists. |
 | `image.pullPolicy` | enum | `IfNotPresent` | Kubernetes image pull policy. |
 | `image.tag` | string | empty | Image tag; an empty value uses chart `appVersion`. |
 | `image.digest` | string | empty | `sha256:` digest that takes precedence over the tag. |

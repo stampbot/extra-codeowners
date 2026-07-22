@@ -44,7 +44,8 @@ from typing import Any
 from packaging.utils import InvalidName, canonicalize_name
 from packaging.version import InvalidVersion, Version
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+EVIDENCE_MEDIA_TYPE = f"application/vnd.stampbot.container-evidence.v{SCHEMA_VERSION}+tar+gzip"
 APPLICATION_NAME = "extra-codeowners"
 EXPECTED_RUNTIME_PYTHON = "3.14.6"
 EXPECTED_UV_VERSION = "0.11.28"
@@ -1810,7 +1811,7 @@ def _inventory_saved_image(
     apk_database_contents: dict[tuple[int, str], bytes] = {}
     identity_contents: dict[tuple[int, str, str], bytes] = {}
     metadata_contents: dict[tuple[int, str, str], bytes] = {}
-    python_record_installations: list[PythonRecordInstallation] = []
+    wheel_installations: list[PythonRecordInstallation] = []
     active_python_installations: dict[str, PythonRecordInstallation] = {}
     historically_managed_paths: set[str] = set()
     historical_record_entry_count = 0
@@ -2196,7 +2197,7 @@ def _inventory_saved_image(
 
             # Replay against the complete layer snapshot, not tar member order.
             # An overwritten or whiteouted RECORD is no longer active, but its
-            # installation evidence remains in python_record_installations.
+            # installation evidence remains in wheel_installations.
             for record_path, installation in list(active_python_installations.items()):
                 if effective.get(record_path) is not installation.record:
                     active_python_installations.pop(record_path)
@@ -2217,7 +2218,7 @@ def _inventory_saved_image(
                 historical_record_entry_count += len(installation.entries)
                 if historical_record_entry_count > MAX_HISTORICAL_RECORD_ENTRIES:
                     raise EvidenceError("historical Python RECORD entries exceed their limit")
-                python_record_installations.append(installation)
+                wheel_installations.append(installation)
                 active_python_installations[record_path] = installation
 
             active_claims = validate_active_python_installations(
@@ -2356,11 +2357,9 @@ def _inventory_saved_image(
         if component.get("ecosystem") == "python"
     }
     owner_occurrences: dict[tuple[int, str, str], str] = {}
-    for installation in python_record_installations:
+    for installation in wheel_installations:
         if installation.owner not in component_owner_keys:
-            raise EvidenceError(
-                f"cannot bind Python RECORD owner identity: {installation.owner}"
-            )
+            raise EvidenceError(f"cannot bind Python RECORD owner identity: {installation.owner}")
         for owner_path, (_digest, _size, owner_record) in installation.entries.items():
             owner_occurrence = (
                 int(owner_record["layer"]),
@@ -2410,11 +2409,14 @@ def _inventory_saved_image(
         == "elf"
     ]
     validate_cross_sbom_component_consistency(embedded_sboms, "collected embedded SBOMs")
-    wheel_identity_files = [
-        observed_payload(record)
-        for record in occurrences
-        if WHEEL_IDENTITY_FILE.search(record["path"])
-    ]
+    wheel_identity_files = sorted(
+        (
+            observed_payload(record)
+            for record in occurrences
+            if WHEEL_IDENTITY_FILE.search(record["path"])
+        ),
+        key=lambda record: (record["layer"], record["path"]),
+    )
     apk_database_occurrences = [
         observed_payload(record)
         for record in occurrences
@@ -2448,7 +2450,7 @@ def _inventory_saved_image(
             ],
         }
         for installation in sorted(
-            python_record_installations,
+            wheel_installations,
             key=lambda item: (int(item.record["layer"]), str(item.record["path"])),
         )
     ]
@@ -2488,7 +2490,7 @@ def _inventory_saved_image(
         "embedded_sboms": embedded_sboms,
         "native_payloads": native_payloads,
         "wheel_identity_files": wheel_identity_files,
-        "python_record_installations": historical_installations,
+        "wheel_installations": historical_installations,
         "python_record_ownership": python_record_ownership,
         "source_completeness": {
             "complete": False,
@@ -3214,11 +3216,14 @@ def verify_apk_database_baseline(inventory: Mapping[str, Any], policy: Mapping[s
         raise EvidenceError("layered APK databases differ from reviewed policy")
 
 
-def validate_python_record_installations(
+def validate_wheel_installations(
     value: object,
     components: Sequence[Mapping[str, Any]],
     occurrence_payloads: Mapping[tuple[int, str], Mapping[str, Any]] | None = None,
-) -> dict[tuple[int, str, str], str]:
+) -> tuple[
+    dict[tuple[int, str, str], str],
+    dict[tuple[int, str, str], str],
+]:
     """Validate explicit historical RECORD replay evidence."""
 
     if not isinstance(value, list) or len(value) > MAX_IMAGE_MEMBERS:
@@ -3233,6 +3238,7 @@ def validate_python_record_installations(
     occurrence_owners: dict[tuple[int, str], str] = {}
     occurrence_records: dict[tuple[int, str], dict[str, Any]] = {}
     occurrence_bindings: dict[tuple[int, str, str], str] = {}
+    effective_occurrence_bindings: dict[tuple[int, str, str], str] = {}
     total_entries = 0
     ordering: list[tuple[int, str]] = []
     for installation in value:
@@ -3346,7 +3352,10 @@ def validate_python_record_installations(
                 raise EvidenceError("historical Python RECORD occurrence has conflicting identity")
             occurrence_owners[key] = str(owner)
             occurrence_records[key] = occurrence
-            occurrence_bindings[(occurrence["layer"], path, occurrence["sha256"])] = str(owner)
+            occurrence_identity = (occurrence["layer"], path, occurrence["sha256"])
+            occurrence_bindings[occurrence_identity] = str(owner)
+            if record["effective"] is True:
+                effective_occurrence_bindings[occurrence_identity] = str(owner)
             recorded_hash = entry.get("recorded_sha256")
             recorded_size = entry.get("recorded_size")
             if path == record_path:
@@ -3382,7 +3391,7 @@ def validate_python_record_installations(
                 )
     if ordering != sorted(ordering):
         raise EvidenceError("historical Python installations are not normalized")
-    return occurrence_bindings
+    return occurrence_bindings, effective_occurrence_bindings
 
 
 def validate_component_inventory(inventory: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -3404,7 +3413,7 @@ def validate_component_inventory(inventory: Mapping[str, Any]) -> list[dict[str,
         "embedded_sboms",
         "native_payloads",
         "wheel_identity_files",
-        "python_record_installations",
+        "wheel_installations",
         "python_record_ownership",
         "source_completeness",
     }
@@ -3437,9 +3446,14 @@ def validate_component_inventory(inventory: Mapping[str, Any]) -> list[dict[str,
     validate_platform_component_invariants(components, str(platform), "component inventory")
     for category in ("apk_database_occurrences", "wheel_identity_files"):
         validate_payload_records(inventory.get(category), f"component inventory {category}")
-    historical_occurrences = validate_python_record_installations(
-        inventory.get("python_record_installations"), components
+    historical_occurrences, effective_historical_occurrences = validate_wheel_installations(
+        inventory.get("wheel_installations"), components
     )
+    python_owner_names = {
+        component_key(component): str(component["name"])
+        for component in components
+        if component.get("ecosystem") == "python"
+    }
     python_component_owners = {
         component_key(component)
         for component in components
@@ -3506,6 +3520,18 @@ def validate_component_inventory(inventory: Mapping[str, Any]) -> list[dict[str,
             [{field: record[field] for field in record if field != "owner"}],
             "component inventory Python RECORD ownership",
         )
+        occurrence = (record["layer"], path, record["sha256"])
+        if python_owner_names.get(effective_historical_occurrences.get(occurrence, "")) != owner:
+            raise EvidenceError(
+                "Python RECORD ownership is not linked to its effective historical claim"
+            )
+    observed_ownership_occurrences = {
+        (record["layer"], record["path"], record["sha256"])
+        for record in ownership
+        if isinstance(record, dict)
+    }
+    if observed_ownership_occurrences != set(effective_historical_occurrences):
+        raise EvidenceError("Python RECORD ownership omits an effective historical claim")
     for payload in (*embedded_sboms, *native_payloads):
         occurrence = (payload["layer"], payload["path"], payload["sha256"])
         if historical_occurrences.get(occurrence) != payload["owner"]:
@@ -3729,7 +3755,7 @@ def verify_selected_application_installation(
     if len(matching_components) != 1:
         raise EvidenceError("selected wheel does not match one effective application component")
 
-    historical = inventory.get("python_record_installations")
+    historical = inventory.get("wheel_installations")
     if historical is not None:
         if not isinstance(historical, list):
             raise EvidenceError("component inventory has invalid historical Python installations")
@@ -4429,7 +4455,7 @@ def validate_all_layer_inventory(files: Mapping[str, Any], inventory: Mapping[st
         "embedded_sboms",
         "native_payloads",
         "wheel_identity_files",
-        "python_record_installations",
+        "wheel_installations",
         "python_record_ownership",
         "source_completeness",
     }
@@ -4529,6 +4555,7 @@ def validate_all_layer_inventory(files: Mapping[str, Any], inventory: Mapping[st
     if not isinstance(records, list) or len(records) > MAX_IMAGE_MEMBERS:
         raise EvidenceError("all-layer inventory has an invalid regular-file list")
     observed_counts = [0] * len(layers)
+    all_occurrences: set[tuple[int, str]] = set()
     seen_occurrences: set[tuple[int, str]] = set()
     effective_paths: set[str] = set()
     total_size = 0
@@ -4576,6 +4603,7 @@ def validate_all_layer_inventory(files: Mapping[str, Any], inventory: Mapping[st
         if occurrence in seen_occurrences:
             raise EvidenceError("all-layer inventory repeats a path within one layer")
         seen_occurrences.add(occurrence)
+        all_occurrences.add(occurrence)
         if effective_value:
             if path in effective_paths:
                 raise EvidenceError("all-layer inventory repeats an effective path")
@@ -4622,6 +4650,9 @@ def validate_all_layer_inventory(files: Mapping[str, Any], inventory: Mapping[st
         if occurrence in seen_directories:
             raise EvidenceError("all-layer inventory repeats a directory within one layer")
         seen_directories.add(occurrence)
+        if occurrence in all_occurrences:
+            raise EvidenceError("all-layer inventory repeats one path across entry categories")
+        all_occurrences.add(occurrence)
         observed_directory_counts[layer_index] += 1
     if observed_directory_counts != [layer["directory_count"] for layer in layers]:
         raise EvidenceError("all-layer inventory directory counts do not match its records")
@@ -4661,6 +4692,9 @@ def validate_all_layer_inventory(files: Mapping[str, Any], inventory: Mapping[st
         if occurrence in seen_non_regular:
             raise EvidenceError("all-layer inventory repeats a non-regular path within one layer")
         seen_non_regular.add(occurrence)
+        if occurrence in all_occurrences:
+            raise EvidenceError("all-layer inventory repeats one path across entry categories")
+        all_occurrences.add(occurrence)
         validate_header_identity(record, "all-layer inventory non-regular file")
         if kind in {"symlink", "hardlink"}:
             target = record.get("target")
@@ -4712,6 +4746,9 @@ def validate_all_layer_inventory(files: Mapping[str, Any], inventory: Mapping[st
         if occurrence in seen_whiteouts:
             raise EvidenceError("all-layer inventory repeats a whiteout within one layer")
         seen_whiteouts.add(occurrence)
+        if occurrence in all_occurrences:
+            raise EvidenceError("all-layer inventory repeats one path across entry categories")
+        all_occurrences.add(occurrence)
     if [
         sum(1 for record in non_regular if record["layer"] == layer_index)
         for layer_index in range(len(layers))
@@ -4737,9 +4774,14 @@ def validate_all_layer_inventory(files: Mapping[str, Any], inventory: Mapping[st
     required_native_payloads = [
         expected_payload(record) for record in records if is_native_payload_path(record["path"])
     ]
-    expected_wheel_identity_files = [
-        expected_payload(record) for record in records if WHEEL_IDENTITY_FILE.search(record["path"])
-    ]
+    expected_wheel_identity_files = sorted(
+        (
+            expected_payload(record)
+            for record in records
+            if WHEEL_IDENTITY_FILE.search(record["path"])
+        ),
+        key=lambda record: (record["layer"], record["path"]),
+    )
     python_component_owners = {
         component_key(component)
         for component in components
@@ -4788,10 +4830,10 @@ def validate_all_layer_inventory(files: Mapping[str, Any], inventory: Mapping[st
     occurrence_payloads = {
         (record["layer"], record["path"]): expected_payload(record) for record in records
     }
-    historical_occurrences = validate_python_record_installations(
-        inventory.get("python_record_installations"), components, occurrence_payloads
+    historical_occurrences, effective_historical_occurrences = validate_wheel_installations(
+        inventory.get("wheel_installations"), components, occurrence_payloads
     )
-    installation_value = inventory.get("python_record_installations")
+    installation_value = inventory.get("wheel_installations")
     if not isinstance(installation_value, list):
         raise EvidenceError("component inventory has invalid historical Python installations")
     observed_record_occurrences = {
@@ -4805,7 +4847,6 @@ def validate_all_layer_inventory(files: Mapping[str, Any], inventory: Mapping[st
     }
     if observed_record_occurrences != expected_record_occurrences:
         raise EvidenceError("component inventory omits a historical Python RECORD installation")
-
     ownership = inventory.get("python_record_ownership")
     if not isinstance(ownership, list) or len(ownership) > MAX_RECORD_ENTRIES:
         raise EvidenceError("component inventory has invalid Python RECORD ownership")
@@ -4813,6 +4854,11 @@ def validate_all_layer_inventory(files: Mapping[str, Any], inventory: Mapping[st
         component["name"]
         for component in components
         if component.get("ecosystem") == "python" and component.get("effective") is True
+    }
+    python_owner_names = {
+        component_key(component): str(component["name"])
+        for component in components
+        if component.get("ecosystem") == "python"
     }
     effective_records = {
         record["path"]: record for record in records if record["effective"] is True
@@ -4866,6 +4912,25 @@ def validate_all_layer_inventory(files: Mapping[str, Any], inventory: Mapping[st
         }
         if observed_payload_record != expected_payload_record:
             raise EvidenceError("Python RECORD ownership does not match all-layer inventory")
+        ownership_occurrence = (
+            ownership_record["layer"],
+            path,
+            ownership_record["sha256"],
+        )
+        if (
+            python_owner_names.get(effective_historical_occurrences.get(ownership_occurrence, ""))
+            != owner
+        ):
+            raise EvidenceError(
+                "Python RECORD ownership is not linked to its effective historical claim"
+            )
+    observed_ownership_occurrences = {
+        (record["layer"], record["path"], record["sha256"])
+        for record in ownership
+        if isinstance(record, dict)
+    }
+    if observed_ownership_occurrences != set(effective_historical_occurrences):
+        raise EvidenceError("Python RECORD ownership omits an effective historical claim")
     for payload in (*embedded_sboms, *native_payloads):
         payload_occurrence = (payload["layer"], payload["path"], payload["sha256"])
         if historical_occurrences.get(payload_occurrence) != payload["owner"]:
@@ -6555,7 +6620,7 @@ def build_bundle(
     output.with_suffix(output.suffix + ".sha256").write_text(f"{bundle_hash}  {output.name}\n")
     predicate = {
         "schema_version": SCHEMA_VERSION,
-        "media_type": "application/vnd.stampbot.container-evidence.v1+tar+gzip",
+        "media_type": EVIDENCE_MEDIA_TYPE,
         "platform": inventory["platform"],
         "subject_digest": inventory["subject_digest"],
         "artifact": {"filename": output.name, "sha256": bundle_hash},
@@ -6837,7 +6902,7 @@ def validate_ci_artifact_contents(root: Path, architecture: str) -> None:
     )
     expected_predicate = {
         "schema_version": SCHEMA_VERSION,
-        "media_type": "application/vnd.stampbot.container-evidence.v1+tar+gzip",
+        "media_type": EVIDENCE_MEDIA_TYPE,
         "platform": inventory["platform"],
         "subject_digest": inventory["subject_digest"],
         "artifact": {"filename": bundle_name, "sha256": bundle_hash},
@@ -7058,6 +7123,7 @@ def validate_filesystem_policy_view_input(files: Mapping[str, Any]) -> None:
     if len(set(layer_digests)) != len(layer_digests):
         raise EvidenceError("all-layer inventory repeats a layer digest")
 
+    all_occurrences: set[tuple[int, str]] = set()
     for category, count_field in count_fields.items():
         records = files.get(category)
         if not isinstance(records, list) or len(records) > MAX_IMAGE_MEMBERS:
@@ -7125,6 +7191,9 @@ def validate_filesystem_policy_view_input(files: Mapping[str, Any]) -> None:
             if occurrence in seen:
                 raise EvidenceError(f"all-layer inventory repeats a {category} path")
             seen.add(occurrence)
+            if occurrence in all_occurrences:
+                raise EvidenceError("all-layer inventory repeats one path across entry categories")
+            all_occurrences.add(occurrence)
             validate_header_identity(item, f"all-layer inventory {category} record")
             if category in {"regular_files", "directories"} and not isinstance(
                 item.get("effective"), bool

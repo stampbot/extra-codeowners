@@ -19,8 +19,8 @@ publication is disabled pending three issues:
 covers CPython normalization plus native-wheel and embedded-SBOM expansion;
 [privilege separation #28](https://github.com/stampbot/extra-codeowners/issues/28)
 isolates publication authority; and
-[build isolation #32](https://github.com/stampbot/extra-codeowners/issues/32)
-hash-pins the PEP 517 environment and exact application wheel.
+[build proof #32](https://github.com/stampbot/extra-codeowners/issues/32)
+connects release and ad-hoc builds to CI's selected application proof.
 An [older public GHCR preview](https://github.com/stampbot/extra-codeowners/issues/30)
 may still be discoverable; it is unsupported, incomplete, and must not be
 deployed or mirrored.
@@ -59,7 +59,7 @@ If you operate a deployment:
   No tagged evidence assets exist while
   [source-completeness issue #18](https://github.com/stampbot/extra-codeowners/issues/18),
   [privilege-separation issue #28](https://github.com/stampbot/extra-codeowners/issues/28),
-  and [build-isolation issue #32](https://github.com/stampbot/extra-codeowners/issues/32)
+  and [build-proof issue #32](https://github.com/stampbot/extra-codeowners/issues/32)
   keep release publication denied.
 - Consult the [checks](reference/checks.md),
   [configuration](reference/configuration.md), and
