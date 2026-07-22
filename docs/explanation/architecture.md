@@ -289,8 +289,10 @@ runtime files and retains its pinned recipe, source archive, and source-carried
 license. It also replays historical Python installs from each layer's `RECORD`.
 Greenlet now has closed-world coverage on both architectures: exact wheel and
 sdist identity, complete native-file ownership, embedded-component identity,
-Alpine GCC source, and reviewed notices. Six other native-wheel owners still
-need complete component, notice, and source records.
+Alpine GCC source, and reviewed notices. MarkupSafe also has exact wheel,
+sdist, and single-payload coverage, with explicit empty SBOM and component
+sets. Five other native-wheel owners still need complete component, notice,
+and source records for the surfaces they expose.
 
 The tagged workflow contains intended image, chart, Python, SBOM, provenance,
 signature, and GitHub-release jobs. An unconditional blocker keeps every

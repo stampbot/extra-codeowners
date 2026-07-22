@@ -46,7 +46,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Rel
 - A reusable, manually runnable Python distribution proof shared by CI and the
   read-only tagged candidate scan.
 - A non-root container, Helm chart source, and supply-chain workflows.
-- Schema-v5 container evidence that binds CPython runtime/source identities,
+- Schema-v6 container evidence that binds CPython runtime/source identities,
   retains every exact locked native wheel and raw embedded SBOM, and closes
   Greenlet with an exact wheel, owner sdist, five-file native set, and embedded
   SBOM component/source/license set. The evidence proves exact co-membership in
@@ -55,8 +55,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Rel
   projections of the installed paths, so they cannot be reassigned while
   comparing the native set across platforms. Global package-URL semantics
   reject conflicting nested identity, source, or license records. A per-owner
-  ledger keeps the other six native-wheel owners and overall source
-  completeness explicitly unresolved.
+  ledger also closes MarkupSafe with its exact wheel, 80,313-byte sdist,
+  single native role, and explicit empty SBOM and component sets. Those empty
+  sets describe the observed wheel; they do not claim the sdist explains every
+  binary byte. The other five native-wheel owners and overall source
+  completeness remain explicitly unresolved.
 - Diátaxis documentation, a threat model, operating guides, and Read the Docs configuration.
 - Bounded pull-request and scheduled property tests for untrusted parsing and policy inputs.
 
