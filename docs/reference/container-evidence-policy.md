@@ -17,7 +17,7 @@ in `tests/test_container_evidence.py`.
 
 ## Common types and limits
 
-The current schema version is integer `1`. JSON must be UTF-8, no larger than
+The current schema version is integer `2`. JSON must be UTF-8, no larger than
 64 MiB, no deeper than 64 containers, and must not contain duplicate object
 keys, floating-point values, non-finite numbers, or invalid Unicode. Unless a
 field says otherwise, every object has exactly the listed keys.
@@ -45,7 +45,7 @@ The policy has exactly these fields:
 
 | Field | Type | Meaning | Consuming gate |
 | --- | --- | --- | --- |
-| `schema_version` | integer | Policy schema; exactly `1`. | Every command through `validate_policy_schema`. |
+| `schema_version` | integer | Policy schema; exactly `2`. | Every command through `validate_policy_schema`. |
 | `base_image` | string | Nonempty bounded Dockerfile base reference; the schema rejects whitespace and `@`. The checked-in value is a tagged Docker Official Python reference. | Exact Dockerfile binding during `bundle` and `verify-ci-policy`. |
 | `base_image_index_digest` | `qualified_sha256` | Reviewed multi-platform base index. | Schema validation during `verify`; exact Dockerfile/index binding during `bundle` and `verify-ci-policy`. |
 | `base_image_platforms` | platform object | Exact ordered base layer diff IDs for both platforms. | Base-prefix and post-base provenance gates. |
@@ -127,8 +127,8 @@ Approval is necessary but not sufficient. The collector also requires the
 inventory's exact complete-source status. Current code intentionally requires
 `complete: false` with the issue #18 reason, so the distribution gate cannot
 pass. Issue #28 independently prevents publication authority from entering
-the current collection path. Issue #32 separately requires a hash-pinned build
-environment and exact application-wheel installation.
+the current collection path. Issue #32 separately requires release and ad-hoc
+builds to consume CI's hash-pinned selected proof and exact application wheel.
 
 ## License policy
 
@@ -178,8 +178,18 @@ array uses this regular-file occurrence shape:
 | `uid`, `gid` | bounded integer |
 
 An occurrence identity is `(layer, path)` and may appear only once per array.
-These baselines make known incomplete surfaces visible; they do not claim that
-the nested components and corresponding sources are complete.
+Component-inventory records for `embedded_sboms` and `native_payloads` add a
+validated wheel owner plus a `cyclonedx` or `elf` identity. Policy comparison
+uses the raw occurrence fields above after the collector validates those added
+fields and binds the occurrence to historical RECORD ownership.
+
+The component inventory retains this raw `wheel_identity_files` array as well
+as `wheel_installations`. They are not interchangeable: the raw array also
+covers base-image identities such as system `pip` WHEEL and RECORD files outside
+`/opt/venv`, while installation replay covers wheel ownership inside the runtime
+virtual environment. These baselines make known incomplete surfaces visible;
+they do not claim that the nested components and corresponding sources are
+complete.
 
 `filesystem_baselines` also has both platform keys. Each value has exactly:
 

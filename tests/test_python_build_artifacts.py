@@ -481,6 +481,7 @@ def test_selects_and_reverifies_exact_native_distribution_proofs(
             output,
             source_revision=PROOF_REVISION,
             wheel_sha256=cast(str, result["wheel_sha256"]),
+            selection_record_sha256=cast(str, result["selection_record_sha256"]),
         )
         == result
     )
@@ -654,6 +655,13 @@ def test_select_rejects_preexisting_output_and_verify_binds_expected_values(
             source_revision=PROOF_REVISION,
             wheel_sha256="5" * 64,
         )
+    with pytest.raises(build.BuildError, match="expected selection record"):
+        build.verify_selection(
+            output,
+            source_revision=PROOF_REVISION,
+            wheel_sha256=cast(str, result["wheel_sha256"]),
+            selection_record_sha256="6" * 64,
+        )
     selected_arm_record = output / build.SELECTED_BUILD_RECORD_NAMES["arm64"]
     retained_arm_record = selected_arm_record.read_bytes()
     selected_arm_record.write_bytes(
@@ -674,6 +682,135 @@ def test_select_rejects_preexisting_output_and_verify_binds_expected_values(
             output,
             source_revision=PROOF_REVISION,
             wheel_sha256=cast(str, result["wheel_sha256"]),
+        )
+
+
+def test_retains_exact_selection_and_emits_installed_wheel_contract(tmp_path: Path) -> None:
+    amd64 = tmp_path / "amd64"
+    arm64 = tmp_path / "arm64"
+    write_distribution_proof(amd64, "amd64")
+    write_distribution_proof(arm64, "arm64")
+    selected = tmp_path / "selected"
+    result = build.select_distributions(
+        amd64,
+        arm64,
+        source_revision=PROOF_REVISION,
+        output=selected,
+    )
+    retained = tmp_path / "retained"
+
+    retained_result = build.retain_verified_selection(
+        selected,
+        output=retained,
+        source_revision=PROOF_REVISION,
+        wheel_sha256=cast(str, result["wheel_sha256"]),
+        selection_record_sha256=cast(str, result["selection_record_sha256"]),
+    )
+
+    assert {path.name for path in retained.iterdir()} == {
+        build.SELECTED_BUILD_RECORD_NAMES["amd64"],
+        build.SELECTED_BUILD_RECORD_NAMES["arm64"],
+        build.SELECTION_RECORD_NAME,
+        WHEEL_NAME,
+        "extra_codeowners-0.1.0.tar.gz",
+    }
+    assert retained_result["files"] == build.selected_file_records(retained)
+    assert all(stat.S_IMODE(path.stat().st_mode) == 0o600 for path in retained.iterdir())
+    installation = cast(dict[str, Any], retained_result["installation"])
+    assert installation["environment_root"] == "/opt/venv"
+    alternatives = cast(list[dict[str, Any]], installation["alternatives"])
+    assert [item["launcher_interpreter"] for item in alternatives] == [
+        "python",
+        "python3",
+        "python3.14",
+    ]
+    assert all(
+        any(file["path"] == "bin/extra-codeowners" for file in item["files"])
+        for item in alternatives
+    )
+    assert all(
+        any(
+            file["path"].endswith("extra_codeowners-0.1.0.dist-info/RECORD")
+            for file in item["files"]
+        )
+        for item in alternatives
+    )
+
+    with pytest.raises(build.BuildError, match="output directory must be absent"):
+        build.retain_verified_selection(
+            selected,
+            output=retained,
+            source_revision=PROOF_REVISION,
+            wheel_sha256=cast(str, result["wheel_sha256"]),
+            selection_record_sha256=cast(str, result["selection_record_sha256"]),
+        )
+
+
+def test_selection_cli_requires_every_expected_identity() -> None:
+    with pytest.raises(SystemExit):
+        build.parser().parse_args(
+            [
+                "verify-selection",
+                "--directory",
+                "selected",
+                "--source-revision",
+                PROOF_REVISION,
+                "--wheel-sha256",
+                "a" * 64,
+            ]
+        )
+    with pytest.raises(SystemExit):
+        build.parser().parse_args(
+            [
+                "retain-selection",
+                "--directory",
+                "selected",
+                "--source-revision",
+                PROOF_REVISION,
+                "--wheel-sha256",
+                "a" * 64,
+                "--selection-record-sha256",
+                "b" * 64,
+            ]
+        )
+
+
+@pytest.mark.parametrize("mutation", ["missing", "extra", "symlink", "tampered"])
+def test_retention_rejects_nonexact_or_tampered_selected_proof(
+    mutation: str, tmp_path: Path
+) -> None:
+    amd64 = tmp_path / "amd64"
+    arm64 = tmp_path / "arm64"
+    write_distribution_proof(amd64, "amd64")
+    write_distribution_proof(arm64, "arm64")
+    selected = tmp_path / "selected"
+    result = build.select_distributions(
+        amd64,
+        arm64,
+        source_revision=PROOF_REVISION,
+        output=selected,
+    )
+    if mutation == "missing":
+        (selected / build.SELECTED_BUILD_RECORD_NAMES["arm64"]).unlink()
+    elif mutation == "extra":
+        (selected / "unreviewed").write_bytes(b"extra")
+    elif mutation == "symlink":
+        record = selected / build.SELECTED_BUILD_RECORD_NAMES["arm64"]
+        target = tmp_path / "arm64-record"
+        target.write_bytes(record.read_bytes())
+        record.unlink()
+        record.symlink_to(target)
+    else:
+        wheel = selected / WHEEL_NAME
+        wheel.write_bytes(wheel.read_bytes() + b"tampered")
+
+    with pytest.raises(build.BuildError):
+        build.retain_verified_selection(
+            selected,
+            output=tmp_path / "retained",
+            source_revision=PROOF_REVISION,
+            wheel_sha256=cast(str, result["wheel_sha256"]),
+            selection_record_sha256=cast(str, result["selection_record_sha256"]),
         )
 
 

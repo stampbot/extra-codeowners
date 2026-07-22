@@ -11,6 +11,7 @@ import csv
 import email.parser
 import email.policy
 import hashlib
+import io
 import json
 import os
 import re
@@ -2110,7 +2111,11 @@ def selection_result(record_bytes: bytes, proof: DistributionProof) -> dict[str,
 
 
 def verify_selection(
-    directory: Path, *, source_revision: str, wheel_sha256: str
+    directory: Path,
+    *,
+    source_revision: str,
+    wheel_sha256: str,
+    selection_record_sha256: str | None = None,
 ) -> dict[str, object]:
     """Reverify a selected proof without consulting Git or a working tree."""
 
@@ -2147,7 +2152,199 @@ def verify_selection(
         expected_source_revision=source_revision,
         expected_wheel_sha256=wheel_sha256,
     )
-    return selection_result(selection_bytes, amd64)
+    result = selection_result(selection_bytes, amd64)
+    if selection_record_sha256 is not None:
+        if SHA256.fullmatch(selection_record_sha256) is None:
+            raise BuildError("expected selection-record digest must be a lowercase SHA-256 digest")
+        if result["selection_record_sha256"] != selection_record_sha256:
+            raise BuildError("selected distribution differs from the expected selection record")
+    return result
+
+
+def selected_file_records(directory: Path) -> list[dict[str, object]]:
+    """Return canonical identities for an already verified five-file selection."""
+
+    record_path, wheel_path, sdist_path, selection_path = distribution_directory_files(
+        directory, selected=True, architecture="amd64"
+    )
+    if selection_path is None:
+        raise BuildError("selected distribution lacks its selection record")
+    paths = {
+        record_path,
+        directory / SELECTED_BUILD_RECORD_NAMES["arm64"],
+        wheel_path,
+        sdist_path,
+        selection_path,
+    }
+    return [
+        {
+            "filename": path.name,
+            "sha256": sha256_file(path),
+            "size": path.stat().st_size,
+        }
+        for path in sorted(paths, key=lambda candidate: candidate.name)
+    ]
+
+
+def urlsafe_record_digest(sha256: str) -> str:
+    """Encode one validated hexadecimal SHA-256 for an installed RECORD row."""
+
+    if SHA256.fullmatch(sha256) is None:
+        raise BuildError("installed file manifest contains an invalid SHA-256 digest")
+    return base64.urlsafe_b64encode(bytes.fromhex(sha256)).rstrip(b"=").decode()
+
+
+def installed_selection_contract(proof: DistributionProof) -> dict[str, object]:
+    """Describe every exact installed layout accepted for the selected wheel."""
+
+    if proof.wheel.dist_info is None:
+        raise BuildError("selected wheel lacks its dist-info identity")
+    python_directory = "python3.14"
+    site_packages = f"lib/{python_directory}/site-packages"
+    record_name = f"{proof.wheel.dist_info}/RECORD"
+    member_records = {
+        name: (digest, size) for name, digest, size in proof.wheel.members if name != record_name
+    }
+    alternatives: list[dict[str, object]] = []
+    for interpreter in ("python", "python3", python_directory):
+        launcher_records = {
+            f"../../../bin/{name}": expected_launcher(
+                Path("/opt/venv"),
+                module,
+                callable_name,
+                interpreter_name=interpreter,
+            )
+            for name, module, callable_name in proof.wheel.scripts
+        }
+        rows: dict[str, tuple[str, int] | None] = dict(member_records)
+        rows.update(
+            {
+                name: (sha256_bytes(content), len(content))
+                for name, content in launcher_records.items()
+            }
+        )
+        rows[record_name] = None
+        record_output = io.StringIO(newline="")
+        writer = csv.writer(record_output, lineterminator="\n")
+        for name in sorted(rows):
+            identity = rows[name]
+            if identity is None:
+                writer.writerow((name, "", ""))
+            else:
+                digest, size = identity
+                writer.writerow((name, f"sha256={urlsafe_record_digest(digest)}", str(size)))
+        record_content = record_output.getvalue().encode()
+
+        files = [
+            {
+                "path": f"{site_packages}/{name}",
+                "sha256": digest,
+                "size": size,
+                "mode": 0o644,
+            }
+            for name, (digest, size) in sorted(member_records.items())
+        ]
+        files.extend(
+            {
+                "path": f"bin/{name.removeprefix('../../../bin/')}",
+                "sha256": sha256_bytes(content),
+                "size": len(content),
+                "mode": 0o755,
+            }
+            for name, content in sorted(launcher_records.items())
+        )
+        files.append(
+            {
+                "path": f"{site_packages}/{record_name}",
+                "sha256": sha256_bytes(record_content),
+                "size": len(record_content),
+                "mode": 0o644,
+            }
+        )
+        alternatives.append(
+            {
+                "launcher_interpreter": interpreter,
+                "files": sorted(files, key=lambda item: str(item["path"])),
+            }
+        )
+    return {
+        "environment_root": "/opt/venv",
+        "project": proof.wheel.record["project"],
+        "version": proof.wheel.record["version"],
+        "python_directory": python_directory,
+        "alternatives": alternatives,
+    }
+
+
+def retain_verified_selection(
+    directory: Path,
+    *,
+    output: Path,
+    source_revision: str,
+    wheel_sha256: str,
+    selection_record_sha256: str,
+) -> dict[str, object]:
+    """Atomically retain one exact selection after verifying it before and after copy."""
+
+    source = Path(os.path.abspath(directory))
+    verified = verify_selection(
+        source,
+        source_revision=source_revision,
+        wheel_sha256=wheel_sha256,
+        selection_record_sha256=selection_record_sha256,
+    )
+    source_records = selected_file_records(source)
+    proof = load_distribution_proof(
+        source,
+        architecture="amd64",
+        expected_source_revision=source_revision,
+        selected=True,
+    )
+    installation = installed_selection_contract(proof)
+    destination = Path(os.path.abspath(output))
+    if os.path.lexists(destination):
+        raise BuildError("retained selection output directory must be absent")
+    try:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        staging = Path(
+            tempfile.mkdtemp(prefix=f".{destination.name}.retain-", dir=destination.parent)
+        )
+    except OSError as exc:
+        raise BuildError(f"cannot stage retained Python selection: {exc}") from exc
+    try:
+        for record in source_records:
+            filename = str(record["filename"])
+            source_path = source / filename
+            limit = (
+                MAX_ARCHIVE_BYTES if filename.endswith((".whl", ".tar.gz")) else MAX_RECORD_BYTES
+            )
+            content = bounded_bytes(source_path, limit, f"selected distribution file {filename}")
+            retained = staging / filename
+            with retained.open("xb") as target:
+                target.write(content)
+            os.chmod(retained, 0o600)
+        retained_result = verify_selection(
+            staging,
+            source_revision=source_revision,
+            wheel_sha256=wheel_sha256,
+            selection_record_sha256=selection_record_sha256,
+        )
+        if retained_result != verified:
+            raise BuildError("retained selection identity changed during publication")
+        retained_records = selected_file_records(staging)
+        if retained_records != source_records:
+            raise BuildError("retained selection files changed during publication")
+        if os.path.lexists(destination):
+            raise BuildError("retained selection output directory appeared during publication")
+        os.replace(staging, destination)
+    except BaseException as exc:
+        shutil.rmtree(staging, ignore_errors=True)
+        if isinstance(exc, BuildError):
+            raise
+        if isinstance(exc, OSError):
+            raise BuildError(f"cannot retain selected Python distribution: {exc}") from exc
+        raise
+    return {**verified, "files": retained_records, "installation": installation}
 
 
 def select_distributions(
@@ -2466,6 +2663,17 @@ def parser() -> argparse.ArgumentParser:
     verify_selected.add_argument("--directory", required=True)
     verify_selected.add_argument("--source-revision", required=True)
     verify_selected.add_argument("--wheel-sha256", required=True)
+
+    verify_selected.add_argument("--selection-record-sha256", required=True)
+
+    retain_selected = commands.add_parser(
+        "retain-selection", help="atomically retain one verified five-file selection"
+    )
+    retain_selected.add_argument("--directory", required=True)
+    retain_selected.add_argument("--output", required=True)
+    retain_selected.add_argument("--source-revision", required=True)
+    retain_selected.add_argument("--wheel-sha256", required=True)
+    retain_selected.add_argument("--selection-record-sha256", required=True)
     return result
 
 
@@ -2518,11 +2726,20 @@ def main(arguments: Sequence[str] | None = None) -> int:
                 source_revision=args.source_revision,
                 output=Path(args.output),
             )
-        else:
+        elif args.command == "verify-selection":
             value = verify_selection(
                 Path(args.directory),
                 source_revision=args.source_revision,
                 wheel_sha256=args.wheel_sha256,
+                selection_record_sha256=args.selection_record_sha256,
+            )
+        else:
+            value = retain_verified_selection(
+                Path(args.directory),
+                output=Path(args.output),
+                source_revision=args.source_revision,
+                wheel_sha256=args.wheel_sha256,
+                selection_record_sha256=args.selection_record_sha256,
             )
     except BuildError as exc:
         sys.stderr.write(f"Python build error: {exc}\n")

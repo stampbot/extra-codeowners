@@ -201,7 +201,6 @@ jobs:
           tags: extra-codeowners:release-candidate-${{ matrix.architecture }}
           cache-from: type=gha,scope=main
           build-args: |
-            VCS_REF=${{ github.sha }}
             VERSION=${{ needs.validate.outputs.version }}
 
       - name: Smoke test hardened release candidate
@@ -365,7 +364,6 @@ jobs:
           provenance: mode=max
           sbom: true
           build-args: |
-            VCS_REF=${{ github.sha }}
             VERSION=${{ needs.validate.outputs.version }}
 
       - name: Extract per-platform SPDX SBOMs
