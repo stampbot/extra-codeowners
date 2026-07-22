@@ -1,23 +1,30 @@
 # Container evidence policy reference
 
-`.compliance/container-policy.json` is the reviewed allowlist for container
-component, license, source, base-image, and layer provenance. It is not a
-configuration file for the running GitHub App. The evidence collector rejects
-unknown or missing fields at every schema boundary and compares observed
-raw records or their documented canonical security projection exactly; adding
-a permissive field has no effect.
+`.compliance/container-policy.json` is the exact reviewed allowlist for image
+components, licenses, sources, base layers, and post-base filesystem effects.
+Use this reference when a container build or policy update changes that file.
+It is not configuration for the running GitHub App.
 
-The executable source of truth is
-`.github/scripts/container_evidence.py`, principally
+The collector rejects missing and unknown fields at every schema boundary. It
+then compares either the raw observed records or the documented canonical
+security projection exactly. An invented permissive field cannot weaken the
+comparison; the schema rejects it.
+
+!!! warning "Policy approval cannot enable publication"
+    Setting `distribution_approval.approved` to `true` does not make the
+    current evidence source-complete and does not bypass the release workflow's
+    structural publication block.
+
+The enforcement code is in `.github/scripts/container_evidence.py`, especially
 `validate_policy_schema`, `verify_inventory`,
 `verify_base_layer_binding`, `canonical_post_base_filesystem_changes`,
 `verify_post_base_filesystem_policy`, `verify_post_base_provenance`, and
-`validate_source_policy_coverage`. Adversarial loader and policy tests live
-in `tests/test_container_evidence.py`.
+`validate_source_policy_coverage`. Adversarial loader and policy tests are in
+`tests/test_container_evidence.py`.
 
 ## Common types and limits
 
-The current schema version is integer `3`. JSON must be UTF-8, no larger than
+The current schema version is integer `4`. JSON must be UTF-8, no larger than
 64 MiB, no deeper than 64 containers, and must not contain duplicate object
 keys, floating-point values, non-finite numbers, or invalid Unicode. Unless a
 field says otherwise, every object has exactly the listed keys.
@@ -210,7 +217,7 @@ not satisfy the record.
 
 `unexpanded_python_payloads` has both platform keys. Each platform value has
 exactly `embedded_sboms`, `native_payloads`, and `wheel_identity_files`. Every
-array uses this regular-file occurrence shape:
+array uses these regular-file occurrence fields:
 
 | Field | Type |
 | --- | --- |
@@ -247,7 +254,7 @@ there is no last-match or effective-file fallback.
 
 `filesystem_baselines` also has both platform keys. Each value has exactly:
 
-- `apk_database_occurrences`: regular-file occurrence records using the shape
+- `apk_database_occurrences`: regular-file occurrence records using the fields
   above, byte-for-byte equal to every distributed APK database occurrence
 - `post_base_directory_effects`: canonical effect records with `layer`, `path`,
   `mode`, `uid`, and `gid`; every post-base directory header must first be
@@ -327,9 +334,17 @@ during bundle generation.
 
 ## Review and validation
 
-For one platform inventory, this command validates the complete standalone
-inventory, the policy schema, component equality, payload baselines, APK
-database history, license coverage, and optional distribution approval:
+The commands answer different questions. A narrower command passing does not
+imply that a wider gate passed.
+
+| Command | Scope |
+| --- | --- |
+| `verify` | One standalone component inventory, the policy schema, exact components, payload baselines, APK database history, license coverage, and optional distribution approval. |
+| `bundle` | The `verify` scope plus the all-layer inventory, Dockerfile and base binding, post-base provenance, Git source binding, source-policy coverage, network hash checks, retained notices, and deterministic archive limits. |
+| `filesystem-policy-view` | A human-readable projection of raw layer records into the canonical directory-effect and removal policy. |
+| `verify-ci-policy` | The offline policy checks possible from an extracted pull-request artifact, materialized policy blob, and materialized Dockerfile blob. |
+
+Run `verify` for one platform inventory with:
 
 ```bash
 uv run --frozen python .github/scripts/container_evidence.py verify \
@@ -337,14 +352,10 @@ uv run --frozen python .github/scripts/container_evidence.py verify \
   --policy .compliance/container-policy.json
 ```
 
-The `bundle` command adds all-layer schema validation, Dockerfile/base binding,
-exact post-base provenance, Git source binding, exact source-policy coverage,
-network hash verification, retained notice verification, and deterministic
-archive limits. Reviewers must run it separately for both platforms through
-the CI workflow; a standalone `verify` success is not the full release gate.
+Reviewers must run `bundle` separately for both platforms through the CI
+workflow. A standalone `verify` success is not the full release gate.
 
-For a human-readable projection of raw layer records into the exact semantic
-filesystem-policy shape, use:
+Generate the filesystem-policy projection with:
 
 ```bash
 uv run --frozen python .github/scripts/container_evidence.py \

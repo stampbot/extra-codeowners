@@ -1,68 +1,75 @@
-# Runtime base image decision
+# Why the runtime uses a pinned Alpine image
 
-Status: accepted for CI compatibility evaluation on 2026-07-14; distribution
-acceptance remains blocked by issues `#18`, `#28`, and `#32`.
+The current runtime choice is accepted for CI compatibility evaluation. It is
+not yet accepted for distribution. The evaluation was made on 2026-07-14, and
+tagged publication remains blocked by [issue #18](https://github.com/stampbot/extra-codeowners/issues/18),
+[issue #28](https://github.com/stampbot/extra-codeowners/issues/28),
+[issue #32](https://github.com/stampbot/extra-codeowners/issues/32), and
+[issue #25](https://github.com/stampbot/extra-codeowners/issues/25).
 
-Extra CODEOWNERS uses the Docker Official Image
-`python:3.14.6-alpine3.24` for both its builder and runtime stages. Both stages
-are pinned to the multi-platform index digest
-`sha256:26730869004e2b9c4b9ad09cab8625e81d256d1ce97e72df5520e806b1709f92`.
-That index contains `linux/amd64` and `linux/arm64` manifests.
+Both Dockerfile stages use the Docker Official Image
+`python:3.14.6-alpine3.24`, pinned to this multi-platform index digest:
 
-This is a compatibility and maintenance decision, not a claim that Alpine or
-musl is universally safer than Debian and glibc. The selected image removed
-unused Debian packages and sharply reduced inherited high-severity findings
-without adding an account, a paid registry dependency, or an untested Python
-build. The remaining risk is explicit below.
+```text
+sha256:26730869004e2b9c4b9ad09cab8625e81d256d1ce97e72df5520e806b1709f92
+```
 
-## Decision drivers
+The index contains `linux/amd64` and `linux/arm64` manifests.
 
-The runtime must satisfy all of these constraints:
+This choice does not mean Alpine or musl is always safer than Debian and glibc.
+For this application, the selected image removed unused Debian packages and
+sharply reduced inherited high-severity findings without introducing a paid
+registry, an account requirement, or an untested Python build. It also left
+risks that the project has to manage explicitly.
 
-- anonymous public pulls and a single immutable index for amd64 and arm64
-- CPython 3.14.6 in the builder and runtime
-- compatible artifacts for every locked native dependency on both architectures,
-  with embedded native components separately inventoried before distribution
-- a nonroot, read-only, capability-free deployment with no network during the
-  container smoke test
+## What constrained the choice
+
+The runtime had to satisfy all of these conditions:
+
+- anonymous public pulls from one immutable amd64 and arm64 index
+- CPython 3.14.6 in both the builder and runtime
+- compatible artifacts for every locked native dependency on both
+  architectures, with embedded native components inventoried separately before
+  distribution
+- a nonroot, read-only, capability-free deployment and a container smoke test
+  with no network
 - deterministic dependency installation with uv
 - a complete vulnerability inventory, a fixable High/Critical gate, and
-  narrowly reviewed Vulnerability Exploitability eXchange (OpenVEX) evidence
-- an upstream maintenance path that Renovate can update without silently
-  changing the distribution or Python line
+  narrowly reviewed OpenVEX evidence
+- an upstream update path that Renovate can follow without silently changing
+  the distribution or Python line
 - enough incident-response support to inspect a failed pod without making the
   production container mutable.
 
-Image size and a low finding count matter only after those constraints. A
-small image that cannot be reproduced, debugged, or updated is not a viable
+Image size and a low finding count only matter after those constraints. A tiny
+image that cannot be reproduced, diagnosed, or updated is a poor base for an
 authorization service.
 
 ## Candidates considered
 
-The comparison reflects tests run on 2026-07-14 and the upstream distribution
-surfaces available that day.
+This comparison records the tests and upstream distribution surfaces available
+on 2026-07-14.
 
 | Candidate | Compatibility and lifecycle | Security and supply chain | Operational trade-off | Decision |
 | --- | --- | --- | --- | --- |
-| `python:3.14.6-slim-trixie` | CPython 3.14 and glibc wheels worked on both architectures. Debian familiarity makes native failures easier to reproduce. | The initial scan found 21 unique unsuppressed High/Critical CVEs in packages inherited from the base, with no newer Debian candidate available. The candidate was digest-pinned, but the service did not use most affected utilities. | A shell and familiar Debian tools help diagnosis, but the unused Perl, gzip, ncurses, ACL, and related packages expand the runtime inventory. | Rejected for CI evaluation because a compatible official image has materially less unused code. |
-| `python:3.14.6-alpine3.24` | CPython 3.14.6 and all 38 locked distributions, including binary wheels for cryptography, psycopg-binary, pydantic-core, cffi, and greenlet, worked on amd64 and arm64. Alpine 3.24 main is supported through 2028-06-01. | The exact Docker Official Image index is digest-pinned. Before VEX, the High inventory contains only three CPython findings. CI builds, inventories, and scans per-platform candidates, but does not publish or sign them. | musl can expose compatibility defects that glibc does not. BusyBox and its shell remain for diagnosis. The final stage removes executable `apk`, system `pip`, `ensurepip`, generated bytecode, and virtualenv bootstrap hooks, while retaining installed-package metadata for scanners. | Selected for CI compatibility evaluation, with a locked import inventory and two-architecture smoke and scan gates. |
-| `cgr.dev/chainguard/python:latest` with `latest-dev` | The experiment installed and imported the locked runtime and passed the hardened smoke test. The public image directory listed amd64 and arm64. | The shell-free runtime had the smallest inherited High inventory, and Chainguard publishes signed SBOM attestations. Public no-cost access exposed only moving `latest` and `latest-dev` tags; version-specific Python tags required an account or commercial access. Digest pinning preserves bytes but not a stable, reviewable Python-version update channel. | The runtime has no shell; incident response needs a separate debug image. A build also depends on `cgr.dev` availability, and an anonymous registry request returned HTTP 500 during this review. | Reconsider when a versioned public tag or an explicitly funded registry contract exists. Do not silently replace the public image with a paid dependency. |
-| `gcr.io/distroless/python3-debian13:nonroot` | Public amd64 and arm64 images were available, but the tested image contained CPython 3.13.5 rather than the selected 3.14.6 runtime. Reusing the 3.14 virtual environment is not ABI-safe. | Distroless removes the package manager and shell and publishes signed images. A fair comparison would require rebuilding and rescanning the complete 3.13 dependency set. | Debug variants exist, but production diagnosis requires an ephemeral debug container. Changing the Python minor line only to obtain a base image would broaden this decision into an application compatibility change. | Rejected for this release; reconsider independently if the project changes its container Python line. |
+| `python:3.14.6-slim-trixie` | CPython 3.14 and glibc wheels worked on both architectures. Debian familiarity makes native failures easier to reproduce. | The initial scan found 21 unique unsuppressed High/Critical CVEs in packages inherited from the base, with no newer Debian candidate available. The candidate was digest-pinned, but the service did not use most affected utilities. | A shell and familiar Debian tools help diagnosis, but unused Perl, gzip, ncurses, ACL, and related packages enlarge the runtime inventory. | Rejected for CI evaluation because a compatible official image contains materially less unused code. |
+| `python:3.14.6-alpine3.24` | CPython 3.14.6 and all 38 locked distributions worked on amd64 and arm64. That includes binary wheels for cryptography, psycopg-binary, pydantic-core, cffi, and greenlet. Alpine 3.24 main is supported through 2028-06-01. | The exact Docker Official Image index is digest-pinned. Before VEX, the High inventory contains only three CPython findings. CI builds, inventories, and scans each platform, but does not publish or sign the result. | musl can expose defects that glibc does not. BusyBox and its shell remain for diagnosis. The final stage removes executable `apk`, system `pip`, `ensurepip`, generated bytecode, and virtualenv bootstrap hooks while retaining installed-package metadata for scanners. | Selected for CI compatibility evaluation, backed by a locked import inventory and two-architecture smoke and scan gates. |
+| `cgr.dev/chainguard/python:latest` with `latest-dev` | The experiment installed and imported the locked runtime and passed the hardened smoke test. The public image directory listed amd64 and arm64. | The shell-free runtime had the smallest inherited High inventory, and Chainguard publishes signed SBOM attestations. Public no-cost access exposed only moving `latest` and `latest-dev` tags; version-specific Python tags required an account or commercial access. A digest preserves bytes, but it does not provide a stable, reviewable Python-version update channel. | The runtime has no shell, so incident response needs a separate debug image. Builds also depend on `cgr.dev` availability; an anonymous registry request returned HTTP 500 during the review. | Reconsider when a versioned public tag or an explicitly funded registry contract exists. Do not turn the public image into an undeclared paid dependency. |
+| `gcr.io/distroless/python3-debian13:nonroot` | Public amd64 and arm64 images were available, but the tested image contained CPython 3.13.5 rather than 3.14.6. Reusing the 3.14 virtual environment would not be ABI-safe. | Distroless removes the package manager and shell and publishes signed images. A fair comparison would require rebuilding and rescanning the full 3.13 dependency set. | Debug variants exist, but production diagnosis requires an ephemeral debug container. Changing the Python minor line just to obtain a base image would turn this into an application compatibility decision. | Rejected for this release. Reconsider independently if the project changes its container Python line. |
 
-The Docker Python documentation explicitly warns that Alpine uses musl and can
-expose libc assumptions. The CI gates make that warning an executable
-constraint rather than dismissing it. See the
+The Docker Python documentation warns that Alpine uses musl and may expose libc
+assumptions. The CI gates turn that warning into something the project tests
+instead of waving it away. The upstream facts in the table come from the
 [Docker Python image variants](https://hub.docker.com/_/python/),
 [Alpine support schedule](https://www.alpinelinux.org/releases/),
 [Chainguard Python tag directory](https://images.chainguard.dev/directory/image/python/versions),
 [Chainguard SBOM guidance](https://edu.chainguard.dev/chainguard/chainguard-images/how-to-use/retrieve-image-sboms/),
-and [Distroless image matrix](https://github.com/GoogleContainerTools/distroless#what-images-are-available)
-for the upstream facts used in the comparison.
+and the [Distroless image matrix](https://github.com/GoogleContainerTools/distroless#what-images-are-available).
 
-## Verification evidence
+## Evidence from the selected image
 
-Both selected platforms passed the same checks. The combined runtime,
-database-migration, and pinned-toolchain tree was rerun on 2026-07-15.
+Both platforms passed the same evaluation. The runtime, database-migration,
+and pinned-toolchain checks were rerun together on 2026-07-15.
 
 | Evidence | amd64 | arm64 |
 | --- | ---: | ---: |
@@ -75,57 +82,84 @@ database-migration, and pinned-toolchain tree was rerun on 2026-07-15.
 | Fixable High/Critical findings after VEX | 0 | 0 |
 | Local uncompressed image size | 118,411,115 bytes | 122,945,442 bytes |
 
-The ordinary Python matrix still runs the full test suite, including the
-PostgreSQL integration suite. Container jobs then build independently for each
-architecture. The workflows version-pin the Buildx 0.35.0 client, disable the
-setup action's mutable binary cache, and digest-pin the multi-platform BuildKit
-0.30.0 and QEMU 10.2.3 images; Renovate tracks all three references. The
-builder asserts the exact Python patch
-version and suppresses uv's installer-only metadata so `uv_cache.json` cannot
-carry its recorded source ctime into the application's installed `RECORD`. The
-hardened smoke test
-asserts the runtime version and musl, compares the installed distribution
-inventory with a reviewed 38-package list, imports one module
-from every distribution, and starts the service as UID/GID 65532 with a
-read-only root, no capabilities, and no network. Helm rendering and validation
-run as a separate required job.
+Those numbers are the result of several independent checks, not one container
+scan.
 
-The collector replays every installed wheel `RECORD` after applying a layer's
-whiteouts and entries. It retains the exact METADATA, WHEEL, RECORD, tags,
-purelib state, and owned file occurrences even when a later layer removes the
-installation. It rejects overlapping owners, replacements without a matching
-same-layer RECORD, unowned effective files, every `.pyc`/`.pyo` occurrence in
-the distributed runtime virtual environment, and effective interpreter-path
-bytecode. The collector also compares third-party `WHEEL`, `RECORD`,
-embedded-SBOM, and ELF path/hash records with reviewed per-platform baselines.
-It retains each SBOM's canonical CycloneDX identities and each native file's
-ELF architecture, bound to the owning historical RECORD occurrence. That is a
-drift and installation-integrity gate.
+### Runtime compatibility
 
-The collector also normalizes CPython as an effective top-level runtime
-component. It binds the exact version header, interpreter link, interpreter,
-and shared library to one reviewed base layer for each architecture. The
-evidence bundle retains the commit-pinned Docker Official Python recipe, the
-recipe-selected CPython source archive, and its exact source-carried `LICENSE`
-bytes. The source and image version-header digests must agree. It does not
-expand vendored native and embedded-SBOM components into notices and
-corresponding sources. Issue `#18` remains the closure gate for that
-source-completeness gap.
+The ordinary Python matrix runs the full test suite, including PostgreSQL
+integration tests. Container jobs then build each architecture independently.
+The workflows pin the Buildx client to 0.35.0, disable the setup action's
+mutable binary cache, and pin the multi-platform BuildKit 0.30.0 and QEMU
+10.2.3 images by digest. Renovate tracks all three references.
 
-The first scan uploads raw JSON without applying VEX, including findings for
-which no fix exists. The narrowly reviewed
-OpenVEX dispositions are applied before a second scan fails on any remaining
-High or Critical finding for which the scanner reports a fix. This follows the
-[container vulnerability policy](https://github.com/stampbot/extra-codeowners/blob/main/SECURITY.md#container-vulnerability-policy):
-unavailable upstream fixes remain visible, and an applicable fix cannot be
-ignored merely because the first inventory scan did not fail.
+The builder asserts the exact Python patch version. It also suppresses uv's
+installer-only metadata so `uv_cache.json` cannot carry its source ctime into
+the installed application `RECORD`.
 
-## OpenVEX dispositions
+The hardened smoke test verifies the runtime version and musl, compares the
+installed distributions with a reviewed 38-package list, and imports a module
+from every distribution. It starts the service as UID/GID 65532 with a
+read-only root filesystem, no capabilities, and no network. Helm rendering and
+validation run in a separate required job.
 
-Python 3.14.6 had three High findings with no supported 3.14 fix in the
-selected image. Each statement names CPython 3.14.6 and the exact CI or release
-product. The release workflow rewrites those products to the published OCI
-digest before signing and attesting the document.
+### Installed Python and native components
+
+The evidence collector replays each installed wheel `RECORD` while applying
+layer entries and whiteouts. It keeps the exact `METADATA`, `WHEEL`, `RECORD`,
+tags, purelib state, and owned-file occurrences, even when a later layer removes
+the installation.
+
+The collector rejects:
+
+- overlapping file owners
+- a replacement without a matching same-layer `RECORD`
+- effective files with no owner
+- every `.pyc` or `.pyo` occurrence in the distributed runtime virtual
+  environment
+- effective bytecode under the interpreter path.
+
+For third-party components, it compares `WHEEL`, `RECORD`, embedded-SBOM, and
+ELF path-and-hash records with reviewed per-platform baselines. It retains each
+SBOM's canonical CycloneDX identities and each native file's ELF architecture,
+bound to the historical `RECORD` occurrence that owns it. These checks detect
+installation and evidence drift; they are not a claim that the dependencies
+are harmless.
+
+### CPython provenance
+
+The collector treats CPython as an effective top-level runtime component. For
+each architecture, it binds the exact version header, interpreter link,
+interpreter, and shared library to one reviewed base layer.
+
+The evidence bundle also retains the commit-pinned Docker Official Python
+recipe, the CPython source archive selected by that recipe, and the exact
+`LICENSE` bytes carried in the source. The source and image version-header
+digests must match.
+
+This does not yet expand vendored native components and embedded-SBOM
+components into notices and corresponding sources. That source-completeness
+gap is why [issue #18](https://github.com/stampbot/extra-codeowners/issues/18)
+still blocks distribution.
+
+### Vulnerability handling
+
+The first scan uploads raw JSON without applying VEX. Findings remain there
+even when no fix exists. A second scan applies the narrowly reviewed OpenVEX
+dispositions, then fails on every remaining High or Critical finding for which
+the scanner reports a fix.
+
+That order implements the
+[container and release policy](https://github.com/stampbot/extra-codeowners/blob/main/SECURITY.md#container-and-release-policy).
+An unavailable upstream fix remains visible, while an available fix cannot be
+ignored merely because the raw inventory did not fail.
+
+## Why the three OpenVEX dispositions are narrow
+
+Python 3.14.6 had three High findings without a supported 3.14 fix in the
+selected image. Each OpenVEX statement identifies CPython 3.14.6 and the exact
+CI or release product. Before signing and attestation, the release workflow
+rewrites those products to the published OCI digest.
 
 | Finding | Vulnerable path | Why it cannot execute here |
 | --- | --- | --- |
@@ -134,72 +168,80 @@ digest before signing and attesting the document.
 | CVE-2026-15308 | `html.parser.HTMLParser` incremental parsing | The application uses `html.escape` for a static setup response and never sends untrusted input through `HTMLParser`. |
 
 An AST-based test fails if production code imports either excluded standard
-library path. That test is not a general reachability proof; it is an
-enforceable tripwire for the precise statements above. A dependency or Python
-update still requires a fresh scan and review of every VEX statement. If a
-supported fix becomes available, update the base instead of extending the
-exception.
+library path. It is a tripwire for these exact claims, not a general
+reachability proof. A dependency or Python update still requires a new scan and
+a review of every VEX statement. When a supported fix appears, the base should
+be updated instead of extending the exception.
 
-Medium and Low findings are not hidden by these statements. Vulnerability
-findings remain in the raw scan artifact; the SBOM separately records the
-installed package inventory and declared licenses.
+The VEX statements do not hide Medium or Low findings. Raw scan artifacts retain
+the vulnerability inventory, and the SBOM separately records installed
+packages and their declared licenses.
 
 ## Update and rollback contract
 
-Renovate recognizes both Dockerfile `FROM` instructions. Its repository policy
-waits three days after publication and schedules digest refreshes weekly. It
-does not auto-merge them. A refresh must pass both architecture builds, runtime
-inventory imports, hardened smoke tests, the complete test suite, Helm
-validation, and both scan modes.
+Renovate recognizes both Dockerfile `FROM` instructions. Repository policy
+waits three days after publication, schedules digest refreshes weekly, and does
+not auto-merge them. A refresh must pass both architecture builds, the runtime
+import inventory, hardened smoke tests, the full test suite, Helm validation,
+and both scan modes.
 
 A Python patch or Alpine series change must update the readable tag and digest
-together. A Python change must also update the builder assertion, runtime
-inventory expectation, OpenVEX component version, and this evidence. An Alpine
-series change must confirm its support end date and repeat the candidate
-comparison where materially different. A digest-only refresh must prove that
-the readable tag still resolves to the reviewed Python and Alpine versions.
+together. A Python change also updates the builder assertion, runtime inventory
+expectation, OpenVEX component version, and this evidence. An Alpine series
+change must confirm the support end date and repeat the candidate comparison
+when the difference is material. For a digest-only refresh, CI must establish
+that the readable tag still resolves to the reviewed Python and Alpine
+versions.
 
-The main-branch image publication job has been removed; current CI does not
-push, sign, or attest a development image. CI also does not verify an upstream
-signature for the Docker Official Image. Tagged publication is structurally
-disabled pending issues `#18`, `#28`, and `#32`. The reviewed digest prevents
-substitution after review, while Renovate and build review are the trust path
-for new base content. Per-platform SBOMs enumerate aggregate packages and their
-declared licenses; they are inventory, not proof that redistribution duties
-have been satisfied. The application is Apache-2.0, but the base includes
-copyleft and notice-bearing packages such as BusyBox, GNU readline, and the
-Mozilla CA certificate bundle. The application's license does not relicense
-those components. A future supported release must also produce the digest-bound
+The main-branch image publication job is gone. Current CI does not push, sign,
+or attest a development image, and it does not verify an upstream signature for
+the Docker Official Image. Tagged publication is structurally disabled while
+issues [#18](https://github.com/stampbot/extra-codeowners/issues/18),
+[#25](https://github.com/stampbot/extra-codeowners/issues/25),
+[#28](https://github.com/stampbot/extra-codeowners/issues/28), and
+[#32](https://github.com/stampbot/extra-codeowners/issues/32) remain open. The
+reviewed digest prevents substitution after review; Renovate and review of the
+new build are the trust path for changed base content.
+
+Per-platform SBOMs enumerate aggregate packages and declared licenses. They do
+not prove that every redistribution duty has been met. Extra CODEOWNERS is
+Apache-2.0, but the base also contains copyleft and notice-bearing components,
+including BusyBox, GNU readline, and the Mozilla CA certificate bundle. The
+application license does not relicense them.
+
+A future supported release must produce digest-bound
 [container distribution evidence](container-distribution-evidence.md) and pass
 its separate human approval gate.
 
-To roll back a base refresh, an operator may deploy only a previously verified,
-supported image by digest and verify readiness, queue processing, and a
-disposable current-head evaluation. No project-supported previous image exists
-yet. Otherwise restore native CODEOWNERS enforcement. Do not rebuild an old
-Dockerfile against a mutable tag. A container rollback makes no
-database-compatibility promise; follow the
-[deployment rollback procedure](../how-to/deploy.md#roll-back-or-mitigate) for
-the complete service decision.
+Rollback is limited to a previously verified, still-supported image identified
+by digest. After deploying it, the operator must verify readiness, queue
+processing, and a disposable evaluation against the current database head. No
+project-supported previous image exists yet. Without one, restore native
+CODEOWNERS enforcement. Never rebuild an old Dockerfile against a mutable tag.
 
-## Residual risk and reconsideration triggers
+Container rollback says nothing about database compatibility. The
+[deployment rollback procedure](../how-to/deploy.md#roll-back-or-mitigate)
+covers the complete service decision.
 
-The selected runtime still includes the BusyBox executable and shell, musl, the
-CPython standard library, package-manager metadata, and every locked dependency.
-It does not include executable `apk`, system `pip`, or `ensurepip`. Scanner data
-can lag disclosure, and a correct VEX statement can become wrong when code paths
-change. The project
-therefore retains the current top-level inventory, exact dependency import check,
-read-only/nonroot chart defaults, and recurring digest updates rather than
-claiming a zero-vulnerability image.
+## Risk that remains
 
-Reopen this decision when any of these conditions occurs:
+The runtime still contains the BusyBox executable and shell, musl, the CPython
+standard library, package-manager metadata, and every locked dependency. It
+does not contain executable `apk`, system `pip`, or `ensurepip`. Scanner data
+can lag disclosure. A sound VEX statement can also become false when code paths
+change.
 
-- a locked native dependency loses an amd64 or arm64 musllinux wheel
+That is why the project keeps an exact top-level inventory, an import check for
+every dependency, read-only and nonroot chart defaults, and recurring digest
+updates. It does not claim a zero-vulnerability image.
+
+Reopen the decision when any of these conditions appears:
+
+- a locked native dependency loses its amd64 or arm64 musllinux wheel
 - a VEX-covered module becomes reachable
 - a High/Critical fix exists but the selected tag does not consume it promptly
 - Python 3.14 or Alpine 3.24 approaches end of support
-- a versioned, public Chainguard Python surface becomes dependable, or the
+- a versioned public Chainguard Python surface becomes dependable, or the
   project explicitly funds and governs a commercial image dependency
-- a compatible shell-free image provides equal or better reproducibility,
+- a compatible shell-free image offers equal or better reproducibility,
   availability, licensing evidence, and incident-response support.

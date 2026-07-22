@@ -1,66 +1,102 @@
 # Run a development installation
 
-In this tutorial, we'll run Extra CODEOWNERS locally, connect it to a development GitHub App, and check that it is healthy. We'll use a disposable organization or test repository. The shared-commit behavior described in [Prepare repository rules](../how-to/prepare-repository-rules.md#3-verify-the-conjunction) means this installation must not protect production merges.
+This tutorial takes you from a clean checkout to a working Extra CODEOWNERS
+check on a disposable pull request. You will run the service locally, connect a
+development GitHub App, delegate one low-risk path, and verify both the success
+and failure cases.
 
-## Prerequisites
+Do not use the result to protect production merges. The
+[commit-scoped check limitation](../reference/project-status.md#production-enforcement-blocker)
+still blocks production enforcement.
 
-Before we begin, we'll need:
+## What you need
 
-- Bash
-- Git
-- [mise](https://mise.jdx.dev/) installed
-- permission to create a GitHub App and install it on a test repository
-- an HTTPS forwarding service that can send public traffic to local port `8000`
+- Bash and Git on a POSIX-compatible system
+- [mise](https://mise.jdx.dev/)
+- permission to create and install a GitHub App
+- a disposable organization or repository
+- an HTTPS forwarding service that can send public traffic to local port
+  `8000`
 - a standard `CODEOWNERS` file in the test repository.
 
-Our forwarding service must preserve the raw request body and GitHub signature headers. We'll keep `/metrics` off its public URL.
+The forwarding service must preserve the request body and GitHub signature
+headers. Expose only the webhook and setup routes you need; keep `/metrics`
+private.
 
-## 1. Install the pinned tools and dependencies
+## 1. Prepare the checkout
 
-From the repository root, we'll run:
+Review `mise.toml` before allowing it to install or run tools. From the
+repository root:
 
 ```bash
+mise trust
 mise install
-uv sync --all-groups
+mise run bootstrap
 ```
 
-Mise should install the versions in `mise.toml`. Uv should then create `.venv` without a dependency-resolution error.
+Mise installs the pinned toolchain, and the bootstrap task creates `.venv` from
+the committed lockfile. Stop here if dependency installation changes
+`uv.lock` or cannot complete with the locked versions.
 
-## 2. Start HTTPS forwarding
+## 2. Give GitHub a temporary HTTPS endpoint
 
-We'll configure the forwarding service to send a public HTTPS origin to `http://127.0.0.1:8000`. We need to record the origin without a trailing path. This tutorial uses a reserved example value:
+Start your forwarding service and point its public HTTPS origin at
+`http://127.0.0.1:8000`. Keep the forwarding process open in another terminal.
+
+Record only the origin, with no trailing path. This tutorial uses a reserved
+example:
 
 ```text
 https://extra-codeowners-tutorial.example.com
 ```
 
-We'll replace that value with the origin from our forwarding service and leave the forwarding process running in a separate terminal.
+The webhook URL will be that origin plus `/webhooks/github`.
 
-## 3. Register a development GitHub App
+## 3. Create the development App
 
-In GitHub's **Developer settings**, we'll create a GitHub App with a unique name that marks it as a development App. We'll give it these settings:
+Create a private GitHub App with a name that clearly marks it as disposable.
+You can use the [App setup URL](../how-to/register-app.md), which fills in the
+permissions and webhook subscriptions, or enter the same settings manually in
+GitHub's **Developer settings**.
 
-- **Webhook URL:** `https://YOUR_FORWARDING_ORIGIN/webhooks/github`
-- **Webhook secret:** a new random secret for this development App
-- **Repository permissions:** Checks read and write; Contents read; Pull requests read; Statuses read and write
+For a manual registration, use:
+
+- **Webhook URL:** `https://YOUR_ORIGIN/webhooks/github`
+- **Webhook secret:** a new random value used only by this App
+- **Repository permissions:** Checks read and write; Contents read; Pull
+  requests read; Statuses read and write
 - **Organization permissions:** Members read
-- **Subscribe to events:** Check run, Installation target, Label, Member, Membership, Organization, Pull request, Pull request review, Push, Repository, Team, and Team add
+- **Events:** Check run, Installation target, Label, Member, Membership,
+  Organization, Pull request, Pull request review, Push, Repository, Team, and
+  Team add.
 
-GitHub automatically delivers Installation and Installation repositories events to every App, so we can't select them as subscriptions. Extra CODEOWNERS handles both events.
+GitHub supplies Metadata read automatically. It also delivers Installation and
+Installation repositories events to every App, so those events do not appear
+in the subscription picker.
 
-GitHub grants Metadata read implicitly. Statuses write makes the App available as an expected source in organization-level rulesets, but Extra CODEOWNERS downscopes runtime tokens so they can't write commit statuses. We won't grant Issues, Actions, Workflows, Administration, or Pull requests write access.
+Do not grant Issues, Actions, Workflows, Administration, or Pull requests write
+access. Statuses write is present so an organization ruleset can identify this
+App as an expected check source; Extra CODEOWNERS deliberately omits that
+permission from the installation tokens it requests at runtime.
 
-Next, we'll generate a private key for the App and save it outside the repository. We'll install the App only on our test repository and the organization-policy repository, which is the organization's `.github` repository by default. The [permission reference](../reference/github-permissions.md) explains each permission and event.
+Generate a private key, save it outside the checkout, and install the App only
+on:
 
-## 4. Configure the local process
+1. the disposable target repository, and
+2. the organization's policy repository, which is `.github` by default.
 
-We'll copy the checked-in safe defaults and then edit `.env` in the repository root:
+The [permissions reference](../reference/github-permissions.md) explains why
+each permission and event is needed.
+
+## 4. Configure the local service
+
+Copy the development defaults:
 
 ```bash
 cp .env.example .env
 ```
 
-Git ignores this file. We'll uncomment the credential settings and make the relevant entries equivalent to these:
+Git ignores `.env`. Edit it so these settings point to the development App:
 
 ```dotenv
 EXTRA_CODEOWNERS_ENVIRONMENT=development
@@ -70,63 +106,84 @@ EXTRA_CODEOWNERS_GITHUB_WEBHOOK_SECRET=replace-with-the-development-webhook-secr
 EXTRA_CODEOWNERS_DATABASE_URL=sqlite:///./extra-codeowners.db
 ```
 
-We'll replace the App ID, absolute private-key path, and webhook secret. The example App ID is not valid configuration. We registered the public forwarding URL directly in the development App, so we need `EXTRA_CODEOWNERS_PUBLIC_URL` only if we use the optional App Manifest setup flow. The [configuration reference](../reference/configuration.md#runtime-settings) describes every setting copied from `.env.example`.
+Replace the App ID, key path, and webhook secret. The example values are not
+usable credentials. An inline webhook secret is reasonable for this local
+exercise; deployed installations should use the file-backed setting or a
+secret manager.
 
-File-mounted secrets are the preferred deployment method. We use the inline webhook-secret variable only for this local tutorial; a deployment can set `EXTRA_CODEOWNERS_GITHUB_WEBHOOK_SECRET_FILE` instead.
+`EXTRA_CODEOWNERS_PUBLIC_URL` is required only while the optional App setup
+flow is enabled. Normal webhook handling uses the URL stored in GitHub's App
+settings.
 
-## 5. Migrate and start Extra CODEOWNERS
+## 5. Start the service
 
-From the repository root, we'll create or upgrade the local development schema
-explicitly, then start the service:
+Database migration is an explicit operator step. Run it before starting the
+server:
 
 ```bash
-uv run python -m extra_codeowners database migrate
-uv run python -m extra_codeowners serve
+mise exec -- uv run python -m extra_codeowners database migrate
+mise exec -- uv run python -m extra_codeowners serve
 ```
 
-Normal service startup never creates or upgrades tables. If the migration
-fails, we'll fix that error before starting the service.
+Startup never creates or upgrades tables. Fix any migration error before
+continuing.
 
-It listens on `127.0.0.1:8000` by default. We'll leave it running and open another terminal in the repository root.
-
-First, we'll check liveness:
+The server listens on `127.0.0.1:8000`. Leave it running, then open another
+terminal and check both probes:
 
 ```bash
 curl --fail-with-body http://127.0.0.1:8000/health/live
-```
-
-Then we'll check readiness:
-
-```bash
 curl --fail-with-body http://127.0.0.1:8000/health/ready
 ```
 
-Both commands should exit with status `0` and report `worker` and `reconciler` as `true`. Liveness and readiness fail if either configured local background task stops. Readiness also fails if the database or required GitHub credentials are unavailable. If a probe fails, we'll inspect the local service log without copying secret values into an issue.
+Both commands should exit with status `0`. The liveness response reports an
+alive worker and reconciler:
 
-## 6. Configure policy and exercise the check
+```json
+{"status":"alive","worker":true,"reconciler":true}
+```
 
-We'll follow [Configure organization and repository policy](../how-to/configure.md), then [Prepare repository rules](../how-to/prepare-repository-rules.md) in the test repository.
+The readiness probe also checks the database and required GitHub credentials. If
+it fails, inspect the local log, but do not copy keys, secrets, or complete
+database URLs into an issue.
 
-Now we'll open a pull request that changes a delegated file. After GitHub sends an event, the service should accept a durable job and publish `Extra CODEOWNERS / approval` for the current head. The check stays non-successful until an appropriate human or enrolled application supplies the required approval.
+## 6. Delegate one path
 
-We'll know the installation works when:
+Use the [configuration guide](../how-to/configure.md) to enroll the App that
+will submit approvals. That may be Stampbot or another development App; it is
+not normally the Extra CODEOWNERS checker itself.
 
-- GitHub shows a verified delivery to `/webhooks/github`
-- the local readiness probe remains successful
-- a Check Run from the development Extra CODEOWNERS App appears on the pull request
-- the negative tests in the configuration guide behave as documented.
+Start with one harmless file and one human owner group. Keep native code-owner
+enforcement enabled while you test the policy. The repository-rules guide comes
+later, after the negative cases pass.
 
-## 7. Run the project checks
+Open a pull request that changes the delegated file. Add any required label and
+have the enrolled App approve the current head. A working installation has all
+of these signals:
 
-We'll stop the server with `Ctrl-C`, then run:
+- GitHub records a successful delivery to `/webhooks/github`.
+- `/health/ready` continues to return HTTP 200.
+- `Extra CODEOWNERS / approval` appears on the current pull-request head.
+- The check succeeds only after the configured owner obligation is satisfied.
+
+Now remove a required label or push another commit. The existing approval must
+stop satisfying the check. Finish the remaining negative tests in the
+[configuration guide](../how-to/configure.md#5-test-the-boundary).
+
+## 7. Run the local quality gate
+
+Stop the development server with `Ctrl-C`, then run:
 
 ```bash
 mise run check
 ```
 
-The source, workflow, Markdown, test, documentation, and Helm checks should all pass.
+This task runs the pull-request test, lint, documentation, workflow, and Helm
+checks available on the workstation. It does not enforce coverage and skips
+PostgreSQL-only tests when `TEST_POSTGRES_URL` is absent.
 
-This fast local task does not enforce the coverage threshold. It also skips PostgreSQL-only tests when `TEST_POSTGRES_URL` is absent. To exercise the complete database suite and enforce the project's coverage threshold, we'll provision a disposable PostgreSQL test database and run:
+To exercise the complete database suite, create a disposable PostgreSQL
+database whose name ends in `_test`, then enter its URL at a hidden prompt:
 
 ```bash
 read -rsp 'Disposable PostgreSQL test URL: ' TEST_POSTGRES_URL
@@ -136,16 +193,25 @@ mise run test:coverage
 unset TEST_POSTGRES_URL
 ```
 
-At the hidden prompt, we'll enter a percent-encoded URL such as `postgresql+psycopg://TEST_USER:TEST_PASSWORD@127.0.0.1:5432/extra_codeowners_test`, with the placeholders replaced. The prompt keeps the value out of normal shell history; we'll keep it out of support logs too.
+Use a URL such as:
 
-The database name must end in `_test`. The suite refuses any other name, then drops and recreates Extra CODEOWNERS tables in that database. We'll never point this variable at a production or shared database. CI runs this path against an ephemeral, digest-pinned PostgreSQL service.
+```text
+postgresql+psycopg://TEST_USER:TEST_PASSWORD@127.0.0.1:5432/extra_codeowners_test
+```
+
+Percent-encode reserved characters in the credentials. The test suite refuses
+database names without the `_test` suffix, then drops and recreates Extra
+CODEOWNERS tables. Never point it at a shared or production database.
 
 ## Clean up
 
-We built a working local Extra CODEOWNERS installation and watched it evaluate a delegated pull request. Now we'll remove its credentials and test state:
+You now have a local service that evaluated a real pull request. Remove the
+temporary authority before moving on:
 
-1. We'll uninstall or suspend the development GitHub App.
-2. We'll delete its private key in GitHub.
-3. We'll stop the HTTPS forwarding process.
-4. We'll delete `.env` and the local `extra-codeowners.db` file.
-5. We'll remove test policy and repository-rule changes that we no longer need.
+1. If you changed repository rules, restore GitHub's native code-owner rule and
+   wait for it to apply. Only then remove the Extra CODEOWNERS required check.
+2. Disable or remove the test repository policy.
+3. Uninstall or suspend the development GitHub App, then delete its private key
+   in GitHub.
+4. Stop the HTTPS forwarding process.
+5. Delete `.env` and `extra-codeowners.db` from the checkout.

@@ -1,138 +1,211 @@
 # Extra CODEOWNERS Helm chart
 
 This chart deploys the self-hosted Extra CODEOWNERS GitHub App service. The
-repository contains the source chart. No versioned GitHub release, supported
-production release, or hosted service is available.
+repository contains chart source only.
 
-The `main` publication job has been removed, and tagged-release publication is
-blocked while native-wheel and embedded-SBOM component/source expansion,
-handoff of the selected build proof to release and ad-hoc builds, and privilege
-separation remain unresolved. CI already normalizes CPython and retains its
-exact runtime identity, pinned build recipe, source archive, and source-carried
-license evidence.
-An older public `main` image may still exist in GHCR; it is unsupported,
-unapproved for distribution, and must not be used by this guide. No versioned
-image or chart is available. A future GitHub release and its attestations will
-define artifact availability; workflow definitions do not prove publication.
+> [!CAUTION]
+> There is no supported image, OCI chart, production release, hosted service,
+> or Marketplace Action. Do not install the old
+> `ghcr.io/stampbot/extra-codeowners:main` image or use this chart to
+> authorize production merges. Keep GitHub's native **Require review from Code
+> Owners** rule in place.
 
 The current Check Run design has a documented commit-to-pull-request
-inheritance window. It does not provide native-equivalent production
-enforcement. The operational sections below record the future chart contract;
-they are not a runnable installation path until the image prerequisite is
-available, and they must not be used to authorize production merges.
+inheritance window, tracked in
+[issue #1](https://github.com/stampbot/extra-codeowners/issues/1). The release
+pipeline is also blocked by
+[source-completeness issue #18](https://github.com/stampbot/extra-codeowners/issues/18),
+[immutable-release issue #25](https://github.com/stampbot/extra-codeowners/issues/25),
+[publication-isolation issue #28](https://github.com/stampbot/extra-codeowners/issues/28),
+and [application build-proof issue #32](https://github.com/stampbot/extra-codeowners/issues/32).
 
-## Prerequisites
+The procedures below record the chart's operator contract for review and
+future releases. They are not a supported installation path today.
 
-- Kubernetes 1.27 or later
-- Helm 3.14 or later
-- a supported Extra CODEOWNERS image pinned by platform digest; no such image
-  exists yet
-- registry access from the cluster, including a read-only pull credential when
-  the future image repository requires authentication
-- an installed Extra CODEOWNERS GitHub App
-- a durable database supported by the application
-- separate Kubernetes Secrets containing runtime settings, the database URL,
-  and mounted GitHub credential files documented in the
-  [configuration reference][configuration]
-- an ingress controller or another way for GitHub to reach the webhook endpoint
-  over HTTPS
+Read the
+[deployment guide](https://extra-codeowners.readthedocs.io/en/latest/how-to/deploy/),
+[configuration reference](https://extra-codeowners.readthedocs.io/en/latest/reference/configuration/),
+and [upgrade procedure][upgrade] before evaluating the chart.
 
-The chart does not provide these resources or operations:
+## Compatibility and prerequisites
 
-- application Secrets
-- a database
-- an ingress controller
-- TLS certificates
-- automated database backups or restore testing.
+| Requirement | Contract |
+| --- | --- |
+| Kubernetes | 1.27 or later, enforced by `Chart.yaml` |
+| Helm | 3.19.0, the version pinned and tested by this repository |
+| Application image | A future supported image pinned by platform digest |
+| Database | PostgreSQL configured under the application's production transport rules |
+| GitHub | An installed Extra CODEOWNERS App |
+| Ingress | Public HTTPS access to only the webhook endpoint |
 
-The chart runs a bounded Alembic migration Job before install and upgrade. The
-application then validates the exact revision and table shape during startup;
-it never creates or upgrades tables implicitly.
+You also need:
 
-The chart sets `EXTRA_CODEOWNERS_ENVIRONMENT=production`. The database Secret
-must replace the container's development-only SQLite URL with a PostgreSQL URL.
-`extraEnv` rejects chart-managed environment variables.
+- registry access from the cluster, with a repository-scoped read-only pull
+  credential when required
+- separate Kubernetes Secrets for runtime settings, the database URL, and
+  mounted GitHub credential files
+- PostgreSQL backups with a tested isolated restore
+- an ingress controller and TLS issuer, or equivalent externally managed
+  routing.
 
-The migration Job does not inherit `existingSecret`, `extraEnvFrom`,
-`extraEnv`, `extraVolumes`, or `extraVolumeMounts`. Configure its database-only
-inputs under `migrations`. Never attach the App private key or webhook secret
-to that Job.
+The chart does not create application Secrets, PostgreSQL, an ingress
+controller, TLS certificates, backups, or restore automation.
 
-The application and migration pods set `enableServiceLinks: false`. Kubernetes
-would otherwise inject a Service variable named `EXTRA_CODEOWNERS_PORT` with a
-URL-like value, which conflicts with the application's integer port setting.
-Use Kubernetes DNS for service discovery instead of injected Service variables.
+## What the chart creates
 
-## Obtain a supported image (currently blocked)
+With default values, Helm renders:
 
-The Dockerfile no longer builds the application from its ambient source
-context. It requires the exact five-file application proof selected from both
-architectures as a read-only `verified-python` build context. It also requires
-the source revision, application-wheel SHA-256, and selection-record SHA-256.
-Pull-request CI provides those inputs and fails closed when they disagree.
+- a bounded `pre-install,pre-upgrade` migration Job
+- one `Recreate` Deployment
+- one ClusterIP Service
+- a dedicated runtime ServiceAccount
+- a NetworkPolicy that selects both application and migration pods
+- a Helm test Pod that checks `/health/live`.
 
-Issue [`#32`](https://github.com/stampbot/extra-codeowners/issues/32) tracks a
-bounded, authenticated handoff for release and ad-hoc consumers. No supported
-operator path supplies those inputs today. Do not substitute a generic artifact
-extractor, an unverified wheel, empty build arguments, or a project build from
-the ambient Docker context. The older public `main` image remains unsupported
-and unapproved for distribution.
+The application and migration pods set `enableServiceLinks: false`.
+Without that setting, Kubernetes can inject an
+`EXTRA_CODEOWNERS_PORT` Service variable containing a URL, which conflicts
+with the application's integer port setting. Use Kubernetes DNS for service
+discovery.
 
-Stop here until issue #32 closes and the project publishes an image-verification
-procedure. That procedure must provide the exact repository, platform digest,
-source revision, wheel digest, selection-record digest, signature, and
-provenance checks before the installation steps below become runnable.
+The application does not call the Kubernetes API, so the chart creates no
+Role, ClusterRole, or binding. Its dedicated ServiceAccount has token
+automounting disabled. The migration Job also disables token automounting; set
+`migrations.serviceAccountName` only when an external database identity
+needs a particular pre-existing ServiceAccount.
 
-## Install the source chart
+The chart sets `EXTRA_CODEOWNERS_ENVIRONMENT=production`. The runtime
+Secret must replace the image's development-only SQLite default with a
+production PostgreSQL URL. Chart validation prevents `extraEnv` from
+overriding the environment or insecure-mode settings.
 
-The commands use `extra-codeowners` as both the Helm release and Kubernetes
-namespace. `RUNTIME_ENV_FILE` contains non-database runtime variables in
-`KEY=value` format, including these file settings:
+Security-sensitive defaults also run as UID and GID 65532, drop every Linux
+capability, disable privilege escalation, use a read-only root filesystem, and
+select the runtime-default seccomp profile. The Deployment uses
+`Recreate`, the insecure override is off, and credential inputs remain
+outside chart-managed resources.
+
+## Obtain an image (currently blocked)
+
+The Dockerfile does not build the application from its ambient source tree. It
+requires a read-only `verified-python` context containing the exact
+five-file Python distribution proof selected across `amd64` and `arm64`.
+It also checks the source revision, application-wheel SHA-256, and
+selection-record SHA-256.
+
+Pull-request CI supplies and verifies those inputs. No supported operator path
+does. Do not replace the proof with a generic artifact extractor, an
+unverified wheel, empty build arguments, or a build from the ambient Docker
+context.
+
+Until the project publishes an image-verification procedure, treat the
+remaining sections as the chart's future operator contract, not as a current
+installation path. That procedure must identify the repository, platform
+digest, source revision, wheel digest, selection-record digest, signature,
+provenance, notices, and corresponding source. When a supported image exists,
+use the central
+[deployment guide](https://extra-codeowners.readthedocs.io/en/latest/how-to/deploy/)
+and [upgrade procedure][upgrade] for task steps; use this README for
+chart-specific inputs, defaults, and review constraints.
+
+## Prepare a future source-chart installation
+
+The examples use `extra-codeowners` for both the Helm release and
+namespace. Run them in a POSIX-compatible Bash shell from an
+operator-controlled cluster-administration host.
+
+Keep the reviewed source in a clean detached worktree. Define the future image
+coordinates and verify the checkout before creating cluster resources:
+
+```bash
+set -euo pipefail
+umask 077
+
+export SOURCE_REVISION='REPLACE_WITH_REVIEWED_40_CHARACTER_COMMIT'
+export CHART_SOURCE='/path/to/clean-detached-extra-codeowners-worktree'
+export IMAGE_REPOSITORY='registry.example.com/stampbot/extra-codeowners'
+export IMAGE_DIGEST='sha256:REPLACE_WITH_64_LOWERCASE_HEX_CHARACTERS'
+export TARGET_ARCH='amd64'
+export GIT_NO_REPLACE_OBJECTS=1
+
+printf '%s\n' "$SOURCE_REVISION" | grep -Eq '^[0-9a-f]{40}$'
+printf '%s\n' "$IMAGE_DIGEST" | grep -Eq '^sha256:[0-9a-f]{64}$'
+case "$TARGET_ARCH" in
+  amd64|arm64) ;;
+  *) exit 1 ;;
+esac
+
+test "$(git -C "$CHART_SOURCE" rev-parse \
+  --verify "$SOURCE_REVISION^{commit}")" = "$SOURCE_REVISION"
+test "$(git -C "$CHART_SOURCE" rev-parse HEAD)" = "$SOURCE_REVISION"
+test -z "$(git -C "$CHART_SOURCE" -c core.fsmonitor=false \
+  status --porcelain=v1 --untracked-files=all)"
+```
+
+Every command must exit zero. The image digest must belong to
+`linux/$TARGET_ARCH`, and the chart source must belong to the same reviewed
+release.
+
+## Create narrowly scoped Secrets
+
+Prepare four files outside version control with mode `0600` or stricter:
+
+- `RUNTIME_ENV_FILE` contains non-database runtime settings, including the App ID
+- `DATABASE_ENV_FILE` contains only the database URL
+- `GITHUB_PRIVATE_KEY_FILE` contains the App PEM private key
+- `GITHUB_WEBHOOK_SECRET_FILE` contains the webhook secret.
+
+Use a webhook secret generated for this App. After the application removes one
+terminal line ending, the value must contain at least 32 bytes and match the
+secret configured in GitHub.
+
+The runtime file must include the numeric App ID and these mounted paths:
 
 ```text
+EXTRA_CODEOWNERS_GITHUB_APP_ID=REPLACE_WITH_NUMERIC_APP_ID
 EXTRA_CODEOWNERS_GITHUB_PRIVATE_KEY_FILE=/run/secrets/extra-codeowners/github-private-key
 EXTRA_CODEOWNERS_GITHUB_WEBHOOK_SECRET_FILE=/run/secrets/extra-codeowners/github-webhook-secret
 ```
 
-`DATABASE_ENV_FILE` contains exactly the database setting required by both
-processes:
+The database file contains:
 
 ```text
 EXTRA_CODEOWNERS_DATABASE_URL=postgresql+psycopg://DB_USER:DB_PASSWORD@DB_HOST:5432/DB_NAME?sslmode=verify-full
 ```
 
-Replace every database placeholder and percent-encode reserved URL characters.
-Both environment files and both credential source files must remain outside
-version control with restricted filesystem permissions. The deployment uses
-separate Secrets for runtime settings, the database URL, and mounted GitHub
-credential files.
+Replace the App ID and every database placeholder. Percent-encode reserved URL
+characters. For remote PostgreSQL, keep `sslmode=verify-full` and add the
+provider's CA settings when needed. Treat the complete URL as a secret.
 
-The example below assumes the image repository requires authentication. Use a
-separate read-only registry credential scoped to pulls from only
-`IMAGE_REPOSITORY`.
-Keep the exact reviewed source in a clean detached worktree on the
-cluster-administration host. Do not install the chart from a mutable working
-tree.
+Export only file paths:
 
-```shell
-set -euo pipefail
-umask 077
+```bash
+export RUNTIME_ENV_FILE="$HOME/.config/extra-codeowners/runtime.env"
+export DATABASE_ENV_FILE="$HOME/.config/extra-codeowners/database.env"
+export GITHUB_PRIVATE_KEY_FILE="$HOME/.config/extra-codeowners/private-key.pem"
+export GITHUB_WEBHOOK_SECRET_FILE="$HOME/.config/extra-codeowners/webhook-secret"
 
-export SOURCE_REVISION='REPLACE_WITH_THE_SAME_REVIEWED_40_CHARACTER_COMMIT'
-export CHART_SOURCE='/path/to/clean-detached-extra-codeowners-worktree'
+test -r "$RUNTIME_ENV_FILE"
+test -r "$DATABASE_ENV_FILE"
+test -r "$GITHUB_PRIVATE_KEY_FILE"
+test -r "$GITHUB_WEBHOOK_SECRET_FILE"
+```
+
+Create the namespace before any Secret:
+
+```bash
+kubectl create namespace extra-codeowners \
+  --dry-run=client -o yaml | kubectl apply -f -
+```
+
+If the image registry requires authentication, create a pull Secret with a
+dedicated read-only credential:
+
+```bash
 export REGISTRY_HOST='registry.example.com'
 export REGISTRY_PULL_USER='REPLACE_WITH_READ_ONLY_PULL_USER'
-export GIT_NO_REPLACE_OBJECTS=1
-case "$SOURCE_REVISION" in (*[!0-9a-f]*|'') exit 1 ;; esac
-test "${#SOURCE_REVISION}" -eq 40
-test "$(git -C "$CHART_SOURCE" rev-parse --verify "${SOURCE_REVISION}^{commit}")" = \
-  "$SOURCE_REVISION"
-test "$(git -C "$CHART_SOURCE" rev-parse HEAD)" = "$SOURCE_REVISION"
-test -z "$(git -C "$CHART_SOURCE" -c core.fsmonitor=false \
-  status --porcelain=v1 --untracked-files=all)"
+test -n "$REGISTRY_PULL_TOKEN"
 
-kubectl create namespace extra-codeowners
-: "${REGISTRY_PULL_TOKEN:?inject the repository-scoped read-only pull token}"
 PULL_DOCKER_CONFIG="$(mktemp -d)"
 cleanup_pull_config() {
   docker --config "$PULL_DOCKER_CONFIG" logout "$REGISTRY_HOST" \
@@ -141,36 +214,46 @@ cleanup_pull_config() {
   unset REGISTRY_PULL_TOKEN
 }
 trap cleanup_pull_config EXIT
-printf '%s' "$REGISTRY_PULL_TOKEN" | docker --config "$PULL_DOCKER_CONFIG" login \
-  "$REGISTRY_HOST" --username "$REGISTRY_PULL_USER" --password-stdin
-kubectl --namespace extra-codeowners create secret generic extra-codeowners-registry \
+
+printf '%s' "$REGISTRY_PULL_TOKEN" |
+  docker --config "$PULL_DOCKER_CONFIG" login "$REGISTRY_HOST" \
+    --username "$REGISTRY_PULL_USER" --password-stdin
+
+kubectl --namespace extra-codeowners create secret generic \
+  extra-codeowners-registry \
   --type=kubernetes.io/dockerconfigjson \
   --from-file=.dockerconfigjson="$PULL_DOCKER_CONFIG/config.json"
+
 cleanup_pull_config
 trap - EXIT
+```
 
-export RUNTIME_ENV_FILE="$HOME/.config/extra-codeowners/runtime.env"
-export DATABASE_ENV_FILE="$HOME/.config/extra-codeowners/database.env"
-export GITHUB_PRIVATE_KEY_FILE="$HOME/.config/extra-codeowners/private-key.pem"
-export GITHUB_WEBHOOK_SECRET_FILE="$HOME/.config/extra-codeowners/webhook-secret"
-kubectl --namespace extra-codeowners create secret generic extra-codeowners-runtime \
+The namespaced Secret keeps the pull credential so pods can reschedule. Remove
+its local plaintext source after creation. To rotate it, replace the Secret,
+prove a new pod can pull, and then revoke the old credential.
+
+Create separate runtime, database, and GitHub Secrets:
+
+```bash
+kubectl --namespace extra-codeowners create secret generic \
+  extra-codeowners-runtime \
   --from-env-file="$RUNTIME_ENV_FILE"
-kubectl --namespace extra-codeowners create secret generic extra-codeowners-database \
+kubectl --namespace extra-codeowners create secret generic \
+  extra-codeowners-database \
   --from-env-file="$DATABASE_ENV_FILE"
-kubectl --namespace extra-codeowners create secret generic extra-codeowners-github \
+kubectl --namespace extra-codeowners create secret generic \
+  extra-codeowners-github \
   --from-file=github-private-key="$GITHUB_PRIVATE_KEY_FILE" \
   --from-file=github-webhook-secret="$GITHUB_WEBHOOK_SECRET_FILE"
 ```
 
-The pull credential remains active inside the namespaced Secret so a pod can
-reschedule. Remove its local plaintext value after creating the Secret. Rotate
-the credential and replace the Secret on an operator-defined schedule; revoke
-the old credential only after a new pod has successfully pulled with its
-replacement.
+The migration Job receives only `extra-codeowners-database`. It never
+inherits runtime `existingSecret`, `extraEnvFrom`,
+`extraEnv`, `extraVolumes`, or `extraVolumeMounts`.
 
-The deployment uses separate Secrets for registry pulls, environment
-variables, and mounted GitHub credential files. Save the non-secret wiring as
-`deployment-values.yaml`:
+## Configure and preflight the release
+
+Save this non-secret configuration as `deployment-values.yaml`:
 
 ```yaml
 existingSecret: extra-codeowners-runtime
@@ -194,12 +277,46 @@ migrations:
   existingSecret: extra-codeowners-database
 ```
 
-Set `kubernetes.io/arch` to the exact recorded `TARGET_ARCH`. A digest built for
-one architecture must never be scheduled on the other architecture.
+Change `kubernetes.io/arch` to the recorded `TARGET_ARCH`. A
+single-platform digest must never be scheduled on the other architecture.
+If the registry permits anonymous pulls, omit `imagePullSecrets` and do
+not create `extra-codeowners-registry`.
 
-Install the reviewed image and source chart:
+Lint and render before installation:
 
-```shell
+```bash
+helm lint "$CHART_SOURCE/charts/extra-codeowners" \
+  --values deployment-values.yaml \
+  --set-string image.repository="$IMAGE_REPOSITORY" \
+  --set-string image.digest="$IMAGE_DIGEST"
+
+RENDERED_MANIFEST="$(mktemp)"
+trap 'rm -f "$RENDERED_MANIFEST"' EXIT
+helm template extra-codeowners \
+  "$CHART_SOURCE/charts/extra-codeowners" \
+  --namespace extra-codeowners \
+  --values deployment-values.yaml \
+  --set-string image.repository="$IMAGE_REPOSITORY" \
+  --set-string image.digest="$IMAGE_DIGEST" \
+  >"$RENDERED_MANIFEST"
+test -s "$RENDERED_MANIFEST"
+rm -f "$RENDERED_MANIFEST"
+trap - EXIT
+```
+
+Helm validates `values.schema.json` during lint and template. Review the
+rendered Deployment, migration Job, Service, ServiceAccount, and NetworkPolicy
+before continuing. Secret values must not appear because the chart references
+existing Secrets by name.
+
+Never pass a secret with `--set`. Shell history and Helm release metadata
+may retain it.
+
+## Install and verify
+
+When a supported image exists, install the reviewed image and source chart:
+
+```bash
 helm install extra-codeowners \
   "$CHART_SOURCE/charts/extra-codeowners" \
   --namespace extra-codeowners \
@@ -208,48 +325,48 @@ helm install extra-codeowners \
   --set-string image.digest="$IMAGE_DIGEST"
 ```
 
-Secret values must not be passed with `--set`. Shell history and Helm release
-metadata may retain them.
+The migration hook must complete before Helm creates the Deployment. The
+application then remains unready until its GitHub and database settings are
+valid.
 
-A successful install creates:
+Wait for rollout and run the live-endpoint test:
 
-- a bounded pre-install migration Job
-- a Deployment
-- a Service
-- a ServiceAccount
-- a NetworkPolicy that selects both application and migration pods after
-  chart resources are installed.
-
-The application remains unready until its GitHub App and persistence
-configuration are valid.
-
-## Verify
-
-Wait for the rollout and run the chart's live-endpoint test:
-
-```shell
+```bash
 kubectl --namespace extra-codeowners rollout status \
   deployment/extra-codeowners --timeout=5m
 helm test extra-codeowners --namespace extra-codeowners
-kubectl --namespace extra-codeowners get pods,service,networkpolicy
+kubectl --namespace extra-codeowners get \
+  jobs,pods,service,serviceaccount,networkpolicy
+kubectl --namespace extra-codeowners logs \
+  job/extra-codeowners-migrate
 ```
 
-If rollout fails, the following commands show pod events and logs. Output must
-be sanitized before sharing. App private keys, webhook secrets, installation
-tokens, and private webhook payloads must not appear in an issue.
+The rollout and Helm test must exit zero. Preserve the migration Job logs with
+the change record before its time-to-live expires.
 
-```shell
-kubectl --namespace extra-codeowners describe deployment/extra-codeowners
+The test Pod does not inherit `nodeSelector`. In a mixed-architecture
+cluster, do not run `helm test` with a single-platform digest unless the
+scheduler can place that Pod on `TARGET_ARCH`. The Deployment and migration
+Job do inherit the configured selector.
+
+If rollout fails, inspect events and bounded logs:
+
+```bash
+kubectl --namespace extra-codeowners describe \
+  deployment/extra-codeowners
 kubectl --namespace extra-codeowners logs \
   deployment/extra-codeowners --all-pods --tail=100
 ```
 
-## Expose the webhook securely
+Sanitize output before sharing it. App keys, webhook secrets, installation
+tokens, database URLs, and private webhook payloads must not appear in an
+issue.
 
-Ingress requires an installed ingress controller and TLS issuer. Replace
-`extra-codeowners.example.com` with the public hostname registered in the GitHub
-App. The `extra-codeowners-tls` Secret must contain a certificate valid for that
-hostname.
+## Expose the webhook
+
+Ingress requires an installed controller and TLS issuer. Replace the example
+hostname, and create `extra-codeowners-tls` with a certificate valid for
+that host:
 
 ```yaml
 ingress:
@@ -266,9 +383,9 @@ ingress:
         - extra-codeowners.example.com
 ```
 
-Save the file as `ingress-values.yaml`, then apply it to the existing release:
+Save it as `ingress-values.yaml` and apply it:
 
-```shell
+```bash
 helm upgrade extra-codeowners \
   "$CHART_SOURCE/charts/extra-codeowners" \
   --namespace extra-codeowners \
@@ -276,57 +393,50 @@ helm upgrade extra-codeowners \
   --values ingress-values.yaml
 ```
 
-The default NetworkPolicy permits traffic to the HTTP port from any network
-peer. This supports ingress controllers across common cluster topologies.
-`networkPolicy.ingressFrom` can restrict access to the controller's namespace
-and pod selectors when those labels are known.
+Expose only `/webhooks/github` publicly. Keep `/metrics`,
+`/health/live`, `/health/ready`, and setup routes behind an
+authenticated operator path or use port forwarding.
 
-The policy's selector covers the application and migration pod labels. The
-Service and PodDisruptionBudget add `app.kubernetes.io/component: application`,
-so they never select the one-shot migration pod. On the first install, Helm
-runs `pre-install` hooks before it creates ordinary chart resources, including
-this NetworkPolicy. Use a namespace-level default-deny policy or pre-create an
-equivalent policy before installation when the initial migration must be
-network-isolated. On upgrade, the installed chart policy already covers the
-new migration pod.
+The default NetworkPolicy permits ingress to the named HTTP port from any peer,
+which works with ingress controllers across common cluster layouts. Restrict
+`networkPolicy.ingressFrom` when the controller namespace and pod labels
+are stable.
 
-The public Ingress must not expose `/metrics`, health endpoints, or setup
-routes. Access to those endpoints requires an authenticated operator route or
-port forwarding.
+The policy selects application and migration pod labels. The Service and
+PodDisruptionBudget select only the application component. On first install,
+the pre-install migration hook runs before Helm creates ordinary resources,
+including this NetworkPolicy. If the first migration needs network isolation,
+apply a namespace default-deny policy or equivalent before `helm install`.
+On upgrade, the existing chart policy already selects the new migration pod.
 
 ## Upgrade and roll back
 
-Before an upgrade, complete the documented [backup and isolated restore
-test][upgrade]. The chart's pre-upgrade hook uses the target image and database
-environment to run `extra-codeowners database migrate`. It waits at most 60
-seconds for the cross-replica PostgreSQL advisory lock, has no process retry,
-has a 180-second Job deadline, and retains the completed Job for one hour by
-default. A failed hook stops Helm before the application Deployment changes.
+Complete the
+[backup and isolated restore procedure][upgrade] before every upgrade. Keep
+`migrations.enabled: true` unless a separate controlled process has
+already applied the exact target head.
 
-Keep `migrations.enabled: true` unless a separately controlled process applies
-the exact target migration before Helm. Set `migrations.serviceAccountName` to
-a pre-existing ServiceAccount when database authentication needs a Kubernetes
-identity. The chart disables Kubernetes API token automounting for that pod;
-review any identity-provider admission mutation separately.
+Migration defaults are:
 
-Set `migrations.existingSecret` to a Secret containing only
-`EXTRA_CODEOWNERS_DATABASE_URL`. Use the migration-specific `extraEnvFrom`,
-`extraEnv`, `extraVolumes`, and `extraVolumeMounts` values only for database
-authentication or trust material. Runtime App settings and GitHub credential
-mounts are never inherited.
+- a 60-second PostgreSQL advisory-lock wait
+- no Kubernetes retry after process failure
+- a 180-second Job deadline
+- a one-hour completed-Job time-to-live.
 
-The default `Recreate` strategy prevents old and new application versions from
-using the database concurrently. It causes a short pause in webhook processing.
-GitHub does not automatically redeliver failed webhook deliveries. After
-recovery, inspect and manually redeliver failures. Periodic reconciliation is a
-separate convergence path for open pull requests.
+The target migration Job stops Helm before the Deployment changes if it fails.
+Use migration-only Secret, environment, volume, and mount values for database
+authentication or CA material. Never attach runtime App credentials.
 
-After issue #32 closes, obtain the next supported image through the published
-verification procedure. Record its platform digest in `IMAGE_DIGEST`, keep the
-matching reviewed source in `CHART_SOURCE`, and upgrade from that checkout.
-Do not rebuild or retag an image as a substitute for the verified artifact:
+The default `Recreate` strategy avoids overlap between old and new
+application pods, but webhook processing pauses briefly. GitHub does not
+automatically redeliver failed deliveries. Inspect and redeliver them after
+readiness returns, then confirm reconciliation converges every open pull
+request.
 
-```shell
+Before a future upgrade, obtain and verify the next supported image, record its
+platform digest, and use the chart from the matching reviewed release:
+
+```bash
 helm upgrade extra-codeowners \
   "$CHART_SOURCE/charts/extra-codeowners" \
   --namespace extra-codeowners \
@@ -337,36 +447,38 @@ kubectl --namespace extra-codeowners rollout status \
   deployment/extra-codeowners --timeout=5m
 ```
 
-If health checks fail, compare the current database head with the previous
-artifact's [required head][upgrade-notes]. When the head did not change, roll
-back the application:
+`--reset-then-reuse-values` starts with the new chart defaults and then
+applies existing overrides. Plain `--reuse-values` can silently miss new
+safety defaults. Review `helm get values` and the new `values.yaml`
+before every upgrade.
 
-```shell
+If health checks fail, compare the database head with the previous artifact's
+[required head][upgrade-notes]. If the head did not change and the upgrade
+notes permit application rollback:
+
+```bash
 helm history extra-codeowners --namespace extra-codeowners
-helm rollback extra-codeowners REVISION --namespace extra-codeowners --wait
+helm rollback extra-codeowners REVISION \
+  --namespace extra-codeowners --wait
 ```
 
-`REVISION` is the known-good revision shown by `helm history`. Helm rollback
-does not reverse database changes or run Alembic downgrade. When the head did
-change, do not start the old image against the migrated database. Restore
-native GitHub code-owner protection, preserve the failed database, restore the
-verified pre-migration backup into a new empty database, and validate it with
-the old artifact before rolling back the Deployment. This restore is required
-even when the migration SQL was additive.
+Replace `REVISION` with the known-good revision from `helm history`.
+Helm rollback does not reverse database changes.
 
-`--reset-then-reuse-values` starts with the new chart defaults before applying
-the release's existing overrides. Plain `--reuse-values` can omit new safety
-defaults. Every upgrade requires review of `helm get values` and the new
-`values.yaml`. A successful merge does not establish that an old override
-remains safe.
+If the head changed, do not start the old image against the migrated database.
+Restore native GitHub code-owner enforcement, stop the service, preserve the
+failed database, and restore the verified backup into a new empty database.
+Validate that restore with the old artifact before rolling the Deployment
+back. Additive SQL does not create an exception.
 
 ## Scaling and disruption
 
-The application serves webhooks and executes durable leased work in the same
-process. Database leases are designed to prevent duplicate ownership. High
-availability has not been validated.
+The application serves webhooks and executes leased work in the same process.
+PostgreSQL leases prevent duplicate ownership, but high availability has not
+been validated.
 
-Until environment-specific validation is complete, use these settings:
+Use these settings until your environment passes concurrency and failure
+tests:
 
 ```yaml
 replicaCount: 1
@@ -376,195 +488,172 @@ podDisruptionBudget:
   enabled: false
 ```
 
-Validation must cover reconciliation, database capacity, webhook routing, and
-termination behavior.
+Validation must cover reconciliation, PostgreSQL capacity, webhook routing,
+leases, and termination behavior.
 
-The default `Recreate` strategy avoids mixed application versions. A
-`RollingUpdate` requires an intentional and tested database-compatibility
-contract for version overlap.
+With one replica, `podDisruptionBudget.minAvailable: 1` can block
+voluntary node maintenance. The CPU autoscaler also needs a working metrics API
+and meaningful CPU requests.
 
-After validation, `podDisruptionBudget.minAvailable: 1` requires at least two
-replicas. With one replica, the budget can block voluntary node maintenance.
-The CPU-based autoscaler requires a cluster metrics API and meaningful CPU
-requests.
+The application has no separate worker command, so this chart creates one
+Deployment. Separate ingress and worker Deployments are not supported.
 
-The application has no separate worker command. The chart therefore creates one
-Deployment. Separate webhook and worker Deployments are not supported.
+Do not select `RollingUpdate` until the overlapping application versions,
+database head, leases, and shutdown behavior have been tested together.
 
-## Insecure policy override
+## Understand the insecure policy override
 
 `allowInsecureChanges: true` sets
-`EXTRA_CODEOWNERS_ALLOW_INSECURE_CHANGES=true` for the process. It removes the
-built-in non-delegable path list. When repository delegation covers them, an
-enrolled application can then satisfy changes to:
+`EXTRA_CODEOWNERS_ALLOW_INSECURE_CHANGES=true` for every application service
+pod in the release. It removes the built-in non-delegable list, so an enrolled
+App may satisfy changes to:
 
-- `CODEOWNERS`
+- supported `CODEOWNERS` files
 - Extra CODEOWNERS policy
-- Stampbot policy at `/stampbot.toml`
-- GitHub Actions workflows
-- repository-local actions under `.github/actions/`.
+- `/stampbot.toml`
+- workflows under `.github/workflows/`
+- local actions under `.github/actions/`.
 
-The setting does not remove organization guardrails or bypass delegation
-matching.
+Organization guardrails and normal delegation matching still apply. This is a
+deployment-wide authority change, not a repository override. The default is
+`false`, and Helm notes print a security warning when it is true.
 
-The default is `false`. A value of `true` accepts the risk that an application
-can approve a change that expands its authority. The setting affects every
-installation served by the deployment, not one repository. Helm notes print a
-security warning when it is enabled.
+## Configure egress policy
 
-## Egress policy
+Egress isolation is disabled by default because the application needs GitHub,
+PostgreSQL, DNS, and possibly telemetry. GitHub API addresses are not a stable
+Kubernetes CIDR contract.
 
-Egress isolation is disabled by default. The application must reach GitHub and
-its database, and GitHub API addresses do not form a stable Kubernetes CIDR
-contract.
+Clusters with an egress proxy or gateway may set
+`networkPolicy.egressEnabled: true` and provide complete rules in
+`networkPolicy.egress`. An empty list then denies all egress, so readiness
+and the migration Job fail. The migration pod still receives no GitHub
+credentials even when a shared rule permits GitHub traffic.
 
-Clusters with an egress proxy or gateway can set
-`networkPolicy.egressEnabled`. `networkPolicy.egress` must then contain complete
-DNS, GitHub, database, and telemetry rules. An empty list denies all egress and
-prevents the readiness probe and migration Job from succeeding. The migration
-pod receives no GitHub credentials even when the shared network rule permits
-GitHub egress.
+## Uninstall without dropping enforcement
 
-## Uninstall
+> [!WARNING]
+> Restore repository enforcement before stopping the check publisher. After
+> the App loses access, it may be unable to revoke an earlier success.
 
-Repository enforcement must be restored before the check publisher stops. For
-every repository that depends on Extra CODEOWNERS:
+For every repository that depends on Extra CODEOWNERS:
 
 1. Re-enable GitHub's native **Require review from Code Owners** rule.
-2. Remove `Extra CODEOWNERS / approval` and its expected App source from the
-   repository ruleset or branch protection.
-3. Verify the changed rule is active, and use a test pull request to confirm
-   that an unapproved owned-file change is blocked.
+2. Confirm that GitHub reports the native rule as active. Then open a test pull
+   request for a path delegated to an App, let the allowed App review make
+   `Extra CODEOWNERS / approval` succeed, and leave it without human code-owner
+   approval. Verify that the native rule is the remaining blocker.
+3. Only after that verification, remove `Extra CODEOWNERS / approval` and its
+   expected App source from the ruleset or branch protection.
 
-Stop the service only after every dependent repository passes that
-verification:
+Only then uninstall:
 
-```shell
+```bash
 helm uninstall extra-codeowners --namespace extra-codeowners
-kubectl --namespace extra-codeowners delete secret extra-codeowners-registry
+kubectl --namespace extra-codeowners delete secret \
+  extra-codeowners-registry --ignore-not-found
 ```
 
-The GitHub App installation must remain active and retain repository access
-until native enforcement is restored and verified. After App access or the
-deployment is gone, Extra CODEOWNERS cannot revoke an earlier successful check.
-The project does not assume that GitHub invalidates that success automatically.
+Keep the App installation and repository access until native enforcement has
+been restored and verified. The project does not assume GitHub invalidates an
+old success automatically.
 
-Uninstalling does not delete:
+Helm uninstall does not delete externally created runtime, database, GitHub,
+registry, or TLS Secrets. It also does not delete PostgreSQL or external
+infrastructure. Remove each only after confirming that no other deployment
+uses it and after satisfying audit-retention requirements.
 
-- the runtime Secret
-- the database Secret
-- the GitHub credential Secret
-- the database
-- the TLS Secret
-- externally managed infrastructure.
+Revoke the registry credential after the last pod stops. If the deployment
+used an operator-owned temporary image copy, delete exactly
+`IMAGE_REPOSITORY@IMAGE_DIGEST`, confirm that a pull by digest fails, and
+then remove any remaining tag. Never delete a shared upstream release artifact.
 
-These resources can be removed after confirming that no other deployment uses
-them, retaining required audit data, and completing App-access cleanup in that
-order. After the last pod is gone, revoke the registry pull credential. If the
-deployment used an operator-owned temporary registry copy, delete the exact
-object by `IMAGE_REPOSITORY@IMAGE_DIGEST`, verify that a pull by digest fails,
-and only then remove any remaining tag. Do not delete a shared upstream release
-artifact.
+## Values reference
 
-## Values
+`values.schema.json` rejects unknown top-level properties and validates
+the constraints below during `helm lint`, `helm template`,
+`helm install`, and `helm upgrade`. The checked-in
+`values.yaml` repeats the default descriptions.
 
-The table describes every chart value. The [values file](values.yaml) repeats
-the descriptions beside each default. [values.schema.json](values.schema.json)
-validates types, bounds, accepted enums, and unknown top-level properties during
-`helm install`, `helm upgrade`, `helm lint`, and `helm template`.
-
-| Value | Type | Default | Purpose |
+| Value | Type | Default | Constraints and effect |
 | --- | --- | --- | --- |
-| `replicaCount` | integer | `1` | API/worker pods when autoscaling is off. |
-| `revisionHistoryLimit` | integer | `3` | Old ReplicaSets retained for rollback. |
-| `deploymentStrategy` | object | `Recreate` | Deployment replacement strategy; avoids overlapping application versions by default. |
-| `image.repository` | string | `example.invalid/stampbot/extra-codeowners` | Intentionally non-pullable placeholder; override it with the verified supported image repository once one exists. |
-| `image.pullPolicy` | enum | `IfNotPresent` | Kubernetes image pull policy. |
-| `image.tag` | string | empty | Image tag; an empty value uses chart `appVersion`. |
-| `image.digest` | string | empty | `sha256:` digest that takes precedence over the tag. |
-| `imagePullSecrets` | array | `[]` | Names of image-registry pull Secrets. |
-| `nameOverride` | string | empty | Replacement for the chart name. |
-| `fullnameOverride` | string | empty | Complete resource-name replacement. |
-| `serviceAccount.create` | boolean | `true` | Create a dedicated ServiceAccount. |
-| `serviceAccount.automountServiceAccountToken` | boolean | `false` | Mount a Kubernetes API token in the pod. |
-| `serviceAccount.annotations` | object | `{}` | ServiceAccount annotations. |
-| `serviceAccount.name` | string | empty | Existing account name, or created account name override. |
-| `podAnnotations` | object | `{}` | Pod annotations. |
-| `podLabels` | object | `{}` | Additional pod labels; chart selector labels are reserved. |
-| `podSecurityContext` | object | non-root, GID 65532 volumes, `RuntimeDefault` seccomp | Pod-level security context. |
-| `securityContext` | object | UID/GID 65532, read-only, no capabilities | Application container security context. |
-| `existingSecret` | string | empty | Secret exposed with `envFrom`; the chart never creates it. |
-| `allowInsecureChanges` | boolean | `false` | Disable only built-in non-delegable paths for every served installation. |
-| `extraEnvFrom` | array | `[]` | Additional Kubernetes `EnvFromSource` objects. |
-| `extraEnv` | array | `[]` | Additional Kubernetes `EnvVar` objects; chart-managed environment names are rejected. |
-| `extraVolumes` | array | `[]` | Additional pod volumes, including externally managed Secret volumes; the name `tmp` is reserved. |
-| `extraVolumeMounts` | array | `[]` | Additional application mounts; the name `tmp` and path `/tmp` are reserved. |
-| `extraArgs` | array | `[]` | Override image command arguments without replacing its entrypoint. |
-| `migrations.enabled` | boolean | `true` | Run the explicit pre-install and pre-upgrade Alembic Job. |
-| `migrations.lockTimeoutSeconds` | number | `60` | Maximum PostgreSQL migration advisory-lock wait. |
-| `migrations.activeDeadlineSeconds` | integer | `180` | Complete migration Job deadline. |
-| `migrations.backoffLimit` | integer | `0` | Kubernetes retries after migration process failure. |
-| `migrations.ttlSecondsAfterFinished` | integer | `3600` | Seconds to retain a completed migration Job for logs, from `60` through `604800`. |
-| `migrations.annotations` | object | `{}` | Additional non-hook Job annotations. |
-| `migrations.serviceAccountName` | string | empty | Pre-existing migration identity; empty uses the namespace's default account. |
-| `migrations.existingSecret` | string | empty | Database-only Secret exposed to the migration container with `envFrom`. |
-| `migrations.extraEnvFrom` | array | `[]` | Additional migration-only `EnvFromSource` objects. |
-| `migrations.extraEnv` | array | `[]` | Additional migration-only `EnvVar` objects; the chart-managed environment name is reserved. |
-| `migrations.extraVolumes` | array | `[]` | Migration-only volumes; the name `tmp` is reserved. |
-| `migrations.extraVolumeMounts` | array | `[]` | Migration-only mounts; the name `tmp` and path `/tmp` are reserved. |
-| `service.type` | enum | `ClusterIP` | Service type. |
-| `service.port` | integer | `80` | In-cluster HTTP Service port. |
-| `service.annotations` | object | `{}` | Service annotations. |
-| `ingress.enabled` | boolean | `false` | Create an Ingress. |
-| `ingress.className` | string | empty | Ingress controller class. |
-| `ingress.annotations` | object | `{}` | Controller-specific Ingress annotations. |
-| `ingress.hosts` | array | example host, exact webhook path | Host and path rules. |
-| `ingress.tls` | array | `[]` | TLS Secret and hostname entries. |
-| `resources.requests` | object | `100m` CPU, `128Mi` memory | Container resource requests. |
-| `resources.limits` | object | `512Mi` memory | Container resource limits; no CPU limit is imposed. |
-| `probes.liveness.enabled` | boolean | `true` | Enable the process liveness probe. |
-| `probes.liveness.path` | string | `/health/live` | Liveness HTTP path. |
-| `probes.liveness.initialDelaySeconds` | integer | `10` | Delay before liveness checks. |
-| `probes.liveness.periodSeconds` | integer | `10` | Liveness check interval. |
-| `probes.liveness.timeoutSeconds` | integer | `3` | Liveness request timeout. |
-| `probes.liveness.failureThreshold` | integer | `3` | Failures before restart. |
-| `probes.readiness.enabled` | boolean | `true` | Enable the dependency-aware readiness probe. |
-| `probes.readiness.path` | string | `/health/ready` | Readiness HTTP path. |
-| `probes.readiness.initialDelaySeconds` | integer | `5` | Delay before readiness checks. |
-| `probes.readiness.periodSeconds` | integer | `10` | Readiness check interval. |
-| `probes.readiness.timeoutSeconds` | integer | `3` | Readiness request timeout. |
-| `probes.readiness.failureThreshold` | integer | `3` | Failures before becoming unready. |
-| `autoscaling.enabled` | boolean | `false` | Create a CPU-based HorizontalPodAutoscaler. |
-| `autoscaling.minReplicas` | integer | `2` | Autoscaler lower replica bound. |
-| `autoscaling.maxReplicas` | integer | `5` | Autoscaler upper replica bound. |
-| `autoscaling.targetCPUUtilizationPercentage` | integer | `70` | Average CPU utilization target. |
-| `podDisruptionBudget.enabled` | boolean | `false` | Create a PodDisruptionBudget. |
-| `podDisruptionBudget.minAvailable` | integer or percentage | `1` | Pods retained during voluntary disruption. |
-| `networkPolicy.enabled` | boolean | `true` | Isolate application and migration pods; permit ingress only to the named application HTTP port. |
-| `networkPolicy.ingressFrom` | array | `[]` | Allowed ingress peers; empty permits all peers to that port. |
-| `networkPolicy.egressEnabled` | boolean | `false` | Add egress isolation to the NetworkPolicy. |
+| `replicaCount` | integer | `1` | At least 1; ignored when autoscaling is enabled. |
+| `revisionHistoryLimit` | integer | `3` | At least 0 old ReplicaSets. |
+| `deploymentStrategy.type` | enum | `Recreate` | `Recreate` or `RollingUpdate`. |
+| `deploymentStrategy.rollingUpdate.maxUnavailable` | integer or percentage | unset | Nonnegative; valid only with `RollingUpdate`. |
+| `deploymentStrategy.rollingUpdate.maxSurge` | integer or percentage | unset | Nonnegative; valid only with `RollingUpdate`. |
+| `image.repository` | string | `example.invalid/stampbot/extra-codeowners` | Nonempty, intentionally non-pullable placeholder. |
+| `image.pullPolicy` | enum | `IfNotPresent` | `Always`, `IfNotPresent`, or `Never`. |
+| `image.tag` | string | empty | Uses chart `appVersion` when empty. |
+| `image.digest` | string | empty | Empty or `sha256:` plus 64 lowercase hex characters; overrides the tag. |
+| `imagePullSecrets` | array | `[]` | Objects containing a nonempty `name`. |
+| `nameOverride` | string | empty | Replaces the chart-name portion of resource names. |
+| `fullnameOverride` | string | empty | Replaces the complete generated resource name. |
+| `serviceAccount.create` | boolean | `true` | Creates the dedicated runtime account. |
+| `serviceAccount.automountServiceAccountToken` | boolean | `false` | Mounts a Kubernetes API token when true. |
+| `serviceAccount.annotations` | string map | `{}` | Adds ServiceAccount annotations. |
+| `serviceAccount.name` | string | empty | Created-account override, or existing account when creation is false. |
+| `podAnnotations` | string map | `{}` | Adds application pod annotations. |
+| `podLabels` | string map | `{}` | Adds labels; cannot override chart name, instance, or component labels. |
+| `podSecurityContext` | object | nonroot, GID 65532 volumes, `RuntimeDefault` seccomp | Applies at pod level. |
+| `securityContext` | object | UID/GID 65532, read-only root, no capabilities | Applies to application and migration containers. |
+| `existingSecret` | string | empty | Runtime Secret exposed with `envFrom`; never created by the chart. |
+| `allowInsecureChanges` | boolean | `false` | Disables only built-in non-delegable paths for every served installation. |
+| `extraEnvFrom` | array | `[]` | Additional runtime `EnvFromSource` objects. |
+| `extraEnv` | array | `[]` | `EnvVar` objects with `name` and exactly one of `value` or `valueFrom`; cannot override chart-managed environment or insecure-mode variables. |
+| `extraVolumes` | array | `[]` | Volume objects with `name`; `tmp` is reserved. |
+| `extraVolumeMounts` | array | `[]` | Mounts with `name` and `mountPath`; `tmp` and `/tmp` are reserved. |
+| `extraArgs` | string array | `[]` | Replaces image arguments without replacing its entrypoint. |
+| `migrations.enabled` | boolean | `true` | Runs the pre-install and pre-upgrade Alembic Job. |
+| `migrations.lockTimeoutSeconds` | number | `60` | Greater than 0 and at most 300 seconds. |
+| `migrations.activeDeadlineSeconds` | integer | `180` | 1 through 3600 seconds. |
+| `migrations.backoffLimit` | integer | `0` | 0 through 10 Kubernetes retries. |
+| `migrations.ttlSecondsAfterFinished` | integer | `3600` | 60 through 604800 seconds. |
+| `migrations.annotations` | string map | `{}` | Additional annotations; hook, weight, and delete-policy annotations are reserved. |
+| `migrations.serviceAccountName` | string | empty | Existing migration identity; empty uses the namespace's default account. |
+| `migrations.existingSecret` | string | empty | Migration-only Secret exposed with `envFrom`. |
+| `migrations.extraEnvFrom` | array | `[]` | Migration-only `EnvFromSource` objects. |
+| `migrations.extraEnv` | array | `[]` | Migration-only `EnvVar` objects with `name` and exactly one of `value` or `valueFrom`; cannot override the production environment. |
+| `migrations.extraVolumes` | array | `[]` | Migration-only volumes; `tmp` is reserved. |
+| `migrations.extraVolumeMounts` | array | `[]` | Migration-only mounts; `tmp` and `/tmp` are reserved. |
+| `service.type` | enum | `ClusterIP` | `ClusterIP`, `NodePort`, or `LoadBalancer`. |
+| `service.port` | integer | `80` | 1 through 65535. |
+| `service.annotations` | string map | `{}` | Adds Service annotations. |
+| `ingress.enabled` | boolean | `false` | Creates an Ingress when true. |
+| `ingress.className` | string | empty | Selects the ingress controller. |
+| `ingress.annotations` | string map | `{}` | Adds controller-specific annotations. |
+| `ingress.hosts` | array | example host and exact webhook path | At least one host; every path starts with `/` and has a valid Kubernetes path type. |
+| `ingress.tls` | array | `[]` | Entries require a nonempty Secret name and at least one host. |
+| `resources.requests` | object | `100m` CPU, `128Mi` memory | Application and migration requests. |
+| `resources.limits` | object | `512Mi` memory | No CPU limit by default. |
+| `probes.liveness.enabled` | boolean | `true` | Enables the process-health probe. |
+| `probes.liveness.path` | string | `/health/live` | Must start with `/`. |
+| `probes.liveness.initialDelaySeconds` | integer | `10` | At least 0. |
+| `probes.liveness.periodSeconds` | integer | `10` | At least 1. |
+| `probes.liveness.timeoutSeconds` | integer | `3` | At least 1. |
+| `probes.liveness.failureThreshold` | integer | `3` | At least 1. |
+| `probes.readiness.enabled` | boolean | `true` | Enables the dependency-aware readiness probe. |
+| `probes.readiness.path` | string | `/health/ready` | Must start with `/`. |
+| `probes.readiness.initialDelaySeconds` | integer | `5` | At least 0. |
+| `probes.readiness.periodSeconds` | integer | `10` | At least 1. |
+| `probes.readiness.timeoutSeconds` | integer | `3` | At least 1. |
+| `probes.readiness.failureThreshold` | integer | `3` | At least 1. |
+| `autoscaling.enabled` | boolean | `false` | Creates a CPU HorizontalPodAutoscaler. |
+| `autoscaling.minReplicas` | integer | `2` | At least 1. |
+| `autoscaling.maxReplicas` | integer | `5` | At least 1. |
+| `autoscaling.targetCPUUtilizationPercentage` | integer | `70` | 1 through 100. |
+| `podDisruptionBudget.enabled` | boolean | `false` | Creates a PodDisruptionBudget. |
+| `podDisruptionBudget.minAvailable` | integer or percentage | `1` | Nonnegative integer or digits followed by `%`. |
+| `networkPolicy.enabled` | boolean | `true` | Selects application and migration pods. |
+| `networkPolicy.ingressFrom` | array | `[]` | Empty permits all peers to the named HTTP port. |
+| `networkPolicy.egressEnabled` | boolean | `false` | Adds egress isolation when true. |
 | `networkPolicy.egress` | array | `[]` | Complete egress rules; empty with isolation enabled denies all egress. |
-| `terminationGracePeriodSeconds` | integer | `30` | Grace period for in-process leased work. |
+| `terminationGracePeriodSeconds` | integer | `30` | At least 1 second for in-process leased work. |
 | `priorityClassName` | string | empty | Existing PriorityClass name. |
-| `nodeSelector` | object | `{}` | Node label constraints. |
-| `tolerations` | array | `[]` | Pod tolerations. |
-| `affinity` | object | `{}` | Pod and node affinity rules. |
-| `topologySpreadConstraints` | array | `[]` | Failure-domain distribution rules. |
+| `nodeSelector` | string map | `{}` | Node label constraints. |
+| `tolerations` | array | `[]` | Kubernetes toleration objects. |
+| `affinity` | object | `{}` | Kubernetes affinity rules. |
+| `topologySpreadConstraints` | array | `[]` | Kubernetes topology spread constraints. |
 
-Security-relevant defaults are:
-
-- a dedicated ServiceAccount with API token automounting disabled
-- non-root execution with all Linux capabilities dropped
-- a read-only root filesystem and runtime-default seccomp profile
-- HTTP liveness and dependency-aware readiness probes
-- the insecure policy override disabled
-- no chart-managed Secret or credential value
-- separate runtime and migration credential inputs
-- a Service selector that excludes migration hooks
-- Kubernetes Service environment-variable injection disabled
-- a NetworkPolicy that covers both application and migration pod labels after
-  ordinary chart resources are installed.
-
-[configuration]: ../../docs/reference/configuration.md
 [upgrade]: https://extra-codeowners.readthedocs.io/en/latest/how-to/upgrade/
 [upgrade-notes]: https://extra-codeowners.readthedocs.io/en/latest/reference/upgrade-notes/

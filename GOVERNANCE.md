@@ -18,7 +18,13 @@ When maintainers cannot reach consensus, they prefer the option that preserves f
 
 Normal changes use pull requests and required checks. Direct pushes to `main` are reserved for repository recovery.
 
-A release starts from a `vMAJOR.MINOR.PATCH` tag on `main`. The release workflow signs and attests its artifacts. The project follows semantic versioning where practical, but a minor release may contain a documented breaking change before 1.0.
+A future release will start from a `vMAJOR.MINOR.PATCH` tag on `main`. The
+release workflow contains the intended signing and attestation jobs, but an
+unconditional publication blocker currently keeps them unreachable. Once that
+block is removed through the reviewed release process, published artifacts
+will be signed and attested. The project follows semantic versioning where
+practical, but a minor release may contain a documented breaking change before
+1.0.
 
 Maintainers may remove a release that contains a known credential, malicious
 artifact, or critical authorization flaw. Published package versions are not

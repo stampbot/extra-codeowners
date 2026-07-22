@@ -1,60 +1,87 @@
 # Review pull-request container evidence
 
-Use this maintainer procedure to review the two platform-specific evidence
-artifacts produced by pull-request CI. A successful review establishes that the
-artifacts came from one successful workflow attempt, that their outer ZIP
-envelopes and internal cross-references are exact, and that observed drift is
-understood. It does **not** approve distribution or make the evidence complete.
+This procedure is for maintainers reviewing the `linux/amd64` and `linux/arm64`
+evidence artifacts from pull-request CI. At the end, you will know whether both
+artifacts came from one successful workflow attempt, whether their outer ZIP
+envelopes and internal references agree, and whether the observed policy drift
+is understood.
 
-There is no supported Extra CODEOWNERS container release. The `main`
-publication job has been removed. The tag workflow can run source, proof, and
-scan jobs with repository-read authority, but a separate blocker stops every
-job with package-write, signing, attestation, or release authority. Issue
-[#18](https://github.com/stampbot/extra-codeowners/issues/18) tracks the
-remaining native-wheel and embedded-SBOM source-completeness gap. Issue
-[#28](https://github.com/stampbot/extra-codeowners/issues/28) tracks the
-privilege-separated release pipeline and recipient verifier. Pull-request CI
-already binds its hash-pinned PEP 517 proof and exact installed application
-wheel into both platform artifacts. Issue
-[#32](https://github.com/stampbot/extra-codeowners/issues/32) remains open for
-retained release evidence and future publication consumption of that selected
-proof. A manual workflow with repository-read authority and the tagged candidate
-scan already use the same proof implementation.
+!!! danger "This review does not approve distribution"
+    Extra CODEOWNERS has no supported container release. A successful review
+    does not make the evidence source-complete and does not authorize an image,
+    chart, package, or GitHub release.
 
-## Prerequisites and trust boundary
+The `main` publication job has been removed. A tag run can validate source,
+build proof, and scan a candidate with repository-read permission, but a
+separate blocker prevents every job with package-write, signing, attestation,
+or release authority from running.
 
-You need Linux, Bash, `gh`, `jq`, `sha256sum`, Git, and the repository's locked
-mise/uv toolchain. You also need two disposable environments:
+Four open issues define the remaining boundary:
 
-1. A credentialed staging host that only queries GitHub's REST API and saves
-   raw bytes. Give it a short-lived token limited to Actions read, contents
-   read, pull-request read, and repository metadata. Do not run pull-request
-   code or parse an artifact there.
-2. A no-secret review VM with no network, no Docker socket, explicit memory,
-   CPU, process, file-count, and disk quotas, and a fresh user-owned `0700`
-   working directory. Parse and inspect the transferred inputs only there.
+- [#18](https://github.com/stampbot/extra-codeowners/issues/18) covers the
+  native-wheel and embedded-SBOM source-completeness gap.
+- [#28](https://github.com/stampbot/extra-codeowners/issues/28) covers the
+  privilege-separated release pipeline and bounded recipient verifier.
+- [#32](https://github.com/stampbot/extra-codeowners/issues/32) covers retaining
+  the selected Python proof in release evidence and handing it to future
+  publication jobs.
+- [#25](https://github.com/stampbot/extra-codeowners/issues/25) covers the first
+  immutable GitHub release after the evidence and privilege boundaries close.
 
-Use a previously reviewed, immutable checkout of the helper from the default
-branch. Do not execute the helper supplied by the pull request you are
-reviewing. If the pull request changes the helper or the expected artifact
-envelope, adversarial review of that change is a prerequisite; an older helper
-failing closed is not permission to fall back to a generic extractor.
+Pull-request CI already binds the hash-pinned PEP 517 proof and exact installed
+application wheel into both platform artifacts. Read-only manual runs and the
+tagged candidate scan use the same proof implementation.
 
-Treat every workflow response, filename, ZIP record, JSON value, and nested
-evidence archive as hostile. In particular:
+## Before you start
 
-- do not use `gh run download`, `unzip`, or an archive GUI; those extract before
-  this project's bounds and envelope checks run
-- do not open the nested evidence tar with `tar` or Python's ordinary
-  `tarfile` iteration; issue #28 must ship the bounded recipient verifier
-- do not execute, import, or source anything retained from an artifact
-- use a disposable VM, not merely a container, when the contributor or input is
-  not already trusted; a container shares its host kernel.
+Plan for four isolated phases. The first and fourth can use separately created
+instances of the same staging-host design.
 
-The workflow retains these artifacts for five days. If they expire, rerun CI
-for the exact pull-request head and review the resulting base, synthetic merge
-commit, and attempt as a new candidate. Never combine platforms from different
-runs or attempts.
+| Phase | Environment | Allowed work |
+| --- | --- | --- |
+| Fetch | Credentialed staging host | Query GitHub's REST API and save raw bytes with a short-lived read-only token. Do not run pull-request code or parse artifacts. |
+| Parse and review | No-secret offline VM | Validate and inspect transferred inputs with no network or Docker socket, explicit resource quotas, and a fresh user-owned `0700` working directory. |
+| Build and test | Separate no-secret VM | Run pull-request code and repository gates. Restricted outbound dependency access and an isolated Docker daemon are allowed here, never in the parsing VM. |
+| Revalidate | Fresh credentialed staging host | Query the pull request immediately before recording a decision or merging. Do not reuse the parsing or test VM. |
+
+The staging host needs Linux, Bash, `gh`, `jq`, `sha256sum`, and Git. The review
+VM needs the same local command-line tools plus a prepared copy of the
+repository's locked mise/uv environment. Prepare that environment before
+disabling the network.
+
+### Freeze the helper you trust
+
+Use a previously reviewed, immutable helper checkout from the default branch.
+Never execute the helper supplied by the pull request under review. If the pull
+request changes the helper or expected artifact envelope, review that change
+and its hostile-input corpus first. An older helper failing closed is not a
+reason to fall back to a generic extractor.
+
+### Treat every input as hostile
+
+- Do not use `gh run download`, `unzip`, or an archive GUI. They extract before
+  this project's bounds and envelope checks run.
+- Do not open the nested evidence tar with `tar` or Python's ordinary
+  `tarfile` iteration. Issue #28 must ship the bounded recipient verifier.
+- Do not execute, import, or source anything retained from an artifact.
+- Use a disposable VM when the contributor or input is not already trusted. A
+  container shares its host kernel and is not the same isolation boundary.
+
+CI retains these artifacts for five days. If they expire, rerun CI for the
+exact pull-request head. Treat the new base, synthetic merge commit, and run
+attempt as a new candidate. Never combine platforms from different runs or
+attempts.
+
+The review moves through these boundaries in order:
+
+1. Authenticate the workflow run and raw ZIPs on the staging host.
+2. Transfer the identity packet and parse both ZIPs offline.
+3. Bind extracted metadata back to the GitHub REST records.
+4. Review policy, inventory, and source drift.
+5. Confirm that the known source gap remains explicit.
+6. Run repository gates in the separate test VM.
+7. Revalidate the live pull request on a fresh staging host.
+8. Record the review while keeping distribution denied.
 
 ## 1. Fetch and authenticate the raw ZIPs
 
@@ -260,16 +287,17 @@ existing directory chains for every input root and the extraction parent. They
 then create the extraction root as a private directory owned by the current
 user.
 
-An intentional schema or provider-envelope migration may have no earlier
-default-branch helper that can parse the new format. In that case, stop before
-opening an artifact. Review the candidate helper, workflow, bounds, and hostile
-corpus as security-sensitive code in a separate no-secret VM. Run its complete
-adversarial test suite, freeze the reviewed commit and helper bytes, and record
-that identity in the review ticket. Only then may that frozen candidate become
-`TRUSTED_ROOT` for its own one-time integration review. After the change merges,
-future reviews must return to a previously reviewed default-branch helper. If
-you cannot establish that bootstrap trust, do not review or merge the evidence
-change.
+!!! warning "A format migration needs a one-time trust bootstrap"
+    A schema or provider-envelope migration may have no earlier default-branch
+    helper that understands the new format. Stop before opening an artifact.
+    In a separate no-secret VM, review the candidate helper, workflow, resource
+    bounds, and hostile-input corpus as security-sensitive code. Run the full
+    adversarial test suite, freeze the reviewed commit and helper bytes, and
+    record that identity in the review ticket.
+    Only that frozen candidate may become `TRUSTED_ROOT` for its one-time
+    integration review. After the change merges, return to a previously
+    reviewed default-branch helper. If you cannot establish this bootstrap
+    trust, do not review or merge the evidence change.
 
 ```bash
 set -euo pipefail
