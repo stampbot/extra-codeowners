@@ -67,7 +67,10 @@
     }
   },
   "cpython_source": {
+    "license_member": "Python-3.14.6/LICENSE",
+    "license_sha256": "b0e25a78cffb43f4d92de8b61ccfa1f1f98ecbc22330b54b5251e7b6ba010231",
     "sha256": "143b1dddefaec3bd2e21e3b839b34a2b7fb9842272883c576420d605e9f30c63",
+    "size": 23921184,
     "url": "https://www.python.org/ftp/python/3.14.6/Python-3.14.6.tar.xz"
   },
   "custom_license_evidence": {
@@ -6334,6 +6337,10 @@
     "python:uvicorn@0.51.0": {
       "expression": "BSD-3-Clause",
       "rationale": "Accepted from installed metadata for CI drift review; this is not distribution approval."
+    },
+    "runtime:cpython@3.14.6": {
+      "expression": "Python-2.0",
+      "rationale": "Provisionally accepted from the exact CPython 3.14.6 source LICENSE and pinned Docker Official Image recipe; this is not distribution approval."
     }
   },
   "license_texts": [
@@ -6406,6 +6413,11 @@
       "id": "PSF-2.0",
       "sha256": "ab745c5061d1dea43a3885e5b4b6befc7e983954954775c5736debeefcdfd89b",
       "url": "https://raw.githubusercontent.com/spdx/license-list-data/421fbabbe80c94c58c12316af1bc6a2dca2362bc/text/PSF-2.0.txt"
+    },
+    {
+      "id": "Python-2.0",
+      "sha256": "893c2bafbb8133f7aa97e1f79a3ee3241ebca7025f56278e9e1f72bb98592f9d",
+      "url": "https://raw.githubusercontent.com/spdx/license-list-data/421fbabbe80c94c58c12316af1bc6a2dca2362bc/text/Python-2.0.txt"
     },
     {
       "id": "X11",
@@ -7031,6 +7043,58 @@
         "name": "uvicorn",
         "observed_license": "BSD-3-Clause",
         "version": "0.51.0"
+      },
+      {
+        "ecosystem": "runtime",
+        "effective": true,
+        "identity_files": {
+          "interpreter": {
+            "effective": true,
+            "elf": {
+              "bits": 64,
+              "endianness": "little",
+              "machine": "x86_64",
+              "machine_id": 62
+            },
+            "gid": 0,
+            "layer": 2,
+            "mode": 493,
+            "path": "usr/local/bin/python3.14",
+            "sha256": "15d57707588f46ca15946ff5f14599f473c112c466f79775a7bbf92dea454221",
+            "size": 14000,
+            "uid": 0
+          },
+          "shared_library": {
+            "effective": true,
+            "elf": {
+              "bits": 64,
+              "endianness": "little",
+              "machine": "x86_64",
+              "machine_id": 62
+            },
+            "gid": 0,
+            "layer": 2,
+            "mode": 493,
+            "path": "usr/local/lib/libpython3.14.so.1.0",
+            "sha256": "66b13f3e0eb0b0cf3f8cf2f5fa008f9df763f31d5c7e54455ef6fd24d1da2e81",
+            "size": 6347256,
+            "uid": 0
+          },
+          "version_header": {
+            "effective": true,
+            "gid": 0,
+            "layer": 2,
+            "mode": 420,
+            "path": "usr/local/include/python3.14/patchlevel.h",
+            "sha256": "1c61b149e1ce72a7f6328c58057970d37fcafb02bec805be071dc0ed4cf39a95",
+            "size": 1773,
+            "uid": 0
+          }
+        },
+        "name": "cpython",
+        "observed_license": "",
+        "purl": "pkg:generic/python@3.14.6",
+        "version": "3.14.6"
       }
     ],
     "linux/arm64": [
@@ -7635,6 +7699,58 @@
         "name": "uvicorn",
         "observed_license": "BSD-3-Clause",
         "version": "0.51.0"
+      },
+      {
+        "ecosystem": "runtime",
+        "effective": true,
+        "identity_files": {
+          "interpreter": {
+            "effective": true,
+            "elf": {
+              "bits": 64,
+              "endianness": "little",
+              "machine": "aarch64",
+              "machine_id": 183
+            },
+            "gid": 0,
+            "layer": 2,
+            "mode": 493,
+            "path": "usr/local/bin/python3.14",
+            "sha256": "ddb93300073b9a42423caa1c8dc3d93acc89f4cae1d688f2d8f0b56996c62c2e",
+            "size": 67168,
+            "uid": 0
+          },
+          "shared_library": {
+            "effective": true,
+            "elf": {
+              "bits": 64,
+              "endianness": "little",
+              "machine": "aarch64",
+              "machine_id": 183
+            },
+            "gid": 0,
+            "layer": 2,
+            "mode": 493,
+            "path": "usr/local/lib/libpython3.14.so.1.0",
+            "sha256": "5027f2f81bf878b19eb56cef9834c66813c8c5a9acab76b29e8900f7df17b275",
+            "size": 6467344,
+            "uid": 0
+          },
+          "version_header": {
+            "effective": true,
+            "gid": 0,
+            "layer": 2,
+            "mode": 420,
+            "path": "usr/local/include/python3.14/patchlevel.h",
+            "sha256": "1c61b149e1ce72a7f6328c58057970d37fcafb02bec805be071dc0ed4cf39a95",
+            "size": 1773,
+            "uid": 0
+          }
+        },
+        "name": "cpython",
+        "observed_license": "",
+        "purl": "pkg:generic/python@3.14.6",
+        "version": "3.14.6"
       }
     ]
   },
@@ -7654,5 +7770,5 @@
       "version": "3.3.4"
     }
   ],
-  "schema_version": 2
+  "schema_version": 3
 }

@@ -198,6 +198,52 @@ def elf64_payload(architecture: str = "amd64") -> bytes:
     )
 
 
+def cpython_patchlevel_header(version: str = "3.14.6") -> bytes:
+    major, minor, micro = version.split(".")
+    return (
+        "#define PY_RELEASE_LEVEL_ALPHA  0xA\n"
+        "#define PY_RELEASE_LEVEL_BETA   0xB\n"
+        "#define PY_RELEASE_LEVEL_GAMMA  0xC\n"
+        "#define PY_RELEASE_LEVEL_FINAL  0xF\n"
+        "/*--start constants--*/\n"
+        f"#define PY_MAJOR_VERSION        {major}\n"
+        f"#define PY_MINOR_VERSION        {minor}\n"
+        f"#define PY_MICRO_VERSION        {micro}\n"
+        "#define PY_RELEASE_LEVEL        PY_RELEASE_LEVEL_FINAL\n"
+        "#define PY_RELEASE_SERIAL       0\n"
+        f'#define PY_VERSION              "{version}"\n'
+        "/*--end constants--*/\n"
+    ).encode()
+
+
+def with_cpython_runtime(layer: bytes, architecture: str) -> bytes:
+    """Append the minimal immutable runtime footprint to a synthetic base layer."""
+
+    source = io.BytesIO(layer)
+    try:
+        with tarfile.open(fileobj=source, mode="r:") as archive:
+            existing = {member.name.removeprefix("./") for member in archive}
+    except tarfile.TarError:
+        return layer
+    output = io.BytesIO(layer)
+    additions = {
+        evidence.CPYTHON_VERSION_HEADER: (cpython_patchlevel_header(), 0o644),
+        evidence.CPYTHON_INTERPRETER: (elf64_payload(architecture), 0o755),
+        evidence.CPYTHON_SHARED_LIBRARY: (elf64_payload(architecture), 0o755),
+    }
+    with tarfile.open(fileobj=output, mode="a") as archive:
+        for path, (content, mode) in additions.items():
+            if path in existing:
+                continue
+            member = tarfile.TarInfo(path)
+            member.size = len(content)
+            member.mode = mode
+            member.uid = 0
+            member.gid = 0
+            archive.addfile(member, io.BytesIO(content))
+    return output.getvalue()
+
+
 def empty_unexpanded_payload_policy() -> dict[str, dict[str, list[dict[str, Any]]]]:
     return {
         platform: {
@@ -217,6 +263,48 @@ def empty_filesystem_baselines() -> dict[str, dict[str, list[dict[str, Any]]]]:
             "post_base_removals": [],
         }
         for platform in ("linux/amd64", "linux/arm64")
+    }
+
+
+def synthetic_runtime_component(platform: str = "linux/amd64") -> dict[str, Any]:
+    machine_id, machine = evidence.ELF_MACHINES[platform]
+
+    def occurrence(path: str, digest: str, size: int, mode: int) -> dict[str, Any]:
+        return {
+            "effective": True,
+            "layer": 0,
+            "path": path,
+            "sha256": digest * 64,
+            "size": size,
+            "mode": mode,
+            "uid": 0,
+            "gid": 0,
+        }
+
+    elf = {
+        "bits": 64,
+        "endianness": "little",
+        "machine": machine,
+        "machine_id": machine_id,
+    }
+    return {
+        "ecosystem": "runtime",
+        "name": "cpython",
+        "version": "3.14.6",
+        "purl": "pkg:generic/python@3.14.6",
+        "observed_license": "",
+        "effective": True,
+        "identity_files": {
+            "version_header": occurrence(evidence.CPYTHON_VERSION_HEADER, "1", 512, 0o644),
+            "interpreter": {
+                **occurrence(evidence.CPYTHON_INTERPRETER, "2", 64, 0o755),
+                "elf": copy.deepcopy(elf),
+            },
+            "shared_library": {
+                **occurrence(evidence.CPYTHON_SHARED_LIBRARY, "3", 64, 0o755),
+                "elf": copy.deepcopy(elf),
+            },
+        },
     }
 
 
@@ -241,7 +329,7 @@ def standalone_inventory(component: dict[str, Any]) -> dict[str, Any]:
         "application_wheel_sha256": "e" * 64,
         "application_selection_record_sha256": "f" * 64,
         "apk_database_sha256": "d" * 64,
-        "components": [component],
+        "components": [component, synthetic_runtime_component()],
         "embedded_sboms": [],
         "native_payloads": [],
         "wheel_identity_files": [],
@@ -260,8 +348,8 @@ def standalone_policy(
 ) -> dict[str, Any]:
     policy = cast(dict[str, Any], json.loads(Path(".compliance/container-policy.json").read_text()))
     policy["platforms"] = {
-        "linux/amd64": [copy.deepcopy(component)],
-        "linux/arm64": [copy.deepcopy(component)],
+        "linux/amd64": [copy.deepcopy(component), synthetic_runtime_component()],
+        "linux/arm64": [copy.deepcopy(component), synthetic_runtime_component("linux/arm64")],
     }
     policy["distribution_approval"] = {
         "approved": False,
@@ -273,9 +361,20 @@ def standalone_policy(
         "python:demo@1": {
             "expression": expression,
             "rationale": "Reviewed test fixture.",
-        }
+        },
+        "runtime:cpython@3.14.6": {
+            "expression": "Python-2.0",
+            "rationale": "Reviewed synthetic CPython fixture.",
+        },
     }
-    policy["license_texts"] = license_texts
+    policy["license_texts"] = [
+        *license_texts,
+        {
+            "id": "Python-2.0",
+            "sha256": "9" * 64,
+            "url": "https://example.com/Python-2.0.txt",
+        },
+    ]
     policy["custom_license_evidence"] = {}
     policy["unexpanded_python_payloads"] = empty_unexpanded_payload_policy()
     policy["filesystem_baselines"] = empty_filesystem_baselines()
@@ -286,6 +385,7 @@ def standalone_policy(
 
 
 def saved_image_layers(path: Path, layers: list[bytes], *, architecture: str = "amd64") -> None:
+    layers = [with_cpython_runtime(layers[0], architecture), *layers[1:]]
     layer_names = [f"blobs/sha256/{evidence.hashlib.sha256(layer).hexdigest()}" for layer in layers]
     config_content = json.dumps(
         {
@@ -553,14 +653,125 @@ def test_strict_json_rejects_lone_unicode_surrogates() -> None:
         evidence.canonical_json({"value": "\ud800"})
 
 
-def test_schema_version_requires_exact_v2_integer_and_media_type() -> None:
-    evidence.require_schema({"schema_version": 2}, "test")
-    for unsupported in (True, 1, 3):
+def test_schema_version_requires_exact_v3_integer_and_media_type() -> None:
+    evidence.require_schema({"schema_version": 3}, "test")
+    for unsupported in (True, 1, 2, 4):
         with pytest.raises(evidence.EvidenceError, match="unsupported test schema"):
             evidence.require_schema({"schema_version": unsupported}, "test")
     assert evidence.EVIDENCE_MEDIA_TYPE == (
-        "application/vnd.stampbot.container-evidence.v2+tar+gzip"
+        "application/vnd.stampbot.container-evidence.v3+tar+gzip"
     )
+
+
+def test_cpython_patchlevel_parser_requires_one_exact_final_version() -> None:
+    assert evidence.parse_cpython_patchlevel_header(cpython_patchlevel_header()) == "3.14.6"
+
+    mutations = (
+        (
+            cpython_patchlevel_header("3.14.5"),
+            "unexpected PY_MICRO_VERSION",
+        ),
+        (
+            cpython_patchlevel_header() + b'#define PY_VERSION              "3.14.6"\n',
+            "must define PY_VERSION exactly once",
+        ),
+        (
+            cpython_patchlevel_header().replace(
+                b"/*--end constants--*/",
+                b"#define PY_UNREVIEWED_VERSION 1\n/*--end constants--*/",
+            ),
+            "unexpected version macro set",
+        ),
+        (
+            cpython_patchlevel_header().replace(b"3.14.6", b"3.14.6\x00"),
+            "invalid control bytes",
+        ),
+    )
+    for content, message in mutations:
+        with pytest.raises(evidence.EvidenceError, match=message):
+            evidence.parse_cpython_patchlevel_header(content)
+
+
+def test_cpython_runtime_component_rejects_mutated_identity_fields() -> None:
+    mutations = {
+        "path": "invalid CPython version_header identity",
+        "uid": "invalid CPython interpreter identity",
+        "mode": "invalid CPython shared_library identity",
+        "layer": "span multiple layers",
+        "architecture": "ELF architecture mismatch",
+    }
+    for mutation, message in mutations.items():
+        component = synthetic_runtime_component()
+        identities = component["identity_files"]
+        if mutation == "path":
+            identities["version_header"]["path"] = "usr/local/include/python3.14/other.h"
+        elif mutation == "uid":
+            identities["interpreter"]["uid"] = 1000
+        elif mutation == "mode":
+            identities["shared_library"]["mode"] = 0o644
+        elif mutation == "layer":
+            identities["shared_library"]["layer"] = 1
+        else:
+            identities["interpreter"]["elf"] = {
+                "bits": 64,
+                "endianness": "little",
+                "machine": "aarch64",
+                "machine_id": 183,
+            }
+        with pytest.raises(evidence.EvidenceError, match=message):
+            evidence.validate_platform_component_invariants(
+                [component], "linux/amd64", "test inventory"
+            )
+
+
+@pytest.mark.parametrize(
+    ("path", "content", "header", "message"),
+    (
+        (
+            evidence.CPYTHON_VERSION_HEADER,
+            cpython_patchlevel_header("3.14.5"),
+            {"mode": 0o644, "uid": 0, "gid": 0},
+            "unexpected PY_MICRO_VERSION",
+        ),
+        (
+            evidence.CPYTHON_INTERPRETER,
+            elf64_payload("arm64"),
+            {"mode": 0o755, "uid": 0, "gid": 0},
+            "ELF architecture does not match linux/amd64",
+        ),
+        (
+            evidence.CPYTHON_SHARED_LIBRARY,
+            elf64_payload(),
+            {"mode": 0o644, "uid": 0, "gid": 0},
+            "shared library has an invalid identity",
+        ),
+        (
+            evidence.CPYTHON_INTERPRETER,
+            elf64_payload(),
+            {"mode": 0o755, "uid": 1000, "gid": 0},
+            "interpreter has an invalid identity",
+        ),
+    ),
+)
+def test_saved_image_rejects_untrusted_cpython_runtime_identity(
+    tmp_path: Path,
+    path: str,
+    content: bytes,
+    header: dict[str, int],
+    message: str,
+) -> None:
+    image = tmp_path / "image.tar"
+    layer = tar_bytes(
+        {
+            "lib/apk/db/installed": apk_database(),
+            path: content,
+        },
+        headers={path: header},
+    )
+    saved_image_layers(image, [layer])
+
+    with pytest.raises(evidence.EvidenceError, match=message):
+        evidence._inventory_saved_image(image, "linux/amd64", "sha256:" + "a" * 64)
 
 
 def test_saved_image_inventory_tracks_whiteouts_and_all_layers(tmp_path: Path) -> None:
@@ -572,9 +783,91 @@ def test_saved_image_inventory_tracks_whiteouts_and_all_layers(tmp_path: Path) -
     assert components[("alpine", "busybox")]["aports_commit"] == "1" * 40
     assert components[("python", "demo")]["effective"] is True
     assert components[("python", "pip")]["effective"] is False
+    runtime = components[("runtime", "cpython")]
+    assert runtime == {
+        "ecosystem": "runtime",
+        "name": "cpython",
+        "version": "3.14.6",
+        "purl": "pkg:generic/python@3.14.6",
+        "observed_license": "",
+        "effective": True,
+        "identity_files": {
+            "version_header": {
+                "effective": True,
+                "layer": 0,
+                "path": evidence.CPYTHON_VERSION_HEADER,
+                "sha256": evidence.sha256_bytes(cpython_patchlevel_header()),
+                "size": len(cpython_patchlevel_header()),
+                "mode": 0o644,
+                "uid": 0,
+                "gid": 0,
+            },
+            "interpreter": {
+                "effective": True,
+                "layer": 0,
+                "path": evidence.CPYTHON_INTERPRETER,
+                "sha256": evidence.sha256_bytes(elf64_payload()),
+                "size": len(elf64_payload()),
+                "mode": 0o755,
+                "uid": 0,
+                "gid": 0,
+                "elf": {
+                    "bits": 64,
+                    "endianness": "little",
+                    "machine": "x86_64",
+                    "machine_id": 62,
+                },
+            },
+            "shared_library": {
+                "effective": True,
+                "layer": 0,
+                "path": evidence.CPYTHON_SHARED_LIBRARY,
+                "sha256": evidence.sha256_bytes(elf64_payload()),
+                "size": len(elf64_payload()),
+                "mode": 0o755,
+                "uid": 0,
+                "gid": 0,
+                "elf": {
+                    "bits": 64,
+                    "endianness": "little",
+                    "machine": "x86_64",
+                    "machine_id": 62,
+                },
+            },
+        },
+    }
     assert inventory["image_revision"] == "a" * 40
-    assert [layer["regular_file_count"] for layer in files["layers"]] == [3, 1]
-    assert len(files["regular_files"]) == 4
+    assert [layer["regular_file_count"] for layer in files["layers"]] == [6, 1]
+    assert len(files["regular_files"]) == 7
+
+
+def test_all_layer_inventory_binds_cpython_component_to_exact_file_occurrences(
+    tmp_path: Path,
+) -> None:
+    image = tmp_path / "image.tar"
+    saved_image(image)
+    inventory, files = evidence._inventory_saved_image(image, "linux/amd64", "sha256:" + "a" * 64)
+    evidence.validate_all_layer_inventory(files, inventory)
+
+    mutated_component = copy.deepcopy(inventory)
+    runtime = next(
+        component
+        for component in mutated_component["components"]
+        if component["ecosystem"] == "runtime"
+    )
+    runtime["identity_files"]["version_header"]["sha256"] = "0" * 64
+    with pytest.raises(evidence.EvidenceError, match="not one exact all-layer"):
+        evidence.validate_all_layer_inventory(files, mutated_component)
+
+    mutated_files = copy.deepcopy(files)
+    interpreter = next(
+        record
+        for record in mutated_files["regular_files"]
+        if record["path"] == evidence.CPYTHON_INTERPRETER
+    )
+    interpreter["sha256"] = "0" * 64
+    with pytest.raises(evidence.EvidenceError, match="not one exact all-layer"):
+        evidence.validate_all_layer_inventory(mutated_files, inventory)
 
 
 def test_all_layer_validators_reject_cross_kind_path_duplicates(tmp_path: Path) -> None:
@@ -1383,6 +1676,77 @@ def test_cpython_source_is_bound_to_official_recipe_version_and_hash() -> None:
     with pytest.raises(evidence.EvidenceError, match="one literal"):
         evidence.verify_cpython_source_binding(
             b"ENV PYTHON_VERSION $VERSION\nENV PYTHON_SHA256 $HASH\n", source
+        )
+    with pytest.raises(evidence.EvidenceError, match="version differs from the runtime"):
+        evidence.verify_cpython_source_binding(
+            f"ENV PYTHON_VERSION 3.14.5\nENV PYTHON_SHA256 {digest}\n".encode(),
+            {
+                **source,
+                "url": "https://www.python.org/ftp/python/3.14.5/Python-3.14.5.tar.xz",
+            },
+        )
+
+
+def test_cpython_source_archive_binds_exact_archive_and_license_bytes() -> None:
+    member = "Python-3.14.6/LICENSE"
+    license_content = b"Python source license\n"
+    archive = tar_bytes(
+        {
+            member: license_content,
+            "Python-3.14.6/Include/Python.h": b"source",
+        }
+    )
+    source = {
+        "size": len(archive),
+        "sha256": evidence.sha256_bytes(archive),
+        "license_member": member,
+        "license_sha256": evidence.sha256_bytes(license_content),
+    }
+
+    assert evidence.verify_cpython_source_archive(archive, source) == license_content
+
+    with pytest.raises(evidence.EvidenceError, match="reviewed identity"):
+        evidence.verify_cpython_source_archive(
+            archive,
+            {**source, "sha256": "0" * 64},
+        )
+    with pytest.raises(evidence.EvidenceError, match="LICENSE does not match"):
+        evidence.verify_cpython_source_archive(
+            archive,
+            {**source, "license_sha256": "0" * 64},
+        )
+    with pytest.raises(evidence.EvidenceError, match="LICENSE does not match"):
+        evidence.verify_cpython_source_archive(
+            archive,
+            {**source, "license_member": "Python-3.14.6/OTHER"},
+        )
+
+
+def test_cpython_source_archive_rejects_ambiguous_or_linked_license() -> None:
+    member = "Python-3.14.6/LICENSE"
+    license_content = b"Python source license\n"
+    duplicate = tar_sequence([(member, license_content), (member, license_content)])
+    source = {
+        "size": len(duplicate),
+        "sha256": evidence.sha256_bytes(duplicate),
+        "license_member": member,
+        "license_sha256": evidence.sha256_bytes(license_content),
+    }
+    with pytest.raises(evidence.EvidenceError, match="not one regular archive member"):
+        evidence.verify_cpython_source_archive(duplicate, source)
+
+    linked = tar_bytes(
+        {"Python-3.14.6/OTHER": license_content},
+        links={member: "OTHER"},
+    )
+    with pytest.raises(evidence.EvidenceError, match="not one regular archive member"):
+        evidence.verify_cpython_source_archive(
+            linked,
+            {
+                **source,
+                "size": len(linked),
+                "sha256": evidence.sha256_bytes(linked),
+            },
         )
 
 
@@ -4566,6 +4930,53 @@ def test_policy_schema_rejects_unknown_fields_at_every_boundary() -> None:
         evidence.validate_policy_schema(unknown_resolution_field)
 
 
+def test_policy_binds_cpython_runtime_to_base_recipe_source_and_license() -> None:
+    policy = cast(dict[str, Any], json.loads(Path(".compliance/container-policy.json").read_text()))
+    evidence.validate_policy_schema(policy)
+
+    for platform, machine in (("linux/amd64", "x86_64"), ("linux/arm64", "aarch64")):
+        runtime = next(
+            component
+            for component in policy["platforms"][platform]
+            if component["ecosystem"] == "runtime"
+        )
+        assert (runtime["name"], runtime["version"], runtime["purl"]) == (
+            "cpython",
+            "3.14.6",
+            "pkg:generic/python@3.14.6",
+        )
+        assert {
+            record["elf"]["machine"]
+            for role, record in runtime["identity_files"].items()
+            if role != "version_header"
+        } == {machine}
+    assert policy["license_resolutions"]["runtime:cpython@3.14.6"]["expression"] == ("Python-2.0")
+    assert any(record["id"] == "Python-2.0" for record in policy["license_texts"])
+
+    outside_base = copy.deepcopy(policy)
+    runtime = next(
+        component
+        for component in outside_base["platforms"]["linux/amd64"]
+        if component["ecosystem"] == "runtime"
+    )
+    for record in runtime["identity_files"].values():
+        record["layer"] = len(outside_base["base_image_platforms"]["linux/amd64"]["layer_diff_ids"])
+    with pytest.raises(evidence.EvidenceError, match="outside the reviewed base"):
+        evidence.validate_policy_schema(outside_base)
+
+    mismatched_recipe = copy.deepcopy(policy)
+    mismatched_recipe["docker_python_recipe"]["license_url"] = (
+        f"https://raw.githubusercontent.com/docker-library/python/{'0' * 40}/LICENSE"
+    )
+    with pytest.raises(evidence.EvidenceError, match="one commit-pinned repository path"):
+        evidence.validate_policy_schema(mismatched_recipe)
+
+    mismatched_source = copy.deepcopy(policy)
+    mismatched_source["cpython_source"]["license_member"] = "Python-3.14.5/LICENSE"
+    with pytest.raises(evidence.EvidenceError, match="license member"):
+        evidence.validate_policy_schema(mismatched_source)
+
+
 def test_policy_schema_rejects_malformed_nested_strings_and_recipe_links() -> None:
     policy = cast(dict[str, Any], json.loads(Path(".compliance/container-policy.json").read_text()))
 
@@ -5148,6 +5559,11 @@ def test_filesystem_policy_view_emits_validated_semantic_projection(tmp_path: Pa
     files_path.write_bytes(evidence.canonical_json(files))
     policy = cast(dict[str, Any], json.loads(Path(".compliance/container-policy.json").read_text()))
     policy["base_image_platforms"]["linux/amd64"]["layer_diff_ids"] = [files["layers"][0]["digest"]]
+    policy["platforms"]["linux/amd64"] = [
+        component
+        for component in policy["platforms"]["linux/amd64"]
+        if component["ecosystem"] != "runtime"
+    ] + [synthetic_runtime_component()]
     policy_path = tmp_path / "policy.json"
     policy_path.write_bytes(evidence.canonical_json(policy))
     output = tmp_path / "filesystem-policy-view.json"
