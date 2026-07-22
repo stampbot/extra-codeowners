@@ -2408,7 +2408,6 @@ def _inventory_saved_image(
         if payload_details.get((record["layer"], record["path"], record["sha256"]), {}).get("kind")
         == "elf"
     ]
-    validate_cross_sbom_component_consistency(embedded_sboms, "collected embedded SBOMs")
     wheel_identity_files = sorted(
         (
             observed_payload(record)
@@ -3104,42 +3103,6 @@ def validate_retained_elf_identity(value: object, platform: str, source: str) ->
         raise EvidenceError(f"{source} has an ELF architecture mismatch")
 
 
-def validate_cross_sbom_component_consistency(
-    records: Sequence[Mapping[str, Any]], source: str
-) -> None:
-    """Reject identity/PURL conflicts spread across distinct embedded SBOM documents."""
-
-    identities: dict[tuple[str, str, str], str] = {}
-    purls: dict[str, tuple[str, str, str]] = {}
-    for record in records:
-        cyclonedx = record.get("cyclonedx")
-        if not isinstance(cyclonedx, dict):
-            raise EvidenceError(f"{source} has an invalid CycloneDX record")
-        metadata_component = cyclonedx.get("metadata_component")
-        components = cyclonedx.get("components")
-        if not isinstance(components, list):
-            raise EvidenceError(f"{source} has an invalid CycloneDX component projection")
-        projected = [
-            *([metadata_component] if isinstance(metadata_component, dict) else []),
-            *components,
-        ]
-        for component in projected:
-            if not isinstance(component, dict):
-                raise EvidenceError(f"{source} has an invalid CycloneDX component projection")
-            identity = (
-                str(component.get("type")),
-                str(component.get("name")),
-                str(component.get("version")),
-            )
-            purl = str(component.get("purl"))
-            previous_purl = identities.setdefault(identity, purl)
-            if previous_purl != purl:
-                raise EvidenceError(f"{source} has cross-SBOM component identity/PURL conflicts")
-            previous_identity = purls.setdefault(purl, identity)
-            if previous_identity != identity:
-                raise EvidenceError(f"{source} has cross-SBOM PURL/component identity conflicts")
-
-
 def validate_structured_python_payloads(
     value: object,
     source: str,
@@ -3148,7 +3111,14 @@ def validate_structured_python_payloads(
     platform: str,
     component_owners: set[str],
 ) -> list[dict[str, Any]]:
-    """Validate occurrence-bound SBOM or ELF evidence from installed wheels."""
+    """Validate occurrence-bound SBOM or ELF evidence from installed wheels.
+
+    CycloneDX identities are scoped to their source document. Wheel builders can
+    report the same display identity under different PURL namespaces, so the
+    occurrence's exact-byte digest, path, and RECORD owner remain the binding
+    across documents. ``validate_retained_cyclonedx_identity`` still rejects
+    contradictory identities inside each individual document.
+    """
 
     if not isinstance(value, list) or len(value) > MAX_IMAGE_MEMBERS:
         raise EvidenceError(f"invalid {source} payload list")
@@ -3466,7 +3436,6 @@ def validate_component_inventory(inventory: Mapping[str, Any]) -> list[dict[str,
         platform=str(platform),
         component_owners=python_component_owners,
     )
-    validate_cross_sbom_component_consistency(embedded_sboms, "component inventory embedded_sboms")
     if any(DIST_INFO_SBOM.search(record["path"]) is None for record in embedded_sboms):
         raise EvidenceError("component inventory has an SBOM outside wheel SBOM directories")
     native_payloads = validate_structured_python_payloads(
@@ -4794,7 +4763,6 @@ def validate_all_layer_inventory(files: Mapping[str, Any], inventory: Mapping[st
         platform=str(platform),
         component_owners=python_component_owners,
     )
-    validate_cross_sbom_component_consistency(embedded_sboms, "component inventory embedded_sboms")
     observed_embedded_sboms = [payload_record_projection(record) for record in embedded_sboms]
     if observed_embedded_sboms != expected_embedded_sboms:
         raise EvidenceError("component inventory omits or alters embedded wheel SBOMs")

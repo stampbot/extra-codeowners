@@ -2883,15 +2883,97 @@ def test_cyclonedx_projection_deduplicates_exact_components_and_rejects_conflict
             cyclonedx_sbom(components=[component, conflicting_identity]), "conflict.cdx.json"
         )
 
-    exact_documents = [{"cyclonedx": parsed}, {"cyclonedx": copy.deepcopy(parsed)}]
-    evidence.validate_cross_sbom_component_consistency(exact_documents, "test SBOMs")
-    second_document = evidence.parse_cyclonedx_sbom(
-        cyclonedx_sbom(components=[conflicting_purl]), "second.cdx.json"
+
+def test_inventory_retains_document_scoped_cyclonedx_purl_observations(
+    tmp_path: Path,
+) -> None:
+    site = "opt/venv/lib/python3.14/site-packages"
+    sboms = {
+        "cryptography": cyclonedx_sbom(
+            components=[
+                {
+                    "type": "library",
+                    "name": "libgcc",
+                    "version": "14.2.0-r6",
+                    "purl": "pkg:apk/NotpineForGHA/libgcc@14.2.0-r6",
+                    "bom-ref": "notpine-libgcc",
+                }
+            ]
+        ),
+        "greenlet": cyclonedx_sbom(
+            components=[
+                {
+                    "type": "library",
+                    "name": "libgcc",
+                    "version": "14.2.0-r6",
+                    "purl": "pkg:apk/alpine/libgcc@14.2.0-r6",
+                    "bom-ref": "alpine-libgcc",
+                }
+            ]
+        ),
+    }
+    installed: dict[str, bytes] = {}
+    for owner, sbom in sboms.items():
+        dist_info = f"{owner}-1.0.dist-info"
+        wheel = {
+            f"{dist_info}/METADATA": metadata(owner, "1.0"),
+            f"{dist_info}/WHEEL": (
+                b"Wheel-Version: 1.0\nRoot-Is-Purelib: false\nTag: py3-none-any\n"
+            ),
+            f"{dist_info}/sboms/auditwheel.cdx.json": sbom,
+        }
+        record_path = f"{dist_info}/RECORD"
+        wheel[record_path] = wheel_record(wheel, record_path)
+        installed.update(wheel)
+
+    image = tmp_path / "document-scoped-sboms.tar"
+    saved_image_layers(
+        image,
+        [
+            tar_bytes(
+                {
+                    "lib/apk/db/installed": apk_database(),
+                    "opt/venv/pyvenv.cfg": PYVENV_CONFIG,
+                    **{f"{site}/{path}": content for path, content in installed.items()},
+                },
+                links=VENV_LINKS,
+            )
+        ],
     )
-    with pytest.raises(evidence.EvidenceError, match="cross-SBOM component identity/PURL"):
-        evidence.validate_cross_sbom_component_consistency(
-            [{"cyclonedx": parsed}, {"cyclonedx": second_document}], "test SBOMs"
+
+    inventory, files = evidence._inventory_saved_image(image, "linux/amd64", "sha256:" + "a" * 64)
+    observations = {
+        record["owner"]: (
+            record["cyclonedx"]["components"][0]["purl"],
+            record["sha256"],
+            record["size"],
         )
+        for record in inventory["embedded_sboms"]
+    }
+    assert observations == {
+        "python:cryptography@1.0": (
+            "pkg:apk/NotpineForGHA/libgcc@14.2.0-r6",
+            evidence.sha256_bytes(sboms["cryptography"]),
+            len(sboms["cryptography"]),
+        ),
+        "python:greenlet@1.0": (
+            "pkg:apk/alpine/libgcc@14.2.0-r6",
+            evidence.sha256_bytes(sboms["greenlet"]),
+            len(sboms["greenlet"]),
+        ),
+    }
+    evidence.validate_component_inventory(inventory)
+    evidence.validate_all_layer_inventory(files, inventory)
+
+    payload_policy = {"unexpanded_python_payloads": empty_unexpanded_payload_policy()}
+    payload_policy["unexpanded_python_payloads"]["linux/amd64"] = {
+        "embedded_sboms": [
+            evidence.payload_record_projection(record) for record in inventory["embedded_sboms"]
+        ],
+        "native_payloads": [],
+        "wheel_identity_files": copy.deepcopy(inventory["wheel_identity_files"]),
+    }
+    evidence.verify_unexpanded_payload_policy(inventory, payload_policy)
 
 
 @pytest.mark.parametrize(
