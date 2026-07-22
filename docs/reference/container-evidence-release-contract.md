@@ -1,38 +1,44 @@
 # Container evidence release contract
 
-This reference defines the evidence that a future supported Extra CODEOWNERS
-container release must publish. It is a minimum contract, not a complete wire
-format or procedure: there is no supported container release today, and no
-current release assets satisfy it. Issue #28 must specify and implement the
-exact canonical JSON encoding, gzip and tar envelope and member order,
-`MANIFEST.json` and source-record schemas, Sigstore issuer and transparency-log
-requirements, and SBOM and provenance predicate contracts before publication.
+This reference defines the minimum evidence contract for a future supported
+Extra CODEOWNERS container release. It is an acceptance boundary, not a current
+asset list or a runnable verification procedure.
 
-The current collector has completed the CPython identity and source tranche of
-[#18](https://github.com/stampbot/extra-codeowners/issues/18). It also retains
-the exact locked platform wheel for every native-payload or embedded-SBOM owner
-and keeps a separately addressed copy of each raw SBOM. Before an inventory may
-report complete, the remaining work in that issue must expand the components
-inside those wheels and SBOMs into complete notice and corresponding-source
-records.
+!!! danger "No current release satisfies this contract"
+    Extra CODEOWNERS does not publish a supported container release today. Do
+    not substitute pull-request artifacts, manual-run artifacts, or the old
+    unsupported `main` image.
 
-The current collector already replays wheel `RECORD` ownership for ineffective
-historical Python installs whose bytes remain in distributed lower layers. A
-future release inventory must retain that `wheel_installations` evidence
-and its effective-only `python_record_ownership` projection; source closure must
-not remove or weaken the attribution gate.
+Issue [#28](https://github.com/stampbot/extra-codeowners/issues/28) must still
+freeze the complete wire format: canonical JSON, the gzip and tar envelope and
+member order, `MANIFEST.json` and source-record schemas, Sigstore issuer and
+transparency-log requirements, and the SBOM and provenance predicate
+contracts.
 
-Issue [#28](https://github.com/stampbot/extra-codeowners/issues/28) must then
-provide privilege-separated collection and publication. That issue will also
-add a shipped, adversarially tested verifier and a runnable recipient how-to.
-CI, manual runs, and the tagged candidate scan use one reusable build-proof
-workflow. Each caller builds the proof in its own run. Issue
-[#32](https://github.com/stampbot/extra-codeowners/issues/32) must still retain
-that proof in release evidence and hand it to the future isolated publication
-jobs. Those jobs must bind the exact selected application wheel to the
-installed runtime. Until all three issues are closed and a supported release
-is announced, missing assets are expected. Do not substitute manual or
-pull-request CI artifacts, or the unsupported historical `main` image.
+Three open security gates separate today's CI evidence from this release
+contract:
+
+| Issue | Work still required |
+| --- | --- |
+| [#18](https://github.com/stampbot/extra-codeowners/issues/18) | Expand native-wheel payloads and components described by embedded SBOMs into complete notice and corresponding-source records. |
+| [#28](https://github.com/stampbot/extra-codeowners/issues/28) | Separate unprivileged collection from publication authority, freeze the wire format, and ship an adversarially tested recipient verifier and how-to. |
+| [#32](https://github.com/stampbot/extra-codeowners/issues/32) | Retain the reproducible Python proof in release evidence and pass it to the isolated publication jobs, which must bind the exact selected wheel to the installed runtime. |
+
+The collector has completed the CPython identity and source portion of #18. It
+also retains the exact locked platform wheel for every native-payload or
+embedded-SBOM owner and a separately addressed copy of each raw SBOM. Those
+records make the remaining gap inspectable; they do not close it.
+
+The collector also replays wheel `RECORD` ownership for historical Python
+installations whose bytes remain in lower layers. A release inventory must keep
+that `wheel_installations` evidence and its effective-only
+`python_record_ownership` projection. Completing source closure must not weaken
+file attribution.
+
+CI, manual runs, and the tagged candidate scan share one reusable build-proof
+workflow, and each caller builds its proof within its own run. Missing release
+assets remain expected until all three issues close and the project announces a
+supported release.
 
 ## Trust statements
 

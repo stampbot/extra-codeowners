@@ -1,114 +1,150 @@
 # Security policy
 
-Extra CODEOWNERS takes part in pull-request authorization. Treat any flaw that could approve the wrong change or expose GitHub credentials as a security issue.
+Extra CODEOWNERS participates in pull-request authorization. A false success,
+credential leak, or check attached to the wrong repository or commit is a
+security issue.
+
+## Report a vulnerability privately
+
+Do not open a public issue for a suspected vulnerability. Use GitHub's
+[private vulnerability reporting form][report]. Include:
+
+- the release, container digest, or exact commit SHA
+- the deployment mode and relevant configuration, with secrets removed
+- the smallest reproduction or proof of concept you can safely provide
+- the impact you observed
+- any temporary mitigation you have tested.
+
+Never include credentials, complete webhook payloads from a private repository,
+private repository contents, or unsanitized organization identifiers.
+
+If the private form is unavailable, contact maintainer
+[Danny Sauer](https://github.com/dannysauer) through a direct method listed on
+his GitHub profile. Keep the first message brief and free of sensitive
+attachments so the maintainer can arrange a safer exchange.
+
+Maintainers will acknowledge and investigate reports when they are available,
+then coordinate disclosure with the reporter. This volunteer project does not
+promise a response or remediation time.
 
 ## Supported versions
 
-There is no tagged release today. After the first release and until the project publishes a stable compatibility policy, only the latest minor version will receive security fixes. Builds from `main` are not supported deployments.
+There is no supported release yet. Builds from `main`, pull-request artifacts,
+and the older public GHCR preview are development evidence, not supported
+deployments. The [project status](docs/reference/project-status.md) tracks the
+release blockers.
 
-## Container vulnerability policy
+After the first release, and until a stable support policy is published, only
+the latest minor line will receive security fixes.
 
-CI builds and scans separate `linux/amd64` and `linux/arm64` candidates. The release image job cannot run until both scans finish.
-
-CI saves a raw JSON inventory without applying VEX, including findings with no upstream fix. Narrowly reviewed OpenVEX dispositions are then applied to the blocking scan, and any remaining High or Critical finding blocks the candidate when the scanner knows of a fix. This keeps unresolved risk visible without pretending that an unavailable or inapplicable patch can be applied.
-
-The `main` container publication job has been removed, and tagged publication
-is currently disabled. The collector now normalizes CPython into the top-level
-component inventory. It binds the runtime record to exact identity files and
-retains the pinned build recipe, source archive, and source-carried `LICENSE`
-bytes. Source-completeness issue #18 remains open because native wheel payloads
-and embedded SBOMs are not expanded into complete component, notice, and
-corresponding-source records. The collector separately replays historical wheel
-`RECORD` ownership across every distributed layer.
-
-Pull-request CI now builds a hash-pinned PEP 517 proof on both native
-architectures and installs the exact selected application wheel. The same
-workflow can run manually with only repository-read authority. The tagged
-release workflow builds a fresh proof in its own run. Its candidate scan
-downloads that proof by immutable artifact ID and verifies the source, wheel,
-and selection-record digests before building either candidate.
-Build-proof issue [`#32`](https://github.com/stampbot/extra-codeowners/issues/32)
-remains open because release evidence and future publication jobs do not yet
-consume that selected proof.
-
-The release workflow can run source checks, the distribution proof, and
-candidate scans with repository-read authority after the readiness milestone
-passes. A separate job then fails unconditionally. Every job with image, chart,
-Python package, signing, attestation, or GitHub release authority depends
-directly on that blocker and cannot run. Security issue
-[`#28`](https://github.com/stampbot/extra-codeowners/issues/28) tracks the
-required privilege-separated container-evidence pipeline. Changing the
-component policy's approval value does not remove this structural block.
-
-The repository's `v*` tag ruleset restricts tag changes to an explicit
-maintainer bypass identity. The tag workflow also queries the configured release
-milestone number with read-only issue permission, verifies its expected title,
-and stops when any issue remains open. It records the milestone counts and
-release context in the workflow summary.
-This workflow gate cannot prevent an authorized user from pushing a Git tag; it
-prevents that unready tag from publishing release artifacts through the
-workflow.
-
-A future supported release must publish a signed SPDX SBOM for each supported
-architecture. Each SBOM attestation must name its platform digest, while the
-multi-platform index receives separate provenance and a signature. Evidence
-from one architecture must never be presented for the other.
-
-That release must also publish a deterministic notice and source-evidence
-archive for each platform digest. The required archive contains effective and
-all-layer inventories, commit-pinned Alpine recipes, checksum-verified
-distfiles, locked Python source, license texts, and a human-readable notice. It
-must close the remaining #18 gap by expanding every embedded wheel SBOM and
-native payload into exact component, notice, and corresponding-source coverage,
-or use wheels rebuilt against separately inventoried system packages.
-It must retain the hash-pinned, cross-architecture application proof required
-by issue #32 and bind every published application artifact to that exact wheel.
-Publication requires reviewed component policy and explicit maintainer
-distribution approval after the collector is split into rootless, network-free
-parsing and separately privileged fetch and publication phases. The current CI
-archives are unsigned review inputs and are not substitutes. This evidence is
-not a legal-compliance determination. See the
-[container distribution evidence design](docs/explanation/container-distribution-evidence.md).
-
-A Vulnerability Exploitability eXchange (VEX) exception must name one vulnerability and the exact package version. It must also explain why the vulnerable code cannot run in this application. VEX dispositions are honored by the blocking scan even when another, unsupported release line contains a fix, so review them like any other security-sensitive change.
-
-Source statements live in [`.openvex.json`](.openvex.json). No release VEX asset
-exists today. A future release must bind each release VEX document to the image
-digest, attach it as an OCI attestation, sign it, and include it with the
-release artifacts. If a usable fix exists, upgrade instead of adding a VEX
-statement.
-
-## Report a vulnerability
-
-Do not open a public issue for a suspected vulnerability. Use GitHub's [private vulnerability reporting form][report]. Include:
-
-- the affected version or container digest
-- the deployment mode and relevant configuration, with secrets removed
-- reproduction steps or a proof of concept
-- the security impact you observed
-- any suggested mitigation
-
-If the private form is unavailable, use a non-public contact method from a maintainer's GitHub profile. Do not put credentials or private repository content in the first message.
-
-Maintainers will acknowledge the report when they are available. They will investigate and coordinate disclosure with the reporter. This volunteer project does not promise response or remediation times.
-
-## Security-sensitive areas
+## What to report
 
 Send a private report when a flaw involves:
 
-- approval identity confusion between a GitHub App and its bot account
-- policy or `CODEOWNERS` evaluation that fails open
+- confusion between an enrolled GitHub App and its bot account
+- policy or `CODEOWNERS` evaluation that can fail open
 - webhook signature verification, replay, or delivery deduplication
-- installation-token, private-key, or webhook-secret disclosure
-- check results applied to the wrong repository, pull request, or commit SHA
-- path matching, rename, or owner-set behavior that bypasses required review
-- container, Helm chart, or release provenance
-- denial of service that prevents required checks from converging
+- installation tokens, private keys, webhook secrets, or setup credentials
+- a check written to the wrong repository, pull request, or commit
+- path matching, renames, owner sets, labels, or stale reviews that bypass
+  required approval
+- repository transfer, App suspension, or missed-event behavior that can leave
+  a false success
+- container, Helm, release, source, SBOM, signature, or provenance integrity
+- resource exhaustion that prevents required checks from converging.
+
+The [threat model](docs/explanation/threat-model.md) describes the expected
+controls and known residual risks. A behavior already listed there may still be
+worth reporting if you found a new way to exploit it or a control does not work
+as documented.
 
 ## Operator responsibilities
 
-Operators must keep GitHub App permissions narrow. They must protect the App private key and webhook secret. Restrict administrative access and update the application and chart. Monitor failed webhook deliveries.
+Operators own the deployment boundary. In particular:
 
-The [deployment guide](docs/how-to/deploy.md) and [operations guide](docs/how-to/operate.md) cover permissions, credential rotation, and recovery.
+- grant only the documented GitHub App permissions
+- keep private keys and webhook secrets in a managed secret store
+- restrict administrative, database, and metrics access
+- monitor failed deliveries, queue convergence, and readiness
+- restore native human code-owner enforcement before suspending the App or
+  removing repository access
+- apply updates and rehearse credential rotation and database recovery.
+
+The [deployment guide](docs/how-to/deploy.md) and
+[operations guide](docs/how-to/operate.md) cover those procedures. The absence
+of a supported release means operators evaluating the source also own the build
+and distribution risk.
+
+## Container and release policy
+
+The repository treats container evidence as a security boundary, not as a
+release approval.
+
+CI builds separate `linux/amd64` and `linux/arm64` candidates. It retains a raw
+vulnerability inventory before applying narrowly reviewed OpenVEX statements.
+Any remaining High or Critical finding blocks the candidate when the scanner
+knows of a fix. Findings without an available or applicable fix remain visible
+in the raw inventory.
+
+Current evidence normalizes CPython as a top-level runtime component. It binds
+that record to the interpreter's exact identity files and retains the pinned
+build recipe, source archive, and source-carried license. It also replays
+historical wheel `RECORD` ownership across distributed layers. This is not yet
+complete corresponding-source evidence: native wheel payloads and embedded
+SBOMs still need exact component, notice, and source coverage under
+[#18](https://github.com/stampbot/extra-codeowners/issues/18).
+
+The application package follows a separate build proof:
+
+1. Native `amd64` and `arm64` jobs each create two clean, hash-pinned PEP 517
+   distributions.
+2. CI selects byte-identical results and retains the source, wheel, and
+   selection-record digests.
+3. Container jobs download that proof by immutable artifact ID, verify it, and
+   install the selected wheel without consulting the ambient source tree.
+
+CI, manual proof runs, and the tagged read-only scan use this same reusable
+workflow. [#32](https://github.com/stampbot/extra-codeowners/issues/32) remains
+open because retained release evidence and future publication do not yet
+consume the selected proof.
+
+Tagged publication is structurally disabled. The release workflow may run
+read-only source checks, Python proof, milestone validation, and candidate
+scans. A separate job then fails unconditionally, and every job with image,
+chart, Python-package, signing, attestation, or GitHub-release authority depends
+directly on that blocker. Changing a policy approval field cannot bypass it.
+
+[#28](https://github.com/stampbot/extra-codeowners/issues/28) tracks the
+privilege-separated evidence and publication design. The `v*` tag ruleset also
+restricts tag changes to an explicit maintainer bypass identity, while the
+workflow verifies the configured milestone title and refuses publication when
+issues remain open. Those controls govern the workflow; they cannot prevent an
+authorized maintainer from creating a Git tag.
+
+A future supported release must include, for each platform digest:
+
+- a signed SPDX SBOM and platform-specific SBOM attestation
+- separate provenance and a signature for the multi-platform index
+- deterministic notices and corresponding-source evidence
+- the exact retained application build proof
+- reviewed component policy and explicit distribution approval.
+
+Evidence from one architecture must never be presented for another. Current CI
+archives are unsigned review inputs and are not substitutes for released
+evidence or legal review. The
+[container distribution evidence design](docs/explanation/container-distribution-evidence.md)
+documents the detailed contract.
+
+## OpenVEX exceptions
+
+Each VEX statement must identify one vulnerability and the exact package
+version, then explain why the affected code cannot run in Extra CODEOWNERS.
+Review that claim as security-sensitive code. If a usable fix exists, upgrade
+instead of adding an exception.
+
+Source statements live in [`.openvex.json`](.openvex.json). No release VEX
+asset exists today. A future release must bind VEX to the exact image digest,
+attach it as an OCI attestation, sign it, and publish it with the release
+artifacts.
 
 [report]: https://github.com/stampbot/extra-codeowners/security/advisories/new

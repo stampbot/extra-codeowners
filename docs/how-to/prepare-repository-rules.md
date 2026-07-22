@@ -1,73 +1,113 @@
 # Prepare repository rules
 
-Replace only GitHub's native code-owner approval rule with the Extra CODEOWNERS check. Keep every other pull-request rule intact.
+Extra CODEOWNERS replaces one part of GitHub's pull-request policy: native
+code-owner review. It does not replace the repository's minimum approval count,
+stale-review rules, signed commits, merge restrictions, or other checks.
 
-## Prerequisites
+!!! warning
+    Use this procedure only in a disposable repository for now. A GitHub Check
+    Run belongs to a commit, not one pull request, so another pull request can
+    briefly inherit an earlier success for the same head. This remains a
+    [production blocker](../reference/project-status.md#production-enforcement-blocker).
 
-- Install Extra CODEOWNERS for the repository.
-- Configure organization and repository policy, then pass the negative tests in the [configuration guide](configure.md#5-verify-with-a-test-pull-request).
-- Obtain permission to administer the repository's ruleset or branch protection.
-- Have the App publish `Extra CODEOWNERS / approval` at least once, so GitHub can offer it as an expected check source.
+## Before you begin
 
-## 1. Capture the current rules
+- Install Extra CODEOWNERS on the test repository.
+- Configure both policy scopes and pass every negative test in the
+  [configuration guide](configure.md#5-test-the-boundary).
+- Obtain permission to administer the applicable ruleset or branch protection.
+- Let the App publish `Extra CODEOWNERS / approval` at least once so GitHub can
+  offer the App as the check's expected source.
 
-Before changing a rule, export or record the current ruleset. Identify the rule for the target branch and record:
+The current App does not evaluate `merge_group` events. If the repository uses
+a merge queue, preserve its existing code-owner rule and stop here.
 
-- the required approving review count
+## 1. Record the current protection
+
+Export the ruleset or otherwise capture the complete rule for the target
+branch. At minimum, record:
+
+- required approval count
 - stale-review dismissal
 - approval of the most recent push
 - native code-owner review
-- required status checks and their expected sources
-- bypass actors.
+- every required check and its expected source
+- bypass actors
+- merge-queue, signed-commit, and branch-update requirements.
 
-Keep this record for rollback.
+Keep the record with the test plan. It is your rollback baseline.
 
-## 2. Change only the code-owner rule
+## 2. Replace only native code-owner review
 
-!!! warning
-    Don't replace native code-owner enforcement on a production repository yet. GitHub can initially show a previous pull request's success when another pull request uses the same head commit. Extra CODEOWNERS invalidates that commit-scoped success after the new event arrives, but the delay remains a production blocker.
-
-If the repository requires a merge queue, stop and preserve its current rules. The initial App neither subscribes to nor evaluates `merge_group`, so it can't replace native code-owner enforcement for a high-assurance merge queue.
-
-In the applicable GitHub ruleset or branch protection:
+In the applicable ruleset or branch-protection rule:
 
 1. Keep **Require a pull request before merging** enabled.
-2. Keep the desired **Required approvals** count, commonly `1` or greater.
-3. Keep stale-review dismissal and most-recent-push approval if your policy uses them.
+2. Keep the desired **Required approvals** count, including `1` or more.
+3. Keep stale-review dismissal and latest-push approval rules.
 4. Disable **Require review from Code Owners**.
-5. Add `Extra CODEOWNERS / approval` as a required check and select the Extra CODEOWNERS App as its expected source. For organization-level rulesets, the App installation needs Statuses write before GitHub offers it in this selector. Extra CODEOWNERS removes that capability from runtime tokens.
-6. Preserve unrelated checks, signed-commit rules, merge-queue policy, and bypass restrictions.
+5. Require `Extra CODEOWNERS / approval`, selecting the Extra CODEOWNERS App as
+   its expected source.
+6. Preserve every unrelated check, bypass restriction, and merge rule.
 
-GitHub App reviews have counted toward the ordinary numeric approval requirement in observed integrations, even though they don't satisfy GitHub's native code-owner rule. GitHub's public documentation isn't explicit about third-party App approvals. Verify this behavior in a non-production repository and keep a live contract test.
+An approving GitHub App review has counted toward the ordinary numeric approval
+rule in tested integrations. GitHub's public documentation does not make that
+third-party behavior an explicit contract, so verify it in this disposable
+repository. Extra CODEOWNERS does not require the numeric count to be removed.
 
-## 3. Verify the conjunction
+Organization-level rulesets require Statuses write on the App registration
+before GitHub offers the App in the expected-source selector. Runtime
+installation tokens omit that permission and cannot write commit statuses.
 
-Exercise every case before applying the rules more broadly:
+The resulting merge policy is:
 
-| Pull request | Expected result |
+```text
+ordinary approval count is satisfied
+AND Extra CODEOWNERS / approval succeeds from the expected App
+AND every other required rule succeeds
+```
+
+## 3. Exercise the complete rule
+
+Run each case before expanding the experiment:
+
+| Pull request | Expected Extra CODEOWNERS result |
 | --- | --- |
-| Delegated path, current-head application approval, all label restrictions met | Extra CODEOWNERS succeeds; ordinary review and other checks still apply. |
-| Delegated path, no approving review | Extra CODEOWNERS blocks. |
-| Delegated path, application approval on an older head | Extra CODEOWNERS blocks. |
-| Undelegated owned path, application approval only | Extra CODEOWNERS blocks pending an appropriate human. |
-| Mixed delegated and undelegated owned paths | Every owner set must be satisfied; uncovered paths remain blocked. |
-| A second open pull request already uses the same head commit | Extra CODEOWNERS fails rather than publishing a pull-request-specific decision on a shared commit. |
-| Owned non-delegable path, such as an ownership file, Extra CODEOWNERS or approving-App policy, workflow, local action, or organization guardrail | Application substitution is rejected pending the appropriate human. |
-| GitHub returns 3,000 changed files | Extra CODEOWNERS publishes a diagnostic failure because it cannot prove the list is complete. |
-| GitHub or database evidence is temporarily unavailable | The check stays blocking and the job retries. |
+| Delegated path, current-head App approval, label restrictions met | Success; ordinary approval count and other checks still apply. |
+| Delegated path with no approval | Blocking. |
+| Delegated path with an App approval on an older head | Blocking. |
+| Undelegated owned path with only an App approval | Blocking until an eligible human approves. |
+| Mixed delegated and undelegated owned paths | Blocking until every effective owner set is satisfied. |
+| A second open pull request already uses the same head | Blocking rather than publishing a pull-request-specific decision on a shared commit. |
+| Owned non-delegable path, including ownership policy, approving-App controls, workflows, local actions, or organization guardrails | Blocking until an eligible human approves. |
+| GitHub reports the 3,000-file API maximum | Diagnostic failure because the service cannot prove that the file list is complete. |
+| GitHub or database evidence is unavailable | Blocking while durable work retries. |
 
-Confirm that the required check names the expected App as its source. A workflow or another App can publish the same check name, but it must not satisfy the rule.
+Confirm that the required rule names the Extra CODEOWNERS App as its expected
+source. A workflow or another App can publish the same check name; a name-only
+rule would accept the wrong publisher.
 
-After a successful test, open or retarget another disposable pull request to the same head commit. Observe the result before and after webhook handling. GitHub can initially display the prior commit-scoped success; the service invalidates it when the new event arrives.
+After an ordinary success, open or retarget another disposable pull request to
+the same head. Observe the inherited result before and after webhook handling.
+That inherited result is why the current check cannot protect production
+merges.
 
-Use the [live GitHub contract fixture](run-live-github-contract.md) to make the
-Check Run transition, expected-source, shared-head, retargeting, optional App
-review, and delivery-shape observations repeatable. The fixture isolates
-GitHub's repository-rule contract; it does not replace a delayed-delivery and
-missed-delivery test against the deployed service.
+The [live GitHub contract fixture](run-live-github-contract.md) makes the Check
+Run transition, source selection, shared-head, retargeting, App-review, and
+webhook-payload field checks repeatable. It does not simulate delayed or missed
+delivery to the deployed service, so keep those failure tests in the operator
+plan too.
 
-## Roll back safely
+## Roll back without leaving a gap
 
-If evaluation is unavailable, incorrect, or being retired, restore GitHub's native **Require review from Code Owners** rule first. Wait until that protection applies, then remove the Extra CODEOWNERS check requirement. Only after both steps should you set repository policy to `enabled = false` or remove it.
+Use this order if evaluation is unavailable, wrong, or being retired:
 
-Don't remove the required check before restoring equivalent human enforcement.
+1. Restore GitHub's native **Require review from Code Owners** rule.
+2. Wait until GitHub shows that protection as active.
+3. Remove the `Extra CODEOWNERS / approval` requirement.
+4. Disable or remove repository policy.
+5. Only then remove the repository from the App installation or suspend the
+   App.
+
+Restoring human enforcement first prevents a period in which neither system
+protects code-owner obligations. It also gives Extra CODEOWNERS a chance to
+revoke its own managed result while it still has repository access.
