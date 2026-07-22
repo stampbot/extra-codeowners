@@ -52,8 +52,11 @@ build one.
 CI also records CPython as a top-level runtime component. The evidence binds
 the interpreter to exact platform identity files and retains the pinned build
 recipe, source archive, source-carried license, and historical ineffective
-Python `RECORD` ownership. Native wheel and embedded-SBOM expansion is
-still incomplete, so an SBOM and provenance alone do not satisfy the release
+Python `RECORD` ownership. Greenlet also has closed-world wheel, source,
+component, and notice coverage on both platforms. MarkupSafe and SQLAlchemy
+bind their exact wheels and sdists to complete native-payload sets, with
+explicit empty SBOM and component sets. Four other native-wheel owners remain
+incomplete, so an SBOM and provenance alone do not satisfy the release
 contract.
 
 A future deployment procedure must name all of these values before the steps

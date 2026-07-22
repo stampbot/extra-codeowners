@@ -6367,6 +6367,11 @@
       "url": "https://raw.githubusercontent.com/spdx/license-list-data/421fbabbe80c94c58c12316af1bc6a2dca2362bc/text/BSD-3-Clause.txt"
     },
     {
+      "id": "GCC-exception-3.1",
+      "sha256": "7103d4f7f7e2f8ce10d282a05e0689637f8d6d9ef7b399d808d1da313e69b960",
+      "url": "https://raw.githubusercontent.com/spdx/license-list-data/421fbabbe80c94c58c12316af1bc6a2dca2362bc/text/GCC-exception-3.1.txt"
+    },
+    {
       "id": "GPL-2.0-only",
       "sha256": "aaf135472f81c5b4a0dca9367e5bb5e9750032b5bebe5442b36e4c0a47430df3",
       "url": "https://raw.githubusercontent.com/spdx/license-list-data/421fbabbe80c94c58c12316af1bc6a2dca2362bc/text/GPL-2.0-only.txt"
@@ -6442,6 +6447,339 @@
       "url": "https://raw.githubusercontent.com/spdx/license-list-data/421fbabbe80c94c58c12316af1bc6a2dca2362bc/text/bzip2-1.0.6.txt"
     }
   ],
+  "native_component_coverage": {
+    "linux/amd64": [
+      {
+        "components": [
+          {
+            "name": "libgcc",
+            "purl": "pkg:apk/alpine/libgcc@14.2.0-r6",
+            "reviewed_license": "GPL-3.0-or-later WITH GCC-exception-3.1",
+            "source": "alpine:gcc@14.2.0-r6",
+            "type": "library",
+            "version": "14.2.0-r6"
+          },
+          {
+            "name": "libstdc++",
+            "purl": "pkg:apk/alpine/libstdc%2B%2B@14.2.0-r6",
+            "reviewed_license": "GPL-3.0-or-later WITH GCC-exception-3.1",
+            "source": "alpine:gcc@14.2.0-r6",
+            "type": "library",
+            "version": "14.2.0-r6"
+          }
+        ],
+        "native_payloads": [
+          {
+            "path": "opt/venv/lib/python3.14/site-packages/greenlet.libs/libgcc_s-0cd532bd.so.1",
+            "role": "greenlet.libs/libgcc_s.so.1",
+            "sha256": "c8f934f958f22b3b9c8e790fde6bc2d2f55ab9ae8b9f5eea65425b20271782d0"
+          },
+          {
+            "path": "opt/venv/lib/python3.14/site-packages/greenlet.libs/libstdc++-5d72f927.so.6.0.33",
+            "role": "greenlet.libs/libstdc++.so.6.0.33",
+            "sha256": "e43bc58c5e9fde5230e0aab5a9927a4d01a034d9f1d760856682b4d1695da3c0"
+          },
+          {
+            "path": "opt/venv/lib/python3.14/site-packages/greenlet/_greenlet.cpython-314-x86_64-linux-musl.so",
+            "role": "greenlet/_greenlet.cpython-314.so",
+            "sha256": "2e1f9964eb2619a4735c6ce1b28c3e9c289e3b51697b5e77c04f2dd4c0ef4e8f"
+          },
+          {
+            "path": "opt/venv/lib/python3.14/site-packages/greenlet/tests/_test_extension.cpython-314-x86_64-linux-musl.so",
+            "role": "greenlet/tests/_test_extension.cpython-314.so",
+            "sha256": "26f96ccb0d3b7f27cc3dece6d30c1d6717a5609638f32cd103b39a9f71aef14d"
+          },
+          {
+            "path": "opt/venv/lib/python3.14/site-packages/greenlet/tests/_test_extension_cpp.cpython-314-x86_64-linux-musl.so",
+            "role": "greenlet/tests/_test_extension_cpp.cpython-314.so",
+            "sha256": "b66cd7447b8754958133ce96857ff3576cdc8d880ccfa7e068cb38697b581a7c"
+          }
+        ],
+        "owner": "python:greenlet@3.5.3",
+        "owner_source": {
+          "sha256": "a61efc018fd3eb317eeca31aba90ee9e7f26f22884a79b6c6ec715bf71bb62f1",
+          "size": 200270,
+          "url": "https://files.pythonhosted.org/packages/e2/f1/fbbfef6af0bad0548f09bc28948ea3c275b4edb19e17fc5ca9900a6a634d/greenlet-3.5.3.tar.gz"
+        },
+        "sboms": [
+          {
+            "components": [
+              {
+                "name": "libgcc",
+                "purl": "pkg:apk/alpine/libgcc@14.2.0-r6",
+                "reviewed_license": "GPL-3.0-or-later WITH GCC-exception-3.1",
+                "source": "alpine:gcc@14.2.0-r6",
+                "type": "library",
+                "version": "14.2.0-r6"
+              },
+              {
+                "name": "libstdc++",
+                "purl": "pkg:apk/alpine/libstdc%2B%2B@14.2.0-r6",
+                "reviewed_license": "GPL-3.0-or-later WITH GCC-exception-3.1",
+                "source": "alpine:gcc@14.2.0-r6",
+                "type": "library",
+                "version": "14.2.0-r6"
+              }
+            ],
+            "path": "opt/venv/lib/python3.14/site-packages/greenlet-3.5.3.dist-info/sboms/auditwheel.cdx.json",
+            "sha256": "88ec96555dafdd7a1e4bac19a57701e712ff3a361a537e653b4baf6829a28e9e"
+          }
+        ],
+        "wheel": {
+          "sha256": "fad5aec764399f1b5cc347ad250a59660f20c8f8888ea6bae1f93b769cce1154",
+          "size": 1684824,
+          "url": "https://files.pythonhosted.org/packages/f7/22/c0a336ae4a1410fd5f5121098e5bfbf1865f64c5ef80b4b5412886c4a332/greenlet-3.5.3-cp314-cp314-musllinux_1_2_x86_64.whl"
+        }
+      },
+      {
+        "components": [],
+        "native_payloads": [
+          {
+            "path": "opt/venv/lib/python3.14/site-packages/markupsafe/_speedups.cpython-314-x86_64-linux-musl.so",
+            "role": "markupsafe/_speedups.cpython-314.so",
+            "sha256": "d87beb24c0d907f39ac850f691eb87c262bba55530cb570269ae70b2fa19ae53"
+          }
+        ],
+        "owner": "python:markupsafe@3.0.3",
+        "owner_source": {
+          "sha256": "722695808f4b6457b320fdc131280796bdceb04ab50fe1795cd540799ebe1698",
+          "size": 80313,
+          "url": "https://files.pythonhosted.org/packages/7e/99/7690b6d4034fffd95959cbe0c02de8deb3098cc577c67bb6a24fe5d7caa7/markupsafe-3.0.3.tar.gz"
+        },
+        "sboms": [],
+        "wheel": {
+          "sha256": "2713baf880df847f2bece4230d4d094280f4e67b1e813eec43b4c0e144a34ffe",
+          "size": 23043,
+          "url": "https://files.pythonhosted.org/packages/ff/0e/53dfaca23a69fbfbbf17a4b64072090e70717344c52eaaaa9c5ddff1e5f0/markupsafe-3.0.3-cp314-cp314-musllinux_1_2_x86_64.whl"
+        }
+      },
+      {
+        "components": [],
+        "native_payloads": [
+          {
+            "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy/cyextension/collections.cpython-314-x86_64-linux-musl.so",
+            "role": "sqlalchemy/cyextension/collections.cpython-314.so",
+            "sha256": "a48610d29b3b54f5ba67b874302c6f400ff3e684f148a50ef0affb6341cfffc6"
+          },
+          {
+            "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy/cyextension/immutabledict.cpython-314-x86_64-linux-musl.so",
+            "role": "sqlalchemy/cyextension/immutabledict.cpython-314.so",
+            "sha256": "548b681d56bc5d945a0b34e6f02a4b3eab88fb54341e4047b8dcae18b7ff215e"
+          },
+          {
+            "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy/cyextension/processors.cpython-314-x86_64-linux-musl.so",
+            "role": "sqlalchemy/cyextension/processors.cpython-314.so",
+            "sha256": "d2105caa5c25faf239930079bef0e821be9e85e659031200a78a31a20e1abce2"
+          },
+          {
+            "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy/cyextension/resultproxy.cpython-314-x86_64-linux-musl.so",
+            "role": "sqlalchemy/cyextension/resultproxy.cpython-314.so",
+            "sha256": "ba92efd35c3c6e528932d84c9363edad2a4ccdac2238b8dfdcf8d40a8d0f35bd"
+          },
+          {
+            "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy/cyextension/util.cpython-314-x86_64-linux-musl.so",
+            "role": "sqlalchemy/cyextension/util.cpython-314.so",
+            "sha256": "9093c13f438c92753f6c3dad7a93ca2034a4b06f91f04575ce9cbf107d3b4bf1"
+          }
+        ],
+        "owner": "python:sqlalchemy@2.0.51",
+        "owner_source": {
+          "sha256": "804dccd8a4a6242c4e30ad961e540e18a588f6527202f2d6791b01845d59fdc9",
+          "size": 9912201,
+          "url": "https://files.pythonhosted.org/packages/02/f1/a7a892f18d4d224e6b26f706531eafccc41e37594d37d304786969ee13cb/sqlalchemy-2.0.51.tar.gz"
+        },
+        "sboms": [],
+        "wheel": {
+          "sha256": "39a76529db6305693d8d4affa58ad5b5e2e18edd62daea628b29b97930b3513d",
+          "size": 3252888,
+          "url": "https://files.pythonhosted.org/packages/02/3c/52f408ea701781caee975606beccc48845f2aee8711ac29843d612c0306c/sqlalchemy-2.0.51-cp314-cp314-musllinux_1_2_x86_64.whl"
+        }
+      }
+    ],
+    "linux/arm64": [
+      {
+        "components": [
+          {
+            "name": "libgcc",
+            "purl": "pkg:apk/alpine/libgcc@14.2.0-r6",
+            "reviewed_license": "GPL-3.0-or-later WITH GCC-exception-3.1",
+            "source": "alpine:gcc@14.2.0-r6",
+            "type": "library",
+            "version": "14.2.0-r6"
+          },
+          {
+            "name": "libstdc++",
+            "purl": "pkg:apk/alpine/libstdc%2B%2B@14.2.0-r6",
+            "reviewed_license": "GPL-3.0-or-later WITH GCC-exception-3.1",
+            "source": "alpine:gcc@14.2.0-r6",
+            "type": "library",
+            "version": "14.2.0-r6"
+          }
+        ],
+        "native_payloads": [
+          {
+            "path": "opt/venv/lib/python3.14/site-packages/greenlet.libs/libgcc_s-2d945d6c.so.1",
+            "role": "greenlet.libs/libgcc_s.so.1",
+            "sha256": "767fb99107fa5e41168413b1eed9d73191c94126c37526263e1af1f1f898788f"
+          },
+          {
+            "path": "opt/venv/lib/python3.14/site-packages/greenlet.libs/libstdc++-85f2cd6d.so.6.0.33",
+            "role": "greenlet.libs/libstdc++.so.6.0.33",
+            "sha256": "74d419612500998317744231a2b322e296836f4a111fdb48196f136d17f0f030"
+          },
+          {
+            "path": "opt/venv/lib/python3.14/site-packages/greenlet/_greenlet.cpython-314-aarch64-linux-musl.so",
+            "role": "greenlet/_greenlet.cpython-314.so",
+            "sha256": "1211c76e369977508dc2e69b840a436a4dc957a7d49d9f0715896f65dfc35360"
+          },
+          {
+            "path": "opt/venv/lib/python3.14/site-packages/greenlet/tests/_test_extension.cpython-314-aarch64-linux-musl.so",
+            "role": "greenlet/tests/_test_extension.cpython-314.so",
+            "sha256": "3e91f5cbe3de485d2fe71162a2c84a08670d0dd3c8f08fddb021dd09e0bd6609"
+          },
+          {
+            "path": "opt/venv/lib/python3.14/site-packages/greenlet/tests/_test_extension_cpp.cpython-314-aarch64-linux-musl.so",
+            "role": "greenlet/tests/_test_extension_cpp.cpython-314.so",
+            "sha256": "20437e5340c5b0f5d660f0c1a116714889b6b0cf128f6280b105a8eb8f2aab8f"
+          }
+        ],
+        "owner": "python:greenlet@3.5.3",
+        "owner_source": {
+          "sha256": "a61efc018fd3eb317eeca31aba90ee9e7f26f22884a79b6c6ec715bf71bb62f1",
+          "size": 200270,
+          "url": "https://files.pythonhosted.org/packages/e2/f1/fbbfef6af0bad0548f09bc28948ea3c275b4edb19e17fc5ca9900a6a634d/greenlet-3.5.3.tar.gz"
+        },
+        "sboms": [
+          {
+            "components": [
+              {
+                "name": "libgcc",
+                "purl": "pkg:apk/alpine/libgcc@14.2.0-r6",
+                "reviewed_license": "GPL-3.0-or-later WITH GCC-exception-3.1",
+                "source": "alpine:gcc@14.2.0-r6",
+                "type": "library",
+                "version": "14.2.0-r6"
+              },
+              {
+                "name": "libstdc++",
+                "purl": "pkg:apk/alpine/libstdc%2B%2B@14.2.0-r6",
+                "reviewed_license": "GPL-3.0-or-later WITH GCC-exception-3.1",
+                "source": "alpine:gcc@14.2.0-r6",
+                "type": "library",
+                "version": "14.2.0-r6"
+              }
+            ],
+            "path": "opt/venv/lib/python3.14/site-packages/greenlet-3.5.3.dist-info/sboms/auditwheel.cdx.json",
+            "sha256": "3adae2e69cbfa1547fec1c336a0a51b7ad5549fb0d321cae2d3afb43fc66d530"
+          }
+        ],
+        "wheel": {
+          "sha256": "a1fad1d11e7d6aab184107baa8e4ece11ccba3ec9599cd7efa5ff4d70d43256a",
+          "size": 1621252,
+          "url": "https://files.pythonhosted.org/packages/d1/50/13efdbea246fe3d3b735e191fec08fb50809f53cd2383ebe123d0809e44b/greenlet-3.5.3-cp314-cp314-musllinux_1_2_aarch64.whl"
+        }
+      },
+      {
+        "components": [],
+        "native_payloads": [
+          {
+            "path": "opt/venv/lib/python3.14/site-packages/markupsafe/_speedups.cpython-314-aarch64-linux-musl.so",
+            "role": "markupsafe/_speedups.cpython-314.so",
+            "sha256": "7f9bf0b4fc7f302e400d54b8a07d3b6923ffcd09e5cbc5e0aacdf273b50daebc"
+          }
+        ],
+        "owner": "python:markupsafe@3.0.3",
+        "owner_source": {
+          "sha256": "722695808f4b6457b320fdc131280796bdceb04ab50fe1795cd540799ebe1698",
+          "size": 80313,
+          "url": "https://files.pythonhosted.org/packages/7e/99/7690b6d4034fffd95959cbe0c02de8deb3098cc577c67bb6a24fe5d7caa7/markupsafe-3.0.3.tar.gz"
+        },
+        "sboms": [],
+        "wheel": {
+          "sha256": "ec15a59cf5af7be74194f7ab02d0f59a62bdcf1a537677ce67a2537c9b87fcda",
+          "size": 23821,
+          "url": "https://files.pythonhosted.org/packages/9a/a7/591f592afdc734f47db08a75793a55d7fbcc6902a723ae4cfbab61010cc5/markupsafe-3.0.3-cp314-cp314-musllinux_1_2_aarch64.whl"
+        }
+      },
+      {
+        "components": [],
+        "native_payloads": [
+          {
+            "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy/cyextension/collections.cpython-314-aarch64-linux-musl.so",
+            "role": "sqlalchemy/cyextension/collections.cpython-314.so",
+            "sha256": "af0e06bc14c4d1e07e9a782ea989a660c93a1d73a03183f8526538ccbdf45815"
+          },
+          {
+            "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy/cyextension/immutabledict.cpython-314-aarch64-linux-musl.so",
+            "role": "sqlalchemy/cyextension/immutabledict.cpython-314.so",
+            "sha256": "51ffb26c1053f8d94f772103542c1c9e175980956e3f8fdfe78a749140509b9e"
+          },
+          {
+            "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy/cyextension/processors.cpython-314-aarch64-linux-musl.so",
+            "role": "sqlalchemy/cyextension/processors.cpython-314.so",
+            "sha256": "87baa582e4ec656af88ab83eadd181919d13afccbfda646d4a2e35901ea9a24d"
+          },
+          {
+            "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy/cyextension/resultproxy.cpython-314-aarch64-linux-musl.so",
+            "role": "sqlalchemy/cyextension/resultproxy.cpython-314.so",
+            "sha256": "953be69c142a001094f93f0c682c6b3f57144677cbe394efc5197d297259eb6c"
+          },
+          {
+            "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy/cyextension/util.cpython-314-aarch64-linux-musl.so",
+            "role": "sqlalchemy/cyextension/util.cpython-314.so",
+            "sha256": "f5ac85bf51fa1cda4b1ab4e109f5a7f390419ef6a4e8d1aad618b7bd213acce1"
+          }
+        ],
+        "owner": "python:sqlalchemy@2.0.51",
+        "owner_source": {
+          "sha256": "804dccd8a4a6242c4e30ad961e540e18a588f6527202f2d6791b01845d59fdc9",
+          "size": 9912201,
+          "url": "https://files.pythonhosted.org/packages/02/f1/a7a892f18d4d224e6b26f706531eafccc41e37594d37d304786969ee13cb/sqlalchemy-2.0.51.tar.gz"
+        },
+        "sboms": [],
+        "wheel": {
+          "sha256": "0f6bcad487aee1c638d707235682fc96f741de00663619881ab235400d03289e",
+          "size": 3230929,
+          "url": "https://files.pythonhosted.org/packages/f6/ab/9e17272fd4dac8df3b83c4fbe52b998a1c9d89a843c8c35ff29b74ff7364/sqlalchemy-2.0.51-cp314-cp314-musllinux_1_2_aarch64.whl"
+        }
+      }
+    ]
+  },
+  "native_component_sources": {
+    "alpine:gcc@14.2.0-r6": {
+      "aports_commit": "fbf60319be3bbaf6dd32ef55cc6fb7189e05c266",
+      "distfiles": [
+        {
+          "filename": "gcc-14.2.0.tar.xz",
+          "sha512": "932bdef0cda94bacedf452ab17f103c0cb511ff2cec55e9112fc0328cbf1d803b42595728ea7b200e0a057c03e85626f937012e49a7515bc5dd256b2bf4bc396",
+          "size": 92306460,
+          "url": "https://distfiles.alpinelinux.org/distfiles/v3.22/gcc-14.2.0.tar.xz"
+        }
+      ],
+      "distfiles_release": "v3.22",
+      "kind": "alpine-aports",
+      "notices": [
+        {
+          "member": "gcc-14.2.0/COPYING.RUNTIME",
+          "sha256": "9d6b43ce4d8de0c878bf16b54d8e7a10d9bd42b75178153e3af6a815bdc90f74",
+          "size": 3324
+        },
+        {
+          "member": "gcc-14.2.0/COPYING3",
+          "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903",
+          "size": 35147
+        }
+      ],
+      "observed_license": "GPL-2.0-or-later AND LGPL-2.1-or-later",
+      "origin": "gcc",
+      "recipe": {
+        "sha256": "5c623d22ac85b64f1dab2346cee6991432723cc7983ec7cb13a5b58692bfc658",
+        "size": 49583,
+        "url": "https://gitlab.alpinelinux.org/alpine/aports/-/archive/fbf60319be3bbaf6dd32ef55cc6fb7189e05c266/aports-fbf60319be3bbaf6dd32ef55cc6fb7189e05c266.tar.gz?path=main/gcc"
+      },
+      "version": "14.2.0-r6"
+    }
+  },
   "platforms": {
     "linux/amd64": [
       {
@@ -7792,5 +8130,5 @@
       "version": "3.3.4"
     }
   ],
-  "schema_version": 4
+  "schema_version": 6
 }
