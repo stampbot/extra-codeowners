@@ -7,8 +7,9 @@ envelopes and internal cross-references are exact, and that observed drift is
 understood. It does **not** approve distribution or make the evidence complete.
 
 There is no supported Extra CODEOWNERS container release. The `main`
-publication job has been removed, and the tag workflow stops before every job
-with package-write, signing, attestation, or release authority. Issue
+publication job has been removed. The tag workflow can run source, proof, and
+scan jobs with repository-read authority, but a separate blocker stops every
+job with package-write, signing, attestation, or release authority. Issue
 [#18](https://github.com/stampbot/extra-codeowners/issues/18) tracks the
 remaining native-wheel and embedded-SBOM source-completeness gap. Issue
 [#28](https://github.com/stampbot/extra-codeowners/issues/28) tracks the
@@ -16,7 +17,9 @@ privilege-separated release pipeline and recipient verifier. Pull-request CI
 already binds its hash-pinned PEP 517 proof and exact installed application
 wheel into both platform artifacts. Issue
 [#32](https://github.com/stampbot/extra-codeowners/issues/32) remains open for
-release and ad-hoc build consumption of that selected proof.
+retained release evidence and future publication consumption of that selected
+proof. A manual workflow with repository-read authority and the tagged candidate
+scan already use the same proof implementation.
 
 ## Prerequisites and trust boundary
 
@@ -701,8 +704,9 @@ Review source policy with these precise boundaries:
 
 - `uv.lock` supplies immutable top-level Python source URLs, sizes, and hashes;
   wheel-only or lower-layer packages need exact fallback records; pull-request
-  CI separately hash-pins and retains its isolated-build proof, while issue #32
-  remains open for release and ad-hoc consumers of that proof
+  CI, manual runs, and tagged candidate scans use the same isolated-build proof,
+  while issue #32 remains open for retained release evidence and future
+  publication consumers
 - Alpine policy pins every `ORIGIN@APORTS_COMMIT`, recipe-subtree hash, verified
   `sha512sums` input, and any narrow parser exception; never execute an
   `APKBUILD`
@@ -849,7 +853,7 @@ Keep `distribution_approval.approved` set to `false`. The current executable
 schema requires source completeness to remain false and rejects an attempt to
 require distribution approval. The tag workflow independently stops before
 privileged jobs, there is no `main` publication job to enable, and issue #32's
-release and ad-hoc selected-proof handoff remains a separate requirement.
+release-evidence and publication handoff remains a separate requirement.
 
 A future supported release must satisfy the
 [container evidence release contract](../reference/container-evidence-release-contract.md),

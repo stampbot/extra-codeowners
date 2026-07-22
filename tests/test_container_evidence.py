@@ -5814,7 +5814,9 @@ def test_workflows_keep_release_blocked_and_collect_review_evidence_in_ci() -> N
     assert release_block in release
     assert "https://github.com/stampbot/extra-codeowners/issues/28" in release
     assert release.index(release_block) < release.index("Publish release image")
-    assert "exit 1" in release[release.index(release_block) : release.index("  quality:")]
+    publication_block = release.split("  publication-block:\n", 1)[1].split("  python:\n", 1)[0]
+    assert "permissions: {}" in publication_block
+    assert "exit 1" in publication_block
     assert '--summary "${GITHUB_STEP_SUMMARY}"' in release
     assert "Build digest-bound distribution evidence" not in release
     assert "--require-distribution-approval" not in release
