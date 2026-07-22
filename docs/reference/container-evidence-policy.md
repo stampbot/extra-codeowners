@@ -17,6 +17,7 @@ comparison; the schema rejects it.
 
 The enforcement code is in `.github/scripts/container_evidence.py`, especially
 `validate_policy_schema`, `verify_inventory`,
+`native_component_coverage_ledger`,
 `verify_base_layer_binding`, `canonical_post_base_filesystem_changes`,
 `verify_post_base_filesystem_policy`, `verify_post_base_provenance`, and
 `validate_source_policy_coverage`. Adversarial loader and policy tests are in
@@ -24,7 +25,7 @@ The enforcement code is in `.github/scripts/container_evidence.py`, especially
 
 ## Common types and limits
 
-The current schema version is integer `4`. JSON must be UTF-8, no larger than
+The current schema version is integer `6`. JSON must be UTF-8, no larger than
 64 MiB, no deeper than 64 containers, and must not contain duplicate object
 keys, floating-point values, non-finite numbers, or invalid Unicode. Unless a
 field says otherwise, every object has exactly the listed keys.
@@ -36,12 +37,13 @@ field says otherwise, every object has exactly the listed keys.
 | `qualified_sha256` | `sha256:` followed by 64 lowercase hexadecimal characters. |
 | `git_sha` | 40 lowercase hexadecimal characters. |
 | `path` | Canonical relative POSIX path, at most 4,096 UTF-8 bytes; no empty, `.`, `..`, backslash, absolute, repeated-separator, or control-character component. |
+| `role` | Deterministic platform-neutral projection of a native payload's exact `site-packages` path; it has the same canonical-path syntax and limit as `path`. |
 | `https_url` | Credential-free HTTPS URL with a valid hostname and port and no control characters; redirects are separately limited to five. |
 | `mode` | Integer from `0` through `07777`; booleans are invalid. |
 | `uid`, `gid` | Integer from `0` through `2^31 - 1`; booleans are invalid. |
 | component list | At most 10,000 exact component records. |
 | occurrence list | At most 250,000 exact layer occurrence records. |
-| source or payload size | Integer from `0` through 64 MiB; booleans are invalid. |
+| source or payload size | Integer from `0` through 64 MiB unless the field says otherwise; booleans are invalid. Native-component distfiles may be at most 128 MiB. |
 | component scalar | UTF-8 text bounded to 512 encoded bytes unless the validator applies a narrower identity grammar. |
 | component identity key | UTF-8 text bounded to 1,056 encoded bytes; it combines two component scalars with ecosystem separators. |
 | license scalar | UTF-8 text bounded to 16,384 encoded bytes. |
@@ -52,7 +54,7 @@ The policy has exactly these fields:
 
 | Field | Type | Meaning | Consuming gate |
 | --- | --- | --- | --- |
-| `schema_version` | integer | Policy schema; exactly `4`. | Every command through `validate_policy_schema`. |
+| `schema_version` | integer | Policy schema; exactly `6`. | Every command through `validate_policy_schema`. |
 | `base_image` | string | Nonempty bounded Dockerfile base reference; the schema rejects whitespace and `@`. The checked-in value is a tagged Docker Official Python reference. | Exact Dockerfile binding during `bundle` and `verify-ci-policy`. |
 | `base_image_index_digest` | `qualified_sha256` | Reviewed multi-platform base index. | Schema validation during `verify`; exact Dockerfile/index binding during `bundle` and `verify-ci-policy`. |
 | `base_image_platforms` | platform object | Exact ordered base layer diff IDs for both platforms. | Base-prefix and post-base provenance gates. |
@@ -60,8 +62,10 @@ The policy has exactly these fields:
 | `distribution_approval` | object | Separate human decision about recipient distribution. | Required only when `--require-distribution-approval` is set. |
 | `license_resolutions` | object | Reviewed expression and rationale for every exact component identity. | Inventory verification, notices, and bundle generation. |
 | `license_texts` | array | Hash-pinned standard license texts required by reviewed expressions. | Inventory coverage and bundle fetch. |
-| `custom_license_evidence` | object | Exact source-carried notice pins for every `LicenseRef-*`. | Inventory coverage and retained-license verification. |
-| `unexpanded_python_payloads` | platform object | Exact known-incomplete wheel SBOM, native, and identity-file occurrences. | `verify`; any drift fails. |
+| `custom_license_evidence` | object | Exact source-carried notice pins for every top-level `LicenseRef-*`. | Inventory coverage and retained-license verification. |
+| `unexpanded_python_payloads` | platform object | Exact raw wheel SBOM, native, and identity-file occurrences. Some owners may also have closed-world coverage. | `verify`; any drift fails. |
+| `native_component_sources` | object | Immutable recipe, distfile, and notice records for native components nested inside wheels. | Schema, recipe, source-retention, and notice gates. |
+| `native_component_coverage` | platform object | Exact owner-level native payload set plus exact wheel, owner source, and embedded-SBOM component/source/license records. | `verify`, lock binding, coverage ledger, notices, and bundle generation. |
 | `filesystem_baselines` | platform object | Exact APK database history plus canonical post-base directory effects and removals. | Deep `bundle` provenance verification and offline CI policy review. |
 | `docker_python_recipe` | object | Pinned Docker Official Python recipe and license. | Bundle fetch and CPython binding. |
 | `cpython_source` | object | Pinned CPython source archive and source-carried identity evidence. | Bundle fetch, recipe binding, and runtime/source identity binding. |
@@ -163,12 +167,11 @@ lower OCI layer remains in policy with `effective: false`.
 | `rationale` | string | Always nonempty. |
 
 Approval is necessary but not sufficient. The collector also requires the
-inventory's exact complete-source status. Current code intentionally requires
-`complete: false` with the issue #18 reason, so the distribution gate cannot
-pass. Issue #28 independently prevents publication authority from entering
-the current collection path. Issue #32 separately requires release evidence
-and the future isolated publication jobs to retain and consume the hash-pinned
-selected proof and exact application wheel.
+inventory's exact complete-source status. Current code keeps `complete: false`
+while four native-wheel owners remain unresolved under issue #18, so the
+approval-required gate cannot pass. Issue #28 independently keeps publication
+authority out of the collector. Issue #32 still requires the selected
+application proof to reach release evidence and the future publication jobs.
 
 ## License policy
 
@@ -197,10 +200,13 @@ determination.
 | `sha256` | `sha256` | Exact text bytes. |
 
 The ID set must equal every non-operator, non-`LicenseRef-*` token required by
-the reviewed expressions.
+the reviewed top-level and resolved native-component expressions. Schema 6
+does not allow `LicenseRef-*` in a nested native-component expression. The
+Greenlet closure therefore adds the pinned SPDX `GCC-exception-3.1` text
+alongside the existing `GPL-3.0-or-later` text.
 
 `custom_license_evidence` is keyed by every and only `LicenseRef-*` identifier
-in those expressions. Each value contains exactly:
+in the top-level `license_resolutions`. Each value contains exactly:
 
 | Field | Type | Constraint |
 | --- | --- | --- |
@@ -240,8 +246,7 @@ as `wheel_installations`. They are not interchangeable: the raw array also
 covers base-image identities such as system `pip` WHEEL and RECORD files outside
 `/opt/venv`, while installation replay covers wheel ownership inside the runtime
 virtual environment. These baselines make known incomplete surfaces visible;
-they do not claim that the nested components and corresponding sources are
-complete.
+the separate coverage policy says which owners have been resolved.
 
 Each `wheel_installations` record preserves the exact WHEEL build tag as well
 as its tags and `Root-Is-Purelib` value. Bundle generation uses those fields to
@@ -251,6 +256,119 @@ acceptable substitute.
 For native-wheel retention, an owner must appear in exactly one historical
 installation record. Repeated installation of the same owner fails closed;
 there is no last-match or effective-file fallback.
+
+## Native-component closure
+
+`native_component_coverage` has both platform keys. The two sorted arrays must
+name the same owner set. An owner record has exactly:
+
+| Field | Contract |
+| --- | --- |
+| `owner` | Canonical `python:NAME@VERSION`, unique on the platform. |
+| `wheel` | Exact credential-free HTTPS URL, SHA-256, and positive size of the platform wheel. The filename must identify that owner and a supported CPython 3.14 musllinux tag for the platform. |
+| `owner_source` | Exact URL, SHA-256, and size of the owner's source archive. Bundle generation requires byte-for-byte equality with the `uv.lock` sdist record. |
+| `native_payloads` | Sorted, unique `role`, `path`, and `sha256` records for every native file owned by the wheel. The set may be empty and is not attributed to `owner_source` or an SBOM component. |
+| `sboms` | Sorted embedded-SBOM records attributed to this owner. The set may be empty but must be present. |
+| `components` | Canonical owner-level set of reviewed embedded components. It must equal the union represented by `sboms[].components`, including an explicit empty set when the wheel has none. |
+
+An owner must expose at least one native payload or embedded SBOM. An owner with
+all three sets empty is invalid. Each SBOM record pins its installed `path` and
+`sha256`. Its `components` list may be empty and must exactly equal the
+canonical component projection parsed from those SBOM bytes. A component
+contains its CycloneDX `type`, `name`, `version`, and `purl`, plus:
+
+- `source`: one key from `native_component_sources`
+- `reviewed_license`: the project's reviewed expression; `LicenseRef-*` is
+  prohibited, and the value does not rewrite or imply an upstream SBOM
+  declaration
+
+`role` is computed from `path`, not chosen independently. The projection:
+
+1. removes the exact
+   `opt/venv/lib/python3.14/site-packages/` prefix
+2. changes a matching
+   `.cpython-314-{x86_64|aarch64}-linux-musl.so` suffix to
+   `.cpython-314.so`, rejecting an architecture that conflicts with the policy
+   platform
+3. removes a valid auditwheel `-HASH` filename segment before
+   `.so[.VERSION...]`, where `HASH` is exactly eight lowercase hexadecimal
+   characters
+4. otherwise retains the canonical relative path unchanged.
+
+When an auditwheel `.libs` basename contains an all-hexadecimal hash segment,
+any other length or uppercase form is invalid. The declared role must equal the
+derived value. Roles and paths are unique within `native_payloads`, and both
+platform records must contain the same role set. This projection prevents a
+role/path swap; it does not attribute the payload to `owner_source` or an SBOM
+component.
+
+Matching owner records on the two platforms must also use the same
+`owner_source`, owner-level `components` set, and logical SBOM set. The logical
+SBOM comparison binds each installed SBOM path and its component set while
+allowing the platform-specific SBOM digest to differ. Architecture-specific
+wheel pins, payload paths, and payload digests may differ. An empty native,
+SBOM, or component set is still part of this comparison; it cannot silently
+become nonempty on the other platform.
+
+For a resolved owner, `native_payloads` must equal that owner's complete native
+payload inventory by path and digest. Its configured SBOM path/hash set and
+each SBOM's component projection must also match the inventory exactly.
+Missing, extra, stale, cross-platform, duplicate, or conflicting records fail.
+Every configured source must be used; an unreferenced source is an error.
+Across all owners, SBOMs, and platforms, one package URL must map to one exact
+normalized `type`, `name`, and `version` identity, source ID, and reviewed
+license.
+
+The evidence groups are intentionally separate: `native_payloads` proves the
+exact files co-contained in the wheel, `owner_source` binds the owner's exact
+source archive, `sboms` binds the observed embedded documents, and
+`components` binds their reviewed identity set. An auditwheel SBOM need not
+provide a component-to-file path, hash, or SONAME relationship. Schema 6
+therefore rejects legacy `owner_payloads` and all per-component `payloads`
+fields rather than implying an unsupported attribution.
+
+`native_component_sources` is keyed as `alpine:ORIGIN@VERSION`. The current
+record shape is deliberately narrow and supports one commit-pinned aports
+recipe with one upstream distfile:
+
+| Field | Contract |
+| --- | --- |
+| `kind` | Exactly `alpine-aports`. |
+| `origin`, `version` | Must reproduce the source key. Literal `pkgname`, `pkgver`, and `pkgrel` in `APKBUILD` must agree. |
+| `aports_commit` | Exact 40-character commit used in the canonical recipe-subtree URL. |
+| `distfiles_release` | Exact Alpine `vMAJOR.MINOR` distfiles namespace used by the recipe. This can differ from the runtime base release. |
+| `recipe` | Exact URL, SHA-256, and size of the recipe-subtree archive. |
+| `distfiles` | Exactly one canonical filename, URL, SHA-512, and positive size no greater than 128 MiB. It must be the recipe's complete nonlocal checksummed source set. |
+| `observed_license` | Exact literal aggregate `license` value from `APKBUILD`. |
+| `notices` | Nonempty, sorted regular-file member, SHA-256, and size records selected from the distfile. |
+
+The collector never executes the recipe. It validates the literal recipe
+identity and checksum table, scans the full source tar under archive limits,
+and retains only the reviewed notice members. The current Greenlet record binds
+the auditwheel SBOM's `libgcc` and `libstdc++` identities to the reviewed Alpine
+GCC 14.2.0-r6 source record. It makes no claim that either identity explains a
+particular native file. The Greenlet sdist is likewise an exact owner source,
+not a file-level attribution.
+
+The MarkupSafe records contain one `native_payloads` entry per platform and
+explicit empty `sboms` and `components` arrays. They bind the exact locked
+wheel and the 80,313-byte MarkupSafe 3.0.3 sdist. The empty arrays mean that
+the reviewed wheel exposes no embedded SBOM or component identity; they do not
+claim that the sdist explains every byte of the compiled extension.
+
+The SQLAlchemy records contain five `native_payloads` entries per platform and
+explicit empty `sboms` and `components` arrays. They bind the exact locked
+wheel and the 9,912,201-byte SQLAlchemy 2.0.51 sdist. Each platform record uses
+the same five derived roles. The empty arrays describe the wheel's observed
+surface; they do not claim reproducibility or close the compiler toolchain.
+
+`inventory/native-component-coverage.json` is derived from policy and observed
+inventory. It contains `schema_version`, `platform`, `complete`,
+`resolved_owners`, and `unresolved_owners`. Resolved records reproduce the exact
+reviewed sets. Unresolved records retain each owner's native path/hash pairs
+and embedded-SBOM component projection. The checked-in policy resolves
+Greenlet, MarkupSafe, and SQLAlchemy; the ledger still reports four unresolved
+owners and `complete: false`.
 
 `filesystem_baselines` also has both platform keys. Each value has exactly:
 
@@ -332,6 +450,13 @@ Unknown exception fields, duplicate links, unobserved allowed links, observed
 unallowed links, and a link replacing `APKBUILD` or a checksummed source fail
 during bundle generation.
 
+Resolved nested components use the separate `native_component_sources`
+records described above. Their recipe and distfile are retained under
+`sources/native-components/ORIGIN/VERSION/`; reviewed notice bytes go under
+`licenses/from-source/native-ORIGIN-VERSION/`. This separation matters when a
+wheel was built against a different Alpine release than the final runtime
+image, as Greenlet was.
+
 ## Review and validation
 
 The commands answer different questions. A narrower command passing does not
@@ -339,8 +464,9 @@ imply that a wider gate passed.
 
 | Command | Scope |
 | --- | --- |
-| `verify` | One standalone component inventory, the policy schema, exact components, payload baselines, APK database history, license coverage, and optional distribution approval. |
-| `bundle` | The `verify` scope plus the all-layer inventory, Dockerfile and base binding, post-base provenance, Git source binding, source-policy coverage, network hash checks, retained notices, and deterministic archive limits. |
+| `verify` | One standalone component inventory, the policy schema, exact components, payload baselines, native-component coverage, APK database history, license coverage, and optional distribution approval. |
+| `bundle` | The `verify` scope plus the all-layer inventory, Dockerfile and base binding, post-base provenance, Git source binding, lock-to-wheel and lock-to-sdist binding, recipe and distfile verification, retained notices, network hash checks, and deterministic archive limits. |
+| `native-component-coverage-view` | The canonical per-owner coverage ledger after full standalone inventory verification. |
 | `filesystem-policy-view` | A human-readable projection of raw layer records into the canonical directory-effect and removal policy. |
 | `verify-ci-policy` | The offline policy checks possible from an extracted pull-request artifact, materialized policy blob, and materialized Dockerfile blob. |
 
@@ -354,6 +480,20 @@ uv run --frozen python .github/scripts/container_evidence.py verify \
 
 Reviewers must run `bundle` separately for both platforms through the CI
 workflow. A standalone `verify` success is not the full release gate.
+
+Generate the native-component coverage ledger with:
+
+```bash
+uv run --frozen python .github/scripts/container_evidence.py \
+  native-component-coverage-view \
+  --inventory PATH_TO_COMPONENT_INVENTORY \
+  --policy .compliance/container-policy.json \
+  --output PATH_TO_COVERAGE_LEDGER
+```
+
+The command runs the full standalone inventory verification before it writes
+the canonical ledger. A ledger with `complete: false` is an accurate record of
+remaining work, not distribution approval.
 
 Generate the filesystem-policy projection with:
 

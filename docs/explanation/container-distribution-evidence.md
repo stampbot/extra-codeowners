@@ -16,7 +16,7 @@ publish a supported container image yet.
 | Evidence subject | Each CI archive names its local image configuration digest because CI does not publish a platform manifest. |
 | Public `main` image | Disabled; the publication job has been removed. |
 | Tagged release | Blocked before any job can publish an image, chart, Python package, or GitHub release. |
-| Source closure | Incomplete for native-wheel payloads and components described by embedded SBOMs. |
+| Source closure | CPython, Greenlet, MarkupSafe, and SQLAlchemy are resolved on both platforms; four native-wheel owners remain incomplete. |
 
 The release workflow can still validate source, build proof, and scan a
 candidate with repository-read permission. A separate job then fails before
@@ -63,10 +63,10 @@ uses only the proof built in its own run. Issue
 of that proof in release evidence and its handoff to the future isolated
 publication path.
 
-CPython now has a normalized top-level component record with exact runtime
-identity, recipe, source, and license evidence. The remaining completeness gap
-is narrower: native-wheel payloads and components described by embedded SBOMs
-do not yet have complete component, notice, and corresponding-source records.
+CPython has a normalized top-level component record with exact runtime
+identity, recipe, source, and license evidence. Greenlet, MarkupSafe, and
+SQLAlchemy now have closed-world native-owner coverage on both platforms. Four
+other owners do not yet have complete records for their observed surfaces.
 Issue [#18](https://github.com/stampbot/extra-codeowners/issues/18) tracks that
 work. Until it closes, the collector sets `source_completeness.complete` to
 `false` and rejects distribution approval. Issue #28 independently blocks
@@ -101,9 +101,11 @@ every layer against the bytes it received. It then:
 8. selects one hash-locked platform wheel for each native or SBOM owner,
    verifies its complete archive `RECORD` against the historical installation,
    and retains the wheel and raw SBOM bytes under `artifacts/native-wheels/`
-9. retrieves hash-pinned source and license material for those top-level
-   components and produces a deterministic, explicitly incomplete review
-   archive.
+9. validates the closed-world native-component policy, writes a per-owner
+   coverage ledger, and binds each resolved owner to its exact locked source
+10. retrieves the hash-pinned source and license material, including the
+    Greenlet/GCC component source and notices, and produces a deterministic,
+    explicitly incomplete review archive.
 
 ### Historical Python installation replay
 
@@ -141,9 +143,12 @@ occurrence identities fail collection. Every `.pyc` or `.pyo` occurrence under
 `/opt/venv` fails even if a later whiteout hides it. Effective bytecode under
 `/usr/local/lib/python3.14/` also fails.
 
-This replay establishes file attribution and executable-byte correspondence. It
-does not expand embedded native components or supply their corresponding
-source. Source completeness therefore remains false.
+This replay establishes which wheel owns each file occurrence and whether the
+installed executable bytes match the wheel. The native-component ledger uses
+that ownership to review one complete wheel at a time. It does not infer which
+source or nested SBOM component produced an individual file. Greenlet,
+MarkupSafe, and SQLAlchemy are resolved; four other owners still lack
+corresponding-source closure, so overall source completeness remains false.
 
 ### CPython runtime identity and source binding
 
@@ -175,8 +180,7 @@ and license bytes alongside the recipe. The reviewed license expression remains
 a policy judgment, not a legal-compliance determination.
 
 This evidence closes the CPython normalization part of issue `#18`. It does not
-close the remaining native-wheel and embedded-SBOM component/source work, and
-it does not approve distribution.
+approve distribution.
 
 ### Structured native and SBOM identities
 
@@ -203,9 +207,85 @@ selects that owner's exact platform wheel from `uv.lock`, verifies its complete
 archive `RECORD`, and matches its installed files to the historical record.
 The bundle keeps the wheel and a separately addressed copy of every raw SBOM.
 
-This proves which wheel supplied the bytes. It does not yet add the
-SBOM's nested components to notices or retain their corresponding source, so
-source completeness remains false.
+This proves which wheel supplied the bytes. Schema 6 adds closed-world coverage
+for individual wheel owners. Every owner record carries explicit
+`native_payloads`, `sboms`, and owner-level `components` sets. At least one
+native or SBOM surface must exist. The component set must be the canonical
+union of the components represented by the SBOM records. Empty sets are valid
+evidence; omitted sets are not. Missing, extra, duplicated, cross-platform,
+conflicting, or stale records fail.
+
+Those are parallel evidence sets, not a file-provenance map. Greenlet's
+auditwheel SBOM lists `libgcc` and `libstdc++` identities and dependencies, but
+it contains no relationship from either component to a file path, file hash, or
+SONAME. The schema therefore keeps all five native files in one owner-level
+`native_payloads` set. It deliberately has no owner-source payload field and no
+component payload field. The exact Greenlet sdist proves the reviewed owner's
+source selection; it does not explain any individual native file. Likewise,
+the nested component source and license records review the SBOM identities
+without claiming that a particular file came from either component.
+
+Installed filenames still vary by architecture. Wheel repair can add a
+platform-specific hash, and a CPython extension filename includes the target
+architecture. The validator derives each role from its exact path: it removes
+the reviewed virtual-environment `site-packages` prefix, collapses the CPython
+platform ABI suffix, and removes a valid auditwheel filename hash. Every other
+part of the relative path remains unchanged. A policy cannot move a role to a
+different path, even if its overall role set stays the same. Schema validation
+also requires both platforms to contain the same derived role set. This path
+projection compares files; it does not attribute them to a source or SBOM
+component.
+
+The same validation gives every package URL one global normalized identity,
+source, and reviewed license across resolved owners and SBOMs.
+
+Greenlet is the first resolved owner. On each platform, the reviewed wheel
+contains three extension modules, two libraries under `greenlet.libs/`, and one
+auditwheel SBOM. The policy separately binds the Greenlet 3.5.3 sdist and an
+Alpine GCC source record for the SBOM's `libgcc` and `libstdc++` components. The
+GCC record pins:
+
+- Alpine aports commit `fbf60319be3bbaf6dd32ef55cc6fb7189e05c266`
+- the exact `main/gcc` recipe-subtree archive
+- the recipe's literal version, package release, and aggregate license field
+- the recipe-selected `gcc-14.2.0.tar.xz` distfile by size and SHA-512
+- the SHA-256 and size of `COPYING3` and `COPYING.RUNTIME` in that archive.
+
+The SBOM does not declare license expressions for those nested components. The
+policy records `GPL-3.0-or-later WITH GCC-exception-3.1` as the project's
+reviewed expression and separately preserves the aggregate license text from
+`APKBUILD`. The evidence does not present that review as upstream metadata or
+legal advice.
+
+MarkupSafe is the second resolved owner. Each platform wheel has one
+`_speedups` extension and no embedded SBOM. The policy binds that one native
+role, its exact platform path and digest, the exact locked wheel, and the
+80,313-byte MarkupSafe 3.0.3 sdist. Its `sboms` and owner-level `components`
+sets are explicitly empty. That closes the observed wheel surface without
+inventing a component or build claim. The sdist and its BSD-3-Clause license
+files are retained as exact source evidence; they do not prove that every byte
+in the extension was reproducibly produced from that archive.
+
+SQLAlchemy is the third resolved owner. Each platform wheel contains five
+`cyextension` modules and no embedded SBOM or separately packaged native
+library. Every module's dynamic section names only the platform musl runtime.
+The policy binds all five paths, roles, and digests to the exact locked wheel
+and the 9,912,201-byte SQLAlchemy 2.0.51 sdist. Its `sboms` and `components`
+sets are explicitly empty.
+
+The sdist carries the five project-authored `.pyx` files, one supporting
+`.pxd`, no generated C source, and no separately attributable bundled
+third-party native code. The collector retains that exact sdist and its MIT
+license. The owner-level component set remains empty because SQLAlchemy's wheel
+has no embedded SBOM; schema 6 derives the set from embedded SBOM components.
+Cython and GCC are build tools, not distributed SQLAlchemy components. Musl
+remains independently inventoried as part of the platform. This evidence does
+not prove that the wheels are reproducible or close the compiler toolchain.
+
+The derived `inventory/native-component-coverage.json` file repeats every
+resolved record and lists the raw native and SBOM observations for unresolved
+owners. Greenlet, MarkupSafe, and SQLAlchemy are resolved on both platforms.
+Four owners remain unresolved, so source completeness remains false.
 
 ### Failed jobs can still leave diagnostics
 
@@ -283,8 +363,8 @@ downloaded build script:
 3. `uv.lock` supplies immutable URLs, sizes, and SHA-256 values for installed
    top-level Python source distributions. Reviewed policy entries cover
    wheel-only and lower-layer top-level components not represented by a locked
-   source distribution. This does not yet provide the nested native components
-   named by wheel SBOMs or their corresponding sources.
+   source distribution. For a resolved native owner, the lock's wheel and sdist
+   records must also equal the owner's coverage policy exactly.
 4. The Docker Official Python recipe is pinned by commit and file hash. Its one
    literal `PYTHON_VERSION` and `PYTHON_SHA256` declaration must select the same
    CPython URL and hash recorded by policy. The source archive's exact size and
@@ -295,6 +375,12 @@ downloaded build script:
 5. Recursive `git ls-tree -rz HEAD` and `git show` retain every tracked regular
    Git blob and its executable mode at the revision recorded in the image
    label. Mutable working-tree files and untracked files are not evidence.
+6. A resolved Alpine-built component uses its own source record rather than the
+   final image's Alpine baseline. The record pins the builder's distfiles
+   release, a commit-addressed recipe subtree, every nonlocal recipe checksum,
+   the exact source archive, and selected source-carried notices. This is how
+   the Greenlet wheel's Alpine 3.22 build provenance remains separate from the
+   Alpine 3.24 runtime image.
 
 Every fetched URL and redirect must be credential-free HTTPS. Redirects are
 bounded, and `MANIFEST.json` records the complete ordered URL chain as `urls`
@@ -310,10 +396,12 @@ both observed and reviewed expressions. A component, version, architecture,
 license expression, metadata hash, effective state, origin, or aports commit
 change breaks the policy comparison.
 
-A `LicenseRef-*` resolution requires an exact component set, a nonempty
-rationale, and one source-carried notice path and SHA-256 for every covered
-component. An unrelated file with a plausible name cannot satisfy the pin. The
-current public-domain resolutions bind these exact records:
+A top-level `LicenseRef-*` resolution requires an exact component set, a
+nonempty rationale, and one source-carried notice path and SHA-256 for every
+covered component. An unrelated file with a plausible name cannot satisfy the
+pin. Schema 6 rejects `LicenseRef-*` in native-component expressions
+because those components do not use the top-level custom-license evidence
+ledger. The current public-domain resolutions bind these exact records:
 
 - `alpine:tzdata@2026b-r0` to
   `licenses/from-source/alpine-tzdata/061340856888-LICENSE`, SHA-256
@@ -322,10 +410,18 @@ current public-domain resolutions bind these exact records:
   `licenses/from-source/alpine-xz/616a3ad264ce-COPYING`, SHA-256
   `616a3ad264ce29b8f1cb97e53037b139d406899ca8d1f799651e17bfa09830b8`.
 
+Nested native components keep a reviewed expression without `LicenseRef-*` in
+the coverage record and retain their reviewed source notices. Greenlet's
+`libgcc` and `libstdc++` entries share the exact GCC source and its retained
+`COPYING3` and `COPYING.RUNTIME` bytes. `THIRD_PARTY_NOTICES.md` puts those
+components in a separate table so a reader can see that the SBOM declared no
+license while the project review selected an expression.
+
 The deterministic review archive normalizes member order, ownership, mode, and
 timestamps. It includes checksums, canonical manifests, raw inventories, the
 reviewed policy, retained top-level source, notices, and license material. Its
-manifest preserves the incomplete source-coverage status. Its
+manifest preserves the incomplete source-coverage status and embeds the same
+ledger written to `inventory/native-component-coverage.json`. Its
 `application_artifacts` record binds the source, selected wheel, selection
 record, accepted launcher form, and SHA-256 and size of every one of the five
 files retained under `artifacts/application/`.
@@ -346,10 +442,10 @@ unprivileged pinned fetch
   -> short-lived isolated publication and signing authority
 ```
 
-Before those phases may publish, the implementation must also parse and retain
-the components, notices, and corresponding sources named by embedded wheel
-SBOMs, or replace the wheels with builds linked against separately inventoried
-packages.
+Before those phases may publish, the same closed-world coverage now used for
+Greenlet, MarkupSafe, and SQLAlchemy must cover the other four native-wheel
+owners, or those wheels must be replaced with builds linked against separately
+inventoried packages.
 
 The parsing phases must run rootless with `--network none`, immutable inputs,
 read-only mounts where practical, and explicit size limits. The first parse
@@ -365,11 +461,12 @@ must fail verification.
 ## Trust boundary and residual risk
 
 The review archive records what the collector observed and fetched under
-reviewed policy. It is not component/source complete today. Even a future
-complete archive would not prove upstream metadata is correct, identify every
-copyright holder, or decide whether a delivery mechanism satisfies every
-jurisdiction. Hashes protect reviewed bytes from silent mutation; they do not
-make the original source trustworthy.
+reviewed policy. Greenlet, MarkupSafe, and SQLAlchemy are closed, but four
+native-wheel owners are not, so the archive is not component/source complete
+today. Even a future complete archive would not prove upstream metadata is
+correct, identify every copyright holder, or decide whether a delivery
+mechanism satisfies every jurisdiction. Hashes protect reviewed bytes from
+silent mutation; they do not make the original source trustworthy.
 
 A maintainer must review both platforms and separately approve recipient
 delivery. Qualified legal review remains necessary before a paid hosted
