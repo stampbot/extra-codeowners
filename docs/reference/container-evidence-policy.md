@@ -17,7 +17,7 @@ in `tests/test_container_evidence.py`.
 
 ## Common types and limits
 
-The current schema version is integer `2`. JSON must be UTF-8, no larger than
+The current schema version is integer `3`. JSON must be UTF-8, no larger than
 64 MiB, no deeper than 64 containers, and must not contain duplicate object
 keys, floating-point values, non-finite numbers, or invalid Unicode. Unless a
 field says otherwise, every object has exactly the listed keys.
@@ -45,7 +45,7 @@ The policy has exactly these fields:
 
 | Field | Type | Meaning | Consuming gate |
 | --- | --- | --- | --- |
-| `schema_version` | integer | Policy schema; exactly `2`. | Every command through `validate_policy_schema`. |
+| `schema_version` | integer | Policy schema; exactly `3`. | Every command through `validate_policy_schema`. |
 | `base_image` | string | Nonempty bounded Dockerfile base reference; the schema rejects whitespace and `@`. The checked-in value is a tagged Docker Official Python reference. | Exact Dockerfile binding during `bundle` and `verify-ci-policy`. |
 | `base_image_index_digest` | `qualified_sha256` | Reviewed multi-platform base index. | Schema validation during `verify`; exact Dockerfile/index binding during `bundle` and `verify-ci-policy`. |
 | `base_image_platforms` | platform object | Exact ordered base layer diff IDs for both platforms. | Base-prefix and post-base provenance gates. |
@@ -57,7 +57,7 @@ The policy has exactly these fields:
 | `unexpanded_python_payloads` | platform object | Exact known-incomplete wheel SBOM, native, and identity-file occurrences. | `verify`; any drift fails. |
 | `filesystem_baselines` | platform object | Exact APK database history plus canonical post-base directory effects and removals. | Deep `bundle` provenance verification and offline CI policy review. |
 | `docker_python_recipe` | object | Pinned Docker Official Python recipe and license. | Bundle fetch and CPython binding. |
-| `cpython_source` | object | Pinned CPython source archive. | Bundle fetch and recipe binding. |
+| `cpython_source` | object | Pinned CPython source archive and source-carried identity evidence. | Bundle fetch, recipe binding, and runtime/source identity binding. |
 | `python_sources` | array | Pinned fallback sources for components absent from `uv.lock`. | Exact source-coverage and bundle gates. |
 | `alpine_distfiles_release` | string | Alpine distfiles release in `vMAJOR.MINOR` form. | Alpine source fetch. |
 | `alpine_recipe_archives` | object | Exact `ORIGIN@APORTS_COMMIT` to recipe-subtree SHA-256 mapping. | Exact source-coverage and bundle gates. |
@@ -109,6 +109,38 @@ An Alpine record has exactly:
 | `aports_commit` | `git_sha` | Exact immutable source commit from installed metadata. |
 | `effective` | boolean | Whether this package database record remains effective. |
 
+The CPython runtime record has exactly:
+
+| Field | Type | Constraint |
+| --- | --- | --- |
+| `ecosystem` | string | Exactly `runtime`. |
+| `name` | string | Exactly `cpython`. |
+| `version` | string | Exactly the checked-in runtime version, currently `3.14.6`. |
+| `purl` | string | Exactly `pkg:generic/python@3.14.6`. |
+| `observed_license` | string | Empty because the image has no authoritative installed-package license field for the runtime. |
+| `effective` | boolean | Exactly `true`. |
+| `identity_files` | object | Exactly `version_header`, `interpreter_link`, `interpreter`, and `shared_library`. |
+
+The version header, interpreter, and shared library are exact effective
+regular-file occurrences with layer, path, SHA-256, size, mode, UID, and GID.
+The interpreter link is one exact effective symbolic-link occurrence with
+layer, path, target, mode, UID, and GID. All four identities must be root-owned
+and come from one reviewed base layer. The version header is mode `0644`; the
+link is mode `0777`; and the interpreter and shared library are mode `0755` with
+an exact 64-bit, little-endian ELF identity for the selected architecture. The
+required identities are:
+
+| Role | Path | Additional constraint |
+| --- | --- | --- |
+| `version_header` | `usr/local/include/python3.14/patchlevel.h` | Exact regular file. |
+| `interpreter_link` | `usr/local/bin/python3` | Symbolic link whose target is exactly `python3.14`. |
+| `interpreter` | `usr/local/bin/python3.14` | Exact regular file with platform ELF identity. |
+| `shared_library` | `usr/local/lib/libpython3.14.so.1.0` | Exact regular file with platform ELF identity. |
+
+Each platform contains exactly one runtime record. Its name, version, and
+package URL must agree across platforms; occurrence hashes and ELF machine
+identities remain platform-specific.
+
 The two platform arrays are independently exact. A record retained only in a
 lower OCI layer remains in policy with `effective: false`.
 
@@ -135,6 +167,18 @@ builds to consume CI's hash-pinned selected proof and exact application wheel.
 `license_resolutions` is keyed by every exact component identity. Each value
 contains only `expression` and nonempty `rationale`, both strings. Its key set
 must equal the selected platform's component identities.
+
+The checked-in `runtime:cpython@3.14.6` resolution is provisionally
+`Python-2.0.1`, reflecting the CNRI 1.6.1 terms in the current composite
+license. Policy pins the
+[exact SPDX `Python-2.0.1` text](https://raw.githubusercontent.com/spdx/license-list-data/421fbabbe80c94c58c12316af1bc6a2dca2362bc/text/Python-2.0.1.txt)
+at commit `421fbabbe80c94c58c12316af1bc6a2dca2362bc` with SHA-256
+`1d165c0d255094285fe6ce754b431b9efc1e7df547db4aed5c3b3d082e5d5aaa`.
+Bundle generation separately retains CPython's exact source-carried `LICENSE`,
+which also contains license history and a 0BSD notice. That complete retained
+file remains the authoritative evidence. Neither the provisional SPDX
+resolution nor collector success is distribution approval or a legal
+determination.
 
 `license_texts` contains objects with exactly:
 
@@ -225,9 +269,25 @@ post-base occurrence fails.
 
 `docker_python_recipe` contains exactly `url`, `sha256`, `license_url`, and
 `license_sha256`. URL fields are `https_url`; hashes are bare `sha256` values.
-`cpython_source` contains exactly `url` and `sha256`. The recipe's one literal
-Python version and hash must select the configured CPython source, and both
-builder and runtime `FROM` instructions must use the reviewed base index.
+
+`cpython_source` contains exactly:
+
+| Field | Type | Constraint |
+| --- | --- | --- |
+| `url` | `https_url` | Exact `python.org` source archive for the checked-in runtime version. |
+| `sha256` | `sha256` | Exact archive digest; it must match the Docker Official Python recipe. |
+| `size` | bounded integer | Exact positive archive size, at most 64 MiB. |
+| `license_member` | `path` | Exactly `Python-3.14.6/LICENSE`. |
+| `license_sha256` | `sha256` | Digest of that one regular archive member. |
+| `patchlevel_member` | `path` | Exactly `Python-3.14.6/Include/patchlevel.h`. |
+| `patchlevel_sha256` | `sha256` | Digest of that one regular archive member and both platform image version headers. |
+
+The recipe's one literal Python version and hash must select this source. Both
+builder and runtime `FROM` instructions must use the reviewed base index. The
+source archive parser permits only bounded regular files, directories, and safe
+links. The required license and patchlevel members must each occur once as a
+regular file. The patchlevel parser confirms the exact version and final
+release state over bytes shared by source and both platform images.
 
 Each `python_sources` item contains exactly:
 

@@ -100,10 +100,17 @@ bytecode. The collector also compares third-party `WHEEL`, `RECORD`,
 embedded-SBOM, and ELF path/hash records with reviewed per-platform baselines.
 It retains each SBOM's canonical CycloneDX identities and each native file's
 ELF architecture, bound to the owning historical RECORD occurrence. That is a
-drift and installation-integrity gate. It does not normalize CPython into the
-top-level component and notice inventory or expand vendored native and
-embedded-SBOM components into notices and corresponding sources. Issue `#18`
-remains the closure gate for both source-completeness gaps.
+drift and installation-integrity gate.
+
+The collector also normalizes CPython as an effective top-level runtime
+component. It binds the exact version header, interpreter link, interpreter,
+and shared library to one reviewed base layer for each architecture. The
+evidence bundle retains the commit-pinned Docker Official Python recipe, the
+recipe-selected CPython source archive, and its exact source-carried `LICENSE`
+bytes. The source and image version-header digests must agree. It does not
+expand vendored native and embedded-SBOM components into notices and
+corresponding sources. Issue `#18` remains the closure gate for that
+source-completeness gap.
 
 The first scan uploads raw JSON without applying VEX, including findings for
 which no fix exists. The narrowly reviewed

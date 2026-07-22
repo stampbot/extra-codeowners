@@ -2,11 +2,11 @@
 
 Extra CODEOWNERS has no supported production release or hosted service. The
 `main` publication job has been removed, and tagged publication is blocked
-while two container source-completeness gaps, handoff of the selected build
-proof, and publication isolation remain incomplete. The current Dockerfile
-requires the application proof selected from both architectures, but no
-supported release or ad-hoc path provides that proof to an operator. You cannot
-complete this guide today.
+while native-wheel and embedded-SBOM source completeness, handoff of the
+selected build proof, and publication isolation remain incomplete. The current
+Dockerfile requires the application proof selected from both architectures,
+but no supported release or ad-hoc path provides that proof to an operator. You
+cannot complete this guide today.
 
 The remaining sections record the runtime requirements for the future supported
 image path. Don't improvise an image input or let the current check authorize
@@ -34,8 +34,8 @@ Use SQLite only for a single-process development installation. It isn't a produc
 
 An older public `ghcr.io/stampbot/extra-codeowners:main` image may still exist.
 It predates the publication block, is unsupported, and does not have complete
-CPython, native-wheel, embedded-SBOM, or historical `RECORD` evidence. Do not
-deploy or mirror it.
+CPython identity/source, native-wheel, embedded-SBOM, or historical `RECORD`
+evidence. Do not deploy or mirror it.
 
 Pull-request CI builds a hash-pinned PEP 517 proof twice on each native
 architecture, selects one byte-identical five-file proof, and passes it to the
@@ -64,9 +64,11 @@ build-proof issue
 resolved before it can publish a versioned image. A policy approval change
 alone cannot enable it.
 
-Issue #18 covers CPython top-level normalization plus native-wheel and
-embedded-SBOM component/source expansion. Current candidates also retain
-historical ineffective Python `RECORD` replay as attribution evidence.
+Issue #18 now covers native-wheel and embedded-SBOM component/source expansion.
+Current candidates normalize CPython into the top-level component inventory,
+bind its exact per-platform identity files, and retain its pinned recipe,
+source archive, and source-carried license. They also retain historical
+ineffective Python `RECORD` replay as attribution evidence.
 The [runtime base image decision](../explanation/runtime-base.md) records the
 selected upstream image, architecture evidence, vulnerability dispositions,
 update contract, and residual risk.
@@ -76,7 +78,7 @@ archive that satisfies the
 [container evidence release contract](../reference/container-evidence-release-contract.md).
 Image provenance and a software bill of materials do not replace that archive.
 Current pull-request CI evidence is unsigned and intended only for maintainer
-review; it explicitly reports both remaining source-completeness gaps.
+review; it explicitly reports the remaining source-completeness gap.
 
 ## 2. Provision durable state
 

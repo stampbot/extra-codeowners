@@ -44,6 +44,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Rel
 - HTTPS and secret-strength checks for App Manifest setup.
 - Reproducible uv and mise development tasks.
 - A non-root container, Helm chart source, and supply-chain workflows.
+- Schema-v3 container evidence that normalizes CPython and binds its exact
+  runtime identity, recipe-selected source, and source-carried license while
+  leaving native-wheel and embedded-SBOM source completeness explicitly false.
 - Diátaxis documentation, a threat model, operating guides, and Read the Docs configuration.
 - Bounded pull-request and scheduled property tests for untrusted parsing and policy inputs.
 

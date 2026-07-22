@@ -9,8 +9,8 @@ understood. It does **not** approve distribution or make the evidence complete.
 There is no supported Extra CODEOWNERS container release. The `main`
 publication job has been removed, and the tag workflow stops before every job
 with package-write, signing, attestation, or release authority. Issue
-[#18](https://github.com/stampbot/extra-codeowners/issues/18) tracks two
-source-completeness gaps. Issue
+[#18](https://github.com/stampbot/extra-codeowners/issues/18) tracks the
+remaining native-wheel and embedded-SBOM source-completeness gap. Issue
 [#28](https://github.com/stampbot/extra-codeowners/issues/28) tracks the
 privilege-separated release pipeline and recipient verifier. Pull-request CI
 already binds its hash-pinned PEP 517 proof and exact installed application
@@ -602,6 +602,12 @@ for architecture in amd64 arm64; do
   diff --unified "$DIFF_ROOT/${architecture}-expected-components.json" \
     "$DIFF_ROOT/${architecture}-observed-components.json"
 
+  jq -e --ascii-output --sort-keys '
+      [.components[] | select(.ecosystem == "runtime" and .name == "cpython")]
+      | if length == 1 then .[0] else error("expected one CPython runtime") end
+    ' "$inventory" > "$DIFF_ROOT/${architecture}-cpython-runtime.json"
+  LC_ALL=C sed -n 'l' "$DIFF_ROOT/${architecture}-cpython-runtime.json"
+
   for category in embedded_sboms native_payloads wheel_identity_files; do
     jq -e --ascii-output --sort-keys \
       --arg platform "$platform" --arg category "$category" \
@@ -674,9 +680,11 @@ done
 No diff output means the exact ordered base diff IDs, top-level components,
 known wheel surfaces, APK database history, and canonical post-base directory
 effects and removals match reviewed policy. Review the printed structured wheel
-payloads as well. Each embedded SBOM and native payload must name the expected
-wheel owner, and its CycloneDX or ELF identity must agree with the upstream
-component and selected architecture.
+payloads and CPython runtime record as well. The CPython record must bind the
+expected version header, interpreter link, interpreter, and shared library from
+one reviewed base layer. Each embedded SBOM and native payload must name the
+expected wheel owner, and its CycloneDX or ELF identity must agree with the
+upstream component and selected architecture.
 
 The filesystem projection validates all raw headers but omits only
 exporter-specific directory re-emissions and whiteout marker attributes that do
@@ -699,8 +707,11 @@ Review source policy with these precise boundaries:
   `sha512sums` input, and any narrow parser exception; never execute an
   `APKBUILD`
 - Docker Official Python policy pins the multi-platform index, exact ordered
-  base diff IDs, recipe, recipe license, and CPython source; it does not contain
-  unused platform manifest or configuration digest fields
+  base diff IDs, recipe, recipe license, CPython source archive, and exact
+  source-carried `LICENSE` and `Include/patchlevel.h`; the source version and
+  hash must match the recipe, and the source patchlevel digest must match both
+  platform image headers; the policy does not contain unused platform manifest
+  or configuration digest fields
 - application evidence is built from every tracked regular Git blob and its
   executable mode at `HEAD`, using recursive `git ls-tree -rz` and `git show`;
   it is not a mutable working-tree copy and is not described as `git archive`
@@ -714,22 +725,27 @@ inventories, collector change, and workflow logs; keep release publication
 blocked until issue #28 supplies the tested tar verifier and runnable recipient
 procedure.
 
-## 5. Confirm both remaining source-completeness gaps remain explicit
+## 5. Confirm the remaining source-completeness gap stays explicit
 
 Both component inventories must contain exactly:
 
 ```json
 {
   "complete": false,
-  "reason": "CPython runtime normalization into the top-level component and notice inventory, native wheel payload and embedded-SBOM component/source expansion remain open in issue #18; public distribution remains blocked pending issue #28."
+  "reason": "Native wheel payload and embedded-SBOM component/source expansion remain open in issue #18; public distribution remains blocked pending issue #28."
 }
 ```
 
-Do not weaken or remove that state. Issue #18 must close both remaining gaps:
+Do not weaken or remove that state. Issue #18 must close the remaining gap by
+expanding native wheel payloads and embedded SBOMs into components, notices,
+and corresponding sources.
 
-1. normalize CPython into the top-level component and notice inventory
-2. expand native wheel payloads and embedded SBOMs into components, notices,
-   and corresponding sources.
+CPython is no longer part of the incomplete status. The trusted helper requires
+one effective top-level CPython component per platform, binds its four runtime
+identities to the all-layer inventory and reviewed base boundary, and verifies
+the pinned recipe, source archive, source-carried version header, and license
+evidence. That closes the CPython tranche without making the entire image
+source-complete.
 
 The trusted helper has already validated `wheel_installations` against
 the all-layer file inventory. It requires every historical installation to bind

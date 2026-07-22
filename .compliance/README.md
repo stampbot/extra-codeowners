@@ -5,6 +5,11 @@ This directory contains the reviewed input to the container evidence collector.
 license, Alpine origin commit, Python source archive, base image, or license-text
 change requires a reviewed policy update.
 
+The policy and generated JSON records use schema version `3`. Evidence
+predicates use media type
+`application/vnd.stampbot.container-evidence.v3+tar+gzip`; earlier or unknown
+versions fail closed.
+
 Raw layer headers remain in the generated all-layer inventory. Filesystem
 policy stores canonical directory effects and removals, not a Docker
 exporter's incidental tar encoding. Regenerate that projection with the
@@ -12,12 +17,17 @@ reviewed helper; do not copy raw directory or whiteout arrays into policy.
 
 Do not describe a passing collector as a legal-compliance determination. The
 collector records the package metadata, embedded wheel SBOM files, native
-payload paths, retained sources, and reviewed policy it observed. It does not
-yet normalize CPython into the top-level inventory or expand native wheel and
+payload paths, retained sources, and reviewed policy it observed. It normalizes
+CPython into the top-level component inventory and binds that record to exact
+version-header, interpreter-link, interpreter, and shared-library identities.
+The bundle also retains the pinned Docker Official Python recipe, exact CPython
+source archive, and source-carried `LICENSE` bytes. The source and image
+`patchlevel.h` digests must agree. It does not yet expand native wheel and
 embedded-SBOM components into complete notice and corresponding-source
-coverage. It does replay `RECORD` ownership for ineffective historical Python
-installs, but attribution does not supply the missing component and source
-closure. The inventory and manifest therefore mark source completeness `false`.
+coverage. It also replays `RECORD` ownership for ineffective historical Python
+installs, but attribution alone does not supply that missing component and
+source closure. The inventory and manifest therefore mark source completeness
+`false` solely for the remaining native-wheel and embedded-SBOM expansion.
 
 Do not set `distribution_approval.approved` to `true` while that status remains
 false. Normal inventory verification does not treat that policy field as a
