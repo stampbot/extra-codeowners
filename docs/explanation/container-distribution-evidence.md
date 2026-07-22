@@ -16,7 +16,7 @@ publish a supported container image yet.
 | Evidence subject | Each CI archive names its local image configuration digest because CI does not publish a platform manifest. |
 | Public `main` image | Disabled; the publication job has been removed. |
 | Tagged release | Blocked before any job can publish an image, chart, Python package, or GitHub release. |
-| Source closure | CPython and Greenlet are resolved on both platforms; six native-wheel owners remain incomplete. |
+| Source closure | CPython, Greenlet, MarkupSafe, and SQLAlchemy are resolved on both platforms; four native-wheel owners remain incomplete. |
 
 The release workflow can still validate source, build proof, and scan a
 candidate with repository-read permission. A separate job then fails before
@@ -42,9 +42,9 @@ of that proof in release evidence and its handoff to the future isolated
 publication path.
 
 CPython has a normalized top-level component record with exact runtime
-identity, recipe, source, and license evidence. Greenlet is the first native
-wheel owner with closed-world coverage on both platforms. Six other owners do
-not yet have complete component, notice, and corresponding-source records.
+identity, recipe, source, and license evidence. Greenlet, MarkupSafe, and
+SQLAlchemy now have closed-world native-owner coverage on both platforms. Four
+other owners do not yet have complete records for their observed surfaces.
 Issue [#18](https://github.com/stampbot/extra-codeowners/issues/18) tracks that
 work. Until it closes, the collector sets `source_completeness.complete` to
 `false` and rejects distribution approval. Issue #28 independently blocks
@@ -80,9 +80,10 @@ every layer against the bytes it received. It then:
    verifies its complete archive `RECORD` against the historical installation,
    and retains the wheel and raw SBOM bytes under `artifacts/native-wheels/`
 9. validates the closed-world native-component policy, writes a per-owner
-   coverage ledger, and retains the pinned Greenlet/GCC sources and notices
-10. retrieves the remaining hash-pinned top-level source and license material
-    and produces a deterministic, explicitly incomplete review archive.
+   coverage ledger, and binds each resolved owner to its exact locked source
+10. retrieves the hash-pinned source and license material, including the
+    Greenlet/GCC component source and notices, and produces a deterministic,
+    explicitly incomplete review archive.
 
 ### Historical Python installation replay
 
@@ -123,9 +124,9 @@ occurrence identities fail collection. Every `.pyc` or `.pyo` occurrence under
 This replay establishes which wheel owns each file occurrence and whether the
 installed executable bytes match the wheel. The native-component ledger uses
 that ownership to review one complete wheel at a time. It does not infer which
-source or nested SBOM component produced an individual file. Greenlet is
-resolved; six other owners still lack corresponding-source closure, so overall
-source completeness remains false.
+source or nested SBOM component produced an individual file. Greenlet,
+MarkupSafe, and SQLAlchemy are resolved; four other owners still lack
+corresponding-source closure, so overall source completeness remains false.
 
 ### CPython runtime identity and source binding
 
@@ -184,13 +185,13 @@ selects that owner's exact platform wheel from `uv.lock`, verifies its complete
 archive `RECORD`, and matches its installed files to the historical record.
 The bundle keeps the wheel and a separately addressed copy of every raw SBOM.
 
-This proves which wheel supplied the bytes. Schema 5 adds closed-world coverage
-for individual wheel owners. A resolved record must contain the exact set of
-every native path and digest owned by the wheel. It must also cover every
-embedded SBOM, reproduce every parsed component identity, name one immutable
-source record and reviewed license for each component, and use every configured
-source. Missing, extra, duplicated, cross-platform, conflicting, or stale
-records fail.
+This proves which wheel supplied the bytes. Schema 6 adds closed-world coverage
+for individual wheel owners. Every owner record carries explicit
+`native_payloads`, `sboms`, and owner-level `components` sets. At least one
+native or SBOM surface must exist. The component set must be the canonical
+union of the components represented by the SBOM records. Empty sets are valid
+evidence; omitted sets are not. Missing, extra, duplicated, cross-platform,
+conflicting, or stale records fail.
 
 Those are parallel evidence sets, not a file-provenance map. Greenlet's
 auditwheel SBOM lists `libgcc` and `libstdc++` identities and dependencies, but
@@ -234,10 +235,35 @@ reviewed expression and separately preserves the aggregate license text from
 `APKBUILD`. The evidence does not present that review as upstream metadata or
 legal advice.
 
+MarkupSafe is the second resolved owner. Each platform wheel has one
+`_speedups` extension and no embedded SBOM. The policy binds that one native
+role, its exact platform path and digest, the exact locked wheel, and the
+80,313-byte MarkupSafe 3.0.3 sdist. Its `sboms` and owner-level `components`
+sets are explicitly empty. That closes the observed wheel surface without
+inventing a component or build claim. The sdist and its BSD-3-Clause license
+files are retained as exact source evidence; they do not prove that every byte
+in the extension was reproducibly produced from that archive.
+
+SQLAlchemy is the third resolved owner. Each platform wheel contains five
+`cyextension` modules and no embedded SBOM or separately packaged native
+library. Every module's dynamic section names only the platform musl runtime.
+The policy binds all five paths, roles, and digests to the exact locked wheel
+and the 9,912,201-byte SQLAlchemy 2.0.51 sdist. Its `sboms` and `components`
+sets are explicitly empty.
+
+The sdist carries the five project-authored `.pyx` files, one supporting
+`.pxd`, no generated C source, and no separately attributable bundled
+third-party native code. The collector retains that exact sdist and its MIT
+license. The owner-level component set remains empty because SQLAlchemy's wheel
+has no embedded SBOM; schema 6 derives the set from embedded SBOM components.
+Cython and GCC are build tools, not distributed SQLAlchemy components. Musl
+remains independently inventoried as part of the platform. This evidence does
+not prove that the wheels are reproducible or close the compiler toolchain.
+
 The derived `inventory/native-component-coverage.json` file repeats every
 resolved record and lists the raw native and SBOM observations for unresolved
-owners. Greenlet is resolved on both platforms. Six owners remain unresolved,
-so source completeness remains false.
+owners. Greenlet, MarkupSafe, and SQLAlchemy are resolved on both platforms.
+Four owners remain unresolved, so source completeness remains false.
 
 ### Failed jobs can still leave diagnostics
 
@@ -351,7 +377,7 @@ change breaks the policy comparison.
 A top-level `LicenseRef-*` resolution requires an exact component set, a
 nonempty rationale, and one source-carried notice path and SHA-256 for every
 covered component. An unrelated file with a plausible name cannot satisfy the
-pin. Schema 5 rejects `LicenseRef-*` in nested native-component expressions
+pin. Schema 6 rejects `LicenseRef-*` in native-component expressions
 because those components do not use the top-level custom-license evidence
 ledger. The current public-domain resolutions bind these exact records:
 
@@ -395,8 +421,9 @@ unprivileged pinned fetch
 ```
 
 Before those phases may publish, the same closed-world coverage now used for
-Greenlet must cover the other six native-wheel owners, or those wheels must be
-replaced with builds linked against separately inventoried packages.
+Greenlet, MarkupSafe, and SQLAlchemy must cover the other four native-wheel
+owners, or those wheels must be replaced with builds linked against separately
+inventoried packages.
 
 The parsing phases must run rootless with `--network none`, immutable inputs,
 read-only mounts where practical, and explicit size limits. The first parse
@@ -412,12 +439,12 @@ must fail verification.
 ## Trust boundary and residual risk
 
 The review archive records what the collector observed and fetched under
-reviewed policy. Greenlet is closed, but six native-wheel owners are not, so the
-archive is not component/source complete today. Even a future complete archive
-would not prove upstream metadata is correct, identify every copyright holder,
-or decide whether a delivery mechanism satisfies every jurisdiction. Hashes
-protect reviewed bytes from silent mutation; they do not make the original
-source trustworthy.
+reviewed policy. Greenlet, MarkupSafe, and SQLAlchemy are closed, but four
+native-wheel owners are not, so the archive is not component/source complete
+today. Even a future complete archive would not prove upstream metadata is
+correct, identify every copyright holder, or decide whether a delivery
+mechanism satisfies every jurisdiction. Hashes protect reviewed bytes from
+silent mutation; they do not make the original source trustworthy.
 
 A maintainer must review both platforms and separately approve recipient
 delivery. Qualified legal review remains necessary before a paid hosted

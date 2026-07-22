@@ -5,8 +5,8 @@ evidence. It is an allowlist, not runtime configuration. A change to a package,
 source archive, license, base layer, native payload, or embedded SBOM must be
 matched by an intentional policy update.
 
-The current policy schema is `5`. Evidence predicates use
-`application/vnd.stampbot.container-evidence.v5+tar+gzip`. The collector
+The current policy schema is `6`. Evidence predicates use
+`application/vnd.stampbot.container-evidence.v6+tar+gzip`. The collector
 rejects older schemas, unknown fields, and records that no longer match the
 image.
 
@@ -18,8 +18,10 @@ Docker Official Python recipe, the exact source archive, and the source-carried
 license. It also retains the exact locked wheel and raw embedded SBOM for every
 Python package that owns native code or an SBOM.
 
-Schema 5 adds closed-world coverage one wheel owner at a time. Greenlet is the
-first resolved owner on both supported architectures. Its policy:
+Schema 6 closes one wheel owner at a time. Greenlet, MarkupSafe, and SQLAlchemy
+are resolved on both supported architectures.
+
+The Greenlet record:
 
 - binds the exact platform wheel and Greenlet sdist from `uv.lock`
 - records all five native files as one exact path-and-digest set, with each
@@ -33,13 +35,27 @@ first resolved owner on both supported architectures. Its policy:
 - verifies the recipe-selected GCC 14.2.0 source archive and retains its
   reviewed `COPYING3` and `COPYING.RUNTIME` files.
 
-These records prove that the five native files and the auditwheel SBOM are in
-the exact reviewed wheel. The SBOM does not relate a component to a file path,
-hash, or SONAME. The policy therefore does not attribute any individual native
-file to the Greenlet sdist, `libgcc`, or `libstdc++`.
+The MarkupSafe record binds the exact platform wheel, the 80,313-byte sdist from
+`uv.lock`, and the wheel's one `_speedups` extension. It also records explicit
+empty SBOM and embedded-component sets. An empty set is evidence that the
+reviewed wheel contains no such surface; omitting the field is a schema error.
+
+The SQLAlchemy record binds the exact platform wheel, the 9,912,201-byte sdist,
+and all five `cyextension` payloads. The wheels contain no embedded SBOM or
+separately packaged native library, so the SBOM and component sets are empty.
+Each extension names only the platform musl runtime as a dynamic dependency.
+The source archive carries the project's Cython sources and no bundled
+third-party native code.
+
+These records prove exact co-membership in each reviewed wheel. They do not
+prove how an individual binary was built. Greenlet's SBOM does not relate a
+component to a file path, hash, or SONAME, so the policy does not assign a file
+to the Greenlet sdist, `libgcc`, or `libstdc++`. MarkupSafe and SQLAlchemy have
+no embedded SBOM. Their exact sdists do not prove how the compiled extensions
+were built or explain every binary byte.
 
 `inventory/native-component-coverage.json` records that result and lists every
-owner still open. Six native-wheel owners remain unresolved, so
+owner still open. Four native-wheel owners remain unresolved, so
 `source_completeness.complete` and `distribution_approval.approved` both remain
 `false`. The ledger is evidence of incremental progress; it is not permission
 to distribute the image.

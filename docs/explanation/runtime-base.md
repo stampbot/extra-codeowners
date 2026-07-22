@@ -137,18 +137,27 @@ recipe, the CPython source archive selected by that recipe, and the exact
 `LICENSE` bytes carried in the source. The source and image version-header
 digests must match.
 
-### Greenlet evidence coverage
+### Native-owner evidence coverage
 
-Greenlet is the first native-wheel owner with closed-world coverage. On both
-architectures, the evidence binds the exact wheel and sdist, accounts for every
-native payload, and reproduces the component identities observed in its
-embedded SBOM. Those are exact co-membership sets, not a map from components to
-individual files. The bundle separately retains the Alpine GCC recipe, source
-archive, and notices reviewed for the SBOM's `libgcc` and `libstdc++`
-identities.
+Greenlet, MarkupSafe, and SQLAlchemy have closed-world coverage on both
+architectures.
+Greenlet binds the exact wheel and sdist, accounts for every native payload,
+and reproduces the component identities observed in its embedded SBOM. The
+bundle separately retains the Alpine GCC recipe, source archive, and notices
+reviewed for the SBOM's `libgcc` and `libstdc++` identities.
 
-Six other native-wheel owners still lack equivalent component, notice, and
-source coverage. That gap is why
+MarkupSafe binds the exact wheel, its one `_speedups` native payload, and the
+80,313-byte sdist. It has explicit empty SBOM and component sets. Those sets
+describe the reviewed wheel; they do not prove that the sdist explains every
+byte in the extension.
+
+SQLAlchemy binds the exact wheel, five `cyextension` payloads, and the
+9,912,201-byte sdist. Its SBOM and component sets are also explicitly empty.
+The sdist carries the project's Cython sources, but this evidence does not
+prove reproducibility or close the compiler toolchain.
+
+Four other native-wheel owners still lack equivalent wheel-surface and source
+coverage. That gap is why
 [issue #18](https://github.com/stampbot/extra-codeowners/issues/18) still blocks
 distribution.
 

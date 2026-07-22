@@ -25,7 +25,7 @@ The enforcement code is in `.github/scripts/container_evidence.py`, especially
 
 ## Common types and limits
 
-The current schema version is integer `5`. JSON must be UTF-8, no larger than
+The current schema version is integer `6`. JSON must be UTF-8, no larger than
 64 MiB, no deeper than 64 containers, and must not contain duplicate object
 keys, floating-point values, non-finite numbers, or invalid Unicode. Unless a
 field says otherwise, every object has exactly the listed keys.
@@ -54,7 +54,7 @@ The policy has exactly these fields:
 
 | Field | Type | Meaning | Consuming gate |
 | --- | --- | --- | --- |
-| `schema_version` | integer | Policy schema; exactly `5`. | Every command through `validate_policy_schema`. |
+| `schema_version` | integer | Policy schema; exactly `6`. | Every command through `validate_policy_schema`. |
 | `base_image` | string | Nonempty bounded Dockerfile base reference; the schema rejects whitespace and `@`. The checked-in value is a tagged Docker Official Python reference. | Exact Dockerfile binding during `bundle` and `verify-ci-policy`. |
 | `base_image_index_digest` | `qualified_sha256` | Reviewed multi-platform base index. | Schema validation during `verify`; exact Dockerfile/index binding during `bundle` and `verify-ci-policy`. |
 | `base_image_platforms` | platform object | Exact ordered base layer diff IDs for both platforms. | Base-prefix and post-base provenance gates. |
@@ -168,7 +168,7 @@ lower OCI layer remains in policy with `effective: false`.
 
 Approval is necessary but not sufficient. The collector also requires the
 inventory's exact complete-source status. Current code keeps `complete: false`
-while six native-wheel owners remain unresolved under issue #18, so the
+while four native-wheel owners remain unresolved under issue #18, so the
 approval-required gate cannot pass. Issue #28 independently keeps publication
 authority out of the collector. Issue #32 still requires the selected
 application proof to reach release evidence and the future publication jobs.
@@ -200,7 +200,7 @@ determination.
 | `sha256` | `sha256` | Exact text bytes. |
 
 The ID set must equal every non-operator, non-`LicenseRef-*` token required by
-the reviewed top-level and resolved native-component expressions. Schema 5
+the reviewed top-level and resolved native-component expressions. Schema 6
 does not allow `LicenseRef-*` in a nested native-component expression. The
 Greenlet closure therefore adds the pinned SPDX `GCC-exception-3.1` text
 alongside the existing `GPL-3.0-or-later` text.
@@ -267,13 +267,15 @@ name the same owner set. An owner record has exactly:
 | `owner` | Canonical `python:NAME@VERSION`, unique on the platform. |
 | `wheel` | Exact credential-free HTTPS URL, SHA-256, and positive size of the platform wheel. The filename must identify that owner and a supported CPython 3.14 musllinux tag for the platform. |
 | `owner_source` | Exact URL, SHA-256, and size of the owner's source archive. Bundle generation requires byte-for-byte equality with the `uv.lock` sdist record. |
-| `native_payloads` | Nonempty, sorted, unique `role`, `path`, and `sha256` records for every native file owned by the wheel. The set is not attributed to `owner_source` or an SBOM component. |
-| `sboms` | Sorted, nonempty embedded-SBOM records attributed to this owner. |
+| `native_payloads` | Sorted, unique `role`, `path`, and `sha256` records for every native file owned by the wheel. The set may be empty and is not attributed to `owner_source` or an SBOM component. |
+| `sboms` | Sorted embedded-SBOM records attributed to this owner. The set may be empty but must be present. |
+| `components` | Canonical owner-level set of reviewed embedded components. It must equal the union represented by `sboms[].components`, including an explicit empty set when the wheel has none. |
 
-Each SBOM record pins its installed `path` and `sha256`. Its nonempty
-`components` list must exactly equal the canonical component projection parsed
-from those SBOM bytes. A component contains its CycloneDX `type`, `name`,
-`version`, and `purl`, plus:
+An owner must expose at least one native payload or embedded SBOM. An owner with
+all three sets empty is invalid. Each SBOM record pins its installed `path` and
+`sha256`. Its `components` list may be empty and must exactly equal the
+canonical component projection parsed from those SBOM bytes. A component
+contains its CycloneDX `type`, `name`, `version`, and `purl`, plus:
 
 - `source`: one key from `native_component_sources`
 - `reviewed_license`: the project's reviewed expression; `LicenseRef-*` is
@@ -300,6 +302,14 @@ platform records must contain the same role set. This projection prevents a
 role/path swap; it does not attribute the payload to `owner_source` or an SBOM
 component.
 
+Matching owner records on the two platforms must also use the same
+`owner_source`, owner-level `components` set, and logical SBOM set. The logical
+SBOM comparison binds each installed SBOM path and its component set while
+allowing the platform-specific SBOM digest to differ. Architecture-specific
+wheel pins, payload paths, and payload digests may differ. An empty native,
+SBOM, or component set is still part of this comparison; it cannot silently
+become nonempty on the other platform.
+
 For a resolved owner, `native_payloads` must equal that owner's complete native
 payload inventory by path and digest. Its configured SBOM path/hash set and
 each SBOM's component projection must also match the inventory exactly.
@@ -309,13 +319,13 @@ Across all owners, SBOMs, and platforms, one package URL must map to one exact
 normalized `type`, `name`, and `version` identity, source ID, and reviewed
 license.
 
-The three evidence groups are intentionally separate: `native_payloads` proves
-the exact files co-contained in the wheel, `owner_source` binds the owner's
-exact source archive, and each SBOM component binds an exact identity, source,
-and reviewed license. The auditwheel SBOM has no component-to-file path, hash,
-or SONAME relationship. Schema 5 therefore rejects legacy `owner_payloads` and
-all per-component `payloads` fields rather than implying an unsupported
-attribution.
+The evidence groups are intentionally separate: `native_payloads` proves the
+exact files co-contained in the wheel, `owner_source` binds the owner's exact
+source archive, `sboms` binds the observed embedded documents, and
+`components` binds their reviewed identity set. An auditwheel SBOM need not
+provide a component-to-file path, hash, or SONAME relationship. Schema 6
+therefore rejects legacy `owner_payloads` and all per-component `payloads`
+fields rather than implying an unsupported attribution.
 
 `native_component_sources` is keyed as `alpine:ORIGIN@VERSION`. The current
 record shape is deliberately narrow and supports one commit-pinned aports
@@ -340,12 +350,25 @@ GCC 14.2.0-r6 source record. It makes no claim that either identity explains a
 particular native file. The Greenlet sdist is likewise an exact owner source,
 not a file-level attribution.
 
+The MarkupSafe records contain one `native_payloads` entry per platform and
+explicit empty `sboms` and `components` arrays. They bind the exact locked
+wheel and the 80,313-byte MarkupSafe 3.0.3 sdist. The empty arrays mean that
+the reviewed wheel exposes no embedded SBOM or component identity; they do not
+claim that the sdist explains every byte of the compiled extension.
+
+The SQLAlchemy records contain five `native_payloads` entries per platform and
+explicit empty `sboms` and `components` arrays. They bind the exact locked
+wheel and the 9,912,201-byte SQLAlchemy 2.0.51 sdist. Each platform record uses
+the same five derived roles. The empty arrays describe the wheel's observed
+surface; they do not claim reproducibility or close the compiler toolchain.
+
 `inventory/native-component-coverage.json` is derived from policy and observed
 inventory. It contains `schema_version`, `platform`, `complete`,
 `resolved_owners`, and `unresolved_owners`. Resolved records reproduce the exact
 reviewed sets. Unresolved records retain each owner's native path/hash pairs
 and embedded-SBOM component projection. The checked-in policy resolves
-Greenlet; the ledger still reports six unresolved owners and `complete: false`.
+Greenlet, MarkupSafe, and SQLAlchemy; the ledger still reports four unresolved
+owners and `complete: false`.
 
 `filesystem_baselines` also has both platform keys. Each value has exactly:
 
