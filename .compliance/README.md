@@ -44,6 +44,15 @@ must also reach release and ad-hoc consumers before supported distribution. An
 is unsupported and incomplete; do not deploy or mirror it. Pull-request CI
 artifacts are unsigned, untrusted review inputs, not release assets.
 
+The CI [raw OCI release-spine check](../docs/reference/release-spine-format.md)
+is another internal proof, not compliance evidence. It verifies a generated
+two-platform fixture carried as two unarchived workflow artifacts. The spine
+contains opaque OCI object bytes and a canonical range record; it does not
+inspect layer contents or establish component, notice, source, SBOM,
+signature, attestation, or publication completeness. A future release consumer
+must take the root index digest from the pinned build action outside the record
+and must stream from the verifier's already-open file descriptor.
+
 Run the documented workflow in
 [`docs/how-to/review-container-evidence.md`](../docs/how-to/review-container-evidence.md)
 to inspect this evidence.

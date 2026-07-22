@@ -25,6 +25,28 @@ the privileged publication jobs can run. Changing
 Issue [#28](https://github.com/stampbot/extra-codeowners/issues/28) tracks the
 privilege-separated release implementation.
 
+CI also exercises a
+[raw OCI release-spine transport](../reference/release-spine-format.md). An
+unprivileged producer turns a generated two-platform OCI fixture into one
+canonical record and one opaque byte-range file. GitHub stores them as separate
+raw artifacts. A read-only job downloads each by immutable artifact ID and
+verifies the provider digest, trusted root digest, record graph, and every byte
+range without invoking an archive parser. The root digest is synthetic, no
+real candidate is built, and this internal transport test does not weaken the
+publication blocker.
+
+The spine deliberately stops before filesystem meaning. It does not check tar
+members, gzip structure, OCI diff IDs, installed application files, notices,
+source completeness, signatures, or attestations. Those remain the work of the
+evidence collector and the future isolated release path. When that path is
+implemented, its trust anchor must be the root index digest returned by the
+pinned build action, not a digest copied from the spine record. It must also
+consume only object chunks that the spine verifier has copied from its retained
+descriptor and fully authenticated before exposure. It must not reopen a
+verified path, and it must wait for the verification context's final
+unchanged-file check before it publishes a manifest, tag, release, or other
+reference.
+
 The application build has its own reproducibility proof. CI builds the package
 twice on each native architecture from the hash-pinned PEP 517 closure and
 requires the two architecture proofs to be byte-identical. It then selects one
