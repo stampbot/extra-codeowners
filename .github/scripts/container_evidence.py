@@ -5734,6 +5734,18 @@ def verify_cpython_source_archive(content: bytes, cpython_source: Mapping[str, A
     return found_license
 
 
+def detached_license_source(entry: Mapping[str, Any], component: str) -> tuple[str, str] | None:
+    """Return a separately fetched license without conflating archive-member hashes."""
+
+    license_url = entry.get("license_url")
+    if license_url is None:
+        return None
+    license_hash = entry.get("license_sha256")
+    if not isinstance(license_url, str) or not isinstance(license_hash, str):
+        raise EvidenceError(f"invalid license source for {component}")
+    return license_url, license_hash
+
+
 def fetch(
     url: str,
     expected_hash: str,
@@ -7039,11 +7051,9 @@ def build_bundle(
                 {"component": manifest_component, "path": license_path}
                 for license_path in found_base_licenses
             )
-            license_url = entry.get("license_url")
-            license_hash = entry.get("license_sha256")
-            if license_url is not None or license_hash is not None:
-                if not isinstance(license_url, str) or not isinstance(license_hash, str):
-                    raise EvidenceError(f"invalid license source for {component}")
+            detached_license = detached_license_source(entry, component)
+            if detached_license is not None:
+                license_url, license_hash = detached_license
                 license_download = bounded_fetch(
                     license_url, license_hash, max_bytes=MAX_LICENSE_BYTES
                 )

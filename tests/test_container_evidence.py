@@ -1880,6 +1880,33 @@ def test_cpython_source_archive_binds_exact_archive_and_license_bytes() -> None:
         )
 
 
+def test_detached_license_source_does_not_conflate_archive_member_digest() -> None:
+    digest = "a" * 64
+    assert (
+        evidence.detached_license_source(
+            {
+                "license_member": "Python-3.14.6/LICENSE",
+                "license_sha256": digest,
+            },
+            "cpython",
+        )
+        is None
+    )
+    assert evidence.detached_license_source(
+        {
+            "license_url": "https://example.com/LICENSE",
+            "license_sha256": digest,
+        },
+        "docker-python-recipe",
+    ) == ("https://example.com/LICENSE", digest)
+
+    with pytest.raises(evidence.EvidenceError, match="invalid license source"):
+        evidence.detached_license_source(
+            {"license_url": "https://example.com/LICENSE"},
+            "docker-python-recipe",
+        )
+
+
 def test_cpython_source_archive_rejects_ambiguous_or_linked_license() -> None:
     member = "Python-3.14.6/LICENSE"
     patchlevel_member = "Python-3.14.6/Include/patchlevel.h"
