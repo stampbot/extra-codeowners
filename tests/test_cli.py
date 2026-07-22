@@ -1,3 +1,5 @@
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +14,21 @@ from extra_codeowners.database import (
     QueueStore,
 )
 from extra_codeowners.migrations import upgrade_database
+
+
+def test_module_help_has_no_startup_log_noise() -> None:
+    result = subprocess.run(
+        [sys.executable, "-m", "extra_codeowners", "--help"],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert result.returncode == 0
+    assert result.stderr == ""
+    assert "Usage:" in result.stdout
+    assert "setup plugin alembic." not in result.stdout
 
 
 def test_validate_policy_command(tmp_path: Path) -> None:
@@ -90,7 +107,7 @@ for_owners = ["*"]
 def test_serve_passes_safe_defaults_to_uvicorn(monkeypatch: Any) -> None:
     calls: list[dict[str, Any]] = []
     sentinel = object()
-    monkeypatch.setattr(cli_module, "create_app", lambda settings: sentinel)
+    monkeypatch.setattr(cli_module, "_create_service_app", lambda settings: sentinel)
     monkeypatch.setattr(
         uvicorn,
         "run",
