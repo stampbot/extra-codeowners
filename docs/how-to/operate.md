@@ -1,231 +1,435 @@
 # Operate and recover Extra CODEOWNERS
 
-Monitor a deployment, diagnose stale checks, replay work safely, and rotate credentials with this guide. Use the guide from the deployed commit: no compatibility guarantee covers its operational interfaces before the first supported release. The architecture is defined in the [deployment guide](deploy.md).
+Use this runbook to monitor the service, investigate a stale check, rotate
+credentials, and retire an installation without dropping code-owner
+enforcement.
 
-## Normal operating state
+Operate from documentation that matches the deployed commit. Before the first
+supported release, operational interfaces may change without a compatibility
+period. The [deployment guide](deploy.md) describes the runtime and its current
+production blockers.
 
-Watch these conditions:
+## Know the healthy baseline
 
-- `/health/live` and `/health/ready` succeed for serving instances. If an instance runs background work, enable both the worker and reconciler and confirm that both response fields are `true`.
-- `extra_codeowners_queue_depth` returns to its usual baseline after bursts of pull-request or authority-change webhooks.
-- Evaluation failures and latency stay within your objectives.
-- `extra_codeowners_webhook_failures_total` doesn't rise unexpectedly.
-- Sustained GitHub API `403` or `429` responses trigger an investigation into permissions, suspension, or rate limits.
-- `extra_codeowners_reconciliations_total{result="failure"}` doesn't rise unexpectedly, and `extra_codeowners_reconciliation_last_success_timestamp_seconds` stays within your reconciliation objective.
-- Every service node keeps an accurate clock. Significant skew can break GitHub authentication and lease timing.
-- `webhook_deliveries_pruned` logs appear when expired IDs exist, and the delivery table doesn't grow unexpectedly.
-- `extra_codeowners_insecure_changes_enabled` stays `0` unless an approved exception is active.
-- `extra_codeowners_dead_jobs` stays `0`. A nonzero value means a legacy or manually introduced terminal row exists; normal runtime exhaustion doesn't create one.
-- Every `in_progress` check has active or pending work and doesn't remain unexplained beyond the retry objective.
+Record a normal value and alerting objective for each signal below. A fixed
+threshold is less useful than a baseline because webhook volume varies with
+pull-request activity.
 
-Reconciliation reevaluates every idle open pull request. Its check briefly returns to `in_progress`, even when no webhook was missed. Choose an interval that balances stale-evidence exposure, GitHub API usage, evaluation latency, and this short interruption to merge availability.
+| Signal | Healthy condition |
+| --- | --- |
+| `/health/live` | HTTP 200 on every serving instance |
+| `/health/ready` | HTTP 200, with database and configured background tasks ready |
+| `extra_codeowners_queue_depth` | Returns to the local baseline after webhook bursts |
+| `extra_codeowners_dead_jobs` | `0` |
+| `extra_codeowners_webhook_failures_total` | No unexplained increase |
+| `extra_codeowners_reconciliations_total{result="failure"}` | No unexplained increase |
+| `extra_codeowners_reconciliation_last_success_timestamp_seconds` | Newer than the reconciliation objective |
+| `extra_codeowners_insecure_changes_enabled` | `0` unless an approved exception is active |
 
-Accepted-webhook logs include the delivery ID, event, action, available repository or pull-request context, and whether the service queued work. Ignored-event logs omit repository and pull-request fields because they retain no work. Evaluation failures carry safe pull-request and last-delivery correlation fields. Authority fan-out failures carry the installation, scope, and reason. When a direct delivery triggered the latest evaluation, its audit records the trigger reason and delivery ID.
+Also watch evaluation latency and failures, PostgreSQL latency, repeated GitHub
+API `403` or `429` responses, and every unexplained long-lived
+`in_progress` check.
 
-Treat logs and audits as private repository metadata. Restrict their retention and access. They must never contain installation tokens, private keys, secrets, authorization headers, full private payloads, or file contents.
+If an instance is meant to run background work, enable both the worker and
+reconciler and confirm that both health-response fields are `true`. Keep
+the deployment settings in the same check because a disabled task reports as
+healthy. Every node also needs an accurate UTC clock. Clock skew can break
+GitHub authentication, setup-state expiry, and database leases.
 
-The service doesn't expose remaining GitHub rate-limit quota. Monitor API failures and limit the service to disposable repositories unless deployment-specific rate-limit detection closes that gap.
+Reconciliation requests work only for open pull requests that do not already
+have a queue row. A reconciled check briefly returns to `in_progress` while
+the worker fetches current evidence. Choose an interval that balances that
+short merge interruption against stale-evidence exposure, GitHub API use, and
+your recovery objective.
+
+The service does not expose remaining GitHub rate-limit quota. Watch API
+failures instead, and keep the service limited to disposable repositories
+until a deployment-specific rate-limit monitor closes that gap.
+
+## Protect logs and audit data
+
+Accepted-webhook logs include the delivery ID, event, action, available
+repository or pull-request context, and whether work was queued. Ignored events
+omit repository and pull-request fields because the service does not retain
+them. Evaluation failures carry the pull request and last-delivery correlation
+fields. Authority failures carry the installation, scope, and reason. An audit
+triggered by a direct delivery records its reason and delivery ID.
+
+Treat all of this as private repository metadata. Restrict access and
+retention. Logs and audits must never contain installation tokens, private
+keys, webhook secrets, authorization headers, complete private payloads, or
+file contents.
 
 ## Manage delivery and audit retention
 
-Set `EXTRA_CODEOWNERS_WEBHOOK_DELIVERY_RETENTION_DAYS` long enough to cover GitHub redelivery and your incident-investigation window. Don't retain private repository metadata longer than you can justify. The default is 30 days.
+`EXTRA_CODEOWNERS_WEBHOOK_DELIVERY_RETENTION_DAYS` defaults to 30 days.
+Set it long enough to cover GitHub redelivery and incident investigation, but
+don't retain private metadata longer than you can justify.
 
-On each run, the elected reconciler removes older webhook delivery IDs. If you disable reconciliation, you also disable automatic pruning.
+The elected reconciler prunes expired delivery IDs and logs
+`webhook_deliveries_pruned` when it removes any. Disabling reconciliation
+also disables automatic pruning.
 
-After an ID expires, GitHub can redeliver and the service can accept it again. This doesn't replay stored authorization evidence. The unique pull-request job is created or coalesced, and the worker fetches current GitHub state before deciding.
+An expired ID may be accepted again if GitHub redelivers it. That does not
+restore old authorization evidence. The delivery creates or coalesces a fresh
+pull-request job, and the worker reads current GitHub state.
 
-The service keeps only the latest evaluation audit for each pull request, but doesn't delete those audit rows automatically. If you need database-level retention, review incident, privacy, and recovery needs first. Back up the database before an approved retention operation; other direct database changes are unsupported.
+The service retains only the latest evaluation audit for each pull request,
+but it does not delete those rows automatically. Back up the database before
+an approved retention operation. Direct database changes for any other reason
+are unsupported.
 
-## Diagnose a missing or stale check
+## Investigate a missing or stale check
 
-### 1. Confirm the policy is meant to run
+Work through these steps in order. Don't publish a replacement success or edit
+queue state to make the symptom disappear.
 
-On the pull request's exact base commit, confirm that repository policy exists at the effective `EXTRA_CODEOWNERS_POLICY_PATH`. The default is `.github/extra-codeowners.toml`. Verify that it sets `enabled = true`.
+### 1. Confirm that policy should run
 
-Confirm that the App installation includes the target repository and the organization-policy repository, which defaults to `.github`.
+Read repository policy from the pull request's exact base commit. Confirm that
+it exists at the effective `EXTRA_CODEOWNERS_POLICY_PATH` and contains
+`enabled = true`. The default path is
+`.github/extra-codeowners.toml`.
 
-### 2. Inspect GitHub delivery state
+Confirm that the App installation can access both the target repository and
+the organization-policy repository, which defaults to `.github`.
 
-In the GitHub App's **Advanced** settings, find the relevant webhook delivery. Record its delivery ID and event type without copying the full payload into an issue.
+An absent repository policy produces no check when the repository has no
+previous managed check. An explicitly disabled policy produces a failing
+check. The organization-policy repository itself is deliberately excluded
+from pull-request evaluation and must use native human code-owner enforcement.
 
-- If GitHub never attempted delivery, verify the App's event subscription and repository selection.
-- If delivery received a non-successful HTTP response, find the same delivery ID in ingress and service logs.
-- If GitHub reports a network failure, verify DNS, TLS, ingress routing, and readiness.
-- If a mapped delivery succeeded, continue to the durable queue. Mapped deliveries include pull-request, review, rerequest, push, label, member, membership, team, team-add, organization, installation, installation-target, repository, and repository-selection events.
+### 2. Trace the GitHub delivery
 
-The service acknowledges ignored actions and pull-request events for the organization-policy repository without storing durable work. It retains a relevant push or lifecycle event for that repository and fans it out across the installation. It does the same when the policy repository is removed from App selection or when removal evidence is malformed. A well-formed removal containing only ordinary target repositories is acknowledged without work because access is already gone.
+Open the App's **Advanced** settings and find the delivery. Record its delivery
+ID and event type, but don't copy the complete payload into an issue.
 
-If you find `webhook_durable_acceptance_failed`, ingress couldn't confirm durable acceptance. A database failure can cause this. So can a timeout while ordering an authority event against an in-flight Check Run.
+- If GitHub never attempted it, check the App subscription and repository
+  selection.
+- If GitHub received a non-2xx response, find the same delivery ID in ingress
+  and service logs.
+- If GitHub reports a network failure, check DNS, TLS, ingress routing, and
+  readiness.
+- If a mapped delivery succeeded, continue to the durable queue.
 
-The service uses fixed timeouts of 3 seconds for a PostgreSQL connection, 2 seconds for application-pool checkout, and 3 seconds for an ordinary statement. Advisory-lock waits use a separate budget for their operation. Correlate the failure with provider latency, proxy health, pool exhaustion, and lock contention. After fixing the dependency or worker problem, manually redeliver the failed GitHub delivery; GitHub won't retry it automatically.
+Mapped events cover pull requests, reviews, check rerequests, pushes, labels,
+members, memberships, teams, team additions, organizations, installations,
+installation targets, repositories, and installation repository selection.
+Unsupported actions are authenticated and acknowledged without durable work.
 
-### 3. Inspect the service
+Pull-request events for the organization-policy repository are also
+acknowledged without retention. A relevant push or lifecycle event for that
+repository is retained and fans out across the installation. Removal of that
+repository, or malformed removal evidence, does the same. A well-formed removal
+containing only ordinary target repositories is acknowledged without work
+because the App has already lost access to them.
 
-Check readiness, database connectivity, worker and reconciler health, reconciliation results, the last-success metric, aggregate queue depth, repeated failures, and GitHub API errors.
+If you see `webhook_durable_acceptance_failed`, ingress could not confirm
+durable storage. A database failure can cause this. So can a timeout while an
+authority event waits for an in-flight Check Run writer.
 
-If the pending queue grows or stays above its baseline past the retry objective, investigate a dependency, worker, or database problem. Broad authority work runs before base-push work. Repository-wide work replaces older base-specific rows. When one repository accumulates more than 100 distinct base refs, the service collapses them into one repository-wide job.
+PostgreSQL uses fixed limits of 3 seconds to connect, 2 seconds to obtain an
+application-pool connection, and 3 seconds for an ordinary statement.
+Correlate the error with provider latency, proxy health, pool exhaustion, and
+lock contention. Once the dependency is healthy, redeliver the failed event.
+GitHub does not retry it automatically.
 
-If the reconciliation timestamp is stale or its failure counter rises, missed-event recovery is unavailable even when the task itself remains alive. Repeated API failures can mean revoked permissions, a suspended installation, rate limiting, or an invalid private key.
+### 3. Inspect the worker and queue
 
-For a mapped pull-request, review, or check-rerequest webhook, ingress stores the event durably. It then makes a bounded attempt to create or update the managed check as `in_progress`. If a repository has neither policy nor a previous managed check, the service skips it deliberately.
+Check readiness, PostgreSQL connectivity, worker and reconciler task health,
+the last successful reconciliation, queue depth, repeated failures, and GitHub
+API errors.
 
-If that fast path times out or the GitHub API raises an exception, the service logs `webhook_check_invalidation_deferred` and increments the webhook-failure counter with reason `invalidation_fast_path`. It still returns `202`. Investigate these signals: stale success can remain visible until the worker reaches GitHub.
-
-Before reading mutable approval evidence, the worker keeps the current-head check `in_progress`. An exception after that point, a newer trigger, or unresolved authority fan-out therefore stays blocking. Evaluation and authority failures remain pending and retry forever. Exponential backoff stops growing at `EXTRA_CODEOWNERS_WORKER_RETRY_MAX_SECONDS`; GitHub rate limits use a separate bounded `Retry-After`. A long-lived `in_progress` check with repeated failures needs a dependency or permission fix, not a manufactured result.
-
-From a checkout or installed container configured with the same database URL, inspect aggregate queue state:
+Run the queue summary from a reviewed checkout configured with the same
+database URL:
 
 ```bash
 uv run python -m extra_codeowners queue-status
 ```
 
-The command prints only `pending=N dead=N`. These counts combine pull-request evaluations and authority fan-out jobs. Normal failures stay pending, so `dead` should be `0`. The `0002_retry_dead_jobs` migration reactivates terminal rows left by an earlier pre-release retry contract. If a terminal row appears afterward, treat it as incompatible or manually introduced state and investigate it.
+Inside the installed runtime image, which does not contain `uv`, run:
 
-### 4. Recover without manufacturing success
+```bash
+python -m extra_codeowners queue-status
+```
 
-If GitHub shows that it didn't accept a delivery, wait until the service is healthy and use **Redeliver**. GitHub doesn't redeliver failures automatically.
+The command prints only aggregate counts:
 
-If an accepted direct pull-request trigger deferred its bounded invalidation fast path, a duplicate delivery can resume that pending attempt. Otherwise, delivery deduplication leaves committed work in place. If no pull-request job exists, scheduled reconciliation creates one.
+```text
+pending=N dead=N
+```
 
-Fix the dependency, credential, permission, or policy problem and let pending work retry. Don't reset attempts to accelerate a retry storm. Ordinary exponential delay is capped by `EXTRA_CODEOWNERS_WORKER_RETRY_MAX_SECONDS`, while rate-limit responses follow GitHub's delay. The check stays `in_progress` until the newest database generation can safely publish a result.
+Both counts combine pull-request evaluation and authority fan-out jobs.
+Ordinary failures remain pending, so `dead` should be zero. Migration
+`0002_retry_dead_jobs` reactivates terminal rows from the earlier
+pre-release retry contract. Treat a later terminal row as incompatible or
+manually introduced state and investigate it.
 
-Use `requeue-dead` only for a legacy or manually introduced terminal row. It isn't part of normal recovery.
+Authority work runs before ordinary pull-request work. Installation-wide work
+splits into repository fences. Repository-wide work replaces older
+base-specific rows, and more than 100 distinct base refs for one repository
+collapse into a conservative repository-wide job.
 
-Never publish a success manually or edit the database to mark work complete.
+For a mapped pull-request, review, or check-rerequest delivery, ingress stores
+the trigger and then makes a bounded attempt to move the managed check to
+`in_progress`. If a fast-path API call fails or times out, the service logs
+`webhook_check_invalidation_deferred`, increments the webhook failure
+counter with reason `invalidation_fast_path`, and still returns `202`
+because the durable job remains authoritative.
 
-### 5. Verify current state
+If the evaluator is unavailable, ingress retains the delivery but returns
+`503`. Redeliver after recovery.
 
-On the exact current head, confirm that the expected App published the check. Verify that its summary reflects the current labels, approvals, paths, and owner sets. A successful check on an older commit doesn't prove recovery.
+Before reading mutable approval evidence, the worker keeps the current-head
+check `in_progress`. A later trigger, an exception, or unresolved authority
+fan-out therefore remains blocking. Evaluation and authority failures retry
+forever. Ordinary exponential delay stops growing at
+`EXTRA_CODEOWNERS_WORKER_RETRY_MAX_SECONDS`; GitHub rate limits use their
+own bounded delay.
 
-## Respond to broad GitHub API failure
+A long-lived `in_progress` check with repeated failures needs a database,
+network, credential, permission, or GitHub recovery. It does not need a
+manufactured result.
 
-If GitHub requests fail across installations:
+### 4. Recover from the cause
 
-1. Preserve fail-closed behavior. If a retry storm threatens GitHub or the database, roll a controlled configuration that sets `EXTRA_CODEOWNERS_WORKER_ENABLED=false` and `EXTRA_CODEOWNERS_RECONCILE_ENABLED=false` on ingress instances. Keep durable webhook storage available. This also pauses automatic delivery-ID pruning; restore both tasks after recovery.
+If GitHub did not receive a successful response, restore service health and use
+**Redeliver**. GitHub doesn't redeliver failures on its own.
+
+A duplicate direct trigger can resume a deferred invalidation attempt.
+Otherwise, delivery deduplication leaves the committed job in place. Scheduled
+reconciliation creates a job only when none exists.
+
+Fix the dependency, credential, permission, or policy problem and let pending
+work retry. Don't reset attempts to accelerate a retry storm. Use
+`requeue-dead` only for a legacy or manually introduced terminal row.
+
+Never mark work complete in the database or publish a success manually.
+
+### 5. Verify current GitHub state
+
+On the pull request's exact current head, confirm that the expected App
+published the check. Read its summary and verify the current labels, approvals,
+paths, and owner sets. A successful check on an older commit is not recovery
+evidence.
+
+## Respond to a broad GitHub API outage
+
+If requests fail across installations:
+
+1. Keep checks fail closed. If retries threaten GitHub or PostgreSQL, roll a
+   controlled configuration with
+   `EXTRA_CODEOWNERS_WORKER_ENABLED=false` and
+   `EXTRA_CODEOWNERS_RECONCILE_ENABLED=false` on ingress instances.
+   Continue durable webhook acceptance if the database can support it.
 2. Check GitHub's published status and the service's rate-limit responses.
-3. Confirm that GitHub hasn't suspended the App and that its private key remains active.
-4. Keep webhook ingress available if it can store work durably without exhausting storage. The invalidation fast path may be deferred while mapped triggers still return `202`; durable workers continue to retry current evidence under queue policy.
-5. Resume workers gradually. Watch pending queue depth, repeated failures, recovery time, and API error rate.
+3. Confirm that GitHub has not suspended the App and that the private key is
+   still active.
+4. Keep ingress available only while it can store work without exhausting
+   capacity. The invalidation fast path may be deferred while mapped triggers
+   still receive `202`.
+5. Resume workers gradually. Watch queue depth, repeated failures, API error
+   rate, and recovery time.
+6. Restore both background tasks after recovery. Pruning is paused while the
+   reconciler is disabled.
 
-If the outage outlasts the repository's merge-availability objective, restore native human code-owner enforcement before removing the Extra CODEOWNERS check. This preserves human review while App delegation is unavailable.
+If the outage exceeds the merge-availability objective, restore native human
+code-owner enforcement before removing the Extra CODEOWNERS required check.
 
-## Rotate the GitHub App private key
+## Rotate credentials
 
-Before rotation, confirm that the deployment can reference a new secret version without printing it.
+### Rotate the App private key
+
+Confirm first that the platform can reference a new secret version without
+printing it.
 
 1. Generate a second private key in the GitHub App settings.
 2. Store it as a new secret-manager version.
-3. Roll one test instance with the new key, then verify readiness and a test installation API call.
+3. Roll one test instance with the new key. Verify readiness and a test
+   installation API call.
 4. Roll the remaining instances.
 5. Verify a current-head evaluation and Check Run.
-6. Delete the old private key in GitHub.
-7. Confirm that no instance reports authentication errors from stale secret mounts.
+6. Delete the old key in GitHub.
+7. Confirm that no instance reports authentication errors from an old mount.
 
-Don't delete the old key until at least one new-key instance passes verification, unless you know the old key is compromised.
+Keep the old key until a new-key instance passes verification, unless the old
+key is compromised.
 
-## Rotate the webhook secret
+### Rotate the webhook secret
 
-GitHub signs each webhook with one secret, so this rotation has no overlap window. Schedule a short controlled transition:
+GitHub signs with one webhook secret, so there is no overlap window:
 
 1. Stop or drain public webhook ingress while workers finish queued work.
-2. During the same maintenance window, update the secret in GitHub and in the secret manager.
-3. Roll every ingress instance with the new secret.
+2. In one maintenance window, update the secret in GitHub and the secret
+   manager.
+3. Roll every ingress instance.
 4. Restore ingress and send a GitHub test delivery.
-5. Confirm that invalid-signature counts stay stable after the test.
-6. Run reconciliation so events from the transition can't leave open pull requests stale.
+5. Confirm that invalid-signature counts remain stable after the test.
+6. Run reconciliation so events from the transition cannot leave open pull
+   requests stale.
 
-If the platform later supports two webhook secrets at once, replace this procedure with overlap and retirement. Document the exact version that adds that support.
+If a later version accepts two secrets, replace this procedure with an overlap
+and retirement plan documented for that version.
 
-## Rotate the database credential
+### Rotate the PostgreSQL credential
 
-If your PostgreSQL provider supports overlapping credentials, use its tested procedure:
+Use overlapping credentials when the provider supports them:
 
-1. Create a replacement credential with the same narrow database privileges. For remote transport, use `sslmode=verify-full`. For a reviewed loopback or Unix-socket proxy, use the same path as before.
-2. Store it as a new secret version without printing the database URL.
-3. Roll one instance with the new URL. Verify readiness, queue access, and a disposable evaluation.
-4. Roll every remaining ingress and worker instance. Confirm that no process uses the old secret version.
-5. After old connection pools drain, revoke the old credential.
+1. Create a replacement with the same narrow database privileges. Preserve
+   `sslmode=verify-full` for a remote route, or the reviewed local proxy
+   path.
+2. Store the URL as a new secret version without printing it.
+3. Roll one instance. Verify readiness, queue access, and a disposable
+   evaluation.
+4. Roll the remaining instances and confirm none uses the old version.
+5. Let old pools drain, then revoke the old credential.
 
-If your provider can't overlap credentials, schedule a maintenance window. Drain public ingress, let active workers finish, rotate the credential, and roll all instances. Restore traffic only after readiness and a disposable evaluation succeed.
+If the provider cannot overlap credentials, drain ingress, finish active work,
+rotate the credential, and roll every instance in a maintenance window.
+Restore traffic only after readiness and a disposable evaluation succeed.
 
 Never put a database password on a command line or in a support transcript.
 
-## Change selected repositories safely
+## Change repository access safely
 
-Before deselecting an ordinary target repository, restore native **Require review from Code Owners** and verify it. Then remove the Extra CODEOWNERS required check. Deselect the repository last.
+### Remove or add selected repositories
 
-The service acknowledges a well-formed `installation_repositories.removed` event that contains only ordinary targets without scheduling work. By the time it arrives, the App can no longer update those repositories.
+Before deselecting an ordinary target:
 
-Before deselecting the organization-policy repository, restore and verify native enforcement on every target. Then remove the Extra CODEOWNERS requirement from those targets. Removing the policy repository affects the whole installation: the service treats its removal, or malformed removal evidence, as conservative policy-source loss. It advances the installation authority epoch and fans out blocking reevaluation to targets it can still access. That asynchronous defense isn't a safe migration procedure.
+1. Restore native **Require review from Code Owners** and verify it.
+2. Remove the Extra CODEOWNERS required check.
+3. Deselect the repository last.
 
-Adding repositories back schedules installation-wide fan-out. Keep native enforcement in place until all of these conditions hold:
+A well-formed `installation_repositories.removed` event containing only
+ordinary targets is acknowledged without work. By delivery time, the App can
+no longer update those repositories.
+
+Removing the organization-policy repository affects the whole installation.
+Restore native enforcement and remove the Extra CODEOWNERS requirement on
+every target first. The service treats removal or malformed removal evidence
+as conservative policy-source loss, advances the installation authority epoch,
+and fans out blocking work to repositories it can still reach. That defense is
+not a migration procedure.
+
+Adding repositories schedules installation-wide fan-out. Keep native
+enforcement until:
 
 - the App can access both the policy source and target
-- installation-wide fan-out has completed
-- authority work has drained
+- installation and authority queues have drained
 - current checks are correct
-- the positive and negative repository-rule tests pass.
+- every positive and negative repository-rule test passes.
 
-## Rename, transfer, archive, or unarchive a repository
+### Rename, transfer, archive, or unarchive
 
-Repository rename, transfer, installation-owner rename, and unarchive events schedule installation-wide reevaluation directly. Accepting one advances a persistent installation authority epoch before fan-out. Every evaluation row stores the epoch from enqueue time, so work under the old name can't publish even if a worker claims it after the event.
+Repository rename, transfer, installation-owner rename, and unarchive events
+schedule installation-wide reevaluation and advance an authority epoch. Each
+queued evaluation carries the epoch from enqueue time, so work under the old
+identity cannot publish after the change.
 
-The worker also rejects a delayed old-name webhook after the epoch changes. It compares the webhook route with GitHub's authoritative base repository full name before reading policy or writing a check. Fan-out discovers current repository names, and the service serializes Check Run writes by installation and head.
+The worker also compares a delayed webhook's repository route with GitHub's
+current base repository name. A mismatch logs
+`stale_repository_alias_discarded` and stops before policy reads or Check
+Run writes.
 
-If a rename or unarchive preserves App installation access:
+For a rename or unarchive that preserves App access:
 
-1. Before the change, verify webhook readiness, worker health, successful reconciliation, and a normal queue baseline.
-2. Keep merges blocked by the repository's existing pull-request rules while making the change.
-3. Confirm that GitHub delivered the matching `repository` or `installation_target` event and that the service accepted it. Redeliver any failed delivery manually.
-4. Wait for installation and repository authority queues to drain. Confirm that every open pull request has a current result under the current repository identity.
-5. Before allowing merges, repeat the negative tests in [Prepare repository rules](prepare-repository-rules.md#3-verify-the-conjunction).
+1. Verify ingress, workers, successful reconciliation, and a normal queue
+   baseline before the change.
+2. Keep merges blocked by existing repository rules during the change.
+3. Confirm that GitHub delivered the matching `repository` or
+   `installation_target` event. Redeliver a failed delivery.
+4. Wait for installation and repository authority work to drain. Confirm every
+   open pull request has a current result under the new identity.
+5. Repeat the negative tests in
+   [Prepare repository rules](prepare-repository-rules.md#3-exercise-the-complete-rule)
+   before allowing merges.
 
-Expect `stale_repository_alias_discarded` when a delayed delivery still names the old route. It means the worker stopped before reading policy or writing a check. If it continues past a full reconciliation interval, inspect webhook redeliveries and canonical-name fan-out. The log includes repository names, so keep it as private metadata.
+If `stale_repository_alias_discarded` continues beyond one reconciliation
+interval, inspect delayed deliveries and canonical-name fan-out. The log
+contains repository names, so keep it private.
 
-Archived repositories don't participate in fan-out or reconciliation while they can't merge. `repository.unarchived` triggers work directly, but the Check Runs update remains eventually consistent. Don't allow a merge until current-state evaluation and the negative tests finish.
+Archived repositories are skipped during fan-out and reconciliation.
+`repository.unarchived` schedules work directly, but the result is
+eventually consistent. Don't merge until current-state evaluation and negative
+tests finish.
 
-If a transfer can move the repository beyond the current App installation's access, use this access-removal sequence:
+If a transfer may leave the installation:
 
-1. Restore native **Require review from Code Owners** and verify it on the repository.
-2. After native enforcement applies, remove Extra CODEOWNERS as a required check.
-3. Transfer the repository. Install Extra CODEOWNERS on the destination organization-policy repository and the target repository.
-4. Revalidate organization enrollment, repository delegation, expected-source selection, and current checks.
-5. Before disabling native code-owner review again, repeat every positive and negative repository-rule test.
+1. Restore and verify native code-owner enforcement.
+2. Remove Extra CODEOWNERS as a required check.
+3. Transfer the repository.
+4. Install Extra CODEOWNERS on the destination policy source and target.
+5. Revalidate enrollment, delegation, expected-source selection, and current
+   checks.
+6. Repeat every positive and negative rule test before disabling native
+   code-owner review.
 
-An epoch fence can't revoke a check after GitHub removes the App's access. If access was lost before you completed the sequence, keep native enforcement in place. Don't edit queue tables to force completion, and don't assume GitHub revoked an earlier success.
+An authority fence cannot revoke a check after GitHub removes App access. If
+access was lost too early, keep native enforcement. Don't edit queue tables or
+assume GitHub revoked the earlier success.
 
-## Back up and restore durable state
+## Test backup restoration
 
-Follow the [database backup and restore procedure](upgrade.md). Reconciliation
-can reconstruct the queue, but delivery deduplication and audit evidence remain
-useful during an incident.
+Follow [Upgrade, back up, and restore](upgrade.md). Reconciliation can rebuild
+queue work, but delivery deduplication and audit evidence still help during an
+incident.
 
 To test a restore:
 
 1. Restore into an isolated database.
 2. Start an instance with public ingress and workers disabled.
-3. Run `extra-codeowners database check` from the compatible application artifact. Inspect queue counts without exposing repository data.
+3. Run `extra-codeowners database check` from the compatible artifact and
+   inspect aggregate queue counts.
 4. Enable a worker against a disposable installation only.
-5. Confirm that stale jobs fetch current GitHub evidence instead of trusting stored hints.
+5. Confirm that restored jobs fetch current GitHub evidence instead of trusting
+   stored hints.
 
-Never run two independent production deployments from restored copies while both can publish checks for the same App installation.
+Never run two restored production copies that can both publish checks for the
+same App installation.
 
-## Retire a deployment
+## Retire the service
 
 !!! warning
-    Retire merge authority before infrastructure. Once the App loses access, Extra CODEOWNERS can't revoke an earlier success. GitHub must not be assumed to invalidate it.
+    Retire merge authority before infrastructure. After the App loses access,
+    it cannot revoke an earlier success. Do not assume GitHub will invalidate
+    that result.
 
-1. Restore GitHub's native **Require review from Code Owners** rule on every affected repository. Verify it with a human-reviewed test pull request.
-2. After the native rule applies, remove the expected-source Extra CODEOWNERS required check.
-3. Set repository policies to `enabled = false` or remove them.
-4. Uninstall the checker App from target repositories and the organization-policy repository.
-5. Stop the service. Revoke every App private key and webhook secret, and remove runtime access to secrets.
-6. Retain or destroy database backups and audit metadata according to the approved incident, legal, and privacy policy.
+1. Restore native **Require review from Code Owners** on every affected
+   repository. Verify it with a human-reviewed test pull request.
+2. Remove the expected-source Extra CODEOWNERS required check only after the
+   native rule applies.
+3. Disable or remove repository policy.
+4. Uninstall the checker App from target repositories and the
+   organization-policy repository.
+5. Stop the service. Revoke App private keys and the webhook secret, then
+   remove runtime access to them.
+6. Retain or destroy database backups and audit metadata under the approved
+   incident, legal, and privacy policy.
 
-Don't delete the App or service first. A required check with no publisher blocks merges, while removing the check first silently removes code-owner enforcement.
+If you delete the App or service first, a required check may block every merge.
+If you remove the check first, code-owner enforcement disappears.
 
-## Insecure-mode alert
+## Respond to insecure mode
 
-Treat `extra_codeowners_insecure_changes_enabled` equal to `1` as an incident unless an active, documented exception covers it. Find the deployment configuration source and set the value back to `false`. Roll every instance, then let pending work and one full reconciliation cycle reevaluate open pull requests.
+Treat `extra_codeowners_insecure_changes_enabled` equal to `1` as an
+incident unless an active, documented exception covers it. Find the deployment
+configuration, restore the value to `false`, and roll every instance.
+Let pending work and one complete reconciliation cycle reevaluate open pull
+requests.
 
-Review application-satisfied checks from the exposure window. Include built-in ownership paths, Extra CODEOWNERS and Stampbot policy, workflows, and local actions.
+Review application-satisfied checks from the exposure window. Include
+`CODEOWNERS`, Extra CODEOWNERS and Stampbot policy, workflows, and local
+actions.
+
+## Escalate an unresolved incident
+
+Restore native code-owner enforcement before asking others to investigate an
+authority failure. Keep the failing service from authorizing merges, preserve
+sanitized evidence, and record the deployed source revision.
+
+Report a suspected vulnerability through the project's
+[private security process](https://github.com/stampbot/extra-codeowners/security/policy).
+Use the
+[support process](https://github.com/stampbot/extra-codeowners/blob/main/SUPPORT.md)
+for other incidents, without attaching credentials, raw private payloads, or
+repository contents.

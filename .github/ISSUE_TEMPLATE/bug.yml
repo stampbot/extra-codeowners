@@ -24,8 +24,8 @@ body:
     id: version
     attributes:
       label: Version
-      description: Provide a release version or immutable container digest.
-      placeholder: v0.2.1 or sha256:…
+      description: Provide a release version, immutable container digest, or exact commit SHA.
+      placeholder: v0.2.1, sha256:…, or a 40-character commit SHA
     validations:
       required: true
   - type: dropdown

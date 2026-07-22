@@ -1,88 +1,111 @@
 # Why database migrations are explicit
 
-Extra CODEOWNERS is merge-control infrastructure. Its database stores pending
-revocations, webhook deduplication, authority generations, leases, and audit
-evidence. Starting against the wrong schema must block the service rather than
-silently create a plausible but incomplete database.
+Extra CODEOWNERS decides whether a pull request may merge, and its database is
+part of that decision. The database records pending revocations, accepted
+webhooks, authority generations, leases, and audit evidence. A database with
+the wrong schema can still answer a health query while omitting state that the
+authorization path needs.
 
-The project uses Alembic because it is the maintained migration layer for
-SQLAlchemy and can run from the same uv-built Python package. Revision files
-contain explicit operations. Runtime ORM metadata is used to validate the
-result, not as an upgrade plan.
+For that reason, the service refuses to start against an incompatible schema.
+It does not try to repair one on the way up.
 
-## Separation of responsibilities
+Alembic is the project's migration layer. It is maintained for SQLAlchemy and
+ships in the same uv-built Python package as the service. Each revision states
+the intended database operations. SQLAlchemy metadata verifies the result; it
+is not an upgrade plan.
+
+## One component changes the schema
+
+The migration command and the running service have different jobs:
 
 ```mermaid
 flowchart LR
   Artifact[Reviewed target artifact] --> Migrator[Explicit migration command]
   Migrator -->|bounded advisory lock| PostgreSQL[(PostgreSQL)]
   PostgreSQL --> Validator[Startup schema validator]
-  Validator -->|exact head and shape| Service[Webhook, worker, reconciler]
+  Validator -->|exact head and required structure| Service[Webhook, worker, reconciler]
   Validator -->|missing or incompatible| Block[Startup fails closed]
 ```
 
-The migrator is the only component allowed to change schema. It serializes
-replicas with a PostgreSQL session advisory lock. Session locks survive
-transaction boundaries but are released by PostgreSQL if the connection or
-process dies. Polling uses `pg_try_advisory_lock`, so lock wait has an explicit
-deadline instead of consuming the ordinary SQL statement budget.
+Only the migrator changes the schema. On PostgreSQL, concurrent migrators
+serialize on a session advisory lock. A session lock survives transaction
+boundaries, which lets Alembic commit revisions without releasing it.
+PostgreSQL still releases the lock if the owning connection or process dies.
 
-The service checks both the Alembic head and the expected ORM shape. Missing
-tables, columns, primary keys, named unique constraints, or indexes stop
-startup. Readiness repeats a lightweight revision and query compatibility
-check. Neither path calls `create_all` or applies a revision.
+The wait loop calls `pg_try_advisory_lock`. Waiting for another migrator
+therefore has its own deadline instead of consuming the 60-second SQL statement
+budget.
 
-## Transaction and restore contract
+At startup, the service verifies all of the following:
 
-PostgreSQL runs each revision transactionally. A failed revision rolls back
-before the migration lock is released. SQLite remains available for local
-development, but SQLite DDL is not the production interruption-recovery
-contract.
+- the one expected Alembic head
+- the application compatibility marker
+- required tables and columns
+- compatible column definitions and PostgreSQL timestamp time-zone modes
+- primary keys, named unique constraints, and indexes
+- expected generated values.
 
-Every application artifact accepts one exact Alembic head. A migration that
-changes that head crosses a restore boundary even when its SQL only adds a
-nullable column or an index. The previous artifact rejects the newer revision
-by design, so rolling its image back also requires restoring the verified
-backup taken at its revision.
+Readiness performs a lighter check of the revision and a representative query.
+Neither startup nor readiness calls `create_all` or applies a migration.
 
-Alembic downgrades are intentionally not an operator interface. Data
-transformations such as reactivating abandoned work cannot be reconstructed
-reliably, and a downgrade would make the revision marker claim an unverified
-state. Operators preserve the failed database, restore into a new empty
-database, and validate that restored copy with the previous artifact under
-native GitHub code-owner protection.
+## A new head creates a restore boundary
 
-The Helm hook runs before the old application Deployment is replaced. A
-migration must still avoid unbounded rewrites and destructive operations that
-could break an old process during the hook. That execution constraint does not
-make the old artifact compatible with the new head or remove the restore
-requirement.
+PostgreSQL runs each Alembic revision in a transaction. If a revision fails,
+its changes roll back before the migration lock is released. SQLite is useful
+for local development, but its data-definition behavior is not the production
+interruption-recovery contract.
 
-## Why startup does not auto-migrate
+Every application artifact accepts exactly one Alembic head. That makes every
+head change a restore boundary, even when the SQL only adds a nullable column
+or an index. The previous artifact rejects the new revision. Rolling back the
+image therefore also means restoring the backup taken while the database was
+still at the previous revision.
 
-Automatic startup migration couples availability, privilege, and schema
-ownership to every webhook replica. During a rollout it can race different
-application versions, hide an incomplete deployment behind repeated pod
-restarts, and make a read-only runtime role impossible.
+Alembic downgrades are deliberately not an operator interface here. Some
+changes, including reactivating abandoned work, cannot be reconstructed from
+the resulting database. A downgrade would move the revision marker to a state
+the project has not verified.
 
-Explicit migration gives operators a bounded change step and evidence before
-traffic moves. It also permits separate database roles now: the Helm Job has
-migration-only Secret, environment, volume, mount, and ServiceAccount inputs.
-It does not inherit the runtime GitHub App Secret or credential mounts. The
-runtime database role can therefore omit schema-change privileges, while the
-migration role can be limited to database migration authority.
+The recovery path is a backup restore instead: preserve the failed database,
+restore the backup into a new empty database, and run the previous artifact's
+validation against that copy. Native GitHub code-owner protection stays enabled
+throughout recovery. The [upgrade procedure](../how-to/upgrade.md) describes
+the operator sequence.
 
-## Release discipline
+The Helm migration hook runs before Helm replaces the old application
+Deployment. Schema changes must therefore avoid unbounded rewrites and
+destructive operations that could break the old process while the hook runs.
+That brief overlap does not make the old artifact compatible with the new
+head, nor does it remove the backup-and-restore requirement.
 
-Every schema-changing pull request must include:
+## Why startup never migrates
+
+If startup migrated automatically, every webhook replica would need
+schema-changing credentials. Replicas from different application versions
+could race during a rollout, and repeated pod restarts could make a migration
+that never completed harder to see.
+
+An explicit command gives operators one bounded change to observe before
+traffic moves. It also permits separate database roles. The Helm Job has its
+own Secret, environment, volume, mount, and ServiceAccount inputs; it does not
+inherit the runtime GitHub App Secret or credential mounts. A deployment may
+omit schema-changing privileges from the runtime role and reserve the
+privileges needed by reviewed revisions for the migration role.
+
+## What a schema-changing release must establish
+
+Every pull request that changes the schema must include:
 
 - an immutable Alembic revision with one predecessor and one head
 - a fresh-install test and an upgrade test from the preceding revision
-- PostgreSQL interruption, concurrency, and shape validation where applicable
-- an entry in the [versioned upgrade notes](../reference/upgrade-notes.md)
-- an explicit head-change and restore boundary
-- chart, container, and documentation updates when operator behavior changes.
+- PostgreSQL interruption, concurrency, and structure validation where they
+  apply
+- an entry in the [database upgrade notes](../reference/upgrade-notes.md)
+- an explicit statement that the head changed and rollback requires a database
+  restore
+- matching chart, container, and documentation changes when operator behavior
+  changes.
 
-CI checks that the application's declared head matches the packaged Alembic
-head. Exact release deployment and restore evidence still belongs in the
-release record; source tests cannot prove an operator's backup is recoverable.
+CI verifies that the application-declared head matches the head packaged with
+Alembic. A release still needs deployment and restore evidence: source tests
+cannot prove that an operator's backup is recoverable.

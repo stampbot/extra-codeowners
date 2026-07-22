@@ -1,113 +1,226 @@
 # Register a GitHub App with the setup URL
 
-Use the optional App Manifest flow to create a private Extra CODEOWNERS GitHub App. The manifest supplies the required permissions, webhook URL, secret, and event subscriptions.
+Use the optional App Manifest flow to create a private Extra CODEOWNERS GitHub
+App. The manifest proposes the webhook URL, permissions, and event
+subscriptions. GitHub creates the webhook secret and private key during the
+conversion.
 
-The flow displays sensitive credentials once. Use an operator-controlled browser, then disable setup as soon as you've stored them.
+The callback displays credentials once. Run it from an operator-controlled
+browser, store the values immediately, and disable setup when registration is
+complete.
 
 ## Prerequisites
 
 You need:
 
 - permission to create a GitHub App for the intended user or organization
-- an Extra CODEOWNERS process reachable at a public HTTPS origin
-- control of reverse-proxy access logging for that origin
-- a secret manager ready to receive the generated credentials
-- a new high-entropy setup-state secret of at least 32 bytes, distinct from every GitHub credential.
+- a reviewed Extra CODEOWNERS checkout with dependencies installed
+- a short-lived service process reachable at a public HTTPS origin
+- control of access logging on every proxy in front of that origin
+- a secret manager ready for the generated credentials
+- a new high-entropy setup-state secret containing at least 32 bytes.
 
-Don't run setup over plain HTTP, from a shared browser profile, while sharing your screen, or through a proxy that records query strings.
+The setup-state secret must be separate from every GitHub credential. Don't
+use a shared browser profile, share the screen, terminate TLS on an untrusted
+proxy, or allow any proxy to record callback query strings.
 
-## 1. Start a bootstrap process
+## 1. Start an isolated setup process
 
-Configure a short-lived process in development mode:
+Configure a short-lived development process:
 
 ```text
 EXTRA_CODEOWNERS_ENVIRONMENT=development
 EXTRA_CODEOWNERS_PUBLIC_URL=https://extra-codeowners-setup.example.com
 EXTRA_CODEOWNERS_SETUP_ENABLED=true
-EXTRA_CODEOWNERS_SETUP_STATE_SECRET=replace-with-a-high-entropy-setup-only-secret
+EXTRA_CODEOWNERS_SETUP_STATE_SECRET=REPLACE_WITH_A_SETUP_ONLY_SECRET
 ```
 
-Replace the public origin and secret. Use HTTPS for the origin and at least 32 UTF-8 bytes for the state secret. Supply that secret through the deployment's secret manager, never through a command-line argument or committed file. Configure the proxy to omit query strings from access logs, especially for `/setup/callback`.
+Replace the example origin and inject the state secret through your deployment
+secret manager. The public URL must be an HTTPS origin without credentials,
+path, query, or fragment. Do not pass the secret on the command line or commit
+it to a file.
 
-Migrate the setup database explicitly, then start the service:
+Disable query-string logging before starting the process, especially for
+`/setup/callback`.
+
+From the reviewed checkout, migrate the setup database and start the service:
 
 ```bash
 uv run python -m extra_codeowners database migrate
 uv run python -m extra_codeowners serve
 ```
 
-The bootstrap process can serve setup without GitHub App credentials. Its readiness endpoint stays non-successful until those credentials are configured. Don't route normal webhook traffic to it.
+The first command must report the bundled migration head. The second keeps
+running and serves the setup page.
 
-## 2. Open the setup URL
+This process does not need App credentials, so `/health/live` returns
+HTTP 200 while `/health/ready` returns HTTP 503. Don't route ordinary
+webhook traffic to it.
 
-If an organization will own the App, open this URL in the operator-controlled browser. Replace `ORGANIZATION` and the example origin:
+## 2. Open the registration page
+
+For an organization-owned App, replace `ORGANIZATION` and open:
 
 ```text
 https://extra-codeowners-setup.example.com/setup?organization=ORGANIZATION
 ```
 
-If a user will own the App, omit the query string:
+For a user-owned App, omit the query string:
 
 ```text
 https://extra-codeowners-setup.example.com/setup
 ```
 
-Select **Continue to GitHub**. Before creating the App, verify the manifest GitHub displays:
+Select **Continue to GitHub**. GitHub lets you edit the proposed registration,
+so review it before creating the App.
 
-- Give the App a unique name no longer than 34 characters. If needed, edit the proposal to a short deployment-specific name such as `eco-ORG-dev`.
+### Verify the identity and URLs
+
+- Give the App a unique name no longer than 34 characters. A short
+  deployment-specific name such as `eco-ORG-dev` leaves room for the
+  required uniqueness.
 - Confirm that the App is private.
-- Confirm that the webhook URL is the expected HTTPS origin plus `/webhooks/github`.
-- Confirm that Checks and Statuses are read and write.
-- Confirm that Contents, Metadata, Members, and Pull requests are read-only.
-- Confirm the explicit subscriptions: Check run, Installation target, Label, Member, Membership, Organization, Pull request, Pull request review, Push, Repository, Team, and Team add.
-- Confirm that the manifest omits Installation and Installation repositories. GitHub delivers them automatically to every App, and Extra CODEOWNERS handles them.
-- Confirm that user authorization isn't requested.
+- Confirm that the webhook URL is the expected HTTPS origin followed by
+  `/webhooks/github`.
+- Confirm that the App does not request user authorization.
 
-Stop if the owner, URL, permission, or event list differs.
+The final name identifies this checker deployment. It is not the name of an
+application whose review may be delegated.
 
-GitHub lets the operator edit the proposed manifest name, and [GitHub App names must be unique](https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/registering-a-github-app#registering-a-github-app). The final name identifies this checker deployment, not the application that submits delegated reviews.
+### Verify permissions
 
-GitHub requires Statuses write before it offers the App as an expected source in organization-level rulesets. Extra CODEOWNERS requests runtime tokens without Statuses, so the running service can't write commit statuses.
+The manifest must request:
+
+| Permission | Access |
+| --- | --- |
+| Checks | Read and write |
+| Contents | Read-only |
+| Members | Read-only |
+| Metadata | Read-only |
+| Pull requests | Read-only |
+| Statuses | Read and write |
+
+Statuses write is a registration permission needed before GitHub offers the
+App as an expected source in organization rulesets. Extra CODEOWNERS
+downscopes runtime installation tokens and omits Statuses, so the service
+cannot write commit statuses. It publishes Check Runs.
+
+### Verify event subscriptions
+
+The explicit subscriptions must be:
+
+- Check run
+- Installation target
+- Label
+- Member
+- Membership
+- Organization
+- Pull request
+- Pull request review
+- Push
+- Repository
+- Team
+- Team add.
+
+The manifest deliberately omits Installation and Installation repositories.
+GitHub sends both events to every App by default, and Extra CODEOWNERS handles
+them.
+
+Stop if the owner, name, visibility, URL, permission, or event list differs
+from this contract.
 
 ## 3. Store the one-time credentials
 
 !!! warning
-    Don't save the callback page, synchronize it through the browser, copy it into a ticket or chat, or put any value in shell history. If you can't confirm secure storage, rotate the credentials before installing the App.
+    Do not save the callback page, synchronize it through the browser, paste it
+    into chat or a ticket, or put any value in shell history. If you cannot
+    confirm secure storage, rotate the credentials before installing the App.
 
-After App creation, GitHub redirects to `/setup/callback`. Extra CODEOWNERS validates the short-lived state, exchanges GitHub's one-use code, and displays the complete conversion response once.
+After creation, GitHub redirects to `/setup/callback`. Extra CODEOWNERS
+validates the short-lived state token, exchanges GitHub's one-use code, and
+shows the complete conversion response. The response uses no-store headers,
+and Extra CODEOWNERS does not retain it.
 
-Store the App ID, PEM private key, webhook secret, slug, and any client secret GitHub returned directly in the secret manager. Verify the entries, then close the page. Extra CODEOWNERS doesn't retain the conversion response.
+Store these values directly in the secret manager:
 
-## 4. Disable setup and configure the service
+- App ID
+- PEM private key
+- webhook secret
+- App slug
+- client secret, if GitHub returned one.
 
-Stop the bootstrap process. Remove the setup-state secret from its runtime and set:
+Verify each secret-manager entry, then close the page.
+
+## 4. Disable setup
+
+Stop the bootstrap process. Remove its setup-state secret and configure the
+normal service:
 
 ```text
 EXTRA_CODEOWNERS_SETUP_ENABLED=false
 ```
 
-Configure the normal service with the new App ID, private key, and webhook secret. GitHub retains the webhook URL from the manifest, so you may leave `EXTRA_CODEOWNERS_PUBLIC_URL` unset after disabling setup; webhook processing doesn't use it. Prefer the file-based private-key and webhook-secret settings in the [configuration reference](../reference/configuration.md#github-settings).
+Add the new App ID, private key, webhook secret, and production database
+configuration. Prefer the file-based secret settings in the
+[GitHub configuration reference](../reference/configuration.md#github-settings).
 
-Start the normal service and confirm `/health/ready` succeeds. Verify that `/setup`, `/setup/callback`, and `/setup/complete` each return `404` while setup is disabled.
+GitHub keeps the webhook URL from the manifest. Once setup is disabled,
+`EXTRA_CODEOWNERS_PUBLIC_URL` is optional because webhook processing does
+not use it.
 
-## 5. Install and verify the App
+Start the normal service and confirm `/health/ready` returns HTTP 200.
+Verify:
 
-Install the private App on the configured organization-policy repository, which defaults to the organization's `.github` repository, and on one disposable target repository. GitHub may visit `/setup/complete` after installation. If setup is already disabled, the expected `404` doesn't undo the installation.
+- `/setup` returns `404`
+- `/setup/complete` returns `404`
+- `/setup/callback?code=test&state=test` returns `404`.
 
-In the App's GitHub settings, open **Advanced**, then **Recent deliveries**. Select the `installation` delivery created when you installed the App and choose **Redeliver**. Confirm each result:
+The callback probe includes its required query parameters so FastAPI reaches
+the disabled route instead of returning a parameter-validation error.
 
-1. GitHub receives `202` from `/webhooks/github`.
-2. The webhook delivery metric increments.
-3. No application, proxy, or load-balancer log contains a credential or callback query string.
-4. On the disposable repository's default branch, commit a minimal disabled policy at the effective policy path, `.github/extra-codeowners.toml` by default. Set `schema_version = 1` and `enabled = false`.
-5. Open a pull request and confirm that Extra CODEOWNERS publishes a failing `Extra CODEOWNERS / approval` check stating that repository policy is disabled. This proves read and Checks access without authorizing delegation or accidentally satisfying a required check.
+## 5. Install the App and test least privilege
 
-Without repository policy, the App intentionally publishes no check. Organization policy alone doesn't opt a repository in.
+Install the private App on:
 
-Continue with [Configure organization and repository policy](configure.md).
+- the organization-policy repository, `ORGANIZATION/.github` by default
+- one disposable target repository.
 
-## Recover from an interrupted setup
+GitHub may visit `/setup/complete` after installation. A `404` from
+the now-disabled setup process does not undo the installation.
 
-If the callback fails or expires, don't reuse its conversion code. Return to `/setup` to issue new state and create another App Manifest conversion. After confirming that an incomplete or duplicate App isn't installed and none of its keys are in use, delete it from GitHub.
+In the App settings, open **Advanced**, find the
+`installation.created` delivery, and select **Redeliver**. Confirm that
+GitHub receives HTTP `202` from `/webhooks/github` and the verified
+webhook metric increases.
 
-If GitHub displayed the credentials but you can't confirm their storage, delete the generated private key and rotate the webhook secret before installing the App.
+Check application, proxy, and load-balancer logs. None may contain a credential
+or callback query string.
+
+On the disposable repository's default branch, commit this disabled policy at
+the effective policy path:
+
+```toml
+schema_version = 1
+enabled = false
+```
+
+Open a pull request. Extra CODEOWNERS must publish a failing
+`Extra CODEOWNERS / approval` check that says repository policy is
+disabled. That result proves Contents read and Checks write access without
+granting delegated authority or satisfying a required check.
+
+Without repository policy, a repository with no previous managed check
+receives no check. Organization policy alone never opts a repository in.
+
+Continue with
+[Configure organization and repository policy](configure.md).
+
+## Recover an interrupted registration
+
+If the callback fails or expires, don't reuse the conversion code. Return to
+`/setup` for a new state token and create a new App Manifest conversion.
+
+Before deleting an incomplete or duplicate App, confirm that it is not
+installed and none of its keys are in use. If GitHub displayed credentials but
+you cannot prove they were stored safely, delete the generated private key and
+rotate the webhook secret before installing the App.

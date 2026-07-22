@@ -1,0 +1,73 @@
+# Project status
+
+Last verified: 2026-07-21.
+
+Extra CODEOWNERS is under active development. You can run the source as a
+self-hosted GitHub App in a disposable environment, but the project does not
+yet support production enforcement or public distribution.
+
+## Available now
+
+The repository contains:
+
+- the GitHub App service and policy evaluator
+- an App Manifest registration flow
+- SQLite support for local development and PostgreSQL support for deployment
+- a Helm chart in source form
+- unit, integration, property, workflow, and container tests
+- CI-built container candidates and review evidence.
+
+The source is useful for evaluation and development. It is not a supported
+release.
+
+## Not available yet
+
+The project does not currently publish or operate:
+
+- a supported GitHub release
+- a supported public container image
+- a packaged Helm chart
+- a hosted Extra CODEOWNERS service
+- the planned `extra-codeowners-action` Marketplace Action.
+
+An older public GHCR preview may still be discoverable. It is incomplete and
+unsupported; do not deploy, mirror, or redistribute it. The disposition is
+tracked in [issue #30](https://github.com/stampbot/extra-codeowners/issues/30).
+
+## Production enforcement blocker
+
+GitHub attaches Check Runs to commits. Extra CODEOWNERS evaluates evidence that
+belongs to one pull request: its base, changed paths, labels, and reviews.
+
+The service refuses to publish success when it can already see another open
+pull request with the same head. It cannot stop a second pull request from
+appearing after success, so that new pull request may briefly inherit the old
+result. The stale result remains until the service processes a related event or
+its periodic reconciler finds the new pull request.
+
+[Issue #1](https://github.com/stampbot/extra-codeowners/issues/1) tracks the
+live contract tests and design work. Until it closes, keep GitHub's native
+**Require review from Code Owners** rule on production repositories.
+
+## Distribution blockers
+
+Tagged publication is structurally disabled. These issues describe the work
+that must finish before the first supported release:
+
+- [#18: complete notices and corresponding-source evidence](https://github.com/stampbot/extra-codeowners/issues/18)
+- [#28: separate archive parsing from publication authority](https://github.com/stampbot/extra-codeowners/issues/28)
+- [#32: retain and bind the selected Python build proof](https://github.com/stampbot/extra-codeowners/issues/32)
+- [#25: publish the first release as an immutable GitHub release](https://github.com/stampbot/extra-codeowners/issues/25).
+
+CI already records substantial container and Python evidence. That work makes
+the remaining gaps visible; it does not approve the current artifacts for
+distribution.
+
+## Roadmap distributions
+
+The self-hosted GitHub App is the first planned distribution. A packaged
+Marketplace Action and a hosted service are separate roadmap items. Neither
+has an availability date.
+
+Follow the linked issues for current evidence and decisions. This page should
+change whenever one of these availability or safety claims changes.

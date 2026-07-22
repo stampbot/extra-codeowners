@@ -1,56 +1,60 @@
-# Container distribution evidence design
+# How container distribution evidence works
 
-Extra CODEOWNERS distributes more than its Apache-2.0 application code. Its OCI
-image also contains CPython, locked Python packages, Alpine packages, and bytes
-hidden by later layers. Container evidence makes that aggregate inspectable. It
-does not declare the aggregate legally compliant.
+An Extra CODEOWNERS image contains more than the project's Apache-2.0 source.
+It also distributes CPython, locked Python packages, Alpine packages, and bytes
+that later OCI layers may hide. The evidence system records that whole set so a
+maintainer can inspect it. Evidence is not a legal-compliance determination.
 
-## Current status
+## Where the project stands
 
-Pull-request CI builds separate `linux/amd64` and `linux/arm64` candidates and
-uploads an evidence archive for each platform. These short-lived, unsigned
-artifacts are review inputs. Their subject is the local image configuration
-digest because CI has not published a platform manifest.
+Pull-request CI produces useful review evidence, but Extra CODEOWNERS does not
+publish a supported container image yet.
 
-Public `main` image and tagged publication are deliberately disabled. The main
-publication job has been removed. The release workflow may run validation,
-proof, and candidate-scan jobs with repository-read authority, but a separate
-job fails before any job can publish an image, chart, Python package, or GitHub
-release. Setting
-`distribution_approval.approved=true` does not remove that structural block.
-Security issue
-[`#28`](https://github.com/stampbot/extra-codeowners/issues/28) tracks the
-required privilege-separated release implementation.
+| Surface | Current state |
+| --- | --- |
+| Pull-request candidates | CI builds separate `linux/amd64` and `linux/arm64` images and uploads one short-lived, unsigned evidence archive for each. |
+| Evidence subject | Each CI archive names its local image configuration digest because CI does not publish a platform manifest. |
+| Public `main` image | Disabled; the publication job has been removed. |
+| Tagged release | Blocked before any job can publish an image, chart, Python package, or GitHub release. |
+| Source closure | Incomplete for native-wheel payloads and components described by embedded SBOMs. |
 
-Pull-request CI now builds the application twice on each native architecture
-with the hash-pinned PEP 517 closure, requires byte-identical architecture
-proofs, and selects one exact five-file proof. Both container candidates install
-that wheel without rebuilding it. Their stable OCI labels bind the source
-revision, wheel SHA-256, and selection-record SHA-256; run metadata separately
-binds the selected GitHub Actions artifact ID and archive digest. Run-scoped
-artifact identity never enters an image label, so a rerun does not change image
-bytes for that reason. Issue
-[`#32`](https://github.com/stampbot/extra-codeowners/issues/32) remains open for
-retaining this proof in release evidence and handing it to the future isolated
-publication path. The reusable workflow also supports a read-only manual run,
-and the tagged candidate scan consumes only the proof built in its own run. No
-CI collector success overrides the publication blocker.
+The release workflow can still validate source, build proof, and scan a
+candidate with repository-read permission. A separate job then fails before
+the privileged publication jobs can run. Changing
+`distribution_approval.approved` to `true` cannot bypass that structural stop.
+Issue [#28](https://github.com/stampbot/extra-codeowners/issues/28) tracks the
+privilege-separated release implementation.
 
-The current archive is intentionally incomplete as distribution evidence.
-CPython is now a normalized top-level runtime component with exact identity,
-recipe, source, and license evidence. Issue `#18` remains open because native
-wheel payloads and embedded SBOMs are not expanded into complete component,
-notice, and corresponding-source records. That is the sole remaining reason
-the collector sets
-`source_completeness.complete` to `false`; it rejects distribution
-approval while that status remains false. Issue `#28` independently keeps
-every tagged publication path blocked.
+The application build has its own reproducibility proof. CI builds the package
+twice on each native architecture from the hash-pinned PEP 517 closure and
+requires the two architecture proofs to be byte-identical. It then selects one
+exact five-file proof. Both container candidates install that selected wheel
+without rebuilding it.
 
-## What the CI collector records and validates
+Stable OCI labels bind the source revision, wheel SHA-256, and selection-record
+SHA-256. Run metadata separately binds the GitHub Actions artifact ID and
+archive digest. The run-scoped identity stays out of the image labels, so a
+rerun does not change the image bytes for that reason. The reusable proof
+workflow also supports read-only manual runs, and the tagged candidate scan
+uses only the proof built in its own run. Issue
+[#32](https://github.com/stampbot/extra-codeowners/issues/32) tracks retention
+of that proof in release evidence and its handoff to the future isolated
+publication path.
 
-The collector saves the inspected image by immutable configuration ID. It
-checks the SHA-256 name of the saved configuration and every layer against the
-actual member bytes before parsing them. It then:
+CPython now has a normalized top-level component record with exact runtime
+identity, recipe, source, and license evidence. The remaining completeness gap
+is narrower: native-wheel payloads and components described by embedded SBOMs
+do not yet have complete component, notice, and corresponding-source records.
+Issue [#18](https://github.com/stampbot/extra-codeowners/issues/18) tracks that
+work. Until it closes, the collector sets `source_completeness.complete` to
+`false` and rejects distribution approval. Issue #28 independently blocks
+tagged publication. Passing CI does not override either condition.
+
+## How the CI collector builds the evidence
+
+The collector saves the candidate by immutable configuration ID. Before it
+interprets the image, it checks the SHA-256 name of the saved configuration and
+every layer against the bytes it received. It then:
 
 1. applies OCI whiteout and opaque-directory behavior without letting archive
    order remove files created in the same layer
@@ -102,10 +106,11 @@ regular-file occurrence at any historically managed path requires a valid
 replacement RECORD introduced in that same layer, even when another layer later
 removes the replacement.
 
-Native-wheel retention is deliberately narrower: an owner must have exactly
-one historical installation. A reinstall of the same owner is rejected rather
-than guessed at, even when the versions match. Supporting that case requires an
-explicit rule for choosing and proving the redistributed installation.
+Native-wheel retention is narrower: an owner must have exactly one historical
+installation. The collector rejects a reinstall of the same owner instead of
+guessing which installation supplied the redistributed bytes, even when both
+versions match. Supporting reinstallations will require an explicit selection
+and proof rule.
 
 RECORD input is limited to 8 MiB and 100,000 rows, and the complete historical
 output is limited to 100,000 entries. Paths are canonicalized inside
@@ -176,9 +181,11 @@ selects that owner's exact platform wheel from `uv.lock`, verifies its complete
 archive `RECORD`, and matches its installed files to the historical record.
 The bundle keeps the wheel and a separately addressed copy of every raw SBOM.
 
-This proves which distribution supplied the bytes. It does not yet add the
+This proves which wheel supplied the bytes. It does not yet add the
 SBOM's nested components to notices or retain their corresponding source, so
 source completeness remains false.
+
+### Failed jobs can still leave diagnostics
 
 CI uploads the artifact even after a collection failure when any partial files
 exist. That upload is diagnostic only: the required collection step still
@@ -187,6 +194,8 @@ Run metadata is written immediately after inventory collection and before
 policy verification, so a policy-drift artifact still identifies its exact
 workflow context. A collector failure before inventory completion can remain
 partial.
+
+### Policy compares filesystem effects
 
 The all-layer inventory preserves raw directory and whiteout headers for
 forensic review. Policy comparison uses their filesystem effects instead of
@@ -203,6 +212,8 @@ in `all-layer-files.json`, and every post-base directory header must still be
 root-owned with mode `0755`. The canonical replay only removes differences that
 produce the same validated filesystem state across trusted Docker/OCI
 exporters.
+
+### Artifact names expose the workflow identity
 
 The two artifact names expose architecture, synthetic merge SHA, and run
 attempt before their ZIP bytes are parsed. Maintainer review downloads the raw
@@ -297,12 +308,12 @@ manifest preserves the incomplete source-coverage status. Its
 record, accepted launcher form, and SHA-256 and size of every one of the five
 files retained under `artifacts/application/`.
 
-## Required release architecture
+## Why release collection needs a different boundary
 
-The current collector parses hostile images and archives while it can also use
-the network. A release job with package-write, OpenID Connect, signing, or
-attestation authority must not run that combined operation. Issue `#28`
-requires this bounded sequence:
+The CI collector parses hostile images and archives in a job that can also use
+the network. That job has no publication authority. A release job with
+package-write, OpenID Connect, signing, or attestation authority must never run
+the combined operation. Issue #28 requires this bounded sequence:
 
 ```text
 unprivileged pinned fetch

@@ -1,42 +1,61 @@
-# Configure organization and repository policy
+# Configure App delegation
 
-Enroll a trusted GitHub App for the organization, then delegate a narrow set of repository paths to it. If you're working from source, complete the [development installation tutorial](../tutorials/development-installation.md) first.
+Extra CODEOWNERS uses two policy files. Organization policy says which GitHub
+Apps may be trusted at all. Repository policy opts one repository in and gives
+an enrolled App a smaller, explicit scope.
 
-## Prerequisites
+This guide enrolls one App and delegates a few low-risk paths. Complete the
+[development installation tutorial](../tutorials/development-installation.md)
+first if you do not already have a test service.
+
+## Before you begin
 
 You need:
 
-- administrator access to the organization's `.github` repository
+- administrator access to the organization's policy repository, `.github` by
+  default
 - permission to change policy in the target repository
-- the trusted App's immutable App ID, bot user ID, and public slug
-- an existing standard `CODEOWNERS` file containing human users or teams.
+- the approving App's numeric App ID, numeric bot user ID, and public slug
+- a standard `CODEOWNERS` file with human users or teams.
 
-Enroll the automation that submits approving reviews, such as Stampbot. Don't enroll the Extra CODEOWNERS checker App that publishes the required check.
+Enroll the App that submits approving reviews, such as Stampbot. The Extra
+CODEOWNERS checker belongs here only if it independently submits reviews too.
 
-Don't add an App bot account to `CODEOWNERS`. GitHub skips lines with invalid syntax, and its errors endpoint reports mixed human and App-bot lines as `Invalid owner`. Treat the whole line as unusable; don't assume its human owners remain effective. After every ownership change, use GitHub's CODEOWNERS error view or the [API check](../explanation/native-codeowners.md#the-gap).
+Do not put an App bot login in `CODEOWNERS`. GitHub reports it as an invalid
+owner and skips the affected line; human owners written beside it do not remain
+as a fallback. The
+[native CODEOWNERS comparison](../explanation/native-codeowners.md#the-gap)
+shows how to check the file for errors.
 
-The examples use the `.github` organization-policy repository and `.github/extra-codeowners.toml` policy path. If the operator changed `EXTRA_CODEOWNERS_ORG_CONFIG_REPOSITORY` or `EXTRA_CODEOWNERS_POLICY_PATH`, substitute those deployment-wide values in both scopes.
+The examples use the default policy location,
+`.github/extra-codeowners.toml`. If the deployment changes
+`EXTRA_CODEOWNERS_ORG_CONFIG_REPOSITORY` or
+`EXTRA_CODEOWNERS_POLICY_PATH`, use the configured repository and path in both
+scopes.
 
-## 1. Record the application identity
+## 1. Record the App's immutable identity
 
-Find the numeric App ID in the App's GitHub settings. Then obtain the bot account ID from GitHub's API. From any directory in a POSIX-compatible shell, run [GitHub CLI](https://cli.github.com/) authenticated for public metadata:
+Find the App ID in the App's GitHub settings. Obtain the bot account's numeric
+user ID with an authenticated [GitHub CLI](https://cli.github.com/) session:
 
 ```bash
 APP_SLUG=example-automation
 gh api "users/${APP_SLUG}%5Bbot%5D" --jq .id
 ```
 
-The output is a numeric user ID:
+The response is a number such as:
 
 ```text
 234567
 ```
 
-Record both IDs from GitHub. Don't infer an identity from a display name, review text, or copied configuration.
+Record the slug and both IDs directly from GitHub. A display name, review body,
+or copied policy file is not identity evidence.
 
-## 2. Enroll the application at organization scope
+## 2. Enroll the App for the organization
 
-In the organization's `.github` repository, add `.github/extra-codeowners.toml` on a human-reviewed branch:
+Add `.github/extra-codeowners.toml` to the default branch of the organization's
+policy repository:
 
 ```toml
 schema_version = 1
@@ -52,13 +71,17 @@ non_delegable_paths = [
 ]
 ```
 
-Replace the example slug and IDs with the values from the previous step.
+Replace the example identity. Keep this change under native human CODEOWNERS
+and normal repository rules.
 
-Keep this organization policy under native human CODEOWNERS and repository rules. The initial single-path schema doesn't let the `.github` repository use this file as its own Extra CODEOWNERS repository policy. Leave GitHub's native code-owner rule enabled there, and don't require the Extra CODEOWNERS check.
+Organization policy does not opt any member repository in. In schema version
+1, the policy repository also cannot use this same file as its own repository
+policy. Leave native code-owner enforcement enabled there, and do not require
+the Extra CODEOWNERS check on it.
 
-## 3. Delegate repository paths
+## 3. Delegate paths in one repository
 
-In the target repository, add `.github/extra-codeowners.toml`:
+Add `.github/extra-codeowners.toml` to the target repository:
 
 ```toml
 schema_version = 1
@@ -72,60 +95,93 @@ paths = [
 ]
 for_owners = ["@example-org/platform"]
 required_labels = ["automation-approved"]
+forbidden_labels = ["needs-security-review"]
 ```
 
-Start with the smallest path set that covers the automation. Set `for_owners` to the owner group the App may replace; the field is mandatory so a delegation can't silently apply to another group. If the App should replace any owner, make that broad choice explicit with `for_owners = ["*"]`.
+Each delegation is one complete alternative. It applies only when all of these
+conditions hold:
 
-Treat labels only as restrictions. The configured App must still submit an approving review for the current pull-request head. If a label such as `needs-security-review` must disable the delegation, add it to `forbidden_labels`. Required and forbidden label matching is case-insensitive.
+- the review came from the enrolled App on the current pull-request head
+- the changed path matches `paths`
+- its effective CODEOWNERS set contains an entry in `for_owners`
+- every required label is present and every forbidden label is absent.
 
-Extra CODEOWNERS reads labels but doesn't create, remove, or rename them. Define their lifecycle and permissions separately.
+Start with the smallest useful path list. `for_owners` is mandatory so a rule
+cannot silently replace a different team. If broad owner coverage is truly
+intended, spell it out with `for_owners = ["*"]`.
 
-From an Extra CODEOWNERS source checkout with the development dependencies and CLI installed, validate both files. Pass paths to local checkouts of the target repository and the organization's `.github` repository:
+Labels only narrow authority. They never count as approval, and Extra
+CODEOWNERS does not create or manage them. Decide separately who may add the
+labels and how they are removed.
+
+Validate both files from a source checkout with development dependencies
+installed:
 
 ```bash
-uv run python -m extra_codeowners validate-policy \
+mise exec -- uv run python -m extra_codeowners validate-policy \
   --repository ../target-repository/.github/extra-codeowners.toml \
   --organization ../organization-dot-github/.github/extra-codeowners.toml
 ```
 
-Expect:
+The successful result is:
 
 ```text
 Policy files are valid.
 ```
 
-This command checks TOML structure and field constraints. The live check also verifies cross-file application aliases, GitHub identities, CODEOWNERS, repository access, and current pull-request evidence.
+This command validates TOML and field constraints. Live evaluation also checks
+the cross-file alias, App identity, repository access, CODEOWNERS result, and
+current pull-request evidence.
 
-## 4. Protect the policy boundary
+## 4. Protect the approval boundary
 
-Don't set `EXTRA_CODEOWNERS_ALLOW_INSECURE_CHANGES` to make a test pull request pass. It weakens every installation served by the process.
+Do not enable `EXTRA_CODEOWNERS_ALLOW_INSECURE_CHANGES` to get through a test.
+It removes the built-in guardrails for every installation served by that
+process.
 
-Verify that the standard `CODEOWNERS` file assigns the following built-in non-delegable paths to appropriate humans or teams:
+The built-in list prevents App substitution on:
 
-- every standard CODEOWNERS location
-- the Extra CODEOWNERS repository policy
+- all standard `CODEOWNERS` locations
+- the effective Extra CODEOWNERS repository policy
 - Stampbot's root `/stampbot.toml`
 - `.github/workflows/**`
-- repository-local actions under `.github/actions/**`.
+- `.github/actions/**`.
 
-Non-delegable patterns prevent an App from replacing a human; they don't create ownership.
+These patterns prevent an App from standing in for a human. They do not assign
+an owner, so your standard `CODEOWNERS` file must still cover them.
 
-For every enrolled App other than Stampbot, add organization guardrails for its repository policy or configuration and for any code that controls what it may approve. An App must not replace a human on a change that expands its own future authority. Include its configuration, rules, prompts, scripts, and generated-policy inputs.
+The service cannot discover every file that controls another App. Add
+organization guardrails for each enrolled App's policy, configuration, rules,
+prompts, generated inputs, and decision code. Cover transitive code too. If a
+privileged workflow calls `scripts/publish/**`, protecting the workflow file
+alone is not enough.
 
-Protect every other owned sensitive surface, including release configuration, deployment policy, production infrastructure, and repository scripts invoked by privileged workflows. Extra CODEOWNERS can't infer transitive execution paths. For example, if a release workflow runs `scripts/publish/**`, make that path non-delegable.
+Apply the same reasoning to release settings, deployment policy, production
+infrastructure, and other owned paths that can expand authority. An approving
+App must not approve the change that broadens what it may approve next.
 
-## 5. Verify with a test pull request
+## 5. Test the boundary
 
-Open a pull request that changes one delegated, low-risk file. Apply any required label, then have the configured App approve the current head commit.
+Open a pull request that changes one delegated, low-risk file. Add the required
+label and have the enrolled App approve the current head. In GitHub, confirm:
 
-Verify all of these results in GitHub:
+1. The repository's ordinary approval-count rule is still satisfied.
+2. The expected Extra CODEOWNERS App publishes
+   `Extra CODEOWNERS / approval`.
+3. The check explains which delegation covered the path and owner set.
+4. Removing the label or dismissing the App review makes the check
+   non-successful.
+5. Pushing another commit makes the approval stale until the App approves the
+   new head.
 
-1. The repository's ordinary required review count is satisfied.
-2. The expected Extra CODEOWNERS App installation reports `Extra CODEOWNERS / approval`.
-3. The check summary names the delegation that satisfied the owned path.
-4. Removing the label or dismissing the App review triggers reevaluation and a non-successful check.
-5. Pushing a commit makes the old approval stop counting until the App approves the new head.
+Next, change a protected control file. For Stampbot, use `/stampbot.toml`; for
+another App, use one of the control paths you added to organization
+guardrails. Its approval must not satisfy that path. The appropriate human
+CODEOWNER should still be required.
 
-Next, open a second pull request that changes a non-delegable path. When testing Stampbot, change its root `/stampbot.toml`. For another App, change one of its organization-guardrail control paths. Confirm that the App review doesn't satisfy the path and that an appropriate human CODEOWNER must approve it.
+Test an undelegated path and a pull request that mixes delegated and
+undelegated files as well. Every effective owner set must be covered.
 
-If a negative test passes when it shouldn't, stop. Remove the Extra CODEOWNERS required check, restore GitHub's native **Require review from Code Owners** rule, and find the cause before trying again.
+If any negative case succeeds, stop the rollout. Restore GitHub's native
+**Require review from Code Owners** rule, remove the Extra CODEOWNERS required
+check, and diagnose the mismatch before continuing.

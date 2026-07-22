@@ -51,11 +51,14 @@ of real payloads and credentials.
 > [!WARNING]
 > Never point `TEST_POSTGRES_URL` at a production or shared database. The test suite drops and recreates project tables.
 
-Docker is required to build the Dockerfile locally:
-
-```shell
-docker build --tag extra-codeowners:dev .
-```
+The Dockerfile intentionally rejects an ad hoc `docker build .`. It installs
+only the exact application wheel selected by the cross-architecture Python
+proof, passed as a read-only `verified-python` build context with three digest
+arguments. Pull-request CI is the maintained way to create that proof and test
+both image platforms. Follow the
+[container-evidence review guide](docs/how-to/review-container-evidence.md) if
+your change affects the image or its evidence; do not substitute a locally
+built wheel and treat the result as equivalent release evidence.
 
 The live GitHub contract fixture is destructive and opt-in. It is not part of
 `mise run check`. Use only the disposable organization procedure in the
@@ -97,12 +100,23 @@ Open the pull request ready for review and complete its checklist. Explain the s
 
 Maintainers may ask you to reorganize commits when that makes the history easier to review.
 
-Stacked pull requests receive the DCO, CodeQL, dependency-review, and workflow-security checks even when they target another feature branch. Merge the stack from the bottom. Because this repository squash-merges, rebase each child onto the new `main` while dropping the parent commits, retarget it, push a rewritten head with `--force-with-lease`, and wait for required checks on that exact SHA. Follow the [stacked pull-request review procedure](docs/how-to/review-stacked-pull-requests.md); a green check stored on an unchanged head can describe the previous base, and moving only the base branch does not synchronize the child.
+Stacked pull requests receive the DCO, CodeQL, dependency-review, and
+workflow-security checks even when they target another feature branch. Merge
+the stack from the bottom. After a parent is squash-merged or rebase-merged,
+rebase each child onto the new `main` while dropping the original parent commit
+range. Either merge method can give those changes new commit IDs.
+
+Retarget the child, push rewritten history with `--force-with-lease`, and wait
+for required checks on that exact SHA. Follow the
+[stacked pull-request review procedure](docs/how-to/review-stacked-pull-requests.md).
+Moving only the base branch does not synchronize the child, and a green check
+on an unchanged head can still describe the previous base.
 
 All required checks and reviews must pass. By default, application approvals cannot replace human CODEOWNER review for:
 
 - `CODEOWNERS`
 - Extra CODEOWNERS policy
+- `/stampbot.toml`
 - GitHub Actions workflows
 - local actions under `.github/actions/`
 
@@ -119,4 +133,4 @@ Reviewers consider these properties in order:
 5. maintainability and documentation
 
 [dco]: https://developercertificate.org/
-[database-tests]: docs/tutorials/development-installation.md#7-run-the-project-checks
+[database-tests]: docs/tutorials/development-installation.md#7-run-the-local-quality-gate

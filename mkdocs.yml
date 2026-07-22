@@ -39,13 +39,14 @@ nav:
       - Configure policy: how-to/configure.md
       - Prepare repository rules: how-to/prepare-repository-rules.md
       - Run the live GitHub contract: how-to/run-live-github-contract.md
-      - Deploy: how-to/deploy.md
+      - Prepare a future deployment: how-to/deploy.md
       - Upgrade, back up, and restore: how-to/upgrade.md
       - Operate and recover: how-to/operate.md
       - Respond to dependency audit: how-to/respond-to-dependency-audit.md
       - Review stacked pull requests: how-to/review-stacked-pull-requests.md
       - Review CI container evidence: how-to/review-container-evidence.md
   - Reference:
+      - Project status: reference/project-status.md
       - Configuration: reference/configuration.md
       - Checks and evaluation: reference/checks.md
       - Command line: reference/cli.md

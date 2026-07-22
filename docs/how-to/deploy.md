@@ -1,141 +1,171 @@
-# Deploy the GitHub App service
+# Prepare a future deployment
 
-Extra CODEOWNERS has no supported production release or hosted service. The
-`main` publication job has been removed, and tagged publication is blocked
-while native-wheel and embedded-SBOM source completeness, handoff of the
-selected build proof, and publication isolation remain incomplete. The current
-Dockerfile requires the application proof selected from both architectures. CI,
-a manual workflow, and the tagged candidate scan can produce or consume that
-proof, but no supported release provides it to an operator. You cannot complete
-this guide today.
+Use this guide to design the database, secrets, network boundary, probes, and
+rollback plan for a future Extra CODEOWNERS deployment. The project does not
+have a supported production release, public image, OCI chart, hosted service,
+or Marketplace Action, so you cannot complete a supported installation yet.
 
-The remaining sections record the runtime requirements for the future supported
-image path. Don't improvise an image input or let the current check authorize
-production merges.
+!!! danger
+    Do not deploy the old `ghcr.io/stampbot/extra-codeowners:main` image,
+    mirror it, or build a substitute from the current Dockerfile. Keep GitHub's
+    native **Require review from Code Owners** rule on production repositories.
+    The release pipeline and the commit-scoped Check Run behavior both have
+    open blockers. [Issue #1](https://github.com/stampbot/extra-codeowners/issues/1)
+    tracks the Check Run gap, and
+    [issue #30](https://github.com/stampbot/extra-codeowners/issues/30) tracks
+    the old image.
 
-## Prerequisites
+## Understand the current release block
 
-You need:
+The main-branch publication job has been removed. Tagged publication is also
+stopped before any job with package, signing, attestation, or release
+authority can run.
 
-- a supported Extra CODEOWNERS image, pinned by platform digest and built from
-  the reviewed application proof; no such image exists yet
-- the exact chart source that belongs to that image version
-- a GitHub App with the [documented permissions and events](../reference/github-permissions.md)
+Four open issues define the remaining release work:
+
+- [#18](https://github.com/stampbot/extra-codeowners/issues/18) expands native
+  wheel and embedded software bill of materials (SBOM) components into the
+  notice, license, and corresponding-source evidence delivered to recipients.
+- [#28](https://github.com/stampbot/extra-codeowners/issues/28) separates
+  untrusted archive parsing from publication credentials and signing
+  authority.
+- [#32](https://github.com/stampbot/extra-codeowners/issues/32) completes the
+  hash-pinned application build and retains its selected proof for release
+  consumers.
+- [#25](https://github.com/stampbot/extra-codeowners/issues/25) makes the first
+  GitHub release draft-first and immutable after its complete artifact set is
+  verified.
+
+Current continuous integration (CI) builds the Python distribution twice on
+each native architecture. It selects one byte-identical five-file proof across
+`amd64` and `arm64`, then passes that directory to the Dockerfile as a
+read-only `verified-python` build context. The Dockerfile also requires the
+source revision, application-wheel SHA-256, and selection-record SHA-256. It
+fails when any input is missing or changed.
+
+The manual **Python distribution proof** workflow can create that proof for the
+commit resolved from a chosen ref. It has repository-read permission only. The
+tagged candidate scan creates and verifies a fresh proof in the same workflow
+run. Neither path publishes an image or gives an operator a supported way to
+build one.
+
+CI also records CPython as a top-level runtime component. The evidence binds
+the interpreter to exact platform identity files and retains the pinned build
+recipe, source archive, source-carried license, and historical ineffective
+Python `RECORD` ownership. Native wheel and embedded-SBOM expansion is
+still incomplete, so an SBOM and provenance alone do not satisfy the release
+contract.
+
+A future deployment procedure must name all of these values before the steps
+below become runnable:
+
+- image repository and platform digest
+- source revision
+- application-wheel and selection-record digests
+- signature and provenance verification commands
+- platform-specific notices and corresponding-source archive
+- chart source from the same reviewed release.
+
+The [runtime base image decision](../explanation/runtime-base.md) records the
+selected base, architecture evidence, vulnerability dispositions, update
+contract, and residual risk. The
+[container evidence release contract](../reference/container-evidence-release-contract.md)
+defines what a future release must deliver.
+
+## Prerequisites for a future deployment
+
+Before scheduling a deployment, obtain:
+
+- a supported Extra CODEOWNERS image, verified and pinned by platform digest
+- the exact chart source associated with that image
+- a GitHub App with the
+  [required permissions and events](../reference/github-permissions.md)
 - a public HTTPS origin with a valid certificate
-- PostgreSQL with hostname-verified TLS for remote connections, or an operator-controlled local proxy or Unix socket
-- PostgreSQL backups and restricted database credentials
+- PostgreSQL with hostname-verified TLS, or an operator-controlled local proxy
+  or Unix socket
+- tested PostgreSQL backups and a database credential restricted to this
+  service
 - a secret manager for the App private key and webhook secret
 - outbound HTTPS access to the configured GitHub API
-- reliable UTC clock synchronization on every service node, which GitHub App JWTs, setup-state expiry, and durable leases need
-- monitoring access to readiness and Prometheus metrics.
+- reliable UTC clock synchronization on every node
+- access to the health endpoints, logs, and Prometheus metrics.
 
-Use SQLite only for a single-process development installation. It isn't a production durable queue.
+Clock accuracy matters because GitHub App JSON Web Tokens, setup-state expiry,
+and database leases use wall-clock time.
 
-## 1. Obtain a supported image (currently blocked)
+Use SQLite only for a single-process development installation. It is not a
+production queue.
 
-An older public `ghcr.io/stampbot/extra-codeowners:main` image may still exist.
-It predates the publication block, is unsupported, and does not have complete
-CPython identity/source, native-wheel, embedded-SBOM, or historical `RECORD`
-evidence. Do not deploy or mirror it.
+## Provision PostgreSQL
 
-Pull-request CI builds a hash-pinned PEP 517 proof twice on each native
-architecture, selects one byte-identical five-file proof, and passes it to the
-Dockerfile as the read-only `verified-python` build context. The Dockerfile
-also requires the exact source revision, application-wheel SHA-256, and
-selection-record SHA-256. It fails closed when any input is absent or changed.
+Create one database and one role for Extra CODEOWNERS. Let that role own only
+the application database; don't grant PostgreSQL cluster administration or
+access to unrelated databases.
 
-The `Python distribution proof` workflow can produce the selected five-file
-artifact for the commit resolved from a manually chosen ref. It has only
-repository-read authority. The tagged candidate scan builds and verifies a
-fresh proof in the same run. Neither path publishes an image or authorizes an
-operator build.
-
-Issue [`#32`](https://github.com/stampbot/extra-codeowners/issues/32) tracks
-retaining the proof in release evidence and handing it to future publication
-jobs after issue #28 separates parsing from publication. Until that path
-exists, don't replace it with a generic ZIP extractor, an unverified wheel,
-empty build arguments, or a build of the project from the ambient Docker
-context. Stop here.
-
-Once issue #32 closes, this section must identify the exact supported image
-reference, platform digest, source revision, wheel digest, selection-record
-digest, signature, and provenance verification command before the deployment
-steps below become runnable.
-
-The checked-in tag-release workflow is structurally disabled before every
-publication job. Source-completeness issue
-[`#18`](https://github.com/stampbot/extra-codeowners/issues/18) and
-privilege-separation issue
-[`#28`](https://github.com/stampbot/extra-codeowners/issues/28), plus
-build-proof issue
-[`#32`](https://github.com/stampbot/extra-codeowners/issues/32), must all be
-resolved before it can publish a versioned image. A policy approval change
-alone cannot enable it.
-
-Issue #18 now covers native-wheel and embedded-SBOM component/source expansion.
-Current candidates normalize CPython into the top-level component inventory,
-bind its exact per-platform identity files, and retain its pinned recipe,
-source archive, and source-carried license. They also retain historical
-ineffective Python `RECORD` replay as attribution evidence.
-The [runtime base image decision](../explanation/runtime-base.md) records the
-selected upstream image, architecture evidence, vulnerability dispositions,
-update contract, and residual risk.
-
-A future tagged release must also provide a platform-specific notice and source
-archive that satisfies the
-[container evidence release contract](../reference/container-evidence-release-contract.md).
-Image provenance and a software bill of materials do not replace that archive.
-Current pull-request CI evidence is unsigned and intended only for maintainer
-review; it explicitly reports the remaining source-completeness gap.
-
-## 2. Provision durable state
-
-Create a dedicated PostgreSQL database and role. Give the role ownership only of the Extra CODEOWNERS database; don't grant cluster-administrator or unrelated-database privileges.
-
-Supply a SQLAlchemy URL through the psycopg driver:
+Use a SQLAlchemy URL through the psycopg driver:
 
 ```text
 postgresql+psycopg://DB_USER:DB_PASSWORD@DB_HOST:5432/DB_NAME?sslmode=verify-full
 ```
 
-Replace every uppercase placeholder and percent-encode reserved characters in URL components. Treat the complete URL as a secret.
+Replace every uppercase placeholder and percent-encode reserved characters in
+URL components. Treat the complete URL as a secret.
 
-For a remote database, keep `sslmode=verify-full`. Add provider CA parameters such as `sslrootcert` when needed. Extra CODEOWNERS rejects `require` and `verify-ca` because neither verifies the database hostname. Query routing can't bypass this rule: `host` takes precedence over the URL authority, and a `hostaddr` or `service` override requires `verify-full`.
+Keep `sslmode=verify-full` for a remote database. Add provider CA options
+such as `sslrootcert` when needed. Extra CODEOWNERS rejects
+`sslmode=require` and `sslmode=verify-ca` because neither verifies the
+database hostname.
 
-Before first startup or every upgrade, follow the [database upgrade, backup,
-restore, and rollback procedure](upgrade.md). Normal service startup validates
-the exact migration head and table shape but never creates or changes schema.
+The effective libpq route decides whether a connection is local. A query-string
+`host` overrides the URL authority. Any `hostaddr` or `service`
+override requires `verify-full`, even if the authority looks local. Only
+`localhost`, `127.0.0.1`, `::1`, a Unix-socket path, or an
+omitted host may use an operator-controlled local transport without TLS. You
+must authenticate and secure that proxy's upstream connection.
 
-The service stops a database operation after these fixed budgets:
+Normal service startup checks the exact Alembic head and table structure. It
+never creates or changes schema. Follow
+[Upgrade, back up, and restore](upgrade.md) before the first startup and every
+upgrade.
 
-- 3 seconds to connect to PostgreSQL
-- 2 seconds to obtain a connection from the application pool
-- 3 seconds for an ordinary statement.
+Database operations have fixed fail-fast limits:
 
-The separate migration command waits at most 60 seconds for its PostgreSQL
-advisory lock by default and limits each migration statement to 60 seconds.
+| Operation | Limit |
+| --- | ---: |
+| Connect to PostgreSQL | 3 seconds |
+| Obtain an application-pool connection | 2 seconds |
+| Run an ordinary statement | 3 seconds |
+| Wait for the default migration advisory lock | 60 seconds |
+| Run one migration statement | 60 seconds |
+
 The Helm migration Job has separate Secret, environment, volume, mount, and
-ServiceAccount values. Give it the database URL and schema-change authority;
-do not attach the GitHub App private key or webhook secret.
+ServiceAccount settings. Give it the database URL and only the authority
+needed to change this schema. Never mount the GitHub private key or webhook
+secret into the migration Job.
 
-Test the entire path from service to database, including any proxy, under expected peak latency and concurrency. If normal operation approaches those limits, don't use this service as merge infrastructure. A timeout blocks or retries work; it never infers approval.
+Test the complete application-to-database path, including any proxy, under the
+expected peak latency and concurrency. If normal operations approach these
+limits, don't use the service as merge infrastructure. A timeout blocks or
+retries work; it never infers approval.
 
-## 3. Mount secrets
+## Mount credentials
 
-Don't bake secrets into the image, put them in command-line arguments, or commit them to an environment file.
+Don't bake credentials into the image, pass them as command-line arguments, or
+commit them to an environment file.
 
-Mount the GitHub App private key and webhook secret as read-only files. Only the container's runtime user should be able to read them. Configure:
+Mount the private key and webhook secret as read-only files that only the
+container's runtime user can read. Configure:
 
 ```text
 EXTRA_CODEOWNERS_GITHUB_PRIVATE_KEY_FILE=/run/secrets/github-private-key
 EXTRA_CODEOWNERS_GITHUB_WEBHOOK_SECRET_FILE=/run/secrets/github-webhook-secret
 ```
 
-Supply the database URL through the platform's secret-injection mechanism.
+Inject the database URL through the platform's secret mechanism.
 
-## 4. Configure the service
+## Configure the process
 
-Set at least:
+Set at least these values:
 
 ```text
 EXTRA_CODEOWNERS_ENVIRONMENT=production
@@ -147,119 +177,158 @@ EXTRA_CODEOWNERS_WORKER_RETRY_MAX_SECONDS=60
 EXTRA_CODEOWNERS_WEBHOOK_DELIVERY_RETENTION_DAYS=30
 ```
 
-Replace the example App ID and database placeholders. Keep `EXTRA_CODEOWNERS_ALLOW_INSECURE_CHANGES=false`. Leave setup mode disabled after App registration; it is disabled by default. Set `EXTRA_CODEOWNERS_PUBLIC_URL` only for a separate setup process, and use HTTPS.
+Replace the App ID and database placeholders. Keep
+`EXTRA_CODEOWNERS_ALLOW_INSECURE_CHANGES=false`.
+
+Setup mode is disabled by default. Keep it off after App registration. Set
+`EXTRA_CODEOWNERS_PUBLIC_URL` only for a separate setup process, and use an
+HTTPS origin.
 
 Production startup rejects:
 
-- SQLite and every other non-PostgreSQL database URL
-- a non-local database connection without `sslmode=verify-full`
+- SQLite and every non-PostgreSQL database URL
+- remote PostgreSQL without `sslmode=verify-full`
 - a webhook secret shorter than 32 UTF-8 bytes
-- a non-HTTPS GitHub API origin.
+- a non-HTTPS GitHub API origin
+- missing App ID, private key, or webhook secret.
 
-An effective `localhost`, `127.0.0.1`, `::1`, or Unix-socket database proxy may omit `sslmode`. A `hostaddr` or `service` override never qualifies for this exception. Authenticate and protect the local proxy's upstream connection yourself.
+Choose a webhook delivery-ID retention period that covers GitHub redelivery
+and your incident investigation window. The elected reconciler removes expired
+IDs. Keep reconciliation enabled or create a separately reviewed pruning
+procedure. Once an ID expires, GitHub may redeliver it and the service may
+accept it again, but the worker still fetches current GitHub evidence.
 
-Choose a delivery-ID retention period that covers GitHub redelivery and your incident-investigation window. The elected reconciler prunes expired IDs. Keep reconciliation enabled, or provide a separately reviewed retention procedure. Once pruned, an old delivery ID may be accepted again, but it can only coalesce a fresh evaluation that fetches current GitHub evidence.
+Evaluation and authority failures retry indefinitely. The
+`EXTRA_CODEOWNERS_WORKER_RETRY_MAX_SECONDS` setting caps the ordinary
+exponential delay, not the attempt count. GitHub rate-limit responses use a
+separate provider-supplied delay bounded to one day. Alert on a queue that
+stays above its normal baseline and on repeated failure logs. Don't use manual
+requeue as routine recovery.
 
-Evaluation and authority failures retry indefinitely because abandoned revocation work could leave a stale success visible. `EXTRA_CODEOWNERS_WORKER_RETRY_MAX_SECONDS` caps the normal exponential delay, not the attempt count. GitHub rate-limit responses use a separate bounded `Retry-After` delay from the provider. Alert when the pending queue stays above its normal baseline and when failure logs repeat. Don't use manual requeue as normal recovery.
+See the [runtime settings reference](../reference/configuration.md#runtime-settings)
+for every setting, default, and bound.
 
-See the [configuration reference](../reference/configuration.md#runtime-settings) for every setting and bound.
+## Expose only the webhook
 
-## 5. Configure ingress
-
-Route public GitHub traffic only to `POST /webhooks/github`. Preserve the raw body and these headers:
+Route unauthenticated GitHub traffic only to `POST /webhooks/github`. The
+proxy must preserve the raw body and these headers:
 
 - `X-Hub-Signature-256`
 - `X-GitHub-Event`
 - `X-GitHub-Delivery`.
 
-Apply current TLS protocols and disable response caching. Limit request bodies to 10 MiB before buffering. You may use a lower limit only after testing legitimate delivery sizes. Rate-limit requests without blocking normal GitHub bursts or redeliveries.
+Use current TLS protocols, disable response caching, and reject request bodies
+larger than 10 MiB before buffering. Use a lower limit only after testing real
+delivery sizes. Rate limits must still accommodate normal GitHub bursts and
+manual redelivery.
 
-Disable query-string logging for `/setup/callback` because its one-use App Manifest conversion code is sensitive. Keep setup disabled during normal operation so that route returns `404`.
+Disable query-string logging for `/setup/callback`. Its one-use App
+Manifest conversion code is sensitive. With setup disabled, `/setup` and
+`/setup/complete` return `404`. A callback request that includes
+its required `code` and `state` parameters also returns `404`.
 
-Keep `/metrics`, `/health/live`, `/health/ready`, and `/setup` on operator-controlled routes. If the ingress can't route by path, require network or proxy authentication everywhere except `/webhooks/github`.
+Keep `/metrics`, `/health/live`, `/health/ready`, and
+`/setup` behind operator-controlled routing. If the proxy cannot route by
+path, require network or proxy authentication everywhere except the webhook.
 
-## 6. Verify before receiving production events
+## Verify the deployment
 
-Treat these as deployment acceptance checks. Passing them doesn't resolve the commit-scoped Check Run limitation, so they don't make this deployment suitable for production merge authorization.
-
-From the orchestrator's network, verify liveness and readiness:
+Run these checks from the orchestrator network. Replace the example hostname
+with an operator-only endpoint:
 
 ```bash
 curl --fail-with-body https://operator-endpoint.example.com/health/live
 curl --fail-with-body https://operator-endpoint.example.com/health/ready
 ```
 
-Confirm that each health response reports `worker` and `reconciler` as `true`, and that the deployment enables both tasks. Verify that the metrics scraper can read `/metrics` and `extra_codeowners_insecure_changes_enabled` is `0`.
+Both requests must return HTTP 200. If the instance runs background work,
+confirm `worker` and `reconciler` are `true` in both responses.
+Also confirm that `EXTRA_CODEOWNERS_WORKER_ENABLED` and
+`EXTRA_CODEOWNERS_RECONCILE_ENABLED` are true; the health payload treats
+an intentionally disabled task as healthy.
+Confirm the metrics scraper can read `/metrics` and that
+`extra_codeowners_insecure_changes_enabled` is `0`.
 
-After the first reconciliation, confirm that `extra_codeowners_reconciliations_total{result="success"}` increased. Verify that `extra_codeowners_reconciliation_last_success_timestamp_seconds` contains a recent Unix timestamp.
+After reconciliation runs, verify that
+`extra_codeowners_reconciliations_total{result="success"}` increased and
+`extra_codeowners_reconciliation_last_success_timestamp_seconds` contains a
+recent Unix timestamp.
 
-In a disposable repository covered by test policy, open a pull request that changes an owned path. In the App's **Advanced** settings, confirm that **Recent deliveries** shows a successful `pull_request` delivery for the `opened` action. Verify that the repository receives a check from the expected App source. Redeliver the same delivery and confirm that deduplication does not create duplicate work. Complete every negative test in [Prepare repository rules](prepare-repository-rules.md#3-verify-the-conjunction) before changing a production ruleset.
+Then use a disposable repository with test policy:
+
+1. Open a pull request that changes an owned path.
+2. In the App's **Advanced** settings, confirm a successful
+   `pull_request.opened` delivery.
+3. Confirm that the expected App publishes the check on the current head.
+4. Redeliver the same delivery and confirm it does not create duplicate work.
+5. Complete every negative test in
+   [Prepare repository rules](prepare-repository-rules.md#3-exercise-the-complete-rule).
+
+Passing these checks does not close the commit-scoped Check Run limitation.
+Do not use the result to authorize production merges.
 
 ## Roll back or mitigate
 
-If a rollout produces incorrect results and the operator has a previously
-verified supported image that is compatible with the current database:
+Restore repository enforcement before changing traffic or processes:
 
-1. Stop routing new webhook traffic to the bad version.
-2. Compare the current database head with the previous artifact's required
-   head.
-3. If the head is unchanged, restore the previous image by its recorded digest
-   and run its `database check`.
-4. If the head changed, restore native **Require review from Code Owners** on
-   every affected repository, stop every application process, preserve the
+1. Restore GitHub's native **Require review from Code Owners** rule on every
+   affected repository.
+2. Wait until GitHub shows the rule as active.
+3. Remove the `Extra CODEOWNERS / approval` requirement if the service's
+   decisions are suspect or the service will remain offline.
+4. Stop routing new webhook traffic.
+
+This order applies to an authorization defect, a same-schema application
+rollback, and a database restore. It prevents an earlier Extra CODEOWNERS
+success from remaining the only code-owner gate while the service is stopped.
+
+If you have a previously verified supported image, compare the current database
+head with that artifact's required head:
+
+1. If the head is unchanged, deploy the previous image by its recorded digest
+   and run `extra-codeowners database check` before restoring traffic.
+2. If the head changed, stop every Extra CODEOWNERS process, preserve the
    failed database, and restore the verified pre-migration backup into a new
-   empty database. Validate it with the previous artifact before routing
-   traffic.
-5. Redeliver deliveries that the service never accepted. Let pending work
-   retry, and let reconciliation enqueue open pull requests that have no
-   existing job.
-6. Verify current-head checks in a test repository.
+   empty database. Validate the restored database with the previous artifact.
+3. Redeliver deliveries that the service never accepted. Let pending work
+   retry, and let reconciliation enqueue open pull requests with no job.
+4. Verify current-head checks in a disposable repository.
 
-Every Alembic head change requires the restore in step 4. An additive physical
-change does not let an old exact-head artifact use the migrated database.
+Every Alembic head change requires the restore in step 2. An additive physical
+change does not make an old exact-head artifact compatible.
 
-No project-supported previous image currently exists. If the operator has no
-previously verified image, or that image cannot safely use the current
-database, restore native **Require review from Code Owners** on every affected
-repository. Only then remove the Extra CODEOWNERS required check. Preserve the
-database and logs for investigation.
+No project-supported previous image exists today. If you don't have a
+previously verified compatible image, keep native code-owner enforcement in
+place and preserve the database and sanitized logs for investigation.
 
 The Helm chart runs a bounded pre-upgrade migration Job and uses a `Recreate`
-Deployment strategy. The old process may remain active while the hook runs, so
-migrations avoid destructive or unbounded operations during that interval.
-This does not make the old artifact valid at the new head. Recreate prevents
-old and new application pods from overlapping after the hook, but briefly
-interrupts webhook processing. GitHub doesn't automatically redeliver failed
-webhooks. Once the service is ready, inspect failed deliveries, redeliver them
-manually, and confirm that scheduled reconciliation is converging open pull
-requests.
+Deployment strategy. The old process may remain active while the hook runs,
+but old and new application pods do not overlap after the hook. Expect a short
+webhook interruption. GitHub does not automatically redeliver failed
+deliveries, so inspect and redeliver them after readiness returns. Then confirm
+that reconciliation is converging every open pull request.
 
-Keep one replica. Don't switch to `RollingUpdate` until you've tested the
-versions, schema, and lease behavior together. Follow
-`charts/extra-codeowners/README.md` from the same exact reviewed checkout for
-the complete Kubernetes procedure; do not jump to a mutable default-branch
-copy.
+Keep one replica and `Recreate` until you have tested the selected versions,
+database schema, leases, and termination behavior together. Use
+`charts/extra-codeowners/README.md` from the same reviewed checkout;
+don't jump to a mutable default-branch copy.
 
-## Release and planned supported paths
+## Planned release artifacts
 
-The initial Helm chart source lives at `charts/extra-codeowners`. Tagged
-publication is currently blocked by source-completeness issue `#18`,
-privilege-separation issue `#28`, and build-proof issue `#32`; the workflow
-cannot publish the items below. After all three are resolved and the evidence
-pipeline is reviewed, the intended exact semantic-version release contract is:
+After issues #18, #25, #28, and #32 close and the evidence path passes review,
+the intended semantic-version release contains:
 
-- a signed multi-architecture image at `ghcr.io/stampbot/extra-codeowners:<version>`
-- a signed OCI chart at `oci://ghcr.io/stampbot/charts/extra-codeowners`, using the release version
-- Python wheel and source artifacts
-- build provenance and software-bill-of-material attestations
-- signed, attested notice and corresponding-source evidence for each platform
-  digest.
+- a signed multi-architecture image at
+  `ghcr.io/stampbot/extra-codeowners:VERSION`
+- a signed OCI chart at
+  `oci://ghcr.io/stampbot/charts/extra-codeowners`
+- Python wheel and source distributions
+- provenance and SBOM attestations
+- signed notices and corresponding-source evidence for each platform digest.
 
-Workflow source does not prove an artifact was published, especially while its
-publication jobs are unreachable. Confirm each artifact on the registry or
-GitHub release after a successful future release. Until the repository
-announces a supported release, none exists.
+A workflow file is not evidence that an artifact was published. Verify every
+future artifact in GHCR or the GitHub release before using it.
 
 Environment-specific chart upgrade evidence and a reproducible Google Cloud
-deployment guide remain planned. Their workload-identity behavior will be
-documented from published artifacts rather than inferred here.
+deployment guide are still planned. Their workload-identity behavior will be
+documented from published artifacts, not inferred from source.

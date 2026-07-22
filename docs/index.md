@@ -1,104 +1,86 @@
 # Extra CODEOWNERS documentation
 
-GitHub's code-owner rule answers a useful but narrow question: did a person or
-team named in `CODEOWNERS` approve this change? Extra CODEOWNERS keeps that
-human ownership model and adds one carefully bounded alternative. An
-organization can let an enrolled GitHub App approve particular paths, while a
-human code owner can still approve everything they own.
+Extra CODEOWNERS lets a human code owner or a specifically enrolled GitHub App
+satisfy ownership for selected files. Human ownership stays in the standard
+`CODEOWNERS` file. App identity and delegated paths live in separate policy.
 
-The service evaluates each owned path in a pull request and publishes its
-decision as a GitHub Check Run. A repository can require that check in place of
-GitHub's native code-owner-review rule. Its ordinary approval count and every
-other required check stay in force.
+The service evaluates the current pull request and publishes one GitHub Check
+Run. It does not submit reviews or grant applications new repository access.
 
-The repository contains an implemented self-hosted GitHub App, a reusable
-evaluator, an App Manifest setup flow, and a Helm chart. CI builds and scans
-container candidates. The `main` publication job has been removed, and tagged
-publication is disabled pending three issues:
-[source completeness #18](https://github.com/stampbot/extra-codeowners/issues/18)
-covers native-wheel and embedded-SBOM component/source expansion;
-[privilege separation #28](https://github.com/stampbot/extra-codeowners/issues/28)
-isolates publication authority; and
-[build proof #32](https://github.com/stampbot/extra-codeowners/issues/32)
-retains the selected application proof in release evidence and connects it to
-the future isolated publication path.
-An [older public GHCR preview](https://github.com/stampbot/extra-codeowners/issues/30)
-may still be discoverable; it is unsupported, incomplete, and must not be
-deployed or mirrored.
-There is no supported release or hosted installation yet.
+!!! warning "Development and test use only"
 
-CI already normalizes CPython as a top-level runtime component. It binds that
-record to exact per-platform identity files and retains the pinned build recipe,
-source archive, and source-carried license evidence. This closes the CPython
-part of issue #18, but the image is not yet source-complete or approved for
-distribution.
+    Extra CODEOWNERS is not ready to replace GitHub's native code-owner rule on
+    a production repository. A Check Run belongs to a commit, while the
+    evidence used here belongs to one pull request. Read the
+    [current project status](reference/project-status.md) before installing or
+    testing the App.
 
-> **Production blocker:** GitHub attaches Check Runs to commits, but Extra
-> CODEOWNERS evaluates evidence for one pull request. A newly opened or
-> retargeted pull request can briefly inherit an earlier result for the same
-> commit. Don't replace native production enforcement until the
-> [eventual-consistency contract](reference/checks.md#eventual-consistency) has
-> been resolved and tested against live GitHub behavior.
+## Start with your task
 
-## Choose your task
+### Evaluate the idea
 
-If you are deciding whether the model fits your repository:
+Read [the native CODEOWNERS comparison](explanation/native-codeowners.md) for
+the problem and intended repository-rule composition. Then use the
+[threat model](explanation/threat-model.md) to decide whether the trust split
+fits your repository.
 
-- Read [how Extra CODEOWNERS differs from native CODEOWNERS](explanation/native-codeowners.md).
-- Follow the reasoning in the [architecture](explanation/architecture.md) and
-  [threat model](explanation/threat-model.md).
-- Check the [GitHub permissions](reference/github-permissions.md) before you
-  install an App build.
+The short version is:
 
-If you want to run the current implementation:
+1. `CODEOWNERS` names people and teams.
+2. Organization policy enrolls an App by immutable GitHub identity.
+3. Repository policy delegates paths, owners, and optional label conditions.
+4. An existing human or eligible App approval can satisfy each owner set.
 
-- Follow the [development installation tutorial](tutorials/development-installation.md).
-- [Register a development App with the setup URL](how-to/register-app.md).
-- [Configure an organization and repository](how-to/configure.md).
-- [Prepare repository rules](how-to/prepare-repository-rules.md).
+### Build a development installation
 
-If you operate a deployment:
+Follow the [development installation tutorial](tutorials/development-installation.md).
+It starts the service, connects a disposable GitHub App, and exercises one
+delegated pull request.
 
-- Use the [deployment guide](how-to/deploy.md).
-- Keep the [operations and recovery guide](how-to/operate.md) close at hand.
-- Review the [container evidence policy](reference/container-evidence-policy.md)
-  and [future release contract](reference/container-evidence-release-contract.md).
-  No tagged evidence assets exist while
-  [source-completeness issue #18](https://github.com/stampbot/extra-codeowners/issues/18),
-  [privilege-separation issue #28](https://github.com/stampbot/extra-codeowners/issues/28),
-  and [build-proof issue #32](https://github.com/stampbot/extra-codeowners/issues/32)
-  keep release publication denied.
-- Consult the [checks](reference/checks.md),
-  [configuration](reference/configuration.md), and
-  [HTTP API](reference/http-api.md) references when you need exact behavior.
+When you already have a running development service, use the focused guides:
 
-## Where trust lives
+- [Register an App with the setup URL](how-to/register-app.md)
+- [Configure organization and repository policy](how-to/configure.md)
+- [Prepare repository rules in a disposable repository](how-to/prepare-repository-rules.md)
+- [Run the live GitHub contract fixture](how-to/run-live-github-contract.md).
 
-`CODEOWNERS` still says which humans own a path. Organization policy enrolls a
-trusted application by immutable identity, and repository policy delegates a
-limited set of paths to it. The evaluator reads policy from the pull request's
-exact base commit and accepts approvals only for its current head. It checks
-both names of a renamed file and fails closed when evidence is missing,
-truncated, stale, or contradictory.
+### Plan a future deployment
 
-Some files can grant or expand an application's authority. Built-in rules keep
-an application from substituting for a human on those sensitive paths. An
-operator can disable that protection with the deployment-wide insecure-changes
-escape hatch, but doing so is a deliberate change to the trust boundary, not a
-convenience setting.
+There is no supported image or chart release yet. If you are planning an
+evaluation, start with the [future-deployment guide](how-to/deploy.md) to see
+what is implemented and what remains blocked. The
+[operations and recovery guide](how-to/operate.md) and
+[upgrade guide](how-to/upgrade.md) document the contracts a future deployment
+must satisfy; they are not a production-readiness claim.
 
-## What comes next
+### Look up exact behavior
 
-The GitHub App is the first distribution. A packaged Marketplace Action and a
-hosted service are separate roadmap items; neither exists yet. The Helm chart
-and App Manifest code are available now, but the project has not published a
-supported release.
+Use the reference pages when you need a field, limit, permission, route, or
+failure state:
 
-## Project help
+- [configuration](reference/configuration.md)
+- [checks and evaluation](reference/checks.md)
+- [command line](reference/cli.md)
+- [GitHub permissions and events](reference/github-permissions.md)
+- [HTTP API](reference/http-api.md)
+- [project status](reference/project-status.md).
 
-Use the repository's
-[support policy](https://github.com/stampbot/extra-codeowners/blob/main/SUPPORT.md)
-for questions and operational incidents. Report security issues through the
+The container-evidence pages document review and release work that remains
+blocked. They describe evidence and safety requirements; they do not mark the
+current candidates as distributable.
+
+### Understand the design
+
+The [architecture](explanation/architecture.md) follows a webhook from receipt
+through durable work and reconciliation. The other explanation pages cover
+the choices behind database migrations, property tests, the runtime base, and
+container evidence.
+
+## Get help or contribute
+
+Use the repository's [support policy](https://github.com/stampbot/extra-codeowners/blob/main/SUPPORT.md)
+for questions and operational incidents. Report vulnerabilities through the
 [private security policy](https://github.com/stampbot/extra-codeowners/security/policy),
-never through a public issue or discussion. Contributions follow the
-[contributor guide](https://github.com/stampbot/extra-codeowners/blob/main/CONTRIBUTING.md).
+not through a public issue. The
+[contributor guide](https://github.com/stampbot/extra-codeowners/blob/main/CONTRIBUTING.md)
+explains local checks, commit sign-off, and pull-request expectations.

@@ -1,57 +1,61 @@
-# Property testing of untrusted inputs
+# Why the security suite uses property tests
 
-Extra CODEOWNERS uses bounded property tests to exercise inputs that an attacker
-or a changing GitHub API can influence. The tests complement example-based unit
-and integration tests. They do not establish that every possible input has been
-examined.
+Much of Extra CODEOWNERS processes data that a contributor or a changing
+GitHub API can influence: webhook bytes, CODEOWNERS syntax, TOML policy, paths,
+pagination, and error metadata. Handwritten examples cover known cases well,
+but they are poor at finding combinations nobody thought to write down.
 
-## Decision
+The project therefore runs bounded property tests beside its ordinary unit and
+integration tests. They search a larger synthetic input space; they do not
+prove that every possible input has been examined.
 
-The project uses
+## Why Hypothesis
+
 [Hypothesis](https://hypothesis.readthedocs.io/en/latest/reference/api.html)
-because it integrates directly with the existing Python and pytest suite,
-shrinks failures to smaller examples, supports explicit regression examples,
-and lets the project set per-profile example and deadline limits.
+fits the existing pytest suite and provides three useful properties of its own:
 
-The first properties cover these trust-boundary contracts:
+- strategies can describe valid and invalid structured inputs
+- a failure is reduced to a smaller counterexample
+- explicit regression examples and bounded execution profiles live with the
+  test.
 
-- malformed or incorrectly signed webhook bodies are rejected;
-- CODEOWNERS parsing has an explicit valid document or structured failure
-  outcome, and unsupported patterns cannot silently become rules;
-- generated repository TOML policies preserve label narrowing when composed
-  with an enrolled organization App and enforce the 1,000-pattern complexity
-  limit;
-- renames retain both old-path and new-path ownership requirements;
-- GitHub list pagination stops only at a short page and fails when a caller's
-  item limit is exceeded;
-- GitHub API diagnostics and rate-limit delays remain bounded.
+The current properties exercise these trust-boundary contracts:
 
-Properties assert security outcomes, not only the absence of an exception. A
-new malformed case must either produce the documented structured rejection or
-preserve the expected fail-closed decision.
+- malformed or incorrectly signed webhooks are rejected
+- a CODEOWNERS document produces either valid rules or a structured failure;
+  unsupported patterns do not silently become rules
+- generated repository policy preserves label restrictions when combined with
+  an enrolled organization App and respects the 1,000-pattern limit
+- both sides of a rename retain their ownership requirements
+- paginated GitHub lists stop only on a short page and fail at the caller's
+  item bound
+- GitHub diagnostics and rate-limit delays stay within their limits.
 
-## Execution profiles and resource bounds
+Each property asserts the security result, not merely “the parser did not
+crash.” A malformed case must produce the documented rejection or preserve a
+blocking decision.
 
-The profiles below are registered in `tests/conftest.py`. Strategy sizes are
-also capped in `tests/test_security_properties.py`; for example, webhook bodies
-are at most 64 KiB and arbitrary CODEOWNERS text is at most 16,384 Unicode code
-points in the generative suite. Existing boundary tests separately exercise the
+## Profiles and limits
+
+`tests/conftest.py` registers three profiles. The strategies in
+`tests/test_security_properties.py` add their own size limits; generated
+webhook bodies, for example, stop at 64 KiB, and arbitrary CODEOWNERS text
+stops at 16,384 Unicode code points. Separate boundary tests cover the larger
 application limits.
 
-| Profile | Maximum generated examples (`max_examples`) | Deadline per example | Use |
+| Profile | Generated-example ceiling | Per-example deadline | Where it runs |
 | --- | ---: | ---: | --- |
-| `dev` | 50 | 500 ms | Normal local and full-suite runs |
-| `ci` | 250 | 750 ms | Pull requests and pushes to `main` |
-| `scheduled` | 2,000 | 1,000 ms | Weekly non-deterministic search |
+| `dev` | 50 | 500 ms | Normal local and full-suite tests |
+| `ci` | 250 | 750 ms | Pull requests and `main` pushes |
+| `scheduled` | 2,000 | 1,000 ms | Weekly exploratory run |
 
-`max_examples` is a ceiling. Hypothesis may stop earlier when a finite strategy
-is exhausted, and explicit `@example` regression cases run in addition to the
-generated examples.
+`max_examples` is a ceiling. Hypothesis may finish earlier when it exhausts a
+finite strategy. Explicit `@example` cases run in addition to generated ones.
 
-The dedicated GitHub Actions job has a 45-minute job limit and a 2 GiB virtual
-memory limit. A timeout, out-of-memory exit, unexpected exception, or violated
-property fails the job. These runner limits bound one invocation; they are not
-a claim about worst-case application memory use in production.
+The hosted property-test job has a 45-minute limit and a 2 GiB virtual-memory
+limit. A timeout, out-of-memory exit, unexpected exception, or failed property
+fails the job. Those limits bound one test invocation; they say nothing about a
+production process's worst-case memory use.
 
 Run the pull-request profile from the repository root:
 
@@ -59,46 +63,46 @@ Run the pull-request profile from the repository root:
 mise run test:property
 ```
 
-Run the longer profile only on a machine where the additional work is
-acceptable:
+Run the longer search when the machine can spare the work:
 
 ```bash
 mise run test:property:scheduled
 ```
 
-Both commands should finish with all property tests passing and print
-Hypothesis statistics. The scheduled profile is intentionally non-deterministic
-so separate runs explore different examples.
+Both tasks print Hypothesis statistics. The scheduled profile deliberately
+uses a new search rather than a persistent example database, so separate runs
+explore different cases.
 
-## Corpus and artifact privacy
+## Synthetic data only
 
-Every generator constructs synthetic values. Explicit `@example` seeds are
-sanitized strings already present in unit tests; no production webhook, API
-response, repository content, token, private key, or customer identifier may be
-added as a seed. Hypothesis's example database is disabled for all three
-profiles, so generated examples are not persisted or uploaded as a corpus.
+Generators construct fictional values. An explicit `@example` must also be a
+small, reviewed synthetic fixture. Never seed the suite with a real webhook,
+API response, repository path set, organization identifier, token, private
+key, or customer data.
 
-CI uploads only the pytest JUnit report. A failing report can contain a minimized
-synthetic example, so the report is still treated as public project data and is
-retained for 14 days. When a failure exposes a useful boundary case, add a
-small, reviewed, synthetic example to the ordinary test suite before fixing the
-implementation. Do not copy a real payload into a regression test.
+The Hypothesis example database is disabled for every profile. CI does not
+retain a generated corpus. It uploads only pytest's JUnit report for 14 days.
+A minimized synthetic counterexample can appear in that report, so the report
+is still treated as public project data.
 
-## Alternatives and limits
+When a generated failure exposes a useful boundary case, first turn it into a
+small ordinary regression test, then fix the implementation. Do not replace
+the minimized example with a real payload from the affected environment.
 
-Coverage-guided engines such as Atheris or an OSS-Fuzz integration could spend
-more compute exploring byte-oriented parsers. They would also require a
-separate harness, corpus lifecycle, sanitizer/runtime decisions, and a privacy
-review. The current surfaces are predominantly typed Python models and policy
-decisions, so Hypothesis gives useful semantic generation with less operational
-machinery. Revisit coverage guidance if parser complexity or native extensions
-grow.
+## What this approach does not cover
 
-OpenSSF Scorecard does not currently list Python Hypothesis among the property
-testing integrations detected by its Fuzzing check. The project accepts that
-measurement gap instead of selecting a weaker technical design for a score.
-The upstream check explicitly notes that undetected fuzzing can still be valid:
-[OpenSSF Scorecard Fuzzing check](https://github.com/ossf/scorecard/blob/main/docs/checks.md#fuzzing).
+Coverage-guided tools such as Atheris or OSS-Fuzz could spend more compute on
+byte-oriented parsers. They would also need a separate harness, corpus
+lifecycle, runtime and sanitizer choices, and a privacy review. Today's main
+surfaces are typed Python models and policy decisions, where semantic
+generation provides more immediate value. Revisit that decision if the parser
+surface or native extension use grows.
 
-This suite is not a proof of correctness. It does not replace the PostgreSQL,
-container, Helm, webhook-recovery, or live GitHub contract tests.
+OpenSSF Scorecard does not currently recognize Python Hypothesis in its
+Fuzzing check. The project accepts that measurement gap instead of choosing a
+weaker test design for a score. Scorecard itself notes that undetected fuzzing
+can still be valid in its
+[Fuzzing check documentation](https://github.com/ossf/scorecard/blob/main/docs/checks.md#fuzzing).
+
+Property tests are one layer. PostgreSQL concurrency, container, Helm,
+webhook-recovery, and live GitHub tests cover boundaries they cannot model.
