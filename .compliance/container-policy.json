@@ -6552,6 +6552,48 @@
           "size": 23043,
           "url": "https://files.pythonhosted.org/packages/ff/0e/53dfaca23a69fbfbbf17a4b64072090e70717344c52eaaaa9c5ddff1e5f0/markupsafe-3.0.3-cp314-cp314-musllinux_1_2_x86_64.whl"
         }
+      },
+      {
+        "components": [],
+        "native_payloads": [
+          {
+            "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy/cyextension/collections.cpython-314-x86_64-linux-musl.so",
+            "role": "sqlalchemy/cyextension/collections.cpython-314.so",
+            "sha256": "a48610d29b3b54f5ba67b874302c6f400ff3e684f148a50ef0affb6341cfffc6"
+          },
+          {
+            "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy/cyextension/immutabledict.cpython-314-x86_64-linux-musl.so",
+            "role": "sqlalchemy/cyextension/immutabledict.cpython-314.so",
+            "sha256": "548b681d56bc5d945a0b34e6f02a4b3eab88fb54341e4047b8dcae18b7ff215e"
+          },
+          {
+            "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy/cyextension/processors.cpython-314-x86_64-linux-musl.so",
+            "role": "sqlalchemy/cyextension/processors.cpython-314.so",
+            "sha256": "d2105caa5c25faf239930079bef0e821be9e85e659031200a78a31a20e1abce2"
+          },
+          {
+            "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy/cyextension/resultproxy.cpython-314-x86_64-linux-musl.so",
+            "role": "sqlalchemy/cyextension/resultproxy.cpython-314.so",
+            "sha256": "ba92efd35c3c6e528932d84c9363edad2a4ccdac2238b8dfdcf8d40a8d0f35bd"
+          },
+          {
+            "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy/cyextension/util.cpython-314-x86_64-linux-musl.so",
+            "role": "sqlalchemy/cyextension/util.cpython-314.so",
+            "sha256": "9093c13f438c92753f6c3dad7a93ca2034a4b06f91f04575ce9cbf107d3b4bf1"
+          }
+        ],
+        "owner": "python:sqlalchemy@2.0.51",
+        "owner_source": {
+          "sha256": "804dccd8a4a6242c4e30ad961e540e18a588f6527202f2d6791b01845d59fdc9",
+          "size": 9912201,
+          "url": "https://files.pythonhosted.org/packages/02/f1/a7a892f18d4d224e6b26f706531eafccc41e37594d37d304786969ee13cb/sqlalchemy-2.0.51.tar.gz"
+        },
+        "sboms": [],
+        "wheel": {
+          "sha256": "39a76529db6305693d8d4affa58ad5b5e2e18edd62daea628b29b97930b3513d",
+          "size": 3252888,
+          "url": "https://files.pythonhosted.org/packages/02/3c/52f408ea701781caee975606beccc48845f2aee8711ac29843d612c0306c/sqlalchemy-2.0.51-cp314-cp314-musllinux_1_2_x86_64.whl"
+        }
       }
     ],
     "linux/arm64": [
@@ -6657,6 +6699,48 @@
           "sha256": "ec15a59cf5af7be74194f7ab02d0f59a62bdcf1a537677ce67a2537c9b87fcda",
           "size": 23821,
           "url": "https://files.pythonhosted.org/packages/9a/a7/591f592afdc734f47db08a75793a55d7fbcc6902a723ae4cfbab61010cc5/markupsafe-3.0.3-cp314-cp314-musllinux_1_2_aarch64.whl"
+        }
+      },
+      {
+        "components": [],
+        "native_payloads": [
+          {
+            "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy/cyextension/collections.cpython-314-aarch64-linux-musl.so",
+            "role": "sqlalchemy/cyextension/collections.cpython-314.so",
+            "sha256": "af0e06bc14c4d1e07e9a782ea989a660c93a1d73a03183f8526538ccbdf45815"
+          },
+          {
+            "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy/cyextension/immutabledict.cpython-314-aarch64-linux-musl.so",
+            "role": "sqlalchemy/cyextension/immutabledict.cpython-314.so",
+            "sha256": "51ffb26c1053f8d94f772103542c1c9e175980956e3f8fdfe78a749140509b9e"
+          },
+          {
+            "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy/cyextension/processors.cpython-314-aarch64-linux-musl.so",
+            "role": "sqlalchemy/cyextension/processors.cpython-314.so",
+            "sha256": "87baa582e4ec656af88ab83eadd181919d13afccbfda646d4a2e35901ea9a24d"
+          },
+          {
+            "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy/cyextension/resultproxy.cpython-314-aarch64-linux-musl.so",
+            "role": "sqlalchemy/cyextension/resultproxy.cpython-314.so",
+            "sha256": "953be69c142a001094f93f0c682c6b3f57144677cbe394efc5197d297259eb6c"
+          },
+          {
+            "path": "opt/venv/lib/python3.14/site-packages/sqlalchemy/cyextension/util.cpython-314-aarch64-linux-musl.so",
+            "role": "sqlalchemy/cyextension/util.cpython-314.so",
+            "sha256": "f5ac85bf51fa1cda4b1ab4e109f5a7f390419ef6a4e8d1aad618b7bd213acce1"
+          }
+        ],
+        "owner": "python:sqlalchemy@2.0.51",
+        "owner_source": {
+          "sha256": "804dccd8a4a6242c4e30ad961e540e18a588f6527202f2d6791b01845d59fdc9",
+          "size": 9912201,
+          "url": "https://files.pythonhosted.org/packages/02/f1/a7a892f18d4d224e6b26f706531eafccc41e37594d37d304786969ee13cb/sqlalchemy-2.0.51.tar.gz"
+        },
+        "sboms": [],
+        "wheel": {
+          "sha256": "0f6bcad487aee1c638d707235682fc96f741de00663619881ab235400d03289e",
+          "size": 3230929,
+          "url": "https://files.pythonhosted.org/packages/f6/ab/9e17272fd4dac8df3b83c4fbe52b998a1c9d89a843c8c35ff29b74ff7364/sqlalchemy-2.0.51-cp314-cp314-musllinux_1_2_aarch64.whl"
         }
       }
     ]

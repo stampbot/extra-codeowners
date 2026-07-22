@@ -82,6 +82,59 @@ MARKUPSAFE_DOCS_LICENSE = b"""BSD-3-Clause License
 .. literalinclude:::: ../LICENSE.txt
     :language: text
 """
+SQLALCHEMY_LICENSE_TEXT = (
+    b"Copyright 2005-2026 SQLAlchemy authors and contributors "
+    b"<see AUTHORS file>.\n\n"
+    b"""Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
+of the Software, and to permit persons to whom the Software is furnished to do
+so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+"""
+)
+SQLALCHEMY_AUTHORS_TEXT = b"""SQLAlchemy was created by Michael Bayer.
+
+Major contributing authors include:
+
+- Mike Bayer
+- Jason Kirtland
+- Michael Trier
+- Diana Clarke
+- Gaetan de Menten
+- Lele Gaifax
+- Jonathan Ellis
+- Gord Thompson
+- Federico Caselli
+- Philip Jenvey
+- Rick Morrison
+- Chris Withers
+- Ants Aasma
+- Sheila Allen
+- Paul Johnston
+- Tony Locke
+- Hajime Nakagami
+- Vraj Mohan
+- Robert Leftwich
+- Taavi Burns
+- Jonathan Vanasco
+- Jeff Widman
+- Scott Dugas
+- Dobes Vandermeer
+- Ville Skytta
+- Rodrigo Menezes
+"""
 MARKUPSAFE_SOURCE: dict[str, Any] = {
     "url": (
         "https://files.pythonhosted.org/packages/7e/99/"
@@ -3375,7 +3428,7 @@ def test_native_component_lock_binding_rejects_wheel_and_owner_source_drift(fiel
         )
 
 
-def test_committed_greenlet_and_markupsafe_policy_is_exact_and_incomplete() -> None:
+def test_committed_native_owner_policy_is_exact_and_incomplete() -> None:
     policy = cast(dict[str, Any], json.loads(Path(".compliance/container-policy.json").read_text()))
     evidence.validate_policy_schema(policy)
     source = policy["native_component_sources"]["alpine:gcc@14.2.0-r6"]
@@ -3428,7 +3481,10 @@ def test_committed_greenlet_and_markupsafe_policy_is_exact_and_incomplete() -> N
         for record in policy["license_texts"]
     )
     assert policy["distribution_approval"]["approved"] is False
-    assert "issue #18" in evidence.SOURCE_COMPLETENESS_REASON
+    assert evidence.SOURCE_COMPLETENESS_REASON == (
+        "Four native-wheel owners still lack closed-world component/source coverage in issue "
+        "#18; public distribution remains blocked pending issue #28."
+    )
     lock_sources = evidence.parse_lock_sources(Path("uv.lock"))
     markupsafe_source = {
         "url": (
@@ -3503,13 +3559,165 @@ def test_committed_greenlet_and_markupsafe_policy_is_exact_and_incomplete() -> N
             ],
         },
     }
+    sqlalchemy_source = {
+        "url": (
+            "https://files.pythonhosted.org/packages/02/f1/"
+            "a7a892f18d4d224e6b26f706531eafccc41e37594d37d304786969ee13cb/"
+            "sqlalchemy-2.0.51.tar.gz"
+        ),
+        "sha256": "804dccd8a4a6242c4e30ad961e540e18a588f6527202f2d6791b01845d59fdc9",
+        "size": 9912201,
+    }
+    sqlalchemy_by_platform: dict[str, dict[str, Any]] = {
+        "linux/amd64": {
+            "wheel": {
+                "url": (
+                    "https://files.pythonhosted.org/packages/02/3c/"
+                    "52f408ea701781caee975606beccc48845f2aee8711ac29843d612c0306c/"
+                    "sqlalchemy-2.0.51-cp314-cp314-musllinux_1_2_x86_64.whl"
+                ),
+                "sha256": "39a76529db6305693d8d4affa58ad5b5e2e18edd62daea628b29b97930b3513d",
+                "size": 3252888,
+            },
+            "payloads": [
+                {
+                    "path": (
+                        "opt/venv/lib/python3.14/site-packages/sqlalchemy/cyextension/"
+                        "collections.cpython-314-x86_64-linux-musl.so"
+                    ),
+                    "role": "sqlalchemy/cyextension/collections.cpython-314.so",
+                    "sha256": "a48610d29b3b54f5ba67b874302c6f400ff3e684f148a50ef0affb6341cfffc6",
+                    "size": 1424968,
+                },
+                {
+                    "path": (
+                        "opt/venv/lib/python3.14/site-packages/sqlalchemy/cyextension/"
+                        "immutabledict.cpython-314-x86_64-linux-musl.so"
+                    ),
+                    "role": "sqlalchemy/cyextension/immutabledict.cpython-314.so",
+                    "sha256": "548b681d56bc5d945a0b34e6f02a4b3eab88fb54341e4047b8dcae18b7ff215e",
+                    "size": 563520,
+                },
+                {
+                    "path": (
+                        "opt/venv/lib/python3.14/site-packages/sqlalchemy/cyextension/"
+                        "processors.cpython-314-x86_64-linux-musl.so"
+                    ),
+                    "role": "sqlalchemy/cyextension/processors.cpython-314.so",
+                    "sha256": "d2105caa5c25faf239930079bef0e821be9e85e659031200a78a31a20e1abce2",
+                    "size": 434912,
+                },
+                {
+                    "path": (
+                        "opt/venv/lib/python3.14/site-packages/sqlalchemy/cyextension/"
+                        "resultproxy.cpython-314-x86_64-linux-musl.so"
+                    ),
+                    "role": "sqlalchemy/cyextension/resultproxy.cpython-314.so",
+                    "sha256": "ba92efd35c3c6e528932d84c9363edad2a4ccdac2238b8dfdcf8d40a8d0f35bd",
+                    "size": 431280,
+                },
+                {
+                    "path": (
+                        "opt/venv/lib/python3.14/site-packages/sqlalchemy/cyextension/"
+                        "util.cpython-314-x86_64-linux-musl.so"
+                    ),
+                    "role": "sqlalchemy/cyextension/util.cpython-314.so",
+                    "sha256": "9093c13f438c92753f6c3dad7a93ca2034a4b06f91f04575ce9cbf107d3b4bf1",
+                    "size": 605968,
+                },
+            ],
+            "identity": [
+                (
+                    "opt/venv/lib/python3.14/site-packages/sqlalchemy-2.0.51.dist-info/RECORD",
+                    "0b7f69da79b3abd11809fd8381cf7de69fafaec19891f95d0594afed27521d18",
+                    24603,
+                ),
+                (
+                    "opt/venv/lib/python3.14/site-packages/sqlalchemy-2.0.51.dist-info/WHEEL",
+                    "20422576b24cc95a1a3bb9e37cc201844e9a6aeac9198e9aef3018c876f0a4fb",
+                    112,
+                ),
+            ],
+        },
+        "linux/arm64": {
+            "wheel": {
+                "url": (
+                    "https://files.pythonhosted.org/packages/f6/ab/"
+                    "9e17272fd4dac8df3b83c4fbe52b998a1c9d89a843c8c35ff29b74ff7364/"
+                    "sqlalchemy-2.0.51-cp314-cp314-musllinux_1_2_aarch64.whl"
+                ),
+                "sha256": "0f6bcad487aee1c638d707235682fc96f741de00663619881ab235400d03289e",
+                "size": 3230929,
+            },
+            "payloads": [
+                {
+                    "path": (
+                        "opt/venv/lib/python3.14/site-packages/sqlalchemy/cyextension/"
+                        "collections.cpython-314-aarch64-linux-musl.so"
+                    ),
+                    "role": "sqlalchemy/cyextension/collections.cpython-314.so",
+                    "sha256": "af0e06bc14c4d1e07e9a782ea989a660c93a1d73a03183f8526538ccbdf45815",
+                    "size": 1495280,
+                },
+                {
+                    "path": (
+                        "opt/venv/lib/python3.14/site-packages/sqlalchemy/cyextension/"
+                        "immutabledict.cpython-314-aarch64-linux-musl.so"
+                    ),
+                    "role": "sqlalchemy/cyextension/immutabledict.cpython-314.so",
+                    "sha256": "51ffb26c1053f8d94f772103542c1c9e175980956e3f8fdfe78a749140509b9e",
+                    "size": 605872,
+                },
+                {
+                    "path": (
+                        "opt/venv/lib/python3.14/site-packages/sqlalchemy/cyextension/"
+                        "processors.cpython-314-aarch64-linux-musl.so"
+                    ),
+                    "role": "sqlalchemy/cyextension/processors.cpython-314.so",
+                    "sha256": "87baa582e4ec656af88ab83eadd181919d13afccbfda646d4a2e35901ea9a24d",
+                    "size": 492024,
+                },
+                {
+                    "path": (
+                        "opt/venv/lib/python3.14/site-packages/sqlalchemy/cyextension/"
+                        "resultproxy.cpython-314-aarch64-linux-musl.so"
+                    ),
+                    "role": "sqlalchemy/cyextension/resultproxy.cpython-314.so",
+                    "sha256": "953be69c142a001094f93f0c682c6b3f57144677cbe394efc5197d297259eb6c",
+                    "size": 493608,
+                },
+                {
+                    "path": (
+                        "opt/venv/lib/python3.14/site-packages/sqlalchemy/cyextension/"
+                        "util.cpython-314-aarch64-linux-musl.so"
+                    ),
+                    "role": "sqlalchemy/cyextension/util.cpython-314.so",
+                    "sha256": "f5ac85bf51fa1cda4b1ab4e109f5a7f390419ef6a4e8d1aad618b7bd213acce1",
+                    "size": 646352,
+                },
+            ],
+            "identity": [
+                (
+                    "opt/venv/lib/python3.14/site-packages/sqlalchemy-2.0.51.dist-info/RECORD",
+                    "cd3011f8b7dd82067ad811d3a8a2a207e60bbd3ad2c9b8cc7e2bccc5e61708e4",
+                    24608,
+                ),
+                (
+                    "opt/venv/lib/python3.14/site-packages/sqlalchemy-2.0.51.dist-info/WHEEL",
+                    "65af8284031537a21af94191b3984a5fb68f4ea67b3d8265f2c09c8fdbcc1b31",
+                    113,
+                ),
+            ],
+        },
+    }
     for platform in ("linux/amd64", "linux/arm64"):
         owners = policy["native_component_coverage"][platform]
         assert [owner["owner"] for owner in owners] == [
             "python:greenlet@3.5.3",
             "python:markupsafe@3.0.3",
+            "python:sqlalchemy@2.0.51",
         ]
-        greenlet_owner, markupsafe_owner = owners
+        greenlet_owner, markupsafe_owner, sqlalchemy_owner = owners
         assert greenlet_owner["owner_source"] == lock_sources[("greenlet", "3.5.3")]
         assert len(greenlet_owner["native_payloads"]) == 5
         assert [record["role"] for record in greenlet_owner["native_payloads"]] == [
@@ -3536,6 +3744,21 @@ def test_committed_greenlet_and_markupsafe_policy_is_exact_and_incomplete() -> N
             "wheel": expected_markupsafe["wheel"],
         }
         assert markupsafe_owner["owner_source"] == lock_sources[("markupsafe", "3.0.3")]
+
+        expected_sqlalchemy = sqlalchemy_by_platform[platform]
+        expected_sqlalchemy_payloads = [
+            {field: record[field] for field in ("path", "role", "sha256")}
+            for record in expected_sqlalchemy["payloads"]
+        ]
+        assert sqlalchemy_owner == {
+            "components": [],
+            "native_payloads": expected_sqlalchemy_payloads,
+            "owner": "python:sqlalchemy@2.0.51",
+            "owner_source": sqlalchemy_source,
+            "sboms": [],
+            "wheel": expected_sqlalchemy["wheel"],
+        }
+        assert sqlalchemy_owner["owner_source"] == lock_sources[("sqlalchemy", "2.0.51")]
 
         owner_versions = {
             "cffi": "2.1.0",
@@ -3600,17 +3823,32 @@ def test_committed_greenlet_and_markupsafe_policy_is_exact_and_incomplete() -> N
             if "markupsafe-3.0.3.dist-info" in record["path"]
         ]
         assert markupsafe_identity == expected_markupsafe["identity"]
+        sqlalchemy_identity = [
+            (record["path"], record["sha256"], record["size"])
+            for record in baselines["wheel_identity_files"]
+            if "sqlalchemy-2.0.51.dist-info" in record["path"]
+        ]
+        assert sqlalchemy_identity == expected_sqlalchemy["identity"]
+        sqlalchemy_payloads = [
+            (record["path"], record["sha256"], record["size"])
+            for record in baselines["native_payloads"]
+            if "/sqlalchemy/cyextension/" in record["path"]
+        ]
+        assert sqlalchemy_payloads == [
+            (record["path"], record["sha256"], record["size"])
+            for record in expected_sqlalchemy["payloads"]
+        ]
         ledger = evidence.native_component_coverage_ledger(inventory, policy)
         assert [item["owner"] for item in ledger["resolved_owners"]] == [
             "python:greenlet@3.5.3",
             "python:markupsafe@3.0.3",
+            "python:sqlalchemy@2.0.51",
         ]
         assert [item["owner"] for item in ledger["unresolved_owners"]] == [
             "python:cffi@2.1.0",
             "python:cryptography@48.0.1",
             "python:psycopg-binary@3.3.4",
             "python:pydantic-core@2.46.4",
-            "python:sqlalchemy@2.0.51",
         ]
         assert ledger["complete"] is False
 
@@ -4332,6 +4570,38 @@ def test_markupsafe_source_license_evidence_is_retained_exactly(tmp_path: Path) 
     ]
     assert (tmp_path / retained[0]).read_bytes() == MARKUPSAFE_LICENSE_TEXT
     assert (tmp_path / retained[1]).read_bytes() == MARKUPSAFE_DOCS_LICENSE
+
+
+def test_sqlalchemy_source_license_evidence_is_retained_exactly(tmp_path: Path) -> None:
+    assert (
+        evidence.sha256_bytes(SQLALCHEMY_LICENSE_TEXT),
+        len(SQLALCHEMY_LICENSE_TEXT),
+    ) == (
+        "e862bb5b904fb5513c3e14288d7a25a12eb0ecc7847a0a965d310e9a955e7cb9",
+        1100,
+    )
+    assert (
+        evidence.sha256_bytes(SQLALCHEMY_AUTHORS_TEXT),
+        len(SQLALCHEMY_AUTHORS_TEXT),
+    ) == (
+        "dc1db0b5d17455adc37b693ff8e409c9a80f603e441695825518c36f786c963e",
+        492,
+    )
+    archive = tar_bytes(
+        {
+            "sqlalchemy-2.0.51/AUTHORS": SQLALCHEMY_AUTHORS_TEXT,
+            "sqlalchemy-2.0.51/LICENSE": SQLALCHEMY_LICENSE_TEXT,
+        }
+    )
+
+    retained = evidence.extract_license_files(archive, "python-sqlalchemy-2.0.51", tmp_path)
+
+    assert retained == [
+        "licenses/from-source/python-sqlalchemy-2.0.51/dc1db0b5d174-AUTHORS",
+        "licenses/from-source/python-sqlalchemy-2.0.51/e862bb5b904f-LICENSE",
+    ]
+    assert (tmp_path / retained[0]).read_bytes() == SQLALCHEMY_AUTHORS_TEXT
+    assert (tmp_path / retained[1]).read_bytes() == SQLALCHEMY_LICENSE_TEXT
 
 
 def test_source_zip_inflater_uses_the_declared_output_cap(

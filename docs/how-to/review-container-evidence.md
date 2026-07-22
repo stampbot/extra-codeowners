@@ -18,8 +18,8 @@ or release authority from running.
 
 Four open issues define the remaining boundary:
 
-- [#18](https://github.com/stampbot/extra-codeowners/issues/18) covers the five
-  native-wheel owners that remain after Greenlet and MarkupSafe.
+- [#18](https://github.com/stampbot/extra-codeowners/issues/18) covers the four
+  native-wheel owners that remain after Greenlet, MarkupSafe, and SQLAlchemy.
 - [#28](https://github.com/stampbot/extra-codeowners/issues/28) covers the
   privilege-separated release pipeline and bounded recipient verifier.
 - [#32](https://github.com/stampbot/extra-codeowners/issues/32) covers retaining
@@ -682,9 +682,10 @@ for architecture in amd64 arm64; do
       and .complete == false
       and ([.resolved_owners[].owner] == [
         "python:greenlet@3.5.3",
-        "python:markupsafe@3.0.3"
+        "python:markupsafe@3.0.3",
+        "python:sqlalchemy@2.0.51"
       ])
-      and (.unresolved_owners | length == 5)
+      and (.unresolved_owners | length == 4)
     ' "$DIFF_ROOT/${architecture}-native-component-coverage.json" >/dev/null
   LC_ALL=C sed -n 'l' \
     "$DIFF_ROOT/${architecture}-native-component-coverage.json"
@@ -770,7 +771,10 @@ Review source policy with these precise boundaries:
   or reviewed license in another owner or SBOM. The Greenlet record separately
   pins the Alpine 3.22 GCC recipe, distfile, and source-carried notices reviewed
   for the SBOM's `libgcc` and `libstdc++` identities. MarkupSafe must contain
-  one `_speedups` native role and explicit empty SBOM and component sets
+  one `_speedups` native role and explicit empty SBOM and component sets.
+  SQLAlchemy must contain its five `cyextension` roles and the same explicit
+  empty sets. Do not add Cython, GCC, or musl as nested SQLAlchemy components
+  without distributed component evidence
 - Docker Official Python policy pins the multi-platform index, exact ordered
   base diff IDs, recipe, recipe license, CPython source archive, and exact
   source-carried `LICENSE` and `Include/patchlevel.h`; the source version and
@@ -798,15 +802,15 @@ Both component inventories must contain exactly:
 ```json
 {
   "complete": false,
-  "reason": "Five native-wheel owners still lack closed-world component/source coverage in issue #18; public distribution remains blocked pending issue #28."
+  "reason": "Four native-wheel owners still lack closed-world component/source coverage in issue #18; public distribution remains blocked pending issue #28."
 }
 ```
 
 Do not weaken or remove that state. The coverage ledger must resolve Greenlet
-and MarkupSafe on both platforms, list the other five owners as unresolved,
-and remain `complete: false`. Issue #18 must close those remaining records with
-exact observed surfaces and the applicable notice and corresponding-source
-evidence.
+MarkupSafe, and SQLAlchemy on both platforms. It must list the other four
+owners as unresolved and remain `complete: false`. Issue #18 must close those
+remaining records with exact observed surfaces and the applicable notice and
+corresponding-source evidence.
 
 CPython is no longer part of the incomplete status. The trusted helper requires
 one effective top-level CPython component per platform, binds its four runtime
@@ -826,8 +830,16 @@ MarkupSafe is no longer part of the incomplete status either. Its resolved
 record binds the exact platform wheel, its single `_speedups` payload, and the
 80,313-byte sdist from `uv.lock`. The explicit empty SBOM and component sets
 must match the observed wheel. They do not prove that the sdist explains every
-byte in the compiled extension. Treat a missing MarkupSafe record or any owner
-resolved beyond these two as policy drift that requires a separate review.
+byte in the compiled extension. Treat a missing MarkupSafe record as policy
+drift that requires a separate review.
+
+SQLAlchemy is no longer part of the incomplete status. Its record binds the
+exact platform wheel, all five `cyextension` roles, and the 9,912,201-byte
+sdist from `uv.lock`. The wheel has no embedded SBOM or separately packaged
+native library, so its SBOM and component sets are empty. This evidence does
+not prove reproducibility or close the compiler toolchain. Treat a missing
+SQLAlchemy record, or any owner resolved beyond these three, as policy drift
+that requires a separate review.
 
 The trusted helper has already validated `wheel_installations` against
 the all-layer file inventory. It requires every historical installation to bind

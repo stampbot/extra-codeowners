@@ -20,22 +20,24 @@ contract:
 
 | Issue | Work still required |
 | --- | --- |
-| [#18](https://github.com/stampbot/extra-codeowners/issues/18) | Complete notice and corresponding-source records for the five native-wheel owners that remain after Greenlet and MarkupSafe. |
+| [#18](https://github.com/stampbot/extra-codeowners/issues/18) | Complete notice and corresponding-source records for the four native-wheel owners that remain after Greenlet, MarkupSafe, and SQLAlchemy. |
 | [#28](https://github.com/stampbot/extra-codeowners/issues/28) | Separate unprivileged collection from publication authority, freeze the wire format, and ship an adversarially tested recipient verifier and how-to. |
 | [#32](https://github.com/stampbot/extra-codeowners/issues/32) | Retain the reproducible Python proof in release evidence and pass it to the isolated publication jobs, which must bind the exact selected wheel to the installed runtime. |
 
 The collector has completed the CPython identity and source portion of #18 and
-the Greenlet and MarkupSafe native-owner portions on both platforms. It retains
-the exact locked platform wheel for every native-payload or embedded-SBOM
-owner and a separately addressed copy of each raw SBOM. For Greenlet, it also
-binds the owner sdist, the complete five-file native set, each embedded
-component, the exact Alpine GCC recipe and distfile, and reviewed source
-notices. These exact
-sets prove co-membership in the wheel. The SBOM has no component-to-file map,
-so the evidence does not assign an individual native file to the owner source
-or a nested component. MarkupSafe adds one exact native payload and explicit
-empty SBOM and component sets. Its exact sdist is source evidence, not proof
-that every binary byte came from that archive. Five owners remain; those
+the Greenlet, MarkupSafe, and SQLAlchemy native-owner portions on both
+platforms. It retains the exact locked platform wheel for every native-payload
+or embedded-SBOM owner and a separately addressed copy of each raw SBOM. For
+Greenlet, it also binds the owner sdist, the complete five-file native set,
+each embedded component, the exact Alpine GCC recipe and distfile, and
+reviewed source notices. These exact sets prove co-membership in the wheel.
+The SBOM has no component-to-file map, so the evidence does not assign an
+individual native file to the owner source or a nested component.
+
+MarkupSafe adds one exact native payload and explicit empty SBOM and component
+sets. SQLAlchemy adds five exact native payloads and the same explicit empty
+sets. Each record binds the exact owner sdist as source evidence, not proof
+that every binary byte came from that archive. Four owners remain; their raw
 records make the gap inspectable but do not close it.
 
 The collector also replays wheel `RECORD` ownership for historical Python
@@ -225,14 +227,24 @@ not provide a relationship from a component to a file path, hash, or SONAME.
 The schema therefore does not attribute any individual payload to the owner
 source or to a nested component.
 
-The current per-platform ledger resolves `python:greenlet@3.5.3` and
-`python:markupsafe@3.0.3`, leaving five owners unresolved. MarkupSafe's record
-has one native role and explicit empty SBOM and component sets. Its exact sdist
-is retained at
+The current per-platform ledger resolves `python:greenlet@3.5.3`,
+`python:markupsafe@3.0.3`, and `python:sqlalchemy@2.0.51`, leaving four owners
+unresolved. MarkupSafe's record has one native role and explicit empty SBOM and
+component sets. Its exact sdist is retained at
 `sources/python/markupsafe/3.0.3/markupsafe-3.0.3.tar.gz`. The source members
 `LICENSE.txt` and `docs/license.rst` are retained as
 `licenses/from-source/python-markupsafe-3.0.3/489a8e110850-LICENSE.txt` and
 `licenses/from-source/python-markupsafe-3.0.3/6fc7e80b75b5-license.rst`.
+SQLAlchemy's record has five native roles and the same explicit empty sets. Its
+exact sdist is retained at
+`sources/python/sqlalchemy/2.0.51/sqlalchemy-2.0.51.tar.gz`. Its source notices
+are retained at these exact paths:
+
+- `licenses/from-source/python-sqlalchemy-2.0.51/4a0179c4ef9f-copyright.rst`
+- `licenses/from-source/python-sqlalchemy-2.0.51/dc1db0b5d174-AUTHORS`
+- `licenses/from-source/python-sqlalchemy-2.0.51/e38dfb2d3115-copyright.html`
+- `licenses/from-source/python-sqlalchemy-2.0.51/e862bb5b904f-LICENSE`
+
 Greenlet's nested `libgcc` and `libstdc++` records point to the exact Alpine GCC
 14.2.0-r6 builder source retained under
 `sources/native-components/gcc/14.2.0-r6/`. The shared source-carried notices

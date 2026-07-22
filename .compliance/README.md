@@ -18,8 +18,8 @@ Docker Official Python recipe, the exact source archive, and the source-carried
 license. It also retains the exact locked wheel and raw embedded SBOM for every
 Python package that owns native code or an SBOM.
 
-Schema 6 closes one wheel owner at a time. Greenlet and MarkupSafe are resolved
-on both supported architectures.
+Schema 6 closes one wheel owner at a time. Greenlet, MarkupSafe, and SQLAlchemy
+are resolved on both supported architectures.
 
 The Greenlet record:
 
@@ -40,14 +40,22 @@ The MarkupSafe record binds the exact platform wheel, the 80,313-byte sdist from
 empty SBOM and embedded-component sets. An empty set is evidence that the
 reviewed wheel contains no such surface; omitting the field is a schema error.
 
+The SQLAlchemy record binds the exact platform wheel, the 9,912,201-byte sdist,
+and all five `cyextension` payloads. The wheels contain no embedded SBOM or
+separately packaged native library, so the SBOM and component sets are empty.
+Each extension names only the platform musl runtime as a dynamic dependency.
+The source archive carries the project's Cython sources and no bundled
+third-party native code.
+
 These records prove exact co-membership in each reviewed wheel. They do not
 prove how an individual binary was built. Greenlet's SBOM does not relate a
 component to a file path, hash, or SONAME, so the policy does not assign a file
-to the Greenlet sdist, `libgcc`, or `libstdc++`. MarkupSafe has no embedded
-SBOM, and its exact sdist does not explain every byte in `_speedups`.
+to the Greenlet sdist, `libgcc`, or `libstdc++`. MarkupSafe and SQLAlchemy have
+no embedded SBOM. Their exact sdists do not prove how the compiled extensions
+were built or explain every binary byte.
 
 `inventory/native-component-coverage.json` records that result and lists every
-owner still open. Five native-wheel owners remain unresolved, so
+owner still open. Four native-wheel owners remain unresolved, so
 `source_completeness.complete` and `distribution_approval.approved` both remain
 `false`. The ledger is evidence of incremental progress; it is not permission
 to distribute the image.

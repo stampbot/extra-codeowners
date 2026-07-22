@@ -168,7 +168,7 @@ lower OCI layer remains in policy with `effective: false`.
 
 Approval is necessary but not sufficient. The collector also requires the
 inventory's exact complete-source status. Current code keeps `complete: false`
-while five native-wheel owners remain unresolved under issue #18, so the
+while four native-wheel owners remain unresolved under issue #18, so the
 approval-required gate cannot pass. Issue #28 independently keeps publication
 authority out of the collector. Issue #32 still requires the selected
 application proof to reach release evidence and the future publication jobs.
@@ -356,13 +356,19 @@ wheel and the 80,313-byte MarkupSafe 3.0.3 sdist. The empty arrays mean that
 the reviewed wheel exposes no embedded SBOM or component identity; they do not
 claim that the sdist explains every byte of the compiled extension.
 
+The SQLAlchemy records contain five `native_payloads` entries per platform and
+explicit empty `sboms` and `components` arrays. They bind the exact locked
+wheel and the 9,912,201-byte SQLAlchemy 2.0.51 sdist. Each platform record uses
+the same five derived roles. The empty arrays describe the wheel's observed
+surface; they do not claim reproducibility or close the compiler toolchain.
+
 `inventory/native-component-coverage.json` is derived from policy and observed
 inventory. It contains `schema_version`, `platform`, `complete`,
 `resolved_owners`, and `unresolved_owners`. Resolved records reproduce the exact
 reviewed sets. Unresolved records retain each owner's native path/hash pairs
 and embedded-SBOM component projection. The checked-in policy resolves
-Greenlet and MarkupSafe; the ledger still reports five unresolved owners and
-`complete: false`.
+Greenlet, MarkupSafe, and SQLAlchemy; the ledger still reports four unresolved
+owners and `complete: false`.
 
 `filesystem_baselines` also has both platform keys. Each value has exactly:
 
