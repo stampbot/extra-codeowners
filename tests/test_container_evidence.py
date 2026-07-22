@@ -398,6 +398,11 @@ def standalone_policy(
         },
     ]
     policy["custom_license_evidence"] = {}
+    policy["native_component_sources"] = {}
+    policy["native_component_coverage"] = {
+        "linux/amd64": [],
+        "linux/arm64": [],
+    }
     policy["unexpanded_python_payloads"] = empty_unexpanded_payload_policy()
     policy["filesystem_baselines"] = empty_filesystem_baselines()
     policy["filesystem_baselines"]["linux/amd64"]["apk_database_occurrences"] = [
@@ -750,6 +755,119 @@ def native_wheel_case(
     return inventory, locked, wheel_content
 
 
+def native_component_coverage_case() -> tuple[
+    dict[str, dict[str, Any]],
+    dict[str, dict[str, Any]],
+    dict[str, Any],
+    dict[tuple[str, str], dict[str, Any]],
+]:
+    """Build a two-platform closed-world owner/component/source policy fixture."""
+
+    inventories: dict[str, dict[str, Any]] = {}
+    locked_wheels: dict[str, dict[str, Any]] = {}
+    coverage: dict[str, list[dict[str, Any]]] = {}
+    owner_source = {
+        "url": "https://files.pythonhosted.org/packages/aa/demo-1.0.tar.gz",
+        "sha256": "1" * 64,
+        "size": 123,
+    }
+    nested_component = {
+        "type": "library",
+        "name": "libdemo",
+        "version": "1.2.3-r0",
+        "purl": "pkg:apk/alpine/libdemo@1.2.3-r0",
+    }
+    for platform in ("linux/amd64", "linux/arm64"):
+        inventory, locked, _content = native_wheel_case(platform=platform)
+        owner_payload = inventory["native_payloads"][0]
+        nested_payload = {
+            **copy.deepcopy(owner_payload),
+            "path": (
+                "opt/venv/lib/python3.14/site-packages/demo.libs/"
+                f"libdemo-{'abcdef12' if platform == 'linux/amd64' else '1234abcd'}.so.1"
+            ),
+            "sha256": "2" * 64 if platform == "linux/amd64" else "3" * 64,
+        }
+        inventory["native_payloads"].append(nested_payload)
+        inventory["embedded_sboms"][0]["cyclonedx"] = {
+            "metadata_component": None,
+            "components": [copy.deepcopy(nested_component)],
+        }
+        inventories[platform] = inventory
+        locked_wheels[platform] = locked
+        coverage[platform] = [
+            {
+                "owner": "python:demo@1.0",
+                "wheel": {field: locked[field] for field in ("url", "sha256", "size")},
+                "owner_source": copy.deepcopy(owner_source),
+                "native_payloads": sorted(
+                    [
+                        {
+                            "role": "demo/native.so",
+                            **{field: owner_payload[field] for field in ("path", "sha256")},
+                        },
+                        {
+                            "role": "demo.libs/libdemo.so.1",
+                            **{field: nested_payload[field] for field in ("path", "sha256")},
+                        },
+                    ],
+                    key=lambda record: record["role"],
+                ),
+                "sboms": [
+                    {
+                        "path": inventory["embedded_sboms"][0]["path"],
+                        "sha256": inventory["embedded_sboms"][0]["sha256"],
+                        "components": [
+                            {
+                                **copy.deepcopy(nested_component),
+                                "source": "alpine:demo-native@1.2.3-r0",
+                                "reviewed_license": "MIT",
+                            }
+                        ],
+                    }
+                ],
+            }
+        ]
+    source = {
+        "kind": "alpine-aports",
+        "origin": "demo-native",
+        "version": "1.2.3-r0",
+        "aports_commit": "4" * 40,
+        "distfiles_release": "v3.22",
+        "recipe": {
+            "url": (
+                "https://gitlab.alpinelinux.org/alpine/aports/-/archive/"
+                f"{'4' * 40}/aports-{'4' * 40}.tar.gz?path=main/demo-native"
+            ),
+            "sha256": "5" * 64,
+            "size": 456,
+        },
+        "distfiles": [
+            {
+                "filename": "demo-native-1.2.3.tar.xz",
+                "url": (
+                    "https://distfiles.alpinelinux.org/distfiles/v3.22/demo-native-1.2.3.tar.xz"
+                ),
+                "sha512": "6" * 128,
+                "size": 789,
+            }
+        ],
+        "observed_license": "MIT",
+        "notices": [
+            {
+                "member": "demo-native-1.2.3/LICENSE",
+                "sha256": "7" * 64,
+                "size": 12,
+            }
+        ],
+    }
+    policy = {
+        "native_component_sources": {"alpine:demo-native@1.2.3-r0": source},
+        "native_component_coverage": coverage,
+    }
+    return inventories, locked_wheels, policy, {("demo", "1.0"): owner_source}
+
+
 def native_wheel_lock_record(locked: dict[str, Any], *extra_filenames: str) -> str:
     """Return a minimal uv.lock package record around one selected-wheel fixture."""
 
@@ -913,13 +1031,13 @@ def test_strict_json_rejects_lone_unicode_surrogates() -> None:
         evidence.canonical_json({"value": "\ud800"})
 
 
-def test_schema_version_requires_exact_v4_integer_and_media_type() -> None:
-    evidence.require_schema({"schema_version": 4}, "test")
-    for unsupported in (True, 1, 2, 3, 5):
+def test_schema_version_requires_exact_v5_integer_and_media_type() -> None:
+    evidence.require_schema({"schema_version": 5}, "test")
+    for unsupported in (True, 1, 2, 3, 4, 6):
         with pytest.raises(evidence.EvidenceError, match="unsupported test schema"):
             evidence.require_schema({"schema_version": unsupported}, "test")
     assert evidence.EVIDENCE_MEDIA_TYPE == (
-        "application/vnd.stampbot.container-evidence.v4+tar+gzip"
+        "application/vnd.stampbot.container-evidence.v5+tar+gzip"
     )
 
 
@@ -1927,6 +2045,7 @@ def test_native_wheel_selection_and_verification_preserve_leading_zero_build(
 
 
 def test_committed_lock_selects_exact_seven_native_owner_wheels() -> None:
+    policy = json.loads(Path(".compliance/container-policy.json").read_text())
     matrix = {
         "linux/amd64": {
             "python:cffi@2.1.0": (
@@ -2013,6 +2132,10 @@ def test_committed_lock_selects_exact_seven_native_owner_wheels() -> None:
         assert [(record["owner"], record["filename"], record["tags"]) for record in selected] == [
             (owner, filename, [tag]) for owner, (filename, tag) in sorted(expected.items())
         ]
+        greenlet = next(record for record in selected if record["owner"] == "python:greenlet@3.5.3")
+        assert {field: greenlet[field] for field in ("url", "sha256", "size")} == policy[
+            "native_component_coverage"
+        ][platform][0]["wheel"]
 
 
 @pytest.mark.parametrize(
@@ -2720,6 +2843,661 @@ def test_native_wheel_retention_rejects_invalid_url_chains(
             content,
             budget=evidence.BundleBudget(),
             urls=urls,
+        )
+
+
+def test_native_component_coverage_ledger_resolves_owner_native_set_and_lock() -> None:
+    inventories, locked, policy, lock_sources = native_component_coverage_case()
+    inventory = inventories["linux/amd64"]
+
+    evidence.validate_native_component_policy_schema(policy)
+    ledger = evidence.verify_native_component_lock_bindings(
+        inventory,
+        policy,
+        [locked["linux/amd64"]],
+        lock_sources,
+    )
+
+    assert ledger["complete"] is True
+    assert [record["owner"] for record in ledger["resolved_owners"]] == ["python:demo@1.0"]
+    assert ledger["unresolved_owners"] == []
+
+
+@pytest.mark.parametrize(
+    ("platform", "path", "role"),
+    (
+        (
+            "linux/amd64",
+            (
+                "opt/venv/lib/python3.14/site-packages/greenlet/"
+                "_greenlet.cpython-314-x86_64-linux-musl.so"
+            ),
+            "greenlet/_greenlet.cpython-314.so",
+        ),
+        (
+            "linux/arm64",
+            (
+                "opt/venv/lib/python3.14/site-packages/greenlet/tests/"
+                "_test_extension.cpython-314-aarch64-linux-musl.so"
+            ),
+            "greenlet/tests/_test_extension.cpython-314.so",
+        ),
+        (
+            "linux/amd64",
+            ("opt/venv/lib/python3.14/site-packages/greenlet.libs/libgcc_s-0cd532bd.so.1"),
+            "greenlet.libs/libgcc_s.so.1",
+        ),
+        (
+            "linux/arm64",
+            ("opt/venv/lib/python3.14/site-packages/greenlet.libs/libstdc++-85f2cd6d.so.6.0.33"),
+            "greenlet.libs/libstdc++.so.6.0.33",
+        ),
+        (
+            "linux/amd64",
+            "opt/venv/lib/python3.14/site-packages/demo/native.abi3.so",
+            "demo/native.abi3.so",
+        ),
+    ),
+)
+def test_native_component_payload_role_is_a_platform_neutral_path_projection(
+    platform: str, path: str, role: str
+) -> None:
+    assert evidence.native_component_payload_role(path, platform, "test payload") == role
+
+
+@pytest.mark.parametrize(
+    ("platform", "path", "message"),
+    (
+        (
+            "linux/amd64",
+            "usr/local/lib/python3.14/site-packages/demo/native.so",
+            "outside the reviewed site-packages root",
+        ),
+        (
+            "linux/amd64",
+            "opt/venv/lib/python3.14/site-packages/../escape.so",
+            "unsafe archive path",
+        ),
+        (
+            "linux/amd64",
+            ("opt/venv/lib/python3.14/site-packages/demo/native.cpython-314-aarch64-linux-musl.so"),
+            "ABI suffix conflicts with linux/amd64",
+        ),
+        (
+            "linux/amd64",
+            "opt/venv/lib/python3.14/site-packages/demo.libs/libdemo-ABCDEF12.so.1",
+            "invalid auditwheel hash",
+        ),
+        (
+            "linux/arm64",
+            "opt/venv/lib/python3.14/site-packages/demo.libs/libdemo-abc1234.so.1",
+            "invalid auditwheel hash",
+        ),
+    ),
+)
+def test_native_component_payload_role_rejects_unsafe_or_ambiguous_paths(
+    platform: str, path: str, message: str
+) -> None:
+    with pytest.raises(evidence.EvidenceError, match=message):
+        evidence.native_component_payload_role(path, platform, "test payload")
+
+
+def test_native_component_coverage_ledger_keeps_unconfigured_owner_unresolved() -> None:
+    inventories, _locked, policy, _lock_sources = native_component_coverage_case()
+    policy["native_component_coverage"] = {"linux/amd64": [], "linux/arm64": []}
+    policy["native_component_sources"] = {}
+
+    ledger = evidence.native_component_coverage_ledger(inventories["linux/amd64"], policy)
+
+    assert ledger["complete"] is False
+    assert ledger["resolved_owners"] == []
+    assert [record["owner"] for record in ledger["unresolved_owners"]] == ["python:demo@1.0"]
+    assert len(ledger["unresolved_owners"][0]["native_payloads"]) == 2
+    assert len(ledger["unresolved_owners"][0]["embedded_sboms"]) == 1
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    (
+        ("missing_payload", "does not exactly cover payloads"),
+        ("stale_payload", "does not exactly cover payloads"),
+        ("stale_sbom", "does not exactly cover SBOMs"),
+        ("stale_owner", "stale owner"),
+        ("wrong_component", "differs from embedded SBOM components"),
+    ),
+)
+def test_native_component_coverage_rejects_missing_extra_or_stale_inventory_bindings(
+    mutation: str, message: str
+) -> None:
+    inventories, _locked, policy, _lock_sources = native_component_coverage_case()
+    record = policy["native_component_coverage"]["linux/amd64"][0]
+    if mutation == "missing_payload":
+        for platform_records in policy["native_component_coverage"].values():
+            platform_records[0]["native_payloads"].pop()
+    elif mutation == "stale_payload":
+        record["native_payloads"][0]["sha256"] = "0" * 64
+    elif mutation == "stale_sbom":
+        record["sboms"][0]["sha256"] = "0" * 64
+    elif mutation == "stale_owner":
+        for platform_records in policy["native_component_coverage"].values():
+            platform_record = platform_records[0]
+            platform_record["owner"] = "python:missing@1.0"
+            platform_record["wheel"]["url"] = platform_record["wheel"]["url"].replace(
+                "demo-1.0-", "missing-1.0-"
+            )
+    else:
+        for platform_records in policy["native_component_coverage"].values():
+            platform_records[0]["sboms"][0]["components"][0]["version"] = "9.9.9-r0"
+
+    with pytest.raises(evidence.EvidenceError, match=message):
+        evidence.native_component_coverage_ledger(inventories["linux/amd64"], policy)
+
+
+def test_native_component_policy_rejects_cross_platform_conflicts_and_duplicate_payloads() -> None:
+    _inventories, _locked, policy, _lock_sources = native_component_coverage_case()
+    crossed = copy.deepcopy(policy)
+    crossed["native_component_coverage"]["linux/arm64"][0]["wheel"] = copy.deepcopy(
+        crossed["native_component_coverage"]["linux/amd64"][0]["wheel"]
+    )
+    with pytest.raises(evidence.EvidenceError, match="conflicts with linux/arm64"):
+        evidence.validate_native_component_policy_schema(crossed)
+
+    semantic_conflict = copy.deepcopy(policy)
+    semantic_conflict["native_component_coverage"]["linux/arm64"][0]["sboms"][0]["components"][0][
+        "reviewed_license"
+    ] = "Apache-2.0"
+    with pytest.raises(evidence.EvidenceError, match="PURL has conflicting identity, source"):
+        evidence.validate_native_component_policy_schema(semantic_conflict)
+
+    duplicate_path = copy.deepcopy(policy)
+    owner = duplicate_path["native_component_coverage"]["linux/amd64"][0]
+    repeated_path = copy.deepcopy(owner["native_payloads"][0])
+    owner["native_payloads"].append(repeated_path)
+    with pytest.raises(evidence.EvidenceError, match="repeats payload path"):
+        evidence.validate_native_component_policy_schema(duplicate_path)
+
+    duplicate_role = copy.deepcopy(policy)
+    owner = duplicate_role["native_component_coverage"]["linux/amd64"][0]
+    repeated_role = copy.deepcopy(owner["native_payloads"][0])
+    repeated_role["path"] = "opt/venv/lib/python3.14/site-packages/demo.libs/libdemo-deadbeef.so.1"
+    owner["native_payloads"].append(repeated_role)
+    with pytest.raises(evidence.EvidenceError, match="invalid payload role"):
+        evidence.validate_native_component_policy_schema(duplicate_role)
+
+
+def test_native_component_policy_rejects_cross_platform_payload_role_differences() -> None:
+    _inventories, _locked, policy, _lock_sources = native_component_coverage_case()
+    arm_owner = policy["native_component_coverage"]["linux/arm64"][0]
+    arm_owner["native_payloads"][1]["path"] = (
+        "opt/venv/lib/python3.14/site-packages/demo/other-native.so"
+    )
+    arm_owner["native_payloads"][1]["role"] = "demo/other-native.so"
+    arm_owner["native_payloads"].sort(key=lambda record: record["role"])
+
+    with pytest.raises(evidence.EvidenceError, match="semantics differ across platforms"):
+        evidence.validate_native_component_policy_schema(policy)
+
+
+def test_native_component_policy_rejects_same_set_cross_platform_role_swaps() -> None:
+    _inventories, _locked, policy, _lock_sources = native_component_coverage_case()
+    arm_owner = policy["native_component_coverage"]["linux/arm64"][0]
+    original_roles = {record["role"] for record in arm_owner["native_payloads"]}
+    first, second = arm_owner["native_payloads"]
+    first["role"], second["role"] = second["role"], first["role"]
+    arm_owner["native_payloads"].sort(key=lambda record: record["role"])
+
+    assert {record["role"] for record in arm_owner["native_payloads"]} == original_roles
+    with pytest.raises(evidence.EvidenceError, match="payload role does not match its path"):
+        evidence.validate_native_component_policy_schema(policy)
+
+
+def test_native_component_policy_cannot_represent_cross_source_payload_swaps() -> None:
+    _inventories, _locked, policy, _lock_sources = native_component_coverage_case()
+    for platform_records in policy["native_component_coverage"].values():
+        owner = platform_records[0]
+        native_payloads = owner.pop("native_payloads")
+        owner["owner_payloads"] = [native_payloads[0]]
+        owner["sboms"][0]["components"][0]["payloads"] = [native_payloads[1]]
+
+    with pytest.raises(evidence.EvidenceError, match="unexpected schema shape"):
+        evidence.validate_native_component_policy_schema(policy)
+
+
+def test_native_component_policy_rejects_per_component_payload_fields() -> None:
+    _inventories, _locked, policy, _lock_sources = native_component_coverage_case()
+    for platform_records in policy["native_component_coverage"].values():
+        owner = platform_records[0]
+        owner["sboms"][0]["components"][0]["payloads"] = [owner["native_payloads"][0]]
+
+    with pytest.raises(evidence.EvidenceError, match="unexpected schema shape"):
+        evidence.validate_native_component_policy_schema(policy)
+
+
+def test_native_component_policy_rejects_global_purl_semantic_conflicts() -> None:
+    _inventories, _locked, policy, _lock_sources = native_component_coverage_case()
+    source = copy.deepcopy(policy["native_component_sources"]["alpine:demo-native@1.2.3-r0"])
+    source.update({"origin": "other-native", "version": "2.0.0-r0"})
+    source["recipe"]["url"] = (
+        "https://gitlab.alpinelinux.org/alpine/aports/-/archive/"
+        f"{'4' * 40}/aports-{'4' * 40}.tar.gz?path=main/other-native"
+    )
+    source["distfiles"] = [
+        {
+            "filename": "other-native-2.0.0.tar.xz",
+            "url": ("https://distfiles.alpinelinux.org/distfiles/v3.22/other-native-2.0.0.tar.xz"),
+            "sha512": "a" * 128,
+            "size": 987,
+        }
+    ]
+    policy["native_component_sources"]["alpine:other-native@2.0.0-r0"] = source
+
+    for platform, platform_records in policy["native_component_coverage"].items():
+        owner = platform_records[0]
+        conflicting = copy.deepcopy(owner["sboms"][0]["components"][0])
+        conflicting.update(
+            {
+                "name": "libconflict",
+                "source": "alpine:other-native@2.0.0-r0",
+                "reviewed_license": "Apache-2.0",
+            }
+        )
+        owner["sboms"].append(
+            {
+                "path": (
+                    "opt/venv/lib/python3.14/site-packages/"
+                    "demo-1.0.dist-info/sboms/zz-conflict.cdx.json"
+                ),
+                "sha256": "d" * 64 if platform == "linux/amd64" else "e" * 64,
+                "components": [conflicting],
+            }
+        )
+
+    with pytest.raises(evidence.EvidenceError, match="PURL has conflicting identity, source"):
+        evidence.validate_native_component_policy_schema(policy)
+
+
+def test_native_component_policy_rejects_nested_custom_license_references() -> None:
+    _inventories, _locked, policy, _lock_sources = native_component_coverage_case()
+    for platform_records in policy["native_component_coverage"].values():
+        platform_records[0]["sboms"][0]["components"][0]["reviewed_license"] = (
+            "LicenseRef-Native-Unreviewed"
+        )
+
+    with pytest.raises(evidence.EvidenceError, match="cannot use LicenseRef identifiers"):
+        evidence.validate_native_component_policy_schema(policy)
+
+
+def test_native_component_policy_rejects_missing_or_unsafe_payload_roles() -> None:
+    _inventories, _locked, policy, _lock_sources = native_component_coverage_case()
+
+    legacy = copy.deepcopy(policy)
+    legacy["native_component_coverage"]["linux/amd64"][0]["native_payloads"][0].pop("role")
+    with pytest.raises(evidence.EvidenceError, match="unexpected schema shape"):
+        evidence.validate_native_component_policy_schema(legacy)
+
+    unsafe = copy.deepcopy(policy)
+    unsafe["native_component_coverage"]["linux/amd64"][0]["native_payloads"][0]["role"] = (
+        "../escape"
+    )
+    with pytest.raises(evidence.EvidenceError, match="unsafe archive path"):
+        evidence.validate_native_component_policy_schema(unsafe)
+
+    overlong = copy.deepcopy(policy)
+    overlong["native_component_coverage"]["linux/amd64"][0]["native_payloads"][0]["role"] = "a" * (
+        evidence.MAX_PATH_BYTES + 1
+    )
+    with pytest.raises(evidence.EvidenceError, match="unsafe archive path"):
+        evidence.validate_native_component_policy_schema(overlong)
+
+
+def test_native_component_policy_rejects_unknown_unused_and_mutable_sources() -> None:
+    _inventories, _locked, policy, _lock_sources = native_component_coverage_case()
+    missing = copy.deepcopy(policy)
+    missing["native_component_sources"] = {}
+    with pytest.raises(evidence.EvidenceError, match="unknown component source"):
+        evidence.validate_native_component_policy_schema(missing)
+
+    unused = copy.deepcopy(policy)
+    extra = copy.deepcopy(next(iter(unused["native_component_sources"].values())))
+    extra["origin"] = "unused"
+    extra["version"] = "9-r0"
+    extra["recipe"]["url"] = (
+        "https://gitlab.alpinelinux.org/alpine/aports/-/archive/"
+        f"{'4' * 40}/aports-{'4' * 40}.tar.gz?path=main/unused"
+    )
+    extra["distfiles"][0].update(
+        {
+            "filename": "unused-9.tar.xz",
+            "url": "https://distfiles.alpinelinux.org/distfiles/v3.22/unused-9.tar.xz",
+        }
+    )
+    unused["native_component_sources"]["alpine:unused@9-r0"] = extra
+    with pytest.raises(evidence.EvidenceError, match="missing, extra, or unused"):
+        evidence.validate_native_component_policy_schema(unused)
+
+    mutable = copy.deepcopy(policy)
+    source = next(iter(mutable["native_component_sources"].values()))
+    source["recipe"]["url"] = "https://gitlab.alpinelinux.org/alpine/aports/archive/main.tar.gz"
+    with pytest.raises(evidence.EvidenceError, match="not commit-pinned"):
+        evidence.validate_native_component_policy_schema(mutable)
+
+    unknown = copy.deepcopy(policy)
+    unknown["native_component_coverage"]["linux/amd64"][0]["reviewed_by"] = "nobody"
+    with pytest.raises(evidence.EvidenceError, match="unexpected schema shape"):
+        evidence.validate_native_component_policy_schema(unknown)
+
+    unknown_source = copy.deepcopy(policy)
+    next(iter(unknown_source["native_component_sources"].values()))["reviewed_by"] = "nobody"
+    with pytest.raises(evidence.EvidenceError, match="unexpected schema shape"):
+        evidence.validate_native_component_policy_schema(unknown_source)
+
+
+def test_native_component_lock_binding_rejects_wheel_and_owner_source_drift() -> None:
+    inventories, locked, policy, lock_sources = native_component_coverage_case()
+    inventory = inventories["linux/amd64"]
+    wrong_wheel = copy.deepcopy(locked["linux/amd64"])
+    wrong_wheel["sha256"] = "0" * 64
+    with pytest.raises(evidence.EvidenceError, match="wheel differs from lock"):
+        evidence.verify_native_component_lock_bindings(
+            inventory, policy, [wrong_wheel], lock_sources
+        )
+
+    wrong_source = copy.deepcopy(lock_sources)
+    wrong_source[("demo", "1.0")]["sha256"] = "0" * 64
+    with pytest.raises(evidence.EvidenceError, match="owner source differs from lock"):
+        evidence.verify_native_component_lock_bindings(
+            inventory, policy, [locked["linux/amd64"]], wrong_source
+        )
+
+
+def test_committed_greenlet_native_component_policy_is_exact_and_incomplete() -> None:
+    policy = cast(dict[str, Any], json.loads(Path(".compliance/container-policy.json").read_text()))
+    evidence.validate_policy_schema(policy)
+    source = policy["native_component_sources"]["alpine:gcc@14.2.0-r6"]
+
+    assert policy["schema_version"] == 5
+    assert source["aports_commit"] == "fbf60319be3bbaf6dd32ef55cc6fb7189e05c266"
+    assert source["recipe"] == {
+        "url": (
+            "https://gitlab.alpinelinux.org/alpine/aports/-/archive/"
+            "fbf60319be3bbaf6dd32ef55cc6fb7189e05c266/"
+            "aports-fbf60319be3bbaf6dd32ef55cc6fb7189e05c266.tar.gz?path=main/gcc"
+        ),
+        "sha256": "5c623d22ac85b64f1dab2346cee6991432723cc7983ec7cb13a5b58692bfc658",
+        "size": 49583,
+    }
+    assert source["distfiles"] == [
+        {
+            "filename": "gcc-14.2.0.tar.xz",
+            "url": "https://distfiles.alpinelinux.org/distfiles/v3.22/gcc-14.2.0.tar.xz",
+            "sha512": (
+                "932bdef0cda94bacedf452ab17f103c0cb511ff2cec55e9112fc0328cbf1d803"
+                "b42595728ea7b200e0a057c03e85626f937012e49a7515bc5dd256b2bf4bc396"
+            ),
+            "size": 92306460,
+        }
+    ]
+    assert source["observed_license"] == "GPL-2.0-or-later AND LGPL-2.1-or-later"
+    assert source["notices"] == [
+        {
+            "member": "gcc-14.2.0/COPYING.RUNTIME",
+            "sha256": "9d6b43ce4d8de0c878bf16b54d8e7a10d9bd42b75178153e3af6a815bdc90f74",
+            "size": 3324,
+        },
+        {
+            "member": "gcc-14.2.0/COPYING3",
+            "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903",
+            "size": 35147,
+        },
+    ]
+    assert any(
+        record
+        == {
+            "id": "GCC-exception-3.1",
+            "sha256": "7103d4f7f7e2f8ce10d282a05e0689637f8d6d9ef7b399d808d1da313e69b960",
+            "url": (
+                "https://raw.githubusercontent.com/spdx/license-list-data/"
+                "421fbabbe80c94c58c12316af1bc6a2dca2362bc/text/GCC-exception-3.1.txt"
+            ),
+        }
+        for record in policy["license_texts"]
+    )
+    assert policy["distribution_approval"]["approved"] is False
+    assert "issue #18" in evidence.SOURCE_COMPLETENESS_REASON
+    lock_sources = evidence.parse_lock_sources(Path("uv.lock"))
+    for platform in ("linux/amd64", "linux/arm64"):
+        owner = policy["native_component_coverage"][platform][0]
+        assert owner["owner"] == "python:greenlet@3.5.3"
+        assert owner["owner_source"] == lock_sources[("greenlet", "3.5.3")]
+        assert len(owner["native_payloads"]) == 5
+        assert [record["role"] for record in owner["native_payloads"]] == [
+            "greenlet.libs/libgcc_s.so.1",
+            "greenlet.libs/libstdc++.so.6.0.33",
+            "greenlet/_greenlet.cpython-314.so",
+            "greenlet/tests/_test_extension.cpython-314.so",
+            "greenlet/tests/_test_extension_cpp.cpython-314.so",
+        ]
+        assert [component["name"] for component in owner["sboms"][0]["components"]] == [
+            "libgcc",
+            "libstdc++",
+        ]
+        assert all("payloads" not in component for component in owner["sboms"][0]["components"])
+
+        owner_versions = {
+            "cffi": "2.1.0",
+            "cryptography": "48.0.1",
+            "greenlet": "3.5.3",
+            "markupsafe": "3.0.3",
+            "psycopg-binary": "3.3.4",
+            "pydantic-core": "2.46.4",
+            "sqlalchemy": "2.0.51",
+        }
+
+        def payload_owner(path: str, versions: dict[str, str] = owner_versions) -> str:
+            first = path.split("site-packages/", maxsplit=1)[1].split("/", maxsplit=1)[0]
+            if first.startswith("_cffi_backend"):
+                name = "cffi"
+            elif first.startswith("psycopg_binary"):
+                name = "psycopg-binary"
+            elif first.startswith("pydantic_core"):
+                name = "pydantic-core"
+            else:
+                name = first.split("-", maxsplit=1)[0].split(".", maxsplit=1)[0]
+            return f"python:{name}@{versions[name]}"
+
+        baselines = policy["unexpanded_python_payloads"][platform]
+        native_payloads = [
+            {**copy.deepcopy(record), "owner": payload_owner(record["path"]), "elf": {}}
+            for record in baselines["native_payloads"]
+        ]
+        embedded_sboms = []
+        for record in baselines["embedded_sboms"]:
+            record_owner = payload_owner(record["path"])
+            components = (
+                [
+                    {field: component[field] for field in ("type", "name", "version", "purl")}
+                    for component in owner["sboms"][0]["components"]
+                ]
+                if record_owner == "python:greenlet@3.5.3"
+                else []
+            )
+            embedded_sboms.append(
+                {
+                    **copy.deepcopy(record),
+                    "owner": record_owner,
+                    "cyclonedx": {"metadata_component": None, "components": components},
+                }
+            )
+        native_owners = sorted({record["owner"] for record in (*native_payloads, *embedded_sboms)})
+        inventory = {
+            "platform": platform,
+            "components": [
+                copy.deepcopy(component)
+                for component in policy["platforms"][platform]
+                if evidence.component_key(component) in native_owners
+            ],
+            "wheel_installations": [{"owner": native_owner} for native_owner in native_owners],
+            "native_payloads": native_payloads,
+            "embedded_sboms": embedded_sboms,
+        }
+        ledger = evidence.native_component_coverage_ledger(inventory, policy)
+        assert [item["owner"] for item in ledger["resolved_owners"]] == ["python:greenlet@3.5.3"]
+        assert len(ledger["unresolved_owners"]) == 6
+        assert ledger["complete"] is False
+
+
+def test_native_component_recipe_binds_version_license_and_distfile() -> None:
+    _inventories, _locked, policy, _lock_sources = native_component_coverage_case()
+    source_id, source = next(iter(policy["native_component_sources"].items()))
+    distfile = source["distfiles"][0]
+    apkbuild = (
+        "pkgname=demo-native\n"
+        "pkgver=1.2.3\n"
+        "pkgrel=0\n"
+        'license="MIT"\n'
+        'source="https://example.com/demo-native-$pkgver.tar.xz"\n'
+        f'sha512sums="\n{distfile["sha512"]}  {distfile["filename"]}\n"\n'
+    ).encode()
+    recipe = tar_bytes({"aports/main/demo-native/APKBUILD": apkbuild})
+
+    evidence.verify_native_component_recipe(source_id, source, recipe)
+
+    wrong_release = recipe.replace(b"pkgrel=0", b"pkgrel=1")
+    with pytest.raises(evidence.EvidenceError, match="metadata differs"):
+        evidence.verify_native_component_recipe(source_id, source, wrong_release)
+
+    wrong_checksum = copy.deepcopy(source)
+    wrong_checksum["distfiles"][0]["sha512"] = "0" * 128
+    with pytest.raises(evidence.EvidenceError, match="distfiles differ"):
+        evidence.verify_native_component_recipe(source_id, wrong_checksum, recipe)
+
+
+def test_native_component_notice_retention_is_exact(tmp_path: Path) -> None:
+    _inventories, _locked, policy, _lock_sources = native_component_coverage_case()
+    source_id, source = next(iter(policy["native_component_sources"].items()))
+    content = b"license text"
+    source["notices"] = [
+        {
+            "member": "demo-native-1.2.3/LICENSE",
+            "sha256": evidence.sha256_bytes(content),
+            "size": len(content),
+        }
+    ]
+    archive = tar_bytes(
+        {
+            "demo-native-1.2.3/LICENSE": content,
+            "demo-native-1.2.3/source.c": b"source",
+        }
+    )
+
+    retained = evidence.retain_native_component_notices(
+        archive,
+        source_id,
+        source,
+        tmp_path,
+        budget=evidence.BundleBudget(),
+    )
+
+    assert len(retained) == 1
+    assert (tmp_path / retained[0]).read_bytes() == content
+
+
+@pytest.mark.parametrize(
+    ("archive", "message"),
+    (
+        (tar_bytes({"demo-native-1.2.3/source.c": b"source"}), "omits reviewed notices"),
+        (tar_bytes({"demo-native-1.2.3/LICENSE": b"wrong"}), "differs from reviewed policy"),
+        (tar_bytes({"../LICENSE": b"license text"}), "unsafe archive path"),
+        (
+            tar_bytes({}, links={"demo-native-1.2.3/LICENSE": "COPYING"}),
+            "notice is not a regular file",
+        ),
+        (
+            tar_bytes(
+                {"demo-native-1.2.3/LICENSE": b"license text"},
+                links={"demo-native-1.2.3/alias": "../../escape"},
+            ),
+            "unsafe archive link target",
+        ),
+    ),
+)
+def test_native_component_notice_retention_rejects_hostile_or_stale_archives(
+    archive: bytes, message: str, tmp_path: Path
+) -> None:
+    _inventories, _locked, policy, _lock_sources = native_component_coverage_case()
+    source_id, source = next(iter(policy["native_component_sources"].items()))
+    content = b"license text"
+    source["notices"] = [
+        {
+            "member": "demo-native-1.2.3/LICENSE",
+            "sha256": evidence.sha256_bytes(content),
+            "size": len(content),
+        }
+    ]
+
+    with pytest.raises(evidence.EvidenceError, match=message):
+        evidence.retain_native_component_notices(
+            archive,
+            source_id,
+            source,
+            tmp_path,
+            budget=evidence.BundleBudget(),
+        )
+
+
+def test_native_component_notice_retention_rejects_duplicate_archive_paths(
+    tmp_path: Path,
+) -> None:
+    _inventories, _locked, policy, _lock_sources = native_component_coverage_case()
+    source_id, source = next(iter(policy["native_component_sources"].items()))
+    content = b"license text"
+    source["notices"] = [
+        {
+            "member": "demo-native-1.2.3/LICENSE",
+            "sha256": evidence.sha256_bytes(content),
+            "size": len(content),
+        }
+    ]
+    output = io.BytesIO()
+    with tarfile.open(fileobj=output, mode="w") as archive:
+        for _index in range(2):
+            member = tarfile.TarInfo("demo-native-1.2.3/LICENSE")
+            member.size = len(content)
+            archive.addfile(member, io.BytesIO(content))
+
+    with pytest.raises(evidence.EvidenceError, match="repeats an archive path"):
+        evidence.retain_native_component_notices(
+            output.getvalue(),
+            source_id,
+            source,
+            tmp_path,
+            budget=evidence.BundleBudget(),
+        )
+
+
+def test_native_component_notice_retention_enforces_resource_limits(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _inventories, _locked, policy, _lock_sources = native_component_coverage_case()
+    source_id, source = next(iter(policy["native_component_sources"].items()))
+    content = b"license text"
+    source["notices"] = [
+        {
+            "member": "demo-native-1.2.3/LICENSE",
+            "sha256": evidence.sha256_bytes(content),
+            "size": len(content),
+        }
+    ]
+    archive = tar_bytes({"demo-native-1.2.3/LICENSE": content})
+    monkeypatch.setattr(evidence, "MAX_ARCHIVE_TOTAL_BYTES", len(content) - 1)
+
+    with pytest.raises(evidence.EvidenceError, match="source is too large"):
+        evidence.retain_native_component_notices(
+            archive,
+            source_id,
+            source,
+            tmp_path,
+            budget=evidence.BundleBudget(),
         )
 
 
@@ -6308,6 +7086,15 @@ def test_source_policy_has_exact_nonduplicated_coverage() -> None:
     with pytest.raises(evidence.EvidenceError, match="repeats standard license"):
         evidence.validate_source_policy_coverage(inventory, duplicate_license, lock_sources)
 
+    missing_native_exception = copy.deepcopy(policy)
+    missing_native_exception["license_texts"] = [
+        record
+        for record in missing_native_exception["license_texts"]
+        if record["id"] != "GCC-exception-3.1"
+    ]
+    with pytest.raises(evidence.EvidenceError, match="does not exactly cover"):
+        evidence.validate_source_policy_coverage(inventory, missing_native_exception, lock_sources)
+
 
 def test_policy_schema_rejects_unknown_fields_at_every_boundary() -> None:
     policy = cast(dict[str, Any], json.loads(Path(".compliance/container-policy.json").read_text()))
@@ -6684,6 +7471,316 @@ def test_selected_proof_retention_fails_closed(
         )
 
 
+def test_trusted_native_component_bundle_contract_is_internally_bound(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _inventories, _locked, native_policy, _lock_sources = native_component_coverage_case()
+    source_id = "alpine:demo-native@1.2.3-r0"
+    source = native_policy["native_component_sources"][source_id]
+    notice_content = b"reviewed native notice\n"
+    notice_member = "demo-native-1.2.3/LICENSE"
+    distfile_content = tar_bytes(
+        {
+            notice_member: notice_content,
+            "demo-native-1.2.3/source.c": b"int demo(void) { return 0; }\n",
+        }
+    )
+    distfile = source["distfiles"][0]
+    distfile.update(
+        {
+            "sha512": evidence.hashlib.sha512(distfile_content).hexdigest(),
+            "size": len(distfile_content),
+        }
+    )
+    source["notices"] = [
+        {
+            "member": notice_member,
+            "sha256": evidence.sha256_bytes(notice_content),
+            "size": len(notice_content),
+        }
+    ]
+    apkbuild = (
+        "pkgname=demo-native\n"
+        "pkgver=1.2.3\n"
+        "pkgrel=0\n"
+        'license="MIT"\n'
+        'source="https://example.com/demo-native-$pkgver.tar.xz"\n'
+        f'sha512sums="\n{distfile["sha512"]}  {distfile["filename"]}\n"\n'
+    ).encode()
+    recipe_content = tar_bytes({"aports/main/demo-native/APKBUILD": apkbuild})
+    source["recipe"].update(
+        {
+            "sha256": evidence.sha256_bytes(recipe_content),
+            "size": len(recipe_content),
+        }
+    )
+
+    for platform_records in native_policy["native_component_coverage"].values():
+        components = platform_records[0]["sboms"][0]["components"]
+        other_component = copy.deepcopy(components[0])
+        other_component.update(
+            {
+                "name": "libother",
+                "purl": "pkg:apk/alpine/libother@1.2.3-r0",
+            }
+        )
+        components.append(other_component)
+    evidence.validate_native_component_policy_schema(native_policy)
+
+    owner_record = copy.deepcopy(native_policy["native_component_coverage"]["linux/amd64"][0])
+    native_coverage = {
+        "schema_version": evidence.SCHEMA_VERSION,
+        "platform": "linux/amd64",
+        "complete": True,
+        "resolved_owners": [owner_record],
+        "unresolved_owners": [],
+    }
+    application = {
+        "ecosystem": "python",
+        "name": "extra-codeowners",
+        "version": "0.0.0",
+        "observed_license": "Apache-2.0",
+        "effective": True,
+        "metadata_sha256": "1" * 64,
+    }
+    inventory = {
+        "platform": "linux/amd64",
+        "subject_digest": "sha256:" + "2" * 64,
+        "components": [application],
+        "source_completeness": {
+            "complete": False,
+            "reason": evidence.SOURCE_COMPLETENESS_REASON,
+        },
+    }
+    files: dict[str, Any] = {}
+    docker_recipe_content = b"trusted Docker Official Python recipe\n"
+    cpython_source_content = b"trusted CPython source archive\n"
+    cpython_license = b"trusted CPython license\n"
+    docker_recipe_url = "https://example.com/docker-python-recipe.tar.gz"
+    cpython_source_url = "https://example.com/Python-3.14.6.tgz"
+    policy = {
+        "base_image_index_digest": "sha256:" + "3" * 64,
+        "distribution_approval": {
+            "approved": False,
+            "approved_by": "",
+            "approved_on": "",
+            "rationale": "The trusted fixture remains intentionally unapproved.",
+        },
+        "docker_python_recipe": {
+            "url": docker_recipe_url,
+            "sha256": evidence.sha256_bytes(docker_recipe_content),
+        },
+        "cpython_source": {
+            "url": cpython_source_url,
+            "sha256": evidence.sha256_bytes(cpython_source_content),
+        },
+        "license_resolutions": {
+            "python:extra-codeowners@0.0.0": {
+                "expression": "Apache-2.0",
+                "rationale": "Reviewed trusted fixture.",
+            }
+        },
+        "custom_license_evidence": {},
+        "license_texts": [],
+        "native_component_sources": native_policy["native_component_sources"],
+        "native_component_coverage": native_policy["native_component_coverage"],
+        "alpine_distfiles_release": "v3.22",
+        "alpine_recipe_archives": {},
+        "alpine_recipe_exceptions": {},
+    }
+
+    inventory_path = tmp_path / "components.json"
+    files_path = tmp_path / "files.json"
+    policy_path = tmp_path / "policy.json"
+    lock_path = tmp_path / "uv.lock"
+    inventory_path.write_bytes(evidence.canonical_json(inventory))
+    files_path.write_bytes(evidence.canonical_json(files))
+    policy_path.write_bytes(evidence.canonical_json(policy))
+    lock_path.write_text("version = 1\nrevision = 3\n")
+
+    revision = "4" * 40
+    monkeypatch.setattr(evidence, "validate_all_layer_inventory", lambda *_args: None)
+    monkeypatch.setattr(evidence, "verify_inventory", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(evidence, "verify_dockerfile_base", lambda *_args: None)
+    monkeypatch.setattr(
+        evidence, "verify_application_artifact_labels", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(evidence, "verify_base_layer_binding", lambda *_args: None)
+    monkeypatch.setattr(evidence, "verify_post_base_provenance", lambda *_args: None)
+    monkeypatch.setattr(
+        evidence,
+        "validate_application_source_binding",
+        lambda *_args: ("extra-codeowners", "0.0.0"),
+    )
+    monkeypatch.setattr(evidence, "parse_lock_sources", lambda *_args: {})
+    monkeypatch.setattr(evidence, "validate_source_policy_coverage", lambda *_args: None)
+    monkeypatch.setattr(evidence, "select_locked_native_wheels", lambda *_args: [])
+    monkeypatch.setattr(
+        evidence,
+        "verify_native_component_lock_bindings",
+        lambda *_args: copy.deepcopy(native_coverage),
+    )
+    monkeypatch.setattr(
+        evidence,
+        "retain_selected_application_artifacts",
+        lambda **_kwargs: (
+            {
+                "source_revision": revision,
+                "wheel_sha256": "5" * 64,
+                "selection_record_sha256": "6" * 64,
+                "files": [],
+            },
+            {"trusted_fixture": True},
+        ),
+    )
+    monkeypatch.setattr(
+        evidence,
+        "verify_selected_application_installation",
+        lambda *_args: "/opt/venv/bin/python",
+    )
+    monkeypatch.setattr(evidence, "deterministic_source_archive", lambda *_args: b"app source")
+    monkeypatch.setattr(evidence, "verify_cpython_source_binding", lambda *_args: None)
+    monkeypatch.setattr(evidence, "verify_cpython_source_archive", lambda *_args: cpython_license)
+    monkeypatch.setattr(evidence, "run", lambda *_args, **_kwargs: f"{revision}\n".encode())
+
+    downloads = {
+        docker_recipe_url: docker_recipe_content,
+        cpython_source_url: cpython_source_content,
+        source["recipe"]["url"]: recipe_content,
+        distfile["url"]: distfile_content,
+    }
+
+    def fake_fetch(
+        url: str,
+        _expected_hash: str,
+        _algorithm: str = "sha256",
+        *,
+        max_bytes: int = evidence.MAX_DOWNLOAD_BYTES,
+    ) -> Any:
+        content = downloads[url]
+        assert len(content) <= max_bytes
+        return evidence.Download(content=content, urls=(url,))
+
+    def fake_extract_license_files(
+        _archive: bytes,
+        component: str,
+        root: Path,
+        *,
+        archive_name: str | None = None,
+        budget: Any | None = None,
+    ) -> list[str]:
+        del archive_name
+        if component != "runtime-cpython-3.14.6":
+            return []
+        relative = (
+            "licenses/from-source/runtime-cpython-3.14.6/"
+            f"{evidence.sha256_bytes(cpython_license)[:12]}-LICENSE"
+        )
+        evidence.write_file(root, relative, cpython_license, budget=budget)
+        return [relative]
+
+    monkeypatch.setattr(evidence, "fetch", fake_fetch)
+    monkeypatch.setattr(evidence, "extract_license_files", fake_extract_license_files)
+
+    output = tmp_path / "evidence.tar.gz"
+    predicate_output = tmp_path / "predicate.json"
+    evidence.build_bundle(
+        inventory_path=inventory_path,
+        files_path=files_path,
+        policy_path=policy_path,
+        lock_path=lock_path,
+        repo=tmp_path,
+        output=output,
+        predicate_output=predicate_output,
+        version="0.0.0-test",
+        source_date_epoch=123,
+        selected_python_directory=tmp_path / "selected-python",
+        application_source_revision=revision,
+        application_wheel_sha256="5" * 64,
+        application_selection_record_sha256="6" * 64,
+        require_approval=False,
+        require_image_revision=False,
+    )
+
+    archive_files: dict[str, bytes] = {}
+    with tarfile.open(output, mode="r:gz") as archive:
+        for member in archive.getmembers():
+            if not member.isfile():
+                continue
+            extracted = archive.extractfile(member)
+            assert extracted is not None
+            archive_files[member.name] = extracted.read()
+
+    manifest = json.loads(archive_files["MANIFEST.json"])
+    emitted_ledger = json.loads(archive_files["inventory/native-component-coverage.json"])
+    assert emitted_ledger == native_coverage
+    assert manifest["native_component_coverage"] == emitted_ledger
+    assert manifest["source_completeness"] == inventory["source_completeness"]
+    assert policy["distribution_approval"]["approved"] is False
+
+    recipe_path = "sources/native-components/demo-native/1.2.3-r0/recipe.tar.gz"
+    distfile_path = (
+        "sources/native-components/demo-native/1.2.3-r0/distfiles/demo-native-1.2.3.tar.xz"
+    )
+    source_records = {record["path"]: record for record in manifest["source_records"]}
+    assert source_records[recipe_path] == evidence.source_record(
+        f"native-source:{source_id}", source["recipe"]["url"], recipe_content, recipe_path
+    )
+    assert source_records[distfile_path] == evidence.source_record(
+        f"native-source:{source_id}",
+        distfile["url"],
+        distfile_content,
+        distfile_path,
+        sha512=distfile["sha512"],
+    )
+
+    notice_path = (
+        "licenses/from-source/native-demo-native-1.2.3-r0/"
+        f"{evidence.sha256_bytes(notice_content)[:12]}-LICENSE"
+    )
+    assert archive_files[notice_path] == notice_content
+    nested_purls = {component["purl"] for component in owner_record["sboms"][0]["components"]}
+    assert nested_purls == {
+        "pkg:apk/alpine/libdemo@1.2.3-r0",
+        "pkg:apk/alpine/libother@1.2.3-r0",
+    }
+    for nested_purl in nested_purls:
+        assert {
+            "component": f"native:{nested_purl}",
+            "path": notice_path,
+            "sha256": evidence.sha256_bytes(notice_content),
+            "size": len(notice_content),
+        } in manifest["license_records"]
+
+    notices = archive_files["THIRD_PARTY_NOTICES.md"].decode()
+    assert (
+        "| libdemo | 1.2.3-r0 | pkg:apk/alpine/libdemo@1.2.3-r0 | "
+        "alpine:demo-native@1.2.3-r0 | Not declared | MIT |"
+    ) in notices
+    assert (
+        "| libother | 1.2.3-r0 | pkg:apk/alpine/libother@1.2.3-r0 | "
+        "alpine:demo-native@1.2.3-r0 | Not declared | MIT |"
+    ) in notices
+
+    checksum_records = {
+        path: digest
+        for digest, path in (
+            line.split("  ", maxsplit=1)
+            for line in archive_files["SHA256SUMS"].decode().splitlines()
+        )
+    }
+    assert set(checksum_records) == set(archive_files) - {"SHA256SUMS"}
+    for path, digest in checksum_records.items():
+        assert digest == evidence.sha256_bytes(archive_files[path])
+
+    bundle_digest = evidence.sha256_bytes(output.read_bytes())
+    assert output.with_suffix(output.suffix + ".sha256").read_text() == (
+        f"{bundle_digest}  {output.name}\n"
+    )
+    predicate = json.loads(predicate_output.read_text())
+    assert predicate["artifact"] == {"filename": output.name, "sha256": bundle_digest}
+
+
 def test_bundle_budget_enforces_cumulative_download_and_retained_limits(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -6707,6 +7804,28 @@ def test_bundle_member_producer_enforces_exact_size_boundary(
     evidence.write_file(tmp_path, "exact", b"abc")
     with pytest.raises(evidence.EvidenceError, match="bundle member exceeds"):
         evidence.write_file(tmp_path, "too-large", b"abcd")
+
+
+def test_native_component_source_size_exception_is_path_scoped(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(evidence, "MAX_ARCHIVE_MEMBER_BYTES", 3)
+    monkeypatch.setattr(evidence, "MAX_NATIVE_COMPONENT_SOURCE_BYTES", 4)
+    native_root = tmp_path / "native"
+    native_root.mkdir()
+    evidence.write_file(
+        native_root,
+        "sources/native-components/demo/1-r0/distfiles/source.tar.xz",
+        b"abcd",
+        max_bytes=evidence.MAX_NATIVE_COMPONENT_SOURCE_BYTES,
+    )
+    evidence.create_deterministic_tar(native_root, tmp_path / "native.tar.gz", 123)
+
+    ordinary_root = tmp_path / "ordinary"
+    ordinary_root.mkdir()
+    (ordinary_root / "source.tar.xz").write_bytes(b"abcd")
+    with pytest.raises(evidence.EvidenceError, match="bundle member exceeds"):
+        evidence.create_deterministic_tar(ordinary_root, tmp_path / "ordinary.tar.gz", 123)
 
 
 def test_deterministic_archive_has_normalized_metadata(tmp_path: Path) -> None:
@@ -7042,6 +8161,55 @@ def test_filesystem_policy_view_emits_validated_semantic_projection(tmp_path: Pa
             ],
         }
     )
+
+
+def test_native_component_coverage_view_emits_validated_ledger(tmp_path: Path) -> None:
+    component = {
+        "ecosystem": "python",
+        "name": "demo",
+        "version": "1",
+        "observed_license": "MIT",
+        "effective": True,
+        "metadata_sha256": "f" * 64,
+    }
+    inventory = standalone_inventory(component)
+    policy = standalone_policy(
+        component,
+        "MIT",
+        license_texts=[
+            {
+                "id": "MIT",
+                "sha256": "e" * 64,
+                "url": "https://example.com/MIT.txt",
+            }
+        ],
+    )
+    inventory_path = tmp_path / "inventory.json"
+    policy_path = tmp_path / "policy.json"
+    output = tmp_path / "native-component-coverage.json"
+    inventory_path.write_bytes(evidence.canonical_json(inventory))
+    policy_path.write_bytes(evidence.canonical_json(policy))
+    arguments = evidence.parser().parse_args(
+        [
+            "native-component-coverage-view",
+            "--inventory",
+            str(inventory_path),
+            "--policy",
+            str(policy_path),
+            "--output",
+            str(output),
+        ]
+    )
+
+    arguments.function(arguments)
+
+    assert json.loads(output.read_text()) == {
+        "schema_version": evidence.SCHEMA_VERSION,
+        "platform": "linux/amd64",
+        "complete": True,
+        "resolved_owners": [],
+        "unresolved_owners": [],
+    }
 
 
 def test_bundle_command_forwards_image_revision_requirement(

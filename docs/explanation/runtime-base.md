@@ -137,10 +137,20 @@ recipe, the CPython source archive selected by that recipe, and the exact
 `LICENSE` bytes carried in the source. The source and image version-header
 digests must match.
 
-This does not yet expand vendored native components and embedded-SBOM
-components into notices and corresponding sources. That source-completeness
-gap is why [issue #18](https://github.com/stampbot/extra-codeowners/issues/18)
-still blocks distribution.
+### Greenlet evidence coverage
+
+Greenlet is the first native-wheel owner with closed-world coverage. On both
+architectures, the evidence binds the exact wheel and sdist, accounts for every
+native payload, and reproduces the component identities observed in its
+embedded SBOM. Those are exact co-membership sets, not a map from components to
+individual files. The bundle separately retains the Alpine GCC recipe, source
+archive, and notices reviewed for the SBOM's `libgcc` and `libstdc++`
+identities.
+
+Six other native-wheel owners still lack equivalent component, notice, and
+source coverage. That gap is why
+[issue #18](https://github.com/stampbot/extra-codeowners/issues/18) still blocks
+distribution.
 
 ### Vulnerability handling
 
