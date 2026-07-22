@@ -73,6 +73,8 @@ of the security contract.
 | Threat | Control | Residual risk |
 | --- | --- | --- |
 | A pull-request author edits delegation policy to authorize that pull request | Load repository policy and CODEOWNERS from the exact base commit. Assign policy paths to humans in CODEOWNERS and make those paths non-delegable by default. | A merged policy change governs later pull requests, so human review of it remains critical. |
+| A pull-request author edits the DCO checker that evaluates the same pull request | Keep the active workflow read-only and secretless. The replacement evaluator is pure, does not execute pull-request content, and is intended to run from an independently controlled GitHub App. | The independent caller and required context do not exist yet. Until issue #40 is complete, the active workflow remains review evidence rather than an enforcement boundary. |
+| A retarget or force-push changes the DCO commit range while evidence is collected | Compare the exact base and head SHAs, bind the comparison and result to the repository identity and pull-request number, and require matching event, before, and after snapshots. | Publication-time revalidation is not implemented. Same-repository and private-fork SHA comparisons still need live contract tests before rollout. |
 | Organization enrollment policy is changed maliciously | Keep enrollment in the separately governed organization-policy repository (`.github` by default), with native human CODEOWNER enforcement. | Compromise of that repository's merge authority can expand application trust across repositories. |
 | The organization-policy repository or installation account is renamed, transferred, deleted, changes default branch, or the policy repository is removed from App selection | Subscribe to repository, organization, installation-target, and repository-selection events. Treat malformed removal evidence as loss of the policy source, durably fan out current-state reevaluation, store an enqueue-time installation authority epoch, and reject queued routes that disagree with GitHub's authoritative base-repository identity. | Access loss can prevent revocation. A visible success may remain until the delivered event and fan-out finish, or until reconciliation recovers a missed delivery. |
 | A target repository is renamed or transferred | Subscribe to repository lifecycle events, advance the enqueue-time installation authority epoch, rediscover current repository names, reject delayed old-name jobs against the authoritative base-repository identity, and serialize Check Run writers by installation and head. | A transfer can remove App access before an earlier success is revoked. Use the safe access-removal sequence unless destination access is already assured. |
@@ -119,6 +121,8 @@ Implementation details may change. These properties may not:
    completed result.
 10. Credentials and raw private payloads never appear in logs, metrics, checks,
     or audit details.
+11. An independent DCO result identifies the repository, pull request, base
+    SHA, and head SHA whose exact comparison produced it.
 
 Invariant 7 has an important limit. GitHub does not offer a pull-request-scoped
 required Check Run, so two pull requests can inherit the check attached to one

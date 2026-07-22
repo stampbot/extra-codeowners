@@ -4316,8 +4316,8 @@
           "layer": 5,
           "mode": 420,
           "path": "opt/venv/lib/python3.14/site-packages/extra_codeowners-0.1.0.dist-info/RECORD",
-          "sha256": "d5f89a8313d96dea4b3b16e3cc692e23a6a7b72e02ef321900633803ab178994",
-          "size": 2646,
+          "sha256": "259305e75cdcfefe93c77a9c391f914b92ae095f42bc8e872d21a3b507b382a1",
+          "size": 2727,
           "uid": 0
         },
         {
@@ -5464,8 +5464,8 @@
           "layer": 5,
           "mode": 420,
           "path": "opt/venv/lib/python3.14/site-packages/extra_codeowners-0.1.0.dist-info/RECORD",
-          "sha256": "d5f89a8313d96dea4b3b16e3cc692e23a6a7b72e02ef321900633803ab178994",
-          "size": 2646,
+          "sha256": "259305e75cdcfefe93c77a9c391f914b92ae095f42bc8e872d21a3b507b382a1",
+          "size": 2727,
           "uid": 0
         },
         {

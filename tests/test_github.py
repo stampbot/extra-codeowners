@@ -1,15 +1,23 @@
 import asyncio
 import gzip
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
+from pydantic import ValidationError
 
+from extra_codeowners.dco import (
+    MAX_PULL_COMMITS,
+    GitHubActor,
+    PullRequestSnapshot,
+    RepositoryIdentity,
+)
 from extra_codeowners.github import (
+    MAX_JSON_RESPONSE_DEPTH,
     GitHubAPIError,
     GitHubClient,
     GitHubError,
@@ -42,6 +50,49 @@ class TrackingStream(httpx.AsyncByteStream):
 
     async def aclose(self) -> None:
         self.closed = True
+
+
+def commit_sha(number: int) -> str:
+    return f"{number:040x}"
+
+
+def dco_pull_snapshot(
+    *,
+    count: int = 1,
+    base_sha: str = commit_sha(10_000),
+    head_sha: str = commit_sha(1),
+    head_repository: RepositoryIdentity | None = None,
+) -> PullRequestSnapshot:
+    repository = RepositoryIdentity(id=100, full_name="example/project")
+    return PullRequestSnapshot(
+        number=7,
+        state="open",
+        repository=repository,
+        base_repository=repository,
+        base_ref="main",
+        base_sha=base_sha,
+        head_repository=head_repository or repository,
+        head_ref="feature/dco",
+        head_sha=head_sha,
+        author=GitHubActor(login="contributor", id=200, type="User"),
+        commit_count=count,
+    )
+
+
+def compare_payload(
+    pull: PullRequestSnapshot,
+    shas: list[str],
+    *,
+    base_commit_sha: str | None = None,
+    total_commits: object | None = None,
+    ahead_by: object | None = None,
+) -> dict[str, object]:
+    return {
+        "base_commit": {"sha": base_commit_sha or pull.base_sha},
+        "total_commits": pull.commit_count if total_commits is None else total_commits,
+        "ahead_by": pull.commit_count if ahead_by is None else ahead_by,
+        "commits": [{"sha": sha} for sha in shas],
+    }
 
 
 @pytest.mark.asyncio
@@ -997,3 +1048,582 @@ async def test_commit_pull_listing_uses_commit_endpoint(private_key: str) -> Non
     assert await client.list_commit_pulls(2, "example/project", "a" * 40) == [{"number": 3}]
     await client.close()
     assert observed_path == f"/repos/example/project/commits/{'a' * 40}/pulls"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("expected_count", (1, 101, MAX_PULL_COMMITS))
+async def test_compare_pull_commits_uses_exact_snapshot_and_bounded_pagination(
+    private_key: str,
+    expected_count: int,
+) -> None:
+    pull = dco_pull_snapshot(count=expected_count, head_sha=commit_sha(expected_count))
+    ordered_shas = [commit_sha(index) for index in range(1, expected_count + 1)]
+    pages: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/access_tokens"):
+            return httpx.Response(201, json=token_response())
+        assert request.url.path == (
+            f"/repos/example/project/compare/{pull.base_sha}...{pull.head_sha}"
+        )
+        assert request.url.params["per_page"] == "100"
+        page = int(request.url.params["page"])
+        pages.append(page)
+        offset = (page - 1) * 100
+        return httpx.Response(
+            200,
+            json=compare_payload(pull, ordered_shas[offset : offset + 100]),
+        )
+
+    client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
+    comparison = await client.compare_pull_commits(2, pull)
+    await client.close()
+
+    assert comparison.repository == pull.repository
+    assert comparison.pull_number == pull.number
+    assert comparison.base_sha == pull.base_sha
+    assert comparison.head_sha == pull.head_sha
+    assert comparison.base_commit_sha == pull.base_sha
+    assert comparison.total_commits == expected_count
+    assert comparison.ahead_by == expected_count
+    assert [item.sha for item in comparison.commits] == ordered_shas
+    assert pages == list(range(1, (expected_count - 1) // 100 + 2))
+
+
+@pytest.mark.asyncio
+async def test_compare_pull_commits_uses_qualified_owners_for_a_fork_head(
+    private_key: str,
+) -> None:
+    fork = RepositoryIdentity(id=101, full_name="fork-owner/project")
+    pull = dco_pull_snapshot(head_repository=fork)
+    observed_path = ""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal observed_path
+        if request.url.path.endswith("/access_tokens"):
+            return httpx.Response(201, json=token_response())
+        observed_path = request.url.path
+        return httpx.Response(200, json=compare_payload(pull, [pull.head_sha]))
+
+    client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
+    comparison = await client.compare_pull_commits(2, pull)
+    await client.close()
+
+    assert comparison.head_sha == pull.head_sha
+    assert observed_path == (
+        f"/repos/example/project/compare/example:{pull.base_sha}...fork-owner:{pull.head_sha}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_compare_pull_commits_rejects_an_ambiguous_same_owner_fork(
+    private_key: str,
+) -> None:
+    pull = dco_pull_snapshot(
+        head_repository=RepositoryIdentity(id=101, full_name="example/renamed-fork")
+    )
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(500)
+
+    client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
+    with pytest.raises(GitHubError, match="base and head owners are identical"):
+        await client.compare_pull_commits(2, pull)
+    await client.close()
+
+    assert requests == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("expected_count", "page_lengths"),
+    (
+        (101, (100, 0)),
+        (1, (0,)),
+        (1, (2,)),
+    ),
+    ids=("truncated-second-page", "missing-first-page", "unexpected-extra-item"),
+)
+async def test_compare_pull_commits_rejects_incomplete_or_oversized_pages(
+    private_key: str,
+    expected_count: int,
+    page_lengths: tuple[int, ...],
+) -> None:
+    pull = dco_pull_snapshot(count=expected_count, head_sha=commit_sha(expected_count))
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/access_tokens"):
+            return httpx.Response(201, json=token_response())
+        page = int(request.url.params["page"])
+        length = page_lengths[page - 1] if page <= len(page_lengths) else 0
+        offset = (page - 1) * 100
+        shas = [commit_sha(index) for index in range(offset + 1, offset + length + 1)]
+        return httpx.Response(200, json=compare_payload(pull, shas))
+
+    client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
+    with pytest.raises(GitHubError, match="page length does not match"):
+        await client.compare_pull_commits(2, pull)
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_compare_pull_commits_rejects_api_metadata_beyond_the_hard_limit(
+    private_key: str,
+) -> None:
+    pull = dco_pull_snapshot(count=MAX_PULL_COMMITS, head_sha=commit_sha(MAX_PULL_COMMITS))
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/access_tokens"):
+            return httpx.Response(201, json=token_response())
+        return httpx.Response(
+            200,
+            json=compare_payload(
+                pull,
+                [commit_sha(index) for index in range(1, 101)],
+                total_commits=MAX_PULL_COMMITS + 1,
+                ahead_by=MAX_PULL_COMMITS + 1,
+            ),
+        )
+
+    client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
+    with pytest.raises(PullRequestTooLargeError, match="250-commit limit"):
+        await client.compare_pull_commits(2, pull)
+    await client.close()
+
+
+@pytest.mark.parametrize("count", (0, -1, True, MAX_PULL_COMMITS + 1))
+def test_pull_snapshot_rejects_unrepresentable_compare_counts(count: int) -> None:
+    with pytest.raises(ValidationError):
+        dco_pull_snapshot(count=count)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    (
+        (lambda payload: [], "expected object response"),
+        (lambda payload: payload.pop("base_commit"), "base_commit object"),
+        (lambda payload: payload.__setitem__("base_commit", []), "base_commit object"),
+        (
+            lambda payload: payload.__setitem__("base_commit", {"sha": "A" * 40}),
+            "invalid base commit SHA",
+        ),
+        (lambda payload: payload.__setitem__("total_commits", True), "invalid total_commits"),
+        (lambda payload: payload.__setitem__("total_commits", 0), "invalid total_commits"),
+        (lambda payload: payload.__setitem__("ahead_by", True), "invalid ahead_by"),
+        (lambda payload: payload.__setitem__("ahead_by", 0), "invalid ahead_by"),
+        (lambda payload: payload.__setitem__("commits", {}), "commits array"),
+        (lambda payload: payload.__setitem__("commits", ["bad"]), "non-object commit"),
+        (
+            lambda payload: payload.__setitem__("commits", [{"sha": "A" * 40}]),
+            "invalid commit",
+        ),
+    ),
+    ids=(
+        "non-object",
+        "missing-base-commit",
+        "non-object-base-commit",
+        "invalid-base-sha",
+        "boolean-total",
+        "zero-total",
+        "boolean-ahead",
+        "zero-ahead",
+        "non-array-commits",
+        "non-object-commit",
+        "invalid-commit-sha",
+    ),
+)
+async def test_compare_pull_commits_rejects_malformed_page_shapes(
+    private_key: str,
+    mutation: Callable[[dict[str, object]], object | None],
+    message: str,
+) -> None:
+    pull = dco_pull_snapshot()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/access_tokens"):
+            return httpx.Response(201, json=token_response())
+        payload = compare_payload(pull, [pull.head_sha])
+        changed = mutation(payload)
+        if changed is not None:
+            return httpx.Response(200, json=changed)
+        return httpx.Response(200, json=payload)
+
+    client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
+    with pytest.raises(GitHubError, match=message):
+        await client.compare_pull_commits(2, pull)
+    await client.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ("base_commit", "total_commits", "ahead_by"))
+async def test_compare_pull_commits_rejects_metadata_changes_between_pages(
+    private_key: str,
+    field: str,
+) -> None:
+    pull = dco_pull_snapshot(count=101, head_sha=commit_sha(101))
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/access_tokens"):
+            return httpx.Response(201, json=token_response())
+        page = int(request.url.params["page"])
+        offset = (page - 1) * 100
+        payload = compare_payload(
+            pull,
+            [
+                commit_sha(index)
+                for index in range(offset + 1, min(offset + 101, pull.commit_count + 1))
+            ],
+        )
+        if page == 2:
+            payload[field] = (
+                {"sha": commit_sha(999)} if field == "base_commit" else pull.commit_count - 1
+            )
+        return httpx.Response(200, json=payload)
+
+    client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
+    with pytest.raises(GitHubError, match="metadata changed between pages"):
+        await client.compare_pull_commits(2, pull)
+    await client.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ("total_commits", "ahead_by"))
+async def test_compare_pull_commits_rejects_counts_that_disagree_with_snapshot(
+    private_key: str,
+    field: str,
+) -> None:
+    pull = dco_pull_snapshot()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/access_tokens"):
+            return httpx.Response(201, json=token_response())
+        payload = compare_payload(pull, [pull.head_sha])
+        payload[field] = 2
+        return httpx.Response(200, json=payload)
+
+    client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
+    with pytest.raises(GitHubError, match="count does not match the snapshot"):
+        await client.compare_pull_commits(2, pull)
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_compare_pull_commits_rejects_a_different_valid_base_sha(
+    private_key: str,
+) -> None:
+    pull = dco_pull_snapshot()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/access_tokens"):
+            return httpx.Response(201, json=token_response())
+        return httpx.Response(
+            200,
+            json=compare_payload(
+                pull,
+                [pull.head_sha],
+                base_commit_sha=commit_sha(999),
+            ),
+        )
+
+    client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
+    with pytest.raises(GitHubError, match="base commit does not match the snapshot"):
+        await client.compare_pull_commits(2, pull)
+    await client.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("shas", "message"),
+    (
+        ([commit_sha(1), commit_sha(1)], "repeated a commit SHA"),
+        ([commit_sha(1), commit_sha(999)], "did not end at the snapshot head"),
+    ),
+    ids=("duplicate", "wrong-head"),
+)
+async def test_compare_pull_commits_rejects_non_unique_or_wrong_head_histories(
+    private_key: str,
+    shas: list[str],
+    message: str,
+) -> None:
+    pull = dco_pull_snapshot(count=2, head_sha=commit_sha(2))
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/access_tokens"):
+            return httpx.Response(201, json=token_response())
+        return httpx.Response(200, json=compare_payload(pull, shas))
+
+    client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
+    with pytest.raises(GitHubError, match=message):
+        await client.compare_pull_commits(2, pull)
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_compare_pull_commits_propagates_api_failure(private_key: str) -> None:
+    pull = dco_pull_snapshot()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/access_tokens"):
+            return httpx.Response(201, json=token_response())
+        return httpx.Response(502, json={"message": "unavailable"})
+
+    client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
+    with pytest.raises(GitHubAPIError, match="returned 502"):
+        await client.compare_pull_commits(2, pull)
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_individual_commit_fetch_is_bound_to_the_exact_sha(private_key: str) -> None:
+    expected_sha = "a" * 40
+    observed_path = ""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal observed_path
+        if request.url.path.endswith("/access_tokens"):
+            return httpx.Response(201, json=token_response())
+        observed_path = request.url.path
+        return httpx.Response(200, json={"sha": expected_sha})
+
+    client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
+    assert await client.get_commit(2, "example/project", expected_sha) == {"sha": expected_sha}
+    await client.close()
+
+    assert observed_path == f"/repos/example/project/commits/{expected_sha}"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invalid_sha", ("a" * 39, "A" * 40, "g" * 40, True))
+async def test_individual_commit_fetch_rejects_malformed_sha_without_api_calls(
+    private_key: str,
+    invalid_sha: object,
+) -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(500)
+
+    client = GitHubClient(
+        1,
+        private_key,
+        transport=httpx.MockTransport(handler),
+    )
+
+    with pytest.raises(ValueError, match="40 lowercase hexadecimal"):
+        await client.get_commit(2, "example/project", invalid_sha)  # type: ignore[arg-type]
+    await client.close()
+
+    assert requests == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "repository",
+    (
+        "owner//repo",
+        "owner/repo?query",
+        "owner/repo#fragment",
+        "owner/repo%2fother",
+        "ownér/repo",
+        "\ud800/repo",
+        r"owner\repo",
+        "owner/.",
+    ),
+)
+async def test_dco_commit_endpoint_rejects_unsafe_repository_paths_without_api_calls(
+    private_key: str,
+    repository: str,
+) -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(500)
+
+    client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
+    with pytest.raises(ValueError, match="GitHub-safe ASCII"):
+        await client.get_commit(2, repository, "a" * 40)
+    await client.close()
+
+    assert requests == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("response", "error"),
+    (
+        (httpx.Response(503, json={"message": "unavailable"}), GitHubAPIError),
+        (httpx.Response(200, json=[]), GitHubError),
+    ),
+)
+async def test_individual_commit_fetch_fails_closed_on_api_or_shape_errors(
+    private_key: str,
+    response: httpx.Response,
+    error: type[Exception],
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/access_tokens"):
+            return httpx.Response(201, json=token_response())
+        return response
+
+    client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
+    with pytest.raises(error):
+        await client.get_commit(2, "example/project", "a" * 40)
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_dco_json_fetch_rejects_declared_oversize_before_streaming(
+    private_key: str,
+) -> None:
+    stream = TrackingStream(b"{}")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/access_tokens"):
+            return httpx.Response(201, json=token_response())
+        return httpx.Response(200, headers={"Content-Length": "5"}, stream=stream)
+
+    client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
+    with pytest.raises(GitHubError, match="4-byte response limit"):
+        await client._get_bounded_json("/evidence", 2, max_bytes=4)
+    await client.close()
+
+    assert stream.chunks_read == 0
+    assert stream.closed is True
+
+
+@pytest.mark.asyncio
+async def test_dco_json_fetch_caps_undeclared_decoded_stream(
+    private_key: str,
+) -> None:
+    stream = TrackingStream(b'{"a"', b":1}")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/access_tokens"):
+            return httpx.Response(201, json=token_response())
+        return httpx.Response(200, stream=stream)
+
+    client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
+    with pytest.raises(GitHubError, match="4-byte response limit"):
+        await client._get_bounded_json("/evidence", 2, max_bytes=4)
+    await client.close()
+
+    assert stream.chunks_read == 2
+    assert stream.closed is True
+
+
+@pytest.mark.asyncio
+async def test_dco_json_fetch_rejects_malformed_or_non_utf8_json(private_key: str) -> None:
+    responses = iter((b"not-json", b'"\xff"'))
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/access_tokens"):
+            return httpx.Response(201, json=token_response())
+        return httpx.Response(200, content=next(responses))
+
+    client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
+    for _ in range(2):
+        with pytest.raises(GitHubError, match="expected JSON response"):
+            await client._get_bounded_json("/evidence", 2, max_bytes=100)
+    await client.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body",
+    (
+        b"\xef\xbb\xbf{}",
+        "{}".encode("utf-16"),
+        "{}".encode("utf-16-le"),
+        "{}".encode("utf-16-be"),
+        "{}".encode("utf-32"),
+        "{}".encode("utf-32-le"),
+        "{}".encode("utf-32-be"),
+    ),
+    ids=(
+        "utf-8-bom",
+        "utf-16-bom",
+        "utf-16-le",
+        "utf-16-be",
+        "utf-32-bom",
+        "utf-32-le",
+        "utf-32-be",
+    ),
+)
+async def test_dco_json_fetch_accepts_only_bomless_utf8(private_key: str, body: bytes) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/access_tokens"):
+            return httpx.Response(201, json=token_response())
+        return httpx.Response(200, content=body)
+
+    client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
+    with pytest.raises(GitHubError, match="expected JSON response"):
+        await client._get_bounded_json("/evidence", 2, max_bytes=100)
+    await client.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body",
+    (
+        b'{"sha":"one","sha":"two"}',
+        b'{"outer":{"sha":"one","sha":"two"}}',
+        b"1" * 5000,
+        b"[" * (MAX_JSON_RESPONSE_DEPTH + 1) + b"0" + b"]" * (MAX_JSON_RESPONSE_DEPTH + 1),
+        b"[" * 10_000 + b"0" + b"]" * 10_000,
+        b"NaN",
+        b"Infinity",
+        b"-Infinity",
+    ),
+    ids=(
+        "duplicate-root-key",
+        "duplicate-nested-key",
+        "integer-limit",
+        "nesting-boundary",
+        "nesting-pathological",
+        "nan",
+        "positive-infinity",
+        "negative-infinity",
+    ),
+)
+async def test_dco_json_fetch_normalizes_ambiguous_or_pathological_json(
+    private_key: str,
+    body: bytes,
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/access_tokens"):
+            return httpx.Response(201, json=token_response())
+        return httpx.Response(200, content=body)
+
+    client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
+    with pytest.raises(GitHubError, match="expected JSON response"):
+        await client._get_bounded_json("/evidence", 2, max_bytes=25_000)
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_dco_json_fetch_accepts_explicit_nesting_boundary_and_string_delimiters(
+    private_key: str,
+) -> None:
+    leaf = 'literal [{]} " \\ tail'
+    encoded_leaf = json.dumps(leaf).encode()
+    body = b'{"nested":' * MAX_JSON_RESPONSE_DEPTH + encoded_leaf + b"}" * MAX_JSON_RESPONSE_DEPTH
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/access_tokens"):
+            return httpx.Response(201, json=token_response())
+        return httpx.Response(200, content=body)
+
+    client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
+    parsed = await client._get_bounded_json("/evidence", 2, max_bytes=1000)
+    await client.close()
+
+    for _ in range(MAX_JSON_RESPONSE_DEPTH):
+        assert isinstance(parsed, dict)
+        assert list(parsed) == ["nested"]
+        parsed = parsed["nested"]
+    assert parsed == leaf

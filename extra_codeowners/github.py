@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import json as json_module
 import math
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
@@ -15,10 +17,75 @@ import jwt
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
 
+from extra_codeowners.dco import (
+    MAX_PULL_COMMITS,
+    PullCommit,
+    PullCommitComparison,
+    PullRequestSnapshot,
+)
+
 MAX_PULL_FILES: Final = 3000
 MAX_PULL_REVIEWS: Final = 1000
+MAX_COMPARE_PAGE_BYTES: Final = 16 * 1024 * 1024
+MAX_COMMIT_RESPONSE_BYTES: Final = 8 * 1024 * 1024
+MAX_JSON_RESPONSE_DEPTH: Final = 64
 MAX_CONFIG_BYTES: Final = 1_000_000
 MAX_CODEOWNERS_BYTES: Final = 3 * 1024 * 1024
+
+_COMMIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+_REPOSITORY_FULL_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+
+
+def _dco_repository_path(repository: str) -> str:
+    """Validate an exact repository name before using it in a DCO REST path."""
+    if (
+        not isinstance(repository, str)
+        or not repository.isascii()
+        or len(repository) > 512
+        or not _REPOSITORY_FULL_NAME_RE.fullmatch(repository)
+        or any(component in {".", ".."} for component in repository.split("/"))
+    ):
+        raise ValueError("repository must be a GitHub-safe ASCII owner/repository name")
+    return repository
+
+
+def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """Build one JSON object while rejecting ambiguous duplicate names."""
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("JSON object contains a duplicate key")
+        result[key] = value
+    return result
+
+
+def _reject_json_constant(value: str) -> NoReturn:
+    """Reject non-standard numeric constants accepted by Python's JSON parser."""
+    raise ValueError(f"JSON response contains the non-standard constant {value}")
+
+
+def _validate_json_nesting(value: str) -> None:
+    """Enforce a parser-independent bound on JSON container nesting."""
+    depth = 0
+    in_string = False
+    escaped = False
+    for character in value:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                in_string = False
+            continue
+        if character == '"':
+            in_string = True
+        elif character in "[{":
+            depth += 1
+            if depth > MAX_JSON_RESPONSE_DEPTH:
+                raise ValueError("JSON response exceeds the nesting-depth limit")
+        elif character in "]}":
+            depth = max(0, depth - 1)
 
 
 class GitHubError(RuntimeError):
@@ -51,7 +118,7 @@ class GitHubRateLimitError(GitHubAPIError):
 
 
 class PullRequestTooLargeError(GitHubError):
-    """A pull request exceeds GitHub's files API visibility limit."""
+    """A pull request exceeds a supported API completeness bound."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -369,6 +436,55 @@ class GitHubClient:
             page += 1
         return items
 
+    async def _get_bounded_json(
+        self,
+        path: str,
+        installation_id: int,
+        *,
+        params: dict[str, Any] | None = None,
+        max_bytes: int,
+    ) -> Any:
+        """Read and parse one size-limited JSON response."""
+        response = await self._authenticated_streaming_response(
+            path,
+            installation_id,
+            params=params,
+        )
+        try:
+            if not response.is_success:
+                error_response = await self._bounded_error_response(response, 1000)
+                self._raise_api_error(error_response, "GET", path)
+
+            content_length = response.headers.get("content-length")
+            normalized_length = content_length.strip() if content_length is not None else ""
+            declared_length = (
+                int(normalized_length)
+                if normalized_length.isascii() and normalized_length.isdecimal()
+                else None
+            )
+            if declared_length is not None and declared_length > max_bytes:
+                raise GitHubError(f"GET {path} exceeds the {max_bytes}-byte response limit")
+
+            content = bytearray()
+            async for chunk in response.aiter_bytes(chunk_size=min(max_bytes, 64 * 1024)):
+                if len(chunk) > max_bytes - len(content):
+                    raise GitHubError(f"GET {path} exceeds the {max_bytes}-byte response limit")
+                content.extend(chunk)
+            try:
+                decoded = bytes(content).decode("utf-8")
+                if decoded.startswith("\ufeff"):
+                    raise ValueError("JSON response must not contain a UTF-8 BOM")
+                _validate_json_nesting(decoded)
+                return json_module.loads(
+                    decoded,
+                    object_pairs_hook=_unique_json_object,
+                    parse_constant=_reject_json_constant,
+                )
+            except (UnicodeDecodeError, RecursionError, ValueError) as error:
+                raise GitHubError(f"expected JSON response from GET {path}") from error
+        finally:
+            await response.aclose()
+
     async def get_pull(self, installation_id: int, repository: str, number: int) -> dict[str, Any]:
         """Fetch current pull request metadata."""
         return await self._request(
@@ -399,6 +515,127 @@ class GitHubClient:
             installation_id,
             max_items=MAX_PULL_REVIEWS,
         )
+
+    async def compare_pull_commits(
+        self,
+        installation_id: int,
+        pull: PullRequestSnapshot,
+    ) -> PullCommitComparison:
+        """Compare the exact base and head from one validated pull snapshot."""
+        expected_count = pull.commit_count
+        if expected_count > MAX_PULL_COMMITS:
+            msg = f"pull request exceeds the supported {MAX_PULL_COMMITS}-commit limit"
+            raise PullRequestTooLargeError(msg)
+
+        repository_path = _dco_repository_path(pull.repository.full_name)
+        base_owner, _ = pull.base_repository.full_name.split("/", maxsplit=1)
+        head_owner, _ = pull.head_repository.full_name.split("/", maxsplit=1)
+        if pull.head_repository == pull.repository:
+            basehead = f"{pull.base_sha}...{pull.head_sha}"
+        else:
+            if base_owner.casefold() == head_owner.casefold():
+                raise GitHubError(
+                    "cannot resolve a fork comparison whose base and head owners are identical"
+                )
+            basehead = f"{base_owner}:{pull.base_sha}...{head_owner}:{pull.head_sha}"
+        endpoint = f"/repos/{repository_path}/compare/{quote(basehead, safe=':.')}"
+
+        items: list[PullCommit] = []
+        seen_shas: set[str] = set()
+        metadata: tuple[str, int, int] | None = None
+        page_count = (expected_count + 99) // 100
+        for page in range(1, page_count + 1):
+            payload = await self._get_bounded_json(
+                endpoint,
+                installation_id,
+                params={"per_page": 100, "page": page},
+                max_bytes=MAX_COMPARE_PAGE_BYTES,
+            )
+            if not isinstance(payload, dict):
+                raise GitHubError(f"expected object response from GET {endpoint}")
+
+            base_commit = payload.get("base_commit")
+            if not isinstance(base_commit, dict):
+                raise GitHubError("compare response omitted its base_commit object")
+            base_commit_sha = base_commit.get("sha")
+            total_commits = payload.get("total_commits")
+            ahead_by = payload.get("ahead_by")
+            page_items = payload.get("commits")
+            if not isinstance(base_commit_sha, str) or not _COMMIT_SHA_RE.fullmatch(
+                base_commit_sha
+            ):
+                raise GitHubError("compare response contained an invalid base commit SHA")
+            if type(total_commits) is not int or total_commits < 1:
+                raise GitHubError("compare response contained an invalid total_commits value")
+            if type(ahead_by) is not int or ahead_by < 1:
+                raise GitHubError("compare response contained an invalid ahead_by value")
+            if not isinstance(page_items, list):
+                raise GitHubError("compare response omitted its commits array")
+
+            page_metadata = (base_commit_sha, total_commits, ahead_by)
+            if metadata is None:
+                metadata = page_metadata
+            elif page_metadata != metadata:
+                raise GitHubError("compare response metadata changed between pages")
+            if total_commits > MAX_PULL_COMMITS or ahead_by > MAX_PULL_COMMITS:
+                msg = f"compare response exceeds the supported {MAX_PULL_COMMITS}-commit limit"
+                raise PullRequestTooLargeError(msg)
+            if base_commit_sha != pull.base_sha:
+                raise GitHubError("compare response base commit does not match the snapshot")
+            if total_commits != expected_count or ahead_by != expected_count:
+                raise GitHubError("compare response count does not match the snapshot")
+
+            expected_page_items = min(100, expected_count - (page - 1) * 100)
+            if len(page_items) != expected_page_items:
+                raise GitHubError("compare response page length does not match its metadata")
+            for item in page_items:
+                if not isinstance(item, dict):
+                    raise GitHubError("compare response contained a non-object commit")
+                try:
+                    compared_commit = PullCommit.from_github(item)
+                except ValueError as error:
+                    raise GitHubError("compare response contained an invalid commit") from error
+                if compared_commit.sha in seen_shas:
+                    raise GitHubError("compare response repeated a commit SHA")
+                seen_shas.add(compared_commit.sha)
+                items.append(compared_commit)
+
+        if metadata is None or len(items) != expected_count:
+            raise GitHubError("compare response did not contain the complete snapshot")
+        if items[-1].sha != pull.head_sha:
+            raise GitHubError("compare response did not end at the snapshot head")
+        base_commit_sha, total_commits, ahead_by = metadata
+        return PullCommitComparison(
+            repository=pull.repository,
+            pull_number=pull.number,
+            base_sha=pull.base_sha,
+            head_sha=pull.head_sha,
+            base_commit_sha=base_commit_sha,
+            total_commits=total_commits,
+            ahead_by=ahead_by,
+            commits=tuple(items),
+        )
+
+    async def get_commit(
+        self,
+        installation_id: int,
+        repository: str,
+        sha: str,
+    ) -> dict[str, Any]:
+        """Fetch one commit by its exact lowercase SHA-1 object name."""
+        if not isinstance(sha, str) or not _COMMIT_SHA_RE.fullmatch(sha):
+            raise ValueError("commit SHA must be exactly 40 lowercase hexadecimal characters")
+        repository_path = _dco_repository_path(repository)
+        result = await self._get_bounded_json(
+            f"/repos/{repository_path}/commits/{sha}",
+            installation_id,
+            params={"per_page": 1, "page": 1},
+            max_bytes=MAX_COMMIT_RESPONSE_BYTES,
+        )
+        if not isinstance(result, dict):
+            msg = f"expected object response from GET /repos/{repository_path}/commits/{sha}"
+            raise GitHubError(msg)
+        return result
 
     async def get_codeowners_errors(
         self, installation_id: int, repository: str, ref: str
