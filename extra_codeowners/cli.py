@@ -3,18 +3,20 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated
 
 import typer
 import uvicorn
 
-from extra_codeowners.app import create_app
 from extra_codeowners.codeowners import validate_pattern
 from extra_codeowners.database import DATABASE_MIGRATION_HEAD, QueueStore
 from extra_codeowners.migrations import expected_revision, upgrade_database
 from extra_codeowners.models import OrganizationPolicy, RepositoryPolicy
 from extra_codeowners.policy import compile_policy
 from extra_codeowners.settings import Settings
+
+if TYPE_CHECKING:
+    from fastapi import FastAPI
 
 cli = typer.Typer(
     name="extra-codeowners",
@@ -23,6 +25,13 @@ cli = typer.Typer(
 )
 database_cli = typer.Typer(help="Migrate and verify the durable database schema.")
 cli.add_typer(database_cli, name="database")
+
+
+def _create_service_app(settings: Settings) -> FastAPI:
+    """Import the ASGI factory only when the service is about to start."""
+    from extra_codeowners.app import create_app
+
+    return create_app(settings)
 
 
 @database_cli.command("migrate")
@@ -87,7 +96,7 @@ def serve(
     # code arrives in a callback query string. Structured application logs do
     # not record request URLs or secret values.
     uvicorn.run(
-        create_app(settings),
+        _create_service_app(settings),
         host=settings.host,
         port=settings.port,
         access_log=False,
