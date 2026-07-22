@@ -51,7 +51,7 @@ from packaging.utils import (
 )
 from packaging.version import InvalidVersion, Version
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 EVIDENCE_MEDIA_TYPE = f"application/vnd.stampbot.container-evidence.v{SCHEMA_VERSION}+tar+gzip"
 APPLICATION_NAME = "extra-codeowners"
 EXPECTED_RUNTIME_PYTHON = "3.14.6"
@@ -77,10 +77,11 @@ EXPECTED_UV_VERSION = "0.11.28"
 APPLICATION_WHEEL_LABEL = "org.stampbot.extra-codeowners.application-wheel.sha256"
 APPLICATION_SELECTION_LABEL = "org.stampbot.extra-codeowners.python-selection-record.sha256"
 SOURCE_COMPLETENESS_REASON = (
-    "Native wheel payload and embedded-SBOM component/source expansion remain open in issue "
-    "#18; public distribution remains blocked pending issue #28."
+    "Six native-wheel owners still lack closed-world component/source coverage in issue #18; "
+    "public distribution remains blocked pending issue #28."
 )
 MAX_DOWNLOAD_BYTES = 64 * 1024 * 1024
+MAX_NATIVE_COMPONENT_SOURCE_BYTES = 128 * 1024 * 1024
 MAX_ARCHIVE_MEMBER_BYTES = 64 * 1024 * 1024
 MAX_ARCHIVE_MEMBERS = 250_000
 MAX_ARCHIVE_TOTAL_BYTES = 1024 * 1024 * 1024
@@ -1741,6 +1742,8 @@ def validate_policy_schema(policy: Mapping[str, Any]) -> None:
         "alpine_distfiles_release",
         "alpine_recipe_archives",
         "alpine_recipe_exceptions",
+        "native_component_sources",
+        "native_component_coverage",
     }
     require_exact_fields(policy, expected_top_level, "policy")
 
@@ -2021,6 +2024,7 @@ def validate_policy_schema(policy: Mapping[str, Any]) -> None:
 
     # These validators enforce the exact nested baseline record shapes.
     validate_unexpanded_payload_policy_schema(policy)
+    validate_native_component_policy_schema(policy)
     for platform in ("linux/amd64", "linux/arm64"):
         baseline = filesystem_baseline(policy, platform)
         validate_payload_records(
@@ -3556,6 +3560,613 @@ def payload_record_projection(record: Mapping[str, Any]) -> dict[str, Any]:
     return {field: record[field] for field in PAYLOAD_RECORD_FIELDS}
 
 
+def validate_pinned_artifact(
+    value: object,
+    source: str,
+    *,
+    max_bytes: int = MAX_DOWNLOAD_BYTES,
+) -> Mapping[str, Any]:
+    """Validate one immutable URL, digest, and byte-size tuple."""
+
+    record = require_exact_fields(value, {"url", "sha256", "size"}, source)
+    url = record["url"]
+    digest = record["sha256"]
+    size = record["size"]
+    if not isinstance(url, str):
+        raise EvidenceError(f"{source} has an invalid URL")
+    require_https_source_url(url)
+    if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+        raise EvidenceError(f"{source} has an invalid digest")
+    if not isinstance(size, int) or isinstance(size, bool) or not 0 < size <= max_bytes:
+        raise EvidenceError(f"{source} has an invalid size")
+    return record
+
+
+def native_component_payload_role(path_value: object, platform: str, source: str) -> str:
+    """Derive one platform-neutral native role from its exact installed path."""
+
+    if platform not in ELF_MACHINES:
+        raise EvidenceError(f"{source} has an unsupported payload platform")
+    if not isinstance(path_value, str):
+        raise EvidenceError(f"{source} has an invalid payload path")
+    path = str(checked_canonical_path(path_value, f"{source} payload path"))
+    site_packages_prefix = f"opt/venv/lib/python{CPYTHON_RUNTIME_MINOR}/site-packages/"
+    if not path.startswith(site_packages_prefix):
+        raise EvidenceError(f"{source} payload is outside the reviewed site-packages root")
+    relative = path.removeprefix(site_packages_prefix)
+    relative_path = checked_canonical_path(relative, f"{source} payload role projection")
+    filename = relative_path.name
+
+    cpython_suffix = re.search(
+        r"\.cpython-(?P<abi>[0-9]+)-(?P<architecture>[A-Za-z0-9_]+)-linux-musl\.so$",
+        filename,
+    )
+    if cpython_suffix is not None:
+        expected_abi = CPYTHON_RUNTIME_MINOR.replace(".", "")
+        expected_architecture = ELF_MACHINES[platform][1]
+        if (
+            cpython_suffix["abi"] != expected_abi
+            or cpython_suffix["architecture"] != expected_architecture
+        ):
+            raise EvidenceError(f"{source} payload ABI suffix conflicts with {platform}")
+        filename = f"{filename[: cpython_suffix.start()]}.cpython-{expected_abi}.so"
+    elif relative_path.parts[0].endswith(".libs"):
+        auditwheel_suffix = re.fullmatch(
+            r"(?P<stem>.+)-(?P<hash>[^/]+)(?P<suffix>\.so(?:\.[0-9]+)*)",
+            filename,
+        )
+        if auditwheel_suffix is not None and re.fullmatch(
+            r"[0-9A-Fa-f]+", auditwheel_suffix["hash"]
+        ):
+            if re.fullmatch(r"[0-9a-f]{8}", auditwheel_suffix["hash"]) is None:
+                raise EvidenceError(f"{source} payload has an invalid auditwheel hash")
+            filename = f"{auditwheel_suffix['stem']}{auditwheel_suffix['suffix']}"
+
+    role = str(relative_path.with_name(filename))
+    return str(checked_canonical_path(role, f"{source} payload role projection"))
+
+
+def validate_native_component_payloads(
+    value: object, platform: str, source: str
+) -> list[Mapping[str, Any]]:
+    """Validate canonical logical-role/path/digest native payload references."""
+
+    if not isinstance(value, list) or len(value) > MAX_IMAGE_MEMBERS:
+        raise EvidenceError(f"{source} has an invalid payload list")
+    records: list[Mapping[str, Any]] = []
+    seen_paths: set[str] = set()
+    seen_roles: set[str] = set()
+    for index, value_record in enumerate(value):
+        record = require_exact_fields(
+            value_record,
+            {"role", "path", "sha256"},
+            f"{source} payload {index}",
+        )
+        role_value = record["role"]
+        path_value = record["path"]
+        digest = record["sha256"]
+        if not isinstance(role_value, str):
+            raise EvidenceError(f"{source} has an invalid payload role")
+        role = str(checked_canonical_path(role_value, f"{source} payload role"))
+        if role != role_value:
+            raise EvidenceError(f"{source} has an invalid payload role")
+        if not isinstance(path_value, str):
+            raise EvidenceError(f"{source} has an invalid payload path")
+        path = str(checked_canonical_path(path_value, f"{source} payload path"))
+        expected_role = native_component_payload_role(path_value, platform, source)
+        if role != expected_role:
+            raise EvidenceError(f"{source} payload role does not match its path")
+        if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+            raise EvidenceError(f"{source} has an invalid payload digest")
+        if path in seen_paths:
+            raise EvidenceError(f"{source} repeats payload path {path}")
+        if role in seen_roles:
+            raise EvidenceError(f"{source} has an invalid payload role")
+        seen_roles.add(role)
+        seen_paths.add(path)
+        records.append(record)
+    if [record["role"] for record in records] != sorted(seen_roles):
+        raise EvidenceError(f"{source} payloads are not canonical")
+    return records
+
+
+def native_component_sources(policy: Mapping[str, Any]) -> Mapping[str, Mapping[str, Any]]:
+    """Validate and return immutable source records for embedded native components."""
+
+    value = policy.get("native_component_sources")
+    if not isinstance(value, dict) or len(value) > MAX_COMPONENTS:
+        raise EvidenceError("policy has invalid native-component sources")
+    sources: dict[str, Mapping[str, Any]] = {}
+    for source_id, raw_record in value.items():
+        if not isinstance(source_id, str):
+            raise EvidenceError("native-component source has an invalid identity")
+        checked_scalar(
+            source_id,
+            "native-component source identity",
+            max_length=MAX_COMPONENT_KEY_LENGTH,
+        )
+        record = require_exact_fields(
+            raw_record,
+            {
+                "kind",
+                "origin",
+                "version",
+                "aports_commit",
+                "distfiles_release",
+                "recipe",
+                "distfiles",
+                "observed_license",
+                "notices",
+            },
+            f"native-component source {source_id}",
+        )
+        origin = record["origin"]
+        version = record["version"]
+        commit = record["aports_commit"]
+        release = record["distfiles_release"]
+        if record["kind"] != "alpine-aports":
+            raise EvidenceError(f"native-component source {source_id} has an unsupported kind")
+        if (
+            not isinstance(origin, str)
+            or checked_scalar(origin, f"native-component source {source_id} origin") != origin
+            or re.fullmatch(r"[a-z0-9][a-z0-9+._-]*", origin) is None
+        ):
+            raise EvidenceError(f"native-component source {source_id} has an invalid origin")
+        if (
+            not isinstance(version, str)
+            or checked_scalar(version, f"native-component source {source_id} version") != version
+        ):
+            raise EvidenceError(f"native-component source {source_id} has an invalid version")
+        if source_id != f"alpine:{origin}@{version}":
+            raise EvidenceError(f"native-component source {source_id} has a conflicting identity")
+        if not isinstance(commit, str) or re.fullmatch(r"[0-9a-f]{40}", commit) is None:
+            raise EvidenceError(f"native-component source {source_id} has an invalid commit")
+        if not isinstance(release, str) or re.fullmatch(r"v\d+\.\d+", release) is None:
+            raise EvidenceError(f"native-component source {source_id} has an invalid release")
+        recipe = validate_pinned_artifact(
+            record["recipe"], f"native-component source {source_id} recipe"
+        )
+        expected_recipe_url = (
+            "https://gitlab.alpinelinux.org/alpine/aports/-/archive/"
+            f"{commit}/aports-{commit}.tar.gz?path=main/{origin}"
+        )
+        if recipe["url"] != expected_recipe_url:
+            raise EvidenceError(f"native-component source {source_id} recipe is not commit-pinned")
+
+        distfiles = record["distfiles"]
+        if not isinstance(distfiles, list) or len(distfiles) != 1:
+            raise EvidenceError(f"native-component source {source_id} has invalid distfiles")
+        distfile_names: set[str] = set()
+        for index, raw_distfile in enumerate(distfiles):
+            distfile = require_exact_fields(
+                raw_distfile,
+                {"filename", "url", "sha512", "size"},
+                f"native-component source {source_id} distfile {index}",
+            )
+            filename = distfile["filename"]
+            url = distfile["url"]
+            digest = distfile["sha512"]
+            size = distfile["size"]
+            if (
+                not isinstance(filename, str)
+                or str(checked_canonical_path(filename, "native-component distfile filename"))
+                != filename
+                or PurePosixPath(filename).name != filename
+                or filename in distfile_names
+            ):
+                raise EvidenceError(
+                    f"native-component source {source_id} has an invalid distfile filename"
+                )
+            distfile_names.add(filename)
+            expected_url = (
+                f"https://distfiles.alpinelinux.org/distfiles/{release}/"
+                f"{urllib.parse.quote(filename, safe='')}"
+            )
+            if not isinstance(url, str) or url != expected_url:
+                raise EvidenceError(
+                    f"native-component source {source_id} has a noncanonical distfile URL"
+                )
+            require_https_source_url(url)
+            if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{128}", digest) is None:
+                raise EvidenceError(
+                    f"native-component source {source_id} has an invalid distfile digest"
+                )
+            if (
+                not isinstance(size, int)
+                or isinstance(size, bool)
+                or not 0 < size <= MAX_NATIVE_COMPONENT_SOURCE_BYTES
+            ):
+                raise EvidenceError(
+                    f"native-component source {source_id} has an invalid distfile size"
+                )
+        if [record["filename"] for record in distfiles] != sorted(distfile_names):
+            raise EvidenceError(f"native-component source {source_id} distfiles are not canonical")
+
+        observed_license = record["observed_license"]
+        if not isinstance(observed_license, str) or not observed_license.strip():
+            raise EvidenceError(
+                f"native-component source {source_id} has no observed recipe license"
+            )
+        checked_scalar(
+            observed_license,
+            f"native-component source {source_id} observed license",
+            max_length=MAX_LICENSE_FIELD_LENGTH,
+        )
+        notices = record["notices"]
+        if not isinstance(notices, list) or not notices or len(notices) > MAX_SOURCE_LICENSE_FILES:
+            raise EvidenceError(f"native-component source {source_id} has invalid notices")
+        notice_members: set[str] = set()
+        for index, raw_notice in enumerate(notices):
+            notice = require_exact_fields(
+                raw_notice,
+                {"member", "sha256", "size"},
+                f"native-component source {source_id} notice {index}",
+            )
+            member = notice["member"]
+            digest = notice["sha256"]
+            size = notice["size"]
+            if (
+                not isinstance(member, str)
+                or str(checked_canonical_path(member, "native-component notice member")) != member
+                or member in notice_members
+            ):
+                raise EvidenceError(
+                    f"native-component source {source_id} has an invalid notice member"
+                )
+            notice_members.add(member)
+            if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+                raise EvidenceError(
+                    f"native-component source {source_id} has an invalid notice digest"
+                )
+            if (
+                not isinstance(size, int)
+                or isinstance(size, bool)
+                or not 0 < size <= MAX_LICENSE_BYTES
+            ):
+                raise EvidenceError(
+                    f"native-component source {source_id} has an invalid notice size"
+                )
+        if [record["member"] for record in notices] != sorted(notice_members):
+            raise EvidenceError(f"native-component source {source_id} notices are not canonical")
+        sources[source_id] = record
+    return sources
+
+
+def validate_native_component_policy_schema(policy: Mapping[str, Any]) -> None:
+    """Validate the closed-world policy used to resolve selected native wheel owners."""
+
+    sources = native_component_sources(policy)
+    coverage = policy.get("native_component_coverage")
+    if not isinstance(coverage, dict) or set(coverage) != {"linux/amd64", "linux/arm64"}:
+        raise EvidenceError("policy must define native-component coverage for both platforms")
+    used_sources: set[str] = set()
+    owners_by_platform: dict[str, set[str]] = {}
+    semantics_by_platform: dict[str, dict[str, Any]] = {}
+    semantics_by_purl: dict[str, dict[str, str]] = {}
+    for platform, raw_records in coverage.items():
+        if not isinstance(raw_records, list) or len(raw_records) > MAX_COMPONENTS:
+            raise EvidenceError(f"native-component coverage for {platform} is invalid")
+        owners: set[str] = set()
+        owner_semantics: dict[str, Any] = {}
+        for owner_index, raw_owner in enumerate(raw_records):
+            owner_record = require_exact_fields(
+                raw_owner,
+                {"owner", "wheel", "owner_source", "native_payloads", "sboms"},
+                f"native-component coverage {platform} owner {owner_index}",
+            )
+            owner = owner_record["owner"]
+            if not isinstance(owner, str) or not owner.startswith("python:") or "@" not in owner:
+                raise EvidenceError(f"native-component coverage for {platform} has invalid owner")
+            raw_name, version = owner.removeprefix("python:").rsplit("@", maxsplit=1)
+            if (
+                normalize_package_name(raw_name) != raw_name
+                or not version
+                or checked_scalar(version, f"native-component owner {owner} version") != version
+                or owner in owners
+            ):
+                raise EvidenceError(f"native-component coverage for {platform} has invalid owner")
+            owners.add(owner)
+            wheel = validate_pinned_artifact(
+                owner_record["wheel"], f"native-component coverage {owner} wheel"
+            )
+            filename = safe_filename(str(wheel["url"]))
+            try:
+                wheel_name, wheel_version, _build, tags = parse_wheel_filename(filename)
+                expected_version = Version(version)
+            except (InvalidVersion, InvalidWheelFilename) as exc:
+                raise EvidenceError(f"native-component coverage {owner} has invalid wheel") from exc
+            if (
+                canonicalize_name(wheel_name) != raw_name
+                or wheel_version != expected_version
+                or not tags
+                or not all(wheel_tag_matches_native_platform(tag, platform) for tag in tags)
+            ):
+                raise EvidenceError(
+                    f"native-component coverage {owner} wheel conflicts with {platform}"
+                )
+            validate_pinned_artifact(
+                owner_record["owner_source"],
+                f"native-component coverage {owner} owner source",
+            )
+            native_payloads = validate_native_component_payloads(
+                owner_record["native_payloads"],
+                platform,
+                f"native-component coverage {owner}",
+            )
+            if not native_payloads:
+                raise EvidenceError(f"native-component coverage {owner} has no native payloads")
+            sboms = owner_record["sboms"]
+            if not isinstance(sboms, list) or not sboms or len(sboms) > MAX_IMAGE_MEMBERS:
+                raise EvidenceError(f"native-component coverage {owner} has invalid SBOMs")
+            sbom_paths: set[str] = set()
+            for sbom_index, raw_sbom in enumerate(sboms):
+                sbom = require_exact_fields(
+                    raw_sbom,
+                    {"path", "sha256", "components"},
+                    f"native-component coverage {owner} SBOM {sbom_index}",
+                )
+                path_value = sbom["path"]
+                digest = sbom["sha256"]
+                if (
+                    not isinstance(path_value, str)
+                    or str(checked_canonical_path(path_value, "native-component SBOM path"))
+                    != path_value
+                    or DIST_INFO_SBOM.search(path_value) is None
+                    or path_value in sbom_paths
+                ):
+                    raise EvidenceError(f"native-component coverage {owner} has invalid SBOM path")
+                sbom_paths.add(path_value)
+                if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+                    raise EvidenceError(
+                        f"native-component coverage {owner} has invalid SBOM digest"
+                    )
+                components = sbom["components"]
+                if (
+                    not isinstance(components, list)
+                    or not components
+                    or len(components) > MAX_CYCLONEDX_COMPONENTS
+                ):
+                    raise EvidenceError(
+                        f"native-component coverage {owner} has invalid SBOM components"
+                    )
+                projections: list[dict[str, str]] = []
+                for component_index, raw_component in enumerate(components):
+                    component = require_exact_fields(
+                        raw_component,
+                        {
+                            "type",
+                            "name",
+                            "version",
+                            "purl",
+                            "source",
+                            "reviewed_license",
+                        },
+                        (
+                            f"native-component coverage {owner} SBOM {sbom_index} "
+                            f"component {component_index}"
+                        ),
+                    )
+                    projection, _bom_ref = normalized_cyclonedx_component(
+                        component,
+                        (
+                            f"native-component coverage {owner} SBOM {sbom_index} "
+                            f"component {component_index}"
+                        ),
+                    )
+                    projections.append(projection)
+                    source_id = component["source"]
+                    if not isinstance(source_id, str) or source_id not in sources:
+                        raise EvidenceError(
+                            f"native-component coverage {owner} has an unknown component source"
+                        )
+                    used_sources.add(source_id)
+                    reviewed = component["reviewed_license"]
+                    if not isinstance(reviewed, str) or not reviewed.strip():
+                        raise EvidenceError(
+                            f"native-component coverage {owner} has no reviewed component license"
+                        )
+                    normalized_reviewed = checked_scalar(
+                        reviewed,
+                        f"native-component coverage {owner} reviewed license",
+                        max_length=MAX_LICENSE_FIELD_LENGTH,
+                    )
+                    if "LicenseRef-" in normalized_reviewed:
+                        raise EvidenceError(
+                            "native-component reviewed licenses cannot use LicenseRef identifiers"
+                        )
+                    semantic = {
+                        **projection,
+                        "source": source_id,
+                        "reviewed_license": normalized_reviewed,
+                    }
+                    previous_semantic = semantics_by_purl.setdefault(projection["purl"], semantic)
+                    if previous_semantic != semantic:
+                        raise EvidenceError(
+                            "native-component PURL has conflicting identity, source, or reviewed "
+                            f"license: {projection['purl']}"
+                        )
+                validate_cyclonedx_component_projection(
+                    None, projections, f"native-component coverage {owner} {path_value}"
+                )
+            if [record["path"] for record in sboms] != sorted(sbom_paths):
+                raise EvidenceError(f"native-component coverage {owner} SBOMs are not canonical")
+            owner_semantics[owner] = {
+                "owner_source": owner_record["owner_source"],
+                "native_payload_roles": sorted(
+                    record["role"] for record in owner_record["native_payloads"]
+                ),
+                "sboms": [
+                    {
+                        "path": sbom["path"],
+                        "components": [
+                            {
+                                field: component[field]
+                                for field in (
+                                    "type",
+                                    "name",
+                                    "version",
+                                    "purl",
+                                    "source",
+                                    "reviewed_license",
+                                )
+                            }
+                            for component in sbom["components"]
+                        ],
+                    }
+                    for sbom in sboms
+                ],
+            }
+        if [record["owner"] for record in raw_records] != sorted(owners):
+            raise EvidenceError(f"native-component coverage for {platform} is not canonical")
+        owners_by_platform[platform] = owners
+        semantics_by_platform[platform] = owner_semantics
+    if owners_by_platform["linux/amd64"] != owners_by_platform["linux/arm64"]:
+        raise EvidenceError("native-component coverage owners differ across platforms")
+    if canonical_json(semantics_by_platform["linux/amd64"]) != canonical_json(
+        semantics_by_platform["linux/arm64"]
+    ):
+        raise EvidenceError("native-component coverage semantics differ across platforms")
+    if used_sources != set(sources):
+        raise EvidenceError("native-component sources are missing, extra, or unused")
+
+
+def native_component_coverage_ledger(
+    inventory: Mapping[str, Any], policy: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Resolve configured owners and enumerate every remaining native/SBOM owner."""
+
+    validate_native_component_policy_schema(policy)
+    platform = inventory.get("platform")
+    coverage = policy.get("native_component_coverage")
+    if platform not in {"linux/amd64", "linux/arm64"} or not isinstance(coverage, dict):
+        raise EvidenceError("component inventory has an unsupported native-component platform")
+    configured = coverage[platform]
+    contexts = native_wheel_contexts(inventory)
+    resolved: list[dict[str, Any]] = []
+    resolved_owners: set[str] = set()
+    for owner_record in configured:
+        owner = str(owner_record["owner"])
+        context = contexts.get(owner)
+        if context is None:
+            raise EvidenceError(f"native-component coverage has a stale owner: {owner}")
+        resolved_owners.add(owner)
+        expected_payloads = {
+            (str(record["path"]), str(record["sha256"]))
+            for record in owner_record["native_payloads"]
+        }
+        expected_sboms: dict[tuple[str, str], Mapping[str, Any]] = {}
+        for sbom in owner_record["sboms"]:
+            key = (str(sbom["path"]), str(sbom["sha256"]))
+            expected_sboms[key] = sbom
+        observed_payloads = {
+            (str(record["path"]), str(record["sha256"])) for record in context["native_payloads"]
+        }
+        if expected_payloads != observed_payloads:
+            raise EvidenceError(
+                f"native-component coverage does not exactly cover payloads for {owner}"
+            )
+        observed_sboms = {
+            (str(record["path"]), str(record["sha256"])): record
+            for record in context["embedded_sboms"]
+        }
+        if set(expected_sboms) != set(observed_sboms):
+            raise EvidenceError(
+                f"native-component coverage does not exactly cover SBOMs for {owner}"
+            )
+        component = context["component"]
+        for key, expected_sbom in expected_sboms.items():
+            observed_sbom = observed_sboms[key]
+            cyclonedx = observed_sbom.get("cyclonedx")
+            if not isinstance(cyclonedx, dict):
+                raise EvidenceError(f"native-component coverage SBOM is unparsed for {owner}")
+            metadata_component = cyclonedx.get("metadata_component")
+            if metadata_component is not None and (
+                not isinstance(metadata_component, dict)
+                or normalize_package_name(str(metadata_component.get("name", "")))
+                != component["name"]
+                or metadata_component.get("version") != component["version"]
+            ):
+                raise EvidenceError(f"native-component SBOM metadata conflicts with owner {owner}")
+            expected_components = [
+                {field: item[field] for field in ("type", "name", "version", "purl")}
+                for item in expected_sbom["components"]
+            ]
+            if canonical_json(expected_components) != canonical_json(cyclonedx.get("components")):
+                raise EvidenceError(
+                    f"native-component coverage differs from embedded SBOM components for {owner}"
+                )
+        resolved.append(dict(owner_record))
+
+    unresolved: list[dict[str, Any]] = []
+    for owner, context in sorted(contexts.items()):
+        if owner in resolved_owners:
+            continue
+        unresolved.append(
+            {
+                "owner": owner,
+                "native_payloads": sorted(
+                    (
+                        {"path": record["path"], "sha256": record["sha256"]}
+                        for record in context["native_payloads"]
+                    ),
+                    key=lambda item: item["path"],
+                ),
+                "embedded_sboms": sorted(
+                    (
+                        {
+                            "path": record["path"],
+                            "sha256": record["sha256"],
+                            "metadata_component": record["cyclonedx"]["metadata_component"],
+                            "components": record["cyclonedx"]["components"],
+                        }
+                        for record in context["embedded_sboms"]
+                    ),
+                    key=lambda item: item["path"],
+                ),
+            }
+        )
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "platform": platform,
+        "complete": not unresolved,
+        "resolved_owners": resolved,
+        "unresolved_owners": unresolved,
+    }
+
+
+def verify_native_component_lock_bindings(
+    inventory: Mapping[str, Any],
+    policy: Mapping[str, Any],
+    locked_wheels: Sequence[Mapping[str, Any]],
+    lock_sources: Mapping[tuple[str, str], Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Bind resolved-owner wheel and source pins to the exact committed lock entries."""
+
+    ledger = native_component_coverage_ledger(inventory, policy)
+    selected: dict[str, Mapping[str, Any]] = {}
+    for wheel in locked_wheels:
+        owner = wheel.get("owner")
+        if not isinstance(owner, str) or owner in selected:
+            raise EvidenceError("locked native wheels repeat an owner")
+        selected[owner] = wheel
+    for owner_record in ledger["resolved_owners"]:
+        owner = str(owner_record["owner"])
+        selected_wheel = selected.get(owner)
+        expected_wheel = owner_record["wheel"]
+        if (
+            selected_wheel is None
+            or {field: selected_wheel.get(field) for field in ("url", "sha256", "size")}
+            != expected_wheel
+        ):
+            raise EvidenceError(f"native-component coverage wheel differs from lock for {owner}")
+        name, version = owner.removeprefix("python:").rsplit("@", maxsplit=1)
+        if lock_sources.get((name, version)) != owner_record["owner_source"]:
+            raise EvidenceError(
+                f"native-component coverage owner source differs from lock for {owner}"
+            )
+    return ledger
+
+
 def validate_retained_cyclonedx_identity(value: object, source: str) -> None:
     """Validate a canonical CycloneDX projection retained without its raw bytes."""
 
@@ -4063,6 +4674,7 @@ def verify_inventory(
             "inspect the normalized diff and review every change"
         )
     verify_unexpanded_payload_policy(inventory, policy)
+    native_coverage = native_component_coverage_ledger(inventory, policy)
     verify_apk_database_baseline(inventory, policy)
     actual_keys = {component_key(component) for component in actual}
     resolutions = policy.get("license_resolutions")
@@ -4071,8 +4683,14 @@ def verify_inventory(
             "reviewed license resolutions do not exactly cover the component inventory"
         )
     required_license_texts: set[str] = set()
-    for component in actual:
-        expression = resolved_license(component, policy)
+    reviewed_expressions = [resolved_license(component, policy) for component in actual]
+    reviewed_expressions.extend(
+        component["reviewed_license"]
+        for owner_record in native_coverage["resolved_owners"]
+        for sbom in owner_record["sboms"]
+        for component in sbom["components"]
+    )
+    for expression in reviewed_expressions:
         required_license_texts.update(
             token
             for token in re.findall(r"[A-Za-z0-9][A-Za-z0-9.+-]*", expression)
@@ -6341,6 +6959,169 @@ def recipe_checksums(
     return checksums, local_sources
 
 
+def native_alpine_recipe_metadata(archive: bytes, origin: str) -> dict[str, str]:
+    """Read exact literal identity and license fields from a validated aports recipe."""
+
+    apkbuild: bytes | None = None
+    try:
+        with tarfile.open(
+            fileobj=io.BytesIO(archive), mode="r:*", tarinfo=BoundedTarInfo
+        ) as source:
+            for member in source:
+                path = checked_path(member.name)
+                if path.parts[-3:] != ("main", origin, "APKBUILD"):
+                    continue
+                if apkbuild is not None or not member.isfile():
+                    raise EvidenceError(
+                        f"native-component recipe has an ambiguous APKBUILD: {origin}"
+                    )
+                apkbuild = read_member(source, member)
+    except tarfile.TarError as exc:
+        raise EvidenceError(f"invalid native-component recipe archive for {origin}: {exc}") from exc
+    if apkbuild is None:
+        raise EvidenceError(f"native-component recipe has no exact APKBUILD path: {origin}")
+    try:
+        text = apkbuild.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise EvidenceError(f"native-component APKBUILD is not UTF-8: {origin}") from exc
+
+    def one_literal(pattern: str, field: str) -> str:
+        matches = re.findall(pattern, text, flags=re.MULTILINE)
+        if len(matches) != 1:
+            raise EvidenceError(
+                f"native-component APKBUILD has no unique literal {field}: {origin}"
+            )
+        return checked_scalar(matches[0], f"native-component APKBUILD {field}")
+
+    return {
+        "origin": one_literal(r"^pkgname=([a-z0-9][a-z0-9+._-]*)$", "pkgname"),
+        "pkgver": one_literal(r"^pkgver=([A-Za-z0-9.+_~-]+)$", "pkgver"),
+        "pkgrel": one_literal(r"^pkgrel=([0-9]+)$", "pkgrel"),
+        "observed_license": one_literal(r'^license="([^"\r\n]+)"$', "license"),
+    }
+
+
+def verify_native_component_recipe(
+    source_id: str, source: Mapping[str, Any], archive: bytes
+) -> None:
+    """Bind one source policy to literal recipe metadata and every upstream distfile."""
+
+    origin = str(source["origin"])
+    checksums, local_sources = recipe_checksums(archive, origin)
+    metadata = native_alpine_recipe_metadata(archive, origin)
+    expected_version = f"{metadata['pkgver']}-r{metadata['pkgrel']}"
+    if (
+        metadata["origin"] != origin
+        or expected_version != source["version"]
+        or metadata["observed_license"] != source["observed_license"]
+    ):
+        raise EvidenceError(f"native-component recipe metadata differs for {source_id}")
+    observed_upstream = {
+        filename: digest for filename, digest in checksums.items() if filename not in local_sources
+    }
+    expected_upstream = {
+        str(record["filename"]): str(record["sha512"]) for record in source["distfiles"]
+    }
+    if observed_upstream != expected_upstream:
+        raise EvidenceError(
+            f"native-component recipe distfiles differ from reviewed policy for {source_id}"
+        )
+
+
+def retain_native_component_notices(
+    archive: bytes,
+    source_id: str,
+    source: Mapping[str, Any],
+    root: Path,
+    *,
+    budget: BundleBudget,
+) -> list[str]:
+    """Retain only exact reviewed notices while validating the whole hostile source tar."""
+
+    expected = {str(record["member"]): record for record in source["notices"]}
+    found: dict[str, bytes] = {}
+    seen_paths: set[str] = set()
+    total = 0
+    try:
+        with tarfile.open(
+            fileobj=io.BytesIO(archive), mode="r:*", tarinfo=BoundedTarInfo
+        ) as tar_source:
+            for count, member in enumerate(tar_source, start=1):
+                if count > MAX_ARCHIVE_MEMBERS:
+                    raise EvidenceError(
+                        f"native-component source has too many entries: {source_id}"
+                    )
+                path = str(checked_path(member.name))
+                if path in seen_paths:
+                    raise EvidenceError(
+                        f"native-component source repeats an archive path: {source_id}/{path}"
+                    )
+                seen_paths.add(path)
+                if member.isdir():
+                    if member.size != 0:
+                        raise EvidenceError(
+                            f"native-component source directory has a payload: {source_id}"
+                        )
+                    continue
+                if member.issym() or member.islnk():
+                    if member.size != 0:
+                        raise EvidenceError(
+                            f"native-component source link has a payload: {source_id}"
+                        )
+                    checked_link_target(member.linkname)
+                    if path in expected:
+                        raise EvidenceError(
+                            f"native-component notice is not a regular file: {source_id}/{path}"
+                        )
+                    continue
+                if not member.isfile():
+                    raise EvidenceError(
+                        f"native-component source has an unsupported entry: {source_id}/{path}"
+                    )
+                if member.size < 0 or member.size > MAX_ARCHIVE_MEMBER_BYTES:
+                    raise EvidenceError(
+                        f"native-component source member exceeds the size limit: {source_id}/{path}"
+                    )
+                total += member.size
+                if total > MAX_ARCHIVE_TOTAL_BYTES:
+                    raise EvidenceError(f"native-component source is too large: {source_id}")
+                if path not in expected:
+                    continue
+                content = read_member(tar_source, member)
+                requirement = expected[path]
+                if (
+                    len(content) != requirement["size"]
+                    or sha256_bytes(content) != requirement["sha256"]
+                ):
+                    raise EvidenceError(
+                        f"native-component notice differs from reviewed policy: {source_id}/{path}"
+                    )
+                found[path] = content
+    except EvidenceError:
+        raise
+    except (tarfile.TarError, RuntimeError, OverflowError, ValueError) as exc:
+        raise EvidenceError(
+            f"invalid native-component source archive for {source_id}: {exc}"
+        ) from exc
+    if set(found) != set(expected):
+        missing = ", ".join(sorted(set(expected) - set(found)))
+        raise EvidenceError(
+            f"native-component source omits reviewed notices: {source_id}: {missing}"
+        )
+
+    component_directory = f"native-{source['origin']}-{source['version']}"
+    written: list[str] = []
+    for notice_member, content in sorted(found.items()):
+        digest = sha256_bytes(content)
+        relative = (
+            f"licenses/from-source/{component_directory}/"
+            f"{digest[:12]}-{PurePosixPath(notice_member).name}"
+        )
+        write_file(root, relative, content, budget=budget)
+        written.append(relative)
+    return written
+
+
 def source_policy_entry(policy: Mapping[str, Any], name: str, version: str) -> dict[str, Any]:
     entries = policy.get("python_sources", [])
     for entry in entries:
@@ -6399,12 +7180,22 @@ def validate_source_policy_coverage(
         raise EvidenceError("Alpine recipe exceptions contain an unused origin")
 
     required_license_texts: set[str] = set()
-    for component in inventory["components"]:
+    reviewed_expressions = [
+        resolved_license(component, policy) for component in inventory["components"]
+    ]
+    validate_native_component_policy_schema(policy)
+    raw_native_coverage = policy["native_component_coverage"]
+    reviewed_expressions.extend(
+        component["reviewed_license"]
+        for platform_records in raw_native_coverage.values()
+        for owner_record in platform_records
+        for sbom in owner_record["sboms"]
+        for component in sbom["components"]
+    )
+    for expression in reviewed_expressions:
         required_license_texts.update(
             token
-            for token in re.findall(
-                r"[A-Za-z0-9][A-Za-z0-9.+-]*", resolved_license(component, policy)
-            )
+            for token in re.findall(r"[A-Za-z0-9][A-Za-z0-9.+-]*", expression)
             if token not in {"AND", "OR", "WITH"} and not token.startswith("LicenseRef-")
         )
     license_texts = policy.get("license_texts")
@@ -6495,8 +7286,10 @@ def write_file(
     content: bytes,
     *,
     budget: BundleBudget | None = None,
+    max_bytes: int | None = None,
 ) -> Path:
-    if len(content) > MAX_ARCHIVE_MEMBER_BYTES:
+    limit = MAX_ARCHIVE_MEMBER_BYTES if max_bytes is None else max_bytes
+    if len(content) > limit:
         raise EvidenceError(f"bundle member exceeds the size limit: {relative}")
     path = checked_path(relative)
     destination = root.joinpath(*path.parts)
@@ -7730,6 +8523,9 @@ def build_bundle(
     lock_sources = parse_lock_sources(lock_path)
     validate_source_policy_coverage(inventory, policy, lock_sources)
     locked_native_wheels = select_locked_native_wheels(lock_path, inventory)
+    native_coverage = verify_native_component_lock_bindings(
+        inventory, policy, locked_native_wheels, lock_sources
+    )
 
     with tempfile.TemporaryDirectory(prefix="extra-codeowners-evidence-") as temporary:
         root = Path(temporary) / "evidence"
@@ -7780,6 +8576,12 @@ def build_bundle(
             )
 
         write_file(root, "inventory/components.json", canonical_json(inventory), budget=budget)
+        write_file(
+            root,
+            "inventory/native-component-coverage.json",
+            canonical_json(native_coverage),
+            budget=budget,
+        )
         write_file(
             root,
             "inventory/all-layer-files.json",
@@ -7922,6 +8724,79 @@ def build_bundle(
                     f"Python source contains no license/notice file: {key[0]} {key[1]}"
                 )
             license_records.extend({"component": component_id, "path": item} for item in found)
+
+        source_policies = native_component_sources(policy)
+        native_components_by_source: dict[str, set[str]] = {}
+        for owner_record in native_coverage["resolved_owners"]:
+            for sbom in owner_record["sboms"]:
+                for component in sbom["components"]:
+                    native_components_by_source.setdefault(component["source"], set()).add(
+                        f"native:{component['purl']}"
+                    )
+        for source_id in sorted(native_components_by_source):
+            native_source = source_policies[source_id]
+            recipe = native_source["recipe"]
+            recipe_download = bounded_fetch(
+                str(recipe["url"]),
+                str(recipe["sha256"]),
+            )
+            if len(recipe_download.content) != recipe["size"]:
+                raise EvidenceError(f"size mismatch for native-component recipe {source_id}")
+            verify_native_component_recipe(source_id, native_source, recipe_download.content)
+            source_directory = f"{native_source['origin']}/{native_source['version']}"
+            recipe_relative = f"sources/native-components/{source_directory}/recipe.tar.gz"
+            write_file(root, recipe_relative, recipe_download.content, budget=budget)
+            source_records.append(
+                source_record(
+                    f"native-source:{source_id}",
+                    recipe_download.urls,
+                    recipe_download.content,
+                    recipe_relative,
+                )
+            )
+            for distfile in native_source["distfiles"]:
+                distfile_download = bounded_fetch(
+                    str(distfile["url"]),
+                    str(distfile["sha512"]),
+                    "sha512",
+                    max_bytes=MAX_NATIVE_COMPONENT_SOURCE_BYTES,
+                )
+                if len(distfile_download.content) != distfile["size"]:
+                    raise EvidenceError(
+                        f"size mismatch for native-component distfile {source_id}/"
+                        f"{distfile['filename']}"
+                    )
+                distfile_relative = (
+                    f"sources/native-components/{source_directory}/distfiles/{distfile['filename']}"
+                )
+                write_file(
+                    root,
+                    distfile_relative,
+                    distfile_download.content,
+                    budget=budget,
+                    max_bytes=MAX_NATIVE_COMPONENT_SOURCE_BYTES,
+                )
+                source_records.append(
+                    source_record(
+                        f"native-source:{source_id}",
+                        distfile_download.urls,
+                        distfile_download.content,
+                        distfile_relative,
+                        sha512=str(distfile["sha512"]),
+                    )
+                )
+                notice_paths = retain_native_component_notices(
+                    distfile_download.content,
+                    source_id,
+                    native_source,
+                    root,
+                    budget=budget,
+                )
+                license_records.extend(
+                    {"component": component_id, "path": notice_path}
+                    for component_id in sorted(native_components_by_source[source_id])
+                    for notice_path in notice_paths
+                )
 
         alpine_components = [
             component for component in inventory["components"] if component["ecosystem"] == "alpine"
@@ -8068,6 +8943,34 @@ def build_bundle(
                 f"{'yes' if component['effective'] else 'no; retained in a lower layer'} | "
                 f"{observed} | {approved} |\n"
             )
+        nested_components = {
+            (
+                component["purl"],
+                component["type"],
+                component["name"],
+                component["version"],
+                component["source"],
+                component["reviewed_license"],
+            )
+            for owner_record in native_coverage["resolved_owners"]
+            for sbom in owner_record["sboms"]
+            for component in sbom["components"]
+        }
+        if nested_components:
+            notices.append("\n## Native wheel components\n\n")
+            notices.append(
+                "These identities come from retained embedded SBOM bytes. The SBOMs did not "
+                "declare license expressions; the reviewed expressions below are project "
+                "policy.\n\n"
+            )
+            notices.append("| Component | Version | Package URL | Source | Observed | Reviewed |\n")
+            notices.append("| --- | --- | --- | --- | --- | --- |\n")
+            for purl, _kind, name, nested_version, source_id, reviewed in sorted(nested_components):
+                notices.append(
+                    f"| {markdown_cell(name)} | {markdown_cell(nested_version)} | "
+                    f"{markdown_cell(purl)} | {markdown_cell(source_id)} | Not declared | "
+                    f"{markdown_cell(reviewed)} |\n"
+                )
         notices.append(
             "\nThe archive includes the standard license texts named above, source-carried "
             "license and notice files, exact source archives, and commit-pinned Alpine "
@@ -8090,6 +8993,7 @@ def build_bundle(
             "policy_sha256": sha256_bytes(canonical_json(policy)),
             "application_artifacts": application_artifacts,
             "native_wheel_artifacts": native_wheel_artifacts,
+            "native_component_coverage": native_coverage,
             "source_completeness": inventory["source_completeness"],
             "source_records": sorted(source_records, key=lambda item: item["path"]),
             "license_records": sorted(
@@ -8167,7 +9071,12 @@ def create_deterministic_tar(root: Path, output: Path, source_date_epoch: int) -
             relative = path.relative_to(root).as_posix()
             info = tarfile.TarInfo(relative)
             size = path.stat().st_size
-            if size > MAX_ARCHIVE_MEMBER_BYTES:
+            limit = (
+                MAX_NATIVE_COMPONENT_SOURCE_BYTES
+                if relative.startswith("sources/native-components/")
+                else MAX_ARCHIVE_MEMBER_BYTES
+            )
+            if size > limit:
                 raise EvidenceError(f"bundle member exceeds the size limit: {relative}")
             info.size = size
             info.mode = 0o644
@@ -8754,6 +9663,17 @@ def command_filesystem_policy_view(args: argparse.Namespace) -> None:
     )
 
 
+def command_native_component_coverage_view(args: argparse.Namespace) -> None:
+    """Emit the validated per-owner native-component closure ledger."""
+
+    inventory = load_json(Path(args.inventory))
+    policy = load_json(Path(args.policy))
+    verify_inventory(inventory, policy, require_approval=False)
+    Path(args.output).write_bytes(
+        canonical_json(native_component_coverage_ledger(inventory, policy))
+    )
+
+
 def command_bundle(args: argparse.Namespace) -> None:
     build_bundle(
         inventory_path=Path(args.inventory),
@@ -8972,6 +9892,15 @@ def parser() -> argparse.ArgumentParser:
     filesystem_policy_view.add_argument("--policy", required=True)
     filesystem_policy_view.add_argument("--output", required=True)
     filesystem_policy_view.set_defaults(function=command_filesystem_policy_view)
+
+    native_coverage_view = subcommands.add_parser(
+        "native-component-coverage-view",
+        help="emit the validated per-owner native-component coverage ledger",
+    )
+    native_coverage_view.add_argument("--inventory", required=True)
+    native_coverage_view.add_argument("--policy", required=True)
+    native_coverage_view.add_argument("--output", required=True)
+    native_coverage_view.set_defaults(function=command_native_component_coverage_view)
 
     bundle = subcommands.add_parser("bundle", help="collect and archive exact source evidence")
     bundle.add_argument("--inventory", required=True)
