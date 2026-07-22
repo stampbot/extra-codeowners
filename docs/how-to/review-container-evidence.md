@@ -18,8 +18,8 @@ or release authority from running.
 
 Four open issues define the remaining boundary:
 
-- [#18](https://github.com/stampbot/extra-codeowners/issues/18) covers the
-  native-wheel and embedded-SBOM source-completeness gap.
+- [#18](https://github.com/stampbot/extra-codeowners/issues/18) covers the six
+  native-wheel owners that remain after Greenlet's closed-world coverage.
 - [#28](https://github.com/stampbot/extra-codeowners/issues/28) covers the
   privilege-separated release pipeline and bounded recipient verifier.
 - [#32](https://github.com/stampbot/extra-codeowners/issues/32) covers retaining
@@ -670,6 +670,22 @@ for architecture in amd64 arm64; do
   LC_ALL=C sed -n 'l' \
     "$DIFF_ROOT/${architecture}-structured-wheel-payloads.json"
 
+  "$TRUSTED_ROOT/.venv/bin/python" \
+    "$TRUSTED_ROOT/.github/scripts/container_evidence.py" \
+    native-component-coverage-view \
+    --inventory "$inventory" \
+    --policy "$POLICY" \
+    --output "$DIFF_ROOT/${architecture}-native-component-coverage.json"
+  jq -e --arg platform "$platform" '
+      .schema_version == 5
+      and .platform == $platform
+      and .complete == false
+      and ([.resolved_owners[].owner] == ["python:greenlet@3.5.3"])
+      and (.unresolved_owners | length == 6)
+    ' "$DIFF_ROOT/${architecture}-native-component-coverage.json" >/dev/null
+  LC_ALL=C sed -n 'l' \
+    "$DIFF_ROOT/${architecture}-native-component-coverage.json"
+
   jq -e --ascii-output --sort-keys --arg platform "$platform" \
     '.filesystem_baselines[$platform].apk_database_occurrences' "$POLICY" \
     > "$DIFF_ROOT/${architecture}-expected-apk-databases.json"
@@ -709,13 +725,13 @@ done
 ```
 
 No diff output means the exact ordered base diff IDs, top-level components,
-known wheel surfaces, APK database history, and canonical post-base directory
+raw wheel surfaces, APK database history, and canonical post-base directory
 effects and removals match reviewed policy. Review the printed structured wheel
-payloads and CPython runtime record as well. The CPython record must bind the
-expected version header, interpreter link, interpreter, and shared library from
-one reviewed base layer. Each embedded SBOM and native payload must name the
-expected wheel owner, and its CycloneDX or ELF identity must agree with the
-upstream component and selected architecture.
+payloads, coverage ledger, and CPython runtime record as well. The CPython
+record must bind the expected version header, interpreter link, interpreter,
+and shared library from one reviewed base layer. Each embedded SBOM and native
+payload must name the expected wheel owner, and its CycloneDX or ELF identity
+must agree with the upstream component and selected architecture.
 
 The filesystem projection validates all raw headers but omits only
 exporter-specific directory re-emissions and whiteout marker attributes that do
@@ -738,6 +754,16 @@ Review source policy with these precise boundaries:
 - Alpine policy pins every `ORIGIN@APORTS_COMMIT`, recipe-subtree hash, verified
   `sha512sums` input, and any narrow parser exception; never execute an
   `APKBUILD`
+- native-component coverage must reproduce the resolved owner's complete
+  native path-and-digest set, use the role derived from each path, and keep the
+  same derived role set across platforms. A role cannot be moved between
+  payload records. Coverage must also reproduce every embedded-SBOM component
+  and bind the wheel and owner sdist to `uv.lock`. Component records must not
+  contain payload fields: the SBOM provides no file, hash, or SONAME
+  relationship. One package URL cannot acquire a different identity, source,
+  or reviewed license in another owner or SBOM. The Greenlet record separately
+  pins the Alpine 3.22 GCC recipe, distfile, and source-carried notices reviewed
+  for the SBOM's `libgcc` and `libstdc++` identities
 - Docker Official Python policy pins the multi-platform index, exact ordered
   base diff IDs, recipe, recipe license, CPython source archive, and exact
   source-carried `LICENSE` and `Include/patchlevel.h`; the source version and
@@ -747,8 +773,9 @@ Review source policy with these precise boundaries:
 - application evidence is built from every tracked regular Git blob and its
   executable mode at `HEAD`, using recursive `git ls-tree -rz` and `git show`;
   it is not a mutable working-tree copy and is not described as `git archive`
-- every `LicenseRef-*` must name exactly the covered components and pin the
-  source-carried notice path and digest for each one.
+- every top-level `LicenseRef-*` must name exactly the covered components and
+  pin the source-carried notice path and digest for each one; schema 5 rejects
+  `LicenseRef-*` in nested native-component expressions.
 
 The nested evidence tar is checksum-bound by the predicate and sidecar, but the
 current repository does not ship the bounded verifier required to inspect that
@@ -764,13 +791,14 @@ Both component inventories must contain exactly:
 ```json
 {
   "complete": false,
-  "reason": "Native wheel payload and embedded-SBOM component/source expansion remain open in issue #18; public distribution remains blocked pending issue #28."
+  "reason": "Six native-wheel owners still lack closed-world component/source coverage in issue #18; public distribution remains blocked pending issue #28."
 }
 ```
 
-Do not weaken or remove that state. Issue #18 must close the remaining gap by
-expanding native wheel payloads and embedded SBOMs into components, notices,
-and corresponding sources.
+Do not weaken or remove that state. The coverage ledger must resolve Greenlet
+on both platforms, list the other six owners as unresolved, and remain
+`complete: false`. Issue #18 must close those remaining records with the same
+payload, component, notice, and corresponding-source evidence.
 
 CPython is no longer part of the incomplete status. The trusted helper requires
 one effective top-level CPython component per platform, binds its four runtime
@@ -779,6 +807,14 @@ the pinned recipe, source archive, source-carried version header, and license
 evidence. That closes the CPython tranche without making the entire image
 source-complete.
 
+Greenlet is also no longer part of the incomplete status. Its resolved ledger
+record binds the exact platform wheel and owner sdist, records all five native
+payloads as one owner-level set, reproduces both nested SBOM component
+identities, and pins the GCC recipe, source archive, and reviewed notices. This
+proves exact co-membership in the wheel, not a component-to-file mapping. Treat
+a missing Greenlet record or any additional resolved owner as policy drift that
+requires a separate review.
+
 The trusted helper has already validated `wheel_installations` against
 the all-layer file inventory. It requires every historical installation to bind
 its canonical owner, METADATA, WHEEL, RECORD, tags, purelib state, and normalized
@@ -786,10 +822,11 @@ owned occurrences. It also preserves the effective-only
 `python_record_ownership` projection. Do not treat that attribution evidence as
 component expansion or corresponding-source delivery.
 
-Current path/hash baselines make those incomplete surfaces visible; they do
-not satisfy source delivery. The separate raw `wheel_identity_files` inventory
-also retains base-image WHEEL and RECORD occurrences outside `/opt/venv`; those
-records have no runtime virtual-environment installation to replay.
+Raw path/hash baselines make every surface visible. The separate coverage
+ledger says which owners have corresponding-source closure; a raw baseline by
+itself does not satisfy source delivery. `wheel_identity_files` also retains
+base-image WHEEL and RECORD occurrences outside `/opt/venv`; those records have
+no runtime virtual-environment installation to replay.
 
 ## 6. Run the repository gates
 
