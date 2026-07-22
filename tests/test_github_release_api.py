@@ -509,10 +509,10 @@ def test_upload_streams_exact_chunks_without_path_seek_or_descriptor_ownership(
         "https://evil.example/repos/stampbot/extra-codeowners/releases/77/assets{?name,label}",
         "https://uploads.github.com/repos/stampbot/other/releases/77/assets{?name,label}",
         "https://uploads.github.com/repos/stampbot/extra-codeowners/releases/78/assets"
-        "{?name,label}",
+        + "{?name,label}",
         "https://uploads.github.com/repos/stampbot/extra-codeowners/releases/77/assets",
         "https://uploads.github.com/repos/stampbot/extra-codeowners/releases/77/assets"
-        "{?name,label}&name=second",
+        + "{?name,label}&name=second",
     ],
 )
 def test_upload_accepts_only_the_exact_trusted_template(
