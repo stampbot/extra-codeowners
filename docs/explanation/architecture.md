@@ -287,8 +287,10 @@ flowchart LR
 The current container evidence binds CPython's top-level identity to exact
 runtime files and retains its pinned recipe, source archive, and source-carried
 license. It also replays historical Python installs from each layer's `RECORD`.
-Native wheel payloads and embedded SBOMs are not yet expanded into complete
-component, notice, and source records.
+Greenlet now has closed-world coverage on both architectures: exact wheel and
+sdist identity, complete native-file ownership, embedded-component identity,
+Alpine GCC source, and reviewed notices. Six other native-wheel owners still
+need complete component, notice, and source records.
 
 The tagged workflow contains intended image, chart, Python, SBOM, provenance,
 signature, and GitHub-release jobs. An unconditional blocker keeps every
