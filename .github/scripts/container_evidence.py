@@ -77,7 +77,7 @@ EXPECTED_UV_VERSION = "0.11.28"
 APPLICATION_WHEEL_LABEL = "org.stampbot.extra-codeowners.application-wheel.sha256"
 APPLICATION_SELECTION_LABEL = "org.stampbot.extra-codeowners.python-selection-record.sha256"
 SOURCE_COMPLETENESS_REASON = (
-    "Five native-wheel owners still lack closed-world component/source coverage in issue #18; "
+    "Four native-wheel owners still lack closed-world component/source coverage in issue #18; "
     "public distribution remains blocked pending issue #28."
 )
 MAX_DOWNLOAD_BYTES = 64 * 1024 * 1024
