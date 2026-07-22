@@ -46,9 +46,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Rel
 - A reusable, manually runnable Python distribution proof shared by CI and the
   read-only tagged candidate scan.
 - A non-root container, Helm chart source, and supply-chain workflows.
-- Schema-v3 container evidence that normalizes CPython and binds its exact
-  runtime identity, recipe-selected source, and source-carried license while
-  leaving native-wheel and embedded-SBOM source completeness explicitly false.
+- Schema-v4 container evidence that binds CPython runtime and source identities,
+  retains each exact locked native wheel and its raw embedded SBOMs, and keeps
+  source completeness explicitly false until nested component and source
+  expansion is finished.
 - Diátaxis documentation, a threat model, operating guides, and Read the Docs configuration.
 - Bounded pull-request and scheduled property tests for untrusted parsing and policy inputs.
 

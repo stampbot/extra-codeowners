@@ -5,9 +5,9 @@ This directory contains the reviewed input to the container evidence collector.
 license, Alpine origin commit, Python source archive, base image, or license-text
 change requires a reviewed policy update.
 
-The policy and generated JSON records use schema version `3`. Evidence
+The policy and generated JSON records use schema version `4`. Evidence
 predicates use media type
-`application/vnd.stampbot.container-evidence.v3+tar+gzip`; earlier or unknown
+`application/vnd.stampbot.container-evidence.v4+tar+gzip`; earlier or unknown
 versions fail closed.
 
 Raw layer headers remain in the generated all-layer inventory. Filesystem
@@ -22,12 +22,12 @@ CPython into the top-level component inventory and binds that record to exact
 version-header, interpreter-link, interpreter, and shared-library identities.
 The bundle also retains the pinned Docker Official Python recipe, exact CPython
 source archive, and source-carried `LICENSE` bytes. The source and image
-`patchlevel.h` digests must agree. It does not yet expand native wheel and
-embedded-SBOM components into complete notice and corresponding-source
-coverage. It also replays `RECORD` ownership for ineffective historical Python
-installs, but attribution alone does not supply that missing component and
-source closure. The inventory and manifest therefore mark source completeness
-`false` solely for the remaining native-wheel and embedded-SBOM expansion.
+`patchlevel.h` digests must agree. For each wheel that owns a native payload or
+embedded SBOM, the bundle retains the exact locked platform wheel and a separate
+copy of every raw SBOM. It still does not expand the components inside those
+files into complete notice and corresponding-source coverage. The inventory
+and manifest therefore keep source completeness `false` for that remaining
+work.
 
 Do not set `distribution_approval.approved` to `true` while that status remains
 false. Normal inventory verification does not treat that policy field as a

@@ -596,6 +596,244 @@ def source_zip_bytes(
     return output.getvalue()
 
 
+def native_wheel_case(
+    *,
+    component_name: str = "demo",
+    version: str = "1.0",
+    platform: str = "linux/amd64",
+    tag: str | None = None,
+    build: str = "",
+    include_header_relocation: bool = False,
+    include_console_script: bool = False,
+    entry_points: bytes | None = None,
+    native_archive_path: str | None = None,
+) -> tuple[dict[str, Any], dict[str, Any], bytes]:
+    """Build one exact native-wheel/archive/installed-RECORD test contract."""
+
+    architecture = {"linux/amd64": "x86_64", "linux/arm64": "aarch64"}[platform]
+    selected_tag = tag or f"cp314-cp314-musllinux_1_2_{architecture}"
+    normalized_name = component_name.replace("-", "_")
+    normalized_version = version.replace("-", "_")
+    distribution = f"{normalized_name}-{normalized_version}"
+    dist_info = f"{distribution}.dist-info"
+    site_root = PurePosixPath("opt/venv/lib/python3.14/site-packages")
+    metadata_path = f"{dist_info}/METADATA"
+    wheel_path = f"{dist_info}/WHEEL"
+    record_path = f"{dist_info}/RECORD"
+    sbom_path = f"{dist_info}/sboms/auditwheel.cdx.json"
+    native_path = native_archive_path or f"{normalized_name}/native.so"
+    wheel_metadata = (
+        "Wheel-Version: 1.0\n"
+        "Root-Is-Purelib: false\n"
+        f"{'Build: ' + build + chr(10) if build else ''}"
+        f"Tag: {selected_tag}\n"
+    ).encode()
+    archive_files = {
+        metadata_path: metadata(component_name, version),
+        wheel_path: wheel_metadata,
+        sbom_path: cyclonedx_sbom(),
+        native_path: elf64_payload("amd64" if platform == "linux/amd64" else "arm64"),
+    }
+    if include_header_relocation:
+        archive_files[f"{distribution}.data/headers/greenlet.h"] = b"header\n"
+    entry_points_path = f"{dist_info}/entry_points.txt"
+    if include_console_script and entry_points is not None:
+        raise AssertionError("native-wheel fixture received two entry-point sources")
+    if include_console_script:
+        entry_points = b"[console_scripts]\ncffi-gen-src = demo.module:main\n"
+    if entry_points is not None:
+        archive_files[entry_points_path] = entry_points
+    archive_files[record_path] = wheel_record(archive_files, record_path)
+    wheel_content = source_zip_bytes(list(archive_files.items()))
+
+    data_directory = f"{distribution}.data"
+    installed_files: dict[str, bytes] = {}
+    archive_to_installed: dict[str, str] = {}
+    for archive_path, payload in archive_files.items():
+        installed_path = evidence.wheel_member_install_path(
+            archive_path,
+            site_root,
+            data_directory=data_directory,
+            component_name=component_name,
+        )
+        archive_to_installed[archive_path] = installed_path
+        installed_files[installed_path] = payload
+    generated: dict[str, bytes] = {}
+    for generated_path, script in evidence.console_script_installations(
+        archive_files, entry_points_path
+    ).items():
+        generated[generated_path] = evidence.expected_native_launcher(
+            script["module"], script["callable"], interpreter_name="python"
+        )
+    installed_files.update(generated)
+
+    def occurrence(path: str, payload: bytes) -> dict[str, Any]:
+        return {
+            "effective": True,
+            "layer": 1,
+            "path": path,
+            "sha256": evidence.sha256_bytes(payload),
+            "size": len(payload),
+            "mode": 0o755 if path.startswith("opt/venv/bin/") else 0o644,
+            "uid": 0,
+            "gid": 0,
+        }
+
+    installed_record_content = (
+        b"installer-generated RECORD\n"
+        if entry_points is not None or include_header_relocation
+        else archive_files[record_path]
+    )
+    installed_files[archive_to_installed[record_path]] = installed_record_content
+    entries: list[dict[str, Any]] = []
+    for path, payload in sorted(installed_files.items()):
+        is_record = path == archive_to_installed[record_path]
+        entries.append(
+            {
+                "path": path,
+                "recorded_sha256": None if is_record else evidence.sha256_bytes(payload),
+                "recorded_size": None if is_record else len(payload),
+                "occurrence": occurrence(path, payload),
+            }
+        )
+    by_path = {entry["path"]: entry["occurrence"] for entry in entries}
+    owner = f"python:{component_name}@{version}"
+    installed_sbom_path = archive_to_installed[sbom_path]
+    installed_native_path = archive_to_installed[native_path]
+    installation = {
+        "owner": owner,
+        "metadata": by_path[archive_to_installed[metadata_path]],
+        "wheel": by_path[archive_to_installed[wheel_path]],
+        "record": by_path[archive_to_installed[record_path]],
+        "root_is_purelib": False,
+        "build": build,
+        "tags": [selected_tag],
+        "entries": entries,
+    }
+    inventory = {
+        "platform": platform,
+        "components": [
+            {
+                "ecosystem": "python",
+                "name": component_name,
+                "version": version,
+            }
+        ],
+        "wheel_installations": [installation],
+        "embedded_sboms": [
+            {
+                **by_path[installed_sbom_path],
+                "owner": owner,
+                "cyclonedx": {},
+            }
+        ],
+        "native_payloads": [
+            {
+                **by_path[installed_native_path],
+                "owner": owner,
+                "elf": {},
+            }
+        ],
+    }
+    build_segment = f"-{build}" if build else ""
+    filename = f"{distribution}{build_segment}-{selected_tag}.whl"
+    locked = {
+        "owner": owner,
+        "platform": platform,
+        "url": f"https://files.pythonhosted.org/packages/aa/{filename}",
+        "sha256": evidence.sha256_bytes(wheel_content),
+        "size": len(wheel_content),
+        "filename": filename,
+        "build": build,
+        "tags": [selected_tag],
+    }
+    return inventory, locked, wheel_content
+
+
+def native_wheel_lock_record(locked: dict[str, Any], *extra_filenames: str) -> str:
+    """Return a minimal uv.lock package record around one selected-wheel fixture."""
+
+    owner = locked["owner"].removeprefix("python:")
+    name, version = owner.rsplit("@", maxsplit=1)
+    wheels = [locked["filename"], *extra_filenames]
+    records = []
+    for index, filename in enumerate(wheels):
+        digest = locked["sha256"] if index == 0 else f"{index:064x}"
+        size = locked["size"] if index == 0 else 1
+        records.append(
+            '    { url = "https://files.pythonhosted.org/packages/aa/'
+            f'{filename}", hash = "sha256:{digest}", size = {size} }},'
+        )
+    return (
+        "version = 1\nrevision = 3\n"
+        "[[package]]\n"
+        f'name = "{name}"\nversion = "{version}"\n'
+        "wheels = [\n" + "\n".join(records) + "\n]\n"
+    )
+
+
+def rewrite_native_wheel(
+    content: bytes,
+    *,
+    replacements: dict[str, bytes] | None = None,
+    removals: set[str] | None = None,
+    additions: dict[str, bytes] | None = None,
+) -> bytes:
+    """Rewrite a fixture wheel and regenerate its authoritative archive RECORD."""
+
+    with zipfile.ZipFile(io.BytesIO(content), mode="r") as archive:
+        files = {
+            item.filename: archive.read(item) for item in archive.infolist() if not item.is_dir()
+        }
+    record_paths = [path for path in files if path.endswith(".dist-info/RECORD")]
+    assert len(record_paths) == 1
+    record_path = record_paths[0]
+    files.pop(record_path)
+    for path in removals or set():
+        files.pop(path)
+    files.update(replacements or {})
+    files.update(additions or {})
+    files[record_path] = wheel_record(files, record_path)
+    return source_zip_bytes(list(files.items()))
+
+
+def replace_native_wheel_record(content: bytes, record: bytes) -> bytes:
+    """Replace archive RECORD bytes without repairing any claimed identities."""
+
+    with zipfile.ZipFile(io.BytesIO(content), mode="r") as archive:
+        files = {
+            item.filename: archive.read(item) for item in archive.infolist() if not item.is_dir()
+        }
+    record_paths = [path for path in files if path.endswith(".dist-info/RECORD")]
+    assert len(record_paths) == 1
+    files[record_paths[0]] = record
+    return source_zip_bytes(list(files.items()))
+
+
+def rebind_installed_wheel_member(
+    inventory: dict[str, Any], installed_path: str, payload: bytes
+) -> None:
+    """Rebind a synthetic installed member while preserving its semantic contract."""
+
+    installation = inventory["wheel_installations"][0]
+    entry = next(item for item in installation["entries"] if item["path"] == installed_path)
+    occurrence = entry["occurrence"]
+    occurrence["sha256"] = evidence.sha256_bytes(payload)
+    occurrence["size"] = len(payload)
+    entry["recorded_sha256"] = occurrence["sha256"]
+    entry["recorded_size"] = occurrence["size"]
+    identity_field = PurePosixPath(installed_path).name.lower()
+    assert identity_field in {"metadata", "wheel"}
+    installation[identity_field] = copy.deepcopy(occurrence)
+
+
+def locked_for_content(locked: dict[str, Any], content: bytes) -> dict[str, Any]:
+    result = copy.deepcopy(locked)
+    result["sha256"] = evidence.sha256_bytes(content)
+    result["size"] = len(content)
+    return result
+
+
 @pytest.mark.parametrize(
     "path",
     [
@@ -675,13 +913,13 @@ def test_strict_json_rejects_lone_unicode_surrogates() -> None:
         evidence.canonical_json({"value": "\ud800"})
 
 
-def test_schema_version_requires_exact_v3_integer_and_media_type() -> None:
-    evidence.require_schema({"schema_version": 3}, "test")
-    for unsupported in (True, 1, 2, 4):
+def test_schema_version_requires_exact_v4_integer_and_media_type() -> None:
+    evidence.require_schema({"schema_version": 4}, "test")
+    for unsupported in (True, 1, 2, 3, 5):
         with pytest.raises(evidence.EvidenceError, match="unsupported test schema"):
             evidence.require_schema({"schema_version": unsupported}, "test")
     assert evidence.EVIDENCE_MEDIA_TYPE == (
-        "application/vnd.stampbot.container-evidence.v3+tar+gzip"
+        "application/vnd.stampbot.container-evidence.v4+tar+gzip"
     )
 
 
@@ -1646,6 +1884,843 @@ def test_lock_sources_reject_duplicate_normalized_name_and_version(tmp_path: Pat
 
     with pytest.raises(evidence.EvidenceError, match="repeats Python source"):
         evidence.parse_lock_sources(lock)
+
+
+def test_native_wheel_selection_uses_exact_installed_abi_build_and_platform(
+    tmp_path: Path,
+) -> None:
+    inventory, locked, _content = native_wheel_case(
+        component_name="cryptography",
+        version="48.0.1",
+        tag="cp311-abi3-musllinux_1_2_x86_64",
+        build="1",
+    )
+    lock = tmp_path / "uv.lock"
+    lock.write_text(
+        native_wheel_lock_record(
+            locked,
+            "cryptography-48.0.1-cp39-abi3-musllinux_1_2_x86_64.whl",
+            "cryptography-48.0.1-cp314t-cp314t-musllinux_1_2_x86_64.whl",
+            "cryptography-48.0.1-cp311-abi3-musllinux_1_2_aarch64.whl",
+            "cryptography-48.0.1-2-cp311-abi3-musllinux_1_2_x86_64.whl",
+        )
+    )
+
+    assert evidence.select_locked_native_wheels(lock, inventory) == [locked]
+
+
+def test_native_wheel_selection_and_verification_preserve_leading_zero_build(
+    tmp_path: Path,
+) -> None:
+    inventory, locked, content = native_wheel_case(build="001alpha")
+    lock = tmp_path / "uv.lock"
+    lock.write_text(
+        native_wheel_lock_record(
+            locked,
+            locked["filename"].replace("-001alpha-", "-1alpha-"),
+        )
+    )
+
+    assert evidence.select_locked_native_wheels(lock, inventory) == [locked]
+    record, _raw_sboms = evidence.verify_native_wheel_artifact(inventory, locked, content)
+    assert record["build"] == "001alpha"
+
+
+def test_committed_lock_selects_exact_seven_native_owner_wheels() -> None:
+    matrix = {
+        "linux/amd64": {
+            "python:cffi@2.1.0": (
+                "cffi-2.1.0-cp314-cp314-musllinux_1_2_x86_64.whl",
+                "cp314-cp314-musllinux_1_2_x86_64",
+            ),
+            "python:cryptography@48.0.1": (
+                "cryptography-48.0.1-cp311-abi3-musllinux_1_2_x86_64.whl",
+                "cp311-abi3-musllinux_1_2_x86_64",
+            ),
+            "python:greenlet@3.5.3": (
+                "greenlet-3.5.3-cp314-cp314-musllinux_1_2_x86_64.whl",
+                "cp314-cp314-musllinux_1_2_x86_64",
+            ),
+            "python:markupsafe@3.0.3": (
+                "markupsafe-3.0.3-cp314-cp314-musllinux_1_2_x86_64.whl",
+                "cp314-cp314-musllinux_1_2_x86_64",
+            ),
+            "python:psycopg-binary@3.3.4": (
+                "psycopg_binary-3.3.4-cp314-cp314-musllinux_1_2_x86_64.whl",
+                "cp314-cp314-musllinux_1_2_x86_64",
+            ),
+            "python:pydantic-core@2.46.4": (
+                "pydantic_core-2.46.4-cp314-cp314-musllinux_1_1_x86_64.whl",
+                "cp314-cp314-musllinux_1_1_x86_64",
+            ),
+            "python:sqlalchemy@2.0.51": (
+                "sqlalchemy-2.0.51-cp314-cp314-musllinux_1_2_x86_64.whl",
+                "cp314-cp314-musllinux_1_2_x86_64",
+            ),
+        },
+        "linux/arm64": {
+            "python:cffi@2.1.0": (
+                "cffi-2.1.0-cp314-cp314-musllinux_1_2_aarch64.whl",
+                "cp314-cp314-musllinux_1_2_aarch64",
+            ),
+            "python:cryptography@48.0.1": (
+                "cryptography-48.0.1-cp311-abi3-musllinux_1_2_aarch64.whl",
+                "cp311-abi3-musllinux_1_2_aarch64",
+            ),
+            "python:greenlet@3.5.3": (
+                "greenlet-3.5.3-cp314-cp314-musllinux_1_2_aarch64.whl",
+                "cp314-cp314-musllinux_1_2_aarch64",
+            ),
+            "python:markupsafe@3.0.3": (
+                "markupsafe-3.0.3-cp314-cp314-musllinux_1_2_aarch64.whl",
+                "cp314-cp314-musllinux_1_2_aarch64",
+            ),
+            "python:psycopg-binary@3.3.4": (
+                "psycopg_binary-3.3.4-cp314-cp314-musllinux_1_2_aarch64.whl",
+                "cp314-cp314-musllinux_1_2_aarch64",
+            ),
+            "python:pydantic-core@2.46.4": (
+                "pydantic_core-2.46.4-cp314-cp314-musllinux_1_1_aarch64.whl",
+                "cp314-cp314-musllinux_1_1_aarch64",
+            ),
+            "python:sqlalchemy@2.0.51": (
+                "sqlalchemy-2.0.51-cp314-cp314-musllinux_1_2_aarch64.whl",
+                "cp314-cp314-musllinux_1_2_aarch64",
+            ),
+        },
+    }
+
+    for platform, expected in matrix.items():
+        inventory: dict[str, Any] = {
+            "platform": platform,
+            "components": [],
+            "wheel_installations": [],
+            "embedded_sboms": [],
+            "native_payloads": [],
+        }
+        for index, (owner, (_filename, tag)) in enumerate(reversed(expected.items())):
+            name, version = owner.removeprefix("python:").rsplit("@", maxsplit=1)
+            inventory["components"].append(
+                {"ecosystem": "python", "name": name, "version": version}
+            )
+            inventory["wheel_installations"].append({"owner": owner, "tags": [tag], "build": ""})
+            inventory["native_payloads"].append(
+                {"owner": owner, "path": f"opt/venv/native/{index}.so"}
+            )
+
+        selected = evidence.select_locked_native_wheels(Path("uv.lock"), inventory)
+
+        assert [(record["owner"], record["filename"], record["tags"]) for record in selected] == [
+            (owner, filename, [tag]) for owner, (filename, tag) in sorted(expected.items())
+        ]
+
+
+@pytest.mark.parametrize(
+    "tag",
+    [
+        "cp314t-cp314t-musllinux_1_2_x86_64",
+        "cp315-cp315-musllinux_1_2_x86_64",
+        "cp314-cp314-manylinux_2_17_x86_64",
+        "cp314-cp314-musllinux_2_0_x86_64",
+        "cp314-cp314-musllinux_0_999_x86_64",
+        "cp314-cp314-musllinux_1_2_aarch64",
+    ],
+)
+def test_native_wheel_selection_rejects_incompatible_tags(tag: str, tmp_path: Path) -> None:
+    inventory, locked, _content = native_wheel_case(tag=tag)
+    lock = tmp_path / "uv.lock"
+    lock.write_text(native_wheel_lock_record(locked))
+
+    with pytest.raises(evidence.EvidenceError, match="found 0"):
+        evidence.select_locked_native_wheels(lock, inventory)
+
+
+def test_native_wheel_selection_rejects_zero_multiple_and_repeated_installations(
+    tmp_path: Path,
+) -> None:
+    inventory, locked, _content = native_wheel_case()
+    lock = tmp_path / "uv.lock"
+    wrong_filename = locked["filename"].replace("cp314-cp314", "cp314t-cp314t")
+    lock.write_text(native_wheel_lock_record(locked).replace(locked["filename"], wrong_filename))
+    with pytest.raises(evidence.EvidenceError, match="found 0"):
+        evidence.select_locked_native_wheels(lock, inventory)
+
+    lock.write_text(native_wheel_lock_record(locked, locked["filename"]))
+    with pytest.raises(evidence.EvidenceError, match="found 2"):
+        evidence.select_locked_native_wheels(lock, inventory)
+
+    repeated = copy.deepcopy(inventory)
+    repeated["wheel_installations"].append(copy.deepcopy(repeated["wheel_installations"][0]))
+    with pytest.raises(evidence.EvidenceError, match="exactly one historical installation"):
+        evidence.select_locked_native_wheels(lock, repeated)
+
+    with pytest.raises(evidence.EvidenceError, match="exactly one historical installation"):
+        evidence.verify_native_wheel_artifact(repeated, locked, _content)
+
+
+def test_native_wheel_selection_rejects_duplicate_packages_and_malformed_wheel_records(
+    tmp_path: Path,
+) -> None:
+    inventory, locked, _content = native_wheel_case()
+    lock_record = native_wheel_lock_record(locked)
+    package_record = lock_record[lock_record.index("[[package]]") :]
+    lock = tmp_path / "uv.lock"
+    lock.write_text(f"{lock_record}\n{package_record}")
+    with pytest.raises(evidence.EvidenceError, match="exactly one native-wheel package"):
+        evidence.select_locked_native_wheels(lock, inventory)
+
+    malformed = lock_record.replace(
+        "wheels = [\n",
+        'wheels = [\n    { url = "https://files.pythonhosted.org/bad.whl", '
+        f'hash = "sha256:{"0" * 64}" }},\n',
+    )
+    lock.write_text(malformed)
+    with pytest.raises(evidence.EvidenceError, match="invalid record"):
+        evidence.select_locked_native_wheels(lock, inventory)
+
+
+def test_native_wheel_verifier_binds_full_record_payloads_and_raw_sbom() -> None:
+    inventory, locked, content = native_wheel_case()
+
+    record, raw_sboms = evidence.verify_native_wheel_artifact(inventory, locked, content)
+
+    assert record == {
+        "owner": "python:demo@1.0",
+        "platform": "linux/amd64",
+        "url": locked["url"],
+        "filename": locked["filename"],
+        "size": len(content),
+        "sha256": evidence.sha256_bytes(content),
+        "build": "",
+        "tags": ["cp314-cp314-musllinux_1_2_x86_64"],
+        "generated_files": [],
+    }
+    assert len(raw_sboms) == 1
+    raw_record, raw_content = raw_sboms[0]
+    installed_sbom = inventory["embedded_sboms"][0]
+    assert raw_content == cyclonedx_sbom()
+    assert raw_record["owner"] == "python:demo@1.0"
+    assert raw_record["archive_path"].endswith(".dist-info/sboms/auditwheel.cdx.json")
+    assert raw_record["installed_occurrence"] == evidence.payload_record_projection(installed_sbom)
+    assert raw_record["sha256"] == evidence.sha256_bytes(raw_content)
+    assert raw_record["size"] == len(raw_content)
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        ("semantic-tamper", "installed occurrence"),
+        ("missing", "different member sets"),
+        ("extra", "different member sets"),
+    ],
+)
+def test_native_wheel_verifier_rejects_raw_sbom_drift_with_regenerated_record(
+    mutation: str, message: str
+) -> None:
+    inventory, locked, content = native_wheel_case()
+    sbom_path = "demo-1.0.dist-info/sboms/auditwheel.cdx.json"
+    if mutation == "semantic-tamper":
+        semantically_equivalent = json.dumps(
+            json.loads(cyclonedx_sbom()), indent=2, sort_keys=True
+        ).encode()
+        assert json.loads(semantically_equivalent) == json.loads(cyclonedx_sbom())
+        assert semantically_equivalent != cyclonedx_sbom()
+        changed = rewrite_native_wheel(content, replacements={sbom_path: semantically_equivalent})
+    elif mutation == "missing":
+        changed = rewrite_native_wheel(content, removals={sbom_path})
+    else:
+        changed = rewrite_native_wheel(
+            content,
+            additions={"demo-1.0.dist-info/sboms/second.cdx.json": cyclonedx_sbom()},
+        )
+
+    with pytest.raises(evidence.EvidenceError, match=message):
+        evidence.verify_native_wheel_artifact(
+            inventory,
+            locked_for_content(locked, changed),
+            changed,
+        )
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        ("malformed", "RECORD row 1 has 1 fields"),
+        ("self-hashed", "RECORD self-entry must be blank"),
+        ("wrong-digest", "RECORD disagrees with member"),
+        ("missing-row", "RECORD does not exactly cover archive members"),
+        ("extra-row", "RECORD does not exactly cover archive members"),
+    ],
+)
+def test_native_wheel_verifier_rejects_hostile_archive_record(mutation: str, message: str) -> None:
+    inventory, locked, content = native_wheel_case()
+    with zipfile.ZipFile(io.BytesIO(content), mode="r") as archive:
+        record_path = "demo-1.0.dist-info/RECORD"
+        rows = archive.read(record_path).decode().splitlines(keepends=True)
+    zero_digest = base64.urlsafe_b64encode(bytes(32)).rstrip(b"=").decode()
+    if mutation == "malformed":
+        record = b"not-a-csv-row\n"
+    elif mutation == "self-hashed":
+        record = "".join(
+            f"{record_path},sha256={zero_digest},0\n" if row.startswith(f"{record_path},") else row
+            for row in rows
+        ).encode()
+    elif mutation == "wrong-digest":
+        record = "".join(
+            f"demo/native.so,sha256={zero_digest},{len(elf64_payload('amd64'))}\n"
+            if row.startswith("demo/native.so,")
+            else row
+            for row in rows
+        ).encode()
+    elif mutation == "missing-row":
+        record = "".join(row for row in rows if not row.startswith("demo/native.so,")).encode()
+    else:
+        record = (
+            "".join(rows[:-1]) + f"demo/ghost.so,sha256={zero_digest},0\n" + rows[-1]
+        ).encode()
+    changed = replace_native_wheel_record(content, record)
+
+    with pytest.raises(evidence.EvidenceError, match=message):
+        evidence.verify_native_wheel_artifact(
+            inventory,
+            locked_for_content(locked, changed),
+            changed,
+        )
+
+
+def test_native_wheel_verifier_detects_extensionless_elf_payloads() -> None:
+    inventory, locked, content = native_wheel_case(native_archive_path="demo/native_binary")
+
+    evidence.verify_native_wheel_artifact(inventory, locked, content)
+
+
+def test_native_wheel_verifier_accepts_pure_sbom_only_owner() -> None:
+    inventory, locked, content = native_wheel_case()
+    wheel_path = "demo-1.0.dist-info/WHEEL"
+    installed_wheel_path = f"opt/venv/lib/python3.14/site-packages/{wheel_path}"
+    native_path = "opt/venv/lib/python3.14/site-packages/demo/native.so"
+    pure_wheel = (
+        b"Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: cp314-cp314-musllinux_1_2_x86_64\n"
+    )
+    changed = rewrite_native_wheel(
+        content,
+        replacements={wheel_path: pure_wheel},
+        removals={"demo/native.so"},
+    )
+    pure_inventory = copy.deepcopy(inventory)
+    pure_inventory["native_payloads"] = []
+    installation = pure_inventory["wheel_installations"][0]
+    installation["entries"] = [
+        entry for entry in installation["entries"] if entry["path"] != native_path
+    ]
+    installation["root_is_purelib"] = True
+    rebind_installed_wheel_member(pure_inventory, installed_wheel_path, pure_wheel)
+
+    record, raw_sboms = evidence.verify_native_wheel_artifact(
+        pure_inventory,
+        locked_for_content(locked, changed),
+        changed,
+    )
+
+    assert record["owner"] == "python:demo@1.0"
+    assert len(raw_sboms) == 1
+
+
+def test_native_wheel_verifier_accepts_reviewed_header_and_launcher_mappings() -> None:
+    header_inventory, header_locked, header_content = native_wheel_case(
+        component_name="greenlet",
+        version="3.5.3",
+        include_header_relocation=True,
+    )
+    evidence.verify_native_wheel_artifact(header_inventory, header_locked, header_content)
+
+    script_inventory, script_locked, script_content = native_wheel_case(
+        component_name="cffi",
+        version="2.1.0",
+        include_console_script=True,
+    )
+    record, _raw_sboms = evidence.verify_native_wheel_artifact(
+        script_inventory, script_locked, script_content
+    )
+    assert record["generated_files"] == [
+        {
+            "callable": "main",
+            "kind": "console_scripts",
+            "module": "demo.module",
+            "name": "cffi-gen-src",
+            "source_path": "cffi-2.1.0.dist-info/entry_points.txt",
+            "installed_occurrence": next(
+                entry["occurrence"]
+                for entry in script_inventory["wheel_installations"][0]["entries"]
+                if entry["path"] == "opt/venv/bin/cffi-gen-src"
+            ),
+            "launcher_interpreter": "python",
+        }
+    ]
+
+
+def test_native_wheel_verifier_accepts_gui_and_ineffective_historical_launchers() -> None:
+    gui_inventory, gui_locked, gui_content = native_wheel_case(
+        entry_points=b"[gui_scripts]\ngui-demo = demo.module:main\n"
+    )
+    gui_record, _raw_sboms = evidence.verify_native_wheel_artifact(
+        gui_inventory, gui_locked, gui_content
+    )
+    assert [(item["kind"], item["name"]) for item in gui_record["generated_files"]] == [
+        ("gui_scripts", "gui-demo")
+    ]
+
+    inactive_inventory, inactive_locked, inactive_content = native_wheel_case(
+        include_console_script=True
+    )
+    launcher = next(
+        entry
+        for entry in inactive_inventory["wheel_installations"][0]["entries"]
+        if entry["path"] == "opt/venv/bin/cffi-gen-src"
+    )
+    launcher["occurrence"]["effective"] = False
+    inactive_record, _raw_sboms = evidence.verify_native_wheel_artifact(
+        inactive_inventory, inactive_locked, inactive_content
+    )
+    assert inactive_record["generated_files"][0]["installed_occurrence"]["effective"] is False
+
+
+@pytest.mark.parametrize(
+    ("entry_points", "message"),
+    [
+        (b"[console_scripts]\n../escape = demo.module:main\n", "unsafe launcher name"),
+        (
+            b"[console_scripts]\ndemo = demo.module:main [extra]\n",
+            "unsupported launcher entry point",
+        ),
+        (
+            b"[console_scripts]\ndemo = demo.module:main\n[gui_scripts]\ndemo = demo.module:main\n",
+            "repeats a launcher name",
+        ),
+    ],
+)
+def test_native_wheel_verifier_rejects_unsafe_entry_points(
+    entry_points: bytes, message: str
+) -> None:
+    inventory, locked, content = native_wheel_case()
+    changed = rewrite_native_wheel(
+        content,
+        additions={"demo-1.0.dist-info/entry_points.txt": entry_points},
+    )
+
+    with pytest.raises(evidence.EvidenceError, match=message):
+        evidence.verify_native_wheel_artifact(
+            inventory,
+            locked_for_content(locked, changed),
+            changed,
+        )
+
+
+@pytest.mark.parametrize("interpreter", ["python", "python3", "python3.14"])
+def test_native_wheel_launcher_template_matches_build_verifier(interpreter: str) -> None:
+    builder = load_script("build_python_artifacts")
+
+    assert evidence.expected_native_launcher(
+        "demo.module", "main", interpreter_name=interpreter
+    ) == builder.expected_launcher(
+        Path("/opt/venv"),
+        "demo.module",
+        "main",
+        interpreter_name=interpreter,
+    )
+
+
+def test_native_wheel_verifier_accepts_typeless_regular_and_stored_v20() -> None:
+    inventory, locked, content = native_wheel_case()
+    stored = rewrite_native_wheel(content)
+    with zipfile.ZipFile(io.BytesIO(stored), mode="r") as archive:
+        entries = [(item.filename, archive.read(item)) for item in archive.infolist()]
+    stored = source_zip_bytes(entries, compression=zipfile.ZIP_STORED)
+    hostile_shape = bytearray(stored)
+    name = "demo-1.0.dist-info/METADATA"
+    local, central = zip_record_offsets(hostile_shape, name)
+    hostile_shape[local + 4 : local + 6] = (20).to_bytes(2, "little")
+    hostile_shape[central + 6 : central + 8] = (20).to_bytes(2, "little")
+    hostile_shape[central + 38 : central + 42] = (0o600 << 16).to_bytes(4, "little")
+    content = bytes(hostile_shape)
+
+    evidence.verify_native_wheel_artifact(
+        inventory,
+        locked_for_content(locked, content),
+        content,
+    )
+
+
+def test_native_wheel_verifier_accepts_stored_v20_directory_entries() -> None:
+    inventory, locked, content = native_wheel_case()
+    with zipfile.ZipFile(io.BytesIO(content), mode="r") as archive:
+        entries = [(item.filename, archive.read(item)) for item in archive.infolist()]
+    directory_names = [
+        "demo/",
+        "demo-1.0.dist-info/",
+        "demo-1.0.dist-info/sboms/",
+    ]
+    changed = bytearray(
+        source_zip_bytes(
+            [(name, b"") for name in directory_names] + entries,
+            compression=zipfile.ZIP_STORED,
+        )
+    )
+    for name in directory_names:
+        local, central = zip_record_offsets(changed, name)
+        changed[local + 4 : local + 6] = (20).to_bytes(2, "little")
+        changed[central + 6 : central + 8] = (20).to_bytes(2, "little")
+    changed_bytes = bytes(changed)
+
+    evidence.verify_native_wheel_artifact(
+        inventory,
+        locked_for_content(locked, changed_bytes),
+        changed_bytes,
+    )
+
+
+@pytest.mark.parametrize(
+    "directory_alias",
+    ["demo/native.so/", "demo-1.0.dist-info/METADATA/"],
+)
+def test_native_wheel_verifier_rejects_file_directory_aliases(directory_alias: str) -> None:
+    inventory, locked, content = native_wheel_case()
+    with zipfile.ZipFile(io.BytesIO(content), mode="r") as archive:
+        entries = [(item.filename, archive.read(item)) for item in archive.infolist()]
+    changed = source_zip_bytes([*entries, (directory_alias, b"")])
+
+    with pytest.raises(evidence.EvidenceError, match="duplicate or non-canonical entry name"):
+        evidence.verify_native_wheel_artifact(
+            inventory,
+            locked_for_content(locked, changed),
+            changed,
+        )
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        ("modified", "installed occurrence"),
+        ("missing", "different member sets"),
+        ("missing-sbom", "different member sets"),
+        ("extra", "different member sets"),
+    ],
+)
+def test_native_wheel_verifier_rejects_modified_missing_and_extra_members(
+    mutation: str, message: str
+) -> None:
+    inventory, locked, content = native_wheel_case()
+    if mutation == "modified":
+        changed = rewrite_native_wheel(
+            content, replacements={"demo/native.so": b"changed native payload\n"}
+        )
+    elif mutation == "missing":
+        changed = rewrite_native_wheel(content, removals={"demo/native.so"})
+    elif mutation == "missing-sbom":
+        changed = rewrite_native_wheel(
+            content, removals={"demo-1.0.dist-info/sboms/auditwheel.cdx.json"}
+        )
+    else:
+        changed = rewrite_native_wheel(content, additions={"demo/extra.so": b"extra\n"})
+
+    with pytest.raises(evidence.EvidenceError, match=message):
+        evidence.verify_native_wheel_artifact(
+            inventory,
+            locked_for_content(locked, changed),
+            changed,
+        )
+
+
+def test_native_wheel_verifier_rejects_reassigned_payload_and_identity_drift() -> None:
+    inventory, locked, content = native_wheel_case()
+    reassigned = copy.deepcopy(inventory)
+    reassigned["native_payloads"][0]["owner"] = "python:other@1.0"
+    with pytest.raises(evidence.EvidenceError, match="no Python component"):
+        evidence.verify_native_wheel_artifact(reassigned, locked, content)
+
+    drifted = copy.deepcopy(inventory)
+    drifted["wheel_installations"][0]["wheel"]["sha256"] = "0" * 64
+    with pytest.raises(evidence.EvidenceError, match=r"installed occurrence|identity.*drifted"):
+        evidence.verify_native_wheel_artifact(drifted, locked, content)
+
+
+@pytest.mark.parametrize(
+    ("archive_path", "installed_name", "payload", "message"),
+    [
+        (
+            "demo-1.0.dist-info/METADATA",
+            "METADATA",
+            metadata("other", "1.0"),
+            "metadata name/version does not match",
+        ),
+        (
+            "demo-1.0.dist-info/METADATA",
+            "METADATA",
+            metadata("demo", "2.0"),
+            "metadata name/version does not match",
+        ),
+        (
+            "demo-1.0.dist-info/WHEEL",
+            "WHEEL",
+            b"Wheel-Version: 1.0\nRoot-Is-Purelib: false\nTag: cp314-cp314-musllinux_1_1_x86_64\n",
+            "WHEEL identity disagrees",
+        ),
+        (
+            "demo-1.0.dist-info/WHEEL",
+            "WHEEL",
+            b"Wheel-Version: 1.0\nRoot-Is-Purelib: false\nBuild: 1\n"
+            b"Tag: cp314-cp314-musllinux_1_2_x86_64\n",
+            "WHEEL identity disagrees",
+        ),
+        (
+            "demo-1.0.dist-info/WHEEL",
+            "WHEEL",
+            b"Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: cp314-cp314-musllinux_1_2_x86_64\n",
+            "WHEEL identity disagrees",
+        ),
+    ],
+)
+def test_native_wheel_verifier_rejects_semantic_identity_drift(
+    archive_path: str,
+    installed_name: str,
+    payload: bytes,
+    message: str,
+) -> None:
+    inventory, locked, content = native_wheel_case()
+    changed = rewrite_native_wheel(content, replacements={archive_path: payload})
+    drifted = copy.deepcopy(inventory)
+    installed_path = "opt/venv/lib/python3.14/site-packages/demo-1.0.dist-info/" + installed_name
+    rebind_installed_wheel_member(drifted, installed_path, payload)
+
+    with pytest.raises(evidence.EvidenceError, match=message):
+        evidence.verify_native_wheel_artifact(
+            drifted,
+            locked_for_content(locked, changed),
+            changed,
+        )
+
+
+def test_native_wheel_verifier_isolates_payloads_between_owners() -> None:
+    first_inventory, first_locked, first_content = native_wheel_case(
+        component_name="alpha", version="1.0"
+    )
+    second_inventory, _second_locked, _second_content = native_wheel_case(
+        component_name="beta", version="2.0"
+    )
+    combined = {
+        "platform": "linux/amd64",
+        "components": first_inventory["components"] + second_inventory["components"],
+        "wheel_installations": first_inventory["wheel_installations"]
+        + second_inventory["wheel_installations"],
+        "embedded_sboms": first_inventory["embedded_sboms"] + second_inventory["embedded_sboms"],
+        "native_payloads": first_inventory["native_payloads"] + second_inventory["native_payloads"],
+    }
+    swapped = copy.deepcopy(combined)
+    first_native, second_native = swapped["native_payloads"]
+    first_native["owner"], second_native["owner"] = (
+        second_native["owner"],
+        first_native["owner"],
+    )
+
+    with pytest.raises(evidence.EvidenceError, match="do not exactly match installed owner"):
+        evidence.verify_native_wheel_artifact(swapped, first_locked, first_content)
+
+
+def test_native_wheel_verifier_rejects_unreviewed_launcher_bytes() -> None:
+    inventory, locked, content = native_wheel_case(include_console_script=True)
+    tampered = copy.deepcopy(inventory)
+    script_entry = next(
+        entry
+        for entry in tampered["wheel_installations"][0]["entries"]
+        if entry["path"] == "opt/venv/bin/cffi-gen-src"
+    )
+    script_entry["occurrence"]["sha256"] = evidence.sha256_bytes(b"hostile wrapper\n")
+    script_entry["occurrence"]["size"] = len(b"hostile wrapper\n")
+    script_entry["recorded_sha256"] = script_entry["occurrence"]["sha256"]
+    script_entry["recorded_size"] = script_entry["occurrence"]["size"]
+
+    with pytest.raises(evidence.EvidenceError, match="differs from reviewed bytes"):
+        evidence.verify_native_wheel_artifact(tampered, locked, content)
+
+
+@pytest.mark.parametrize("mutation", ["encrypted", "compression", "link"])
+def test_native_wheel_verifier_rejects_unsafe_zip_metadata(mutation: str) -> None:
+    inventory, locked, content = native_wheel_case()
+    changed = bytearray(content)
+    local, central = zip_record_offsets(changed, "demo/native.so")
+    if mutation == "encrypted":
+        changed[local + 6 : local + 8] = (1).to_bytes(2, "little")
+        changed[central + 8 : central + 10] = (1).to_bytes(2, "little")
+    elif mutation == "compression":
+        changed[local + 8 : local + 10] = (99).to_bytes(2, "little")
+        changed[central + 10 : central + 12] = (99).to_bytes(2, "little")
+    else:
+        changed[central + 38 : central + 42] = ((stat.S_IFLNK | 0o777) << 16).to_bytes(4, "little")
+    changed_bytes = bytes(changed)
+
+    with pytest.raises(evidence.EvidenceError, match=r"metadata|compression|entry type"):
+        evidence.verify_native_wheel_artifact(
+            inventory,
+            locked_for_content(locked, changed_bytes),
+            changed_bytes,
+        )
+
+
+@pytest.mark.parametrize(
+    ("path", "message"),
+    [
+        ("../escape", "unsafe archive path"),
+        ("other-1.0.dist-info/METADATA", "foreign dist-info"),
+        ("demo-1.0.dist-info/INSTALLER", "installer-generated metadata"),
+        ("demo/cache.pyc", "contains bytecode"),
+    ],
+)
+def test_native_wheel_verifier_rejects_unsafe_or_foreign_members(path: str, message: str) -> None:
+    inventory, locked, content = native_wheel_case()
+    changed = rewrite_native_wheel(content, additions={path: b"hostile\n"})
+
+    with pytest.raises(evidence.EvidenceError, match=message):
+        evidence.verify_native_wheel_artifact(
+            inventory,
+            locked_for_content(locked, changed),
+            changed,
+        )
+
+
+def test_native_wheel_verifier_bounds_member_size_and_expansion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    inventory, locked, content = native_wheel_case()
+    monkeypatch.setattr(evidence, "MAX_ARCHIVE_MEMBER_BYTES", 4)
+    with pytest.raises(evidence.EvidenceError, match="resource limits"):
+        evidence.verify_native_wheel_artifact(inventory, locked, content)
+
+    monkeypatch.setattr(evidence, "MAX_ARCHIVE_MEMBER_BYTES", 64 * 1024 * 1024)
+    monkeypatch.setattr(evidence, "MAX_SOURCE_ZIP_COMPRESSION_RATIO", 1)
+    with pytest.raises(evidence.EvidenceError, match="resource limits"):
+        evidence.verify_native_wheel_artifact(inventory, locked, content)
+
+
+def test_native_wheel_retention_is_deterministic_and_manifest_bound(tmp_path: Path) -> None:
+    inventory, locked, content = native_wheel_case()
+    records = []
+    url_chain = (locked["url"], "https://files.pythonhosted.org/resolved/demo.whl")
+    wheel_path = f"artifacts/native-wheels/demo/1.0/{locked['filename']}"
+    sbom_archive_path = "demo-1.0.dist-info/sboms/auditwheel.cdx.json"
+    sbom_path = "artifacts/native-wheels/demo/1.0/embedded-sboms/" + sbom_archive_path
+    expected_sbom = {
+        "owner": "python:demo@1.0",
+        "platform": "linux/amd64",
+        "url": locked["url"],
+        "archive_path": sbom_archive_path,
+        "installed_occurrence": evidence.payload_record_projection(inventory["embedded_sboms"][0]),
+        "size": len(cyclonedx_sbom()),
+        "sha256": evidence.sha256_bytes(cyclonedx_sbom()),
+        "urls": list(url_chain),
+        "path": sbom_path,
+    }
+    for suffix in ("one", "two"):
+        root = tmp_path / suffix
+        root.mkdir()
+        record = evidence.retain_native_wheel_artifact(
+            root,
+            inventory,
+            locked,
+            content,
+            budget=evidence.BundleBudget(),
+            urls=url_chain,
+        )
+        records.append(record)
+        assert record == {
+            "owner": "python:demo@1.0",
+            "platform": "linux/amd64",
+            "url": locked["url"],
+            "filename": locked["filename"],
+            "size": len(content),
+            "sha256": evidence.sha256_bytes(content),
+            "build": "",
+            "tags": ["cp314-cp314-musllinux_1_2_x86_64"],
+            "generated_files": [],
+            "urls": list(url_chain),
+            "path": wheel_path,
+            "embedded_sboms": [expected_sbom],
+        }
+        assert (root / record["path"]).read_bytes() == content
+        assert record["sha256"] == evidence.sha256_file(
+            root / record["path"], max_bytes=evidence.MAX_DOWNLOAD_BYTES
+        )
+        for sbom in record["embedded_sboms"]:
+            retained = root / sbom["path"]
+            assert retained.read_bytes() == cyclonedx_sbom()
+            assert sbom["sha256"] == evidence.sha256_file(
+                retained, max_bytes=evidence.MAX_ARCHIVE_MEMBER_BYTES
+            )
+            assert sbom["urls"] == record["urls"]
+
+    assert evidence.canonical_json(records[0]) == evidence.canonical_json(records[1])
+
+
+def test_native_wheel_retention_ignores_unrelated_owner_input_order(tmp_path: Path) -> None:
+    first_inventory, first_locked, first_content = native_wheel_case(
+        component_name="alpha", version="1.0"
+    )
+    second_inventory, _second_locked, _second_content = native_wheel_case(
+        component_name="beta", version="2.0"
+    )
+    sequence_fields = (
+        "components",
+        "wheel_installations",
+        "embedded_sboms",
+        "native_payloads",
+    )
+    combined: dict[str, Any] = {"platform": "linux/amd64"}
+    for field in sequence_fields:
+        combined[field] = [*first_inventory[field], *second_inventory[field]]
+    reversed_inventory = copy.deepcopy(combined)
+    for field in sequence_fields:
+        reversed_inventory[field] = list(reversed(reversed_inventory[field]))
+
+    records = []
+    for suffix, inventory in (("forward", combined), ("reversed", reversed_inventory)):
+        root = tmp_path / suffix
+        root.mkdir()
+        records.append(
+            evidence.retain_native_wheel_artifact(
+                root,
+                inventory,
+                first_locked,
+                first_content,
+                budget=evidence.BundleBudget(),
+            )
+        )
+
+    assert evidence.canonical_json(records[0]) == evidence.canonical_json(records[1])
+
+
+@pytest.mark.parametrize(
+    "urls",
+    [
+        (),
+        ("https://files.pythonhosted.org/not-requested.whl",),
+        ("https://files.pythonhosted.org/requested.whl", "http://example.com/redirect.whl"),
+    ],
+)
+def test_native_wheel_retention_rejects_invalid_url_chains(
+    tmp_path: Path, urls: tuple[str, ...]
+) -> None:
+    inventory, locked, content = native_wheel_case()
+    if urls and urls[0].endswith("/requested.whl"):
+        urls = (locked["url"], *urls[1:])
+
+    with pytest.raises(evidence.EvidenceError, match=r"URL chain|credential-free HTTPS"):
+        evidence.retain_native_wheel_artifact(
+            tmp_path,
+            inventory,
+            locked,
+            content,
+            budget=evidence.BundleBudget(),
+            urls=urls,
+        )
 
 
 def test_recipe_checksum_parser_does_not_execute_recipe() -> None:
