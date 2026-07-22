@@ -6801,7 +6801,7 @@
       {
         "ecosystem": "python",
         "effective": true,
-        "metadata_sha256": "33b6ac48ab54ae7e571ef39d40af9cffe27468008881afbe5f954cc640218ed2",
+        "metadata_sha256": "c6b673d0d11214c5893198d4965328609e7070cab3c926d7b6908377ae49827c",
         "name": "extra-codeowners",
         "observed_license": "Apache-2.0",
         "version": "0.1.0"
@@ -7467,7 +7467,7 @@
       {
         "ecosystem": "python",
         "effective": true,
-        "metadata_sha256": "33b6ac48ab54ae7e571ef39d40af9cffe27468008881afbe5f954cc640218ed2",
+        "metadata_sha256": "c6b673d0d11214c5893198d4965328609e7070cab3c926d7b6908377ae49827c",
         "name": "extra-codeowners",
         "observed_license": "Apache-2.0",
         "version": "0.1.0"
