@@ -17,7 +17,9 @@ Routine automation can know that a pull request is safe while GitHub's code-owne
 > The self-hosted App and its documentation are available, and the repository
 > includes Helm chart source. The `main` publication job has been removed, and
 > tagged publication is blocked. [Source-completeness issue #18](https://github.com/stampbot/extra-codeowners/issues/18)
-> covers CPython normalization plus native-wheel and embedded-SBOM expansion.
+> now covers native-wheel and embedded-SBOM component/source expansion. CI
+> already normalizes CPython and retains its exact runtime identity, pinned
+> build recipe, source archive, and source-carried license evidence.
 > [Selected build-proof handoff](https://github.com/stampbot/extra-codeowners/issues/32)
 > and
 > [publication privilege separation](https://github.com/stampbot/extra-codeowners/issues/28)

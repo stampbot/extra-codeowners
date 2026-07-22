@@ -328,11 +328,15 @@ operational surfaces, not public product APIs.
 The repository currently implements the GitHub App service and reusable Python
 evaluator. It also contains a dedicated Helm chart. CI builds and scans
 multi-platform candidates, but the `main` publication job has been removed.
-Current container evidence remains incomplete in two ways: CPython is absent
-from the normalized top-level component and notice inventory; native wheel and
-embedded-SBOM contents are not expanded into component, notice, and source
-records. Historical Python installs are replayed from each layer's `RECORD`
-against that layer's complete filesystem snapshot.
+Current container evidence normalizes CPython as one top-level runtime
+component. It binds that identity to the exact version header, interpreter
+link, interpreter, and shared library in each platform image. The retained
+source version header must be byte-identical to the image header. Evidence also
+retains the pinned build recipe, exact source archive, and source-carried
+license. Native wheel and embedded-SBOM contents are still not expanded into
+complete component, notice, and source records. Historical Python installs are
+replayed from each layer's `RECORD` against that layer's complete filesystem
+snapshot.
 
 The tag workflow contains the intended versioned image, OCI chart, Python
 artifact, provenance, and software-bill-of-material publication jobs, but an
@@ -340,9 +344,10 @@ unconditional validation failure keeps every one unreachable. Security issue
 [#28](https://github.com/stampbot/extra-codeowners/issues/28) requires a
 privilege-separated container-evidence pipeline before that block can be
 removed. Source-completeness issue
-[#18](https://github.com/stampbot/extra-codeowners/issues/18) requires both
-remaining gaps to close, by expanding components and sources or using builds
-linked against separately inventoried packages.
+[#18](https://github.com/stampbot/extra-codeowners/issues/18) requires that
+remaining native-wheel and embedded-SBOM gap to close, either by expanding
+components and sources or by using builds linked against separately inventoried
+packages.
 Build-proof handoff issue
 [#32](https://github.com/stampbot/extra-codeowners/issues/32) separately
 requires release and ad-hoc builds to consume the proof that pull-request CI

@@ -16,7 +16,7 @@ evaluator, an App Manifest setup flow, and a Helm chart. CI builds and scans
 container candidates. The `main` publication job has been removed, and tagged
 publication is disabled pending three issues:
 [source completeness #18](https://github.com/stampbot/extra-codeowners/issues/18)
-covers CPython normalization plus native-wheel and embedded-SBOM expansion;
+covers native-wheel and embedded-SBOM component/source expansion;
 [privilege separation #28](https://github.com/stampbot/extra-codeowners/issues/28)
 isolates publication authority; and
 [build proof #32](https://github.com/stampbot/extra-codeowners/issues/32)
@@ -25,6 +25,12 @@ An [older public GHCR preview](https://github.com/stampbot/extra-codeowners/issu
 may still be discoverable; it is unsupported, incomplete, and must not be
 deployed or mirrored.
 There is no supported release or hosted installation yet.
+
+CI already normalizes CPython as a top-level runtime component. It binds that
+record to exact per-platform identity files and retains the pinned build recipe,
+source archive, and source-carried license evidence. This closes the CPython
+part of issue #18, but the image is not yet source-complete or approved for
+distribution.
 
 > **Production blocker:** GitHub attaches Check Runs to commits, but Extra
 > CODEOWNERS evaluates evidence for one pull request. A newly opened or

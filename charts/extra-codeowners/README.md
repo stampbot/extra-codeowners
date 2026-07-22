@@ -5,9 +5,11 @@ repository contains the source chart. No versioned GitHub release, supported
 production release, or hosted service is available.
 
 The `main` publication job has been removed, and tagged-release publication is
-blocked while CPython normalization, native-wheel and embedded-SBOM expansion,
+blocked while native-wheel and embedded-SBOM component/source expansion,
 handoff of the selected build proof to release and ad-hoc builds, and privilege
-separation remain unresolved.
+separation remain unresolved. CI already normalizes CPython and retains its
+exact runtime identity, pinned build recipe, source archive, and source-carried
+license evidence.
 An older public `main` image may still exist in GHCR; it is unsupported,
 unapproved for distribution, and must not be used by this guide. No versioned
 image or chart is available. A future GitHub release and its attestations will
