@@ -352,12 +352,15 @@ def inspect_layout(
         raise release_spine.SpineError("BuildKit index digest inputs disagree")
     if release_spine.OCI_DIGEST.fullmatch(expected_index_digest) is None:
         raise release_spine.SpineError("trusted BuildKit index digest is invalid")
-    if _directory_names(layout, "OCI layout", maximum=3) != {
+    if _directory_names(layout, "OCI layout", maximum=4) != {
         "blobs",
         "index.json",
+        "ingest",
         "oci-layout",
     }:
         raise release_spine.SpineError("OCI layout has missing or extra top-level entries")
+    if _directory_names(layout / "ingest", "BuildKit ingest root", maximum=1):
+        raise release_spine.SpineError("BuildKit ingest root is not empty")
     layout_record = _exact_mapping(
         _json_file(layout / "oci-layout", "OCI layout version"),
         OCI_LAYOUT_FIELDS,
@@ -533,10 +536,24 @@ def build(
 ) -> Mapping[str, Any]:
     """Build and independently reverify one canonical spine and record pair."""
 
-    if spine_output.name != release_spine.expected_spine_filename(expected.source_revision):
-        raise release_spine.SpineError("spine output filename is not bound to the source revision")
-    if record_output.name != release_spine.expected_record_filename(expected.source_revision):
-        raise release_spine.SpineError("record output filename is not bound to the source revision")
+    if spine_output.name != release_spine.expected_spine_filename(
+        expected.source_revision,
+        expected.python_artifact_id,
+        expected.run_id,
+        expected.run_attempt,
+    ):
+        raise release_spine.SpineError(
+            "spine output filename is not bound to the Python artifact and producer run"
+        )
+    if record_output.name != release_spine.expected_record_filename(
+        expected.source_revision,
+        expected.python_artifact_id,
+        expected.run_id,
+        expected.run_attempt,
+    ):
+        raise release_spine.SpineError(
+            "record output filename is not bound to the Python artifact and producer run"
+        )
     root, platforms, selected_objects = inspect_layout(layout, expected_index_digest, expected)
     output = _create_output(spine_output, "spine")
     whole = hashlib.sha256()
@@ -565,6 +582,7 @@ def build(
         "schema_version": release_spine.SCHEMA_VERSION,
         "media_type": release_spine.RECORD_MEDIA_TYPE,
         "repository": {"id": expected.repository_id, "name": expected.repository_name},
+        "run": {"id": expected.run_id, "attempt": expected.run_attempt},
         "source": {"revision": expected.source_revision, "version": expected.version},
         "workflow": {
             "path": expected.workflow_path,

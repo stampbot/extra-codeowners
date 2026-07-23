@@ -4,40 +4,58 @@ The release spine is an internal transport for a bounded, two-platform OCI
 descriptor graph. It lets a later job verify raw candidate bytes without
 opening a tar, ZIP, gzip, or Docker archive in that job.
 
-**Status: internal transport only.** The current CI check uses a generated
-fixture. It does not build or publish a real Extra CODEOWNERS candidate. A
-passing check proves this transport and verifier contract only. It does not
-prove layer semantics, complete distribution evidence, signatures,
-attestations, or publication safety.
+**Status: internal transport only.** The CI producer builds a real, unsigned
+Extra CODEOWNERS candidate into a local OCI directory and never pushes it. A
+passing check proves the pinned BuildKit export and the two-file transport
+contract. It does not approve the candidate for distribution, prove what the
+layers mean, complete the distribution evidence, or make publication safe. The
+check creates no signatures or attestations.
 
-The format has two files:
+The filename base is:
 
-| File | Media type | Purpose |
+```text
+extra-codeowners-image-SOURCE_SHA-python-artifact-PYTHON_ARTIFACT_ID-run-RUN_ID-attempt-PRODUCER_ATTEMPT
+```
+
+The format adds one of two suffixes:
+
+| Suffix | Media type | Purpose |
 | --- | --- | --- |
-| `extra-codeowners-image-SOURCE_SHA.bin` | `application/vnd.stampbot.oci-release-spine.v1+octet-stream` | Concatenated, opaque OCI object bytes. |
-| `extra-codeowners-image-SOURCE_SHA.spine.json` | `application/vnd.stampbot.oci-release-spine.v1+json` | Canonical identity, descriptor graph, and byte ranges. |
+| `.bin` | `application/vnd.stampbot.oci-release-spine.v1+octet-stream` | Concatenated, opaque OCI object bytes. |
+| `.spine.json` | `application/vnd.stampbot.oci-release-spine.v1+json` | Canonical identity, descriptor graph, and byte ranges. |
 
-`SOURCE_SHA` is the exact lowercase 40-character source revision. Neither file
-is a supported GitHub release asset.
+`SOURCE_SHA` is the exact lowercase 40-character source revision. The artifact,
+run, and attempt values are canonical positive decimal strings. A producer
+rerun changes `PRODUCER_ATTEMPT`, so it cannot collide with the previous
+attempt's raw artifacts. Neither file is a supported GitHub release asset.
 
 ## Boundary
 
-The builder and verifier have deliberately different responsibilities:
+The builder and verifier serve different trust boundaries:
 
 ```mermaid
 flowchart LR
-    A[Pinned BuildKit<br>OCI layout, tar=false] --> B[Unprivileged spine builder]
-    B --> C[Raw spine artifact]
-    B --> D[Raw record artifact]
-    C --> E[Bounded verifier]
-    D --> E
-    E --> F[STOP<br>publication remains blocked]
+    A[Selected Python artifact<br>immutable ID] --> B[Verify selected proof]
+    B --> C[Pinned BuildKit<br>OCI directory export]
+    C --> D[Unprivileged spine builder]
+    E[Build action<br>root digest] --> D
+    D --> F[Raw spine artifact]
+    D --> G[Raw record artifact]
+    F --> H[Read-only verifier]
+    G --> H
+    H --> I[STOP<br>publication remains blocked]
 ```
 
-The builder reads the small OCI index, manifest, and configuration JSON
+The producer downloads the selected Python proof by immutable artifact ID and
+verifies it before the build. Buildx `v0.35.0` and BuildKit `v0.30.0` then
+export one `linux/amd64` and one `linux/arm64` image as an OCI directory with
+`tar=false`. The build does not push or attach provenance or SBOM descriptors
+to the candidate.
+
+The spine builder reads the small OCI index, manifest, and configuration JSON
 objects. It verifies each object against the descriptor that selected it. OCI
-layer bodies are never parsed; they are hashed and copied as opaque byte
-ranges.
+layer bodies are never parsed; the builder hashes and copies them as opaque
+byte ranges.
 
 The verifier treats every OCI object body as opaque. It validates only the
 small canonical record, the trusted workflow inputs, the exact byte ranges,
@@ -57,25 +75,26 @@ independently accepted job output:
 | Value | Required source |
 | --- | --- |
 | Repository ID and name | GitHub workflow context. |
-| Source revision and release version | Accepted release inputs and checked-out revision. |
+| Workflow run ID | GitHub workflow context. |
+| Successful producer attempt | The raw producer's `GITHUB_RUN_ATTEMPT`, forwarded as a job output. |
+| Source revision and project version | `GITHUB_SHA` and the version in the checked-out `pyproject.toml`. |
 | Workflow path, ref, and workflow SHA | GitHub workflow context. |
 | Candidate registry, repository, and source-bound tag | The candidate-build plan. |
-| Root OCI index digest | The pinned BuildKit or build-action digest output. Never `record.index.digest`. |
+| Root OCI index digest | The pinned build action's `digest` output. Never `record.index.digest`. |
 | Python proof artifact ID and provider/archive SHA-256 | The accepted Python distribution job outputs. |
 | Application wheel and selection-record SHA-256 values | The accepted Python distribution job outputs. |
 | Record and spine artifact SHA-256 values | The two raw upload-action outputs. |
 
-The root digest is the candidate anchor. The builder requires the trusted
-digest to equal the one descriptor in BuildKit's wrapper `index.json`. The
-standalone verifier independently requires `record.index.digest` to equal that
-same trusted value.
+The root digest is the candidate anchor. CI takes it directly from the pinned
+`docker/build-push-action` output, never from `index.json` or the spine record.
+The builder requires that digest to equal the one descriptor in BuildKit's
+wrapper `index.json`. The standalone verifier then requires
+`record.index.digest` to equal the same out-of-band value.
 
-In the current CI transport check, the root digest comes from the synthetic
-fixture generator. That proves the cross-job interface, not a real BuildKit
-candidate. CI does not yet exercise compatibility with an actual BuildKit
-`v0.30.0` `tar=false` layout. A future candidate workflow must replace the
-fixture value with the digest returned by its pinned build action and add that
-real-layout compatibility proof.
+The CI job exercises the real BuildKit `v0.30.0` `tar=false` directory dialect.
+Synthetic layouts remain in the unit suite because they let tests supply
+hostile layer bytes and malformed descriptor graphs without teaching a
+production consumer to parse an archive.
 
 GitHub raw-artifact SHA-256 values are 64 lowercase hexadecimal characters.
 OCI descriptor digests include the `sha256:` prefix.
@@ -92,13 +111,19 @@ The top-level directory contains exactly:
 blobs/
   sha256/
 index.json
+ingest/
 oci-layout
 ```
+
+The pinned BuildKit directory exporter leaves the local content store's empty
+`ingest/` root alongside the OCI Image Layout. The builder requires a real,
+empty directory there. A missing, linked, non-directory, or nonempty ingest
+root fails closed.
 
 `oci-layout` contains only `imageLayoutVersion: "1.0.0"`. `blobs` contains only
 the `sha256` directory, and that directory contains exactly the lowercase
 digest-named objects reachable from the selected graph. Missing blobs, orphan
-blobs, links, multiply linked files, and extra entries fail closed.
+blobs, links, multiply linked files, and extra entries also fail closed.
 
 ### BuildKit wrapper
 
@@ -109,7 +134,7 @@ annotations:
 - `io.containerd.image.name`, equal to
   `REGISTRY/REPOSITORY:release-candidate-SOURCE_SHA`
 - `org.opencontainers.image.created`, matching the bounded
-  `YYYY-MM-DDTHH:MM:SS[.fraction]Z` shape and numeric field ranges enforced by
+  `YYYY-MM-DDTHH:MM:SS[.fraction]Z` format and numeric field ranges enforced by
   the builder (calendar validity is not established)
 - `org.opencontainers.image.ref.name`, equal to
   `release-candidate-SOURCE_SHA`.
@@ -176,6 +201,7 @@ The top-level object has exactly these fields:
 | `schema_version` | Integer `1`. |
 | `media_type` | `application/vnd.stampbot.oci-release-spine.v1+json`. |
 | `repository` | Repository identity object. |
+| `run` | Workflow run ID and successful producer attempt. |
 | `source` | Source revision and version object. |
 | `workflow` | Workflow path, ref, and SHA object. |
 | `candidate` | Candidate registry, repository, and tag object. |
@@ -190,15 +216,16 @@ The top-level object has exactly these fields:
 | Object | Exact fields |
 | --- | --- |
 | `repository` | `id`, `name` |
+| `run` | `id`, `attempt` |
 | `source` | `revision`, `version` |
 | `workflow` | `path`, `ref`, `sha` |
 | `candidate` | `registry`, `repository`, `tag` |
 | `python_distribution` | `artifact_id`, `artifact_sha256`, `wheel_sha256`, `selection_record_sha256` |
 | `spine` | `filename`, `media_type`, `size`, `sha256` |
 
-Repository and artifact IDs are canonical positive decimal strings no greater
-than `2^63 - 1`. The version has exactly three non-negative integer parts. The
-candidate tag is exactly `release-candidate-SOURCE_SHA`.
+Repository, run, attempt, and artifact IDs are canonical positive decimal
+strings no greater than `2^63 - 1`. The version has exactly three non-negative
+integer parts. The candidate tag is exactly `release-candidate-SOURCE_SHA`.
 
 The workflow path is under `.github/workflows/` and ends in `.yml` or `.yaml`.
 The workflow ref is exactly
@@ -218,6 +245,8 @@ complete value must contain ASCII characters only.
 | `media_type` | Exact record media type | Exact value |
 | `repository.id` | Positive canonical decimal string | 19 characters and `2^63 - 1` |
 | `repository.name` | ASCII `OWNER/REPOSITORY`; letters, digits, `_`, `.`, and `-` | 512 characters |
+| `run.id` | Positive canonical decimal string | 19 characters and `2^63 - 1` |
+| `run.attempt` | Positive canonical decimal string | 19 characters and `2^63 - 1` |
 | `source.revision` | Lowercase hexadecimal string | 40 characters exactly |
 | `source.version` | ASCII `MAJOR.MINOR.PATCH` without leading zeroes | 64 characters |
 | `workflow.path` | ASCII `.github/workflows/NAME.yml` or `.yaml` | 512 characters |
@@ -230,7 +259,7 @@ complete value must contain ASCII characters only.
 | `python_distribution.artifact_sha256` | Lowercase hexadecimal provider/archive digest | 64 characters exactly |
 | `python_distribution.wheel_sha256` | Lowercase hexadecimal wheel digest | 64 characters exactly |
 | `python_distribution.selection_record_sha256` | Lowercase hexadecimal record digest | 64 characters exactly |
-| `spine.filename` | Exact `extra-codeowners-image-SOURCE_SHA.bin` | 255 characters |
+| `spine.filename` | Exact filename base and `.bin` suffix listed above | 255 characters |
 | `spine.media_type` | Exact spine media type | Exact value |
 | `spine.sha256` | Lowercase hexadecimal raw-file digest | 64 characters exactly |
 | `spine.size` | Integer from 1 through 2 GiB; boolean is rejected | 2 GiB |
@@ -338,7 +367,8 @@ publishes a spine.
 ## Commands
 
 Both production scripts use only the Python standard library. Inspect their
-complete interfaces with:
+complete interfaces from the repository root on a POSIX system with Python
+3.12 or newer:
 
 ```bash
 python .github/scripts/build_release_spine.py --help
@@ -352,19 +382,31 @@ standard error and exits non-zero.
 
 ## CI transport proof
 
-The CI producer uploads the record and spine as two separate
+The CI producer has only `contents: read`. It downloads the selected Python
+distribution by immutable ID, verifies the proof, and supplies that directory
+as the Dockerfile's read-only named build context. A pinned QEMU image supplies
+the `arm64` emulation. The pinned build action runs Buildx `v0.35.0` with
+BuildKit `v0.30.0` and exports exactly `linux/amd64,linux/arm64` with
+`type=oci`, `tar=false`, `push=false`, `provenance=false`, and `sbom=false`.
+Its digest output is the trusted root digest.
+
+The producer uploads the spine and record as two separate
 `actions/upload-artifact@v7` artifacts with `archive: false`. It does not set an
-artifact name: in raw mode, the source filename is the artifact name. The
-producer exports each immutable artifact ID, each raw provider digest, and the
-synthetic root index digest.
+artifact name: in raw mode, the source filename is the artifact name. The job
+exports each immutable artifact ID, each raw provider digest, the root digest,
+the workflow run ID, and the successful producer attempt.
 
 The consumer downloads each artifact separately by ID with
 `actions/download-artifact@v8`, `skip-decompress: true`, and
 `digest-mismatch: error`. It then runs the standalone verifier with the
 out-of-band digests, trusted workflow identity, and internally consistent
-record graph. Both jobs have only `contents: read`; they have no secret,
-environment, OpenID Connect, package, attestation, release, or other write
-authority.
+record graph. The consumer gets the producer attempt from the producer's job
+output instead of substituting its own attempt during a consumer-only rerun.
+It has no Docker setup, socket, archive parser, or publication client. Both
+jobs declare only `contents: read`. Neither receives repository secrets or a
+GitHub environment, and neither requests an OpenID Connect token or package,
+attestation, release, or repository write permission. The producer's only
+write path is its run-scoped upload of the two raw artifacts.
 
 ## What this contract does not prove
 
@@ -376,13 +418,19 @@ A valid spine does not establish any of the following:
 - that configuration `rootfs.diff_ids` match layer contents
 - that a filesystem replay is safe or complete
 - that notices, licenses, SBOMs, or corresponding source are complete
-- that the selected Python proof is present inside each layer
+- that the spine alone proves the selected Python files are present in the
+  image layers
 - that a candidate was scanned or approved for release
 - that a signature, attestation, provenance statement, or transparency-log
   entry exists
 - that any registry, package, chart, GitHub release, or release asset may be
   published.
 
-Those remain separate gates. The tagged release workflow remains structurally
-blocked. Container-evidence source completeness remains false, and
+Those remain separate gates. Issue
+[#32](https://github.com/stampbot/extra-codeowners/issues/32) still tracks the
+retained release/evidence binding and future consumer handoff. The tagged
+release workflow remains structurally blocked by issue
+[#28](https://github.com/stampbot/extra-codeowners/issues/28). Container-evidence
+source completeness remains false while issue
+[#18](https://github.com/stampbot/extra-codeowners/issues/18) is open, and
 `distribution_approval.approved` must remain false.

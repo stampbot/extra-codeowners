@@ -58,7 +58,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Rel
 - A bounded raw Python-distribution spine and canonical record, verified through
   direct `archive: false` artifacts without archive parsing in the consumer.
 - A bounded raw OCI release-spine builder and standalone verifier, with a
-  two-file `archive: false` CI transport proof, immutable pre-exposure object
+  real two-platform BuildKit directory export, a rerun-safe two-file
+  `archive: false` CI transport proof, immutable pre-exposure object
   verification, and no publication authority.
 - An offline-tested immutable-release controller core with exact draft
   ownership, retained asset descriptors, response-loss reconciliation, and no
