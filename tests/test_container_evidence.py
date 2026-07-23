@@ -10,6 +10,7 @@ import stat
 import subprocess
 import sys
 import tarfile
+import tomllib
 import zipfile
 import zlib
 from collections.abc import Iterable
@@ -479,10 +480,6 @@ def standalone_inventory(component: dict[str, Any]) -> dict[str, Any]:
         "apk_database_occurrences": [apk_record],
         "wheel_installations": [],
         "python_record_ownership": [],
-        "source_completeness": {
-            "complete": False,
-            "reason": evidence.SOURCE_COMPLETENESS_REASON,
-        },
     }
 
 
@@ -876,7 +873,7 @@ def native_wheel_case(
     return inventory, locked, wheel_content
 
 
-def native_component_coverage_case() -> tuple[
+def _native_component_fixture_inputs() -> tuple[
     dict[str, dict[str, Any]],
     dict[str, dict[str, Any]],
     dict[str, Any],
@@ -989,6 +986,107 @@ def native_component_coverage_case() -> tuple[
     return inventories, locked_wheels, policy, {("demo", "1.0"): owner_source}
 
 
+def native_component_v7_policy_case() -> dict[str, Any]:
+    """Return a minimal cross-platform v7 observation/review/closure policy."""
+
+    inventories, _locked, fixture, _lock_sources = _native_component_fixture_inputs()
+    source_id = "alpine:demo-native@1.2.3-r0"
+    source = copy.deepcopy(fixture["native_component_sources"][source_id])
+    source["allowed_recipe_links"] = []
+    coverage: dict[str, list[dict[str, Any]]] = {}
+    for platform in ("linux/amd64", "linux/arm64"):
+        inventory = inventories[platform]
+        fixture_owner = fixture["native_component_coverage"][platform][0]
+        component = {
+            "type": "library",
+            "name": "libdemo",
+            "version": "1.2.3",
+            "purl": "pkg:generic/libdemo@1.2.3",
+            "bom_ref": "pkg:generic/libdemo@1.2.3",
+            "hashes": [{"alg": "SHA-256", "content": "1" * 64}],
+            "licenses": [{"license": {"id": "MIT"}}],
+        }
+        observation_body = {
+            "metadata_component": None,
+            "metadata_root_echo": None,
+            "upstream_invalid_duplicate_bom_ref": False,
+            "components": [component],
+        }
+        observation = {
+            "bom_format": "CycloneDX",
+            "spec_version": "1.5",
+            **observation_body,
+            "observation_sha256": evidence.sha256_bytes(evidence.canonical_json(observation_body)),
+        }
+        sbom_path = fixture_owner["sboms"][0]["path"]
+        payload_sizes = {record["path"]: record["size"] for record in inventory["native_payloads"]}
+        native_payloads = [
+            {**payload, "size": payload_sizes[payload["path"]]}
+            for payload in fixture_owner["native_payloads"]
+        ]
+        reference = evidence.retained_observation_reference(
+            sbom_path,
+            observation["observation_sha256"],
+            component,
+        )
+        coverage[platform] = [
+            {
+                "owner": fixture_owner["owner"],
+                "wheel": copy.deepcopy(fixture_owner["wheel"]),
+                "owner_source": copy.deepcopy(fixture_owner["owner_source"]),
+                "cargo_lock": None,
+                "native_payloads": native_payloads,
+                "sboms": [
+                    {
+                        "path": sbom_path,
+                        "sha256": fixture_owner["sboms"][0]["sha256"],
+                        "observation": observation,
+                        "metadata_root": {"kind": "missing", "anomaly_review": None},
+                    }
+                ],
+                "component_reviews": [
+                    {
+                        "observations": [reference],
+                        "source": source_id,
+                        "reviewed_license": "MIT",
+                    }
+                ],
+                "payload_dispositions": [
+                    {
+                        "kind": "sbom-components",
+                        "role": "demo.libs/libdemo.so.1",
+                        "observations": [reference],
+                    },
+                    {"kind": "owner", "role": "demo/native.so"},
+                ],
+                "known_omissions": [],
+                "canonical_relationships": [],
+                "review": {"state": "closed", "reason": "", "unresolved_items": []},
+            }
+        ]
+    return {
+        "native_component_sources": {source_id: source},
+        "native_component_coverage": coverage,
+    }
+
+
+def native_component_coverage_case() -> tuple[
+    dict[str, dict[str, Any]],
+    dict[str, dict[str, Any]],
+    dict[str, Any],
+    dict[tuple[str, str], dict[str, Any]],
+]:
+    """Build exact inventories and their schema-v7 closed review policy."""
+
+    inventories, locked, _fixture, lock_sources = _native_component_fixture_inputs()
+    policy = native_component_v7_policy_case()
+    for platform in ("linux/amd64", "linux/arm64"):
+        owner = policy["native_component_coverage"][platform][0]
+        inventory_sbom = inventories[platform]["embedded_sboms"][0]
+        inventory_sbom["cyclonedx"] = copy.deepcopy(owner["sboms"][0]["observation"])
+    return inventories, locked, policy, lock_sources
+
+
 def native_wheel_lock_record(locked: dict[str, Any], *extra_filenames: str) -> str:
     """Return a minimal uv.lock package record around one selected-wheel fixture."""
 
@@ -1009,6 +1107,61 @@ def native_wheel_lock_record(locked: dict[str, Any], *extra_filenames: str) -> s
         f'name = "{name}"\nversion = "{version}"\n'
         "wheels = [\n" + "\n".join(records) + "\n]\n"
     )
+
+
+def rebind_policy_observation_digest(
+    value: object,
+    *,
+    sbom_path: str,
+    observation_sha256: str,
+) -> None:
+    """Update every policy reference to one intentionally changed observation."""
+
+    if isinstance(value, dict):
+        if value.get("sbom_path") == sbom_path and "observation_sha256" in value:
+            value["observation_sha256"] = observation_sha256
+        for item in value.values():
+            rebind_policy_observation_digest(
+                item,
+                sbom_path=sbom_path,
+                observation_sha256=observation_sha256,
+            )
+    elif isinstance(value, list):
+        for item in value:
+            rebind_policy_observation_digest(
+                item,
+                sbom_path=sbom_path,
+                observation_sha256=observation_sha256,
+            )
+
+
+def rebind_policy_observation_bom_ref(
+    value: object,
+    *,
+    sbom_path: str,
+    old_bom_ref: str,
+    new_bom_ref: str,
+) -> None:
+    """Update every exact policy reference to one intentionally changed bom-ref."""
+
+    if isinstance(value, dict):
+        if value.get("sbom_path") == sbom_path and value.get("bom_ref") == old_bom_ref:
+            value["bom_ref"] = new_bom_ref
+        for item in value.values():
+            rebind_policy_observation_bom_ref(
+                item,
+                sbom_path=sbom_path,
+                old_bom_ref=old_bom_ref,
+                new_bom_ref=new_bom_ref,
+            )
+    elif isinstance(value, list):
+        for item in value:
+            rebind_policy_observation_bom_ref(
+                item,
+                sbom_path=sbom_path,
+                old_bom_ref=old_bom_ref,
+                new_bom_ref=new_bom_ref,
+            )
 
 
 def rewrite_native_wheel(
@@ -1152,13 +1305,13 @@ def test_strict_json_rejects_lone_unicode_surrogates() -> None:
         evidence.canonical_json({"value": "\ud800"})
 
 
-def test_schema_version_requires_exact_v6_integer_and_media_type() -> None:
-    evidence.require_schema({"schema_version": 6}, "test")
-    for unsupported in (True, 1, 2, 3, 4, 5, 7):
+def test_schema_version_requires_exact_v7_integer_and_media_type() -> None:
+    evidence.require_schema({"schema_version": 7}, "test")
+    for unsupported in (True, 1, 2, 3, 4, 5, 6, 8):
         with pytest.raises(evidence.EvidenceError, match="unsupported test schema"):
             evidence.require_schema({"schema_version": unsupported}, "test")
     assert evidence.EVIDENCE_MEDIA_TYPE == (
-        "application/vnd.stampbot.container-evidence.v6+tar+gzip"
+        "application/vnd.stampbot.container-evidence.v7+tar+gzip"
     )
 
 
@@ -2988,24 +3141,27 @@ def test_native_component_coverage_ledger_resolves_owner_native_set_and_lock() -
     assert ledger["unresolved_owners"] == []
 
 
-def test_native_component_policy_accepts_explicit_empty_sbom_and_component_sets() -> None:
+def test_native_component_policy_accepts_explicit_empty_sbom_and_review_sets() -> None:
     inventories, _locked, policy, _lock_sources = native_component_coverage_case()
     policy["native_component_sources"] = {}
     for platform in ("linux/amd64", "linux/arm64"):
         inventories[platform]["embedded_sboms"] = []
         owner = policy["native_component_coverage"][platform][0]
         owner["sboms"] = []
-        owner["components"] = []
+        owner["component_reviews"] = []
+        owner["payload_dispositions"] = [
+            {"kind": "owner", "role": payload["role"]} for payload in owner["native_payloads"]
+        ]
 
     evidence.validate_native_component_policy_schema(policy)
     ledger = evidence.native_component_coverage_ledger(inventories["linux/amd64"], policy)
 
     assert ledger["complete"] is True
     assert ledger["resolved_owners"][0]["sboms"] == []
-    assert ledger["resolved_owners"][0]["components"] == []
+    assert ledger["resolved_owners"][0]["component_reviews"] == []
 
 
-@pytest.mark.parametrize("field", ("sboms", "components"))
+@pytest.mark.parametrize("field", ("sboms", "component_reviews"))
 def test_native_component_policy_requires_explicit_empty_evidence_sets(field: str) -> None:
     _inventories, _locked, policy, _lock_sources = native_component_coverage_case()
     for platform_records in policy["native_component_coverage"].values():
@@ -3022,7 +3178,8 @@ def test_native_component_policy_rejects_owner_without_native_or_sbom_surface() 
         owner = platform_records[0]
         owner["native_payloads"] = []
         owner["sboms"] = []
-        owner["components"] = []
+        owner["component_reviews"] = []
+        owner["payload_dispositions"] = []
 
     with pytest.raises(evidence.EvidenceError, match="no native payload or SBOM surface"):
         evidence.validate_native_component_policy_schema(policy)
@@ -3034,21 +3191,13 @@ def test_native_component_coverage_rejects_unexpected_observed_sbom_for_native_o
     for platform_records in policy["native_component_coverage"].values():
         owner = platform_records[0]
         owner["sboms"] = []
-        owner["components"] = []
+        owner["component_reviews"] = []
+        owner["payload_dispositions"] = [
+            {"kind": "owner", "role": payload["role"]} for payload in owner["native_payloads"]
+        ]
 
     with pytest.raises(evidence.EvidenceError, match="does not exactly cover SBOMs"):
         evidence.native_component_coverage_ledger(inventories["linux/amd64"], policy)
-
-
-def test_native_component_policy_rejects_fabricated_owner_component_mapping() -> None:
-    _inventories, _locked, policy, _lock_sources = native_component_coverage_case()
-    for platform_records in policy["native_component_coverage"].values():
-        platform_records[0]["sboms"] = []
-
-    with pytest.raises(
-        evidence.EvidenceError, match="owner components differ from embedded SBOM components"
-    ):
-        evidence.validate_native_component_policy_schema(policy)
 
 
 @pytest.mark.parametrize(
@@ -3130,18 +3279,13 @@ def test_native_component_payload_role_rejects_unsafe_or_ambiguous_paths(
         evidence.native_component_payload_role(path, platform, "test payload")
 
 
-def test_native_component_coverage_ledger_keeps_unconfigured_owner_unresolved() -> None:
+def test_native_component_coverage_ledger_rejects_unconfigured_owner() -> None:
     inventories, _locked, policy, _lock_sources = native_component_coverage_case()
     policy["native_component_coverage"] = {"linux/amd64": [], "linux/arm64": []}
     policy["native_component_sources"] = {}
 
-    ledger = evidence.native_component_coverage_ledger(inventories["linux/amd64"], policy)
-
-    assert ledger["complete"] is False
-    assert ledger["resolved_owners"] == []
-    assert [record["owner"] for record in ledger["unresolved_owners"]] == ["python:demo@1.0"]
-    assert len(ledger["unresolved_owners"][0]["native_payloads"]) == 2
-    assert len(ledger["unresolved_owners"][0]["embedded_sboms"]) == 1
+    with pytest.raises(evidence.EvidenceError, match="must exactly match observed owners"):
+        evidence.native_component_coverage_ledger(inventories["linux/amd64"], policy)
 
 
 @pytest.mark.parametrize(
@@ -3150,22 +3294,20 @@ def test_native_component_coverage_ledger_keeps_unconfigured_owner_unresolved() 
         ("missing_payload", "does not exactly cover payloads"),
         ("stale_payload", "does not exactly cover payloads"),
         ("stale_sbom", "does not exactly cover SBOMs"),
-        ("stale_owner", "stale owner"),
-        ("wrong_component", "differs from embedded SBOM components"),
+        ("stale_owner", "must exactly match observed owners"),
+        ("wrong_component", "differs from embedded SBOM observation"),
     ),
 )
 def test_native_component_coverage_rejects_missing_extra_or_stale_inventory_bindings(
     mutation: str, message: str
 ) -> None:
     inventories, _locked, policy, _lock_sources = native_component_coverage_case()
-    record = policy["native_component_coverage"]["linux/amd64"][0]
     if mutation == "missing_payload":
-        for platform_records in policy["native_component_coverage"].values():
-            platform_records[0]["native_payloads"].pop()
+        inventories["linux/amd64"]["native_payloads"].pop()
     elif mutation == "stale_payload":
-        record["native_payloads"][0]["sha256"] = "0" * 64
+        inventories["linux/amd64"]["native_payloads"][0]["sha256"] = "0" * 64
     elif mutation == "stale_sbom":
-        record["sboms"][0]["sha256"] = "0" * 64
+        inventories["linux/amd64"]["embedded_sboms"][0]["sha256"] = "0" * 64
     elif mutation == "stale_owner":
         for platform_records in policy["native_component_coverage"].values():
             platform_record = platform_records[0]
@@ -3174,10 +3316,18 @@ def test_native_component_coverage_rejects_missing_extra_or_stale_inventory_bind
                 "demo-1.0-", "missing-1.0-"
             )
     else:
-        for platform_records in policy["native_component_coverage"].values():
-            owner = platform_records[0]
-            owner["sboms"][0]["components"][0]["version"] = "9.9.9-r0"
-            owner["components"][0]["version"] = "9.9.9-r0"
+        observation = inventories["linux/amd64"]["embedded_sboms"][0]["cyclonedx"]
+        observation["components"][0]["version"] = "9.9.9"
+        body = {
+            field: observation[field]
+            for field in (
+                "metadata_component",
+                "metadata_root_echo",
+                "upstream_invalid_duplicate_bom_ref",
+                "components",
+            )
+        }
+        observation["observation_sha256"] = evidence.sha256_bytes(evidence.canonical_json(body))
 
     with pytest.raises(evidence.EvidenceError, match=message):
         evidence.native_component_coverage_ledger(inventories["linux/amd64"], policy)
@@ -3193,10 +3343,10 @@ def test_native_component_policy_rejects_cross_platform_conflicts_and_duplicate_
         evidence.validate_native_component_policy_schema(crossed)
 
     semantic_conflict = copy.deepcopy(policy)
-    semantic_conflict["native_component_coverage"]["linux/arm64"][0]["sboms"][0]["components"][0][
+    semantic_conflict["native_component_coverage"]["linux/arm64"][0]["component_reviews"][0][
         "reviewed_license"
     ] = "Apache-2.0"
-    with pytest.raises(evidence.EvidenceError, match="PURL has conflicting identity, source"):
+    with pytest.raises(evidence.EvidenceError, match="semantics differ across platforms"):
         evidence.validate_native_component_policy_schema(semantic_conflict)
 
     duplicate_path = copy.deepcopy(policy)
@@ -3223,12 +3373,17 @@ def test_native_component_policy_rejects_cross_platform_payload_role_differences
     )
     arm_owner["native_payloads"][1]["role"] = "demo/other-native.so"
     arm_owner["native_payloads"].sort(key=lambda record: record["role"])
+    disposition = next(
+        record for record in arm_owner["payload_dispositions"] if record["role"] == "demo/native.so"
+    )
+    disposition["role"] = "demo/other-native.so"
+    arm_owner["payload_dispositions"].sort(key=lambda record: record["role"])
 
     with pytest.raises(evidence.EvidenceError, match="semantics differ across platforms"):
         evidence.validate_native_component_policy_schema(policy)
 
 
-def test_native_component_policy_rejects_cross_platform_source_and_component_set_drift() -> None:
+def test_native_component_policy_rejects_cross_platform_source_drift() -> None:
     _inventories, _locked, policy, _lock_sources = native_component_coverage_case()
 
     source_drift = copy.deepcopy(policy)
@@ -3236,15 +3391,6 @@ def test_native_component_policy_rejects_cross_platform_source_and_component_set
     arm_owner["owner_source"]["sha256"] = "0" * 64
     with pytest.raises(evidence.EvidenceError, match="semantics differ across platforms"):
         evidence.validate_native_component_policy_schema(source_drift)
-
-    component_drift = copy.deepcopy(policy)
-    arm_owner = component_drift["native_component_coverage"]["linux/arm64"][0]
-    extra = copy.deepcopy(arm_owner["components"][0])
-    extra.update({"name": "libother", "purl": "pkg:apk/alpine/libother@1.2.3-r0"})
-    arm_owner["components"].append(copy.deepcopy(extra))
-    arm_owner["sboms"][0]["components"].append(copy.deepcopy(extra))
-    with pytest.raises(evidence.EvidenceError, match="semantics differ across platforms"):
-        evidence.validate_native_component_policy_schema(component_drift)
 
 
 def test_native_component_policy_rejects_same_set_cross_platform_role_swaps() -> None:
@@ -3260,79 +3406,26 @@ def test_native_component_policy_rejects_same_set_cross_platform_role_swaps() ->
         evidence.validate_native_component_policy_schema(policy)
 
 
-def test_native_component_policy_cannot_represent_cross_source_payload_swaps() -> None:
-    _inventories, _locked, policy, _lock_sources = native_component_coverage_case()
-    for platform_records in policy["native_component_coverage"].values():
-        owner = platform_records[0]
-        native_payloads = owner.pop("native_payloads")
-        owner["owner_payloads"] = [native_payloads[0]]
-        owner["sboms"][0]["components"][0]["payloads"] = [native_payloads[1]]
-
-    with pytest.raises(evidence.EvidenceError, match="unexpected schema shape"):
-        evidence.validate_native_component_policy_schema(policy)
-
-
 def test_native_component_policy_rejects_per_component_payload_fields() -> None:
     _inventories, _locked, policy, _lock_sources = native_component_coverage_case()
     for platform_records in policy["native_component_coverage"].values():
         owner = platform_records[0]
-        owner["sboms"][0]["components"][0]["payloads"] = [owner["native_payloads"][0]]
+        owner["sboms"][0]["observation"]["components"][0]["payloads"] = [
+            owner["native_payloads"][0]
+        ]
 
-    with pytest.raises(evidence.EvidenceError, match="unexpected schema shape"):
-        evidence.validate_native_component_policy_schema(policy)
-
-
-def test_native_component_policy_rejects_global_purl_semantic_conflicts() -> None:
-    _inventories, _locked, policy, _lock_sources = native_component_coverage_case()
-    source = copy.deepcopy(policy["native_component_sources"]["alpine:demo-native@1.2.3-r0"])
-    source.update({"origin": "other-native", "version": "2.0.0-r0"})
-    source["recipe"]["url"] = (
-        "https://gitlab.alpinelinux.org/alpine/aports/-/archive/"
-        f"{'4' * 40}/aports-{'4' * 40}.tar.gz?path=main/other-native"
-    )
-    source["distfiles"] = [
-        {
-            "filename": "other-native-2.0.0.tar.xz",
-            "url": ("https://distfiles.alpinelinux.org/distfiles/v3.22/other-native-2.0.0.tar.xz"),
-            "sha512": "a" * 128,
-            "size": 987,
-        }
-    ]
-    policy["native_component_sources"]["alpine:other-native@2.0.0-r0"] = source
-
-    for platform, platform_records in policy["native_component_coverage"].items():
-        owner = platform_records[0]
-        conflicting = copy.deepcopy(owner["sboms"][0]["components"][0])
-        conflicting.update(
-            {
-                "name": "libconflict",
-                "source": "alpine:other-native@2.0.0-r0",
-                "reviewed_license": "Apache-2.0",
-            }
-        )
-        owner["sboms"].append(
-            {
-                "path": (
-                    "opt/venv/lib/python3.14/site-packages/"
-                    "demo-1.0.dist-info/sboms/zz-conflict.cdx.json"
-                ),
-                "sha256": "d" * 64 if platform == "linux/amd64" else "e" * 64,
-                "components": [conflicting],
-            }
-        )
-
-    with pytest.raises(evidence.EvidenceError, match="PURL has conflicting identity, source"):
+    with pytest.raises(evidence.EvidenceError, match="CycloneDX component projection is invalid"):
         evidence.validate_native_component_policy_schema(policy)
 
 
 def test_native_component_policy_rejects_nested_custom_license_references() -> None:
     _inventories, _locked, policy, _lock_sources = native_component_coverage_case()
     for platform_records in policy["native_component_coverage"].values():
-        platform_records[0]["sboms"][0]["components"][0]["reviewed_license"] = (
+        platform_records[0]["component_reviews"][0]["reviewed_license"] = (
             "LicenseRef-Native-Unreviewed"
         )
 
-    with pytest.raises(evidence.EvidenceError, match="cannot use LicenseRef identifiers"):
+    with pytest.raises(evidence.EvidenceError, match="invalid reviewed license"):
         evidence.validate_native_component_policy_schema(policy)
 
 
@@ -3363,7 +3456,7 @@ def test_native_component_policy_rejects_unknown_unused_and_mutable_sources() ->
     _inventories, _locked, policy, _lock_sources = native_component_coverage_case()
     missing = copy.deepcopy(policy)
     missing["native_component_sources"] = {}
-    with pytest.raises(evidence.EvidenceError, match="unknown component source"):
+    with pytest.raises(evidence.EvidenceError, match="unknown source"):
         evidence.validate_native_component_policy_schema(missing)
 
     unused = copy.deepcopy(policy)
@@ -3401,6 +3494,891 @@ def test_native_component_policy_rejects_unknown_unused_and_mutable_sources() ->
         evidence.validate_native_component_policy_schema(unknown_source)
 
 
+def test_native_component_source_union_accepts_all_v7_variants() -> None:
+    alpine_commit = "1" * 40
+    alpine_source = {
+        "kind": "alpine-aports",
+        "origin": "openldap",
+        "version": "2.6.8-r0",
+        "aports_commit": alpine_commit,
+        "distfiles_release": "v3.22",
+        "recipe": {
+            "url": (
+                "https://gitlab.alpinelinux.org/alpine/aports/-/archive/"
+                f"{alpine_commit}/aports-{alpine_commit}.tar.gz?path=main/openldap"
+            ),
+            "sha256": "2" * 64,
+            "size": 1024,
+        },
+        "distfiles": [
+            {
+                "filename": "openldap-2.6.8.tar.gz",
+                "url": ("https://distfiles.alpinelinux.org/distfiles/v3.22/openldap-2.6.8.tar.gz"),
+                "sha512": "3" * 128,
+                "size": 2048,
+            },
+            {
+                "filename": "openldap-fix.patch",
+                "url": ("https://distfiles.alpinelinux.org/distfiles/v3.22/openldap-fix.patch"),
+                "sha512": "4" * 128,
+                "size": 512,
+            },
+        ],
+        "allowed_recipe_links": [
+            {
+                "path": "main/openldap/openldap-lloadd.pre-install",
+                "type": "symlink",
+                "target": "main/openldap/openldap.pre-install",
+            }
+        ],
+        "observed_license": "OLDAP-2.8",
+        "notices": [
+            {
+                "member": "openldap-2.6.8/LICENSE",
+                "sha256": "5" * 64,
+                "size": 100,
+            }
+        ],
+    }
+    crate_source = {
+        "kind": "crates-io",
+        "name": "demo-crate",
+        "version": "1.2.3",
+        "crate": {
+            "url": "https://static.crates.io/crates/demo-crate/demo-crate-1.2.3.crate",
+            "sha256": "6" * 64,
+            "size": 4096,
+        },
+        "manifest": {
+            "member": "demo-crate-1.2.3/Cargo.toml",
+            "sha256": "7" * 64,
+            "size": 200,
+        },
+        "raw_license": "MIT/Apache-2.0",
+        "normalized_license": "MIT OR Apache-2.0",
+        "notices": [
+            {
+                "member": "demo-crate-1.2.3/LICENSE-MIT",
+                "sha256": "8" * 64,
+                "size": 300,
+            }
+        ],
+    }
+    owner_source_id = "owner-sdist:python:demo@1.0#src/native"
+    owner_source = {
+        "kind": "owner-sdist-subpath",
+        "owner": "python:demo@1.0",
+        "path": "src/native",
+        "tree_sha256": "9" * 64,
+        "member_count": 4,
+        "expanded_size": 8192,
+        "notices": [
+            {
+                "member": "src/native/LICENSE",
+                "sha256": "a" * 64,
+                "size": 400,
+            }
+        ],
+    }
+    upstream_source = {
+        "kind": "checksummed-upstream-release",
+        "name": "openssl",
+        "version": "4.0.1",
+        "archive": {
+            "url": "https://www.openssl.org/source/openssl-4.0.1.tar.gz",
+            "sha256": "b" * 64,
+            "size": 16384,
+        },
+        "checksum_document": {
+            "url": "https://www.openssl.org/source/openssl-4.0.1.tar.gz.sha256",
+            "sha256": "c" * 64,
+            "size": 100,
+        },
+        "checksum_filename": "openssl-4.0.1.tar.gz",
+        "notices": [
+            {
+                "member": "openssl-4.0.1/LICENSE.txt",
+                "sha256": "d" * 64,
+                "size": 500,
+            }
+        ],
+    }
+    sources = {
+        "alpine:openldap@2.6.8-r0": alpine_source,
+        "crates-io:demo-crate@1.2.3": crate_source,
+        owner_source_id: owner_source,
+        "upstream-release:openssl@4.0.1": upstream_source,
+    }
+
+    assert evidence.native_component_sources({"native_component_sources": sources}) == sources
+
+
+def test_native_component_source_union_rejects_legacy_and_ambiguous_records() -> None:
+    _inventories, _locked, policy, _lock_sources = _native_component_fixture_inputs()
+    legacy_source = next(iter(policy["native_component_sources"].values()))
+    with pytest.raises(evidence.EvidenceError, match="unexpected schema shape"):
+        evidence.native_component_sources(
+            {"native_component_sources": {"alpine:demo-native@1.2.3-r0": legacy_source}}
+        )
+
+    ambiguous = {
+        "kind": "checksummed-upstream-release",
+        "name": "demo",
+        "version": "1.0",
+        "archive": {
+            "url": "https://example.com/demo-1.0.tar.gz",
+            "sha256": "1" * 64,
+            "size": 10,
+        },
+        "checksum_document": {
+            "url": "https://example.com/SHA256SUMS",
+            "sha256": "2" * 64,
+            "size": 10,
+        },
+        "checksum_filename": "different.tar.gz",
+        "notices": [{"member": "LICENSE", "sha256": "3" * 64, "size": 10}],
+    }
+    with pytest.raises(evidence.EvidenceError, match="checksum filename"):
+        evidence.native_component_sources(
+            {"native_component_sources": {"upstream-release:demo@1.0": ambiguous}}
+        )
+
+
+@pytest.mark.parametrize(
+    ("document", "expected_sha256", "message"),
+    (
+        (
+            b"a" * 64 + b" *demo-1.0.tar.gz\n",
+            "a" * 64,
+            None,
+        ),
+        (
+            b"a" * 64 + b" *demo-1.0.tar.gz\n" + b"a" * 64 + b"  demo-1.0.tar.gz\n",
+            "a" * 64,
+            "exactly one matching filename",
+        ),
+        (
+            b"a" * 64 + b" *demo-1.0.tar.gz\n",
+            "b" * 64,
+            "digest differs",
+        ),
+        (
+            b"not a checksum\n",
+            "a" * 64,
+            "malformed record",
+        ),
+    ),
+)
+def test_upstream_checksum_document_is_exact_and_unambiguous(
+    document: bytes,
+    expected_sha256: str,
+    message: str | None,
+) -> None:
+    if message is None:
+        evidence.verify_upstream_checksum_document(
+            document,
+            filename="demo-1.0.tar.gz",
+            expected_sha256=expected_sha256,
+        )
+        return
+    with pytest.raises(evidence.EvidenceError, match=message):
+        evidence.verify_upstream_checksum_document(
+            document,
+            filename="demo-1.0.tar.gz",
+            expected_sha256=expected_sha256,
+        )
+
+
+def test_crates_io_archive_binds_manifest_license_and_notices() -> None:
+    manifest = b'[package]\nname = "demo-crate"\nversion = "1.2.3"\nlicense = "MIT OR Apache-2.0"\n'
+    notice = b"Copyright demo\n"
+    archive = tar_bytes(
+        {
+            "demo-crate-1.2.3/Cargo.toml": manifest,
+            "demo-crate-1.2.3/LICENSE": notice,
+            "demo-crate-1.2.3/src/lib.rs": b"pub fn demo() {}\n",
+        }
+    )
+    source = {
+        "name": "demo-crate",
+        "version": "1.2.3",
+        "manifest": {
+            "member": "demo-crate-1.2.3/Cargo.toml",
+            "sha256": evidence.sha256_bytes(manifest),
+            "size": len(manifest),
+        },
+        "raw_license": "MIT OR Apache-2.0",
+        "notices": [
+            {
+                "member": "demo-crate-1.2.3/LICENSE",
+                "sha256": evidence.sha256_bytes(notice),
+                "size": len(notice),
+            }
+        ],
+    }
+    found = evidence.verify_crates_io_archive(
+        archive,
+        source_id="crates-io:demo-crate@1.2.3",
+        source=source,
+    )
+    assert found == {
+        "demo-crate-1.2.3/Cargo.toml": manifest,
+        "demo-crate-1.2.3/LICENSE": notice,
+    }
+
+    changed = copy.deepcopy(source)
+    changed["raw_license"] = "MIT"
+    with pytest.raises(evidence.EvidenceError, match="identity or license differs"):
+        evidence.verify_crates_io_archive(
+            archive,
+            source_id="crates-io:demo-crate@1.2.3",
+            source=changed,
+        )
+
+    linked = tar_bytes(
+        {"demo-crate-1.2.3/Cargo.toml": manifest},
+        links={"demo-crate-1.2.3/LICENSE": "Cargo.toml"},
+    )
+    with pytest.raises(evidence.EvidenceError, match="unsupported entry"):
+        evidence.verify_crates_io_archive(
+            linked,
+            source_id="crates-io:demo-crate@1.2.3",
+            source=source,
+        )
+
+
+def test_owner_sdist_subtree_uses_a_canonical_link_free_manifest() -> None:
+    source_file = b"int demo(void) { return 0; }\n"
+    header_file = b"int demo(void);\n"
+    archive = tar_bytes(
+        {
+            "demo-1.0/src/native/demo.c": source_file,
+            "demo-1.0/src/native/include/demo.h": header_file,
+            "demo-1.0/README.md": b"demo\n",
+        },
+        directories=[
+            "demo-1.0",
+            "demo-1.0/src",
+            "demo-1.0/src/native",
+            "demo-1.0/src/native/include",
+        ],
+    )
+    manifest = [
+        {
+            "path": "demo.c",
+            "type": "file",
+            "mode": 0o644,
+            "size": len(source_file),
+            "sha256": evidence.sha256_bytes(source_file),
+        },
+        {
+            "path": "include",
+            "type": "directory",
+            "mode": 0o755,
+            "size": 0,
+            "sha256": None,
+        },
+        {
+            "path": "include/demo.h",
+            "type": "file",
+            "mode": 0o644,
+            "size": len(header_file),
+            "sha256": evidence.sha256_bytes(header_file),
+        },
+    ]
+    source = {
+        "path": "src/native",
+        "member_count": len(manifest),
+        "expanded_size": len(source_file) + len(header_file),
+        "tree_sha256": evidence.sha256_bytes(evidence.canonical_json(manifest)),
+    }
+    assert (
+        evidence.verify_owner_sdist_subtree(
+            archive,
+            source_id="owner-sdist:python:demo@1.0#src/native",
+            source=source,
+            archive_name="demo-1.0.tar.gz",
+        )
+        == manifest
+    )
+
+    linked = tar_bytes(
+        {"demo-1.0/src/native/demo.c": source_file},
+        links={"demo-1.0/docs/latest": "README.md"},
+    )
+    with pytest.raises(evidence.EvidenceError, match="unsupported entry"):
+        evidence.verify_owner_sdist_subtree(
+            linked,
+            source_id="owner-sdist:python:demo@1.0#src/native",
+            source=source,
+            archive_name="demo-1.0.tar.gz",
+        )
+
+    multiple_roots = tar_bytes(
+        {
+            "demo-1.0/src/native/demo.c": source_file,
+            "other-root/README": b"other\n",
+        }
+    )
+    with pytest.raises(evidence.EvidenceError, match="one top-level root"):
+        evidence.verify_owner_sdist_subtree(
+            multiple_roots,
+            source_id="owner-sdist:python:demo@1.0#src/native",
+            source=source,
+            archive_name="demo-1.0.tar.gz",
+        )
+
+
+def test_owner_sdist_zip_subtree_tracks_top_level_roots() -> None:
+    source_file = b"int demo(void) { return 0; }\n"
+    manifest = [
+        {
+            "path": "demo.c",
+            "type": "file",
+            "mode": 0o644,
+            "size": len(source_file),
+            "sha256": evidence.sha256_bytes(source_file),
+        }
+    ]
+    source = {
+        "path": "src/native",
+        "member_count": 1,
+        "expanded_size": len(source_file),
+        "tree_sha256": evidence.sha256_bytes(evidence.canonical_json(manifest)),
+    }
+    archive = source_zip_bytes(
+        [
+            ("demo-1.0/", b""),
+            ("demo-1.0/src/", b""),
+            ("demo-1.0/src/native/", b""),
+            ("demo-1.0/src/native/demo.c", source_file),
+            ("demo-1.0/README.md", b"demo\n"),
+        ]
+    )
+
+    assert (
+        evidence.verify_owner_sdist_subtree(
+            archive,
+            source_id="owner-sdist:python:demo@1.0#src/native",
+            source=source,
+            archive_name="demo-1.0.zip",
+        )
+        == manifest
+    )
+
+    multiple_roots = source_zip_bytes(
+        [
+            ("demo-1.0/src/native/demo.c", source_file),
+            ("other-root/README.md", b"other\n"),
+        ]
+    )
+    with pytest.raises(evidence.EvidenceError, match="one top-level root"):
+        evidence.verify_owner_sdist_subtree(
+            multiple_roots,
+            source_id="owner-sdist:python:demo@1.0#src/native",
+            source=source,
+            archive_name="demo-1.0.zip",
+        )
+
+
+def test_native_component_v7_policy_separates_observation_review_and_closure() -> None:
+    policy = native_component_v7_policy_case()
+    evidence.validate_native_component_policy_schema(policy)
+
+    missing_review = copy.deepcopy(policy)
+    for records in missing_review["native_component_coverage"].values():
+        records[0]["component_reviews"] = []
+    with pytest.raises(evidence.EvidenceError, match="does not dispose every SBOM observation"):
+        evidence.validate_native_component_policy_schema(missing_review)
+
+    drifted_license = copy.deepcopy(policy)
+    drifted_license["native_component_coverage"]["linux/arm64"][0]["sboms"][0]["observation"][
+        "components"
+    ][0]["licenses"] = [{"license": {"id": "Apache-2.0"}}]
+    body = {
+        field: drifted_license["native_component_coverage"]["linux/arm64"][0]["sboms"][0][
+            "observation"
+        ][field]
+        for field in (
+            "metadata_component",
+            "metadata_root_echo",
+            "upstream_invalid_duplicate_bom_ref",
+            "components",
+        )
+    }
+    drifted_license["native_component_coverage"]["linux/arm64"][0]["sboms"][0]["observation"][
+        "observation_sha256"
+    ] = evidence.sha256_bytes(evidence.canonical_json(body))
+    drifted_owner = drifted_license["native_component_coverage"]["linux/arm64"][0]
+    rebind_policy_observation_digest(
+        drifted_owner,
+        sbom_path=drifted_owner["sboms"][0]["path"],
+        observation_sha256=drifted_owner["sboms"][0]["observation"]["observation_sha256"],
+    )
+    with pytest.raises(evidence.EvidenceError, match="semantics differ across platforms"):
+        evidence.validate_native_component_policy_schema(drifted_license)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    (
+        ("observation_sha256", "0" * 64, "unknown observation"),
+        ("bom_ref", "unrelated-occurrence", "unknown observation"),
+        ("purl", "pkg:generic/other@9.9.9", "unknown observation"),
+        ("identity_kind", "purl", "unexpected schema shape"),
+    ),
+)
+def test_native_component_v7_review_references_bind_the_exact_observation(
+    field: str,
+    value: str,
+    message: str,
+) -> None:
+    policy = native_component_v7_policy_case()
+    for records in policy["native_component_coverage"].values():
+        reference = records[0]["component_reviews"][0]["observations"][0]
+        reference[field] = value
+    with pytest.raises(evidence.EvidenceError, match=message):
+        evidence.validate_native_component_policy_schema(policy)
+
+
+def test_native_component_v7_crate_review_binds_purl_hash_and_normalized_license() -> None:
+    policy = native_component_v7_policy_case()
+    source_id = "crates-io:demo-crate@1.2.3"
+    crate_digest = "a" * 64
+    policy["native_component_sources"] = {
+        source_id: {
+            "kind": "crates-io",
+            "name": "demo-crate",
+            "version": "1.2.3",
+            "crate": {
+                "url": ("https://static.crates.io/crates/demo-crate/demo-crate-1.2.3.crate"),
+                "sha256": crate_digest,
+                "size": 100,
+            },
+            "manifest": {
+                "member": "demo-crate-1.2.3/Cargo.toml",
+                "sha256": "b" * 64,
+                "size": 100,
+            },
+            "raw_license": "MIT OR Apache-2.0",
+            "normalized_license": "MIT OR Apache-2.0",
+            "notices": [
+                {
+                    "member": "demo-crate-1.2.3/LICENSE",
+                    "sha256": "c" * 64,
+                    "size": 100,
+                }
+            ],
+        }
+    }
+    for records in policy["native_component_coverage"].values():
+        owner = records[0]
+        sbom = owner["sboms"][0]
+        component = sbom["observation"]["components"][0]
+        component.update(
+            {
+                "name": "demo-crate",
+                "version": "1.2.3",
+                "purl": "pkg:cargo/demo-crate@1.2.3",
+                "bom_ref": "pkg:cargo/demo-crate@1.2.3",
+                "hashes": [{"alg": "SHA-256", "content": crate_digest}],
+                "licenses": [{"expression": "MIT OR Apache-2.0"}],
+            }
+        )
+        body = {
+            field: sbom["observation"][field]
+            for field in (
+                "metadata_component",
+                "metadata_root_echo",
+                "upstream_invalid_duplicate_bom_ref",
+                "components",
+            )
+        }
+        sbom["observation"]["observation_sha256"] = evidence.sha256_bytes(
+            evidence.canonical_json(body)
+        )
+        reference = evidence.retained_observation_reference(
+            sbom["path"],
+            sbom["observation"]["observation_sha256"],
+            component,
+        )
+        owner["component_reviews"] = [
+            {
+                "observations": [reference],
+                "source": source_id,
+                "reviewed_license": "MIT OR Apache-2.0",
+            }
+        ]
+        owner["cargo_lock"] = {
+            "member": "demo-1.0/Cargo.lock",
+            "sha256": "e" * 64,
+            "size": 100,
+            "source_ids": [source_id],
+            "non_sbom_packages": [],
+        }
+        owner["payload_dispositions"][0]["observations"] = [reference]
+    evidence.validate_native_component_policy_schema(policy)
+
+    wrong_hash = copy.deepcopy(policy)
+    for records in wrong_hash["native_component_coverage"].values():
+        records[0]["sboms"][0]["observation"]["components"][0]["hashes"][0]["content"] = "d" * 64
+        sbom = records[0]["sboms"][0]
+        body = {
+            field: sbom["observation"][field]
+            for field in (
+                "metadata_component",
+                "metadata_root_echo",
+                "upstream_invalid_duplicate_bom_ref",
+                "components",
+            )
+        }
+        sbom["observation"]["observation_sha256"] = evidence.sha256_bytes(
+            evidence.canonical_json(body)
+        )
+        rebind_policy_observation_digest(
+            records[0],
+            sbom_path=sbom["path"],
+            observation_sha256=sbom["observation"]["observation_sha256"],
+        )
+    with pytest.raises(evidence.EvidenceError, match="crate review differs"):
+        evidence.validate_native_component_policy_schema(wrong_hash)
+
+    conflicting_hash = copy.deepcopy(policy)
+    for records in conflicting_hash["native_component_coverage"].values():
+        owner = records[0]
+        sbom = owner["sboms"][0]
+        sbom["observation"]["components"][0]["hashes"].append(
+            {"alg": "SHA-256", "content": "d" * 64}
+        )
+        body = {
+            field: sbom["observation"][field]
+            for field in (
+                "metadata_component",
+                "metadata_root_echo",
+                "upstream_invalid_duplicate_bom_ref",
+                "components",
+            )
+        }
+        sbom["observation"]["observation_sha256"] = evidence.sha256_bytes(
+            evidence.canonical_json(body)
+        )
+        rebind_policy_observation_digest(
+            owner,
+            sbom_path=sbom["path"],
+            observation_sha256=sbom["observation"]["observation_sha256"],
+        )
+    with pytest.raises(evidence.EvidenceError, match="repeats a hash algorithm"):
+        evidence.validate_native_component_policy_schema(conflicting_hash)
+
+    wrong_observed_license = copy.deepcopy(policy)
+    for records in wrong_observed_license["native_component_coverage"].values():
+        owner = records[0]
+        sbom = owner["sboms"][0]
+        sbom["observation"]["components"][0]["licenses"] = [{"expression": "GPL-3.0-only"}]
+        body = {
+            field: sbom["observation"][field]
+            for field in (
+                "metadata_component",
+                "metadata_root_echo",
+                "upstream_invalid_duplicate_bom_ref",
+                "components",
+            )
+        }
+        sbom["observation"]["observation_sha256"] = evidence.sha256_bytes(
+            evidence.canonical_json(body)
+        )
+        rebind_policy_observation_digest(
+            owner,
+            sbom_path=sbom["path"],
+            observation_sha256=sbom["observation"]["observation_sha256"],
+        )
+    with pytest.raises(evidence.EvidenceError, match="crate review differs"):
+        evidence.validate_native_component_policy_schema(wrong_observed_license)
+
+
+def test_native_component_v7_crate_review_requires_exact_cargo_lock_context() -> None:
+    policy = native_component_v7_policy_case()
+    source_id = "crates-io:demo-crate@1.2.3"
+    source = {
+        "kind": "crates-io",
+        "name": "demo-crate",
+        "version": "1.2.3",
+        "crate": {
+            "url": "https://static.crates.io/crates/demo-crate/demo-crate-1.2.3.crate",
+            "sha256": "a" * 64,
+            "size": 100,
+        },
+        "manifest": {
+            "member": "demo-crate-1.2.3/Cargo.toml",
+            "sha256": "b" * 64,
+            "size": 100,
+        },
+        "raw_license": "MIT",
+        "normalized_license": "MIT",
+        "notices": [
+            {
+                "member": "demo-crate-1.2.3/LICENSE",
+                "sha256": "c" * 64,
+                "size": 100,
+            }
+        ],
+    }
+    policy["native_component_sources"] = {source_id: source}
+    for records in policy["native_component_coverage"].values():
+        owner = records[0]
+        sbom = owner["sboms"][0]
+        component = sbom["observation"]["components"][0]
+        component.update(
+            {
+                "name": "demo-crate",
+                "version": "1.2.3",
+                "purl": "pkg:cargo/demo-crate@1.2.3",
+                "bom_ref": "pkg:cargo/demo-crate@1.2.3",
+                "hashes": [{"alg": "SHA-256", "content": "a" * 64}],
+                "licenses": [{"license": {"id": "MIT"}}],
+            }
+        )
+        body = {
+            field: sbom["observation"][field]
+            for field in (
+                "metadata_component",
+                "metadata_root_echo",
+                "upstream_invalid_duplicate_bom_ref",
+                "components",
+            )
+        }
+        sbom["observation"]["observation_sha256"] = evidence.sha256_bytes(
+            evidence.canonical_json(body)
+        )
+        reference = evidence.retained_observation_reference(
+            sbom["path"],
+            sbom["observation"]["observation_sha256"],
+            component,
+        )
+        owner["component_reviews"] = [
+            {
+                "observations": [reference],
+                "source": source_id,
+                "reviewed_license": "MIT",
+            }
+        ]
+        owner["payload_dispositions"][0]["observations"] = [reference]
+
+    with pytest.raises(evidence.EvidenceError, match=r"require Cargo\.lock context"):
+        evidence.validate_native_component_policy_schema(policy)
+
+    for records in policy["native_component_coverage"].values():
+        records[0]["cargo_lock"] = {
+            "member": "demo-1.0/Cargo.lock",
+            "sha256": "d" * 64,
+            "size": 100,
+            "source_ids": [source_id],
+            "non_sbom_packages": [],
+        }
+    evidence.validate_native_component_policy_schema(policy)
+
+    wrong_sources = copy.deepcopy(policy)
+    for records in wrong_sources["native_component_coverage"].values():
+        records[0]["cargo_lock"]["source_ids"] = []
+    with pytest.raises(evidence.EvidenceError, match="source IDs differ"):
+        evidence.validate_native_component_policy_schema(wrong_sources)
+
+    overlap = copy.deepcopy(policy)
+    for records in overlap["native_component_coverage"].values():
+        records[0]["cargo_lock"]["non_sbom_packages"] = [
+            {
+                "name": "demo-crate",
+                "version": "1.2.3",
+                "source": evidence.CARGO_CRATES_IO_SOURCE,
+                "checksum": "a" * 64,
+            }
+        ]
+    with pytest.raises(evidence.EvidenceError, match="repeats a reviewed crate"):
+        evidence.validate_native_component_policy_schema(overlap)
+
+    cross_platform_drift = copy.deepcopy(policy)
+    cross_platform_drift["native_component_coverage"]["linux/arm64"][0]["cargo_lock"]["sha256"] = (
+        "e" * 64
+    )
+    with pytest.raises(evidence.EvidenceError, match="semantics differ across platforms"):
+        evidence.validate_native_component_policy_schema(cross_platform_drift)
+
+
+def test_cargo_lock_verifier_rejects_missing_duplicate_foreign_and_unreviewed_packages() -> None:
+    source_id = "crates-io:demo-crate@1.2.3"
+    checksum_a = "a" * 64
+    checksum_b = "b" * 64
+    sources = {
+        source_id: {
+            "kind": "crates-io",
+            "name": "demo-crate",
+            "version": "1.2.3",
+            "crate": {"sha256": checksum_a},
+        }
+    }
+    package = (
+        "[[package]]\n"
+        'name = "demo-crate"\n'
+        'version = "1.2.3"\n'
+        f'source = "{evidence.CARGO_CRATES_IO_SOURCE}"\n'
+        f'checksum = "{checksum_a}"\n'
+    )
+    valid = f"version = 4\n\n{package}".encode()
+
+    def verify(content: bytes, *, context_content: bytes | None = None) -> None:
+        expected = content if context_content is None else context_content
+        context = {
+            "owner": "python:demo@1.0",
+            "owner_root_observations": set(),
+            "observations": {},
+            "record": {
+                "cargo_lock": {
+                    "member": "demo-1.0/Cargo.lock",
+                    "sha256": evidence.sha256_bytes(expected),
+                    "size": len(expected),
+                    "source_ids": [source_id],
+                    "non_sbom_packages": [],
+                },
+                "component_reviews": [],
+            },
+        }
+        evidence.verify_owner_cargo_lock(
+            context,
+            sources,
+            tar_bytes({"demo-1.0/Cargo.lock": content}),
+            archive_name="demo-1.0.tar.gz",
+        )
+
+    verify(valid)
+
+    missing = valid.replace(b"demo-crate", b"other-crate")
+    with pytest.raises(evidence.EvidenceError, match="registry packages differ"):
+        verify(missing)
+
+    duplicate = valid + b"\n" + package.encode()
+    with pytest.raises(evidence.EvidenceError, match="repeats a package"):
+        verify(duplicate)
+
+    foreign = valid.replace(
+        evidence.CARGO_CRATES_IO_SOURCE.encode(),
+        b"registry+https://example.com/index",
+    )
+    with pytest.raises(evidence.EvidenceError, match="foreign registry"):
+        verify(foreign)
+
+    extra = (
+        valid
+        + b"\n[[package]]\n"
+        + b'name = "lock-only"\nversion = "9.0.0"\n'
+        + f'source = "{evidence.CARGO_CRATES_IO_SOURCE}"\n'.encode()
+        + f'checksum = "{checksum_b}"\n'.encode()
+    )
+    with pytest.raises(evidence.EvidenceError, match="registry packages differ"):
+        verify(extra)
+
+    with pytest.raises(evidence.EvidenceError, match="reviewed source file differs"):
+        verify(valid + b"\n", context_content=valid)
+
+
+def test_native_component_v7_open_owner_requires_exact_unresolved_evidence() -> None:
+    policy = native_component_v7_policy_case()
+    for records in policy["native_component_coverage"].values():
+        owner = records[0]
+        reference = copy.deepcopy(owner["component_reviews"][0]["observations"][0])
+        owner["component_reviews"] = []
+        owner["known_omissions"] = [
+            {
+                "id": "unproven-libdemo",
+                "component": {
+                    "type": "library",
+                    "name": "libdemo",
+                    "version": "1.2.3",
+                    "purl": "pkg:generic/libdemo@1.2.3",
+                },
+                "observations": [reference],
+                "payload_roles": ["demo.libs/libdemo.so.1"],
+                "missing_evidence": ["source-payload-relationship"],
+                "reason": "The retained source is not proven to have built this payload.",
+            }
+        ]
+        owner["payload_dispositions"][0] = {
+            "kind": "known-omission",
+            "role": "demo.libs/libdemo.so.1",
+            "omission": "unproven-libdemo",
+        }
+        owner["review"] = {
+            "state": "open",
+            "reason": "Exact build-material provenance is unavailable.",
+            "unresolved_items": ["unproven-libdemo"],
+        }
+    policy["native_component_sources"] = {}
+    evidence.validate_native_component_policy_schema(policy)
+
+    falsely_closed = copy.deepcopy(policy)
+    for records in falsely_closed["native_component_coverage"].values():
+        records[0]["review"] = {"state": "closed", "reason": "", "unresolved_items": []}
+    with pytest.raises(evidence.EvidenceError, match="cannot close"):
+        evidence.validate_native_component_policy_schema(falsely_closed)
+
+    stale_ledger = copy.deepcopy(policy)
+    for records in stale_ledger["native_component_coverage"].values():
+        records[0]["review"]["unresolved_items"] = ["different-gap"]
+    with pytest.raises(evidence.EvidenceError, match="differ from known omissions"):
+        evidence.validate_native_component_policy_schema(stale_ledger)
+
+
+def test_native_component_v7_policy_requires_review_for_metadata_root_echo() -> None:
+    policy = native_component_v7_policy_case()
+    for records in policy["native_component_coverage"].values():
+        sbom = records[0]["sboms"][0]
+        wheel = records[0]["wheel"]["url"].rsplit("/", maxsplit=1)[-1]
+        root = {
+            "type": "library",
+            "name": "demo",
+            "version": "1.0",
+            "purl": f"pkg:pypi/demo@1.0?file_name={wheel}",
+            "bom_ref": f"pkg:pypi/demo@1.0?file_name={wheel}",
+            "hashes": [],
+            "licenses": [],
+        }
+        observation = sbom["observation"]
+        observation["metadata_component"] = root
+        observation["metadata_root_echo"] = copy.deepcopy(root)
+        observation["upstream_invalid_duplicate_bom_ref"] = True
+        body = {
+            field: observation[field]
+            for field in (
+                "metadata_component",
+                "metadata_root_echo",
+                "upstream_invalid_duplicate_bom_ref",
+                "components",
+            )
+        }
+        observation["observation_sha256"] = evidence.sha256_bytes(evidence.canonical_json(body))
+        rebind_policy_observation_digest(
+            records[0],
+            sbom_path=sbom["path"],
+            observation_sha256=observation["observation_sha256"],
+        )
+        sbom["metadata_root"] = {
+            "kind": "owner",
+            "anomaly_review": {
+                "kind": "metadata-root-echo",
+                "reason": (
+                    "The upstream auditwheel document repeats its metadata root and bom-ref "
+                    "as one canonically identical top-level component."
+                ),
+            },
+        }
+    evidence.validate_native_component_policy_schema(policy)
+
+    missing_review = copy.deepcopy(policy)
+    for records in missing_review["native_component_coverage"].values():
+        records[0]["sboms"][0]["metadata_root"]["anomaly_review"] = None
+    with pytest.raises(evidence.EvidenceError, match="anomaly review"):
+        evidence.validate_native_component_policy_schema(missing_review)
+
+
 @pytest.mark.parametrize("field", ("url", "sha256", "size"))
 def test_native_component_lock_binding_rejects_wheel_and_owner_source_drift(field: str) -> None:
     inventories, locked, policy, lock_sources = native_component_coverage_case()
@@ -3428,429 +4406,276 @@ def test_native_component_lock_binding_rejects_wheel_and_owner_source_drift(fiel
         )
 
 
+def test_native_component_lock_binding_accepts_exact_reviewed_source_fallback() -> None:
+    inventories, locked, policy, lock_sources = native_component_coverage_case()
+    inventory = inventories["linux/amd64"]
+    fallback = lock_sources.pop(("demo", "1.0"))
+    policy["python_sources"] = [
+        {
+            "name": "demo",
+            "version": "1.0",
+            **fallback,
+        }
+    ]
+
+    ledger = evidence.verify_native_component_lock_bindings(
+        inventory,
+        policy,
+        [locked["linux/amd64"]],
+        lock_sources,
+    )
+    assert ledger["complete"] is True
+
+    wrong_fallback = copy.deepcopy(policy)
+    wrong_fallback["python_sources"][0]["sha256"] = "0" * 64
+    with pytest.raises(evidence.EvidenceError, match="reviewed source fallback"):
+        evidence.verify_native_component_lock_bindings(
+            inventory,
+            wrong_fallback,
+            [locked["linux/amd64"]],
+            lock_sources,
+        )
+
+
 def test_committed_native_owner_policy_is_exact_and_incomplete() -> None:
     policy = cast(dict[str, Any], json.loads(Path(".compliance/container-policy.json").read_text()))
     evidence.validate_policy_schema(policy)
-    source = policy["native_component_sources"]["alpine:gcc@14.2.0-r6"]
 
-    assert policy["schema_version"] == 6
-    assert source["aports_commit"] == "fbf60319be3bbaf6dd32ef55cc6fb7189e05c266"
-    assert source["recipe"] == {
-        "url": (
-            "https://gitlab.alpinelinux.org/alpine/aports/-/archive/"
-            "fbf60319be3bbaf6dd32ef55cc6fb7189e05c266/"
-            "aports-fbf60319be3bbaf6dd32ef55cc6fb7189e05c266.tar.gz?path=main/gcc"
-        ),
-        "sha256": "5c623d22ac85b64f1dab2346cee6991432723cc7983ec7cb13a5b58692bfc658",
-        "size": 49583,
-    }
-    assert source["distfiles"] == [
-        {
-            "filename": "gcc-14.2.0.tar.xz",
-            "url": "https://distfiles.alpinelinux.org/distfiles/v3.22/gcc-14.2.0.tar.xz",
-            "sha512": (
-                "932bdef0cda94bacedf452ab17f103c0cb511ff2cec55e9112fc0328cbf1d803"
-                "b42595728ea7b200e0a057c03e85626f937012e49a7515bc5dd256b2bf4bc396"
-            ),
-            "size": 92306460,
-        }
-    ]
-    assert source["observed_license"] == "GPL-2.0-or-later AND LGPL-2.1-or-later"
-    assert source["notices"] == [
-        {
-            "member": "gcc-14.2.0/COPYING.RUNTIME",
-            "sha256": "9d6b43ce4d8de0c878bf16b54d8e7a10d9bd42b75178153e3af6a815bdc90f74",
-            "size": 3324,
-        },
-        {
-            "member": "gcc-14.2.0/COPYING3",
-            "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903",
-            "size": 35147,
-        },
-    ]
-    assert any(
-        record
-        == {
-            "id": "GCC-exception-3.1",
-            "sha256": "7103d4f7f7e2f8ce10d282a05e0689637f8d6d9ef7b399d808d1da313e69b960",
-            "url": (
-                "https://raw.githubusercontent.com/spdx/license-list-data/"
-                "421fbabbe80c94c58c12316af1bc6a2dca2362bc/text/GCC-exception-3.1.txt"
-            ),
-        }
-        for record in policy["license_texts"]
-    )
+    assert policy["schema_version"] == 7
     assert policy["distribution_approval"]["approved"] is False
-    assert evidence.SOURCE_COMPLETENESS_REASON == (
-        "Four native-wheel owners still lack closed-world component/source coverage in issue "
-        "#18; public distribution remains blocked pending issue #28."
+    source = policy["native_component_sources"]["alpine:gcc@14.2.0-r6"]
+    assert source["allowed_recipe_links"] == []
+    assert source["aports_commit"] == "fbf60319be3bbaf6dd32ef55cc6fb7189e05c266"
+    assert source["recipe"]["sha256"] == (
+        "5c623d22ac85b64f1dab2346cee6991432723cc7983ec7cb13a5b58692bfc658"
     )
-    lock_sources = evidence.parse_lock_sources(Path("uv.lock"))
-    markupsafe_source = {
-        "url": (
-            "https://files.pythonhosted.org/packages/7e/99/"
-            "7690b6d4034fffd95959cbe0c02de8deb3098cc577c67bb6a24fe5d7caa7/"
-            "markupsafe-3.0.3.tar.gz"
-        ),
-        "sha256": "722695808f4b6457b320fdc131280796bdceb04ab50fe1795cd540799ebe1698",
-        "size": 80313,
+
+    expected_owners = [
+        "python:cffi@2.1.0",
+        "python:cryptography@48.0.1",
+        "python:greenlet@3.5.3",
+        "python:markupsafe@3.0.3",
+        "python:psycopg-binary@3.3.4",
+        "python:pydantic-core@2.46.4",
+        "python:sqlalchemy@2.0.51",
+    ]
+    expected_states = {
+        "python:cffi@2.1.0": "open",
+        "python:cryptography@48.0.1": "open",
+        "python:greenlet@3.5.3": "closed",
+        "python:markupsafe@3.0.3": "closed",
+        "python:psycopg-binary@3.3.4": "open",
+        "python:pydantic-core@2.46.4": "open",
+        "python:sqlalchemy@2.0.51": "closed",
     }
-    markupsafe_by_platform = {
-        "linux/amd64": {
-            "wheel": {
-                "url": (
-                    "https://files.pythonhosted.org/packages/ff/0e/"
-                    "53dfaca23a69fbfbbf17a4b64072090e70717344c52eaaaa9c5ddff1e5f0/"
-                    "markupsafe-3.0.3-cp314-cp314-musllinux_1_2_x86_64.whl"
-                ),
-                "sha256": "2713baf880df847f2bece4230d4d094280f4e67b1e813eec43b4c0e144a34ffe",
-                "size": 23043,
-            },
-            "payload": {
-                "path": (
-                    "opt/venv/lib/python3.14/site-packages/markupsafe/"
-                    "_speedups.cpython-314-x86_64-linux-musl.so"
-                ),
-                "role": "markupsafe/_speedups.cpython-314.so",
-                "sha256": "d87beb24c0d907f39ac850f691eb87c262bba55530cb570269ae70b2fa19ae53",
-            },
-            "identity": [
-                (
-                    "opt/venv/lib/python3.14/site-packages/markupsafe-3.0.3.dist-info/RECORD",
-                    "fc8dc3884a15a5a604660af350d56fe1abe4b83d16ed6b4c72d11653e700a4e5",
-                    914,
-                ),
-                (
-                    "opt/venv/lib/python3.14/site-packages/markupsafe-3.0.3.dist-info/WHEEL",
-                    "2b6fd37a16678a82410e69b96da0d57e1a02c5a72527326c3eb9e0de183b583d",
-                    112,
-                ),
-            ],
-        },
-        "linux/arm64": {
-            "wheel": {
-                "url": (
-                    "https://files.pythonhosted.org/packages/9a/a7/"
-                    "591f592afdc734f47db08a75793a55d7fbcc6902a723ae4cfbab61010cc5/"
-                    "markupsafe-3.0.3-cp314-cp314-musllinux_1_2_aarch64.whl"
-                ),
-                "sha256": "ec15a59cf5af7be74194f7ab02d0f59a62bdcf1a537677ce67a2537c9b87fcda",
-                "size": 23821,
-            },
-            "payload": {
-                "path": (
-                    "opt/venv/lib/python3.14/site-packages/markupsafe/"
-                    "_speedups.cpython-314-aarch64-linux-musl.so"
-                ),
-                "role": "markupsafe/_speedups.cpython-314.so",
-                "sha256": "7f9bf0b4fc7f302e400d54b8a07d3b6923ffcd09e5cbc5e0aacdf273b50daebc",
-            },
-            "identity": [
-                (
-                    "opt/venv/lib/python3.14/site-packages/markupsafe-3.0.3.dist-info/RECORD",
-                    "8f2578875b67ef46338c2c6af9740c609ace64eebf44963384388a69307f5d21",
-                    915,
-                ),
-                (
-                    "opt/venv/lib/python3.14/site-packages/markupsafe-3.0.3.dist-info/WHEEL",
-                    "624aeb504b1fb0c19886fd23f4e113f5fcb26ff3c0789da05ceb1c7703a3732a",
-                    113,
-                ),
-            ],
-        },
-    }
-    sqlalchemy_source = {
-        "url": (
-            "https://files.pythonhosted.org/packages/02/f1/"
-            "a7a892f18d4d224e6b26f706531eafccc41e37594d37d304786969ee13cb/"
-            "sqlalchemy-2.0.51.tar.gz"
-        ),
-        "sha256": "804dccd8a4a6242c4e30ad961e540e18a588f6527202f2d6791b01845d59fdc9",
-        "size": 9912201,
-    }
-    sqlalchemy_by_platform: dict[str, dict[str, Any]] = {
-        "linux/amd64": {
-            "wheel": {
-                "url": (
-                    "https://files.pythonhosted.org/packages/02/3c/"
-                    "52f408ea701781caee975606beccc48845f2aee8711ac29843d612c0306c/"
-                    "sqlalchemy-2.0.51-cp314-cp314-musllinux_1_2_x86_64.whl"
-                ),
-                "sha256": "39a76529db6305693d8d4affa58ad5b5e2e18edd62daea628b29b97930b3513d",
-                "size": 3252888,
-            },
-            "payloads": [
-                {
-                    "path": (
-                        "opt/venv/lib/python3.14/site-packages/sqlalchemy/cyextension/"
-                        "collections.cpython-314-x86_64-linux-musl.so"
-                    ),
-                    "role": "sqlalchemy/cyextension/collections.cpython-314.so",
-                    "sha256": "a48610d29b3b54f5ba67b874302c6f400ff3e684f148a50ef0affb6341cfffc6",
-                    "size": 1424968,
-                },
-                {
-                    "path": (
-                        "opt/venv/lib/python3.14/site-packages/sqlalchemy/cyextension/"
-                        "immutabledict.cpython-314-x86_64-linux-musl.so"
-                    ),
-                    "role": "sqlalchemy/cyextension/immutabledict.cpython-314.so",
-                    "sha256": "548b681d56bc5d945a0b34e6f02a4b3eab88fb54341e4047b8dcae18b7ff215e",
-                    "size": 563520,
-                },
-                {
-                    "path": (
-                        "opt/venv/lib/python3.14/site-packages/sqlalchemy/cyextension/"
-                        "processors.cpython-314-x86_64-linux-musl.so"
-                    ),
-                    "role": "sqlalchemy/cyextension/processors.cpython-314.so",
-                    "sha256": "d2105caa5c25faf239930079bef0e821be9e85e659031200a78a31a20e1abce2",
-                    "size": 434912,
-                },
-                {
-                    "path": (
-                        "opt/venv/lib/python3.14/site-packages/sqlalchemy/cyextension/"
-                        "resultproxy.cpython-314-x86_64-linux-musl.so"
-                    ),
-                    "role": "sqlalchemy/cyextension/resultproxy.cpython-314.so",
-                    "sha256": "ba92efd35c3c6e528932d84c9363edad2a4ccdac2238b8dfdcf8d40a8d0f35bd",
-                    "size": 431280,
-                },
-                {
-                    "path": (
-                        "opt/venv/lib/python3.14/site-packages/sqlalchemy/cyextension/"
-                        "util.cpython-314-x86_64-linux-musl.so"
-                    ),
-                    "role": "sqlalchemy/cyextension/util.cpython-314.so",
-                    "sha256": "9093c13f438c92753f6c3dad7a93ca2034a4b06f91f04575ce9cbf107d3b4bf1",
-                    "size": 605968,
-                },
-            ],
-            "identity": [
-                (
-                    "opt/venv/lib/python3.14/site-packages/sqlalchemy-2.0.51.dist-info/RECORD",
-                    "0b7f69da79b3abd11809fd8381cf7de69fafaec19891f95d0594afed27521d18",
-                    24603,
-                ),
-                (
-                    "opt/venv/lib/python3.14/site-packages/sqlalchemy-2.0.51.dist-info/WHEEL",
-                    "20422576b24cc95a1a3bb9e37cc201844e9a6aeac9198e9aef3018c876f0a4fb",
-                    112,
-                ),
-            ],
-        },
-        "linux/arm64": {
-            "wheel": {
-                "url": (
-                    "https://files.pythonhosted.org/packages/f6/ab/"
-                    "9e17272fd4dac8df3b83c4fbe52b998a1c9d89a843c8c35ff29b74ff7364/"
-                    "sqlalchemy-2.0.51-cp314-cp314-musllinux_1_2_aarch64.whl"
-                ),
-                "sha256": "0f6bcad487aee1c638d707235682fc96f741de00663619881ab235400d03289e",
-                "size": 3230929,
-            },
-            "payloads": [
-                {
-                    "path": (
-                        "opt/venv/lib/python3.14/site-packages/sqlalchemy/cyextension/"
-                        "collections.cpython-314-aarch64-linux-musl.so"
-                    ),
-                    "role": "sqlalchemy/cyextension/collections.cpython-314.so",
-                    "sha256": "af0e06bc14c4d1e07e9a782ea989a660c93a1d73a03183f8526538ccbdf45815",
-                    "size": 1495280,
-                },
-                {
-                    "path": (
-                        "opt/venv/lib/python3.14/site-packages/sqlalchemy/cyextension/"
-                        "immutabledict.cpython-314-aarch64-linux-musl.so"
-                    ),
-                    "role": "sqlalchemy/cyextension/immutabledict.cpython-314.so",
-                    "sha256": "51ffb26c1053f8d94f772103542c1c9e175980956e3f8fdfe78a749140509b9e",
-                    "size": 605872,
-                },
-                {
-                    "path": (
-                        "opt/venv/lib/python3.14/site-packages/sqlalchemy/cyextension/"
-                        "processors.cpython-314-aarch64-linux-musl.so"
-                    ),
-                    "role": "sqlalchemy/cyextension/processors.cpython-314.so",
-                    "sha256": "87baa582e4ec656af88ab83eadd181919d13afccbfda646d4a2e35901ea9a24d",
-                    "size": 492024,
-                },
-                {
-                    "path": (
-                        "opt/venv/lib/python3.14/site-packages/sqlalchemy/cyextension/"
-                        "resultproxy.cpython-314-aarch64-linux-musl.so"
-                    ),
-                    "role": "sqlalchemy/cyextension/resultproxy.cpython-314.so",
-                    "sha256": "953be69c142a001094f93f0c682c6b3f57144677cbe394efc5197d297259eb6c",
-                    "size": 493608,
-                },
-                {
-                    "path": (
-                        "opt/venv/lib/python3.14/site-packages/sqlalchemy/cyextension/"
-                        "util.cpython-314-aarch64-linux-musl.so"
-                    ),
-                    "role": "sqlalchemy/cyextension/util.cpython-314.so",
-                    "sha256": "f5ac85bf51fa1cda4b1ab4e109f5a7f390419ef6a4e8d1aad618b7bd213acce1",
-                    "size": 646352,
-                },
-            ],
-            "identity": [
-                (
-                    "opt/venv/lib/python3.14/site-packages/sqlalchemy-2.0.51.dist-info/RECORD",
-                    "cd3011f8b7dd82067ad811d3a8a2a207e60bbd3ad2c9b8cc7e2bccc5e61708e4",
-                    24608,
-                ),
-                (
-                    "opt/venv/lib/python3.14/site-packages/sqlalchemy-2.0.51.dist-info/WHEEL",
-                    "65af8284031537a21af94191b3984a5fb68f4ea67b3d8265f2c09c8fdbcc1b31",
-                    113,
-                ),
-            ],
-        },
+    expected_omissions = {
+        "python:cffi@2.1.0": ["unproven-libffi-build-input"],
+        "python:cryptography@48.0.1": ["unresolved-rust-and-openssl-sources"],
+        "python:greenlet@3.5.3": [],
+        "python:markupsafe@3.0.3": [],
+        "python:psycopg-binary@3.3.4": [
+            "missing-libpq-sbom",
+            "unreviewed-bundled-library-sources",
+        ],
+        "python:pydantic-core@2.46.4": [
+            "missing-libgcc-sbom",
+            "unreviewed-cargo-sources",
+        ],
+        "python:sqlalchemy@2.0.51": [],
     }
     for platform in ("linux/amd64", "linux/arm64"):
         owners = policy["native_component_coverage"][platform]
-        assert [owner["owner"] for owner in owners] == [
-            "python:greenlet@3.5.3",
-            "python:markupsafe@3.0.3",
-            "python:sqlalchemy@2.0.51",
-        ]
-        greenlet_owner, markupsafe_owner, sqlalchemy_owner = owners
-        assert greenlet_owner["owner_source"] == lock_sources[("greenlet", "3.5.3")]
-        assert len(greenlet_owner["native_payloads"]) == 5
-        assert [record["role"] for record in greenlet_owner["native_payloads"]] == [
-            "greenlet.libs/libgcc_s.so.1",
-            "greenlet.libs/libstdc++.so.6.0.33",
-            "greenlet/_greenlet.cpython-314.so",
-            "greenlet/tests/_test_extension.cpython-314.so",
-            "greenlet/tests/_test_extension_cpp.cpython-314.so",
-        ]
-        assert greenlet_owner["components"] == greenlet_owner["sboms"][0]["components"]
-        assert [component["name"] for component in greenlet_owner["components"]] == [
-            "libgcc",
-            "libstdc++",
-        ]
-        assert all("payloads" not in component for component in greenlet_owner["components"])
-
-        expected_markupsafe = markupsafe_by_platform[platform]
-        assert markupsafe_owner == {
-            "components": [],
-            "native_payloads": [expected_markupsafe["payload"]],
-            "owner": "python:markupsafe@3.0.3",
-            "owner_source": markupsafe_source,
-            "sboms": [],
-            "wheel": expected_markupsafe["wheel"],
-        }
-        assert markupsafe_owner["owner_source"] == lock_sources[("markupsafe", "3.0.3")]
-
-        expected_sqlalchemy = sqlalchemy_by_platform[platform]
-        expected_sqlalchemy_payloads = [
-            {field: record[field] for field in ("path", "role", "sha256")}
-            for record in expected_sqlalchemy["payloads"]
-        ]
-        assert sqlalchemy_owner == {
-            "components": [],
-            "native_payloads": expected_sqlalchemy_payloads,
-            "owner": "python:sqlalchemy@2.0.51",
-            "owner_source": sqlalchemy_source,
-            "sboms": [],
-            "wheel": expected_sqlalchemy["wheel"],
-        }
-        assert sqlalchemy_owner["owner_source"] == lock_sources[("sqlalchemy", "2.0.51")]
-
-        owner_versions = {
-            "cffi": "2.1.0",
-            "cryptography": "48.0.1",
-            "greenlet": "3.5.3",
-            "markupsafe": "3.0.3",
-            "psycopg-binary": "3.3.4",
-            "pydantic-core": "2.46.4",
-            "sqlalchemy": "2.0.51",
-        }
-
-        def payload_owner(path: str, versions: dict[str, str] = owner_versions) -> str:
-            first = path.split("site-packages/", maxsplit=1)[1].split("/", maxsplit=1)[0]
-            if first.startswith("_cffi_backend"):
-                name = "cffi"
-            elif first.startswith("psycopg_binary"):
-                name = "psycopg-binary"
-            elif first.startswith("pydantic_core"):
-                name = "pydantic-core"
-            else:
-                name = first.split("-", maxsplit=1)[0].split(".", maxsplit=1)[0]
-            return f"python:{name}@{versions[name]}"
-
-        baselines = policy["unexpanded_python_payloads"][platform]
-        native_payloads = [
-            {**copy.deepcopy(record), "owner": payload_owner(record["path"]), "elf": {}}
-            for record in baselines["native_payloads"]
-        ]
-        embedded_sboms = []
-        for record in baselines["embedded_sboms"]:
-            record_owner = payload_owner(record["path"])
-            components = (
-                [
-                    {field: component[field] for field in ("type", "name", "version", "purl")}
-                    for component in greenlet_owner["components"]
-                ]
-                if record_owner == "python:greenlet@3.5.3"
-                else []
+        assert [record["owner"] for record in owners] == expected_owners
+        assert {record["owner"]: record["review"]["state"] for record in owners} == (
+            expected_states
+        )
+        assert {
+            record["owner"]: [omission["id"] for omission in record["known_omissions"]]
+            for record in owners
+        } == expected_omissions
+        pydantic = next(
+            record for record in owners if record["owner"] == "python:pydantic-core@2.46.4"
+        )
+        libgcc = next(
+            omission
+            for omission in pydantic["known_omissions"]
+            if omission["id"] == "missing-libgcc-sbom"
+        )
+        assert libgcc["component"]["version"] == "12.4.0"
+        assert (
+            sum(
+                sbom["metadata_root"]["anomaly_review"] is not None
+                for owner in owners
+                for sbom in owner["sboms"]
             )
-            embedded_sboms.append(
+            == 3
+        )
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    (
+        ("metadata-root", "metadata-root omission does not cite its observation"),
+        ("payload", "named omission does not cite its payload"),
+    ),
+)
+def test_known_omission_dispositions_bind_the_named_omission(
+    mutation: str,
+    message: str,
+) -> None:
+    policy = cast(dict[str, Any], json.loads(Path(".compliance/container-policy.json").read_text()))
+
+    for records in policy["native_component_coverage"].values():
+        owners = {record["owner"]: record for record in records}
+        if mutation == "metadata-root":
+            cryptography = owners["python:cryptography@48.0.1"]
+            sbom = next(
+                record
+                for record in cryptography["sboms"]
+                if record["metadata_root"]["kind"] == "owner"
+            )
+            observation = sbom["observation"]
+            reference = evidence.retained_observation_reference(
+                sbom["path"],
+                observation["observation_sha256"],
+                observation["metadata_component"],
+            )
+            cryptography["known_omissions"].append(
                 {
-                    **copy.deepcopy(record),
-                    "owner": record_owner,
-                    "cyclonedx": {"metadata_component": None, "components": components},
+                    "id": "unrelated-metadata-root-review",
+                    "component": {
+                        "type": "library",
+                        "name": "unrelated-component",
+                        "version": "1",
+                        "purl": "",
+                    },
+                    "observations": [reference],
+                    "payload_roles": [],
+                    "missing_evidence": ["exact-source"],
+                    "reason": "Adversarial fixture assigns the root to another omission.",
                 }
             )
-        native_owners = sorted({record["owner"] for record in (*native_payloads, *embedded_sboms)})
-        inventory = {
-            "platform": platform,
-            "components": [
-                copy.deepcopy(component)
-                for component in policy["platforms"][platform]
-                if evidence.component_key(component) in native_owners
-            ],
-            "wheel_installations": [{"owner": native_owner} for native_owner in native_owners],
-            "native_payloads": native_payloads,
-            "embedded_sboms": embedded_sboms,
-        }
-        markupsafe_identity = [
-            (record["path"], record["sha256"], record["size"])
-            for record in baselines["wheel_identity_files"]
-            if "markupsafe-3.0.3.dist-info" in record["path"]
-        ]
-        assert markupsafe_identity == expected_markupsafe["identity"]
-        sqlalchemy_identity = [
-            (record["path"], record["sha256"], record["size"])
-            for record in baselines["wheel_identity_files"]
-            if "sqlalchemy-2.0.51.dist-info" in record["path"]
-        ]
-        assert sqlalchemy_identity == expected_sqlalchemy["identity"]
-        sqlalchemy_payloads = [
-            (record["path"], record["sha256"], record["size"])
-            for record in baselines["native_payloads"]
-            if "/sqlalchemy/cyextension/" in record["path"]
-        ]
-        assert sqlalchemy_payloads == [
-            (record["path"], record["sha256"], record["size"])
-            for record in expected_sqlalchemy["payloads"]
-        ]
-        ledger = evidence.native_component_coverage_ledger(inventory, policy)
-        assert [item["owner"] for item in ledger["resolved_owners"]] == [
-            "python:greenlet@3.5.3",
-            "python:markupsafe@3.0.3",
-            "python:sqlalchemy@2.0.51",
-        ]
-        assert [item["owner"] for item in ledger["unresolved_owners"]] == [
-            "python:cffi@2.1.0",
-            "python:cryptography@48.0.1",
-            "python:psycopg-binary@3.3.4",
-            "python:pydantic-core@2.46.4",
-        ]
-        assert ledger["complete"] is False
+            cryptography["known_omissions"].sort(key=lambda record: record["id"])
+            cryptography["review"]["unresolved_items"] = [
+                record["id"] for record in cryptography["known_omissions"]
+            ]
+            anomaly_review = copy.deepcopy(sbom["metadata_root"]["anomaly_review"])
+            sbom["metadata_root"] = {
+                "kind": "known-omission",
+                "omission": "unresolved-rust-and-openssl-sources",
+                "anomaly_review": anomaly_review,
+            }
+        else:
+            psycopg = owners["python:psycopg-binary@3.3.4"]
+            disposition = next(
+                record
+                for record in psycopg["payload_dispositions"]
+                if record["role"] == "psycopg_binary.libs/libpq.so.5.18"
+            )
+            disposition["omission"] = "unreviewed-bundled-library-sources"
+
+    with pytest.raises(evidence.EvidenceError, match=message):
+        evidence.validate_native_component_policy_schema(policy)
+
+
+@pytest.mark.parametrize(
+    ("side", "message"),
+    (
+        ("source", "relationship source payload does not cite its observation"),
+        ("target", "relationship target payload does not cite its observation"),
+    ),
+)
+def test_native_relationship_requires_payload_observation_mapping(side: str, message: str) -> None:
+    policy = cast(dict[str, Any], json.loads(Path(".compliance/container-policy.json").read_text()))
+    for records in policy["native_component_coverage"].values():
+        owners = {record["owner"]: record for record in records}
+        cryptography = owners["python:cryptography@48.0.1"]
+        greenlet = owners["python:greenlet@3.5.3"]
+        relationship = cryptography["canonical_relationships"][0]
+        if side == "source":
+            disposition = next(
+                record
+                for record in cryptography["payload_dispositions"]
+                if record["role"] == relationship["payload_role"]
+            )
+            disposition["observations"] = [
+                copy.deepcopy(cryptography["known_omissions"][0]["observations"][0])
+            ]
+        else:
+            disposition = next(
+                record
+                for record in greenlet["payload_dispositions"]
+                if record["role"] == relationship["reference_payload_role"]
+            )
+            unrelated = next(
+                record
+                for record in greenlet["payload_dispositions"]
+                if record["role"] == "greenlet.libs/libstdc++.so.6.0.33"
+            )
+            disposition["observations"] = copy.deepcopy(unrelated["observations"])
+
+    with pytest.raises(evidence.EvidenceError, match=message):
+        evidence.validate_native_component_policy_schema(policy)
+
+
+def test_native_relationship_target_bom_ref_drift_has_equivalent_semantics() -> None:
+    policy = cast(dict[str, Any], json.loads(Path(".compliance/container-policy.json").read_text()))
+    records = policy["native_component_coverage"]["linux/arm64"]
+    owners = {record["owner"]: record for record in records}
+    cryptography = owners["python:cryptography@48.0.1"]
+    greenlet = owners["python:greenlet@3.5.3"]
+    target = cryptography["canonical_relationships"][0]["reference_observation"]
+    sbom = next(record for record in greenlet["sboms"] if record["path"] == target["sbom_path"])
+    observation = sbom["observation"]
+    component = next(
+        record for record in observation["components"] if record["bom_ref"] == target["bom_ref"]
+    )
+    old_bom_ref = component["bom_ref"]
+    new_bom_ref = "zzzz-arm64-build-specific-libgcc"
+    component["bom_ref"] = new_bom_ref
+    rebind_policy_observation_bom_ref(
+        records,
+        sbom_path=sbom["path"],
+        old_bom_ref=old_bom_ref,
+        new_bom_ref=new_bom_ref,
+    )
+
+    semantic_body = {
+        field: observation[field]
+        for field in (
+            "metadata_component",
+            "metadata_root_echo",
+            "upstream_invalid_duplicate_bom_ref",
+            "components",
+        )
+    }
+    observation["observation_sha256"] = evidence.sha256_bytes(
+        evidence.canonical_json(semantic_body)
+    )
+    rebind_policy_observation_digest(
+        records,
+        sbom_path=sbom["path"],
+        observation_sha256=observation["observation_sha256"],
+    )
+
+    def reference_key(reference: object) -> tuple[str, str, str, str, str]:
+        return cast(
+            tuple[str, str, str, str, str],
+            evidence.validate_observation_reference(reference, "test reference"),
+        )
+
+    for review in greenlet["component_reviews"]:
+        review["observations"].sort(key=reference_key)
+    greenlet["component_reviews"].sort(
+        key=lambda review: tuple(reference_key(item) for item in review["observations"])
+    )
+    for omission in greenlet["known_omissions"]:
+        omission["observations"].sort(key=reference_key)
+    for disposition in greenlet["payload_dispositions"]:
+        if disposition["kind"] == "sbom-components":
+            disposition["observations"].sort(key=reference_key)
+
+    evidence.validate_native_component_policy_schema(policy)
 
 
 def test_native_component_recipe_binds_version_license_and_distfile() -> None:
@@ -4057,16 +4882,44 @@ def test_recipe_checksum_parser_rejects_even_safe_links(link_kind: str) -> None:
 
 def test_recipe_checksum_parser_requires_an_exact_pinned_link_exception() -> None:
     path = "aports/main/demo/post-upgrade"
+    target = "aports/main/demo/post-install"
     recipe = tar_bytes(
-        {"aports/main/demo/APKBUILD": b""},
+        {
+            "aports/main/demo/APKBUILD": b"",
+            target: b"#!/bin/sh\n",
+        },
         links={path: "post-install"},
     )
-    exception = {"path": path, "target": "post-install", "type": "symlink"}
+    exception = {"path": path, "target": target, "type": "symlink"}
 
     assert evidence.recipe_checksums(recipe, "demo", allowed_links=[exception]) == ({}, set())
     with pytest.raises(evidence.EvidenceError, match="missing="):
         evidence.recipe_checksums(
             tar_bytes({"aports/main/demo/APKBUILD": b""}),
+            "demo",
+            allowed_links=[exception],
+        )
+
+
+@pytest.mark.parametrize("failure", ("dangling", "chain"))
+def test_recipe_checksum_link_exception_must_resolve_directly_to_a_regular_file(
+    failure: str,
+) -> None:
+    path = "aports/main/demo/post-upgrade"
+    target = "aports/main/demo/post-install"
+    files = {"aports/main/demo/APKBUILD": b""}
+    links = {path: "post-install"}
+    if failure == "chain":
+        links[target] = "real-script"
+        files["aports/main/demo/real-script"] = b"#!/bin/sh\n"
+    exception = {"path": path, "target": target, "type": "symlink"}
+
+    with pytest.raises(
+        evidence.EvidenceError,
+        match=r"resolve directly to retained regular files|unexpected=",
+    ):
+        evidence.recipe_checksums(
+            tar_bytes(files, links=links),
             "demo",
             allowed_links=[exception],
         )
@@ -5082,12 +5935,163 @@ def test_policy_comparison_and_human_approval_are_separate() -> None:
         "approved_on": "2026-07-14",
         "rationale": "Test-only approval.",
     }
-    with pytest.raises(evidence.EvidenceError, match="evidence is incomplete"):
-        evidence.verify_inventory(inventory, policy, require_approval=True)
+    evidence.verify_inventory(inventory, policy, require_approval=True)
 
     policy["platforms"]["linux/amd64"][0] = {**component, "version": "2"}
     with pytest.raises(evidence.EvidenceError, match="differs from the reviewed policy"):
         evidence.verify_inventory(inventory, policy, require_approval=False)
+
+
+def test_incomplete_native_coverage_cannot_claim_distribution_approval(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    committed_policy = cast(
+        dict[str, Any], json.loads(Path(".compliance/container-policy.json").read_text())
+    )
+    committed_policy["distribution_approval"] = {
+        "approved": True,
+        "approved_by": "maintainer",
+        "approved_on": "2026-07-22",
+        "rationale": "This must not override open owner reviews.",
+    }
+    with pytest.raises(evidence.EvidenceError, match=r"cannot be true while.*incomplete"):
+        evidence.validate_policy_schema(committed_policy)
+
+    component = {
+        "ecosystem": "python",
+        "name": "demo",
+        "version": "1",
+        "observed_license": "MIT",
+        "effective": True,
+        "metadata_sha256": "f" * 64,
+    }
+    inventory = standalone_inventory(component)
+    policy = standalone_policy(
+        component,
+        "MIT",
+        license_texts=[
+            {
+                "id": "MIT",
+                "sha256": "e5" * 32,
+                "url": "https://example.com/MIT.txt",
+            }
+        ],
+    )
+    policy["distribution_approval"] = {
+        "approved": True,
+        "approved_by": "maintainer",
+        "approved_on": "2026-07-22",
+        "rationale": "This must not override derived evidence.",
+    }
+    monkeypatch.setattr(
+        evidence,
+        "native_component_coverage_ledger",
+        lambda _inventory, _policy: {
+            "complete": False,
+            "resolved_owners": [],
+            "unresolved_owners": [{"owner": "python:demo@1"}],
+        },
+    )
+
+    with pytest.raises(evidence.EvidenceError, match=r"cannot be true while.*incomplete"):
+        evidence.verify_inventory(inventory, policy, require_approval=False)
+
+
+def test_standalone_verification_rejects_extra_standard_license_text() -> None:
+    component = {
+        "ecosystem": "python",
+        "name": "demo",
+        "version": "1",
+        "observed_license": "MIT",
+        "effective": True,
+        "metadata_sha256": "f" * 64,
+    }
+    inventory = standalone_inventory(component)
+    policy = standalone_policy(
+        component,
+        "MIT",
+        license_texts=[
+            {
+                "id": "MIT",
+                "sha256": "e5" * 32,
+                "url": "https://example.com/MIT.txt",
+            }
+        ],
+    )
+    policy["license_texts"].append(
+        {
+            "id": "Apache-2.0",
+            "sha256": "a" * 64,
+            "url": "https://example.com/Apache-2.0.txt",
+        }
+    )
+
+    with pytest.raises(evidence.EvidenceError, match="does not exactly cover"):
+        evidence.verify_inventory(inventory, policy, require_approval=False)
+
+
+def test_standard_license_union_includes_direct_reviews_in_open_owners() -> None:
+    component = {
+        "ecosystem": "python",
+        "name": "demo",
+        "version": "1",
+        "observed_license": "MIT",
+        "effective": True,
+        "metadata_sha256": "f" * 64,
+    }
+    policy = standalone_policy(
+        component,
+        "MIT",
+        license_texts=[
+            {
+                "id": "MIT",
+                "sha256": "e5" * 32,
+                "url": "https://example.com/MIT.txt",
+            }
+        ],
+    )
+    native_policy = native_component_v7_policy_case()
+    for records in native_policy["native_component_coverage"].values():
+        owner = records[0]
+        owner["component_reviews"][0]["reviewed_license"] = "Apache-2.0"
+        owner["known_omissions"] = [
+            {
+                "id": "missing-build-proof",
+                "component": {
+                    "type": "library",
+                    "name": "demo-build",
+                    "version": "1.0",
+                    "purl": "",
+                },
+                "observations": [],
+                "payload_roles": [],
+                "missing_evidence": ["build-material-attestation"],
+                "reason": "The exact build-material proof is not retained.",
+            }
+        ]
+        owner["review"] = {
+            "state": "open",
+            "reason": "One build-material proof remains open.",
+            "unresolved_items": ["missing-build-proof"],
+        }
+    evidence.validate_native_component_policy_schema(native_policy)
+    policy.update(native_policy)
+
+    with pytest.raises(evidence.EvidenceError, match="does not exactly cover"):
+        evidence.validate_standard_license_text_coverage(
+            [component, synthetic_runtime_component()], policy
+        )
+
+    policy["license_texts"].append(
+        {
+            "id": "Apache-2.0",
+            "sha256": "a" * 64,
+            "url": "https://example.com/Apache-2.0.txt",
+        }
+    )
+    evidence.validate_standard_license_text_coverage(
+        [component, synthetic_runtime_component()], policy
+    )
 
 
 def test_license_refs_require_exact_pinned_custom_evidence() -> None:
@@ -5905,7 +6909,6 @@ def test_inventory_reports_unexpanded_wheel_sboms_and_native_payloads(
 
     inventory, files = evidence._inventory_saved_image(image, "linux/amd64", "sha256:" + "a" * 64)
 
-    assert inventory["source_completeness"]["complete"] is False
     assert [item["path"] for item in inventory["embedded_sboms"]] == [
         f"{site}/demo-1.0.dist-info/sboms/auditwheel.cdx.json"
     ]
@@ -5919,6 +6922,9 @@ def test_inventory_reports_unexpanded_wheel_sboms_and_native_payloads(
             "name": "libdemo",
             "version": "1.2.3",
             "purl": "pkg:generic/libdemo@1.2.3",
+            "bom_ref": "pkg:generic/libdemo@1.2.3",
+            "hashes": [],
+            "licenses": [],
         }
     ]
     assert inventory["native_payloads"][0]["owner"] == "python:demo@1.0"
@@ -5967,38 +6973,811 @@ def test_inventory_reports_unexpanded_wheel_sboms_and_native_payloads(
         evidence.verify_unexpanded_payload_policy(changed_wheel, payload_policy)
 
 
-def test_cyclonedx_projection_deduplicates_exact_components_and_rejects_conflicts() -> None:
+def test_cyclonedx_projection_uses_bom_ref_for_repeated_purl_occurrences() -> None:
     component = {
         "type": "library",
         "name": "libdemo",
         "version": "1.2.3",
         "purl": "pkg:generic/libdemo@1.2.3",
-        "bom-ref": "libdemo",
+        "bom-ref": "libdemo:first",
     }
+    second = copy.deepcopy(component)
+    second["bom-ref"] = "libdemo:second"
     parsed = evidence.parse_cyclonedx_sbom(
-        cyclonedx_sbom(components=[component, copy.deepcopy(component)]), "demo.cdx.json"
+        cyclonedx_sbom(components=[second, component]), "demo.cdx.json"
     )
-    assert parsed["components"] == [
-        {
-            "type": "library",
-            "name": "libdemo",
-            "version": "1.2.3",
-            "purl": "pkg:generic/libdemo@1.2.3",
-        }
+    reversed_order = evidence.parse_cyclonedx_sbom(
+        cyclonedx_sbom(components=[component, second]), "demo.cdx.json"
+    )
+    assert parsed == reversed_order
+    assert [item["bom_ref"] for item in parsed["components"]] == [
+        "libdemo:first",
+        "libdemo:second",
     ]
 
     conflicting_purl = copy.deepcopy(component)
     conflicting_purl["purl"] = "pkg:generic/libdemo@9.9.9"
-    with pytest.raises(evidence.EvidenceError, match="conflicting purls"):
+    conflicting_purl["bom-ref"] = "libdemo-nine"
+    parsed = evidence.parse_cyclonedx_sbom(
+        cyclonedx_sbom(components=[component, conflicting_purl]), "distinct.cdx.json"
+    )
+    assert [item["purl"] for item in parsed["components"]] == [
+        "pkg:generic/libdemo@1.2.3",
+        "pkg:generic/libdemo@9.9.9",
+    ]
+
+    duplicate_ref = copy.deepcopy(component)
+    duplicate_ref["name"] = "other"
+    with pytest.raises(evidence.EvidenceError, match="repeats a non-echo bom-ref"):
         evidence.parse_cyclonedx_sbom(
-            cyclonedx_sbom(components=[component, conflicting_purl]), "conflict.cdx.json"
+            cyclonedx_sbom(components=[component, duplicate_ref]), "duplicate-ref.cdx.json"
         )
 
-    conflicting_identity = copy.deepcopy(component)
-    conflicting_identity["name"] = "other"
-    with pytest.raises(evidence.EvidenceError, match="conflicting component identities"):
+    missing_ref = copy.deepcopy(component)
+    missing_ref.pop("bom-ref")
+    with pytest.raises(evidence.EvidenceError, match="mixed or repeated fallback purl"):
         evidence.parse_cyclonedx_sbom(
-            cyclonedx_sbom(components=[component, conflicting_identity]), "conflict.cdx.json"
+            cyclonedx_sbom(components=[component, missing_ref]), "mixed-identity.cdx.json"
+        )
+
+
+def auditwheel_fixture_bytes(filename: str) -> bytes:
+    fixture = (
+        Path(__file__).parent
+        / "fixtures"
+        / "container_evidence"
+        / "v7"
+        / "auditwheel"
+        / f"{filename}.b64"
+    )
+    return base64.b64decode(
+        b"".join(fixture.read_bytes().splitlines()),
+        validate=True,
+    )
+
+
+def real_v7_fixture_bytes(filename: str) -> bytes:
+    fixture = (
+        Path(__file__).parent
+        / "fixtures"
+        / "container_evidence"
+        / "v7"
+        / "real"
+        / f"{filename}.b64"
+    )
+    return base64.b64decode(
+        b"".join(fixture.read_bytes().splitlines()),
+        validate=True,
+    )
+
+
+def real_v7_crate_bytes(name: str, version: str) -> bytes:
+    fixture = (
+        Path(__file__).parent
+        / "fixtures"
+        / "container_evidence"
+        / "v7"
+        / "real"
+        / "crates"
+        / f"{name}-{version}.crate.b64"
+    )
+    return base64.b64decode(
+        b"".join(fixture.read_bytes().splitlines()),
+        validate=True,
+    )
+
+
+def real_rust_cargo_lock_case(
+    *,
+    owner: str,
+    sbom_filename: str,
+    installed_sbom_path: str,
+    lock_filename: str,
+    lock_member: str,
+    metadata_is_owner: bool,
+) -> tuple[
+    dict[str, Any],
+    dict[str, dict[str, Any]],
+    bytes,
+    dict[str, Any],
+]:
+    """Build a verification context from exact locked-package Rust evidence."""
+
+    raw_sbom = real_v7_fixture_bytes(sbom_filename)
+    parsed = evidence.parse_cyclonedx_sbom(raw_sbom, sbom_filename)
+    sbom_path = f"opt/venv/lib/python3.14/site-packages/{installed_sbom_path}"
+    observation_sha256 = parsed["observation_sha256"]
+    observations: dict[tuple[str, str, str, str, str], dict[str, Any]] = {}
+    owner_roots: set[tuple[str, str, str, str, str]] = set()
+    local_references: list[dict[str, str]] = []
+    sources: dict[str, dict[str, Any]] = {}
+
+    projected = [
+        *([parsed["metadata_component"]] if parsed["metadata_component"] is not None else []),
+        *parsed["components"],
+    ]
+    for index, component in enumerate(projected):
+        reference = evidence.retained_observation_reference(
+            sbom_path,
+            observation_sha256,
+            component,
+        )
+        key = evidence.validate_observation_reference(
+            reference,
+            f"real Rust fixture observation {index}",
+        )
+        observations[key] = component
+        identity = evidence.cargo_purl_identity(
+            component["purl"],
+            f"real Rust fixture observation {index}",
+        )
+        if identity is None:
+            continue
+        if "download_url=file:" in component["purl"]:
+            if index == 0 and parsed["metadata_component"] is not None and metadata_is_owner:
+                owner_roots.add(key)
+            else:
+                local_references.append(reference)
+            continue
+        hashes = [item["content"] for item in component["hashes"] if item["alg"] == "SHA-256"]
+        assert len(hashes) == 1
+        name, version = identity
+        source_id = f"crates-io:{name}@{version}"
+        sources[source_id] = {
+            "kind": "crates-io",
+            "name": name,
+            "version": version,
+            "crate": {"sha256": hashes[0]},
+        }
+
+    local_source_id = f"owner-sdist:{owner}#src/rust"
+    sources[local_source_id] = {
+        "kind": "owner-sdist-subpath",
+        "owner": owner,
+    }
+    lock_bytes = real_v7_fixture_bytes(lock_filename)
+    lock = tomllib.loads(lock_bytes.decode("utf-8"))
+    reviewed = {
+        (record["name"], record["version"])
+        for source_id, record in sources.items()
+        if source_id.startswith("crates-io:")
+    }
+    non_sbom_packages = sorted(
+        (
+            {
+                "name": package["name"],
+                "version": package["version"],
+                "source": package["source"],
+                "checksum": package["checksum"],
+            }
+            for package in lock["package"]
+            if package.get("source") == evidence.CARGO_CRATES_IO_SOURCE
+            and (package["name"], package["version"]) not in reviewed
+        ),
+        key=lambda record: (
+            record["name"],
+            record["version"],
+            record["source"],
+            record["checksum"],
+        ),
+    )
+    cargo_lock = {
+        "member": lock_member,
+        "sha256": evidence.sha256_bytes(lock_bytes),
+        "size": len(lock_bytes),
+        "source_ids": sorted(
+            source_id for source_id in sources if source_id.startswith("crates-io:")
+        ),
+        "non_sbom_packages": non_sbom_packages,
+    }
+    component_reviews = (
+        [
+            {
+                "observations": sorted(
+                    local_references,
+                    key=evidence.canonical_json,
+                ),
+                "source": local_source_id,
+                "reviewed_license": "fixture-only",
+            }
+        ]
+        if local_references
+        else []
+    )
+    context = {
+        "owner": owner,
+        "owner_root_observations": owner_roots,
+        "observations": observations,
+        "record": {
+            "cargo_lock": cargo_lock,
+            "component_reviews": component_reviews,
+        },
+    }
+    archive = tar_bytes({lock_member: lock_bytes})
+    return context, sources, archive, parsed
+
+
+@pytest.mark.parametrize(
+    ("name", "version", "crate_sha256"),
+    (
+        (
+            "cfg-if",
+            "1.0.0",
+            "baf1de4339761588bc0619e3cbc0120ee582ebb74b53b4efbf79117bd2da40fd",
+        ),
+        (
+            "lexical-parse-float",
+            "1.0.5",
+            "de6f9cb01fb0b08060209a057c048fcbab8717b4c1ecd2eac66ebfe39a65b0f2",
+        ),
+        (
+            "lexical-parse-integer",
+            "1.0.5",
+            "72207aae22fc0a121ba7b6d479e42cbfea549af1479c3f3a4f12c70dd66df12e",
+        ),
+        (
+            "lexical-util",
+            "1.0.6",
+            "5a82e24bf537fd24c177ffbbdc6ebcc8d54732c35b50a3f28cc3f4e4c949a0b3",
+        ),
+        (
+            "stable_deref_trait",
+            "1.2.0",
+            "a8f112729512f8e442d81f95a8a7ddf2b7c6b8a1a6f509a95864142b30cab2d3",
+        ),
+        (
+            "version_check",
+            "0.9.5",
+            "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a",
+        ),
+    ),
+)
+def test_real_pydantic_legacy_crate_licenses_preserve_raw_slash_spelling(
+    name: str,
+    version: str,
+    crate_sha256: str,
+) -> None:
+    crate = real_v7_crate_bytes(name, version)
+    assert evidence.sha256_bytes(crate) == crate_sha256
+    pydantic_sbom = evidence.parse_cyclonedx_sbom(
+        real_v7_fixture_bytes("pydantic_core-2.46.4.pydantic-core.cyclonedx.json"),
+        "Pydantic Core legacy-license fixture",
+    )
+    observed = [
+        component
+        for component in pydantic_sbom["components"]
+        if component["purl"] == f"pkg:cargo/{name}@{version}"
+    ]
+    assert len(observed) == 1
+    assert {"alg": "SHA-256", "content": crate_sha256} in observed[0]["hashes"]
+
+    manifest_member = f"{name}-{version}/Cargo.toml"
+    reviewed_files: dict[str, bytes] = {}
+    with tarfile.open(fileobj=io.BytesIO(crate), mode="r:*") as archive:
+        for member in archive:
+            if not member.isfile():
+                continue
+            if member.name != manifest_member and evidence.LICENSE_NAME.search(member.name) is None:
+                continue
+            stream = archive.extractfile(member)
+            assert stream is not None
+            reviewed_files[member.name] = stream.read()
+    manifest = reviewed_files[manifest_member]
+    assert tomllib.loads(manifest.decode("utf-8"))["package"]["license"] == "MIT/Apache-2.0"
+
+    notices = [
+        {
+            "member": member,
+            "sha256": evidence.sha256_bytes(content),
+            "size": len(content),
+        }
+        for member, content in sorted(reviewed_files.items())
+        if member != manifest_member
+    ]
+    source_id = f"crates-io:{name}@{version}"
+    source = {
+        "kind": "crates-io",
+        "name": name,
+        "version": version,
+        "crate": {
+            "url": f"https://static.crates.io/crates/{name}/{name}-{version}.crate",
+            "sha256": crate_sha256,
+            "size": len(crate),
+        },
+        "manifest": {
+            "member": manifest_member,
+            "sha256": evidence.sha256_bytes(manifest),
+            "size": len(manifest),
+        },
+        "raw_license": "MIT/Apache-2.0",
+        "normalized_license": "MIT OR Apache-2.0",
+        "notices": notices,
+    }
+    validated = evidence.validate_crates_io_component_source(source_id, source)
+    assert validated["raw_license"] == "MIT/Apache-2.0"
+    assert validated["normalized_license"] == "MIT OR Apache-2.0"
+    assert (
+        evidence.verify_crates_io_archive(
+            crate,
+            source_id=source_id,
+            source=validated,
+        )
+        == reviewed_files
+    )
+    if name == "cfg-if":
+        false_normalization = copy.deepcopy(source)
+        false_normalization["normalized_license"] = "MIT"
+        with pytest.raises(evidence.EvidenceError, match="normalization differs"):
+            evidence.validate_crates_io_component_source(source_id, false_normalization)
+
+
+def test_real_pydantic_cargo_lock_accounts_for_87_crates_and_16_lock_only_packages() -> None:
+    context, sources, archive, parsed = real_rust_cargo_lock_case(
+        owner="python:pydantic-core@2.46.4",
+        sbom_filename="pydantic_core-2.46.4.pydantic-core.cyclonedx.json",
+        installed_sbom_path=("pydantic_core-2.46.4.dist-info/sboms/pydantic-core.cyclonedx.json"),
+        lock_filename="pydantic_core-2.46.4.Cargo.lock",
+        lock_member="pydantic_core-2.46.4/Cargo.lock",
+        metadata_is_owner=True,
+    )
+    assert (
+        evidence.sha256_bytes(
+            real_v7_fixture_bytes("pydantic_core-2.46.4.pydantic-core.cyclonedx.json")
+        )
+        == "b2da43ae9b1f9f388f8845b6f96df645d16b7e5c8f9f9f2fa8e64ef894b59598"
+    )
+    assert len(parsed["components"]) == 88
+    assert len(context["record"]["cargo_lock"]["source_ids"]) == 87
+    assert len(context["record"]["cargo_lock"]["non_sbom_packages"]) == 16
+    assert [
+        (package["name"], package["version"])
+        for package in context["record"]["cargo_lock"]["non_sbom_packages"]
+    ] == [
+        ("bitflags", "2.9.1"),
+        ("bumpalo", "3.19.0"),
+        ("cc", "1.0.101"),
+        ("js-sys", "0.3.77"),
+        ("log", "0.4.27"),
+        ("portable-atomic", "1.6.0"),
+        ("r-efi", "5.2.0"),
+        ("rustversion", "1.0.17"),
+        ("wasi", "0.14.2+wasi-0.2.4"),
+        ("wasm-bindgen", "0.2.100"),
+        ("wasm-bindgen-backend", "0.2.100"),
+        ("wasm-bindgen-macro", "0.2.100"),
+        ("wasm-bindgen-macro-support", "0.2.100"),
+        ("wasm-bindgen-shared", "0.2.100"),
+        ("wit-bindgen-rt", "0.39.0"),
+        ("zerocopy-derive", "0.8.25"),
+    ]
+    assert evidence.verify_owner_cargo_lock(
+        context,
+        sources,
+        archive,
+        archive_name="pydantic_core-2.46.4.tar.gz",
+    ) == real_v7_fixture_bytes("pydantic_core-2.46.4.Cargo.lock")
+
+    missing_lock_only = copy.deepcopy(context)
+    missing_lock_only["record"]["cargo_lock"]["non_sbom_packages"].pop()
+    with pytest.raises(evidence.EvidenceError, match="registry packages differ"):
+        evidence.verify_owner_cargo_lock(
+            missing_lock_only,
+            sources,
+            archive,
+            archive_name="pydantic_core-2.46.4.tar.gz",
+        )
+
+    changed_source = copy.deepcopy(sources)
+    changed_source[context["record"]["cargo_lock"]["source_ids"][0]]["crate"]["sha256"] = "0" * 64
+    with pytest.raises(evidence.EvidenceError, match="registry packages differ"):
+        evidence.verify_owner_cargo_lock(
+            context,
+            changed_source,
+            archive,
+            archive_name="pydantic_core-2.46.4.tar.gz",
+        )
+
+
+def test_real_cryptography_cargo_lock_and_openssl_observation_are_retained() -> None:
+    context, sources, archive, parsed = real_rust_cargo_lock_case(
+        owner="python:cryptography@48.0.1",
+        sbom_filename="cryptography-48.0.1.cryptography-rust.cyclonedx.json",
+        installed_sbom_path=(
+            "cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+        ),
+        lock_filename="cryptography-48.0.1.Cargo.lock",
+        lock_member="cryptography-48.0.1/Cargo.lock",
+        metadata_is_owner=False,
+    )
+    assert (
+        evidence.sha256_bytes(
+            real_v7_fixture_bytes("cryptography-48.0.1.cryptography-rust.cyclonedx.json")
+        )
+        == "9b2b3873832a3999a192327543e07e9cdcd66f083fd77a009054ace71cc6e92f"
+    )
+    assert len(parsed["components"]) == 40
+    assert len(context["record"]["cargo_lock"]["source_ids"]) == 32
+    assert context["record"]["cargo_lock"]["non_sbom_packages"] == []
+    assert evidence.verify_owner_cargo_lock(
+        context,
+        sources,
+        archive,
+        archive_name="cryptography-48.0.1.tar.gz",
+    ) == real_v7_fixture_bytes("cryptography-48.0.1.Cargo.lock")
+
+    openssl_raw = real_v7_fixture_bytes("cryptography-48.0.1.openssl.cyclonedx.json")
+    assert evidence.sha256_bytes(openssl_raw) == (
+        "58f780e03ba9030ff66b3ed9e02c06e72a9f0a477caa3ae4299ab3e7b81c5f50"
+    )
+    openssl = evidence.parse_cyclonedx_sbom(openssl_raw, "cryptography OpenSSL fixture")
+    assert openssl["components"] == [
+        {
+            "type": "library",
+            "name": "openssl",
+            "version": "4.0.1",
+            "purl": (
+                "pkg:generic/openssl@4.0.1?download_url=https://github.com/openssl/"
+                "openssl/releases/download/openssl-4.0.1/openssl-4.0.1.tar.gz"
+            ),
+            "bom_ref": "",
+            "hashes": [
+                {
+                    "alg": "SHA-256",
+                    "content": "2db3f3a0d6ea4b59e1f094ace2c8cd536dffb87cdc39084c5afa1e6f7f37dd09",
+                }
+            ],
+            "licenses": [],
+        }
+    ]
+
+
+def test_real_cffi_libffi_candidate_cannot_replace_missing_build_provenance() -> None:
+    wheel = real_v7_fixture_bytes("cffi-2.1.0-cp314-musllinux-x86_64.whl")
+    assert evidence.sha256_bytes(wheel) == (
+        "dbf7c7a88e2bac086f06d14577332760bdeecc42bdec8ac4077f6260557d9326"
+    )
+    libffi_notice = (
+        Path(__file__).parent
+        / "fixtures"
+        / "container_evidence"
+        / "v7"
+        / "real"
+        / "libffi-3.4.6.LICENSE"
+    ).read_bytes()
+    assert evidence.sha256_bytes(libffi_notice) == (
+        "67894089811f93fca47a76f85e017da6f8582d4ba0905963c6e0f1ad6df7a195"
+    )
+    assert b"Copyright (c) 1996-2024  Anthony Green, Red Hat, Inc and others." in libffi_notice
+    assert b"The above copyright notice and this permission notice shall be" in libffi_notice
+    with zipfile.ZipFile(io.BytesIO(wheel)) as archive:
+        members = archive.namelist()
+        assert not any(".dist-info/sboms/" in member for member in members)
+        native_members = [member for member in members if member.endswith(".so")]
+        assert native_members == ["_cffi_backend.cpython-314-x86_64-linux-musl.so"]
+        extension = archive.read(native_members[0])
+    assert evidence.sha256_bytes(extension) == (
+        "d2ee0b7499f1b3fd3ee5bc6c7b90ee9d6111fdfb9901d32cff7cf462f094321f"
+    )
+    assert b"cffistatic_ffi_call" in extension
+    assert b"ffi_prep_cif" in extension
+    assert b"libffi.so" not in extension
+
+    policy = cast(dict[str, Any], json.loads(Path(".compliance/container-policy.json").read_text()))
+    for platform in ("linux/amd64", "linux/arm64"):
+        owner = next(
+            record
+            for record in policy["native_component_coverage"][platform]
+            if record["owner"] == "python:cffi@2.1.0"
+        )
+        assert owner["sboms"] == []
+        assert owner["review"]["state"] == "open"
+        assert owner["known_omissions"] == [
+            {
+                "component": {
+                    "name": "libffi",
+                    "purl": "",
+                    "type": "library",
+                    "version": "3.4.6",
+                },
+                "id": "unproven-libffi-build-input",
+                "missing_evidence": [
+                    "build-material-attestation",
+                    "exact-source",
+                    "sbom-observation",
+                    "source-payload-relationship",
+                ],
+                "observations": [],
+                "payload_roles": ["_cffi_backend.cpython-314.so"],
+                "reason": owner["known_omissions"][0]["reason"],
+            }
+        ]
+
+    candidate = copy.deepcopy(policy)
+    candidate["native_component_sources"]["upstream-release:libffi@3.4.6"] = {
+        "kind": "checksummed-upstream-release",
+        "name": "libffi",
+        "version": "3.4.6",
+        "archive": {
+            "url": "https://github.com/libffi/libffi/archive/refs/tags/v3.4.6.tar.gz",
+            "sha256": "9ac790464c1eb2f5ab5809e978a1683e9393131aede72d1b0a0703771d3c6cda",
+            "size": 1_000_000,
+        },
+        "checksum_document": {
+            "url": "https://example.com/libffi-3.4.6.tar.gz.sha256",
+            "sha256": "1" * 64,
+            "size": 100,
+        },
+        "checksum_filename": "v3.4.6.tar.gz",
+        "notices": [
+            {
+                "member": "libffi-3.4.6/LICENSE",
+                "sha256": "2" * 64,
+                "size": 100,
+            }
+        ],
+    }
+    with pytest.raises(evidence.EvidenceError, match="missing, extra, or unused"):
+        evidence.validate_native_component_policy_schema(candidate)
+
+
+@pytest.mark.parametrize(
+    ("filename", "sha256"),
+    (
+        (
+            "cryptography-48.0.1-cp311-abi3-musllinux_1_2_aarch64.auditwheel.cdx.json",
+            "2ec6b8e8ae1c144269de3834e53f5919f5042980d191ff7f3efd17885028102f",
+        ),
+        (
+            "cryptography-48.0.1-cp311-abi3-musllinux_1_2_x86_64.auditwheel.cdx.json",
+            "dae5479c7694801d07dbd8b0a8a495e4aebce0c30832910ca5c848ca66e40fd3",
+        ),
+        (
+            "greenlet-3.5.3-cp314-cp314-musllinux_1_2_aarch64.auditwheel.cdx.json",
+            "3adae2e69cbfa1547fec1c336a0a51b7ad5549fb0d321cae2d3afb43fc66d530",
+        ),
+        (
+            "greenlet-3.5.3-cp314-cp314-musllinux_1_2_x86_64.auditwheel.cdx.json",
+            "88ec96555dafdd7a1e4bac19a57701e712ff3a361a537e653b4baf6829a28e9e",
+        ),
+        (
+            "psycopg_binary-3.3.4-cp314-cp314-musllinux_1_2_aarch64.auditwheel.cdx.json",
+            "d4b27924b425127c33ddbc41f082abe2246bc1b25fc9b88716f889fb7686832e",
+        ),
+        (
+            "psycopg_binary-3.3.4-cp314-cp314-musllinux_1_2_x86_64.auditwheel.cdx.json",
+            "ed66539d58a72ebe684d6a918841d10b8f980c63a3eb65d401f3b4028a7c4a63",
+        ),
+    ),
+)
+def test_real_auditwheel_metadata_root_echo_is_review_visible(
+    filename: str,
+    sha256: str,
+) -> None:
+    raw = auditwheel_fixture_bytes(filename)
+    assert evidence.sha256_bytes(raw) == sha256
+    document = json.loads(raw)
+    assert document["bomFormat"] == "CycloneDX"
+    assert document["specVersion"] == "1.4"
+    assert document["metadata"]["component"] in document["components"]
+
+    parsed = evidence.parse_cyclonedx_sbom(raw, filename)
+    assert parsed["metadata_root_echo"] == parsed["metadata_component"]
+    assert parsed["upstream_invalid_duplicate_bom_ref"] is True
+    assert len(parsed["components"]) == len(document["components"]) - 1
+    evidence.validate_retained_cyclonedx_identity(parsed, filename)
+
+
+@pytest.mark.parametrize(
+    ("filename", "sha256"),
+    (
+        (
+            "psycopg_binary-3.3.4-cp314-cp314-musllinux_1_2_aarch64.auditwheel.cdx.json",
+            "d4b27924b425127c33ddbc41f082abe2246bc1b25fc9b88716f889fb7686832e",
+        ),
+        (
+            "psycopg_binary-3.3.4-cp314-cp314-musllinux_1_2_x86_64.auditwheel.cdx.json",
+            "ed66539d58a72ebe684d6a918841d10b8f980c63a3eb65d401f3b4028a7c4a63",
+        ),
+    ),
+)
+def test_real_psycopg_auditwheel_occurrences_are_retained_independently(
+    filename: str,
+    sha256: str,
+) -> None:
+    raw = auditwheel_fixture_bytes(filename)
+    assert evidence.sha256_bytes(raw) == sha256
+
+    parsed = evidence.parse_cyclonedx_sbom(raw, filename)
+    assert parsed["metadata_root_echo"] == parsed["metadata_component"]
+    assert parsed["upstream_invalid_duplicate_bom_ref"] is True
+    purls = [item["purl"] for item in parsed["components"]]
+    assert purls.count("pkg:apk/alpine/krb5@libs-1.21.3-r0") == 4
+    assert purls.count("pkg:apk/alpine/libldap@2.6.8-r0") == 2
+    assert len({item["bom_ref"] for item in parsed["components"]}) == len(parsed["components"])
+    evidence.validate_retained_cyclonedx_identity(parsed, filename)
+
+    reordered = json.loads(raw)
+    reordered["components"] = list(reversed(reordered["components"]))
+    reparsed = evidence.parse_cyclonedx_sbom(
+        json.dumps(reordered).encode(),
+        f"reordered-{filename}",
+    )
+    assert reparsed == parsed
+
+
+def test_cyclonedx_projection_preserves_roots_hashes_and_license_observations() -> None:
+    root = {
+        "type": "application",
+        "name": "not-the-wheel-owner",
+        "version": "0.1.0",
+        "purl": "pkg:cargo/not-the-wheel-owner@0.1.0",
+        "hashes": [{"alg": "SHA-256", "content": "a" * 64}],
+        "licenses": [{"expression": "MIT/Apache-2.0"}],
+    }
+    component = {
+        "type": "library",
+        "name": "demo-crate",
+        "version": "1.2.3",
+        "purl": "pkg:cargo/demo-crate@1.2.3",
+        "hashes": [{"alg": "SHA-256", "content": "b" * 64}],
+        "licenses": [{"license": {"id": "MIT"}}],
+    }
+    parsed = evidence.parse_cyclonedx_sbom(
+        cyclonedx_sbom(components=[component], metadata_component=root),
+        "preserved.cdx.json",
+    )
+
+    assert parsed == {
+        "bom_format": "CycloneDX",
+        "spec_version": "1.5",
+        "metadata_component": {
+            **root,
+            "bom_ref": "",
+            "hashes": [{"alg": "SHA-256", "content": "a" * 64}],
+            "licenses": [{"expression": "MIT/Apache-2.0"}],
+        },
+        "metadata_root_echo": None,
+        "upstream_invalid_duplicate_bom_ref": False,
+        "components": [
+            {
+                **component,
+                "bom_ref": "",
+                "hashes": [{"alg": "SHA-256", "content": "b" * 64}],
+                "licenses": [{"license": {"id": "MIT"}}],
+            }
+        ],
+        "observation_sha256": parsed["observation_sha256"],
+    }
+    evidence.validate_retained_cyclonedx_identity(parsed, "preserved fixture")
+
+    envelope_changed = json.loads(cyclonedx_sbom(components=[component], metadata_component=root))
+    envelope_changed["serialNumber"] = "urn:uuid:abcdefab-cdef-4abc-8def-abcdefabcdef"
+    envelope_changed["version"] = 7
+    reparsed = evidence.parse_cyclonedx_sbom(
+        json.dumps(envelope_changed).encode(), "changed-envelope.cdx.json"
+    )
+    assert reparsed == parsed
+
+    license_changed = copy.deepcopy(component)
+    license_changed["licenses"] = [{"license": {"id": "Apache-2.0"}}]
+    changed = evidence.parse_cyclonedx_sbom(
+        cyclonedx_sbom(components=[license_changed], metadata_component=root),
+        "changed-license.cdx.json",
+    )
+    assert changed["observation_sha256"] != parsed["observation_sha256"]
+
+
+@pytest.mark.parametrize(
+    "hashes",
+    (
+        [
+            {"alg": "SHA-256", "content": "a" * 64},
+            {"alg": "SHA-256", "content": "b" * 64},
+        ],
+        [
+            {"alg": "SHA-256", "content": "a" * 64},
+            {"alg": "sha-256", "content": "b" * 64},
+        ],
+        [
+            {"alg": "SHA-256", "content": "a" * 64},
+            {"alg": "SHA-256", "content": "a" * 64},
+        ],
+    ),
+)
+def test_cyclonedx_projection_rejects_duplicate_hash_algorithms(
+    hashes: list[dict[str, str]],
+) -> None:
+    component = {
+        "type": "library",
+        "name": "demo-crate",
+        "version": "1.2.3",
+        "purl": "pkg:cargo/demo-crate@1.2.3",
+        "hashes": hashes,
+    }
+
+    with pytest.raises(evidence.EvidenceError, match="repeats a hash algorithm"):
+        evidence.parse_cyclonedx_sbom(
+            cyclonedx_sbom(components=[component]),
+            "duplicate-hash-algorithm.cdx.json",
+        )
+
+
+def test_cyclonedx_projection_retains_one_exact_metadata_root_echo() -> None:
+    root = {
+        "type": "library",
+        "name": "demo",
+        "version": "1.0",
+        "purl": "pkg:pypi/demo@1.0?file_name=demo.whl",
+        "bom-ref": "pkg:pypi/demo@1.0?file_name=demo.whl",
+    }
+    parsed = evidence.parse_cyclonedx_sbom(
+        cyclonedx_sbom(components=[copy.deepcopy(root)], metadata_component=root),
+        "auditwheel.cdx.json",
+    )
+
+    expected_root = {
+        "type": "library",
+        "name": "demo",
+        "version": "1.0",
+        "purl": "pkg:pypi/demo@1.0?file_name=demo.whl",
+        "bom_ref": "pkg:pypi/demo@1.0?file_name=demo.whl",
+        "hashes": [],
+        "licenses": [],
+    }
+    assert parsed["metadata_component"] == expected_root
+    assert parsed["metadata_root_echo"] == expected_root
+    assert parsed["upstream_invalid_duplicate_bom_ref"] is True
+    assert parsed["components"] == []
+    evidence.validate_retained_cyclonedx_identity(parsed, "auditwheel fixture")
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "second_echo",
+        "same_purl_different_ref",
+        "same_ref_different_purl",
+        "different_field",
+        "nested_duplicate",
+    ),
+)
+def test_cyclonedx_metadata_root_echo_exception_is_exactly_scoped(mutation: str) -> None:
+    root = {
+        "type": "library",
+        "name": "demo",
+        "version": "1.0",
+        "purl": "pkg:pypi/demo@1.0?file_name=demo.whl",
+        "bom-ref": "pkg:pypi/demo@1.0?file_name=demo.whl",
+    }
+    echo = copy.deepcopy(root)
+    components: list[dict[str, Any]] = [echo]
+    if mutation == "second_echo":
+        components.append(copy.deepcopy(root))
+    elif mutation == "same_purl_different_ref":
+        echo["bom-ref"] = "different"
+    elif mutation == "same_ref_different_purl":
+        echo["purl"] = "pkg:pypi/other@1.0"
+    elif mutation == "different_field":
+        echo["name"] = "other"
+    else:
+        components = [
+            {
+                "type": "library",
+                "name": "parent",
+                "version": "1.0",
+                "purl": "pkg:generic/parent@1.0",
+                "bom-ref": "parent",
+                "components": [echo],
+            }
+        ]
+
+    with pytest.raises(
+        evidence.EvidenceError,
+        match=r"repeats metadata component purl|repeats a non-echo bom-ref",
+    ):
+        evidence.parse_cyclonedx_sbom(
+            cyclonedx_sbom(components=components, metadata_component=root),
+            "invalid-echo.cdx.json",
         )
 
 
@@ -6286,8 +8065,8 @@ def test_structured_payload_validation_rejects_owner_and_identity_tampering(
         evidence.validate_component_inventory(wrong_owner)
 
     wrong_component_digest = copy.deepcopy(inventory)
-    wrong_component_digest["embedded_sboms"][0]["cyclonedx"]["component_identity_sha256"] = "0" * 64
-    with pytest.raises(evidence.EvidenceError, match="component-identity digest"):
+    wrong_component_digest["embedded_sboms"][0]["cyclonedx"]["observation_sha256"] = "0" * 64
+    with pytest.raises(evidence.EvidenceError, match="CycloneDX observation"):
         evidence.validate_all_layer_inventory(files, wrong_component_digest)
 
     wrong_elf = copy.deepcopy(inventory)
@@ -7787,6 +9566,20 @@ def test_policy_schema_rejects_malformed_nested_strings_and_recipe_links() -> No
     with pytest.raises(evidence.EvidenceError, match="allowed recipe link"):
         evidence.validate_policy_schema(malformed_link)
 
+    unresolved_target = copy.deepcopy(policy)
+    exception = next(iter(unresolved_target["alpine_recipe_exceptions"].values()))
+    exception["allowed_links"][0]["target"] = "alpine-baselayout.post-install"
+    with pytest.raises(evidence.EvidenceError, match="one canonical sibling"):
+        evidence.validate_policy_schema(unresolved_target)
+
+    duplicate_path = copy.deepcopy(policy)
+    exception = next(iter(duplicate_path["alpine_recipe_exceptions"].values()))
+    duplicate = copy.deepcopy(exception["allowed_links"][0])
+    duplicate["target"] = duplicate["target"].replace("post-install", "pre-install")
+    exception["allowed_links"].append(duplicate)
+    with pytest.raises(evidence.EvidenceError, match="duplicate allowed recipe link"):
+        evidence.validate_policy_schema(duplicate_path)
+
     malformed_rationale = copy.deepcopy(policy)
     exception = next(iter(malformed_rationale["alpine_recipe_exceptions"].values()))
     exception["rationale"] = "\ud800"
@@ -8100,18 +9893,6 @@ def test_trusted_native_component_bundle_contract_is_internally_bound(
         }
     )
 
-    for platform_records in native_policy["native_component_coverage"].values():
-        owner_record = platform_records[0]
-        components = owner_record["sboms"][0]["components"]
-        other_component = copy.deepcopy(components[0])
-        other_component.update(
-            {
-                "name": "libother",
-                "purl": "pkg:apk/alpine/libother@1.2.3-r0",
-            }
-        )
-        components.append(other_component)
-        owner_record["components"].append(copy.deepcopy(other_component))
     evidence.validate_native_component_policy_schema(native_policy)
 
     resolved_owner_records = copy.deepcopy(native_policy["native_component_coverage"][platform])
@@ -8122,6 +9903,9 @@ def test_trusted_native_component_bundle_contract_is_internally_bound(
         "complete": True,
         "resolved_owners": resolved_owner_records,
         "unresolved_owners": [],
+        "observed_sbom_anomalies": [],
+        "remaining_owner_count": 0,
+        "remaining_owner_names": [],
     }
     application = {
         "ecosystem": "python",
@@ -8143,10 +9927,6 @@ def test_trusted_native_component_bundle_contract_is_internally_bound(
         "platform": platform,
         "subject_digest": "sha256:" + "2" * 64,
         "components": [application, markupsafe_component],
-        "source_completeness": {
-            "complete": False,
-            "reason": evidence.SOURCE_COMPLETENESS_REASON,
-        },
     }
     files: dict[str, Any] = {}
     docker_recipe_content = b"trusted Docker Official Python recipe\n"
@@ -8384,7 +10164,11 @@ def test_trusted_native_component_bundle_contract_is_internally_bound(
     emitted_ledger = json.loads(archive_files["inventory/native-component-coverage.json"])
     assert emitted_ledger == native_coverage
     assert manifest["native_component_coverage"] == emitted_ledger
-    assert manifest["source_completeness"] == inventory["source_completeness"]
+    assert manifest["source_completeness"] == {
+        "complete": True,
+        "remaining_owner_count": 0,
+        "remaining_owner_names": [],
+    }
     assert policy["distribution_approval"]["approved"] is False
     assert manifest["native_wheel_artifacts"] == [
         {
@@ -8404,9 +10188,10 @@ def test_trusted_native_component_bundle_contract_is_internally_bound(
         "sha256",
     ) in fetched
 
-    recipe_path = "sources/native-components/demo-native/1.2.3-r0/recipe.tar.gz"
+    native_source_directory = evidence.sha256_bytes(source_id.encode())[:20]
+    recipe_path = f"sources/native-components/{native_source_directory}/recipe.tar.gz"
     distfile_path = (
-        "sources/native-components/demo-native/1.2.3-r0/distfiles/demo-native-1.2.3.tar.xz"
+        f"sources/native-components/{native_source_directory}/distfiles/demo-native-1.2.3.tar.xz"
     )
     source_records = {record["path"]: record for record in manifest["source_records"]}
     markupsafe_source_path = "sources/python/markupsafe/3.0.3/markupsafe-3.0.3.tar.gz"
@@ -8429,22 +10214,18 @@ def test_trusted_native_component_bundle_contract_is_internally_bound(
     )
 
     notice_path = (
-        "licenses/from-source/native-demo-native-1.2.3-r0/"
+        f"licenses/from-source/native-{native_source_directory}/"
         f"{evidence.sha256_bytes(notice_content)[:12]}-LICENSE"
     )
     assert archive_files[notice_path] == notice_content
-    nested_purls = {component["purl"] for component in owner_record["sboms"][0]["components"]}
-    assert nested_purls == {
-        "pkg:apk/alpine/libdemo@1.2.3-r0",
-        "pkg:apk/alpine/libother@1.2.3-r0",
-    }
-    for nested_purl in nested_purls:
-        assert {
-            "component": f"native:{nested_purl}",
-            "path": notice_path,
-            "sha256": evidence.sha256_bytes(notice_content),
-            "size": len(notice_content),
-        } in manifest["license_records"]
+    nested_component = owner_record["sboms"][0]["observation"]["components"][0]
+    nested_identity = f"native:{nested_component['purl']}#bom-ref:{nested_component['bom_ref']}"
+    assert {
+        "component": nested_identity,
+        "path": notice_path,
+        "sha256": evidence.sha256_bytes(notice_content),
+        "size": len(notice_content),
+    } in manifest["license_records"]
 
     markupsafe_license_paths = {
         "licenses/from-source/python-markupsafe-3.0.3/489a8e110850-LICENSE.txt": (
@@ -8465,12 +10246,8 @@ def test_trusted_native_component_bundle_contract_is_internally_bound(
 
     notices = archive_files["THIRD_PARTY_NOTICES.md"].decode()
     assert (
-        "| libdemo | 1.2.3-r0 | pkg:apk/alpine/libdemo@1.2.3-r0 | "
-        "alpine:demo-native@1.2.3-r0 | Not declared | MIT |"
-    ) in notices
-    assert (
-        "| libother | 1.2.3-r0 | pkg:apk/alpine/libother@1.2.3-r0 | "
-        "alpine:demo-native@1.2.3-r0 | Not declared | MIT |"
+        "| python:demo@1.0 | libdemo | 1.2.3 | pkg:generic/libdemo@1.2.3 | "
+        "pkg:generic/libdemo@1.2.3 | alpine:demo-native@1.2.3-r0 |"
     ) in notices
     assert ("| python | markupsafe | 3.0.3 | yes | BSD-3-Clause | BSD-3-Clause |") in notices
 
@@ -8921,6 +10698,9 @@ def test_native_component_coverage_view_emits_validated_ledger(tmp_path: Path) -
         "complete": True,
         "resolved_owners": [],
         "unresolved_owners": [],
+        "observed_sbom_anomalies": [],
+        "remaining_owner_count": 0,
+        "remaining_owner_names": [],
     }
 
 

@@ -51,7 +51,7 @@ from packaging.utils import (
 )
 from packaging.version import InvalidVersion, Version
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 EVIDENCE_MEDIA_TYPE = f"application/vnd.stampbot.container-evidence.v{SCHEMA_VERSION}+tar+gzip"
 APPLICATION_NAME = "extra-codeowners"
 EXPECTED_RUNTIME_PYTHON = "3.14.6"
@@ -76,10 +76,6 @@ CPYTHON_IDENTITY_PATHS = {
 EXPECTED_UV_VERSION = "0.11.28"
 APPLICATION_WHEEL_LABEL = "org.stampbot.extra-codeowners.application-wheel.sha256"
 APPLICATION_SELECTION_LABEL = "org.stampbot.extra-codeowners.python-selection-record.sha256"
-SOURCE_COMPLETENESS_REASON = (
-    "Four native-wheel owners still lack closed-world component/source coverage in issue #18; "
-    "public distribution remains blocked pending issue #28."
-)
 MAX_DOWNLOAD_BYTES = 64 * 1024 * 1024
 MAX_NATIVE_COMPONENT_SOURCE_BYTES = 128 * 1024 * 1024
 MAX_ARCHIVE_MEMBER_BYTES = 64 * 1024 * 1024
@@ -102,9 +98,26 @@ MAX_CPYTHON_PATCHLEVEL_BYTES = 64 * 1024
 MAX_RECORD_ENTRIES = 100_000
 MAX_HISTORICAL_RECORD_ENTRIES = MAX_RECORD_ENTRIES
 MAX_CYCLONEDX_COMPONENTS = 10_000
+MAX_CYCLONEDX_HASHES = 16
+MAX_CYCLONEDX_LICENSES = 16
 MAX_COMPONENT_FIELD_LENGTH = 512
 MAX_COMPONENT_KEY_LENGTH = 2 * MAX_COMPONENT_FIELD_LENGTH + 32
 MAX_LICENSE_FIELD_LENGTH = 16 * 1024
+MAX_REVIEW_RATIONALE_LENGTH = 4 * 1024
+MAX_NATIVE_OWNERS = 10_000
+MAX_SBOMS_PER_OWNER = 256
+MAX_OBSERVATIONS_PER_OWNER = 10_000
+MAX_COMPONENT_REVIEWS = 10_000
+MAX_OBSERVATIONS_PER_REVIEW = 256
+MAX_CANONICAL_RELATIONSHIPS = 1_024
+MAX_KNOWN_OMISSIONS = 256
+MAX_NATIVE_COMPONENT_SOURCES = 10_000
+MAX_ALPINE_DISTFILES = 64
+MAX_ALPINE_RECIPE_LINKS = 64
+MAX_OWNER_SUBTREE_MEMBERS = 100_000
+MAX_OWNER_SUBTREE_BYTES = 256 * 1024 * 1024
+MAX_CARGO_LOCK_BYTES = 8 * 1024 * 1024
+MAX_CARGO_LOCK_PACKAGES = 100_000
 MAX_BUNDLE_DOWNLOADS = 10_000
 MAX_BUNDLE_DOWNLOAD_BYTES = 1024 * 1024 * 1024
 MAX_BUNDLE_FILES = 100_000
@@ -157,6 +170,8 @@ PACKAGE_URL = re.compile(
     r"^pkg:[a-z][a-z0-9.+-]*/[^\s/?#]+(?:/[^\s/?#]+)*(?:@[^\s/?#]+)?"
     r"(?:\?[^\s#]+)?(?:#[^\s]+)?$"
 )
+CARGO_CRATES_IO_SOURCE = "registry+https://github.com/rust-lang/crates.io-index"
+CARGO_PACKAGE_NAME = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]*$")
 NORMALIZE_NAME = re.compile(r"[-_.]+")
 APK_PACKAGE_NAME = re.compile(r"^(?:[a-z0-9]|\.[a-z0-9])[a-z0-9+_.-]{0,199}$")
 APK_ORIGIN = re.compile(r"^[a-z0-9][a-z0-9+_.-]{0,199}$")
@@ -584,8 +599,47 @@ def checked_cyclonedx_scalar(
     return checked
 
 
-def normalized_cyclonedx_component(value: object, source: str) -> tuple[dict[str, str], str]:
-    """Project one hostile CycloneDX component to its stable package identity."""
+def validate_bounded_observation_json(value: object, source: str) -> None:
+    """Bound raw review-sensitive JSON retained from an upstream SBOM."""
+
+    if value is None or isinstance(value, bool):
+        return
+    if isinstance(value, int):
+        return
+    if isinstance(value, str):
+        try:
+            encoded = value.encode("utf-8")
+        except UnicodeEncodeError as exc:
+            raise EvidenceError(f"CycloneDX {source} is not valid UTF-8") from exc
+        if (
+            len(encoded) > MAX_LICENSE_FIELD_LENGTH
+            or "\x00" in value
+            or any(
+                (ord(character) < 32 and character not in "\t\n\r")
+                or 0x7F <= ord(character) <= 0x9F
+                for character in value
+            )
+        ):
+            raise EvidenceError(f"CycloneDX {source} is not a bounded text value")
+        return
+    if isinstance(value, list):
+        if len(value) > MAX_CYCLONEDX_LICENSES:
+            raise EvidenceError(f"CycloneDX {source} has too many values")
+        for index, item in enumerate(value):
+            validate_bounded_observation_json(item, f"{source}[{index}]")
+        return
+    if isinstance(value, dict):
+        if len(value) > MAX_CYCLONEDX_LICENSES:
+            raise EvidenceError(f"CycloneDX {source} has too many fields")
+        for key, item in value.items():
+            checked_cyclonedx_scalar(key, f"{source} key")
+            validate_bounded_observation_json(item, f"{source}.{key}")
+        return
+    raise EvidenceError(f"CycloneDX {source} has an unsupported JSON value")
+
+
+def cyclonedx_component_observation(value: object, source: str) -> tuple[dict[str, Any], str]:
+    """Project one hostile component without discarding hashes or license observations."""
 
     if not isinstance(value, dict):
         raise EvidenceError(f"CycloneDX component is not an object: {source}")
@@ -603,95 +657,186 @@ def normalized_cyclonedx_component(value: object, source: str) -> tuple[dict[str
     )
     if PACKAGE_URL.fullmatch(purl) is None:
         raise EvidenceError(f"CycloneDX component has an invalid purl: {source}")
-    bom_ref_value = value.get("bom-ref", "")
+    if "bom-ref" in value and "bom_ref" in value:
+        raise EvidenceError(f"CycloneDX component has conflicting bom-ref spellings: {source}")
+    bom_ref_value = value.get("bom-ref", value.get("bom_ref", ""))
     bom_ref = checked_cyclonedx_scalar(
         bom_ref_value,
         f"component bom-ref in {source}",
         max_length=MAX_LICENSE_FIELD_LENGTH,
         allow_empty=True,
     )
+
+    raw_hashes = value.get("hashes", [])
+    if not isinstance(raw_hashes, list) or len(raw_hashes) > MAX_CYCLONEDX_HASHES:
+        raise EvidenceError(f"CycloneDX component has invalid hashes: {source}")
+    hashes: list[dict[str, str]] = []
+    seen_hash_algorithms: set[str] = set()
+    for index, raw_hash in enumerate(raw_hashes):
+        record = require_exact_fields(
+            raw_hash,
+            {"alg", "content"},
+            f"CycloneDX component hash {index} in {source}",
+        )
+        algorithm = checked_cyclonedx_scalar(record["alg"], f"component hash algorithm in {source}")
+        content = checked_cyclonedx_scalar(
+            record["content"],
+            f"component hash content in {source}",
+            max_length=MAX_LICENSE_FIELD_LENGTH,
+        )
+        if re.fullmatch(r"[0-9A-Fa-f]+", content) is None or len(content) % 2:
+            raise EvidenceError(f"CycloneDX component has an invalid hash: {source}")
+        algorithm_identity = algorithm.casefold()
+        if algorithm_identity in seen_hash_algorithms:
+            raise EvidenceError(f"CycloneDX component repeats a hash algorithm: {source}")
+        seen_hash_algorithms.add(algorithm_identity)
+        hashes.append({"alg": algorithm, "content": content})
+    hashes.sort(key=lambda item: (item["alg"], item["content"]))
+
+    raw_licenses = value.get("licenses", [])
+    if not isinstance(raw_licenses, list) or len(raw_licenses) > MAX_CYCLONEDX_LICENSES:
+        raise EvidenceError(f"CycloneDX component has invalid licenses: {source}")
+    licenses: list[object] = []
+    license_keys: set[bytes] = set()
+    for index, raw_license in enumerate(raw_licenses):
+        if not isinstance(raw_license, dict):
+            raise EvidenceError(f"CycloneDX component license is not an object: {source}")
+        validate_bounded_observation_json(raw_license, f"component license {index} in {source}")
+        encoded = canonical_json(raw_license)
+        if len(encoded) > MAX_LICENSE_FIELD_LENGTH:
+            raise EvidenceError(f"CycloneDX component license is too large: {source}")
+        if encoded in license_keys:
+            raise EvidenceError(f"CycloneDX component repeats a license observation: {source}")
+        license_keys.add(encoded)
+        licenses.append(raw_license)
+    licenses.sort(key=canonical_json)
+
     return {
         "type": component_type,
         "name": name,
         "version": version,
         "purl": purl,
+        "bom_ref": bom_ref,
+        "hashes": hashes,
+        "licenses": licenses,
     }, bom_ref
 
 
-def validate_cyclonedx_component_projection(
+def cyclonedx_occurrence_identity(component: Mapping[str, Any]) -> tuple[str, str]:
+    """Return the document-local identity for one retained component occurrence."""
+
+    bom_ref = str(component["bom_ref"])
+    if bom_ref:
+        return "bom-ref", bom_ref
+    return "purl", str(component["purl"])
+
+
+def validate_cyclonedx_occurrence_identities(
+    components: Sequence[Mapping[str, Any]],
+    source: str,
+    *,
+    metadata_purl: str | None = None,
+) -> None:
+    """Reject ambiguous occurrence identities without collapsing repeated packages."""
+
+    seen_bom_refs: set[str] = set()
+    purl_identities: dict[str, list[tuple[str, str]]] = {}
+    for component in components:
+        purl = str(component["purl"])
+        kind, identity = cyclonedx_occurrence_identity(component)
+        if metadata_purl is not None and purl == metadata_purl:
+            raise EvidenceError(f"CycloneDX document repeats metadata component purl: {source}")
+        if kind == "bom-ref":
+            if identity in seen_bom_refs:
+                raise EvidenceError(f"CycloneDX document repeats a non-echo bom-ref: {source}")
+            seen_bom_refs.add(identity)
+        identities = purl_identities.setdefault(purl, [])
+        if identities and (kind != "bom-ref" or any(item[0] != "bom-ref" for item in identities)):
+            raise EvidenceError(
+                f"CycloneDX document has mixed or repeated fallback purl identity: {source}"
+            )
+        identities.append((kind, identity))
+
+
+def cyclonedx_component_sort_key(component: Mapping[str, Any]) -> tuple[object, ...]:
+    """Sort retained observations independently of hostile document order."""
+
+    identity_kind, identity = cyclonedx_occurrence_identity(component)
+    return (
+        str(component["purl"]),
+        identity_kind,
+        identity,
+        str(component["type"]),
+        str(component["name"]),
+        str(component["version"]),
+        canonical_json(component["hashes"]),
+        canonical_json(component["licenses"]),
+    )
+
+
+def validate_cyclonedx_observation_projection(
     metadata_component: object,
     components: object,
     source: str,
-) -> tuple[dict[str, str] | None, list[dict[str, str]]]:
-    """Validate, de-duplicate, and canonically order normalized component identities."""
+) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+    """Validate a canonical document-scoped set of exact component observations."""
 
+    expected_fields = {
+        "type",
+        "name",
+        "version",
+        "purl",
+        "bom_ref",
+        "hashes",
+        "licenses",
+    }
     if metadata_component is not None and (
-        not isinstance(metadata_component, dict)
-        or set(metadata_component) != {"type", "name", "version", "purl"}
+        not isinstance(metadata_component, dict) or set(metadata_component) != expected_fields
     ):
         raise EvidenceError(f"CycloneDX metadata component projection is invalid: {source}")
     if not isinstance(components, list) or len(components) > MAX_CYCLONEDX_COMPONENTS:
         raise EvidenceError(f"CycloneDX component projection is invalid: {source}")
 
-    projected: list[dict[str, str]] = []
+    projected: list[dict[str, Any]] = []
     if metadata_component is not None:
         projected.append(metadata_component)
     for component in components:
-        if not isinstance(component, dict) or set(component) != {
-            "type",
-            "name",
-            "version",
-            "purl",
-        }:
+        if not isinstance(component, dict) or set(component) != expected_fields:
             raise EvidenceError(f"CycloneDX component projection is invalid: {source}")
         projected.append(component)
 
-    identities: dict[tuple[str, str, str], str] = {}
-    purls: dict[str, tuple[str, str, str]] = {}
-    seen: set[tuple[str, str, str, str]] = set()
-    for component in projected:
-        component_type = checked_cyclonedx_scalar(
-            component.get("type"), f"projected component type in {source}"
+    validated: list[dict[str, Any]] = []
+    for index, component in enumerate(projected):
+        observation, _bom_ref = cyclonedx_component_observation(
+            component, f"projected component {index} in {source}"
         )
-        if component_type not in CYCLONEDX_COMPONENT_TYPES:
-            raise EvidenceError(f"CycloneDX component has an unsupported type: {source}")
-        name = checked_cyclonedx_scalar(
-            component.get("name"), f"projected component name in {source}"
-        )
-        version = checked_cyclonedx_scalar(
-            component.get("version"),
-            f"projected component version in {source}",
-            allow_empty=True,
-        )
-        purl = checked_cyclonedx_scalar(
-            component.get("purl"),
-            f"projected component purl in {source}",
-            max_length=MAX_LICENSE_FIELD_LENGTH,
-        )
-        if PACKAGE_URL.fullmatch(purl) is None:
-            raise EvidenceError(f"CycloneDX component has an invalid purl: {source}")
-        identity = (component_type, name, version)
-        previous_purl = identities.setdefault(identity, purl)
-        if previous_purl != purl:
-            raise EvidenceError(f"CycloneDX component identity has conflicting purls: {source}")
-        previous_identity = purls.setdefault(purl, identity)
-        if previous_identity != identity:
-            raise EvidenceError(f"CycloneDX purl has conflicting component identities: {source}")
-        exact = (*identity, purl)
-        if exact in seen:
-            raise EvidenceError(f"CycloneDX component projection repeats an identity: {source}")
-        seen.add(exact)
+        if observation != component:
+            raise EvidenceError(f"CycloneDX component projection is not canonical: {source}")
+        validated.append(observation)
 
-    expected = sorted(
-        components, key=lambda item: (item["type"], item["name"], item["version"], item["purl"])
+    validated_components = validated[1:] if metadata_component is not None else validated
+    validate_cyclonedx_occurrence_identities(
+        validated_components,
+        source,
+        metadata_purl=(str(metadata_component["purl"]) if metadata_component is not None else None),
     )
+    if (
+        metadata_component is not None
+        and metadata_component["bom_ref"]
+        and any(
+            component["bom_ref"] == metadata_component["bom_ref"]
+            for component in validated_components
+        )
+    ):
+        raise EvidenceError(f"CycloneDX document repeats a non-echo bom-ref: {source}")
+    expected = sorted(components, key=cyclonedx_component_sort_key)
     if components != expected:
         raise EvidenceError(f"CycloneDX component projection is not canonical: {source}")
     return metadata_component, components
 
 
 def parse_cyclonedx_sbom(content: bytes, path: str) -> dict[str, Any]:
-    """Parse one bounded CycloneDX JSON document into a canonical identity projection."""
+    """Parse one bounded CycloneDX document into a review-sensitive observation."""
 
     document = strict_json_loads(content, f"embedded CycloneDX SBOM {path}")
     if not isinstance(document, dict):
@@ -717,7 +862,6 @@ def parse_cyclonedx_sbom(content: bytes, path: str) -> dict[str, Any]:
     )
     if serial_number and CYCLONEDX_SERIAL_NUMBER.fullmatch(serial_number) is None:
         raise EvidenceError(f"embedded CycloneDX SBOM has an invalid serialNumber: {path}")
-    serial_number = serial_number.lower()
 
     metadata = document.get("metadata", {})
     if not isinstance(metadata, dict):
@@ -727,17 +871,24 @@ def parse_cyclonedx_sbom(content: bytes, path: str) -> dict[str, Any]:
     if not isinstance(raw_components, list):
         raise EvidenceError(f"embedded CycloneDX SBOM has an invalid component list: {path}")
 
-    flattened: list[tuple[dict[str, str], str, bool]] = []
+    flattened: list[tuple[dict[str, Any], str, bool, bool, Mapping[str, Any]]] = []
     component_count = 0
 
-    def walk(raw: object, location: str, *, metadata_root: bool = False) -> None:
+    def walk(
+        raw: object,
+        location: str,
+        *,
+        metadata_root: bool = False,
+        top_level: bool = False,
+    ) -> None:
         nonlocal component_count
         component_count += 1
         if component_count > MAX_CYCLONEDX_COMPONENTS:
             raise EvidenceError(f"embedded CycloneDX SBOM has too many components: {path}")
-        projection, bom_ref = normalized_cyclonedx_component(raw, location)
-        flattened.append((projection, bom_ref, metadata_root))
+        projection, bom_ref = cyclonedx_component_observation(raw, location)
         assert isinstance(raw, dict)
+        validate_bounded_observation_json(raw, f"raw component in {location}")
+        flattened.append((projection, bom_ref, metadata_root, top_level, raw))
         children = raw.get("components", [])
         if not isinstance(children, list):
             raise EvidenceError(f"CycloneDX component has invalid nested components: {location}")
@@ -747,59 +898,50 @@ def parse_cyclonedx_sbom(content: bytes, path: str) -> dict[str, Any]:
     if raw_metadata_component is not None:
         walk(raw_metadata_component, f"{path}.metadata.component", metadata_root=True)
     for index, raw_component in enumerate(raw_components):
-        walk(raw_component, f"{path}.components[{index}]")
+        walk(raw_component, f"{path}.components[{index}]", top_level=True)
     if not flattened:
         raise EvidenceError(f"embedded CycloneDX SBOM has no component identities: {path}")
 
-    identities: dict[tuple[str, str, str], str] = {}
-    purls: dict[str, tuple[str, str, str]] = {}
-    references: dict[str, tuple[str, str, str, str]] = {}
-    unique: dict[tuple[str, str, str, str], dict[str, str]] = {}
-    metadata_component: dict[str, str] | None = None
-    for projection, bom_ref, metadata_root in flattened:
-        identity = (projection["type"], projection["name"], projection["version"])
-        purl = projection["purl"]
-        existing_purl = identities.setdefault(identity, purl)
-        if existing_purl != purl:
-            raise EvidenceError(f"CycloneDX component identity has conflicting purls: {path}")
-        existing_identity = purls.setdefault(purl, identity)
-        if existing_identity != identity:
-            raise EvidenceError(f"CycloneDX purl has conflicting component identities: {path}")
-        exact = (*identity, purl)
-        if bom_ref:
-            existing_reference = references.setdefault(bom_ref, exact)
-            if existing_reference != exact:
-                raise EvidenceError(f"CycloneDX bom-ref has conflicting identities: {path}")
-        unique.setdefault(exact, projection)
+    metadata_component: dict[str, Any] | None = None
+    metadata_component_raw: Mapping[str, Any] | None = None
+    metadata_root_echo: dict[str, Any] | None = None
+    components: list[dict[str, Any]] = []
+    for projection, bom_ref, metadata_root, top_level, raw_component in flattened:
+        purl = str(projection["purl"])
+        if metadata_component is not None and purl == metadata_component["purl"]:
+            if (
+                metadata_component_raw is None
+                or metadata_root
+                or not top_level
+                or metadata_root_echo is not None
+                or not bom_ref
+                or projection != metadata_component
+                or canonical_json(raw_component) != canonical_json(metadata_component_raw)
+            ):
+                raise EvidenceError(f"CycloneDX document repeats metadata component purl: {path}")
+            metadata_root_echo = projection
+            continue
         if metadata_root:
             if metadata_component is not None:
                 raise EvidenceError(f"embedded CycloneDX SBOM repeats metadata component: {path}")
             metadata_component = projection
+            metadata_component_raw = raw_component
+        else:
+            components.append(projection)
 
-    if metadata_component is not None:
-        metadata_exact = (
-            metadata_component["type"],
-            metadata_component["name"],
-            metadata_component["version"],
-            metadata_component["purl"],
-        )
-        unique.pop(metadata_exact, None)
-    components = sorted(
-        unique.values(),
-        key=lambda item: (item["type"], item["name"], item["version"], item["purl"]),
-    )
-    validate_cyclonedx_component_projection(metadata_component, components, path)
-    component_identity = {
+    components.sort(key=cyclonedx_component_sort_key)
+    validate_cyclonedx_observation_projection(metadata_component, components, path)
+    observation = {
         "metadata_component": metadata_component,
+        "metadata_root_echo": metadata_root_echo,
+        "upstream_invalid_duplicate_bom_ref": metadata_root_echo is not None,
         "components": components,
     }
     return {
         "bom_format": "CycloneDX",
         "spec_version": spec_version,
-        "serial_number": serial_number,
-        "version": document_version,
-        **component_identity,
-        "component_identity_sha256": sha256_bytes(canonical_json(component_identity)),
+        **observation,
+        "observation_sha256": sha256_bytes(canonical_json(observation)),
     }
 
 
@@ -2025,6 +2167,14 @@ def validate_policy_schema(policy: Mapping[str, Any]) -> None:
     # These validators enforce the exact nested baseline record shapes.
     validate_unexpanded_payload_policy_schema(policy)
     validate_native_component_policy_schema(policy)
+    if approval["approved"] is True and any(
+        owner_record["review"]["state"] == "open"
+        for platform_records in policy["native_component_coverage"].values()
+        for owner_record in platform_records
+    ):
+        raise EvidenceError(
+            "distribution approval cannot be true while native-component coverage is incomplete"
+        )
     for platform in ("linux/amd64", "linux/arm64"):
         baseline = filesystem_baseline(policy, platform)
         validate_payload_records(
@@ -2869,10 +3019,6 @@ def _inventory_saved_image(
         "wheel_identity_files": wheel_identity_files,
         "wheel_installations": historical_installations,
         "python_record_ownership": python_record_ownership,
-        "source_completeness": {
-            "complete": False,
-            "reason": SOURCE_COMPLETENESS_REASON,
-        },
     }
     files = {
         "schema_version": SCHEMA_VERSION,
@@ -3639,12 +3785,13 @@ def validate_native_component_payloads(
     for index, value_record in enumerate(value):
         record = require_exact_fields(
             value_record,
-            {"role", "path", "sha256"},
+            {"role", "path", "sha256", "size"},
             f"{source} payload {index}",
         )
         role_value = record["role"]
         path_value = record["path"]
         digest = record["sha256"]
+        size = record["size"]
         if not isinstance(role_value, str):
             raise EvidenceError(f"{source} has an invalid payload role")
         role = str(checked_canonical_path(role_value, f"{source} payload role"))
@@ -3658,6 +3805,12 @@ def validate_native_component_payloads(
             raise EvidenceError(f"{source} payload role does not match its path")
         if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
             raise EvidenceError(f"{source} has an invalid payload digest")
+        if (
+            not isinstance(size, int)
+            or isinstance(size, bool)
+            or not 0 < size <= MAX_ARCHIVE_MEMBER_BYTES
+        ):
+            raise EvidenceError(f"{source} has an invalid payload size")
         if path in seen_paths:
             raise EvidenceError(f"{source} repeats payload path {path}")
         if role in seen_roles:
@@ -3670,12 +3823,369 @@ def validate_native_component_payloads(
     return records
 
 
+def validate_native_source_notices(value: object, source_id: str) -> list[Mapping[str, Any]]:
+    """Validate a canonical, bounded notice inventory shared by every source kind."""
+
+    if not isinstance(value, list) or not value or len(value) > MAX_SOURCE_LICENSE_FILES:
+        raise EvidenceError(f"native-component source {source_id} has invalid notices")
+    notices: list[Mapping[str, Any]] = []
+    members: set[str] = set()
+    total_size = 0
+    for index, raw_notice in enumerate(value):
+        notice = require_exact_fields(
+            raw_notice,
+            {"member", "sha256", "size"},
+            f"native-component source {source_id} notice {index}",
+        )
+        member = notice["member"]
+        digest = notice["sha256"]
+        size = notice["size"]
+        if (
+            not isinstance(member, str)
+            or str(checked_canonical_path(member, "native-component notice member")) != member
+            or member in members
+        ):
+            raise EvidenceError(f"native-component source {source_id} has an invalid notice member")
+        members.add(member)
+        if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+            raise EvidenceError(f"native-component source {source_id} has an invalid notice digest")
+        if not isinstance(size, int) or isinstance(size, bool) or not 0 < size <= MAX_LICENSE_BYTES:
+            raise EvidenceError(f"native-component source {source_id} has an invalid notice size")
+        total_size += size
+        if total_size > MAX_SOURCE_LICENSE_TOTAL_BYTES:
+            raise EvidenceError(
+                f"native-component source {source_id} notice bytes exceed the limit"
+            )
+        notices.append(notice)
+    if [record["member"] for record in notices] != sorted(members):
+        raise EvidenceError(f"native-component source {source_id} notices are not canonical")
+    return notices
+
+
+def validate_alpine_component_source(source_id: str, raw_record: object) -> Mapping[str, Any]:
+    record = require_exact_fields(
+        raw_record,
+        {
+            "kind",
+            "origin",
+            "version",
+            "aports_commit",
+            "distfiles_release",
+            "recipe",
+            "distfiles",
+            "allowed_recipe_links",
+            "observed_license",
+            "notices",
+        },
+        f"native-component source {source_id}",
+    )
+    origin = record["origin"]
+    version = record["version"]
+    commit = record["aports_commit"]
+    release = record["distfiles_release"]
+    if (
+        not isinstance(origin, str)
+        or checked_scalar(origin, f"native-component source {source_id} origin") != origin
+        or re.fullmatch(r"[a-z0-9][a-z0-9+._-]*", origin) is None
+    ):
+        raise EvidenceError(f"native-component source {source_id} has an invalid origin")
+    if (
+        not isinstance(version, str)
+        or checked_scalar(version, f"native-component source {source_id} version") != version
+    ):
+        raise EvidenceError(f"native-component source {source_id} has an invalid version")
+    if source_id != f"alpine:{origin}@{version}":
+        raise EvidenceError(f"native-component source {source_id} has a conflicting identity")
+    if not isinstance(commit, str) or re.fullmatch(r"[0-9a-f]{40}", commit) is None:
+        raise EvidenceError(f"native-component source {source_id} has an invalid commit")
+    if not isinstance(release, str) or re.fullmatch(r"v\d+\.\d+", release) is None:
+        raise EvidenceError(f"native-component source {source_id} has an invalid release")
+    recipe = validate_pinned_artifact(
+        record["recipe"], f"native-component source {source_id} recipe"
+    )
+    expected_recipe_url = (
+        "https://gitlab.alpinelinux.org/alpine/aports/-/archive/"
+        f"{commit}/aports-{commit}.tar.gz?path=main/{origin}"
+    )
+    if recipe["url"] != expected_recipe_url:
+        raise EvidenceError(f"native-component source {source_id} recipe is not commit-pinned")
+
+    distfiles = record["distfiles"]
+    if not isinstance(distfiles, list) or not 1 <= len(distfiles) <= MAX_ALPINE_DISTFILES:
+        raise EvidenceError(f"native-component source {source_id} has invalid distfiles")
+    distfile_names: set[str] = set()
+    for index, raw_distfile in enumerate(distfiles):
+        distfile = require_exact_fields(
+            raw_distfile,
+            {"filename", "url", "sha512", "size"},
+            f"native-component source {source_id} distfile {index}",
+        )
+        filename = distfile["filename"]
+        url = distfile["url"]
+        digest = distfile["sha512"]
+        size = distfile["size"]
+        if (
+            not isinstance(filename, str)
+            or str(checked_canonical_path(filename, "native-component distfile filename"))
+            != filename
+            or PurePosixPath(filename).name != filename
+            or filename in distfile_names
+        ):
+            raise EvidenceError(
+                f"native-component source {source_id} has an invalid distfile filename"
+            )
+        distfile_names.add(filename)
+        expected_url = (
+            f"https://distfiles.alpinelinux.org/distfiles/{release}/"
+            f"{urllib.parse.quote(filename, safe='')}"
+        )
+        if not isinstance(url, str) or url != expected_url:
+            raise EvidenceError(
+                f"native-component source {source_id} has a noncanonical distfile URL"
+            )
+        if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{128}", digest) is None:
+            raise EvidenceError(
+                f"native-component source {source_id} has an invalid distfile digest"
+            )
+        if (
+            not isinstance(size, int)
+            or isinstance(size, bool)
+            or not 0 < size <= MAX_NATIVE_COMPONENT_SOURCE_BYTES
+        ):
+            raise EvidenceError(f"native-component source {source_id} has an invalid distfile size")
+    if [record["filename"] for record in distfiles] != sorted(distfile_names):
+        raise EvidenceError(f"native-component source {source_id} distfiles are not canonical")
+
+    links = record["allowed_recipe_links"]
+    if not isinstance(links, list) or len(links) > MAX_ALPINE_RECIPE_LINKS:
+        raise EvidenceError(f"native-component source {source_id} has invalid recipe links")
+    seen_links: set[str] = set()
+    for index, raw_link in enumerate(links):
+        link = require_exact_fields(
+            raw_link,
+            {"path", "type", "target"},
+            f"native-component source {source_id} recipe link {index}",
+        )
+        path_value = link["path"]
+        target_value = link["target"]
+        if (
+            link["type"] != "symlink"
+            or not isinstance(path_value, str)
+            or str(checked_canonical_path(path_value, "native-component recipe link path"))
+            != path_value
+            or path_value in seen_links
+            or not isinstance(target_value, str)
+            or str(checked_canonical_path(target_value, "native-component recipe link target"))
+            != target_value
+        ):
+            raise EvidenceError(f"native-component source {source_id} has an invalid recipe link")
+        path = PurePosixPath(path_value)
+        target = PurePosixPath(target_value)
+        if path == target or path.parent != target.parent:
+            raise EvidenceError(
+                f"native-component source {source_id} recipe link must target a sibling"
+            )
+        seen_links.add(path_value)
+    if [record["path"] for record in links] != sorted(seen_links):
+        raise EvidenceError(f"native-component source {source_id} recipe links are not canonical")
+
+    observed_license = record["observed_license"]
+    if not isinstance(observed_license, str) or not observed_license.strip():
+        raise EvidenceError(f"native-component source {source_id} has no observed recipe license")
+    checked_scalar(
+        observed_license,
+        f"native-component source {source_id} observed license",
+        max_length=MAX_LICENSE_FIELD_LENGTH,
+    )
+    validate_native_source_notices(record["notices"], source_id)
+    return record
+
+
+def validate_crates_io_component_source(source_id: str, raw_record: object) -> Mapping[str, Any]:
+    record = require_exact_fields(
+        raw_record,
+        {
+            "kind",
+            "name",
+            "version",
+            "crate",
+            "manifest",
+            "raw_license",
+            "normalized_license",
+            "notices",
+        },
+        f"native-component source {source_id}",
+    )
+    name = record["name"]
+    version = record["version"]
+    if (
+        not isinstance(name, str)
+        or checked_scalar(name, f"native-component source {source_id} name") != name
+        or re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]*", name) is None
+        or not isinstance(version, str)
+        or checked_scalar(version, f"native-component source {source_id} version") != version
+        or source_id != f"crates-io:{name}@{version}"
+    ):
+        raise EvidenceError(f"native-component source {source_id} has a conflicting identity")
+    crate = validate_pinned_artifact(
+        record["crate"],
+        f"native-component source {source_id} crate",
+        max_bytes=MAX_NATIVE_COMPONENT_SOURCE_BYTES,
+    )
+    quoted_name = urllib.parse.quote(name, safe="-._~")
+    quoted_version = urllib.parse.quote(version, safe="-._~+")
+    expected_url = (
+        f"https://static.crates.io/crates/{quoted_name}/{quoted_name}-{quoted_version}.crate"
+    )
+    if crate["url"] != expected_url:
+        raise EvidenceError(f"native-component source {source_id} has a noncanonical crate URL")
+    manifest = require_exact_fields(
+        record["manifest"],
+        {"member", "sha256", "size"},
+        f"native-component source {source_id} manifest",
+    )
+    expected_member = f"{name}-{version}/Cargo.toml"
+    if manifest["member"] != expected_member:
+        raise EvidenceError(f"native-component source {source_id} has an invalid manifest member")
+    if (
+        not isinstance(manifest["sha256"], str)
+        or re.fullmatch(r"[0-9a-f]{64}", manifest["sha256"]) is None
+    ):
+        raise EvidenceError(f"native-component source {source_id} has an invalid manifest digest")
+    if (
+        not isinstance(manifest["size"], int)
+        or isinstance(manifest["size"], bool)
+        or not 0 < manifest["size"] <= MAX_ARCHIVE_MEMBER_BYTES
+    ):
+        raise EvidenceError(f"native-component source {source_id} has an invalid manifest size")
+    for field in ("raw_license", "normalized_license"):
+        value = record[field]
+        if (
+            not isinstance(value, str)
+            or checked_scalar(
+                value,
+                f"native-component source {source_id} {field}",
+                max_length=MAX_LICENSE_FIELD_LENGTH,
+            )
+            != value
+        ):
+            raise EvidenceError(f"native-component source {source_id} has an invalid {field}")
+    expected_normalized_license = (
+        "MIT OR Apache-2.0" if record["raw_license"] == "MIT/Apache-2.0" else record["raw_license"]
+    )
+    if record["normalized_license"] != expected_normalized_license:
+        raise EvidenceError(f"native-component source {source_id} license normalization differs")
+    notices = validate_native_source_notices(record["notices"], source_id)
+    if any(notice["member"] == expected_member for notice in notices):
+        raise EvidenceError(f"native-component source {source_id} repeats its manifest as a notice")
+    return record
+
+
+def validate_owner_subpath_component_source(
+    source_id: str, raw_record: object
+) -> Mapping[str, Any]:
+    record = require_exact_fields(
+        raw_record,
+        {
+            "kind",
+            "owner",
+            "path",
+            "tree_sha256",
+            "member_count",
+            "expanded_size",
+            "notices",
+        },
+        f"native-component source {source_id}",
+    )
+    owner = record["owner"]
+    path_value = record["path"]
+    if (
+        not isinstance(owner, str)
+        or not owner.startswith("python:")
+        or "@" not in owner
+        or not isinstance(path_value, str)
+        or str(checked_canonical_path(path_value, "owner-sdist source path")) != path_value
+        or source_id != f"owner-sdist:{owner}#{path_value}"
+    ):
+        raise EvidenceError(f"native-component source {source_id} has a conflicting identity")
+    digest = record["tree_sha256"]
+    count = record["member_count"]
+    expanded = record["expanded_size"]
+    if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+        raise EvidenceError(f"native-component source {source_id} has an invalid tree digest")
+    if (
+        not isinstance(count, int)
+        or isinstance(count, bool)
+        or not 0 < count <= MAX_OWNER_SUBTREE_MEMBERS
+        or not isinstance(expanded, int)
+        or isinstance(expanded, bool)
+        or not 0 < expanded <= MAX_OWNER_SUBTREE_BYTES
+    ):
+        raise EvidenceError(f"native-component source {source_id} has invalid subtree bounds")
+    validate_native_source_notices(record["notices"], source_id)
+    return record
+
+
+def validate_upstream_release_component_source(
+    source_id: str, raw_record: object
+) -> Mapping[str, Any]:
+    record = require_exact_fields(
+        raw_record,
+        {
+            "kind",
+            "name",
+            "version",
+            "archive",
+            "checksum_document",
+            "checksum_filename",
+            "notices",
+        },
+        f"native-component source {source_id}",
+    )
+    name = record["name"]
+    version = record["version"]
+    if (
+        not isinstance(name, str)
+        or checked_scalar(name, f"native-component source {source_id} name") != name
+        or not isinstance(version, str)
+        or checked_scalar(version, f"native-component source {source_id} version") != version
+        or source_id != f"upstream-release:{name}@{version}"
+    ):
+        raise EvidenceError(f"native-component source {source_id} has a conflicting identity")
+    archive = validate_pinned_artifact(
+        record["archive"],
+        f"native-component source {source_id} archive",
+        max_bytes=MAX_NATIVE_COMPONENT_SOURCE_BYTES,
+    )
+    validate_pinned_artifact(
+        record["checksum_document"],
+        f"native-component source {source_id} checksum document",
+        max_bytes=MAX_DOWNLOAD_BYTES,
+    )
+    filename = record["checksum_filename"]
+    if (
+        not isinstance(filename, str)
+        or PurePosixPath(filename).name != filename
+        or str(checked_canonical_path(filename, "upstream checksum filename")) != filename
+        or safe_filename(str(archive["url"])) != filename
+    ):
+        raise EvidenceError(f"native-component source {source_id} has an invalid checksum filename")
+    validate_native_source_notices(record["notices"], source_id)
+    return record
+
+
 def native_component_sources(policy: Mapping[str, Any]) -> Mapping[str, Mapping[str, Any]]:
-    """Validate and return immutable source records for embedded native components."""
+    """Validate the schema-v7 tagged union of immutable component sources."""
 
     value = policy.get("native_component_sources")
-    if not isinstance(value, dict) or len(value) > MAX_COMPONENTS:
+    if not isinstance(value, dict) or len(value) > MAX_NATIVE_COMPONENT_SOURCES:
         raise EvidenceError("policy has invalid native-component sources")
+    validators = {
+        "alpine-aports": validate_alpine_component_source,
+        "crates-io": validate_crates_io_component_source,
+        "owner-sdist-subpath": validate_owner_subpath_component_source,
+        "checksummed-upstream-release": validate_upstream_release_component_source,
+    }
     sources: dict[str, Mapping[str, Any]] = {}
     for source_id, raw_record in value.items():
         if not isinstance(source_id, str):
@@ -3685,372 +4195,1803 @@ def native_component_sources(policy: Mapping[str, Any]) -> Mapping[str, Mapping[
             "native-component source identity",
             max_length=MAX_COMPONENT_KEY_LENGTH,
         )
-        record = require_exact_fields(
-            raw_record,
-            {
-                "kind",
-                "origin",
-                "version",
-                "aports_commit",
-                "distfiles_release",
-                "recipe",
-                "distfiles",
-                "observed_license",
-                "notices",
-            },
-            f"native-component source {source_id}",
-        )
-        origin = record["origin"]
-        version = record["version"]
-        commit = record["aports_commit"]
-        release = record["distfiles_release"]
-        if record["kind"] != "alpine-aports":
+        if not isinstance(raw_record, dict):
+            raise EvidenceError(f"native-component source {source_id} is not an object")
+        kind = raw_record.get("kind")
+        validator = validators.get(kind) if isinstance(kind, str) else None
+        if validator is None:
             raise EvidenceError(f"native-component source {source_id} has an unsupported kind")
-        if (
-            not isinstance(origin, str)
-            or checked_scalar(origin, f"native-component source {source_id} origin") != origin
-            or re.fullmatch(r"[a-z0-9][a-z0-9+._-]*", origin) is None
-        ):
-            raise EvidenceError(f"native-component source {source_id} has an invalid origin")
-        if (
-            not isinstance(version, str)
-            or checked_scalar(version, f"native-component source {source_id} version") != version
-        ):
-            raise EvidenceError(f"native-component source {source_id} has an invalid version")
-        if source_id != f"alpine:{origin}@{version}":
-            raise EvidenceError(f"native-component source {source_id} has a conflicting identity")
-        if not isinstance(commit, str) or re.fullmatch(r"[0-9a-f]{40}", commit) is None:
-            raise EvidenceError(f"native-component source {source_id} has an invalid commit")
-        if not isinstance(release, str) or re.fullmatch(r"v\d+\.\d+", release) is None:
-            raise EvidenceError(f"native-component source {source_id} has an invalid release")
-        recipe = validate_pinned_artifact(
-            record["recipe"], f"native-component source {source_id} recipe"
-        )
-        expected_recipe_url = (
-            "https://gitlab.alpinelinux.org/alpine/aports/-/archive/"
-            f"{commit}/aports-{commit}.tar.gz?path=main/{origin}"
-        )
-        if recipe["url"] != expected_recipe_url:
-            raise EvidenceError(f"native-component source {source_id} recipe is not commit-pinned")
-
-        distfiles = record["distfiles"]
-        if not isinstance(distfiles, list) or len(distfiles) != 1:
-            raise EvidenceError(f"native-component source {source_id} has invalid distfiles")
-        distfile_names: set[str] = set()
-        for index, raw_distfile in enumerate(distfiles):
-            distfile = require_exact_fields(
-                raw_distfile,
-                {"filename", "url", "sha512", "size"},
-                f"native-component source {source_id} distfile {index}",
-            )
-            filename = distfile["filename"]
-            url = distfile["url"]
-            digest = distfile["sha512"]
-            size = distfile["size"]
-            if (
-                not isinstance(filename, str)
-                or str(checked_canonical_path(filename, "native-component distfile filename"))
-                != filename
-                or PurePosixPath(filename).name != filename
-                or filename in distfile_names
-            ):
-                raise EvidenceError(
-                    f"native-component source {source_id} has an invalid distfile filename"
-                )
-            distfile_names.add(filename)
-            expected_url = (
-                f"https://distfiles.alpinelinux.org/distfiles/{release}/"
-                f"{urllib.parse.quote(filename, safe='')}"
-            )
-            if not isinstance(url, str) or url != expected_url:
-                raise EvidenceError(
-                    f"native-component source {source_id} has a noncanonical distfile URL"
-                )
-            require_https_source_url(url)
-            if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{128}", digest) is None:
-                raise EvidenceError(
-                    f"native-component source {source_id} has an invalid distfile digest"
-                )
-            if (
-                not isinstance(size, int)
-                or isinstance(size, bool)
-                or not 0 < size <= MAX_NATIVE_COMPONENT_SOURCE_BYTES
-            ):
-                raise EvidenceError(
-                    f"native-component source {source_id} has an invalid distfile size"
-                )
-        if [record["filename"] for record in distfiles] != sorted(distfile_names):
-            raise EvidenceError(f"native-component source {source_id} distfiles are not canonical")
-
-        observed_license = record["observed_license"]
-        if not isinstance(observed_license, str) or not observed_license.strip():
-            raise EvidenceError(
-                f"native-component source {source_id} has no observed recipe license"
-            )
-        checked_scalar(
-            observed_license,
-            f"native-component source {source_id} observed license",
-            max_length=MAX_LICENSE_FIELD_LENGTH,
-        )
-        notices = record["notices"]
-        if not isinstance(notices, list) or not notices or len(notices) > MAX_SOURCE_LICENSE_FILES:
-            raise EvidenceError(f"native-component source {source_id} has invalid notices")
-        notice_members: set[str] = set()
-        for index, raw_notice in enumerate(notices):
-            notice = require_exact_fields(
-                raw_notice,
-                {"member", "sha256", "size"},
-                f"native-component source {source_id} notice {index}",
-            )
-            member = notice["member"]
-            digest = notice["sha256"]
-            size = notice["size"]
-            if (
-                not isinstance(member, str)
-                or str(checked_canonical_path(member, "native-component notice member")) != member
-                or member in notice_members
-            ):
-                raise EvidenceError(
-                    f"native-component source {source_id} has an invalid notice member"
-                )
-            notice_members.add(member)
-            if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
-                raise EvidenceError(
-                    f"native-component source {source_id} has an invalid notice digest"
-                )
-            if (
-                not isinstance(size, int)
-                or isinstance(size, bool)
-                or not 0 < size <= MAX_LICENSE_BYTES
-            ):
-                raise EvidenceError(
-                    f"native-component source {source_id} has an invalid notice size"
-                )
-        if [record["member"] for record in notices] != sorted(notice_members):
-            raise EvidenceError(f"native-component source {source_id} notices are not canonical")
-        sources[source_id] = record
+        sources[source_id] = validator(source_id, raw_record)
     return sources
 
 
-def validate_reviewed_native_components(
+def cargo_package_identity(value: object, source: str) -> tuple[str, str, str, str]:
+    """Validate one exact crates.io ``Cargo.lock`` package identity."""
+
+    record = require_exact_fields(
+        value,
+        {"name", "version", "source", "checksum"},
+        source,
+    )
+    name = record["name"]
+    version = record["version"]
+    registry = record["source"]
+    checksum = record["checksum"]
+    if (
+        not isinstance(name, str)
+        or checked_scalar(name, f"{source} name") != name
+        or CARGO_PACKAGE_NAME.fullmatch(name) is None
+        or not isinstance(version, str)
+        or checked_scalar(version, f"{source} version") != version
+        or registry != CARGO_CRATES_IO_SOURCE
+        or not isinstance(checksum, str)
+        or re.fullmatch(r"[0-9a-f]{64}", checksum) is None
+    ):
+        raise EvidenceError(f"{source} has an invalid package identity")
+    return name, version, registry, checksum
+
+
+def validate_cargo_lock_context(
     value: object,
     *,
+    owner: str,
     sources: Mapping[str, Mapping[str, Any]],
-    source: str,
-    used_sources: set[str],
-    semantics_by_purl: dict[str, dict[str, str]],
-) -> list[Mapping[str, Any]]:
-    """Validate one canonical set of reviewed embedded-component identities."""
+    crate_source_ids: set[str],
+) -> Mapping[str, Any] | None:
+    """Validate the exact lockfile context required by crates.io reviews."""
 
-    if not isinstance(value, list) or len(value) > MAX_CYCLONEDX_COMPONENTS:
-        raise EvidenceError(f"{source} has invalid components")
-    records: list[Mapping[str, Any]] = []
-    projections: list[dict[str, str]] = []
-    for component_index, raw_component in enumerate(value):
-        component = require_exact_fields(
-            raw_component,
-            {
-                "type",
-                "name",
-                "version",
-                "purl",
-                "source",
-                "reviewed_license",
-            },
-            f"{source} component {component_index}",
+    if value is None:
+        if crate_source_ids:
+            raise EvidenceError(
+                f"native-component coverage {owner} crate reviews require Cargo.lock context"
+            )
+        return None
+    if not crate_source_ids:
+        raise EvidenceError(
+            f"native-component coverage {owner} has Cargo.lock context without crate reviews"
         )
-        projection, _bom_ref = normalized_cyclonedx_component(
-            component, f"{source} component {component_index}"
+    record = require_exact_fields(
+        value,
+        {"member", "sha256", "size", "source_ids", "non_sbom_packages"},
+        f"native-component coverage {owner} Cargo.lock",
+    )
+    member = record["member"]
+    digest = record["sha256"]
+    size = record["size"]
+    if (
+        not isinstance(member, str)
+        or str(
+            checked_canonical_path(
+                member,
+                f"native-component coverage {owner} Cargo.lock member",
+            )
         )
-        projections.append(projection)
-        source_id = component["source"]
-        if not isinstance(source_id, str) or source_id not in sources:
-            raise EvidenceError(f"{source} has an unknown component source")
-        used_sources.add(source_id)
-        reviewed = component["reviewed_license"]
-        if not isinstance(reviewed, str) or not reviewed.strip():
-            raise EvidenceError(f"{source} has no reviewed component license")
-        normalized_reviewed = checked_scalar(
-            reviewed,
-            f"{source} reviewed license",
+        != member
+        or PurePosixPath(member).name != "Cargo.lock"
+        or not isinstance(digest, str)
+        or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+        or not isinstance(size, int)
+        or isinstance(size, bool)
+        or not 0 < size <= MAX_CARGO_LOCK_BYTES
+    ):
+        raise EvidenceError(f"native-component coverage {owner} has invalid Cargo.lock identity")
+
+    raw_source_ids = record["source_ids"]
+    if (
+        not isinstance(raw_source_ids, list)
+        or len(raw_source_ids) > MAX_CARGO_LOCK_PACKAGES
+        or not all(isinstance(source_id, str) for source_id in raw_source_ids)
+        or raw_source_ids != sorted(set(raw_source_ids))
+        or set(raw_source_ids) != crate_source_ids
+    ):
+        raise EvidenceError(
+            f"native-component coverage {owner} Cargo.lock source IDs differ from crate reviews"
+        )
+    for source_id in raw_source_ids:
+        source_record = sources.get(source_id)
+        if source_record is None or source_record["kind"] != "crates-io":
+            raise EvidenceError(
+                f"native-component coverage {owner} Cargo.lock has a non-crate source ID"
+            )
+
+    raw_non_sbom = record["non_sbom_packages"]
+    if not isinstance(raw_non_sbom, list) or len(raw_non_sbom) > MAX_CARGO_LOCK_PACKAGES:
+        raise EvidenceError(
+            f"native-component coverage {owner} Cargo.lock has invalid non-SBOM packages"
+        )
+    non_sbom = [
+        cargo_package_identity(
+            package,
+            f"native-component coverage {owner} Cargo.lock non-SBOM package {index}",
+        )
+        for index, package in enumerate(raw_non_sbom)
+    ]
+    if non_sbom != sorted(set(non_sbom)):
+        raise EvidenceError(
+            f"native-component coverage {owner} Cargo.lock non-SBOM packages are not canonical"
+        )
+    reviewed_identities = {
+        (str(sources[source_id]["name"]), str(sources[source_id]["version"]))
+        for source_id in raw_source_ids
+    }
+    if reviewed_identities & {(name, version) for name, version, _source, _checksum in non_sbom}:
+        raise EvidenceError(
+            f"native-component coverage {owner} Cargo.lock repeats a reviewed crate as non-SBOM"
+        )
+    return record
+
+
+def cargo_purl_identity(value: object, source: str) -> tuple[str, str] | None:
+    """Return one Cargo name/version identity, or ``None`` for another ecosystem."""
+
+    if not isinstance(value, str) or not value.startswith("pkg:cargo/"):
+        return None
+    package = value.removeprefix("pkg:cargo/").split("?", maxsplit=1)[0].split("#", maxsplit=1)[0]
+    if "/" in package or "@" not in package:
+        raise EvidenceError(f"{source} has an invalid Cargo purl")
+    raw_name, raw_version = package.rsplit("@", maxsplit=1)
+    try:
+        name = urllib.parse.unquote(raw_name, errors="strict")
+        version = urllib.parse.unquote(raw_version, errors="strict")
+    except UnicodeDecodeError as exc:
+        raise EvidenceError(f"{source} has an invalid Cargo purl") from exc
+    if (
+        CARGO_PACKAGE_NAME.fullmatch(name) is None
+        or not version
+        or checked_scalar(version, f"{source} Cargo version") != version
+    ):
+        raise EvidenceError(f"{source} has an invalid Cargo purl")
+    return name, version
+
+
+def cyclonedx_reviewed_license(value: object, source: str) -> str:
+    """Return one exact supported CycloneDX license observation."""
+
+    if not isinstance(value, list) or len(value) != 1:
+        raise EvidenceError(f"{source} must have exactly one license observation")
+    record = value[0]
+    if not isinstance(record, dict):
+        raise EvidenceError(f"{source} has an unsupported license observation")
+    if set(record) == {"expression"}:
+        expression = record["expression"]
+    elif set(record) == {"license"}:
+        license_record = record["license"]
+        if not isinstance(license_record, dict) or set(license_record) != {"id"}:
+            raise EvidenceError(f"{source} has an unsupported license observation")
+        expression = license_record["id"]
+    else:
+        raise EvidenceError(f"{source} has an unsupported license observation")
+    if (
+        not isinstance(expression, str)
+        or checked_scalar(
+            expression,
+            source,
             max_length=MAX_LICENSE_FIELD_LENGTH,
         )
-        if "LicenseRef-" in normalized_reviewed:
+        != expression
+    ):
+        raise EvidenceError(f"{source} has an invalid license observation")
+    return expression
+
+
+def verify_owner_cargo_lock(
+    owner_context: Mapping[str, Any],
+    sources: Mapping[str, Mapping[str, Any]],
+    owner_archive: bytes,
+    *,
+    archive_name: str,
+) -> bytes | None:
+    """Verify exact lockfile membership and crate checksums in one retained owner sdist."""
+
+    owner = str(owner_context["owner"])
+    lock_context = owner_context["record"]["cargo_lock"]
+    if lock_context is None:
+        return None
+    member = str(lock_context["member"])
+    found = reviewed_files_from_source_archive(
+        owner_archive,
+        archive_name=archive_name,
+        source_id=f"{owner} Cargo.lock",
+        expected={
+            member: {
+                "sha256": lock_context["sha256"],
+                "size": lock_context["size"],
+            }
+        },
+        max_member_bytes=MAX_CARGO_LOCK_BYTES,
+    )
+    if set(found) != {member}:
+        raise EvidenceError(f"retained owner sdist omits exact Cargo.lock member for {owner}")
+    content = found[member]
+    try:
+        document = tomllib.loads(content.decode("utf-8"))
+    except (UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
+        raise EvidenceError(f"retained owner Cargo.lock is invalid for {owner}") from exc
+    if not isinstance(document, dict) or set(document) != {"version", "package"}:
+        raise EvidenceError(f"retained owner Cargo.lock has an unexpected shape for {owner}")
+    lock_version = document["version"]
+    raw_packages = document["package"]
+    if (
+        not isinstance(lock_version, int)
+        or isinstance(lock_version, bool)
+        or lock_version not in {3, 4}
+        or not isinstance(raw_packages, list)
+        or not 1 <= len(raw_packages) <= MAX_CARGO_LOCK_PACKAGES
+    ):
+        raise EvidenceError(f"retained owner Cargo.lock has invalid bounds for {owner}")
+
+    registry_packages: dict[tuple[str, str], tuple[str, str, str, str]] = {}
+    local_packages: set[tuple[str, str]] = set()
+    for index, raw_package in enumerate(raw_packages):
+        if not isinstance(raw_package, dict) or not {"name", "version"} <= set(raw_package):
+            raise EvidenceError(f"retained owner Cargo.lock has an invalid package for {owner}")
+        if set(raw_package) - {"name", "version", "source", "checksum", "dependencies"}:
             raise EvidenceError(
-                "native-component reviewed licenses cannot use LicenseRef identifiers"
+                f"retained owner Cargo.lock package has unexpected fields for {owner}"
             )
-        semantic = {
-            **projection,
-            "source": source_id,
-            "reviewed_license": normalized_reviewed,
-        }
-        previous_semantic = semantics_by_purl.setdefault(projection["purl"], semantic)
-        if previous_semantic != semantic:
+        dependencies = raw_package.get("dependencies", [])
+        if (
+            not isinstance(dependencies, list)
+            or len(dependencies) > MAX_CARGO_LOCK_PACKAGES
+            or not all(
+                isinstance(dependency, str)
+                and checked_scalar(
+                    dependency,
+                    f"retained owner Cargo.lock dependency {index}",
+                )
+                == dependency
+                for dependency in dependencies
+            )
+        ):
             raise EvidenceError(
-                "native-component PURL has conflicting identity, source, or reviewed "
-                f"license: {projection['purl']}"
+                f"retained owner Cargo.lock package has invalid dependencies for {owner}"
             )
-        records.append(component)
-    validate_cyclonedx_component_projection(None, projections, source)
+        name = raw_package["name"]
+        version = raw_package["version"]
+        if (
+            not isinstance(name, str)
+            or checked_scalar(name, f"retained owner Cargo.lock package {index} name") != name
+            or CARGO_PACKAGE_NAME.fullmatch(name) is None
+            or not isinstance(version, str)
+            or checked_scalar(version, f"retained owner Cargo.lock package {index} version")
+            != version
+        ):
+            raise EvidenceError(f"retained owner Cargo.lock has an invalid package for {owner}")
+        identity = (name, version)
+        registry = raw_package.get("source")
+        checksum = raw_package.get("checksum")
+        if registry is None:
+            if checksum is not None or identity in local_packages or identity in registry_packages:
+                raise EvidenceError(
+                    f"retained owner Cargo.lock repeats or corrupts a local package for {owner}"
+                )
+            local_packages.add(identity)
+            continue
+        if registry != CARGO_CRATES_IO_SOURCE:
+            raise EvidenceError(f"retained owner Cargo.lock uses a foreign registry for {owner}")
+        canonical = cargo_package_identity(
+            {
+                "name": name,
+                "version": version,
+                "source": registry,
+                "checksum": checksum,
+            },
+            f"retained owner Cargo.lock package {index}",
+        )
+        if identity in registry_packages or identity in local_packages:
+            raise EvidenceError(f"retained owner Cargo.lock repeats a package for {owner}")
+        registry_packages[identity] = canonical
+
+    expected_registry: dict[tuple[str, str], tuple[str, str, str, str]] = {}
+    for source_id in lock_context["source_ids"]:
+        source_record = sources[source_id]
+        identity = (str(source_record["name"]), str(source_record["version"]))
+        expected_registry[identity] = (
+            identity[0],
+            identity[1],
+            CARGO_CRATES_IO_SOURCE,
+            str(source_record["crate"]["sha256"]),
+        )
+    for package in lock_context["non_sbom_packages"]:
+        canonical = cargo_package_identity(package, f"{owner} Cargo.lock non-SBOM package")
+        identity = (canonical[0], canonical[1])
+        if identity in expected_registry:
+            raise EvidenceError(f"{owner} Cargo.lock repeats a reviewed package")
+        expected_registry[identity] = canonical
+    if registry_packages != expected_registry:
+        raise EvidenceError(
+            f"retained owner Cargo.lock registry packages differ from reviewed context for {owner}"
+        )
+
+    expected_local: set[tuple[str, str]] = set()
+    for reference in owner_context["owner_root_observations"]:
+        observation = owner_context["observations"][reference]
+        cargo_identity = cargo_purl_identity(
+            observation["purl"],
+            f"{owner} Cargo owner root",
+        )
+        if cargo_identity is not None:
+            expected_local.add(cargo_identity)
+    for review in owner_context["record"]["component_reviews"]:
+        source_record = sources[str(review["source"])]
+        if source_record["kind"] != "owner-sdist-subpath":
+            continue
+        for raw_reference in review["observations"]:
+            reference = validate_observation_reference(
+                raw_reference,
+                f"{owner} local Cargo observation",
+            )
+            observation = owner_context["observations"][reference]
+            cargo_identity = cargo_purl_identity(
+                observation["purl"],
+                f"{owner} local Cargo observation",
+            )
+            if cargo_identity is not None:
+                expected_local.add(cargo_identity)
+    if local_packages != expected_local:
+        raise EvidenceError(
+            "retained owner Cargo.lock local packages differ from reviewed "
+            f"observations for {owner}"
+        )
+    return content
+
+
+def verify_upstream_checksum_document(
+    content: bytes,
+    *,
+    filename: str,
+    expected_sha256: str,
+) -> None:
+    """Require one unambiguous GNU-style SHA-256 record for an exact filename."""
+
+    if len(content) > MAX_DOWNLOAD_BYTES:
+        raise EvidenceError("upstream checksum document exceeds the size limit")
+    if (
+        PurePosixPath(filename).name != filename
+        or str(checked_canonical_path(filename, "upstream checksum filename")) != filename
+        or re.fullmatch(r"[0-9a-f]{64}", expected_sha256) is None
+    ):
+        raise EvidenceError("upstream checksum verification has an invalid expectation")
+    try:
+        text = content.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise EvidenceError("upstream checksum document is not UTF-8") from exc
+    records: list[tuple[str, str]] = []
+    for line_number, line in enumerate(text.splitlines(), start=1):
+        if line_number > MAX_RECORD_ENTRIES:
+            raise EvidenceError("upstream checksum document has too many records")
+        if not line:
+            continue
+        match = re.fullmatch(r"([0-9a-f]{64}) [ *](\S(?:.*\S)?)", line)
+        if match is None:
+            raise EvidenceError(
+                f"upstream checksum document has a malformed record at line {line_number}"
+            )
+        digest, raw_filename = match.groups()
+        if (
+            PurePosixPath(raw_filename).name != raw_filename
+            or str(checked_canonical_path(raw_filename, "upstream checksum record filename"))
+            != raw_filename
+        ):
+            raise EvidenceError(
+                f"upstream checksum document has an unsafe filename at line {line_number}"
+            )
+        if raw_filename == filename:
+            records.append((digest, raw_filename))
+    if len(records) != 1:
+        raise EvidenceError("upstream checksum document must contain exactly one matching filename")
+    if records[0][0] != expected_sha256:
+        raise EvidenceError("upstream checksum document digest differs from reviewed archive")
+
+
+def verify_crates_io_archive(
+    archive: bytes,
+    *,
+    source_id: str,
+    source: Mapping[str, Any],
+) -> dict[str, bytes]:
+    """Validate one official ``.crate`` archive and return exact reviewed files."""
+
+    name = str(source["name"])
+    version = str(source["version"])
+    expected_root = f"{name}-{version}"
+    expected_files = {
+        str(source["manifest"]["member"]): source["manifest"],
+        **{str(record["member"]): record for record in source["notices"]},
+    }
+    found: dict[str, bytes] = {}
+    seen_paths: set[str] = set()
+    total = 0
+    try:
+        with tarfile.open(fileobj=io.BytesIO(archive), mode="r:*", tarinfo=BoundedTarInfo) as crate:
+            for count, member in enumerate(crate, start=1):
+                if count > MAX_ARCHIVE_MEMBERS:
+                    raise EvidenceError(f"crate archive has too many entries: {source_id}")
+                path = checked_path(member.name)
+                path_string = str(path)
+                if path.parts[0] != expected_root:
+                    raise EvidenceError(f"crate archive has an unexpected root: {source_id}")
+                if path_string in seen_paths:
+                    raise EvidenceError(
+                        f"crate archive repeats an entry path: {source_id}/{path_string}"
+                    )
+                seen_paths.add(path_string)
+                if member.isdir():
+                    if member.size != 0:
+                        raise EvidenceError(f"crate archive directory has a payload: {source_id}")
+                    continue
+                if (
+                    not member.isfile()
+                    or member.issparse()
+                    or member.size < 0
+                    or member.size > MAX_ARCHIVE_MEMBER_BYTES
+                ):
+                    raise EvidenceError(
+                        f"crate archive has an unsupported entry: {source_id}/{path_string}"
+                    )
+                total += member.size
+                if total > MAX_ARCHIVE_TOTAL_BYTES:
+                    raise EvidenceError(f"crate archive exceeds the size limit: {source_id}")
+                if path_string not in expected_files:
+                    continue
+                content = read_member(crate, member)
+                expectation = expected_files[path_string]
+                if (
+                    len(content) != expectation["size"]
+                    or sha256_bytes(content) != expectation["sha256"]
+                ):
+                    raise EvidenceError(f"crate reviewed file differs: {source_id}/{path_string}")
+                found[path_string] = content
+    except EvidenceError:
+        raise
+    except (tarfile.TarError, RuntimeError, OverflowError, ValueError) as exc:
+        raise EvidenceError(f"invalid crate archive for {source_id}: {exc}") from exc
+    if set(found) != set(expected_files):
+        raise EvidenceError(f"crate archive omits reviewed files: {source_id}")
+    manifest_path = str(source["manifest"]["member"])
+    try:
+        manifest = tomllib.loads(found[manifest_path].decode("utf-8"))
+    except (UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
+        raise EvidenceError(f"crate manifest is invalid: {source_id}") from exc
+    package = manifest.get("package")
+    if (
+        not isinstance(package, dict)
+        or package.get("name") != name
+        or package.get("version") != version
+        or package.get("license") != source["raw_license"]
+    ):
+        raise EvidenceError(f"crate manifest identity or license differs: {source_id}")
+    return found
+
+
+def verify_owner_sdist_subtree(
+    archive: bytes,
+    *,
+    source_id: str,
+    source: Mapping[str, Any],
+    archive_name: str,
+) -> list[dict[str, Any]]:
+    """Verify a canonical file manifest for one path inside a hostile owner sdist."""
+
+    configured_path = checked_canonical_path(
+        str(source["path"]), f"owner-sdist subtree path for {source_id}"
+    )
+    records: list[dict[str, Any]] = []
+    roots: set[str] = set()
+    expanded_size = 0
+
+    def retain(
+        archive_path: PurePosixPath,
+        *,
+        entry_type: str,
+        mode: int,
+        size: int,
+        content: bytes | None,
+    ) -> None:
+        nonlocal expanded_size
+        roots.add(archive_path.parts[0])
+        if len(archive_path.parts) < 2:
+            return
+        relative_to_root = PurePosixPath(*archive_path.parts[1:])
+        try:
+            relative = relative_to_root.relative_to(configured_path)
+        except ValueError:
+            return
+        if not relative.parts:
+            return
+        if not 0 <= mode <= 0o777 or mode & 0o7000:
+            raise EvidenceError(
+                f"owner-sdist subtree has an unsafe mode: {source_id}/{archive_path}"
+            )
+        if entry_type == "file":
+            assert content is not None
+            expanded_size += size
+            if expanded_size > MAX_OWNER_SUBTREE_BYTES:
+                raise EvidenceError(f"owner-sdist subtree exceeds its size limit: {source_id}")
+            digest: str | None = sha256_bytes(content)
+        else:
+            if size != 0 or content is not None:
+                raise EvidenceError(
+                    f"owner-sdist subtree directory has a payload: {source_id}/{archive_path}"
+                )
+            digest = None
+        records.append(
+            {
+                "path": str(relative),
+                "type": entry_type,
+                "mode": mode,
+                "size": size,
+                "sha256": digest,
+            }
+        )
+
+    try:
+        zip_candidate = (
+            archive_name.lower().endswith(".zip")
+            or archive.startswith(ZIP_SIGNATURES)
+            or has_source_zip_eocd(archive)
+        )
+        if zip_candidate:
+            central_offset, central_size, entry_count = preflight_source_zip(archive)
+            central_entries = read_source_zip_central_directory(
+                archive,
+                central_offset,
+                central_size,
+                entry_count,
+            )
+            entries = validate_source_zip_entries(
+                archive,
+                central_offset,
+                central_entries,
+            )
+            for entry in entries:
+                metadata = entry.metadata
+                path = checked_path(metadata.name)
+                mode = metadata.external_attr >> 16 & 0o777
+                if metadata.name.endswith("/"):
+                    retain(
+                        path,
+                        entry_type="directory",
+                        mode=mode,
+                        size=0,
+                        content=None,
+                    )
+                else:
+                    payload = read_source_zip_payload(
+                        archive,
+                        entry,
+                        max_bytes=MAX_ARCHIVE_MEMBER_BYTES,
+                        purpose="owner-sdist subtree member",
+                    )
+                    retain(
+                        path,
+                        entry_type="file",
+                        mode=mode,
+                        size=len(payload),
+                        content=payload,
+                    )
+        else:
+            seen_paths: set[str] = set()
+            with tarfile.open(
+                fileobj=io.BytesIO(archive), mode="r:*", tarinfo=BoundedTarInfo
+            ) as sdist:
+                total = 0
+                for count, member in enumerate(sdist, start=1):
+                    if count > MAX_ARCHIVE_MEMBERS:
+                        raise EvidenceError(f"owner sdist has too many entries: {source_id}")
+                    path = checked_path(member.name)
+                    path_string = str(path)
+                    roots.add(path.parts[0])
+                    if path_string in seen_paths:
+                        raise EvidenceError(
+                            f"owner sdist repeats an entry path: {source_id}/{path_string}"
+                        )
+                    seen_paths.add(path_string)
+                    if member.isdir():
+                        if member.size != 0:
+                            raise EvidenceError(f"owner sdist directory has a payload: {source_id}")
+                        retain(
+                            path,
+                            entry_type="directory",
+                            mode=member.mode,
+                            size=0,
+                            content=None,
+                        )
+                        continue
+                    if (
+                        not member.isfile()
+                        or member.issparse()
+                        or member.size < 0
+                        or member.size > MAX_ARCHIVE_MEMBER_BYTES
+                    ):
+                        raise EvidenceError(
+                            f"owner sdist has an unsupported entry: {source_id}/{path_string}"
+                        )
+                    total += member.size
+                    if total > MAX_ARCHIVE_TOTAL_BYTES:
+                        raise EvidenceError(f"owner sdist exceeds the size limit: {source_id}")
+                    payload = read_member(sdist, member)
+                    retain(
+                        path,
+                        entry_type="file",
+                        mode=member.mode,
+                        size=len(payload),
+                        content=payload,
+                    )
+    except EvidenceError:
+        raise
+    except (tarfile.TarError, RuntimeError, OverflowError, ValueError) as exc:
+        raise EvidenceError(f"invalid owner sdist for {source_id}: {exc}") from exc
+
+    if len(roots) != 1:
+        raise EvidenceError(f"owner sdist must have exactly one top-level root: {source_id}")
+    records.sort(key=lambda item: (item["path"], item["type"]))
+    if (
+        not records
+        or len(records) > MAX_OWNER_SUBTREE_MEMBERS
+        or len(records) != source["member_count"]
+        or expanded_size != source["expanded_size"]
+        or sha256_bytes(canonical_json(records)) != source["tree_sha256"]
+    ):
+        raise EvidenceError(f"owner-sdist subtree differs from reviewed policy: {source_id}")
     return records
 
 
+def parse_native_owner(value: object, source: str) -> tuple[str, str, str]:
+    """Validate and split one canonical ``python:name@version`` owner identity."""
+
+    if not isinstance(value, str) or not value.startswith("python:") or "@" not in value:
+        raise EvidenceError(f"{source} has an invalid owner")
+    raw_name, version = value.removeprefix("python:").rsplit("@", maxsplit=1)
+    if (
+        normalize_package_name(raw_name) != raw_name
+        or not version
+        or checked_scalar(version, f"{source} owner version") != version
+    ):
+        raise EvidenceError(f"{source} has an invalid owner")
+    return value, raw_name, version
+
+
+ObservationReferenceKey = tuple[str, str, str, str, str]
+SemanticObservationProjection = tuple[
+    list[dict[str, Any]],
+    dict[ObservationReferenceKey, dict[str, str]],
+]
+
+
+def validate_observation_reference(value: object, source: str) -> ObservationReferenceKey:
+    """Validate one digest-bound, document-local occurrence reference."""
+
+    if not isinstance(value, dict):
+        raise EvidenceError(f"{source} is not an object")
+    identity_kind = value.get("identity_kind")
+    expected_fields = {
+        "sbom_path",
+        "observation_sha256",
+        "identity_kind",
+        "purl",
+    }
+    if identity_kind == "bom-ref":
+        expected_fields.add("bom_ref")
+    elif identity_kind != "purl":
+        raise EvidenceError(f"{source} has an invalid observation identity kind")
+    record = require_exact_fields(value, expected_fields, source)
+    path_value = record["sbom_path"]
+    observation_sha256 = record["observation_sha256"]
+    purl = record["purl"]
+    if (
+        not isinstance(path_value, str)
+        or str(checked_canonical_path(path_value, f"{source} SBOM path")) != path_value
+        or DIST_INFO_SBOM.search(path_value) is None
+        or not isinstance(observation_sha256, str)
+        or re.fullmatch(r"[0-9a-f]{64}", observation_sha256) is None
+        or not isinstance(purl, str)
+        or checked_scalar(
+            purl,
+            f"{source} purl",
+            max_length=MAX_LICENSE_FIELD_LENGTH,
+        )
+        != purl
+        or PACKAGE_URL.fullmatch(purl) is None
+    ):
+        raise EvidenceError(f"{source} has an invalid observation reference")
+    identity = purl
+    if identity_kind == "bom-ref":
+        bom_ref = record["bom_ref"]
+        if (
+            not isinstance(bom_ref, str)
+            or checked_scalar(
+                bom_ref,
+                f"{source} bom-ref",
+                max_length=MAX_LICENSE_FIELD_LENGTH,
+            )
+            != bom_ref
+        ):
+            raise EvidenceError(f"{source} has an invalid observation bom-ref")
+        identity = bom_ref
+    return path_value, observation_sha256, identity_kind, identity, purl
+
+
+def retained_observation_reference(
+    sbom_path: str,
+    observation_sha256: str,
+    component: Mapping[str, Any],
+) -> dict[str, str]:
+    """Build the exact policy reference for one retained component occurrence."""
+
+    identity_kind, identity = cyclonedx_occurrence_identity(component)
+    reference = {
+        "sbom_path": sbom_path,
+        "observation_sha256": observation_sha256,
+        "identity_kind": identity_kind,
+        "purl": str(component["purl"]),
+    }
+    if identity_kind == "bom-ref":
+        reference["bom_ref"] = identity
+    validate_observation_reference(reference, "retained observation")
+    return reference
+
+
+def validate_observation_references(
+    value: object,
+    source: str,
+    *,
+    allow_empty: bool = False,
+) -> list[ObservationReferenceKey]:
+    if (
+        not isinstance(value, list)
+        or len(value) > MAX_OBSERVATIONS_PER_REVIEW
+        or (not value and not allow_empty)
+    ):
+        raise EvidenceError(f"{source} has invalid observation references")
+    references = [
+        validate_observation_reference(record, f"{source} observation {index}")
+        for index, record in enumerate(value)
+    ]
+    if len(references) != len(set(references)) or references != sorted(references):
+        raise EvidenceError(f"{source} observation references are not canonical")
+    return references
+
+
+def validate_component_review_source_binding(
+    *,
+    owner: str,
+    source_id: str,
+    source_record: Mapping[str, Any],
+    reviewed_license: str,
+    references: Sequence[ObservationReferenceKey],
+    observations: Mapping[ObservationReferenceKey, Mapping[str, Any]],
+) -> None:
+    """Bind source kinds with machine-verifiable identity fields to each observation."""
+
+    kind = source_record["kind"]
+    if kind == "owner-sdist-subpath":
+        if source_record["owner"] != owner:
+            raise EvidenceError(
+                f"native-component coverage {owner} uses another owner's sdist subtree"
+            )
+        return
+    if kind != "crates-io":
+        return
+    name = str(source_record["name"])
+    version = str(source_record["version"])
+    quoted_name = urllib.parse.quote(name, safe="-._~")
+    quoted_version = urllib.parse.quote(version, safe="-._~+")
+    expected_purl = f"pkg:cargo/{quoted_name}@{quoted_version}"
+    expected_hash = {
+        "alg": "SHA-256",
+        "content": str(source_record["crate"]["sha256"]),
+    }
+    if reviewed_license != source_record["normalized_license"]:
+        raise EvidenceError(
+            f"native-component coverage {owner} crate review license differs from {source_id}"
+        )
+    for reference in references:
+        observation = observations[reference]
+        observed_license = cyclonedx_reviewed_license(
+            observation["licenses"],
+            f"native-component coverage {owner} crate review {source_id}",
+        )
+        if (
+            observation["purl"] != expected_purl
+            or expected_hash not in observation["hashes"]
+            or observed_license != source_record["normalized_license"]
+        ):
+            raise EvidenceError(
+                f"native-component coverage {owner} crate review differs from {source_id}"
+            )
+
+
+def validate_native_owner_review(
+    raw_owner: object,
+    *,
+    platform: str,
+    sources: Mapping[str, Mapping[str, Any]],
+    used_sources: set[str],
+) -> dict[str, Any]:
+    """Validate one v7 owner record without resolving cross-owner relationships."""
+
+    owner_record = require_exact_fields(
+        raw_owner,
+        {
+            "owner",
+            "wheel",
+            "owner_source",
+            "cargo_lock",
+            "native_payloads",
+            "sboms",
+            "component_reviews",
+            "payload_dispositions",
+            "known_omissions",
+            "canonical_relationships",
+            "review",
+        },
+        f"native-component coverage {platform}",
+    )
+    owner, name, version = parse_native_owner(
+        owner_record["owner"], f"native-component coverage {platform}"
+    )
+    wheel = validate_pinned_artifact(
+        owner_record["wheel"], f"native-component coverage {owner} wheel"
+    )
+    filename = safe_filename(str(wheel["url"]))
+    try:
+        wheel_name, wheel_version, _build, tags = parse_wheel_filename(filename)
+        expected_version = Version(version)
+    except (InvalidVersion, InvalidWheelFilename) as exc:
+        raise EvidenceError(f"native-component coverage {owner} has invalid wheel") from exc
+    if (
+        canonicalize_name(wheel_name) != name
+        or wheel_version != expected_version
+        or not tags
+        or not all(wheel_tag_matches_native_platform(tag, platform) for tag in tags)
+    ):
+        raise EvidenceError(f"native-component coverage {owner} wheel conflicts with {platform}")
+    validate_pinned_artifact(
+        owner_record["owner_source"],
+        f"native-component coverage {owner} owner source",
+    )
+    payloads = validate_native_component_payloads(
+        owner_record["native_payloads"],
+        platform,
+        f"native-component coverage {owner}",
+    )
+
+    raw_sboms = owner_record["sboms"]
+    if not isinstance(raw_sboms, list) or len(raw_sboms) > MAX_SBOMS_PER_OWNER:
+        raise EvidenceError(f"native-component coverage {owner} has invalid SBOMs")
+    sbom_paths: set[str] = set()
+    observations: dict[ObservationReferenceKey, Mapping[str, Any]] = {}
+    owner_root_observations: set[ObservationReferenceKey] = set()
+    omission_root_observations: dict[ObservationReferenceKey, str] = {}
+    sboms: list[Mapping[str, Any]] = []
+    for sbom_index, raw_sbom in enumerate(raw_sboms):
+        sbom = require_exact_fields(
+            raw_sbom,
+            {"path", "sha256", "observation", "metadata_root"},
+            f"native-component coverage {owner} SBOM {sbom_index}",
+        )
+        path_value = sbom["path"]
+        digest = sbom["sha256"]
+        if (
+            not isinstance(path_value, str)
+            or str(checked_canonical_path(path_value, "native-component SBOM path")) != path_value
+            or DIST_INFO_SBOM.search(path_value) is None
+            or path_value in sbom_paths
+            or not isinstance(digest, str)
+            or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+        ):
+            raise EvidenceError(f"native-component coverage {owner} has an invalid SBOM identity")
+        sbom_paths.add(path_value)
+        observation = sbom["observation"]
+        validate_retained_cyclonedx_identity(
+            observation, f"native-component coverage {owner} SBOM {sbom_index}"
+        )
+        assert isinstance(observation, dict)
+        metadata_component = observation["metadata_component"]
+        root_disposition = sbom["metadata_root"]
+        anomaly_review = (
+            root_disposition.get("anomaly_review")
+            if isinstance(root_disposition, dict)
+            else object()
+        )
+        root_echo = observation["metadata_root_echo"]
+        if root_echo is None:
+            if anomaly_review is not None:
+                raise EvidenceError(
+                    f"native-component coverage {owner} has a stale metadata-root anomaly review"
+                )
+        else:
+            anomaly = require_exact_fields(
+                anomaly_review,
+                {"kind", "reason"},
+                f"native-component coverage {owner} metadata-root anomaly review",
+            )
+            reason = anomaly["reason"]
+            if (
+                anomaly["kind"] != "metadata-root-echo"
+                or not isinstance(reason, str)
+                or checked_scalar(
+                    reason,
+                    f"native-component coverage {owner} metadata-root anomaly reason",
+                    max_length=MAX_REVIEW_RATIONALE_LENGTH,
+                )
+                != reason
+            ):
+                raise EvidenceError(
+                    f"native-component coverage {owner} has an invalid metadata-root echo review"
+                )
+        if metadata_component is None:
+            require_exact_fields(
+                root_disposition,
+                {"kind", "anomaly_review"},
+                f"native-component coverage {owner} metadata root",
+            )
+            if root_disposition["kind"] != "missing":
+                raise EvidenceError(
+                    f"native-component coverage {owner} has a false metadata-root disposition"
+                )
+        else:
+            assert isinstance(metadata_component, dict)
+            root_reference = validate_observation_reference(
+                retained_observation_reference(
+                    path_value,
+                    str(observation["observation_sha256"]),
+                    metadata_component,
+                ),
+                f"native-component coverage {owner} metadata root",
+            )
+            root_kind = root_disposition.get("kind") if isinstance(root_disposition, dict) else None
+            if root_kind == "owner":
+                require_exact_fields(
+                    root_disposition,
+                    {"kind", "anomaly_review"},
+                    f"native-component coverage {owner} metadata root",
+                )
+                if (
+                    normalize_package_name(str(metadata_component["name"])) != name
+                    or metadata_component["version"] != version
+                ):
+                    raise EvidenceError(
+                        f"native-component coverage {owner} owner metadata root conflicts"
+                    )
+                owner_root_observations.add(root_reference)
+            elif root_kind == "embedded-component":
+                require_exact_fields(
+                    root_disposition,
+                    {"kind", "anomaly_review"},
+                    f"native-component coverage {owner} metadata root",
+                )
+            elif root_kind == "known-omission":
+                root = require_exact_fields(
+                    root_disposition,
+                    {"kind", "omission", "anomaly_review"},
+                    f"native-component coverage {owner} metadata root",
+                )
+                omission = root["omission"]
+                if not isinstance(omission, str):
+                    raise EvidenceError(
+                        f"native-component coverage {owner} has an invalid root omission"
+                    )
+                omission_root_observations[root_reference] = omission
+            else:
+                raise EvidenceError(
+                    f"native-component coverage {owner} has an invalid metadata-root disposition"
+                )
+        document_observations = list(
+            ([metadata_component] if metadata_component is not None else [])
+            + list(observation["components"])
+        )
+        for component in document_observations:
+            key = validate_observation_reference(
+                retained_observation_reference(
+                    path_value,
+                    str(observation["observation_sha256"]),
+                    component,
+                ),
+                f"native-component coverage {owner} retained observation",
+            )
+            if key in observations:
+                raise EvidenceError(
+                    f"native-component coverage {owner} repeats an SBOM observation"
+                )
+            observations[key] = component
+        sboms.append(sbom)
+    if [record["path"] for record in sboms] != sorted(sbom_paths):
+        raise EvidenceError(f"native-component coverage {owner} SBOMs are not canonical")
+    if len(observations) > MAX_OBSERVATIONS_PER_OWNER:
+        raise EvidenceError(f"native-component coverage {owner} has too many observations")
+    if not payloads and not sboms:
+        raise EvidenceError(
+            f"native-component coverage {owner} has no native payload or SBOM surface"
+        )
+
+    raw_reviews = owner_record["component_reviews"]
+    if not isinstance(raw_reviews, list) or len(raw_reviews) > MAX_COMPONENT_REVIEWS:
+        raise EvidenceError(f"native-component coverage {owner} has invalid component reviews")
+    reviewed_observations: set[ObservationReferenceKey] = set()
+    crate_source_ids: set[str] = set()
+    review_order: list[tuple[ObservationReferenceKey, ...]] = []
+    for review_index, raw_review in enumerate(raw_reviews):
+        review = require_exact_fields(
+            raw_review,
+            {"observations", "source", "reviewed_license"},
+            f"native-component coverage {owner} component review {review_index}",
+        )
+        references = validate_observation_references(
+            review["observations"],
+            f"native-component coverage {owner} component review {review_index}",
+        )
+        if not set(references) <= set(observations):
+            raise EvidenceError(
+                f"native-component coverage {owner} review references an unknown observation"
+            )
+        if reviewed_observations & set(references):
+            raise EvidenceError(
+                f"native-component coverage {owner} reviews an observation more than once"
+            )
+        reviewed_observations.update(references)
+        source_id = review["source"]
+        if not isinstance(source_id, str) or source_id not in sources:
+            raise EvidenceError(f"native-component coverage {owner} review has an unknown source")
+        used_sources.add(source_id)
+        if sources[source_id]["kind"] == "crates-io":
+            crate_source_ids.add(source_id)
+        reviewed_license = review["reviewed_license"]
+        if (
+            not isinstance(reviewed_license, str)
+            or checked_scalar(
+                reviewed_license,
+                f"native-component coverage {owner} reviewed license",
+                max_length=MAX_LICENSE_FIELD_LENGTH,
+            )
+            != reviewed_license
+            or "LicenseRef-" in reviewed_license
+        ):
+            raise EvidenceError(
+                f"native-component coverage {owner} has an invalid reviewed license"
+            )
+        validate_component_review_source_binding(
+            owner=owner,
+            source_id=source_id,
+            source_record=sources[source_id],
+            reviewed_license=reviewed_license,
+            references=references,
+            observations=observations,
+        )
+        review_order.append(tuple(references))
+    if review_order != sorted(review_order):
+        raise EvidenceError(
+            f"native-component coverage {owner} component reviews are not canonical"
+        )
+    cargo_lock = validate_cargo_lock_context(
+        owner_record["cargo_lock"],
+        owner=owner,
+        sources=sources,
+        crate_source_ids=crate_source_ids,
+    )
+
+    raw_omissions = owner_record["known_omissions"]
+    if not isinstance(raw_omissions, list) or len(raw_omissions) > MAX_KNOWN_OMISSIONS:
+        raise EvidenceError(f"native-component coverage {owner} has invalid known omissions")
+    omission_ids: set[str] = set()
+    omitted_observations: set[ObservationReferenceKey] = set()
+    omitted_payload_roles: set[str] = set()
+    omission_observations: dict[str, set[ObservationReferenceKey]] = {}
+    omission_payload_roles: dict[str, set[str]] = {}
+    missing_evidence_values = {
+        "build-material-attestation",
+        "component-inventory",
+        "exact-source",
+        "license-evidence",
+        "notice-evidence",
+        "payload-provenance",
+        "sbom-observation",
+        "source-payload-relationship",
+    }
+    for omission_index, raw_omission in enumerate(raw_omissions):
+        omission = require_exact_fields(
+            raw_omission,
+            {
+                "id",
+                "component",
+                "observations",
+                "payload_roles",
+                "missing_evidence",
+                "reason",
+            },
+            f"native-component coverage {owner} omission {omission_index}",
+        )
+        omission_id = omission["id"]
+        if (
+            not isinstance(omission_id, str)
+            or checked_scalar(omission_id, f"native-component coverage {owner} omission id")
+            != omission_id
+            or re.fullmatch(r"[a-z0-9][a-z0-9._-]*", omission_id) is None
+            or omission_id in omission_ids
+        ):
+            raise EvidenceError(f"native-component coverage {owner} has an invalid omission id")
+        omission_ids.add(omission_id)
+        component = require_exact_fields(
+            omission["component"],
+            {"type", "name", "version", "purl"},
+            f"native-component coverage {owner} omission component",
+        )
+        for field in ("type", "name", "version", "purl"):
+            raw_value = component[field]
+            if (
+                not isinstance(raw_value, str)
+                or checked_scalar(
+                    raw_value,
+                    f"native-component coverage {owner} omission component {field}",
+                    max_length=(
+                        MAX_LICENSE_FIELD_LENGTH if field == "purl" else MAX_COMPONENT_FIELD_LENGTH
+                    ),
+                    allow_empty=field in {"version", "purl"},
+                )
+                != raw_value
+            ):
+                raise EvidenceError(
+                    f"native-component coverage {owner} has an invalid omission component"
+                )
+        if component["purl"] and PACKAGE_URL.fullmatch(str(component["purl"])) is None:
+            raise EvidenceError(
+                f"native-component coverage {owner} has an invalid omission component purl"
+            )
+        references = validate_observation_references(
+            omission["observations"],
+            f"native-component coverage {owner} omission {omission_id}",
+            allow_empty=True,
+        )
+        if not set(references) <= set(observations) or omitted_observations & set(references):
+            raise EvidenceError(
+                f"native-component coverage {owner} omission has invalid observations"
+            )
+        omitted_observations.update(references)
+        omission_observations[omission_id] = set(references)
+        roles = omission["payload_roles"]
+        if (
+            not isinstance(roles, list)
+            or len(roles) > MAX_IMAGE_MEMBERS
+            or not all(isinstance(role, str) for role in roles)
+            or roles != sorted(set(roles))
+            or not set(roles) <= {str(payload["role"]) for payload in payloads}
+            or omitted_payload_roles & set(roles)
+        ):
+            raise EvidenceError(
+                f"native-component coverage {owner} omission has invalid payload roles"
+            )
+        omitted_payload_roles.update(roles)
+        omission_payload_roles[omission_id] = set(roles)
+        missing_evidence = omission["missing_evidence"]
+        if (
+            not isinstance(missing_evidence, list)
+            or not missing_evidence
+            or missing_evidence != sorted(set(missing_evidence))
+            or not set(missing_evidence) <= missing_evidence_values
+        ):
+            raise EvidenceError(
+                f"native-component coverage {owner} omission has invalid missing evidence"
+            )
+        reason = omission["reason"]
+        if (
+            not isinstance(reason, str)
+            or checked_scalar(
+                reason,
+                f"native-component coverage {owner} omission reason",
+                max_length=MAX_REVIEW_RATIONALE_LENGTH,
+            )
+            != reason
+        ):
+            raise EvidenceError(f"native-component coverage {owner} omission has no exact reason")
+    if [record["id"] for record in raw_omissions] != sorted(omission_ids):
+        raise EvidenceError(f"native-component coverage {owner} omissions are not canonical")
+    if set(omission_root_observations.values()) - omission_ids:
+        raise EvidenceError(
+            f"native-component coverage {owner} metadata root cites an unknown omission"
+        )
+    for reference, omission_id in omission_root_observations.items():
+        if reference not in omission_observations[omission_id]:
+            raise EvidenceError(
+                f"native-component coverage {owner} metadata-root omission "
+                "does not cite its observation"
+            )
+
+    raw_relationships = owner_record["canonical_relationships"]
+    if (
+        not isinstance(raw_relationships, list)
+        or len(raw_relationships) > MAX_CANONICAL_RELATIONSHIPS
+    ):
+        raise EvidenceError(
+            f"native-component coverage {owner} has invalid canonical relationships"
+        )
+    relationship_observations: set[ObservationReferenceKey] = set()
+    relationship_order: list[ObservationReferenceKey] = []
+    relationships: list[Mapping[str, Any]] = []
+    for relationship_index, raw_relationship in enumerate(raw_relationships):
+        relationship = require_exact_fields(
+            raw_relationship,
+            {
+                "kind",
+                "observation",
+                "reference_owner",
+                "reference_observation",
+                "payload_role",
+                "reference_payload_role",
+            },
+            f"native-component coverage {owner} relationship {relationship_index}",
+        )
+        if relationship["kind"] != "same-component-by-payload-equivalence":
+            raise EvidenceError(
+                f"native-component coverage {owner} has an unsupported relationship"
+            )
+        observation_reference = validate_observation_reference(
+            relationship["observation"],
+            f"native-component coverage {owner} relationship observation",
+        )
+        if (
+            observation_reference not in observations
+            or observation_reference in relationship_observations
+        ):
+            raise EvidenceError(
+                f"native-component coverage {owner} relationship has an invalid observation"
+            )
+        relationship_observations.add(observation_reference)
+        reference_owner, _reference_name, _reference_version = parse_native_owner(
+            relationship["reference_owner"],
+            f"native-component coverage {owner} relationship",
+        )
+        if reference_owner == owner:
+            raise EvidenceError(
+                f"native-component coverage {owner} relationship must reference another owner"
+            )
+        validate_observation_reference(
+            relationship["reference_observation"],
+            f"native-component coverage {owner} relationship reference",
+        )
+        payload_role = relationship["payload_role"]
+        reference_payload_role = relationship["reference_payload_role"]
+        for role_value in (payload_role, reference_payload_role):
+            if not isinstance(role_value, str):
+                raise EvidenceError(
+                    f"native-component coverage {owner} relationship has an invalid payload role"
+                )
+            checked_canonical_path(
+                role_value, f"native-component coverage {owner} relationship payload role"
+            )
+        if payload_role not in {payload["role"] for payload in payloads}:
+            raise EvidenceError(
+                f"native-component coverage {owner} relationship has an unknown payload role"
+            )
+        relationship_order.append(observation_reference)
+        relationships.append(relationship)
+    if relationship_order != sorted(relationship_order):
+        raise EvidenceError(f"native-component coverage {owner} relationships are not canonical")
+
+    raw_dispositions = owner_record["payload_dispositions"]
+    if not isinstance(raw_dispositions, list) or len(raw_dispositions) > MAX_IMAGE_MEMBERS:
+        raise EvidenceError(f"native-component coverage {owner} has invalid payload dispositions")
+    payload_roles = {str(payload["role"]) for payload in payloads}
+    disposition_roles: set[str] = set()
+    payload_observations: dict[str, set[ObservationReferenceKey]] = {}
+    for raw_disposition in raw_dispositions:
+        if not isinstance(raw_disposition, dict):
+            raise EvidenceError(
+                f"native-component coverage {owner} has an invalid payload disposition"
+            )
+        role = raw_disposition.get("role")
+        kind = raw_disposition.get("kind")
+        if not isinstance(role, str) or role not in payload_roles or role in disposition_roles:
+            raise EvidenceError(
+                f"native-component coverage {owner} has an invalid payload disposition role"
+            )
+        disposition_roles.add(role)
+        if kind == "owner":
+            require_exact_fields(
+                raw_disposition,
+                {"role", "kind"},
+                f"native-component coverage {owner} payload disposition",
+            )
+        elif kind == "sbom-components":
+            disposition = require_exact_fields(
+                raw_disposition,
+                {"role", "kind", "observations"},
+                f"native-component coverage {owner} payload disposition",
+            )
+            references = validate_observation_references(
+                disposition["observations"],
+                f"native-component coverage {owner} payload disposition",
+            )
+            if not set(references) <= set(observations):
+                raise EvidenceError(
+                    f"native-component coverage {owner} payload disposition has "
+                    "unknown observations"
+                )
+            payload_observations[role] = set(references)
+        elif kind == "known-omission":
+            disposition = require_exact_fields(
+                raw_disposition,
+                {"role", "kind", "omission"},
+                f"native-component coverage {owner} payload disposition",
+            )
+            omission_id = disposition["omission"]
+            if not isinstance(omission_id, str) or omission_id not in omission_ids:
+                raise EvidenceError(
+                    f"native-component coverage {owner} payload disposition has unknown omission"
+                )
+            if role not in omission_payload_roles[omission_id]:
+                raise EvidenceError(
+                    f"native-component coverage {owner} named omission does not cite its payload"
+                )
+        else:
+            raise EvidenceError(
+                f"native-component coverage {owner} has an unsupported payload disposition"
+            )
+    if [record["role"] for record in raw_dispositions] != sorted(disposition_roles):
+        raise EvidenceError(
+            f"native-component coverage {owner} payload dispositions are not canonical"
+        )
+    if disposition_roles != payload_roles:
+        raise EvidenceError(
+            f"native-component coverage {owner} does not dispose every native payload"
+        )
+
+    disposed_observations = (
+        owner_root_observations
+        | reviewed_observations
+        | omitted_observations
+        | relationship_observations
+    )
+    if len(disposed_observations) != (
+        len(owner_root_observations)
+        + len(reviewed_observations)
+        + len(omitted_observations)
+        + len(relationship_observations)
+    ):
+        raise EvidenceError(
+            f"native-component coverage {owner} gives one observation multiple dispositions"
+        )
+    if disposed_observations != set(observations):
+        raise EvidenceError(
+            f"native-component coverage {owner} does not dispose every SBOM observation"
+        )
+
+    review = require_exact_fields(
+        owner_record["review"],
+        {"state", "reason", "unresolved_items"},
+        f"native-component coverage {owner} review",
+    )
+    state = review["state"]
+    reason = review["reason"]
+    unresolved = review["unresolved_items"]
+    if state not in {"open", "closed"}:
+        raise EvidenceError(f"native-component coverage {owner} has an invalid review state")
+    if (
+        not isinstance(reason, str)
+        or checked_scalar(
+            reason,
+            f"native-component coverage {owner} review reason",
+            max_length=MAX_REVIEW_RATIONALE_LENGTH,
+            allow_empty=state == "closed",
+        )
+        != reason
+        or not isinstance(unresolved, list)
+        or len(unresolved) > MAX_COMPONENTS
+        or not all(
+            isinstance(item, str)
+            and checked_scalar(
+                item,
+                f"native-component coverage {owner} unresolved item",
+                max_length=MAX_REVIEW_RATIONALE_LENGTH,
+            )
+            == item
+            for item in unresolved
+        )
+        or unresolved != sorted(set(unresolved))
+    ):
+        raise EvidenceError(f"native-component coverage {owner} has an invalid review")
+    if state == "closed" and (reason or unresolved or raw_omissions):
+        raise EvidenceError(
+            f"native-component coverage {owner} cannot close with a reason, "
+            "unresolved item, or omission"
+        )
+    if state == "open" and (not reason or not unresolved):
+        raise EvidenceError(
+            f"native-component coverage {owner} open review requires exact unresolved items"
+        )
+    if state == "open" and set(unresolved) != omission_ids:
+        raise EvidenceError(
+            f"native-component coverage {owner} unresolved items differ from known omissions"
+        )
+
+    return {
+        "record": owner_record,
+        "owner": owner,
+        "state": state,
+        "cargo_lock": cargo_lock,
+        "observations": observations,
+        "owner_root_observations": owner_root_observations,
+        "reviewed_observations": reviewed_observations,
+        "relationship_observations": relationship_observations,
+        "payloads": {str(payload["role"]): payload for payload in payloads},
+        "payload_observations": payload_observations,
+        "relationships": relationships,
+    }
+
+
+def validate_native_relationships(contexts: Mapping[str, Mapping[str, Any]], platform: str) -> None:
+    """Resolve v7 relationships in a second pass against closed reference owners."""
+
+    target_references: set[tuple[str, ObservationReferenceKey]] = set()
+    relationship_sources = {
+        (owner, reference)
+        for owner, context in contexts.items()
+        for reference in context["relationship_observations"]
+    }
+    for owner, context in contexts.items():
+        for relationship in context["relationships"]:
+            source_reference = validate_observation_reference(
+                relationship["observation"], f"{platform} relationship source"
+            )
+            reference_owner = str(relationship["reference_owner"])
+            reference_context = contexts.get(reference_owner)
+            if reference_context is None or reference_context["state"] != "closed":
+                raise EvidenceError(
+                    f"native-component coverage {owner} relationship target is not closed"
+                )
+            reference = validate_observation_reference(
+                relationship["reference_observation"], f"{platform} relationship target"
+            )
+            if reference not in reference_context["reviewed_observations"]:
+                raise EvidenceError(
+                    f"native-component coverage {owner} relationship target is not "
+                    "directly reviewed"
+                )
+            payload_role = str(relationship["payload_role"])
+            reference_payload_role = str(relationship["reference_payload_role"])
+            if source_reference not in context["payload_observations"].get(payload_role, set()):
+                raise EvidenceError(
+                    f"native-component coverage {owner} relationship source payload "
+                    "does not cite its observation"
+                )
+            if reference not in reference_context["payload_observations"].get(
+                reference_payload_role, set()
+            ):
+                raise EvidenceError(
+                    f"native-component coverage {owner} relationship target payload "
+                    "does not cite its observation"
+                )
+            if (reference_owner, reference) in relationship_sources:
+                raise EvidenceError(
+                    f"native-component coverage {owner} relationships cannot form chains"
+                )
+            target_key = (reference_owner, reference)
+            if target_key in target_references:
+                raise EvidenceError(
+                    f"native-component coverage {owner} reuses a relationship target"
+                )
+            target_references.add(target_key)
+            observed = context["observations"][source_reference]
+            reference_observed = reference_context["observations"][reference]
+            if {field: observed[field] for field in ("type", "name", "version")} != {
+                field: reference_observed[field] for field in ("type", "name", "version")
+            }:
+                raise EvidenceError(
+                    f"native-component coverage {owner} relationship changes component identity"
+                )
+            payload = context["payloads"].get(payload_role)
+            reference_payload = reference_context["payloads"].get(reference_payload_role)
+            if (
+                payload is None
+                or reference_payload is None
+                or {field: payload[field] for field in ("sha256", "size")}
+                != {field: reference_payload[field] for field in ("sha256", "size")}
+            ):
+                raise EvidenceError(
+                    f"native-component coverage {owner} relationship payloads are not "
+                    "byte-identical"
+                )
+
+
+def native_owner_semantic_observation_projection(
+    context: Mapping[str, Any], contexts: Mapping[str, Mapping[str, Any]]
+) -> SemanticObservationProjection:
+    """Canonicalize one owner's observations and exact-reference lookup."""
+
+    record = context["record"]
+    canonical_purls: dict[ObservationReferenceKey, str] = {}
+    for relationship in context["relationships"]:
+        source_reference = validate_observation_reference(
+            relationship["observation"], "relationship semantic source"
+        )
+        reference_owner = str(relationship["reference_owner"])
+        reference = validate_observation_reference(
+            relationship["reference_observation"], "relationship semantic target"
+        )
+        canonical_purls[source_reference] = str(
+            contexts[reference_owner]["observations"][reference]["purl"]
+        )
+
+    def canonical_observation(
+        reference_key: ObservationReferenceKey,
+        observation: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        projected = dict(observation)
+        original_purl = str(observation["purl"])
+        canonical_purl = canonical_purls.get(reference_key, original_purl)
+        projected["purl"] = canonical_purl
+        if observation["bom_ref"] == original_purl:
+            projected["bom_ref"] = canonical_purl
+        return projected
+
+    def semantic_reference(
+        sbom_path: str,
+        component: Mapping[str, Any],
+    ) -> dict[str, str]:
+        identity_kind, identity = cyclonedx_occurrence_identity(component)
+        reference = {
+            "sbom_path": sbom_path,
+            "identity_kind": identity_kind,
+            "purl": str(component["purl"]),
+        }
+        if identity_kind == "bom-ref":
+            reference["bom_ref"] = identity
+        return reference
+
+    sboms = []
+    semantic_references: dict[ObservationReferenceKey, dict[str, str]] = {}
+    for sbom in record["sboms"]:
+        observation = sbom["observation"]
+        raw_observation_sha256 = str(observation["observation_sha256"])
+        metadata_component = observation["metadata_component"]
+        metadata_root_echo = observation["metadata_root_echo"]
+        metadata_key: ObservationReferenceKey | None = None
+        if metadata_component is not None:
+            metadata_key = validate_observation_reference(
+                retained_observation_reference(
+                    str(sbom["path"]),
+                    raw_observation_sha256,
+                    metadata_component,
+                ),
+                "semantic metadata observation",
+            )
+            metadata_component = canonical_observation(metadata_key, metadata_component)
+        if metadata_root_echo is not None:
+            assert metadata_key is not None
+            metadata_root_echo = canonical_observation(metadata_key, metadata_root_echo)
+        if sbom["metadata_root"]["kind"] == "owner":
+            _owner, owner_name, owner_version = parse_native_owner(
+                record["owner"], "semantic owner root"
+            )
+            owner_root_identity = f"pkg:generic/python-owner/{owner_name}@{owner_version}"
+            assert metadata_component is not None
+            metadata_component["purl"] = owner_root_identity
+            metadata_component["bom_ref"] = owner_root_identity
+            if metadata_root_echo is not None:
+                metadata_root_echo["purl"] = owner_root_identity
+                metadata_root_echo["bom_ref"] = owner_root_identity
+        elif metadata_component is not None and metadata_component["bom_ref"]:
+            root_identity = {
+                field: metadata_component[field]
+                for field in ("type", "name", "version", "purl", "hashes", "licenses")
+            }
+            semantic_root_ref = "semantic-root:" + sha256_bytes(canonical_json(root_identity))
+            metadata_component["bom_ref"] = semantic_root_ref
+            if metadata_root_echo is not None:
+                metadata_root_echo["bom_ref"] = semantic_root_ref
+        raw_components = list(observation["components"])
+        canonical_components: list[dict[str, Any]] = []
+        component_pairs: list[tuple[ObservationReferenceKey, dict[str, Any]]] = []
+        for component in raw_components:
+            raw_key = validate_observation_reference(
+                retained_observation_reference(
+                    str(sbom["path"]),
+                    raw_observation_sha256,
+                    component,
+                ),
+                "semantic component observation",
+            )
+            canonical_component = canonical_observation(raw_key, component)
+            canonical_components.append(canonical_component)
+            component_pairs.append((raw_key, canonical_component))
+        occurrence_groups: dict[bytes, list[tuple[ObservationReferenceKey, dict[str, Any]]]] = {}
+        for raw_key, canonical_component in component_pairs:
+            if not canonical_component["bom_ref"]:
+                continue
+            semantic_identity = canonical_json(
+                {
+                    field: canonical_component[field]
+                    for field in (
+                        "type",
+                        "name",
+                        "version",
+                        "purl",
+                        "hashes",
+                        "licenses",
+                    )
+                }
+            )
+            occurrence_groups.setdefault(semantic_identity, []).append(
+                (raw_key, canonical_component)
+            )
+        for semantic_identity, group in occurrence_groups.items():
+            prefix = "semantic-occurrence:" + sha256_bytes(semantic_identity)
+            for ordinal, (_raw_key, canonical_component) in enumerate(
+                sorted(group, key=lambda item: item[0])
+            ):
+                canonical_component["bom_ref"] = f"{prefix}:{ordinal}"
+        canonical_components.sort(key=cyclonedx_component_sort_key)
+        semantic_body = {
+            "metadata_component": metadata_component,
+            "metadata_root_echo": metadata_root_echo,
+            "upstream_invalid_duplicate_bom_ref": observation["upstream_invalid_duplicate_bom_ref"],
+            "components": canonical_components,
+        }
+        semantic_digest = sha256_bytes(canonical_json(semantic_body))
+        if metadata_key is not None:
+            assert metadata_component is not None
+            semantic_references[metadata_key] = semantic_reference(
+                str(sbom["path"]),
+                metadata_component,
+            )
+        for raw_key, canonical_component in component_pairs:
+            semantic_references[raw_key] = semantic_reference(
+                str(sbom["path"]),
+                canonical_component,
+            )
+        sboms.append(
+            {
+                "path": sbom["path"],
+                "metadata_root": sbom["metadata_root"],
+                "observation": {
+                    "bom_format": observation["bom_format"],
+                    "spec_version": observation["spec_version"],
+                    **semantic_body,
+                    "observation_sha256": semantic_digest,
+                },
+            }
+        )
+
+    return sboms, semantic_references
+
+
+def native_owner_semantic_projection(
+    context: Mapping[str, Any],
+    semantic_contexts: Mapping[str, SemanticObservationProjection],
+) -> dict[str, Any]:
+    """Remove platform bytes while retaining all cross-platform review semantics."""
+
+    record = context["record"]
+    semantic_context = semantic_contexts.get(str(context["owner"]))
+    if semantic_context is None:
+        raise EvidenceError("semantic owner context is unknown")
+    sboms, semantic_references = semantic_context
+
+    def canonical_reference(raw: object) -> dict[str, str]:
+        key = validate_observation_reference(raw, "semantic observation reference")
+        reference = semantic_references.get(key)
+        if reference is None:
+            raise EvidenceError("semantic observation reference is unknown")
+        return reference
+
+    def canonical_references(raw: Sequence[object]) -> list[dict[str, str]]:
+        return sorted(
+            (canonical_reference(reference) for reference in raw),
+            key=canonical_json,
+        )
+
+    reviews = [
+        {
+            **review,
+            "observations": canonical_references(review["observations"]),
+        }
+        for review in record["component_reviews"]
+    ]
+    reviews.sort(key=canonical_json)
+    omissions = [
+        {
+            **omission,
+            "observations": canonical_references(omission["observations"]),
+        }
+        for omission in record["known_omissions"]
+    ]
+    dispositions = []
+    for disposition in record["payload_dispositions"]:
+        if disposition["kind"] == "sbom-components":
+            dispositions.append(
+                {
+                    **disposition,
+                    "observations": canonical_references(disposition["observations"]),
+                }
+            )
+        else:
+            dispositions.append(disposition)
+    relationships = []
+    for relationship in record["canonical_relationships"]:
+        reference_owner = str(relationship["reference_owner"])
+        reference_context = semantic_contexts.get(reference_owner)
+        if reference_context is None:
+            raise EvidenceError("semantic relationship target owner is unknown")
+        reference_key = validate_observation_reference(
+            relationship["reference_observation"],
+            "semantic relationship target",
+        )
+        reference_observation = reference_context[1].get(reference_key)
+        if reference_observation is None:
+            raise EvidenceError("semantic relationship target observation is unknown")
+        relationships.append(
+            {
+                **relationship,
+                "observation": canonical_reference(relationship["observation"]),
+                "reference_observation": reference_observation,
+            }
+        )
+    relationships.sort(key=canonical_json)
+    return {
+        "owner": record["owner"],
+        "owner_source": record["owner_source"],
+        "cargo_lock": record["cargo_lock"],
+        "native_payload_roles": [payload["role"] for payload in record["native_payloads"]],
+        "sboms": sboms,
+        "component_reviews": reviews,
+        "payload_dispositions": dispositions,
+        "known_omissions": omissions,
+        "canonical_relationships": relationships,
+        "review": record["review"],
+    }
+
+
 def validate_native_component_policy_schema(policy: Mapping[str, Any]) -> None:
-    """Validate the closed-world policy used to resolve selected native wheel owners."""
+    """Validate the v7 observation, review-mapping, and closure policy."""
 
     sources = native_component_sources(policy)
     coverage = policy.get("native_component_coverage")
     if not isinstance(coverage, dict) or set(coverage) != {"linux/amd64", "linux/arm64"}:
         raise EvidenceError("policy must define native-component coverage for both platforms")
     used_sources: set[str] = set()
-    owners_by_platform: dict[str, set[str]] = {}
-    semantics_by_platform: dict[str, dict[str, Any]] = {}
-    semantics_by_purl: dict[str, dict[str, str]] = {}
+    platform_contexts: dict[str, dict[str, dict[str, Any]]] = {}
     for platform, raw_records in coverage.items():
-        if not isinstance(raw_records, list) or len(raw_records) > MAX_COMPONENTS:
+        if not isinstance(raw_records, list) or len(raw_records) > MAX_NATIVE_OWNERS:
             raise EvidenceError(f"native-component coverage for {platform} is invalid")
-        owners: set[str] = set()
-        owner_semantics: dict[str, Any] = {}
-        for owner_index, raw_owner in enumerate(raw_records):
-            owner_record = require_exact_fields(
+        contexts: dict[str, dict[str, Any]] = {}
+        for raw_owner in raw_records:
+            context = validate_native_owner_review(
                 raw_owner,
-                {"owner", "wheel", "owner_source", "native_payloads", "sboms", "components"},
-                f"native-component coverage {platform} owner {owner_index}",
-            )
-            owner = owner_record["owner"]
-            if not isinstance(owner, str) or not owner.startswith("python:") or "@" not in owner:
-                raise EvidenceError(f"native-component coverage for {platform} has invalid owner")
-            raw_name, version = owner.removeprefix("python:").rsplit("@", maxsplit=1)
-            if (
-                normalize_package_name(raw_name) != raw_name
-                or not version
-                or checked_scalar(version, f"native-component owner {owner} version") != version
-                or owner in owners
-            ):
-                raise EvidenceError(f"native-component coverage for {platform} has invalid owner")
-            owners.add(owner)
-            wheel = validate_pinned_artifact(
-                owner_record["wheel"], f"native-component coverage {owner} wheel"
-            )
-            filename = safe_filename(str(wheel["url"]))
-            try:
-                wheel_name, wheel_version, _build, tags = parse_wheel_filename(filename)
-                expected_version = Version(version)
-            except (InvalidVersion, InvalidWheelFilename) as exc:
-                raise EvidenceError(f"native-component coverage {owner} has invalid wheel") from exc
-            if (
-                canonicalize_name(wheel_name) != raw_name
-                or wheel_version != expected_version
-                or not tags
-                or not all(wheel_tag_matches_native_platform(tag, platform) for tag in tags)
-            ):
-                raise EvidenceError(
-                    f"native-component coverage {owner} wheel conflicts with {platform}"
-                )
-            validate_pinned_artifact(
-                owner_record["owner_source"],
-                f"native-component coverage {owner} owner source",
-            )
-            native_payloads = validate_native_component_payloads(
-                owner_record["native_payloads"],
-                platform,
-                f"native-component coverage {owner}",
-            )
-            sboms = owner_record["sboms"]
-            if not isinstance(sboms, list) or len(sboms) > MAX_IMAGE_MEMBERS:
-                raise EvidenceError(f"native-component coverage {owner} has invalid SBOMs")
-            if not native_payloads and not sboms:
-                raise EvidenceError(
-                    f"native-component coverage {owner} has no native payload or SBOM surface"
-                )
-            sbom_paths: set[str] = set()
-            nested_components_by_purl: dict[str, Mapping[str, Any]] = {}
-            for sbom_index, raw_sbom in enumerate(sboms):
-                sbom = require_exact_fields(
-                    raw_sbom,
-                    {"path", "sha256", "components"},
-                    f"native-component coverage {owner} SBOM {sbom_index}",
-                )
-                path_value = sbom["path"]
-                digest = sbom["sha256"]
-                if (
-                    not isinstance(path_value, str)
-                    or str(checked_canonical_path(path_value, "native-component SBOM path"))
-                    != path_value
-                    or DIST_INFO_SBOM.search(path_value) is None
-                    or path_value in sbom_paths
-                ):
-                    raise EvidenceError(f"native-component coverage {owner} has invalid SBOM path")
-                sbom_paths.add(path_value)
-                if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
-                    raise EvidenceError(
-                        f"native-component coverage {owner} has invalid SBOM digest"
-                    )
-                components = sbom["components"]
-                validated_components = validate_reviewed_native_components(
-                    components,
-                    sources=sources,
-                    source=f"native-component coverage {owner} SBOM {sbom_index}",
-                    used_sources=used_sources,
-                    semantics_by_purl=semantics_by_purl,
-                )
-                for component in validated_components:
-                    nested_components_by_purl[str(component["purl"])] = component
-            if [record["path"] for record in sboms] != sorted(sbom_paths):
-                raise EvidenceError(f"native-component coverage {owner} SBOMs are not canonical")
-            owner_components = validate_reviewed_native_components(
-                owner_record["components"],
+                platform=platform,
                 sources=sources,
-                source=f"native-component coverage {owner} owner component set",
                 used_sources=used_sources,
-                semantics_by_purl=semantics_by_purl,
             )
-            nested_components = sorted(
-                nested_components_by_purl.values(),
-                key=lambda item: (item["type"], item["name"], item["version"], item["purl"]),
-            )
-            if canonical_json(owner_components) != canonical_json(nested_components):
-                raise EvidenceError(
-                    f"native-component coverage {owner} owner components differ from embedded "
-                    "SBOM components"
-                )
-            owner_semantics[owner] = {
-                "owner_source": owner_record["owner_source"],
-                "native_payload_roles": sorted(
-                    record["role"] for record in owner_record["native_payloads"]
-                ),
-                "components": owner_record["components"],
-                "sboms": [
-                    {
-                        "path": sbom["path"],
-                        "components": [
-                            {
-                                field: component[field]
-                                for field in (
-                                    "type",
-                                    "name",
-                                    "version",
-                                    "purl",
-                                    "source",
-                                    "reviewed_license",
-                                )
-                            }
-                            for component in sbom["components"]
-                        ],
-                    }
-                    for sbom in sboms
-                ],
-            }
-        if [record["owner"] for record in raw_records] != sorted(owners):
+            owner = context["owner"]
+            if owner in contexts:
+                raise EvidenceError(f"native-component coverage for {platform} repeats {owner}")
+            contexts[owner] = context
+        if [record["owner"] for record in raw_records] != sorted(contexts):
             raise EvidenceError(f"native-component coverage for {platform} is not canonical")
-        owners_by_platform[platform] = owners
-        semantics_by_platform[platform] = owner_semantics
-    if owners_by_platform["linux/amd64"] != owners_by_platform["linux/arm64"]:
+        validate_native_relationships(contexts, platform)
+        platform_contexts[platform] = contexts
+    amd64_contexts = platform_contexts["linux/amd64"]
+    arm64_contexts = platform_contexts["linux/arm64"]
+    if set(amd64_contexts) != set(arm64_contexts):
         raise EvidenceError("native-component coverage owners differ across platforms")
-    if canonical_json(semantics_by_platform["linux/amd64"]) != canonical_json(
-        semantics_by_platform["linux/arm64"]
-    ):
-        raise EvidenceError("native-component coverage semantics differ across platforms")
+    amd64_semantic_contexts = {
+        owner: native_owner_semantic_observation_projection(context, amd64_contexts)
+        for owner, context in amd64_contexts.items()
+    }
+    arm64_semantic_contexts = {
+        owner: native_owner_semantic_observation_projection(context, arm64_contexts)
+        for owner, context in arm64_contexts.items()
+    }
+    for owner in sorted(amd64_contexts):
+        amd64_semantics = native_owner_semantic_projection(
+            amd64_contexts[owner], amd64_semantic_contexts
+        )
+        arm64_semantics = native_owner_semantic_projection(
+            arm64_contexts[owner], arm64_semantic_contexts
+        )
+        if canonical_json(amd64_semantics) != canonical_json(arm64_semantics):
+            raise EvidenceError(
+                f"native-component coverage semantics differ across platforms for {owner}"
+            )
     if used_sources != set(sources):
         raise EvidenceError("native-component sources are missing, extra, or unused")
 
@@ -4058,7 +5999,7 @@ def validate_native_component_policy_schema(policy: Mapping[str, Any]) -> None:
 def native_component_coverage_ledger(
     inventory: Mapping[str, Any], policy: Mapping[str, Any]
 ) -> dict[str, Any]:
-    """Resolve configured owners and enumerate every remaining native/SBOM owner."""
+    """Bind every observed native owner to one explicit open or closed review."""
 
     validate_native_component_policy_schema(policy)
     platform = inventory.get("platform")
@@ -4067,16 +6008,26 @@ def native_component_coverage_ledger(
         raise EvidenceError("component inventory has an unsupported native-component platform")
     configured = coverage[platform]
     contexts = native_wheel_contexts(inventory)
+    configured_owners = {
+        str(record["owner"]): record
+        for record in configured
+        if isinstance(record, dict) and isinstance(record.get("owner"), str)
+    }
+    if set(configured_owners) != set(contexts):
+        missing = sorted(set(contexts) - set(configured_owners))
+        stale = sorted(set(configured_owners) - set(contexts))
+        raise EvidenceError(
+            "native-component coverage must exactly match observed owners; "
+            f"missing={missing!r}, stale={stale!r}"
+        )
     resolved: list[dict[str, Any]] = []
-    resolved_owners: set[str] = set()
+    unresolved: list[dict[str, Any]] = []
+    sbom_anomalies: list[dict[str, Any]] = []
     for owner_record in configured:
         owner = str(owner_record["owner"])
-        context = contexts.get(owner)
-        if context is None:
-            raise EvidenceError(f"native-component coverage has a stale owner: {owner}")
-        resolved_owners.add(owner)
+        context = contexts[owner]
         expected_payloads = {
-            (str(record["path"]), str(record["sha256"]))
+            (str(record["path"]), str(record["sha256"]), int(record["size"]))
             for record in owner_record["native_payloads"]
         }
         expected_sboms: dict[tuple[str, str], Mapping[str, Any]] = {}
@@ -4084,7 +6035,8 @@ def native_component_coverage_ledger(
             key = (str(sbom["path"]), str(sbom["sha256"]))
             expected_sboms[key] = sbom
         observed_payloads = {
-            (str(record["path"]), str(record["sha256"])) for record in context["native_payloads"]
+            (str(record["path"]), str(record["sha256"]), int(record["size"]))
+            for record in context["native_payloads"]
         }
         if expected_payloads != observed_payloads:
             raise EvidenceError(
@@ -4098,64 +6050,39 @@ def native_component_coverage_ledger(
             raise EvidenceError(
                 f"native-component coverage does not exactly cover SBOMs for {owner}"
             )
-        component = context["component"]
         for key, expected_sbom in expected_sboms.items():
             observed_sbom = observed_sboms[key]
             cyclonedx = observed_sbom.get("cyclonedx")
             if not isinstance(cyclonedx, dict):
                 raise EvidenceError(f"native-component coverage SBOM is unparsed for {owner}")
-            metadata_component = cyclonedx.get("metadata_component")
-            if metadata_component is not None and (
-                not isinstance(metadata_component, dict)
-                or normalize_package_name(str(metadata_component.get("name", "")))
-                != component["name"]
-                or metadata_component.get("version") != component["version"]
-            ):
-                raise EvidenceError(f"native-component SBOM metadata conflicts with owner {owner}")
-            expected_components = [
-                {field: item[field] for field in ("type", "name", "version", "purl")}
-                for item in expected_sbom["components"]
-            ]
-            if canonical_json(expected_components) != canonical_json(cyclonedx.get("components")):
+            if canonical_json(expected_sbom["observation"]) != canonical_json(cyclonedx):
                 raise EvidenceError(
-                    f"native-component coverage differs from embedded SBOM components for {owner}"
+                    f"native-component coverage differs from embedded SBOM observation for {owner}"
                 )
-        resolved.append(dict(owner_record))
-
-    unresolved: list[dict[str, Any]] = []
-    for owner, context in sorted(contexts.items()):
-        if owner in resolved_owners:
-            continue
-        unresolved.append(
-            {
-                "owner": owner,
-                "native_payloads": sorted(
-                    (
-                        {"path": record["path"], "sha256": record["sha256"]}
-                        for record in context["native_payloads"]
-                    ),
-                    key=lambda item: item["path"],
-                ),
-                "embedded_sboms": sorted(
-                    (
-                        {
-                            "path": record["path"],
-                            "sha256": record["sha256"],
-                            "metadata_component": record["cyclonedx"]["metadata_component"],
-                            "components": record["cyclonedx"]["components"],
-                        }
-                        for record in context["embedded_sboms"]
-                    ),
-                    key=lambda item: item["path"],
-                ),
-            }
-        )
+            anomaly_review = expected_sbom["metadata_root"]["anomaly_review"]
+            if anomaly_review is not None:
+                sbom_anomalies.append(
+                    {
+                        "owner": owner,
+                        "sbom_path": expected_sbom["path"],
+                        "observation_sha256": expected_sbom["observation"]["observation_sha256"],
+                        **anomaly_review,
+                    }
+                )
+        review = owner_record["review"]
+        if review["state"] == "closed":
+            resolved.append(dict(owner_record))
+        else:
+            unresolved.append(dict(owner_record))
     return {
         "schema_version": SCHEMA_VERSION,
         "platform": platform,
         "complete": not unresolved,
         "resolved_owners": resolved,
         "unresolved_owners": unresolved,
+        "observed_sbom_anomalies": sbom_anomalies,
+        "remaining_owner_count": len(unresolved),
+        "remaining_owner_names": [record["owner"] for record in unresolved],
     }
 
 
@@ -4165,7 +6092,7 @@ def verify_native_component_lock_bindings(
     locked_wheels: Sequence[Mapping[str, Any]],
     lock_sources: Mapping[tuple[str, str], Mapping[str, Any]],
 ) -> dict[str, Any]:
-    """Bind resolved-owner wheel and source pins to the exact committed lock entries."""
+    """Bind every native owner to the selected wheel and reviewed source pins."""
 
     ledger = native_component_coverage_ledger(inventory, policy)
     selected: dict[str, Mapping[str, Any]] = {}
@@ -4174,7 +6101,11 @@ def verify_native_component_lock_bindings(
         if not isinstance(owner, str) or owner in selected:
             raise EvidenceError("locked native wheels repeat an owner")
         selected[owner] = wheel
-    for owner_record in ledger["resolved_owners"]:
+    coverage = policy.get("native_component_coverage")
+    platform = inventory.get("platform")
+    if not isinstance(coverage, dict) or platform not in coverage:
+        raise EvidenceError("native-component lock binding has no platform policy")
+    for owner_record in coverage[platform]:
         owner = str(owner_record["owner"])
         selected_wheel = selected.get(owner)
         expected_wheel = owner_record["wheel"]
@@ -4185,59 +6116,64 @@ def verify_native_component_lock_bindings(
         ):
             raise EvidenceError(f"native-component coverage wheel differs from lock for {owner}")
         name, version = owner.removeprefix("python:").rsplit("@", maxsplit=1)
-        if lock_sources.get((name, version)) != owner_record["owner_source"]:
+        expected_source = lock_sources.get((name, version))
+        source_origin = "lock"
+        if expected_source is None:
+            fallback_source = source_policy_entry(policy, name, version)
+            expected_source = {field: fallback_source[field] for field in ("url", "sha256", "size")}
+            source_origin = "reviewed source fallback"
+        if expected_source != owner_record["owner_source"]:
             raise EvidenceError(
-                f"native-component coverage owner source differs from lock for {owner}"
+                f"native-component coverage owner source differs from {source_origin} for {owner}"
             )
     return ledger
 
 
 def validate_retained_cyclonedx_identity(value: object, source: str) -> None:
-    """Validate a canonical CycloneDX projection retained without its raw bytes."""
+    """Validate a canonical CycloneDX observation retained beside its raw bytes."""
 
     if not isinstance(value, dict) or set(value) != {
         "bom_format",
         "spec_version",
-        "serial_number",
-        "version",
         "metadata_component",
+        "metadata_root_echo",
+        "upstream_invalid_duplicate_bom_ref",
         "components",
-        "component_identity_sha256",
+        "observation_sha256",
     }:
-        raise EvidenceError(f"{source} has an invalid CycloneDX identity")
+        raise EvidenceError(f"{source} has an invalid CycloneDX observation")
     if value.get("bom_format") != "CycloneDX":
         raise EvidenceError(f"{source} has an invalid CycloneDX format")
     spec_version = value.get("spec_version")
     if spec_version not in CYCLONEDX_SPEC_VERSIONS:
         raise EvidenceError(f"{source} has an unsupported CycloneDX spec version")
-    document_version = value.get("version")
-    if (
-        not isinstance(document_version, int)
-        or isinstance(document_version, bool)
-        or not 1 <= document_version <= MAX_TAR_ID
-    ):
-        raise EvidenceError(f"{source} has an invalid CycloneDX document version")
-    serial_number = value.get("serial_number")
-    if (
-        not isinstance(serial_number, str)
-        or serial_number != serial_number.lower()
-        or (serial_number and CYCLONEDX_SERIAL_NUMBER.fullmatch(serial_number) is None)
-    ):
-        raise EvidenceError(f"{source} has an invalid CycloneDX serial number")
-    metadata_component, components = validate_cyclonedx_component_projection(
+    metadata_component, components = validate_cyclonedx_observation_projection(
         value.get("metadata_component"), value.get("components"), source
     )
-    identity = {
+    metadata_root_echo = value.get("metadata_root_echo")
+    upstream_invalid = value.get("upstream_invalid_duplicate_bom_ref")
+    if metadata_root_echo is None:
+        if upstream_invalid is not False:
+            raise EvidenceError(f"{source} has an invalid metadata-root echo state")
+    elif (
+        metadata_component is None
+        or metadata_root_echo != metadata_component
+        or upstream_invalid is not True
+    ):
+        raise EvidenceError(f"{source} has an invalid metadata-root echo")
+    observation = {
         "metadata_component": metadata_component,
+        "metadata_root_echo": metadata_root_echo,
+        "upstream_invalid_duplicate_bom_ref": upstream_invalid,
         "components": components,
     }
-    digest = value.get("component_identity_sha256")
+    digest = value.get("observation_sha256")
     if (
         not isinstance(digest, str)
         or re.fullmatch(r"[0-9a-f]{64}", digest) is None
-        or digest != sha256_bytes(canonical_json(identity))
+        or digest != sha256_bytes(canonical_json(observation))
     ):
-        raise EvidenceError(f"{source} has an invalid CycloneDX component-identity digest")
+        raise EvidenceError(f"{source} has an invalid CycloneDX observation digest")
 
 
 def validate_retained_elf_identity(value: object, platform: str, source: str) -> None:
@@ -4544,7 +6480,6 @@ def validate_component_inventory(inventory: Mapping[str, Any]) -> list[dict[str,
         "wheel_identity_files",
         "wheel_installations",
         "python_record_ownership",
-        "source_completeness",
     }
     require_exact_fields(inventory, expected_fields, "component inventory")
     platform = inventory.get("platform")
@@ -4676,12 +6611,55 @@ def validate_component_inventory(inventory: Mapping[str, Any]) -> list[dict[str,
         raise EvidenceError(
             "component inventory APK digest does not identify one effective occurrence"
         )
-    if inventory.get("source_completeness") != {
-        "complete": False,
-        "reason": SOURCE_COMPLETENESS_REASON,
-    }:
-        raise EvidenceError("component inventory has an invalid source-completeness status")
     return components
+
+
+def validate_standard_license_text_coverage(
+    components: Sequence[Mapping[str, Any]], policy: Mapping[str, Any]
+) -> None:
+    """Require the exact standard texts used by top-level and direct reviews."""
+
+    reviewed_expressions = [resolved_license(component, policy) for component in components]
+    raw_native_coverage = policy.get("native_component_coverage")
+    if not isinstance(raw_native_coverage, dict):
+        raise EvidenceError("policy has invalid native-component coverage")
+    for platform_records in raw_native_coverage.values():
+        if not isinstance(platform_records, list):
+            raise EvidenceError("policy has invalid native-component coverage")
+        for owner_record in platform_records:
+            if not isinstance(owner_record, dict):
+                raise EvidenceError("policy has invalid native-component coverage")
+            component_reviews = owner_record.get("component_reviews")
+            if not isinstance(component_reviews, list):
+                raise EvidenceError("policy has invalid native-component reviews")
+            for component_review in component_reviews:
+                if not isinstance(component_review, dict) or not isinstance(
+                    component_review.get("reviewed_license"), str
+                ):
+                    raise EvidenceError("policy has invalid native-component review license")
+                reviewed_expressions.append(component_review["reviewed_license"])
+
+    required_license_texts = {
+        token
+        for expression in reviewed_expressions
+        for token in re.findall(r"[A-Za-z0-9][A-Za-z0-9.+-]*", expression)
+        if token not in {"AND", "OR", "WITH"} and not token.startswith("LicenseRef-")
+    }
+    license_texts = policy.get("license_texts")
+    if not isinstance(license_texts, list):
+        raise EvidenceError("policy has no reviewed license texts")
+    configured_license_ids: set[str] = set()
+    for entry in license_texts:
+        if not isinstance(entry, dict) or not isinstance(entry.get("id"), str):
+            raise EvidenceError("policy has an invalid license text record")
+        identifier = entry["id"]
+        if identifier in configured_license_ids:
+            raise EvidenceError(f"policy repeats standard license text: {identifier}")
+        configured_license_ids.add(identifier)
+    if configured_license_ids != required_license_texts:
+        raise EvidenceError(
+            "standard license-text policy does not exactly cover reviewed identifiers"
+        )
 
 
 def verify_inventory(
@@ -4707,44 +6685,26 @@ def verify_inventory(
         raise EvidenceError(
             "reviewed license resolutions do not exactly cover the component inventory"
         )
-    required_license_texts: set[str] = set()
-    reviewed_expressions = [resolved_license(component, policy) for component in actual]
-    reviewed_expressions.extend(
-        component["reviewed_license"]
-        for owner_record in native_coverage["resolved_owners"]
-        for component in owner_record["components"]
-    )
-    for expression in reviewed_expressions:
-        required_license_texts.update(
-            token
-            for token in re.findall(r"[A-Za-z0-9][A-Za-z0-9.+-]*", expression)
-            if token not in {"AND", "OR", "WITH"} and not token.startswith("LicenseRef-")
-        )
-    license_texts = policy.get("license_texts")
-    if not isinstance(license_texts, list):
-        raise EvidenceError("policy has no reviewed license texts")
-    provided_license_texts = {entry.get("id") for entry in license_texts if isinstance(entry, dict)}
-    missing_texts = required_license_texts - provided_license_texts
-    if missing_texts:
-        raise EvidenceError(f"policy has no standard text for: {', '.join(sorted(missing_texts))}")
+    validate_standard_license_text_coverage(actual, policy)
     validated_custom_license_evidence(actual, policy)
     expected_base = policy.get("base_image_index_digest")
     if not isinstance(expected_base, str) or not SHA256.fullmatch(expected_base):
         raise EvidenceError("policy base image index digest is invalid")
+    approval = policy.get("distribution_approval")
+    if not isinstance(approval, dict):
+        raise EvidenceError("policy has no distribution approval record")
+    if approval.get("approved") is True and native_coverage["complete"] is not True:
+        raise EvidenceError(
+            "distribution approval cannot be true while native-component coverage is incomplete"
+        )
     if require_approval:
-        approval = policy.get("distribution_approval")
-        if not isinstance(approval, dict) or approval.get("approved") is not True:
+        if approval.get("approved") is not True:
             raise EvidenceError(
                 "recipient distribution mechanism has not received explicit maintainer approval"
             )
         for field in ("approved_by", "approved_on", "rationale"):
             if not isinstance(approval.get(field), str) or not approval[field].strip():
                 raise EvidenceError(f"distribution approval is missing {field}")
-        completeness = inventory.get("source_completeness")
-        if not isinstance(completeness, dict) or completeness.get("complete") is not True:
-            raise EvidenceError(
-                "component and corresponding-source evidence is incomplete; distribution denied"
-            )
 
 
 def verify_image_revision(
@@ -5591,7 +7551,6 @@ def validate_all_layer_inventory(files: Mapping[str, Any], inventory: Mapping[st
         "wheel_identity_files",
         "wheel_installations",
         "python_record_ownership",
-        "source_completeness",
     }
     if set(inventory) != inventory_keys:
         raise EvidenceError("component inventory has an unexpected schema shape")
@@ -5616,13 +7575,6 @@ def validate_all_layer_inventory(files: Mapping[str, Any], inventory: Mapping[st
         value = inventory.get(field)
         if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
             raise EvidenceError(f"component inventory has an invalid {field}")
-    expected_completeness = {
-        "complete": False,
-        "reason": SOURCE_COMPLETENESS_REASON,
-    }
-    if inventory.get("source_completeness") != expected_completeness:
-        raise EvidenceError("component inventory has an invalid source-completeness status")
-
     components = validate_component_records(inventory.get("components"), "component inventory")
     validate_platform_component_invariants(components, str(platform), "component inventory")
     python_hashes = {
@@ -6846,8 +8798,7 @@ def recipe_checksums(
         if set(entry) != {"path", "target", "type"}:
             raise EvidenceError(f"invalid allowed recipe link policy for {origin}")
         expected_path = str(checked_path(entry["path"]))
-        target = entry["target"]
-        checked_link_target(target)
+        target = str(checked_path(entry["target"]))
         link_type = entry["type"]
         if link_type not in {"symlink", "hardlink"}:
             raise EvidenceError(f"invalid allowed recipe link type for {origin}: {link_type}")
@@ -6859,8 +8810,10 @@ def recipe_checksums(
         expected_links.add(record)
 
     regular_hashes: dict[str, str] = {}
+    regular_paths: set[str] = set()
     apkbuild: bytes | None = None
     observed_links: set[tuple[str, str, str]] = set()
+    seen_paths: set[str] = set()
     try:
         with tarfile.open(
             fileobj=io.BytesIO(archive), mode="r:*", tarinfo=BoundedTarInfo
@@ -6872,14 +8825,24 @@ def recipe_checksums(
                 if count > MAX_ARCHIVE_MEMBERS:
                     raise EvidenceError(f"recipe archive has too many entries: {origin}")
                 path = checked_path(member.name)
+                path_string = str(path)
+                if path_string in seen_paths:
+                    raise EvidenceError(
+                        f"recipe archive repeats an entry path: {origin}/{path_string}"
+                    )
+                seen_paths.add(path_string)
                 if member.issym() or member.islnk():
                     if member.size != 0:
                         raise EvidenceError(f"recipe archive link has a payload: {origin}")
                     checked_link_target(member.linkname)
+                    if member.issym():
+                        target_path = checked_path(str(path.parent / member.linkname))
+                    else:
+                        target_path = checked_path(member.linkname)
                     observed_links.add(
                         (
-                            str(path),
-                            member.linkname,
+                            path_string,
+                            str(target_path),
                             "symlink" if member.issym() else "hardlink",
                         )
                     )
@@ -6890,6 +8853,7 @@ def recipe_checksums(
                     continue
                 if not member.isfile():
                     raise EvidenceError(f"recipe archive has an unsupported entry: {origin}")
+                regular_paths.add(path_string)
                 total += member.size
                 if total > MAX_ARCHIVE_TOTAL_BYTES:
                     raise EvidenceError(f"recipe archive is too large: {origin}")
@@ -6919,6 +8883,14 @@ def recipe_checksums(
         raise EvidenceError(
             f"recipe archive links are not allowed unless exactly pinned for {origin}; "
             f"unexpected={unexpected!r}, missing={missing!r}"
+        )
+    unresolved_links = sorted(
+        (path, target) for path, target, _link_type in observed_links if target not in regular_paths
+    )
+    if unresolved_links:
+        raise EvidenceError(
+            f"recipe archive links must resolve directly to retained regular files for {origin}: "
+            f"{unresolved_links!r}"
         )
     if apkbuild is None:
         raise EvidenceError(f"recipe archive has no APKBUILD: {origin}")
@@ -7031,7 +9003,11 @@ def verify_native_component_recipe(
     """Bind one source policy to literal recipe metadata and every upstream distfile."""
 
     origin = str(source["origin"])
-    checksums, local_sources = recipe_checksums(archive, origin)
+    checksums, local_sources = recipe_checksums(
+        archive,
+        origin,
+        allowed_links=source["allowed_recipe_links"],
+    )
     metadata = native_alpine_recipe_metadata(archive, origin)
     expected_version = f"{metadata['pkgver']}-r{metadata['pkgrel']}"
     if (
@@ -7050,6 +9026,141 @@ def verify_native_component_recipe(
         raise EvidenceError(
             f"native-component recipe distfiles differ from reviewed policy for {source_id}"
         )
+
+
+def reviewed_files_from_source_archive(
+    archive: bytes,
+    *,
+    archive_name: str,
+    source_id: str,
+    expected: Mapping[str, Mapping[str, Any]],
+    max_member_bytes: int = MAX_LICENSE_BYTES,
+) -> dict[str, bytes]:
+    """Validate a hostile archive and return the reviewed regular files it contains."""
+
+    found: dict[str, bytes] = {}
+    try:
+        zip_candidate = (
+            archive_name.lower().endswith(".zip")
+            or archive.startswith(ZIP_SIGNATURES)
+            or has_source_zip_eocd(archive)
+        )
+        if zip_candidate:
+            central_offset, central_size, entry_count = preflight_source_zip(archive)
+            central_entries = read_source_zip_central_directory(
+                archive,
+                central_offset,
+                central_size,
+                entry_count,
+            )
+            entries = validate_source_zip_entries(
+                archive,
+                central_offset,
+                central_entries,
+            )
+            for entry in entries:
+                metadata = entry.metadata
+                path = str(checked_path(metadata.name))
+                if path not in expected:
+                    continue
+                if metadata.name.endswith("/"):
+                    raise EvidenceError(f"reviewed source file is not regular: {source_id}/{path}")
+                content = read_source_zip_payload(
+                    archive,
+                    entry,
+                    max_bytes=max_member_bytes,
+                    purpose="reviewed source file",
+                )
+                requirement = expected[path]
+                if (
+                    len(content) != requirement["size"]
+                    or sha256_bytes(content) != requirement["sha256"]
+                ):
+                    raise EvidenceError(f"reviewed source file differs: {source_id}/{path}")
+                found[path] = content
+            return found
+
+        seen_paths: set[str] = set()
+        total = 0
+        with tarfile.open(
+            fileobj=io.BytesIO(archive), mode="r:*", tarinfo=BoundedTarInfo
+        ) as tar_source:
+            for count, member in enumerate(tar_source, start=1):
+                if count > MAX_ARCHIVE_MEMBERS:
+                    raise EvidenceError(f"source archive has too many entries: {source_id}")
+                path = str(checked_path(member.name))
+                if path in seen_paths:
+                    raise EvidenceError(f"source archive repeats an entry path: {source_id}/{path}")
+                seen_paths.add(path)
+                if member.isdir():
+                    if member.size != 0:
+                        raise EvidenceError(
+                            f"source archive directory has a payload: {source_id}/{path}"
+                        )
+                    continue
+                if member.issym() or member.islnk():
+                    if member.size != 0:
+                        raise EvidenceError(
+                            f"source archive link has a payload: {source_id}/{path}"
+                        )
+                    checked_link_target(member.linkname)
+                    if path in expected:
+                        raise EvidenceError(
+                            f"reviewed source file is not regular: {source_id}/{path}"
+                        )
+                    continue
+                if (
+                    not member.isfile()
+                    or member.issparse()
+                    or member.size < 0
+                    or member.size > MAX_ARCHIVE_MEMBER_BYTES
+                ):
+                    raise EvidenceError(
+                        f"source archive has an unsupported entry: {source_id}/{path}"
+                    )
+                total += member.size
+                if total > MAX_ARCHIVE_TOTAL_BYTES:
+                    raise EvidenceError(f"source archive exceeds the size limit: {source_id}")
+                if path not in expected:
+                    continue
+                if member.size > max_member_bytes:
+                    raise EvidenceError(
+                        f"reviewed source file exceeds its size limit: {source_id}/{path}"
+                    )
+                content = read_member(tar_source, member)
+                requirement = expected[path]
+                if (
+                    len(content) != requirement["size"]
+                    or sha256_bytes(content) != requirement["sha256"]
+                ):
+                    raise EvidenceError(f"reviewed source file differs: {source_id}/{path}")
+                found[path] = content
+        return found
+    except EvidenceError:
+        raise
+    except (tarfile.TarError, RuntimeError, OverflowError, ValueError) as exc:
+        raise EvidenceError(f"invalid source archive for {source_id}: {exc}") from exc
+
+
+def retain_reviewed_native_notices(
+    found: Mapping[str, bytes],
+    *,
+    component_directory: str,
+    root: Path,
+    budget: BundleBudget,
+) -> list[str]:
+    """Write exact reviewed native-source notices under deterministic paths."""
+
+    written: list[str] = []
+    for notice_member, content in sorted(found.items()):
+        digest = sha256_bytes(content)
+        relative = (
+            f"licenses/from-source/{component_directory}/"
+            f"{digest[:12]}-{PurePosixPath(notice_member).name}"
+        )
+        write_file(root, relative, content, budget=budget)
+        written.append(relative)
+    return written
 
 
 def retain_native_component_notices(
@@ -7203,39 +9314,8 @@ def validate_source_policy_coverage(
     if not isinstance(recipe_exceptions, dict) or not set(recipe_exceptions) <= expected_recipes:
         raise EvidenceError("Alpine recipe exceptions contain an unused origin")
 
-    required_license_texts: set[str] = set()
-    reviewed_expressions = [
-        resolved_license(component, policy) for component in inventory["components"]
-    ]
     validate_native_component_policy_schema(policy)
-    raw_native_coverage = policy["native_component_coverage"]
-    reviewed_expressions.extend(
-        component["reviewed_license"]
-        for platform_records in raw_native_coverage.values()
-        for owner_record in platform_records
-        for component in owner_record["components"]
-    )
-    for expression in reviewed_expressions:
-        required_license_texts.update(
-            token
-            for token in re.findall(r"[A-Za-z0-9][A-Za-z0-9.+-]*", expression)
-            if token not in {"AND", "OR", "WITH"} and not token.startswith("LicenseRef-")
-        )
-    license_texts = policy.get("license_texts")
-    if not isinstance(license_texts, list):
-        raise EvidenceError("policy has no reviewed license texts")
-    configured_license_ids: set[str] = set()
-    for entry in license_texts:
-        if not isinstance(entry, dict) or not isinstance(entry.get("id"), str):
-            raise EvidenceError("policy has an invalid license text record")
-        identifier = entry["id"]
-        if identifier in configured_license_ids:
-            raise EvidenceError(f"policy repeats standard license text: {identifier}")
-        configured_license_ids.add(identifier)
-    if configured_license_ids != required_license_texts:
-        raise EvidenceError(
-            "standard license-text policy does not exactly cover resolved identifiers"
-        )
+    validate_standard_license_text_coverage(inventory["components"], policy)
 
 
 def alpine_recipe_exception(
@@ -7268,7 +9348,7 @@ def alpine_recipe_exception(
     if not isinstance(links, list) or len(links) > MAX_COMPONENTS:
         raise EvidenceError(f"invalid allowed recipe links for {key}")
     validated_links: list[Mapping[str, str]] = []
-    seen_links: set[tuple[str, str, str]] = set()
+    seen_paths: set[str] = set()
     for link in links:
         if not isinstance(link, dict) or set(link) != {"path", "target", "type"}:
             raise EvidenceError(f"invalid allowed recipe link policy for {key}")
@@ -7285,13 +9365,19 @@ def alpine_recipe_exception(
         if path != path_value:
             raise EvidenceError(f"non-canonical allowed recipe link path for {key}")
         checked_link_target(target)
+        target_path = str(checked_path(target))
+        if (
+            target_path != target
+            or path == target_path
+            or PurePosixPath(path).parent != PurePosixPath(target_path).parent
+        ):
+            raise EvidenceError(f"allowed recipe link must target one canonical sibling for {key}")
         if link_type not in {"symlink", "hardlink"}:
             raise EvidenceError(f"invalid allowed recipe link type for {key}: {link_type}")
-        identity = (path, target, link_type)
-        if identity in seen_links:
+        if path in seen_paths:
             raise EvidenceError(f"duplicate allowed recipe link policy for {key}: {path}")
-        seen_links.add(identity)
-        validated_links.append({"path": path, "target": target, "type": link_type})
+        seen_paths.add(path)
+        validated_links.append({"path": path, "target": target_path, "type": link_type})
     if not dynamic and not validated_links:
         raise EvidenceError(f"Alpine recipe exception grants nothing for {key}")
     return dynamic, tuple(validated_links)
@@ -8717,6 +10803,7 @@ def build_bundle(
             for component in inventory["components"]
             if component["ecosystem"] == "python" and component["name"] != "extra-codeowners"
         ]
+        python_source_archives: dict[tuple[str, str], tuple[bytes, Sequence[str], str]] = {}
         for component in python_components:
             key = (component["name"], component["version"])
             source = lock_sources.get(key)
@@ -8734,6 +10821,7 @@ def build_bundle(
             component_id = f"python-{key[0]}-{key[1]}"
             relative = f"sources/python/{key[0]}/{key[1]}/{safe_filename(url)}"
             write_file(root, relative, content, budget=budget)
+            python_source_archives[key] = (content, download.urls, relative)
             source_records.append(source_record(component_id, download.urls, content, relative))
             found = extract_license_files(
                 content,
@@ -8750,75 +10838,285 @@ def build_bundle(
 
         source_policies = native_component_sources(policy)
         native_components_by_source: dict[str, set[str]] = {}
-        for owner_record in native_coverage["resolved_owners"]:
-            for component in owner_record["components"]:
-                native_components_by_source.setdefault(component["source"], set()).add(
-                    f"native:{component['purl']}"
-                )
-        for source_id in sorted(native_components_by_source):
-            native_source = source_policies[source_id]
-            recipe = native_source["recipe"]
-            recipe_download = bounded_fetch(
-                str(recipe["url"]),
-                str(recipe["sha256"]),
+        raw_coverage = policy["native_component_coverage"][inventory["platform"]]
+        for owner_record in raw_coverage:
+            context = validate_native_owner_review(
+                owner_record,
+                platform=str(inventory["platform"]),
+                sources=source_policies,
+                used_sources=set(),
             )
-            if len(recipe_download.content) != recipe["size"]:
-                raise EvidenceError(f"size mismatch for native-component recipe {source_id}")
-            verify_native_component_recipe(source_id, native_source, recipe_download.content)
-            source_directory = f"{native_source['origin']}/{native_source['version']}"
-            recipe_relative = f"sources/native-components/{source_directory}/recipe.tar.gz"
-            write_file(root, recipe_relative, recipe_download.content, budget=budget)
-            source_records.append(
-                source_record(
-                    f"native-source:{source_id}",
-                    recipe_download.urls,
-                    recipe_download.content,
-                    recipe_relative,
+            if context["cargo_lock"] is not None:
+                _owner, owner_name, owner_version = parse_native_owner(
+                    owner_record["owner"],
+                    "Cargo.lock source owner",
                 )
-            )
-            for distfile in native_source["distfiles"]:
-                distfile_download = bounded_fetch(
-                    str(distfile["url"]),
-                    str(distfile["sha512"]),
-                    "sha512",
-                    max_bytes=MAX_NATIVE_COMPONENT_SOURCE_BYTES,
-                )
-                if len(distfile_download.content) != distfile["size"]:
+                cached_owner_source = python_source_archives.get((owner_name, owner_version))
+                if cached_owner_source is None:
                     raise EvidenceError(
-                        f"size mismatch for native-component distfile {source_id}/"
-                        f"{distfile['filename']}"
+                        "native owner with Cargo.lock context has no retained Python "
+                        f"source archive: {owner_record['owner']}"
                     )
-                distfile_relative = (
-                    f"sources/native-components/{source_directory}/distfiles/{distfile['filename']}"
+                owner_archive, _owner_urls, owner_relative = cached_owner_source
+                cargo_lock = verify_owner_cargo_lock(
+                    context,
+                    source_policies,
+                    owner_archive,
+                    archive_name=owner_relative,
+                )
+                assert cargo_lock is not None
+                lock_relative = (
+                    "sources/cargo-locks/"
+                    f"{sha256_bytes(str(owner_record['owner']).encode())[:20]}/Cargo.lock"
                 )
                 write_file(
                     root,
-                    distfile_relative,
-                    distfile_download.content,
+                    lock_relative,
+                    cargo_lock,
+                    budget=budget,
+                    max_bytes=MAX_CARGO_LOCK_BYTES,
+                )
+            for component_review in owner_record["component_reviews"]:
+                source_id = str(component_review["source"])
+                for raw_reference in component_review["observations"]:
+                    reference = validate_observation_reference(
+                        raw_reference,
+                        f"native source consumer {source_id}",
+                    )
+                    component = context["observations"][reference]
+                    identity_kind, identity = cyclonedx_occurrence_identity(component)
+                    native_components_by_source.setdefault(source_id, set()).add(
+                        f"native:{component['purl']}#{identity_kind}:{identity}"
+                    )
+        if set(native_components_by_source) != set(source_policies):
+            raise EvidenceError(
+                "native-component bundle sources differ from reviewed source consumers"
+            )
+        for source_id in sorted(native_components_by_source):
+            native_source = source_policies[source_id]
+            kind = str(native_source["kind"])
+            source_directory = sha256_bytes(source_id.encode())[:20]
+            expected_notices = {
+                str(record["member"]): record for record in native_source["notices"]
+            }
+            found_notices: dict[str, bytes] = {}
+
+            def collect_notices(
+                content: bytes,
+                archive_name: str,
+                *,
+                selected_source_id: str = source_id,
+                selected_expected_notices: Mapping[str, Mapping[str, Any]] = expected_notices,
+                selected_found_notices: dict[str, bytes] = found_notices,
+            ) -> None:
+                for member, notice_content in reviewed_files_from_source_archive(
+                    content,
+                    archive_name=archive_name,
+                    source_id=selected_source_id,
+                    expected=selected_expected_notices,
+                ).items():
+                    if member in selected_found_notices:
+                        raise EvidenceError(
+                            f"native-component notice appears in multiple archives: "
+                            f"{selected_source_id}/{member}"
+                        )
+                    selected_found_notices[member] = notice_content
+
+            if kind == "alpine-aports":
+                recipe = native_source["recipe"]
+                recipe_download = bounded_fetch(
+                    str(recipe["url"]),
+                    str(recipe["sha256"]),
+                )
+                if len(recipe_download.content) != recipe["size"]:
+                    raise EvidenceError(f"size mismatch for native-component recipe {source_id}")
+                verify_native_component_recipe(source_id, native_source, recipe_download.content)
+                recipe_relative = f"sources/native-components/{source_directory}/recipe.tar.gz"
+                write_file(
+                    root,
+                    recipe_relative,
+                    recipe_download.content,
+                    budget=budget,
+                )
+                source_records.append(
+                    source_record(
+                        f"native-source:{source_id}",
+                        recipe_download.urls,
+                        recipe_download.content,
+                        recipe_relative,
+                    )
+                )
+                collect_notices(recipe_download.content, "recipe.tar.gz")
+                for distfile in native_source["distfiles"]:
+                    distfile_download = bounded_fetch(
+                        str(distfile["url"]),
+                        str(distfile["sha512"]),
+                        "sha512",
+                        max_bytes=MAX_NATIVE_COMPONENT_SOURCE_BYTES,
+                    )
+                    if len(distfile_download.content) != distfile["size"]:
+                        raise EvidenceError(
+                            f"size mismatch for native-component distfile {source_id}/"
+                            f"{distfile['filename']}"
+                        )
+                    distfile_relative = (
+                        f"sources/native-components/{source_directory}/distfiles/"
+                        f"{distfile['filename']}"
+                    )
+                    write_file(
+                        root,
+                        distfile_relative,
+                        distfile_download.content,
+                        budget=budget,
+                        max_bytes=MAX_NATIVE_COMPONENT_SOURCE_BYTES,
+                    )
+                    source_records.append(
+                        source_record(
+                            f"native-source:{source_id}",
+                            distfile_download.urls,
+                            distfile_download.content,
+                            distfile_relative,
+                            sha512=str(distfile["sha512"]),
+                        )
+                    )
+                    collect_notices(
+                        distfile_download.content,
+                        str(distfile["filename"]),
+                    )
+            elif kind == "crates-io":
+                crate = native_source["crate"]
+                crate_download = bounded_fetch(
+                    str(crate["url"]),
+                    str(crate["sha256"]),
+                    max_bytes=MAX_NATIVE_COMPONENT_SOURCE_BYTES,
+                )
+                if len(crate_download.content) != crate["size"]:
+                    raise EvidenceError(f"size mismatch for native-component crate {source_id}")
+                reviewed_files = verify_crates_io_archive(
+                    crate_download.content,
+                    source_id=source_id,
+                    source=native_source,
+                )
+                crate_relative = (
+                    f"sources/native-components/{source_directory}/"
+                    f"{safe_filename(str(crate['url']))}"
+                )
+                write_file(
+                    root,
+                    crate_relative,
+                    crate_download.content,
                     budget=budget,
                     max_bytes=MAX_NATIVE_COMPONENT_SOURCE_BYTES,
                 )
                 source_records.append(
                     source_record(
                         f"native-source:{source_id}",
-                        distfile_download.urls,
-                        distfile_download.content,
-                        distfile_relative,
-                        sha512=str(distfile["sha512"]),
+                        crate_download.urls,
+                        crate_download.content,
+                        crate_relative,
                     )
                 )
-                notice_paths = retain_native_component_notices(
-                    distfile_download.content,
-                    source_id,
-                    native_source,
-                    root,
-                    budget=budget,
+                found_notices.update(
+                    {
+                        member: content
+                        for member, content in reviewed_files.items()
+                        if member in expected_notices
+                    }
                 )
-                license_records.extend(
-                    {"component": component_id, "path": notice_path}
-                    for component_id in sorted(native_components_by_source[source_id])
-                    for notice_path in notice_paths
+            elif kind == "owner-sdist-subpath":
+                _owner, owner_name, owner_version = parse_native_owner(
+                    native_source["owner"], f"native source {source_id}"
                 )
+                cached = python_source_archives.get((owner_name, owner_version))
+                if cached is None:
+                    raise EvidenceError(
+                        f"owner-sdist source has no retained owner archive: {source_id}"
+                    )
+                owner_archive, owner_urls, owner_relative = cached
+                subtree = verify_owner_sdist_subtree(
+                    owner_archive,
+                    source_id=source_id,
+                    source=native_source,
+                    archive_name=owner_relative,
+                )
+                manifest_relative = (
+                    f"sources/native-components/{source_directory}/subtree-manifest.json"
+                )
+                manifest_content = canonical_json(subtree)
+                write_file(root, manifest_relative, manifest_content, budget=budget)
+                source_records.append(
+                    source_record(
+                        f"native-source:{source_id}",
+                        owner_urls,
+                        owner_archive,
+                        owner_relative,
+                    )
+                )
+                collect_notices(owner_archive, owner_relative)
+            elif kind == "checksummed-upstream-release":
+                checksum = native_source["checksum_document"]
+                checksum_download = bounded_fetch(
+                    str(checksum["url"]),
+                    str(checksum["sha256"]),
+                )
+                if len(checksum_download.content) != checksum["size"]:
+                    raise EvidenceError(f"size mismatch for checksum document {source_id}")
+                archive_policy = native_source["archive"]
+                archive_download = bounded_fetch(
+                    str(archive_policy["url"]),
+                    str(archive_policy["sha256"]),
+                    max_bytes=MAX_NATIVE_COMPONENT_SOURCE_BYTES,
+                )
+                if len(archive_download.content) != archive_policy["size"]:
+                    raise EvidenceError(f"size mismatch for upstream release archive {source_id}")
+                verify_upstream_checksum_document(
+                    checksum_download.content,
+                    filename=str(native_source["checksum_filename"]),
+                    expected_sha256=str(archive_policy["sha256"]),
+                )
+                for artifact_name, artifact, download in (
+                    ("checksum", checksum, checksum_download),
+                    ("archive", archive_policy, archive_download),
+                ):
+                    relative = (
+                        f"sources/native-components/{source_directory}/{artifact_name}-"
+                        f"{safe_filename(str(artifact['url']))}"
+                    )
+                    write_file(
+                        root,
+                        relative,
+                        download.content,
+                        budget=budget,
+                        max_bytes=MAX_NATIVE_COMPONENT_SOURCE_BYTES,
+                    )
+                    source_records.append(
+                        source_record(
+                            f"native-source:{source_id}",
+                            download.urls,
+                            download.content,
+                            relative,
+                        )
+                    )
+                collect_notices(
+                    archive_download.content,
+                    str(native_source["checksum_filename"]),
+                )
+            else:
+                raise EvidenceError(f"unsupported native-component bundle source kind: {kind}")
+
+            if set(found_notices) != set(expected_notices):
+                raise EvidenceError(f"native-component source omits reviewed notices: {source_id}")
+            notice_paths = retain_reviewed_native_notices(
+                found_notices,
+                component_directory=f"native-{source_directory}",
+                root=root,
+                budget=budget,
+            )
+            license_records.extend(
+                {"component": component_id, "path": notice_path}
+                for component_id in sorted(native_components_by_source[source_id])
+                for notice_path in notice_paths
+            )
 
         alpine_components = [
             component for component in inventory["components"] if component["ecosystem"] == "alpine"
@@ -8965,32 +11263,95 @@ def build_bundle(
                 f"{'yes' if component['effective'] else 'no; retained in a lower layer'} | "
                 f"{observed} | {approved} |\n"
             )
-        nested_components = {
-            (
-                component["purl"],
-                component["type"],
-                component["name"],
-                component["version"],
-                component["source"],
-                component["reviewed_license"],
+        nested_components: set[tuple[str, ...]] = set()
+        native_omissions: list[tuple[str, str, str, str]] = []
+        for owner_record in raw_coverage:
+            context = validate_native_owner_review(
+                owner_record,
+                platform=str(inventory["platform"]),
+                sources=source_policies,
+                used_sources=set(),
             )
-            for owner_record in native_coverage["resolved_owners"]
-            for component in owner_record["components"]
-        }
+            for review in owner_record["component_reviews"]:
+                for raw_reference in review["observations"]:
+                    reference = validate_observation_reference(
+                        raw_reference,
+                        "third-party notice observation",
+                    )
+                    component = context["observations"][reference]
+                    nested_components.add(
+                        (
+                            str(owner_record["owner"]),
+                            str(component["name"]),
+                            str(component["version"]),
+                            str(component["purl"]),
+                            str(component["bom_ref"]),
+                            str(review["source"]),
+                            canonical_json(component["licenses"]).decode("utf-8"),
+                            str(review["reviewed_license"]),
+                        )
+                    )
+            native_omissions.extend(
+                (
+                    str(owner_record["owner"]),
+                    str(known_omission["id"]),
+                    ", ".join(known_omission["missing_evidence"]),
+                    str(known_omission["reason"]),
+                )
+                for known_omission in owner_record["known_omissions"]
+            )
         if nested_components:
             notices.append("\n## Native wheel components\n\n")
             notices.append(
-                "These identities come from retained embedded SBOM bytes. The SBOMs did not "
-                "declare license expressions; the reviewed expressions below are project "
-                "policy.\n\n"
+                "These occurrence identities and observed license fields come from the exact "
+                "retained embedded SBOM bytes. Reviewed expressions are project policy.\n\n"
             )
-            notices.append("| Component | Version | Package URL | Source | Observed | Reviewed |\n")
-            notices.append("| --- | --- | --- | --- | --- | --- |\n")
-            for purl, _kind, name, nested_version, source_id, reviewed in sorted(nested_components):
+            notices.append(
+                "| Owner | Component | Version | Package URL | bom-ref | Source | "
+                "Observed licenses | Reviewed |\n"
+            )
+            notices.append("| --- | --- | --- | --- | --- | --- | --- | --- |\n")
+            for (
+                owner,
+                name,
+                nested_version,
+                purl,
+                bom_ref,
+                source_id,
+                observed_licenses,
+                reviewed,
+            ) in sorted(nested_components):
                 notices.append(
-                    f"| {markdown_cell(name)} | {markdown_cell(nested_version)} | "
-                    f"{markdown_cell(purl)} | {markdown_cell(source_id)} | Not declared | "
-                    f"{markdown_cell(reviewed)} |\n"
+                    f"| {markdown_cell(owner)} | {markdown_cell(name)} | "
+                    f"{markdown_cell(nested_version)} | {markdown_cell(purl)} | "
+                    f"{markdown_cell(bom_ref)} | {markdown_cell(source_id)} | "
+                    f"{markdown_cell(observed_licenses)} | {markdown_cell(reviewed)} |\n"
+                )
+        if native_omissions:
+            notices.append("\n## Open native-component evidence\n\n")
+            notices.append(
+                "These items are explicit gaps, not inferred approvals. Distribution remains "
+                "incomplete while any item is open.\n\n"
+            )
+            notices.append("| Owner | Item | Missing evidence | Exact reason |\n")
+            notices.append("| --- | --- | --- | --- |\n")
+            for owner, omission_id, missing, reason in sorted(native_omissions):
+                notices.append(
+                    f"| {markdown_cell(owner)} | {markdown_cell(omission_id)} | "
+                    f"{markdown_cell(missing)} | {markdown_cell(reason)} |\n"
+                )
+        sbom_anomalies = native_coverage["observed_sbom_anomalies"]
+        if sbom_anomalies:
+            notices.append("\n## Upstream SBOM anomalies\n\n")
+            notices.append("| Owner | SBOM | Observation digest | Anomaly | Review |\n")
+            notices.append("| --- | --- | --- | --- | --- |\n")
+            for anomaly in sbom_anomalies:
+                notices.append(
+                    f"| {markdown_cell(anomaly['owner'])} | "
+                    f"{markdown_cell(anomaly['sbom_path'])} | "
+                    f"{markdown_cell(anomaly['observation_sha256'])} | "
+                    f"{markdown_cell(anomaly['kind'])} | "
+                    f"{markdown_cell(anomaly['reason'])} |\n"
                 )
         notices.append(
             "\nThe archive includes the standard license texts named above, source-carried "
@@ -9015,7 +11376,11 @@ def build_bundle(
             "application_artifacts": application_artifacts,
             "native_wheel_artifacts": native_wheel_artifacts,
             "native_component_coverage": native_coverage,
-            "source_completeness": inventory["source_completeness"],
+            "source_completeness": {
+                "complete": native_coverage["complete"],
+                "remaining_owner_count": native_coverage["remaining_owner_count"],
+                "remaining_owner_names": native_coverage["remaining_owner_names"],
+            },
             "source_records": sorted(source_records, key=lambda item: item["path"]),
             "license_records": sorted(
                 license_records, key=lambda item: (item["component"], item["path"])

@@ -147,17 +147,17 @@ bundle separately retains the Alpine GCC recipe, source archive, and notices
 reviewed for the SBOM's `libgcc` and `libstdc++` identities.
 
 MarkupSafe binds the exact wheel, its one `_speedups` native payload, and the
-80,313-byte sdist. It has explicit empty SBOM and component sets. Those sets
-describe the reviewed wheel; they do not prove that the sdist explains every
-byte in the extension.
+80,313-byte sdist. It has no embedded SBOM, and its payload disposition treats
+the extension as owner code. That decision describes the reviewed wheel; it
+does not prove that the sdist explains every byte in the extension.
 
 SQLAlchemy binds the exact wheel, five `cyextension` payloads, and the
-9,912,201-byte sdist. Its SBOM and component sets are also explicitly empty.
-The sdist carries the project's Cython sources, but this evidence does not
-prove reproducibility or close the compiler toolchain.
+9,912,201-byte sdist. It also has no embedded SBOM, and all five payloads are
+disposed as owner code. The sdist carries the project's Cython sources, but
+this evidence does not prove reproducibility or close the compiler toolchain.
 
-Four other native-wheel owners still lack equivalent wheel-surface and source
-coverage. That gap is why
+Four other native-wheel owners retain explicit, structured omissions. Their
+open review state is why
 [issue #18](https://github.com/stampbot/extra-codeowners/issues/18) still blocks
 distribution.
 
