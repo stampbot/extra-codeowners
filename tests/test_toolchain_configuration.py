@@ -56,8 +56,8 @@ def test_uv_version_is_identical_locally_in_containers_and_in_workflows() -> Non
     assert "COPY pyproject.toml uv.lock README.md mise.toml requirements-build.txt ./" in dockerfile
     assert "COPY .github/scripts/build_python_artifacts.py ./.github/scripts/" in dockerfile
     assert (
-        "COPY .github/scripts/container_evidence.py .github/scripts/release_readiness.py "
-        "./.github/scripts/"
+        "COPY .github/scripts/container_evidence.py .github/scripts/release_controller.py \\\n"
+        "  .github/scripts/release_readiness.py ./.github/scripts/"
     ) in dockerfile
     assert '["uv", "--version"]' in dockerfile
     assert "if actual != expected:" in dockerfile
