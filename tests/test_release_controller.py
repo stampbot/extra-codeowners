@@ -125,8 +125,10 @@ def release_record(
 
 def remote_asset(asset: Any, *, asset_id: int, **changes: Any) -> dict[str, Any]:
     value: dict[str, Any] = {
+        "content_type": "application/octet-stream",
         "digest": f"sha256:{asset.sha256}",
         "id": asset_id,
+        "label": None,
         "name": asset.name,
         "size": asset.size,
         "state": "uploaded",
@@ -139,6 +141,7 @@ class FakeAPI:
     def __init__(self, plan: Any) -> None:
         self.plan = plan
         self.actual_repository_id = plan.repository_id
+        self.repository_id_sequence: list[int] = []
         self.tag_commit = plan.target_commit
         self.tag_resolution_sequence: list[str] = []
         self.releases: list[dict[str, Any]] = []
@@ -153,9 +156,12 @@ class FakeAPI:
         self.create_prerelease = False
         self.publish_prerelease = False
         self.publish_immutable = True
+        self.publish_response_changes: dict[str, Any] = {}
         self.mutate_after_upload: tuple[Path, bytes] | None = None
 
     def repository_id(self) -> int:
+        if self.repository_id_sequence:
+            return self.repository_id_sequence.pop(0)
         return cast(int, self.actual_repository_id)
 
     def resolve_tag(self, tag: str) -> str:
@@ -217,7 +223,9 @@ class FakeAPI:
         release["prerelease"] = self.publish_prerelease
         if self.ambiguous_publish:
             raise controller.AmbiguousMutationError("response lost after publish")
-        return copy.deepcopy(release)
+        response = copy.deepcopy(release)
+        response.update(self.publish_response_changes)
+        return response
 
     def releases_by_id(self, release_id: int) -> dict[str, Any]:
         return next(value for value in self.releases if value["id"] == release_id)
@@ -267,6 +275,10 @@ def test_manifest_is_canonical_exact_and_binds_local_assets(tmp_path: Path) -> N
         (lambda value: value.update(schema_version=2), "unsupported schema version"),
         (lambda value: value.update(repository_id=True), "integer bounds"),
         (lambda value: value.update(tag="latest"), "release tag"),
+        (
+            lambda value: value["assets"][0].update(name="app.", path="one/app."),
+            "release asset name",
+        ),
         (lambda value: value["assets"][0].update(path="../app.whl"), "unsafe local path"),
         (lambda value: value["assets"][0].update(size=0), "integer bounds"),
         (lambda value: value["assets"].reverse(), "not sorted"),
@@ -653,6 +665,28 @@ def test_publish_response_loss_accepts_only_reconciled_immutable_state(tmp_path:
     assert api.events.count("publish") == 1
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("tag_name", "v999.0.0"),
+        ("target_commitish", "d" * 40),
+        ("name", "substituted release"),
+        ("body", "substituted body"),
+    ],
+)
+def test_malformed_successful_publish_response_uses_exact_readback(
+    tmp_path: Path, field: str, value: str
+) -> None:
+    plan, root, _ = write_fixture(tmp_path)
+    api = FakeAPI(plan)
+    api.publish_response_changes[field] = value
+
+    result = reconcile(api, plan, root)
+
+    assert result.immutable is True
+    assert api.events.count("publish") == 1
+
+
 def test_tag_move_before_publish_stops_publication(tmp_path: Path) -> None:
     plan, root, _ = write_fixture(tmp_path)
     api = FakeAPI(plan)
@@ -736,6 +770,8 @@ def test_prerelease_state_is_rejected_at_mutation_boundaries(tmp_path: Path, bou
         ({"name": "unexpected.bin"}, "unexpected asset"),
         ({"size": 0}, "integer bounds"),
         ({"state": "new"}, "not uploaded"),
+        ({"content_type": "text/plain"}, "content type"),
+        ({"label": "display label"}, "unexpected label"),
         ({"digest": "sha256:" + "0" * 64}, "does not match"),
         ({"digest": None}, "no server SHA-256"),
     ],
@@ -749,6 +785,20 @@ def test_remote_asset_defects_block_every_mutation(
     api.assets[release["id"]].append(remote_asset(plan.assets[0], asset_id=1, **changes))
 
     with pytest.raises(controller.ControllerError, match=message):
+        reconcile(api, plan, root)
+
+    assert api.events == []
+
+
+def test_remote_asset_missing_required_label_blocks_every_mutation(tmp_path: Path) -> None:
+    plan, root, _ = write_fixture(tmp_path)
+    api = FakeAPI(plan)
+    release = api.add_release()
+    asset = remote_asset(plan.assets[0], asset_id=1)
+    del asset["label"]
+    api.assets[release["id"]].append(asset)
+
+    with pytest.raises(controller.ControllerError, match="unexpected label"):
         reconcile(api, plan, root)
 
     assert api.events == []
@@ -809,6 +859,28 @@ def test_exact_immutable_release_is_idempotent_success(tmp_path: Path) -> None:
     assert api.events == []
 
 
+def test_release_readback_rejects_a_substituted_release_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plan, root, _ = write_fixture(tmp_path)
+    api = FakeAPI(plan)
+    release = api.add_release()
+    api.assets[release["id"]] = [
+        remote_asset(asset, asset_id=index) for index, asset in enumerate(plan.assets, start=1)
+    ]
+    original_get_release = api.get_release
+
+    def substituted_release(release_id: int) -> Mapping[str, Any]:
+        return {**original_get_release(release_id), "id": release_id + 1}
+
+    monkeypatch.setattr(api, "get_release", substituted_release)
+
+    with pytest.raises(controller.ControllerError, match="different release ID"):
+        reconcile(api, plan, root)
+
+    assert "publish" not in api.events
+
+
 @pytest.mark.parametrize(
     ("release_changes", "message"),
     [
@@ -847,6 +919,44 @@ def test_repository_and_tag_identity_fail_before_mutation(tmp_path: Path, bounda
         reconcile(api, plan, root)
 
     assert api.events == []
+
+
+@pytest.mark.parametrize("boundary", ["create", "upload", "publish"])
+def test_repository_identity_is_rechecked_before_each_mutation(
+    tmp_path: Path, boundary: str
+) -> None:
+    plan, root, _ = write_fixture(tmp_path)
+    api = FakeAPI(plan)
+    if boundary == "upload":
+        api.add_release()
+    elif boundary == "publish":
+        release = api.add_release()
+        api.assets[release["id"]] = [
+            remote_asset(asset, asset_id=index) for index, asset in enumerate(plan.assets, start=1)
+        ]
+    api.repository_id_sequence = [plan.repository_id, plan.repository_id + 1]
+
+    with pytest.raises(controller.ControllerError, match="repository ID"):
+        reconcile(api, plan, root)
+
+    assert boundary not in api.events
+    assert not any(event.startswith("upload:") for event in api.events)
+
+
+def test_repository_identity_is_rechecked_during_publication_readback(tmp_path: Path) -> None:
+    plan, root, _ = write_fixture(tmp_path)
+    api = FakeAPI(plan)
+    release = api.add_release()
+    api.assets[release["id"]] = [
+        remote_asset(asset, asset_id=index) for index, asset in enumerate(plan.assets, start=1)
+    ]
+    api.repository_id_sequence = [plan.repository_id, plan.repository_id, plan.repository_id + 1]
+
+    with pytest.raises(controller.ControllerError, match="repository ID"):
+        reconcile(api, plan, root)
+
+    assert api.events == ["publish"]
+    assert api.releases[0]["immutable"] is True
 
 
 def test_local_change_during_upload_leaves_only_a_draft(tmp_path: Path) -> None:

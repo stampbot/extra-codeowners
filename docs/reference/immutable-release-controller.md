@@ -1,13 +1,16 @@
 # Immutable release controller contract
 
 Extra CODEOWNERS includes an offline-tested state machine for creating one
-exact, immutable GitHub release. It is not connected to the release workflow
-and cannot publish anything today. The concrete GitHub API adapter, final asset
-policy, and workflow handoff remain work under issues
+exact, immutable GitHub release and a concrete standard-library GitHub REST
+adapter. Neither is connected to the release workflow, so they cannot publish
+anything today. The final asset policy and privileged workflow handoff remain
+work under issues
 [#25](https://github.com/stampbot/extra-codeowners/issues/25),
 [#18](https://github.com/stampbot/extra-codeowners/issues/18),
 [#28](https://github.com/stampbot/extra-codeowners/issues/28), and
-[#32](https://github.com/stampbot/extra-codeowners/issues/32).
+[#32](https://github.com/stampbot/extra-codeowners/issues/32). The
+[GitHub release API adapter contract](github-release-api-adapter.md) documents
+the separate network boundary.
 
 The controller lives in `.github/scripts/release_controller.py`. Its narrow
 `ReleaseAPI` protocol deliberately has no operation for deleting a release,
@@ -53,7 +56,9 @@ draft created for another repository, tag, commit, workflow, run, manifest, or
 asset set is therefore foreign state, even if its name looks familiar.
 
 Each asset has exactly `name`, `path`, `size`, and `sha256`. Names are safe
-basenames of at most 255 characters. Paths are relative POSIX paths whose final
+basenames of at most 255 characters and cannot start or end with a period;
+GitHub normalizes those periods during upload, which would break exact-name
+identity. Paths are relative POSIX paths whose final
 component equals `name`; absolute paths, empty segments, traversal, backslashes,
 more than eight path segments, and unsupported characters are rejected. Names
 and paths must be unique, and the array must be sorted by name.
@@ -115,7 +120,8 @@ flowchart TD
 An upload URL is accepted only when it uses HTTPS on `uploads.github.com`, has
 the exact repository and release-ID path, and has no credentials, port, query,
 or fragment. Remote assets must form the exact manifest name set. Every asset
-must be in the uploaded state and have the expected nonzero size and GitHub
+must be in the uploaded state, have no display label, use
+`application/octet-stream`, and have the expected nonzero size and GitHub
 server `sha256:` digest. Unexpected, duplicate, missing, empty, or mismatched
 assets stop reconciliation.
 
@@ -126,11 +132,18 @@ or prerelease publication is an integrity incident, not a state the controller
 repairs.
 
 The immutable repository ID returned by the API is the live GitHub security
-identity. The repository name is bounded routing and audit data that the future
-adapter must supply from trusted workflow context; this offline core does not
-query GitHub for a canonical name. After a rename, generate a new manifest and
-expected identity for the same repository ID. The controller does not silently
-adopt the old name.
+identity. The repository name is bounded routing and audit data. The controller
+checks the ID at startup, before every mutation, and during final publication
+readback. After a rename, generate a new manifest and expected identity for the
+same repository ID; the controller does not silently adopt the old name.
+
+GitHub's release mutation routes still use `OWNER/REPOSITORY`, and no identity
+check can make the following request atomic with that lookup. Future workflow
+wiring must supply a token whose authority is narrowed to the exact repository
+ID. A general personal access token or multi-repository installation token is
+outside this contract. Rechecks narrow rename and replacement races; the scoped
+token is the control that prevents a reused old name from redirecting a
+mutation.
 
 After the last complete local rehash, the controller rereads the same release
 by ID, requires it to remain an exact non-immutable draft, rereads the complete
@@ -147,6 +160,15 @@ The post-publication checks detect the resulting incident, but the controller
 cannot repair or delete an immutable release. See GitHub's [immutable release
 contract](https://docs.github.com/en/code-security/concepts/supply-chain-security/immutable-releases).
 
+The controller also cannot discover safely whether immutable releases are
+enabled. GitHub's repository preflight endpoint requires Administration read,
+which the future contents-write publication token must not receive. Before any
+workflow can call this controller, a separate narrowly privileged step must
+check `GET /repos/{owner}/{repo}/immutable-releases`, bind the successful result
+to the exact repository ID, and make it a hard publication prerequisite. If
+that setting is off, publishing first and inspecting `immutable: false`
+afterward would already have exposed a mutable release.
+
 ## Ambiguous responses and recovery
 
 Network failure can hide whether a GitHub mutation succeeded. The adapter must
@@ -159,19 +181,20 @@ error must not be mislabeled as ambiguous.
 | Asset upload | Relist assets and continue only if that exact asset now exists with the planned size and digest. Do not retry an upload whose outcome is unknown. |
 | Publication | Read the same release by ID for a bounded three polls. Accept only the exact immutable release. |
 
-A failed run can leave a private draft containing a partial or rejected asset
-set. The controller never removes it automatically. Until the API adapter and
-operator runbook land, a maintainer must treat such a draft as evidence to
-inspect, not as something automation may age-clean. No current workflow calls
-the controller, so this recovery procedure is not yet an operational release
-path.
+Once a workflow calls the controller, a failed run can leave a private draft
+containing a partial or rejected asset set. The controller never removes it
+automatically. Until the operator runbook and privileged workflow handoff land,
+a maintainer must treat such a draft as evidence to inspect, not as something
+automation may age-clean. No current workflow calls the controller or adapter,
+so this recovery procedure is not yet an operational release path.
 
 ## Non-claims
 
 The controller proves state-machine and byte-identity rules in offline tests.
 It does not yet:
 
-- call the GitHub API or upload an asset
+- receive a token or call the concrete GitHub API adapter from a workflow
+- prove through a separate preflight that immutable releases are enabled
 - define the final release asset set
 - prove that source, notice, SBOM, signature, or attestation evidence is
   complete
@@ -179,6 +202,6 @@ It does not yet:
 - invoke `gh release verify`
 - make tagged publication reachable.
 
-The repository must keep publication blocked until the concrete adapter,
-privilege-separated evidence path, final asset policy, operator recovery
-procedure, and live immutable-release verification are complete.
+The repository must keep publication blocked until the privilege-separated
+evidence path, final asset policy, operator recovery procedure, workflow
+handoff, and live immutable-release verification are complete.

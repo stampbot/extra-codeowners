@@ -58,6 +58,7 @@ nav:
       - Raw OCI release-spine format: reference/release-spine-format.md
       - Container evidence release contract: reference/container-evidence-release-contract.md
       - Immutable release controller contract: reference/immutable-release-controller.md
+      - GitHub release API adapter contract: reference/github-release-api-adapter.md
   - Explanation:
       - Native CODEOWNERS comparison: explanation/native-codeowners.md
       - Architecture: explanation/architecture.md

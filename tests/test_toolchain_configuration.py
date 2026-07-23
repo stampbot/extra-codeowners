@@ -59,6 +59,7 @@ def test_uv_version_is_identical_locally_in_containers_and_in_workflows() -> Non
     for script in (
         "build_release_spine.py",
         "container_evidence.py",
+        "github_release_api.py",
         "release_controller.py",
         "release_readiness.py",
         "release_spine.py",

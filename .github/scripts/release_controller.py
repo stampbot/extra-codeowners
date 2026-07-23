@@ -35,7 +35,7 @@ SEMANTIC_TAG = re.compile(r"^v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0
 HEX40 = re.compile(r"^[0-9a-f]{40}$")
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
 WORKFLOW_PATH = re.compile(r"^\.github/workflows/[A-Za-z0-9_.-]+\.ya?ml$")
-SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$")
+SAFE_NAME = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,253}[A-Za-z0-9_-])?$")
 SAFE_SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$")
 
 
@@ -690,6 +690,10 @@ def _remote_asset(value: Mapping[str, Any], expected: Asset | None = None) -> tu
     name = _bounded_string(value.get("name"), "GitHub release asset name", SAFE_NAME, maximum=255)
     if value.get("state") != "uploaded":
         raise ControllerError(f"GitHub release asset {name} is not uploaded")
+    if value.get("content_type") != "application/octet-stream":
+        raise ControllerError(f"GitHub release asset {name} has the wrong content type")
+    if "label" not in value or value["label"] is not None:
+        raise ControllerError(f"GitHub release asset {name} has an unexpected label")
     size = _bounded_integer(
         value.get("size"), f"GitHub release asset {name} size", minimum=1, maximum=MAX_ASSET_BYTES
     )
@@ -732,13 +736,20 @@ def _require_complete_remote_assets(api: ReleaseAPI, release_id: int, plan: Rele
 
 def _get_exact_release(api: ReleaseAPI, release_id: int, plan: ReleasePlan) -> Mapping[str, Any]:
     release = api.get_release(release_id)
-    _release_identity(release, plan)
+    observed_id, _, _ = _release_identity(release, plan)
+    if observed_id != release_id:
+        raise ControllerError("GitHub returned a different release ID")
     return release
 
 
 def _require_tag_target(api: ReleaseAPI, plan: ReleasePlan) -> None:
     if api.resolve_tag(plan.tag) != plan.target_commit:
         raise ControllerError("GitHub release tag does not resolve to the planned commit")
+
+
+def _require_repository_identity(api: ReleaseAPI, plan: ReleasePlan) -> None:
+    if api.repository_id() != plan.repository_id:
+        raise ControllerError("GitHub repository ID does not match the release plan")
 
 
 def _reconcile_verified_release(
@@ -748,11 +759,13 @@ def _reconcile_verified_release(
     resumed = release is not None
     if release is None:
         try:
+            _require_repository_identity(api, plan)
             release = api.create_draft(plan)
             _, created_draft, created_immutable = _release_identity(release, plan)
             if not created_draft or created_immutable:
                 raise ControllerError("GitHub did not create the requested draft release")
         except AmbiguousMutationError:
+            _require_repository_identity(api, plan)
             release = _find_release(api, plan)
             if release is None:
                 raise ControllerError("cannot reconcile an ambiguous draft creation") from None
@@ -763,6 +776,7 @@ def _reconcile_verified_release(
             raise ControllerError("matching GitHub release is public but mutable")
         _require_complete_remote_assets(api, release_id, plan)
         _require_tag_target(api, plan)
+        _require_repository_identity(api, plan)
         return ReleaseResult(release_id, plan.tag, True, resumed=True)
 
     upload_url = _validate_upload_url(release.get("upload_url"), plan, release_id)
@@ -771,9 +785,11 @@ def _reconcile_verified_release(
         if verified.asset.name in observed:
             continue
         try:
+            _require_repository_identity(api, plan)
             response = api.upload_asset(release_id, upload_url, verified)
             _remote_asset(response, verified.asset)
         except AmbiguousMutationError:
+            _require_repository_identity(api, plan)
             reconciled = _remote_assets(api, release_id, plan)
             if verified.asset.name not in reconciled:
                 raise ControllerError(
@@ -789,13 +805,21 @@ def _reconcile_verified_release(
         raise ControllerError("GitHub release changed before final draft publication")
     _require_complete_remote_assets(api, release_id, plan)
     _require_tag_target(api, plan)
+    _require_repository_identity(api, plan)
     try:
         published = api.publish_release(release_id)
-        _release_identity(published, plan)
     except AmbiguousMutationError:
         # The bounded readback loop below reconciles whether publication succeeded.
         pass
+    else:
+        # A successful mutation response with malformed or contradictory
+        # identity fields cannot prove the final state. Publication may have
+        # happened, so reconcile it through the same bounded exact readback
+        # used for a lost response instead of returning early.
+        with contextlib.suppress(ControllerError):
+            _release_identity(published, plan)
     for _ in range(MAX_RECONCILE_POLLS):
+        _require_repository_identity(api, plan)
         current = _get_exact_release(api, release_id, plan)
         _, current_draft, current_immutable = _release_identity(current, plan)
         if not current_draft:
@@ -817,8 +841,7 @@ def reconcile_release(
     """Create or resume one exact draft and accept only its immutable publication."""
 
     _require_expected_identity(plan, expected)
-    if api.repository_id() != plan.repository_id:
-        raise ControllerError("GitHub repository ID does not match the release plan")
+    _require_repository_identity(api, plan)
     _require_tag_target(api, plan)
     with open_verified_assets(asset_root, plan) as verified_assets:
         return _reconcile_verified_release(api, plan, verified_assets)
