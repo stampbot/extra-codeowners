@@ -61,10 +61,15 @@ without rebuilding it.
 The reusable proof workflow also packs those five selected files into a [raw
 Python-distribution
 spine](../reference/python-distribution-spine-format.md) and a canonical
-record. A separate read-only job verifies both raw artifacts by immutable ID
-without opening the wheel or source distribution. That pair remains an
-internal transport proof. No downstream release-evidence or publication job
-retains or consumes it.
+record. A separate read-only job downloads both raw artifacts by immutable ID,
+then verifies and atomically materializes the five files without opening the
+wheel or source-distribution archives.
+
+The tagged workflow defines a privileged consumer that would attest and sign
+the materialized distributions and retain the three selection records. The
+unconditional publication blocker keeps that job unreachable. Its record
+artifact is not an input to the GitHub release job, so the pair remains an
+internal transport rather than supported release evidence.
 
 Stable OCI labels bind the source revision, wheel SHA-256, and selection-record
 SHA-256. Run metadata separately binds the GitHub Actions artifact ID and

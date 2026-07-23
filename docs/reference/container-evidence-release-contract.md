@@ -13,9 +13,12 @@ archive, or permission to publish.
 
 The [raw Python-distribution
 spine](python-distribution-spine-format.md) similarly carries the selected
-five-file application proof without archive parsing in its read-only consumer.
-The reusable workflow verifies that pair but does not retain it as release
-evidence or pass it to a publication job.
+five-file application proof without archive parsing. The reusable workflow
+verifies and materializes that pair in a read-only job. The tagged workflow
+also defines a privileged consumer that would retain the three selection
+records and attest and sign the distributions, but the publication blocker
+keeps it unreachable. The GitHub release job does not consume the retained
+records.
 
 !!! danger "No current release satisfies this contract"
     Extra CODEOWNERS does not publish a supported container release today. Do
@@ -35,7 +38,7 @@ contract:
 | --- | --- |
 | [#18](https://github.com/stampbot/extra-codeowners/issues/18) | Complete notice and corresponding-source records for the four native-wheel owners that remain after Greenlet, MarkupSafe, and SQLAlchemy. |
 | [#28](https://github.com/stampbot/extra-codeowners/issues/28) | Separate unprivileged collection from publication authority, freeze the wire format, and ship an adversarially tested recipient verifier and how-to. |
-| [#32](https://github.com/stampbot/extra-codeowners/issues/32) | Retain the reproducible Python proof in release evidence and pass it to the isolated publication jobs, which must bind the exact selected wheel to the installed runtime. |
+| [#32](https://github.com/stampbot/extra-codeowners/issues/32) | Bind the retained Python selection records and exact wheel digest into the complete release evidence, then bind the installed runtime to that same wheel. |
 
 The raw spine includes an adversarially tested transport verifier. It does not
 finish [#28](https://github.com/stampbot/extra-codeowners/issues/28), which
