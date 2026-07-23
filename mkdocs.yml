@@ -49,6 +49,7 @@ nav:
       - Project status: reference/project-status.md
       - Configuration: reference/configuration.md
       - Checks and evaluation: reference/checks.md
+      - DCO evidence contract: reference/dco-evidence.md
       - Command line: reference/cli.md
       - GitHub permissions and events: reference/github-permissions.md
       - HTTP API: reference/http-api.md

@@ -77,6 +77,16 @@ def test_dependency_audit_uses_locked_mode_without_frozen_mode() -> None:
     assert "--preview-features audit-command" in workflow
 
 
+def test_ci_checks_lockfile_freshness_outside_frozen_mode() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    lock_check = workflow.split("      - name: Verify lockfile is current\n", 1)[1].split(
+        "\n      - name:", 1
+    )[0]
+
+    assert 'UV_FROZEN: "false"' in lock_check
+    assert "run: uv lock --check" in lock_check
+
+
 def test_pinned_uv_exposes_the_scheduled_audit_interface_without_network() -> None:
     uv = shutil.which("uv")
     assert uv is not None, "the pinned uv executable must be available to the test suite"

@@ -1,9 +1,11 @@
-"""Least-privilege asynchronous GitHub REST API client."""
+"""Least-privilege asynchronous GitHub REST and GraphQL API client."""
 
 from __future__ import annotations
 
 import asyncio
+import json as json_module
 import math
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
@@ -15,10 +17,148 @@ import jwt
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
 
+from extra_codeowners.dco import (
+    MAX_COMMIT_MESSAGE_BYTES,
+    MAX_PULL_COMMITS,
+    CommitEvidence,
+    PullCommit,
+    PullCommitComparison,
+    PullRequestSnapshot,
+    RepositoryIdentity,
+)
+
 MAX_PULL_FILES: Final = 3000
 MAX_PULL_REVIEWS: Final = 1000
+MAX_DCO_COMMIT_LIST_RESPONSE_BYTES: Final = 256 * 1024
+MAX_DCO_COMMIT_DETAIL_RESPONSE_BYTES: Final = 8 * 1024 * 1024
+MAX_DCO_AGGREGATE_MESSAGE_BYTES: Final = 16 * 1024 * 1024
+MAX_DCO_DETAIL_CONCURRENCY: Final = 2
+MAX_JSON_RESPONSE_DEPTH: Final = 64
 MAX_CONFIG_BYTES: Final = 1_000_000
 MAX_CODEOWNERS_BYTES: Final = 3 * 1024 * 1024
+
+_REPOSITORY_FULL_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+
+_DCO_PULL_COMMITS_QUERY: Final = """\
+query DcoPullCommits(
+  $owner: String!
+  $name: String!
+  $number: Int!
+  $cursor: String
+) {
+  repository(owner: $owner, name: $name) {
+    databaseId
+    nameWithOwner
+    pullRequest(number: $number) {
+      number
+      state
+      baseRefName
+      baseRefOid
+      baseRepository { databaseId nameWithOwner }
+      headRefName
+      headRefOid
+      headRepository { databaseId nameWithOwner }
+      commits(first: 100, after: $cursor) {
+        totalCount
+        nodes { id commit { oid } }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+  }
+}
+"""
+
+_DCO_COMMIT_QUERY: Final = """\
+query DcoCommit($id: ID!) {
+  node(id: $id) {
+    __typename
+    ... on PullRequestCommit {
+      id
+      pullRequest {
+        number
+        state
+        baseRefName
+        baseRefOid
+        baseRepository { databaseId nameWithOwner }
+        headRefName
+        headRefOid
+        headRepository { databaseId nameWithOwner }
+        repository { databaseId nameWithOwner }
+      }
+      commit {
+        oid
+        parents(first: 65) {
+          totalCount
+          nodes { oid }
+          pageInfo { hasNextPage endCursor }
+        }
+        message
+        author { name email user { login databaseId } }
+        committer { name email }
+        signature {
+          isValid
+          state
+          verifiedAt
+          wasSignedByGitHub
+          signer { login databaseId }
+        }
+      }
+    }
+  }
+}
+"""
+
+
+def _dco_repository_path(repository: str) -> str:
+    """Validate an exact repository name before using it in a DCO REST path."""
+    if (
+        not isinstance(repository, str)
+        or not repository.isascii()
+        or len(repository) > 512
+        or not _REPOSITORY_FULL_NAME_RE.fullmatch(repository)
+        or any(component in {".", ".."} for component in repository.split("/"))
+    ):
+        raise ValueError("repository must be a GitHub-safe ASCII owner/repository name")
+    return repository
+
+
+def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """Build one JSON object while rejecting ambiguous duplicate names."""
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("JSON object contains a duplicate key")
+        result[key] = value
+    return result
+
+
+def _reject_json_constant(value: str) -> NoReturn:
+    """Reject non-standard numeric constants accepted by Python's JSON parser."""
+    raise ValueError(f"JSON response contains the non-standard constant {value}")
+
+
+def _validate_json_nesting(value: str) -> None:
+    """Enforce a parser-independent bound on JSON container nesting."""
+    depth = 0
+    in_string = False
+    escaped = False
+    for character in value:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                in_string = False
+            continue
+        if character == '"':
+            in_string = True
+        elif character in "[{":
+            depth += 1
+            if depth > MAX_JSON_RESPONSE_DEPTH:
+                raise ValueError("JSON response exceeds the nesting-depth limit")
+        elif character in "]}":
+            depth = max(0, depth - 1)
 
 
 class GitHubError(RuntimeError):
@@ -51,7 +191,7 @@ class GitHubRateLimitError(GitHubAPIError):
 
 
 class PullRequestTooLargeError(GitHubError):
-    """A pull request exceeds GitHub's files API visibility limit."""
+    """A pull request exceeds a supported API completeness bound."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,8 +202,19 @@ class InstallationToken:
     expires_at: datetime
 
 
+@dataclass(frozen=True, slots=True)
+class _BoundedJsonResponse:
+    """Parsed JSON plus the bounded retry metadata needed after HTTP 200."""
+
+    payload: Any
+    status_code: int
+    retry_after: str | None
+    rate_limit_remaining: str | None
+    rate_limit_reset: str | None
+
+
 class GitHubClient:
-    """GitHub App and installation REST API client.
+    """GitHub App and installation API client.
 
     The caller supplies only an App ID and PEM key. Installation tokens are
     cached in memory and never logged or persisted.
@@ -221,10 +372,12 @@ class GitHubClient:
 
     async def _authenticated_streaming_response(
         self,
+        method: str,
         path: str,
         installation_id: int,
         *,
         params: dict[str, Any] | None = None,
+        json: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,
     ) -> httpx.Response:
         """Return an open streamed response, refreshing a rejected token once.
@@ -235,9 +388,10 @@ class GitHubClient:
         for attempt in range(2):
             token = await self._installation_token(installation_id)
             request = self._http.build_request(
-                "GET",
+                method,
                 path,
                 params=params,
+                json=json,
                 headers={**(headers or {}), "Authorization": f"Bearer {token}"},
             )
             response = await self._http.send(request, stream=True)
@@ -286,16 +440,11 @@ class GitHubClient:
         return message
 
     @staticmethod
-    def _retry_delay(response: httpx.Response, message: str) -> int | None:
-        retry_after = response.headers.get("retry-after")
-        remaining = response.headers.get("x-ratelimit-remaining")
-        is_limited = response.status_code == 429 or (
-            response.status_code == 403
-            and (retry_after is not None or remaining == "0" or "rate limit" in message.lower())
-        )
-        if not is_limited:
-            return None
-
+    def _bounded_retry_delay(
+        retry_after: str | None,
+        rate_limit_reset: str | None,
+    ) -> int:
+        """Normalize provider retry metadata to the service's safe delay range."""
         delay: float | None = None
         if retry_after is not None:
             try:
@@ -306,16 +455,29 @@ class GitHubClient:
                     delay = (parsed - datetime.now(UTC)).total_seconds()
                 except (TypeError, ValueError, OverflowError):
                     delay = None
-        if delay is None:
-            reset = response.headers.get("x-ratelimit-reset")
-            if reset is not None:
-                try:
-                    delay = float(reset) - datetime.now(UTC).timestamp()
-                except ValueError:
-                    delay = None
+        if delay is None and rate_limit_reset is not None:
+            try:
+                delay = float(rate_limit_reset) - datetime.now(UTC).timestamp()
+            except ValueError:
+                delay = None
         if delay is not None and not math.isfinite(delay):
             delay = None
         return max(1, min(math.ceil(delay if delay is not None else 60), 86_400))
+
+    @classmethod
+    def _retry_delay(cls, response: httpx.Response, message: str) -> int | None:
+        retry_after = response.headers.get("retry-after")
+        remaining = response.headers.get("x-ratelimit-remaining")
+        is_limited = response.status_code == 429 or (
+            response.status_code == 403
+            and (retry_after is not None or remaining == "0" or "rate limit" in message.lower())
+        )
+        if not is_limited:
+            return None
+        return cls._bounded_retry_delay(
+            retry_after,
+            response.headers.get("x-ratelimit-reset"),
+        )
 
     @classmethod
     def _raise_api_error(cls, response: httpx.Response, method: str, path: str) -> NoReturn:
@@ -369,6 +531,86 @@ class GitHubClient:
             page += 1
         return items
 
+    async def _bounded_json_request(
+        self,
+        method: str,
+        path: str,
+        installation_id: int,
+        *,
+        params: dict[str, Any] | None = None,
+        json: dict[str, Any] | None = None,
+        max_bytes: int,
+    ) -> _BoundedJsonResponse:
+        """Read and parse one size-limited JSON response."""
+        response = await self._authenticated_streaming_response(
+            method,
+            path,
+            installation_id,
+            params=params,
+            json=json,
+        )
+        try:
+            if not response.is_success:
+                error_response = await self._bounded_error_response(response, 1000)
+                self._raise_api_error(error_response, method, path)
+
+            content_length = response.headers.get("content-length")
+            normalized_length = content_length.strip() if content_length is not None else ""
+            declared_length = (
+                int(normalized_length)
+                if normalized_length.isascii() and normalized_length.isdecimal()
+                else None
+            )
+            if declared_length is not None and declared_length > max_bytes:
+                raise GitHubError(f"{method} {path} exceeds the {max_bytes}-byte response limit")
+
+            content = bytearray()
+            async for chunk in response.aiter_bytes(chunk_size=min(max_bytes, 64 * 1024)):
+                if len(chunk) > max_bytes - len(content):
+                    raise GitHubError(
+                        f"{method} {path} exceeds the {max_bytes}-byte response limit"
+                    )
+                content.extend(chunk)
+            try:
+                decoded = bytes(content).decode("utf-8")
+                if decoded.startswith("\ufeff"):
+                    raise ValueError("JSON response must not contain a UTF-8 BOM")
+                _validate_json_nesting(decoded)
+                payload = json_module.loads(
+                    decoded,
+                    object_pairs_hook=_unique_json_object,
+                    parse_constant=_reject_json_constant,
+                )
+            except (UnicodeDecodeError, RecursionError, ValueError) as error:
+                raise GitHubError(f"expected JSON response from {method} {path}") from error
+            return _BoundedJsonResponse(
+                payload=payload,
+                status_code=response.status_code,
+                retry_after=response.headers.get("retry-after"),
+                rate_limit_remaining=response.headers.get("x-ratelimit-remaining"),
+                rate_limit_reset=response.headers.get("x-ratelimit-reset"),
+            )
+        finally:
+            await response.aclose()
+
+    async def _get_bounded_json(
+        self,
+        path: str,
+        installation_id: int,
+        *,
+        params: dict[str, Any] | None = None,
+        max_bytes: int,
+    ) -> Any:
+        """Read and parse one size-limited GET response."""
+        response = await self._bounded_json_request(
+            "GET",
+            path,
+            installation_id,
+            params=params,
+            max_bytes=max_bytes,
+        )
+        return response.payload
+
     async def get_pull(self, installation_id: int, repository: str, number: int) -> dict[str, Any]:
         """Fetch current pull request metadata."""
         return await self._request(
@@ -399,6 +641,311 @@ class GitHubClient:
             installation_id,
             max_items=MAX_PULL_REVIEWS,
         )
+
+    async def _graphql(
+        self,
+        installation_id: int,
+        *,
+        query: str,
+        variables: dict[str, Any],
+        operation: str,
+        max_bytes: int,
+    ) -> dict[str, Any]:
+        """Run one bounded GraphQL query and reject partial/error responses."""
+        response = await self._bounded_json_request(
+            "POST",
+            "/graphql",
+            installation_id,
+            json={"query": query, "variables": variables},
+            max_bytes=max_bytes,
+        )
+        payload = response.payload
+        if not isinstance(payload, dict):
+            raise GitHubError(f"GraphQL {operation} returned a non-object response")
+        errors = payload.get("errors")
+        if errors is not None and (not isinstance(errors, list) or errors):
+            if self._graphql_errors_are_rate_limited(
+                errors,
+                retry_after=response.retry_after,
+                rate_limit_remaining=response.rate_limit_remaining,
+            ):
+                retry_delay = self._bounded_retry_delay(
+                    response.retry_after,
+                    response.rate_limit_reset,
+                )
+                raise GitHubRateLimitError(
+                    response.status_code,
+                    "POST",
+                    "/graphql",
+                    f"GraphQL {operation} was rate limited",
+                    retry_delay,
+                )
+            raise GitHubError(f"GraphQL {operation} returned errors")
+        data = payload.get("data")
+        if not isinstance(data, dict):
+            raise GitHubError(f"GraphQL {operation} omitted its data object")
+        return data
+
+    @staticmethod
+    def _graphql_errors_are_rate_limited(
+        errors: Any,
+        *,
+        retry_after: str | None,
+        rate_limit_remaining: str | None,
+    ) -> bool:
+        """Recognize GitHub's HTTP-200 primary and secondary limit responses."""
+        if retry_after is not None or rate_limit_remaining == "0":
+            return True
+        if not isinstance(errors, list):
+            return False
+        for error in errors:
+            if not isinstance(error, dict):
+                continue
+            error_type = error.get("type")
+            if isinstance(error_type, str) and error_type.casefold() == "rate_limited":
+                return True
+            extensions = error.get("extensions")
+            if isinstance(extensions, dict):
+                code = extensions.get("code")
+                if isinstance(code, str) and code.casefold() == "rate_limited":
+                    return True
+            message = error.get("message")
+            if isinstance(message, str) and "rate limit" in message.casefold():
+                return True
+        return False
+
+    @staticmethod
+    def _graphql_repository(value: Any, field: str) -> RepositoryIdentity:
+        if not isinstance(value, dict):
+            raise GitHubError(f"GraphQL {field} must be an object")
+        repository_id = value.get("databaseId")
+        full_name = value.get("nameWithOwner")
+        if type(repository_id) is not int or not isinstance(full_name, str):
+            raise GitHubError(f"GraphQL {field} has an invalid identity")
+        try:
+            return RepositoryIdentity(
+                id=repository_id,
+                full_name=full_name,
+            )
+        except ValueError as error:
+            raise GitHubError(f"GraphQL {field} has an invalid identity") from error
+
+    @classmethod
+    def _validate_graphql_pull_identity(
+        cls,
+        value: Any,
+        pull: PullRequestSnapshot,
+        *,
+        repository: Any,
+    ) -> dict[str, Any]:
+        """Bind a selected GraphQL pull object to the exact REST snapshot."""
+        if not isinstance(value, dict):
+            raise GitHubError("GraphQL pull request must be an object")
+        if cls._graphql_repository(repository, "repository") != pull.repository:
+            raise GitHubError("GraphQL repository identity changed during DCO collection")
+        allowed_states = {"OPEN"} if pull.state == "open" else {"CLOSED", "MERGED"}
+        base_repository = cls._graphql_repository(value.get("baseRepository"), "base repository")
+        head_repository = cls._graphql_repository(value.get("headRepository"), "head repository")
+        if (
+            type(value.get("number")) is not int
+            or value.get("number") != pull.number
+            or value.get("state") not in allowed_states
+            or value.get("baseRefName") != pull.base_ref
+            or value.get("baseRefOid") != pull.base_sha
+            or base_repository != pull.base_repository
+            or value.get("headRefName") != pull.head_ref
+            or value.get("headRefOid") != pull.head_sha
+            or head_repository != pull.head_repository
+        ):
+            raise GitHubError("GraphQL pull request identity changed during DCO collection")
+        return value
+
+    async def compare_pull_commits(
+        self,
+        installation_id: int,
+        pull: PullRequestSnapshot,
+    ) -> PullCommitComparison:
+        """List only commit OIDs, binding every page to the exact pull snapshot."""
+        expected_count = pull.commit_count
+        if expected_count > MAX_PULL_COMMITS:
+            msg = f"pull request exceeds the supported {MAX_PULL_COMMITS}-commit limit"
+            raise PullRequestTooLargeError(msg)
+
+        repository_path = _dco_repository_path(pull.repository.full_name)
+        owner, name = repository_path.split("/", maxsplit=1)
+        items: list[PullCommit] = []
+        seen_shas: set[str] = set()
+        seen_node_ids: set[str] = set()
+        seen_cursors: set[str] = set()
+        cursor: str | None = None
+
+        while True:
+            data = await self._graphql(
+                installation_id,
+                query=_DCO_PULL_COMMITS_QUERY,
+                variables={
+                    "owner": owner,
+                    "name": name,
+                    "number": pull.number,
+                    "cursor": cursor,
+                },
+                operation="DCO pull commit list",
+                max_bytes=MAX_DCO_COMMIT_LIST_RESPONSE_BYTES,
+            )
+            repository = data.get("repository")
+            if not isinstance(repository, dict):
+                raise GitHubError("GraphQL DCO pull commit list omitted its repository")
+            pull_payload = self._validate_graphql_pull_identity(
+                repository.get("pullRequest"),
+                pull,
+                repository=repository,
+            )
+            commits = pull_payload.get("commits")
+            if not isinstance(commits, dict):
+                raise GitHubError("GraphQL pull request omitted its commit connection")
+            total_count = commits.get("totalCount")
+            if type(total_count) is not int or total_count < 1:
+                raise GitHubError("GraphQL pull commit count is invalid")
+            if total_count > MAX_PULL_COMMITS:
+                msg = f"pull request exceeds the supported {MAX_PULL_COMMITS}-commit limit"
+                raise PullRequestTooLargeError(msg)
+            if total_count != expected_count:
+                raise GitHubError("GraphQL pull commit count does not match the snapshot")
+
+            nodes = commits.get("nodes")
+            page_info = commits.get("pageInfo")
+            if not isinstance(nodes, list) or not isinstance(page_info, dict):
+                raise GitHubError("GraphQL pull commit page is malformed")
+            remaining = expected_count - len(items)
+            expected_page_items = min(100, remaining)
+            if len(nodes) != expected_page_items:
+                raise GitHubError("GraphQL pull commit page is incomplete")
+            for node in nodes:
+                if not isinstance(node, dict):
+                    raise GitHubError("GraphQL pull commit page contains a null node")
+                try:
+                    item = PullCommit.from_graphql(node)
+                except ValueError as error:
+                    raise GitHubError("GraphQL pull commit node is invalid") from error
+                if item.sha in seen_shas or item.node_id in seen_node_ids:
+                    raise GitHubError("GraphQL pull commit page repeated a commit")
+                seen_shas.add(item.sha)
+                seen_node_ids.add(item.node_id)
+                items.append(item)
+
+            has_next_page = page_info.get("hasNextPage")
+            end_cursor = page_info.get("endCursor")
+            if type(has_next_page) is not bool:
+                raise GitHubError("GraphQL pull commit page has invalid pagination metadata")
+            expected_next_page = len(items) < expected_count
+            if has_next_page != expected_next_page:
+                raise GitHubError("GraphQL pull commit pagination disagrees with its count")
+            cursor_bytes = 0
+            if end_cursor is not None:
+                if not isinstance(end_cursor, str):
+                    raise GitHubError("GraphQL pull commit cursor is invalid")
+                try:
+                    cursor_bytes = len(end_cursor.encode("utf-8"))
+                except UnicodeEncodeError as error:
+                    raise GitHubError("GraphQL pull commit cursor is invalid") from error
+                if cursor_bytes > 4096:
+                    raise GitHubError("GraphQL pull commit cursor is invalid")
+            if not has_next_page:
+                break
+            if not isinstance(end_cursor, str) or not end_cursor or end_cursor in seen_cursors:
+                raise GitHubError("GraphQL pull commit cursor is invalid")
+            seen_cursors.add(end_cursor)
+            cursor = end_cursor
+
+        if len(items) != expected_count:
+            raise GitHubError("GraphQL pull commit list is incomplete")
+        if items[-1].sha != pull.head_sha:
+            raise GitHubError("GraphQL pull commit list did not end at the snapshot head")
+        return PullCommitComparison(
+            repository=pull.repository,
+            pull_number=pull.number,
+            base_sha=pull.base_sha,
+            head_sha=pull.head_sha,
+            base_commit_sha=pull.base_sha,
+            total_commits=expected_count,
+            ahead_by=expected_count,
+            commits=tuple(items),
+        )
+
+    async def _get_pull_commit_evidence(
+        self,
+        installation_id: int,
+        pull: PullRequestSnapshot,
+        item: PullCommit,
+    ) -> tuple[CommitEvidence, int]:
+        data = await self._graphql(
+            installation_id,
+            query=_DCO_COMMIT_QUERY,
+            variables={"id": item.node_id},
+            operation="DCO commit detail",
+            max_bytes=MAX_DCO_COMMIT_DETAIL_RESPONSE_BYTES,
+        )
+        node = data.get("node")
+        if not isinstance(node, dict) or node.get("__typename") != "PullRequestCommit":
+            raise GitHubError("GraphQL DCO commit detail returned the wrong node type")
+        if node.get("id") != item.node_id:
+            raise GitHubError("GraphQL DCO commit detail returned the wrong node")
+        pull_payload = node.get("pullRequest")
+        if not isinstance(pull_payload, dict):
+            raise GitHubError("GraphQL DCO commit detail omitted its pull request")
+        self._validate_graphql_pull_identity(
+            pull_payload,
+            pull,
+            repository=pull_payload.get("repository"),
+        )
+        commit = node.get("commit")
+        if not isinstance(commit, dict) or commit.get("oid") != item.sha:
+            raise GitHubError("GraphQL DCO commit detail returned the wrong commit")
+        message = commit.get("message")
+        if not isinstance(message, str):
+            raise GitHubError("GraphQL DCO commit detail omitted its message")
+        try:
+            message_bytes = len(message.encode("utf-8"))
+        except UnicodeEncodeError as error:
+            raise GitHubError("GraphQL DCO commit message is not valid Unicode") from error
+        if message_bytes > MAX_COMMIT_MESSAGE_BYTES:
+            raise GitHubError(f"commit message exceeds the {MAX_COMMIT_MESSAGE_BYTES}-byte limit")
+        try:
+            evidence = CommitEvidence.from_graphql(commit)
+        except ValueError as error:
+            raise GitHubError("GraphQL DCO commit detail is invalid") from error
+        return evidence, message_bytes
+
+    async def get_pull_commit_evidence(
+        self,
+        installation_id: int,
+        pull: PullRequestSnapshot,
+    ) -> tuple[PullCommitComparison, tuple[CommitEvidence, ...]]:
+        """Collect bounded DCO commit evidence with at most two detail requests in flight."""
+        comparison = await self.compare_pull_commits(installation_id, pull)
+        evidence: list[CommitEvidence] = []
+        message_bytes = 0
+        for offset in range(0, len(comparison.commits), MAX_DCO_DETAIL_CONCURRENCY):
+            batch = comparison.commits[offset : offset + MAX_DCO_DETAIL_CONCURRENCY]
+            tasks = [
+                asyncio.create_task(self._get_pull_commit_evidence(installation_id, pull, item))
+                for item in batch
+            ]
+            try:
+                results = await asyncio.gather(*tasks)
+            except BaseException:
+                for task in tasks:
+                    task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
+                raise
+            for item_evidence, item_message_bytes in results:
+                message_bytes += item_message_bytes
+                if message_bytes > MAX_DCO_AGGREGATE_MESSAGE_BYTES:
+                    raise GitHubError(
+                        "pull-request commit messages exceed the aggregate DCO evidence limit"
+                    )
+                evidence.append(item_evidence)
+        return comparison, tuple(evidence)
 
     async def get_codeowners_errors(
         self, installation_id: int, repository: str, ref: str
@@ -433,6 +980,7 @@ class GitHubClient:
         encoded_path = quote(path, safe="/")
         endpoint = f"/repos/{repository}/contents/{encoded_path}"
         response = await self._authenticated_streaming_response(
+            "GET",
             endpoint,
             installation_id,
             params=params,
