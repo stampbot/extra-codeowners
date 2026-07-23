@@ -90,7 +90,7 @@ of the security contract.
 | App access is suspended or an ordinary target repository is removed from its installation | Keep native human enforcement until access changes finish, and restore it before intentional removal. Acknowledge a well-formed ordinary-target removal without pretending revocation succeeded. | Once access is gone, Extra CODEOWNERS cannot revoke an existing check in that repository. |
 | A trusted application is compromised | Limit delegation by path, effective owner, and labels. Preserve non-delegable paths. | Within that scope, the application is intentionally trusted to approve. |
 | The operator loses GitHub API access or reaches a rate limit | Fail closed, retry indefinitely with a configured maximum ordinary backoff, honor separately bounded provider `Retry-After` or reset timing, and expose queue state and API failures. | Availability failures block merges while retries continue at bounded intervals. The service has no remaining-quota metric. |
-| Another actor publishes a check with the same name | Require the Extra CODEOWNERS App as the expected source. Grant installation-level Commit statuses (`statuses`) write for organization ruleset discovery, but omit it from runtime tokens. | A rule configured by name alone is vulnerable to source confusion. |
+| Another actor publishes a check with the same name | Require the Extra CODEOWNERS App as the expected source. Register the App with Commit statuses (`statuses`) write so GitHub can offer it as an organization-ruleset source, then omit that permission from runtime tokens. | A rule configured by name alone is vulnerable to source confusion. |
 | A proxy, browser, or observer captures App Manifest setup material | Require HTTPS and signed, short-lived state; suppress access logs; return no-store pages with a restrictive content security policy; disable setup after use. | The one-time callback and displayed conversion response contain credentials. A compromised operator endpoint or browser can disclose them. |
 | The service or database is compromised | Use least-privilege App permissions, short-lived installation tokens, a secret manager, encrypted transport, and restricted database access. | Service compromise can falsify checks within installed repositories. Rotate the App key and investigate every affected check. |
 
@@ -131,7 +131,12 @@ expected-source rulesets, App reviews, and sanitized webhook payloads against a
 disposable GitHub.com repository. A run is evidence for the tested API and
 account at that recorded time. It cannot prove instant or reliable webhook
 delivery, and it does not remove the production blocker while success can be
-inherited before invalidation.
+inherited before invalidation. Its delivery-log probe follows GitHub's
+pagination metadata within fixed bounds. When another page remains, an unseen
+delivery is incomplete evidence, not evidence that the delivery was absent.
+The same rule applies to cleanup: after an ambiguous repository create,
+repeated 404 responses trigger manual verification rather than a successful
+cleanup claim.
 
 ## Why some paths cannot be delegated
 

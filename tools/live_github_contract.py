@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Final, cast
-from urllib.parse import quote
+from urllib.parse import parse_qsl, quote, urlsplit
 
 import httpx
 import jwt
@@ -27,7 +27,59 @@ import jwt
 API_VERSION: Final = "2026-03-10"
 API_URL: Final = "https://api.github.com"
 CONFIRMATION_PREFIX: Final = "delete-disposable-repository-in:"
-REPORT_SCHEMA_VERSION: Final = 1
+REPORT_SCHEMA_VERSION: Final = 2
+DELIVERY_LINK_HEADER_LIMIT: Final = 8192
+DELIVERY_CURSOR_LIMIT: Final = 1024
+DELIVERY_LINK_RELATIONS: Final = frozenset({"first", "last", "next", "prev"})
+DELIVERY_PAGE_SIZE_MAXIMUM: Final = 100
+WEBHOOK_DELIVERY_LIST_LIMIT: Final = 300
+WEBHOOK_DELIVERY_PAGE_LIMIT: Final = 3
+WEBHOOK_DELIVERY_PAGE_SIZE: Final = 100
+WEBHOOK_CAPTURE_SECONDS: Final = 30
+REPOSITORY_RECOVERY_ATTEMPTS: Final = 6
+REPOSITORY_RECOVERY_INTERVAL_SECONDS: Final = 5
+REPOSITORY_CLEANUP_STATES: Final = frozenset(
+    {
+        "not_attempted",
+        "response_confirmed_cleaned",
+        "response_unknown_cleaned",
+    }
+)
+
+CORE_OBSERVATIONS: Final = (
+    "organization_ruleset_expected_source",
+    "repository_ruleset_expected_source",
+    "completed_success_to_in_progress_blocks_merge",
+    "shared_head_inherits_success_before_invalidation",
+    "shared_head_invalidation_blocks_both_pull_requests",
+    "retarget_inherits_commit_scoped_success_before_invalidation",
+    "pull_request_opened_delivery_observed",
+    "pull_request_retarget_delivery_observed",
+)
+APP_REVIEW_OBSERVATIONS: Final = (
+    "numeric_approval_rule_blocks_before_app_review",
+    "app_review_attributed_to_bot",
+    "app_review_counts_as_numeric_approval",
+)
+DIAGNOSTIC_OBSERVATIONS: Final = (
+    "in_progress_merge_state_blocked",
+    "in_progress_merge_attempt_blocked",
+    "installation_repository_added_delivery_observed",
+)
+WEBHOOK_OBSERVATIONS: Final = (
+    "installation_repository_added_delivery_observed",
+    "pull_request_opened_delivery_observed",
+    "pull_request_retarget_delivery_observed",
+)
+MANUAL_EVIDENCE_REQUIRED: Final = (
+    "deployed_webhook_delay_and_redelivery",
+    "deployed_webhook_loss_and_reconciliation",
+    "installation_lifecycle_delivery_contracts",
+    "repository_rename_transfer_and_deletion",
+    "installation_suspension_and_deletion",
+    "repository_selection_access_removal",
+    "authority_loss_merge_handback",
+)
 
 JsonObject = dict[str, Any]
 
@@ -188,7 +240,7 @@ class RestClient:
     def close(self) -> None:
         self._http.close()
 
-    def request(
+    def _request_response(
         self,
         method: str,
         path: str,
@@ -196,7 +248,7 @@ class RestClient:
         body: JsonObject | None = None,
         params: dict[str, str | int] | None = None,
         expected: tuple[int, ...] = (200,),
-    ) -> Any:
+    ) -> httpx.Response:
         response = self._http.request(method, path, json=body, params=params)
         if response.status_code not in expected:
             message = ""
@@ -210,9 +262,48 @@ class RestClient:
             raise ContractError(
                 f"GitHub API {method} {path} returned {response.status_code}{message}"
             )
+        return response
+
+    @staticmethod
+    def _response_body(response: httpx.Response) -> Any:
         if response.status_code == 204 or not response.content:
             return None
         return response.json()
+
+    def request(
+        self,
+        method: str,
+        path: str,
+        *,
+        body: JsonObject | None = None,
+        params: dict[str, str | int] | None = None,
+        expected: tuple[int, ...] = (200,),
+    ) -> Any:
+        response = self._request_response(
+            method,
+            path,
+            body=body,
+            params=params,
+            expected=expected,
+        )
+        return self._response_body(response)
+
+    def request_with_link(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: dict[str, str | int] | None = None,
+        expected: tuple[int, ...] = (200,),
+    ) -> tuple[Any, str | None]:
+        """Return a response body and only its pagination Link header."""
+        response = self._request_response(
+            method,
+            path,
+            params=params,
+            expected=expected,
+        )
+        return self._response_body(response), response.headers.get("link")
 
     def status(
         self,
@@ -222,6 +313,176 @@ class RestClient:
         body: JsonObject | None = None,
     ) -> int:
         return self._http.request(method, path, json=body).status_code
+
+
+def _malformed_delivery_link() -> ContractError:
+    return ContractError("GitHub delivery Link header is malformed or ambiguous")
+
+
+def _next_delivery_link_target(value: str | None) -> str | None:
+    if value is None:
+        return None
+    if (
+        not value
+        or len(value) > DELIVERY_LINK_HEADER_LIMIT
+        or any(character in value for character in "\r\n\0")
+    ):
+        raise _malformed_delivery_link()
+
+    links: dict[str, str] = {}
+    position = 0
+    while position < len(value):
+        while position < len(value) and value[position] in " \t":
+            position += 1
+        if position >= len(value) or value[position] != "<":
+            raise _malformed_delivery_link()
+        target_end = value.find(">", position + 1)
+        if target_end < 0:
+            raise _malformed_delivery_link()
+        target = value[position + 1 : target_end]
+        if not target or any(character.isspace() or ord(character) < 0x21 for character in target):
+            raise _malformed_delivery_link()
+        position = target_end + 1
+
+        while position < len(value) and value[position] in " \t":
+            position += 1
+        if position >= len(value) or value[position] != ";":
+            raise _malformed_delivery_link()
+        position += 1
+        while position < len(value) and value[position] in " \t":
+            position += 1
+        if value[position : position + 3].lower() != "rel":
+            raise _malformed_delivery_link()
+        position += 3
+        while position < len(value) and value[position] in " \t":
+            position += 1
+        if position >= len(value) or value[position] != "=":
+            raise _malformed_delivery_link()
+        position += 1
+        while position < len(value) and value[position] in " \t":
+            position += 1
+        if position >= len(value) or value[position] != '"':
+            raise _malformed_delivery_link()
+        relation_end = value.find('"', position + 1)
+        if relation_end < 0:
+            raise _malformed_delivery_link()
+        relation = value[position + 1 : relation_end].lower()
+        if relation not in DELIVERY_LINK_RELATIONS or relation in links:
+            raise _malformed_delivery_link()
+        links[relation] = target
+        position = relation_end + 1
+
+        while position < len(value) and value[position] in " \t":
+            position += 1
+        if position == len(value):
+            break
+        if value[position] != ",":
+            raise _malformed_delivery_link()
+        position += 1
+        if position == len(value):
+            raise _malformed_delivery_link()
+
+    return links.get("next")
+
+
+def _next_delivery_cursor(link_header: str | None) -> str | None:
+    target = _next_delivery_link_target(link_header)
+    if target is None:
+        return None
+    try:
+        parsed = urlsplit(target)
+        port = parsed.port
+        query = parse_qsl(
+            parsed.query,
+            keep_blank_values=True,
+            strict_parsing=True,
+            max_num_fields=3,
+        )
+    except ValueError as error:
+        raise _malformed_delivery_link() from error
+    if (
+        parsed.scheme.lower() != "https"
+        or parsed.hostname is None
+        or parsed.hostname.lower() != "api.github.com"
+        or parsed.username is not None
+        or parsed.password is not None
+        or port is not None
+        or parsed.path != "/app/hook/deliveries"
+        or parsed.fragment
+        or not query
+    ):
+        raise _malformed_delivery_link()
+
+    values: dict[str, str] = {}
+    for name, item in query:
+        if name not in {"cursor", "per_page"} or name in values:
+            raise _malformed_delivery_link()
+        values[name] = item
+    cursor = values.get("cursor")
+    if (
+        cursor is None
+        or not cursor
+        or len(cursor) > DELIVERY_CURSOR_LIMIT
+        or any(ord(character) < 0x21 or ord(character) > 0x7E for character in cursor)
+    ):
+        raise _malformed_delivery_link()
+    per_page = values.get("per_page")
+    if per_page is not None and (
+        not per_page.isdecimal() or not 1 <= int(per_page) <= DELIVERY_PAGE_SIZE_MAXIMUM
+    ):
+        raise _malformed_delivery_link()
+    return cursor
+
+
+def delivery_summaries_bounded(
+    client: RestClient,
+    *,
+    list_limit: int,
+    page_limit: int,
+    page_size: int,
+) -> tuple[list[JsonObject], bool, int]:
+    """List delivery summaries through validated cursors within explicit bounds."""
+    if (
+        list_limit <= 0
+        or page_limit <= 0
+        or page_size <= 0
+        or page_size > DELIVERY_PAGE_SIZE_MAXIMUM
+    ):
+        raise ValueError(
+            "delivery pagination bounds must be positive and page_size cannot exceed 100"
+        )
+
+    summaries: list[JsonObject] = []
+    seen_cursors: set[str] = set()
+    cursor: str | None = None
+    pages_read = 0
+
+    while pages_read < page_limit and len(summaries) < list_limit:
+        requested_page_size = min(page_size, list_limit - len(summaries))
+        params: dict[str, str | int] = {"per_page": requested_page_size}
+        if cursor is not None:
+            params["cursor"] = cursor
+        response, link_header = client.request_with_link(
+            "GET",
+            "/app/hook/deliveries",
+            params=params,
+        )
+        pages_read += 1
+        if not isinstance(response, list) or any(not isinstance(item, dict) for item in response):
+            raise ContractError("GitHub delivery listing is not a list of objects")
+        if len(response) > requested_page_size:
+            raise ContractError("GitHub delivery listing exceeded the requested page size")
+        summaries.extend(response)
+
+        next_cursor = _next_delivery_cursor(link_header)
+        if next_cursor is None:
+            return summaries, True, pages_read
+        if next_cursor in seen_cursors:
+            raise ContractError("GitHub delivery pagination repeated a cursor")
+        seen_cursors.add(next_cursor)
+        cursor = next_cursor
+
+    return summaries, False, pages_read
 
 
 class AppAuth:
@@ -296,20 +557,51 @@ def required_check_has_expected_source(ruleset: JsonObject, *, context: str, app
     return False
 
 
+def _positive_delivery_integer(value: Any, description: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ContractError(f"GitHub delivery {description} is not a positive integer")
+    return cast(int, value)
+
+
+def _delivery_pair(delivery: JsonObject, description: str) -> tuple[str, str]:
+    event = delivery.get("event")
+    action = delivery.get("action")
+    if not isinstance(event, str) or not event or not isinstance(action, str) or not action:
+        raise ContractError(f"GitHub delivery {description} omitted event or action")
+    return event, action
+
+
+def _delivery_status(delivery: JsonObject, description: str) -> tuple[bool, int]:
+    redelivery = delivery.get("redelivery")
+    status_code = delivery.get("status_code")
+    if not isinstance(redelivery, bool):
+        raise ContractError(f"GitHub delivery {description} omitted Boolean redelivery metadata")
+    # GitHub's REST schema requires an integer but does not publish minimum or maximum bounds.
+    if isinstance(status_code, bool) or not isinstance(status_code, int):
+        raise ContractError(f"GitHub delivery {description} omitted integer status metadata")
+    return redelivery, status_code
+
+
 def sanitize_delivery(delivery: JsonObject) -> JsonObject:
     """Reduce a raw App delivery to metadata and payload field names."""
+    redelivery, status_code = _delivery_status(delivery, "detail")
     request = delivery.get("request")
     payload = request.get("payload") if isinstance(request, dict) else None
     shape: JsonObject = {}
     if isinstance(payload, dict):
         shape["root_keys"] = sorted(str(key) for key in payload)
         for name in (
+            "account",
+            "changes",
+            "enterprise",
             "installation",
             "organization",
             "pull_request",
+            "repositories",
             "repositories_added",
             "repositories_removed",
             "repository",
+            "requester",
             "sender",
         ):
             value = payload.get(name)
@@ -322,29 +614,106 @@ def sanitize_delivery(delivery: JsonObject) -> JsonObject:
         "action": delivery.get("action") if isinstance(delivery.get("action"), str) else None,
         "event": delivery.get("event") if isinstance(delivery.get("event"), str) else None,
         "payload_shape": shape,
-        "redelivery": delivery.get("redelivery") is True,
-        "status_code": (
-            delivery.get("status_code") if isinstance(delivery.get("status_code"), int) else None
-        ),
+        "redelivery": redelivery,
+        "status_code": status_code,
     }
 
 
-def delivery_targets_repository(delivery: JsonObject, repository_id: int) -> bool:
-    """Return whether a delivery payload identifies the disposable repository."""
+def installation_add_targets_repository(
+    delivery: JsonObject,
+    *,
+    repository_id: int,
+    installation_id: int,
+) -> bool:
+    """Validate an installation add payload and test its added-repository list."""
+    expected_repository = _positive_delivery_integer(repository_id, "fixture repository ID")
+    expected_installation = _positive_delivery_integer(
+        installation_id,
+        "fixture installation ID",
+    )
     request = delivery.get("request")
     payload = request.get("payload") if isinstance(request, dict) else None
     if not isinstance(payload, dict):
-        return False
-    repository = payload.get("repository")
-    if isinstance(repository, dict) and repository.get("id") == repository_id:
-        return True
+        raise ContractError("GitHub installation add delivery omitted its payload")
+    if payload.get("action") != "added":
+        raise ContractError("GitHub installation add delivery payload has an unexpected action")
+    installation = payload.get("installation")
+    if not isinstance(installation, dict):
+        raise ContractError("GitHub installation add delivery omitted its installation")
+    payload_installation = _positive_delivery_integer(
+        installation.get("id"),
+        "payload installation ID",
+    )
+    if payload_installation != expected_installation:
+        raise ContractError("GitHub installation add delivery targets another installation")
+
+    repository_ids: dict[str, set[int]] = {}
     for field in ("repositories_added", "repositories_removed"):
         repositories = payload.get(field)
-        if isinstance(repositories, list) and any(
-            isinstance(item, dict) and item.get("id") == repository_id for item in repositories
-        ):
-            return True
-    return False
+        if not isinstance(repositories, list):
+            raise ContractError(f"GitHub installation add delivery omitted {field}")
+        ids: set[int] = set()
+        for item in repositories:
+            if not isinstance(item, dict):
+                raise ContractError(
+                    f"GitHub installation add delivery {field} is not a list of objects"
+                )
+            item_id = _positive_delivery_integer(
+                item.get("id"),
+                f"{field} repository ID",
+            )
+            if item_id in ids:
+                raise ContractError(
+                    f"GitHub installation add delivery repeated a repository in {field}"
+                )
+            ids.add(item_id)
+        repository_ids[field] = ids
+    if repository_ids["repositories_added"] & repository_ids["repositories_removed"]:
+        raise ContractError(
+            "GitHub installation add delivery puts one repository in both change lists"
+        )
+    return expected_repository in repository_ids["repositories_added"]
+
+
+def _validate_webhook_detail(
+    summary: JsonObject,
+    detail: JsonObject,
+    *,
+    expected_pair: tuple[str, str],
+    installation_id: int,
+    repository_id: int,
+) -> None:
+    summary_id = _positive_delivery_integer(summary.get("id"), "summary ID")
+    detail_id = _positive_delivery_integer(detail.get("id"), "detail ID")
+    summary_installation = _positive_delivery_integer(
+        summary.get("installation_id"),
+        "summary installation ID",
+    )
+    detail_installation = _positive_delivery_integer(
+        detail.get("installation_id"),
+        "detail installation ID",
+    )
+    if (
+        detail_id != summary_id
+        or summary_installation != installation_id
+        or detail_installation != installation_id
+        or _delivery_pair(summary, "summary") != expected_pair
+        or _delivery_pair(detail, "detail") != expected_pair
+        or _delivery_status(summary, "summary") != _delivery_status(detail, "detail")
+    ):
+        raise ContractError("GitHub delivery detail does not match its summary")
+
+    if expected_pair[0] == "pull_request":
+        summary_repository = _positive_delivery_integer(
+            summary.get("repository_id"),
+            "summary repository ID",
+        )
+        detail_repository = _positive_delivery_integer(
+            detail.get("repository_id"),
+            "detail repository ID",
+        )
+        if summary_repository != repository_id or detail_repository != repository_id:
+            raise ContractError("GitHub delivery detail does not match its fixture repository")
 
 
 def _status_check_rule(context: str, app_id: int) -> JsonObject:
@@ -399,6 +768,114 @@ def contract_interpretation(assertions: JsonObject) -> JsonObject:
     }
 
 
+def _observation_state(assertions: JsonObject, name: str) -> str:
+    if name not in assertions:
+        return "missing"
+    value = assertions[name]
+    if value is None:
+        return "not_run"
+    if value is True:
+        return "observed_true"
+    if value is False:
+        return "observed_false"
+    return "invalid"
+
+
+def evidence_completeness(report: JsonObject, *, approver_configured: bool) -> JsonObject:
+    """Describe which evidence this report contains without interpreting false as absent."""
+    assertions_value = report.get("assertions")
+    assertions = assertions_value if isinstance(assertions_value, dict) else {}
+    names = (*CORE_OBSERVATIONS, *APP_REVIEW_OBSERVATIONS, *DIAGNOSTIC_OBSERVATIONS)
+    observations = {name: _observation_state(assertions, name) for name in names}
+    webhook_capture = report.get("webhook_capture")
+    webhook_capture_valid = False
+    incomplete_observations: list[str] = []
+    if isinstance(webhook_capture, dict):
+        incomplete_value = webhook_capture.get("incomplete_observations")
+        incomplete_candidates = (
+            [name for name in incomplete_value if isinstance(name, str)]
+            if isinstance(incomplete_value, list)
+            else []
+        )
+        webhook_capture_valid = (
+            isinstance(incomplete_value, list)
+            and len(incomplete_candidates) == len(incomplete_value)
+            and all(name in WEBHOOK_OBSERVATIONS for name in incomplete_candidates)
+            and all(name not in assertions for name in incomplete_candidates)
+            and len(set(incomplete_value)) == len(incomplete_value)
+            and type(webhook_capture.get("delivery_list_limit")) is int
+            and webhook_capture["delivery_list_limit"] == WEBHOOK_DELIVERY_LIST_LIMIT
+            and type(webhook_capture.get("delivery_page_limit")) is int
+            and webhook_capture["delivery_page_limit"] == WEBHOOK_DELIVERY_PAGE_LIMIT
+            and type(webhook_capture.get("delivery_page_size")) is int
+            and webhook_capture["delivery_page_size"] == WEBHOOK_DELIVERY_PAGE_SIZE
+            and type(webhook_capture.get("delivery_window_complete")) is bool
+            and type(webhook_capture.get("last_poll_pages_read")) is int
+            and 1 <= webhook_capture["last_poll_pages_read"] <= WEBHOOK_DELIVERY_PAGE_LIMIT
+            and type(webhook_capture.get("pages_read_total")) is int
+            and type(webhook_capture.get("poll_count")) is int
+            and 1
+            <= webhook_capture["poll_count"]
+            <= webhook_capture["pages_read_total"]
+            <= webhook_capture["poll_count"] * WEBHOOK_DELIVERY_PAGE_LIMIT
+            and webhook_capture["last_poll_pages_read"] <= webhook_capture["pages_read_total"]
+            and (not incomplete_candidates or webhook_capture["delivery_window_complete"] is False)
+        )
+        if webhook_capture_valid:
+            incomplete_observations = sorted(incomplete_candidates)
+            for name in incomplete_observations:
+                observations[name] = "incomplete"
+
+    fixture = report.get("fixture")
+    selection = fixture.get("checker_repository_selection") if isinstance(fixture, dict) else None
+    configured_required = list(CORE_OBSERVATIONS)
+    if approver_configured:
+        configured_required.extend(APP_REVIEW_OBSERVATIONS)
+    if selection == "selected":
+        configured_required.append("installation_repository_added_delivery_observed")
+
+    def observed(name: str) -> bool:
+        return observations[name] in {"observed_true", "observed_false"}
+
+    configured_observations_complete = all(observed(name) for name in configured_required)
+    full_automated_complete = webhook_capture_valid and all(
+        observed(name) for name in (*CORE_OBSERVATIONS, *APP_REVIEW_OBSERVATIONS)
+    )
+    report_result = report.get("result")
+    cleanup_succeeded = report.get("cleanup_succeeded")
+    selection_valid = selection in {"all", "selected"}
+    return {
+        "configured_run_complete": (
+            report_result == "observed"
+            and cleanup_succeeded is True
+            and selection_valid
+            and webhook_capture_valid
+            and configured_observations_complete
+        ),
+        "configured_observations_complete": configured_observations_complete,
+        "full_automated_observations_complete": full_automated_complete,
+        "webhook_capture_metadata_valid": webhook_capture_valid,
+        "configured_required": configured_required,
+        "full_automated_required": [
+            *CORE_OBSERVATIONS,
+            *APP_REVIEW_OBSERVATIONS,
+        ],
+        "observations": observations,
+        "observed_false": sorted(
+            name for name, state in observations.items() if state == "observed_false"
+        ),
+        "not_run": sorted(name for name, state in observations.items() if state == "not_run"),
+        "missing": sorted(name for name, state in observations.items() if state == "missing"),
+        "invalid": sorted(name for name, state in observations.items() if state == "invalid"),
+        "incomplete": incomplete_observations,
+        "manual_evidence_required": list(MANUAL_EVIDENCE_REQUIRED),
+        "scope": (
+            "automated GitHub fixture only; lifecycle, deployed delivery, and "
+            "authority-loss evidence remain separate"
+        ),
+    }
+
+
 def merge_attempt_was_blocked(status_code: int) -> bool:
     """Interpret a merge response, retaining an accepted merge as unsafe evidence."""
     if status_code == 200:
@@ -444,14 +921,18 @@ class Fixture:
         self.checker: RestClient | None = None
         self.approver_auth = AppAuth(config.approver) if config.approver is not None else None
         self.approver: RestClient | None = None
-        suffix = secrets.token_hex(4)
+        suffix = secrets.token_hex(16)
         self.repository_name = f"extra-codeowners-contract-{suffix}"
         self.repository = f"{config.organization}/{self.repository_name}"
         self.repository_created = False
+        self.repository_creation_attempted = False
+        self.repository_creation_outcome_unknown = False
+        self.repository_creation_state = "not_attempted"
         self.repository_id: int | None = None
         self.default_branch = ""
         self.organization_ruleset_name = f"Extra CODEOWNERS contract {self.repository_name}"
         self.organization_ruleset_id: int | None = None
+        self.organization_ruleset_creation_attempted = False
         self.report: JsonObject = {
             "schema_version": REPORT_SCHEMA_VERSION,
             "api_version": API_VERSION,
@@ -461,6 +942,7 @@ class Fixture:
                 "approver_repository_selection": None,
                 "checker_repository_selection": None,
                 "private_repository": True,
+                "repository_creation_state": self.repository_creation_state,
                 "repository_kept": config.keep_repository,
             },
             "assertions": {},
@@ -470,6 +952,51 @@ class Fixture:
     @property
     def repo_path(self) -> str:
         return f"/repos/{quote(self.repository, safe='/')}"
+
+    def _set_repository_creation_state(self, state: str) -> None:
+        self.repository_creation_state = state
+        report = getattr(self, "report", None)
+        fixture_report = report.get("fixture") if isinstance(report, dict) else None
+        if isinstance(fixture_report, dict):
+            fixture_report["repository_creation_state"] = state
+
+    def _create_repository(self) -> JsonObject:
+        sys.stdout.write(
+            "Prepared disposable repository recovery coordinates:\n"
+            f"  owner: {self.config.organization}\n"
+            f"  name: {self.repository_name}\n"
+            f"  URL: https://github.com/{self.repository}\n"
+        )
+        # The POST can succeed even when its response is lost. Make the recovery
+        # coordinates durable in redirected logs before any request can create
+        # the repository.
+        sys.stdout.flush()
+        preflight_status = self.operator.status("GET", self.repo_path)
+        if preflight_status != 404:
+            raise ContractError(
+                "disposable repository preflight did not return 404; creation was not attempted"
+            )
+
+        self.repository_creation_attempted = True
+        self.repository_creation_outcome_unknown = True
+        self._set_repository_creation_state("attempted_response_unknown")
+        created_response = self.operator.request(
+            "POST",
+            f"/orgs/{quote(self.config.organization)}/repos",
+            body={
+                "name": self.repository_name,
+                "private": True,
+                "auto_init": True,
+                "delete_branch_on_merge": False,
+                "description": "Disposable Extra CODEOWNERS live contract fixture",
+            },
+            expected=(201,),
+        )
+        # A returned response proves that GitHub accepted the request even if its body is malformed.
+        self.repository_created = True
+        self.repository_creation_outcome_unknown = False
+        self._set_repository_creation_state("response_confirmed")
+        return _object(created_response, "created repository")
 
     def _ensure_app_access(
         self,
@@ -658,6 +1185,8 @@ class Fixture:
     def _create_rulesets(self) -> None:
         assert self.repository_id is not None
         rule = _status_check_rule(self.config.check_name, self.config.checker.app_id)
+        sys.stdout.write(f"Organization ruleset recovery name: {self.organization_ruleset_name}\n")
+        self.organization_ruleset_creation_attempted = True
         org_ruleset = _object(
             self.operator.request(
                 "POST",
@@ -681,6 +1210,10 @@ class Fixture:
             "organization ruleset",
         )
         self.organization_ruleset_id = _integer(org_ruleset.get("id"), "organization ruleset ID")
+        sys.stdout.write(
+            "Created disposable organization ruleset "
+            f"{self.organization_ruleset_name!r} (ID {self.organization_ruleset_id})\n"
+        )
         repository_ruleset = _object(
             self.operator.request(
                 "POST",
@@ -772,61 +1305,123 @@ class Fixture:
     def _capture_webhook_contracts(self) -> None:
         client = self.checker_auth.jwt_client()
         try:
-            deadline = time.monotonic() + 30
-            matching: list[JsonObject] = []
-            while time.monotonic() < deadline:
-                deliveries = client.request("GET", "/app/hook/deliveries", params={"per_page": 100})
-                if isinstance(deliveries, list):
-                    summaries = [item for item in deliveries if isinstance(item, dict)]
-                    matching = [
-                        item
-                        for item in summaries
-                        if item.get("installation_id") == self.config.checker.installation_id
-                        and (
-                            item.get("repository_id") == self.repository_id
-                            or item.get("event") == "installation_repositories"
-                        )
-                    ]
-                actions = {(item.get("event"), item.get("action")) for item in matching}
-                if ("pull_request", "opened") in actions and ("pull_request", "edited") in actions:
-                    break
-                time.sleep(1)
-            selected: list[JsonObject] = []
+            deadline = time.monotonic() + WEBHOOK_CAPTURE_SECONDS
+            fixture_report = _object(self.report["fixture"], "fixture report")
+            selected_installation = fixture_report["checker_repository_selection"] == "selected"
             wanted = {
                 ("installation_repositories", "added"),
                 ("pull_request", "edited"),
                 ("pull_request", "opened"),
             }
-            seen: set[tuple[Any, Any]] = set()
-            for summary in matching:
-                key = (summary.get("event"), summary.get("action"))
-                delivery_id = summary.get("id")
-                if key not in wanted or key in seen or not isinstance(delivery_id, int):
-                    continue
-                detail = client.request("GET", f"/app/hook/deliveries/{delivery_id}")
-                if isinstance(detail, dict) and (
-                    key != ("installation_repositories", "added")
-                    or (
-                        self.repository_id is not None
-                        and delivery_targets_repository(detail, self.repository_id)
+            required = {
+                ("pull_request", "edited"),
+                ("pull_request", "opened"),
+            }
+            if selected_installation:
+                required.add(("installation_repositories", "added"))
+            contracts: dict[tuple[str, str], JsonObject] = {}
+            inspected_ids: set[int] = set()
+            poll_count = 0
+            pages_read_total = 0
+            last_poll_pages_read = 0
+            window_complete = False
+            while time.monotonic() < deadline:
+                deliveries, window_complete, last_poll_pages_read = delivery_summaries_bounded(
+                    client,
+                    list_limit=WEBHOOK_DELIVERY_LIST_LIMIT,
+                    page_limit=WEBHOOK_DELIVERY_PAGE_LIMIT,
+                    page_size=WEBHOOK_DELIVERY_PAGE_SIZE,
+                )
+                poll_count += 1
+                pages_read_total += last_poll_pages_read
+                for summary in deliveries:
+                    event = summary.get("event")
+                    if event not in {"installation_repositories", "pull_request"}:
+                        continue
+                    pair = _delivery_pair(summary, "summary")
+                    if pair not in wanted or pair in contracts:
+                        continue
+                    summary_installation = _positive_delivery_integer(
+                        summary.get("installation_id"),
+                        "summary installation ID",
                     )
-                ):
-                    selected.append(sanitize_delivery(detail))
-                    seen.add(key)
-            self.report["webhook_contracts"] = selected
+                    if summary_installation != self.config.checker.installation_id:
+                        continue
+                    if pair[0] == "pull_request":
+                        summary_repository = _positive_delivery_integer(
+                            summary.get("repository_id"),
+                            "summary repository ID",
+                        )
+                        if summary_repository != self.repository_id:
+                            continue
+                    delivery_id = _positive_delivery_integer(summary.get("id"), "summary ID")
+                    if delivery_id in inspected_ids:
+                        continue
+                    inspected_ids.add(delivery_id)
+                    detail = client.request("GET", f"/app/hook/deliveries/{delivery_id}")
+                    if not isinstance(detail, dict):
+                        raise ContractError("GitHub delivery detail is not an object")
+                    assert self.repository_id is not None
+                    _validate_webhook_detail(
+                        summary,
+                        detail,
+                        expected_pair=pair,
+                        installation_id=self.config.checker.installation_id,
+                        repository_id=self.repository_id,
+                    )
+                    if pair == ("installation_repositories", "added") and not (
+                        installation_add_targets_repository(
+                            detail,
+                            repository_id=self.repository_id,
+                            installation_id=self.config.checker.installation_id,
+                        )
+                    ):
+                        continue
+                    contracts[pair] = sanitize_delivery(detail)
+                if required <= contracts.keys():
+                    break
+                time.sleep(1)
+            seen = set(contracts)
+            self.report["webhook_contracts"] = [contracts[pair] for pair in sorted(contracts)]
             assertions = _object(self.report["assertions"], "report assertions")
-            opened_observed = ("pull_request", "opened") in seen
-            retarget_observed = ("pull_request", "edited") in seen
-            assertions["pull_request_opened_delivery_observed"] = opened_observed
-            assertions["pull_request_retarget_delivery_observed"] = retarget_observed
-            assertions["installation_repository_added_delivery_observed"] = (
-                "installation_repositories",
-                "added",
-            ) in seen
+            observation_pairs = {
+                "pull_request_opened_delivery_observed": ("pull_request", "opened"),
+                "pull_request_retarget_delivery_observed": ("pull_request", "edited"),
+            }
+            if selected_installation:
+                observation_pairs["installation_repository_added_delivery_observed"] = (
+                    "installation_repositories",
+                    "added",
+                )
+            else:
+                assertions["installation_repository_added_delivery_observed"] = None
+
+            incomplete_observations: list[str] = []
+            for observation, pair in observation_pairs.items():
+                if pair in seen:
+                    assertions[observation] = True
+                elif window_complete:
+                    assertions[observation] = False
+                else:
+                    assertions.pop(observation, None)
+                    incomplete_observations.append(observation)
+
+            self.report["webhook_capture"] = {
+                "delivery_list_limit": WEBHOOK_DELIVERY_LIST_LIMIT,
+                "delivery_page_limit": WEBHOOK_DELIVERY_PAGE_LIMIT,
+                "delivery_page_size": WEBHOOK_DELIVERY_PAGE_SIZE,
+                "delivery_window_complete": window_complete,
+                "incomplete_observations": sorted(incomplete_observations),
+                "last_poll_pages_read": last_poll_pages_read,
+                "pages_read_total": pages_read_total,
+                "poll_count": poll_count,
+            }
+            opened_observed = assertions.get("pull_request_opened_delivery_observed") is True
+            retarget_observed = assertions.get("pull_request_retarget_delivery_observed") is True
             if not opened_observed or not retarget_observed:
                 raise ContractError(
                     "the checker App did not expose both pull_request.opened and "
-                    "pull_request.edited deliveries within 30 seconds"
+                    "pull_request.edited deliveries within the bounded capture window"
                 )
         finally:
             client.close()
@@ -839,20 +1434,7 @@ class Fixture:
         )
         fixture_report["checker_repository_selection"] = checker_repository_selection
         fixture_report["approver_repository_selection"] = approver_repository_selection
-        created_response = self.operator.request(
-            "POST",
-            f"/orgs/{quote(self.config.organization)}/repos",
-            body={
-                "name": self.repository_name,
-                "private": True,
-                "auto_init": True,
-                "delete_branch_on_merge": False,
-                "description": "Disposable Extra CODEOWNERS live contract fixture",
-            },
-            expected=(201,),
-        )
-        self.repository_created = True
-        created = _object(created_response, "created repository")
+        created = self._create_repository()
         self.repository_id = _integer(created.get("id"), "repository ID")
         sys.stdout.write(f"Created disposable repository https://github.com/{self.repository}\n")
         self.default_branch = _string(created.get("default_branch"), "default branch")
@@ -959,30 +1541,51 @@ class Fixture:
 
     def close(self) -> list[str]:
         errors: list[str] = []
+
+        def record_failure(operation: str, error: Exception) -> None:
+            errors.append(f"{operation} failed ({type(error).__name__})")
+
         if self.config.keep_repository:
-            sys.stdout.write(f"Keeping fixture repository https://github.com/{self.repository}\n")
+            if getattr(self, "repository_creation_outcome_unknown", False):
+                self._set_repository_creation_state("response_unknown_retained")
+            elif getattr(self, "repository_created", False):
+                self._set_repository_creation_state("response_confirmed_retained")
+            sys.stdout.write(
+                "Cleanup disabled; retaining any created fixture repository "
+                f"https://github.com/{self.repository} and organization ruleset "
+                f"{self.organization_ruleset_name!r}\n"
+            )
         else:
             ruleset_id = self.organization_ruleset_id
-            if ruleset_id is None and self.repository_created:
+            ruleset_attempted = getattr(
+                self,
+                "organization_ruleset_creation_attempted",
+                ruleset_id is not None,
+            )
+            if ruleset_id is None and ruleset_attempted:
                 try:
                     rulesets = self.operator.request(
                         "GET",
                         f"/orgs/{quote(self.config.organization)}/rulesets",
                         params={"per_page": 100},
                     )
-                    if isinstance(rulesets, list):
-                        matching_ids = [
-                            _integer(item.get("id"), "organization ruleset ID")
-                            for item in rulesets
-                            if isinstance(item, dict)
-                            and item.get("name") == self.organization_ruleset_name
-                            and isinstance(item.get("id"), int)
-                            and not isinstance(item.get("id"), bool)
-                        ]
-                        if len(matching_ids) == 1:
-                            ruleset_id = matching_ids[0]
-                except ContractError as error:
-                    errors.append(f"organization ruleset discovery failed: {error}")
+                    if not isinstance(rulesets, list):
+                        raise ContractError("GitHub organization ruleset listing is not a list")
+                    matching_ids = [
+                        _integer(item.get("id"), "organization ruleset ID")
+                        for item in rulesets
+                        if isinstance(item, dict)
+                        and item.get("name") == self.organization_ruleset_name
+                        and isinstance(item.get("id"), int)
+                        and not isinstance(item.get("id"), bool)
+                    ]
+                    if len(matching_ids) != 1:
+                        raise ContractError(
+                            "GitHub organization ruleset recovery did not find exactly one rule"
+                        )
+                    ruleset_id = matching_ids[0]
+                except Exception as error:
+                    record_failure("organization ruleset discovery", error)
             if ruleset_id is not None:
                 try:
                     self.operator.request(
@@ -990,20 +1593,65 @@ class Fixture:
                         (f"/orgs/{quote(self.config.organization)}/rulesets/{ruleset_id}"),
                         expected=(204,),
                     )
-                except ContractError as error:
-                    errors.append(f"organization ruleset cleanup failed: {error}")
-            if self.repository_created:
+                except Exception as error:
+                    record_failure("organization ruleset cleanup", error)
+            creation_outcome_unknown = getattr(
+                self,
+                "repository_creation_outcome_unknown",
+                False,
+            )
+            if creation_outcome_unknown:
+                try:
+                    for attempt in range(REPOSITORY_RECOVERY_ATTEMPTS):
+                        recovery_status = self.operator.status("GET", self.repo_path)
+                        if recovery_status == 200:
+                            self.operator.request("DELETE", self.repo_path, expected=(204,))
+                            self.repository_creation_outcome_unknown = False
+                            self.repository_created = False
+                            self._set_repository_creation_state("response_unknown_cleaned")
+                            break
+                        if recovery_status != 404:
+                            raise ContractError(
+                                "repository recovery probe returned an unexpected status"
+                            )
+                        if attempt + 1 < REPOSITORY_RECOVERY_ATTEMPTS:
+                            time.sleep(REPOSITORY_RECOVERY_INTERVAL_SECONDS)
+                    else:
+                        # A transport failure leaves the POST outcome unknowable.
+                        # Repeated 404s reduce the chance of delayed visibility but
+                        # cannot prove that GitHub never accepted the create.
+                        raise ContractError(
+                            "repository remained absent during bounded recovery; "
+                            "manual verification is required"
+                        )
+                except Exception as error:
+                    self._set_repository_creation_state("manual_cleanup_required")
+                    sys.stderr.write(
+                        "Manual repository verification required: "
+                        f"https://github.com/{self.repository}\n"
+                    )
+                    record_failure("repository recovery", error)
+            elif getattr(self, "repository_created", False):
                 try:
                     self.operator.request("DELETE", self.repo_path, expected=(204,))
-                except ContractError as error:
-                    errors.append(f"repository cleanup failed: {error}")
-        if self.checker is not None:
-            self.checker.close()
-        if self.approver is not None:
-            self.approver.close()
-        if self.repository_selection is not None:
-            self.repository_selection.close()
-        self.operator.close()
+                    self.repository_created = False
+                    self._set_repository_creation_state("response_confirmed_cleaned")
+                except Exception as error:
+                    self._set_repository_creation_state("manual_cleanup_required")
+                    record_failure("repository cleanup", error)
+        clients = (
+            ("checker client close", getattr(self, "checker", None)),
+            ("approver client close", getattr(self, "approver", None)),
+            ("repository-selection client close", getattr(self, "repository_selection", None)),
+            ("operator client close", self.operator),
+        )
+        for operation, client in clients:
+            if client is None:
+                continue
+            try:
+                client.close()
+            except Exception as error:
+                record_failure(operation, error)
         return errors
 
 
@@ -1038,12 +1686,38 @@ def main() -> int:
         exit_code = 1
     else:
         report["result"] = "observed"
-    cleanup_errors = fixture.close()
-    report["cleanup_succeeded"] = not cleanup_errors and not config.keep_repository
+    try:
+        cleanup_errors = fixture.close()
+    except Exception as error:
+        cleanup_errors = [f"fixture cleanup failed ({type(error).__name__})"]
+    fixture_report = report.get("fixture")
+    repository_creation_state = (
+        fixture_report.get("repository_creation_state")
+        if isinstance(fixture_report, dict)
+        else None
+    )
+    if (
+        not config.keep_repository
+        and repository_creation_state not in REPOSITORY_CLEANUP_STATES
+        and not cleanup_errors
+    ):
+        cleanup_errors.append("repository cleanup accounting failed (ContractError)")
+    report["cleanup_succeeded"] = (
+        not cleanup_errors
+        and not config.keep_repository
+        and repository_creation_state in REPOSITORY_CLEANUP_STATES
+    )
     if cleanup_errors:
         report["cleanup_failure_count"] = len(cleanup_errors)
         for cleanup_error in cleanup_errors:
             sys.stderr.write(f"{cleanup_error}\n")
+        exit_code = 1
+    completeness = evidence_completeness(
+        report,
+        approver_configured=config.approver is not None,
+    )
+    report["evidence_completeness"] = completeness
+    if exit_code == 0 and completeness.get("configured_run_complete") is not True:
         exit_code = 1
     config.report_file.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
     sys.stdout.write(f"Wrote sanitized report to {config.report_file}\n")
