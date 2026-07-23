@@ -34,12 +34,14 @@ API `403` or `429` responses, and every unexplained long-lived
 
 A replica that observes another process holding the reconciler lease does not
 record an attempt. Shutdown before a scan begins does not record one either.
-An election error is a failure. A partial attempt means the process lost its
-lease, an active scan was interrupted by graceful shutdown, or the process
-could not safely scan an installation or queue its pull requests. This includes
-GitHub request failures, invalid GitHub responses, and database errors while
-adding queue jobs. Work from healthy installations may still be queued, but a
-partial attempt does not refresh the last-success gauge.
+When shutdown wins during election, the process releases any lease it just
+acquired; a database error during acquisition or release is an election
+failure. A partial attempt means the process lost its lease, an active scan was
+interrupted by graceful shutdown, or the process could not safely scan an
+installation or queue its pull requests. This includes GitHub request failures,
+invalid GitHub responses, and database errors while adding queue jobs. Work
+from healthy installations may still be queued, but a partial attempt does not
+refresh the last-success gauge.
 
 A malformed top-level installation response fails the whole attempt before the
 service processes any installation. Once that list passes validation, a

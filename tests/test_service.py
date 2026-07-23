@@ -1774,9 +1774,9 @@ async def test_shutdown_winning_during_election_does_not_report_an_attempt(
     stop = asyncio.Event()
     store = migrated_store(f"sqlite:///{tmp_path / 'reconcile-stopped-during-election.db'}")
     event_loop = asyncio.get_running_loop()
+    original_acquire = store.acquire_service_lease
 
     def acquire_then_stop(name: str, owner: str, lease_seconds: int) -> bool:
-        del name, owner, lease_seconds
         stop_visible = threading.Event()
 
         def mark_stopped() -> None:
@@ -1785,10 +1785,12 @@ async def test_shutdown_winning_during_election_does_not_report_an_attempt(
 
         event_loop.call_soon_threadsafe(mark_stopped)
         assert stop_visible.wait(timeout=1)
-        return True
+        return original_acquire(name, owner, lease_seconds)
 
     acquire = MagicMock(side_effect=acquire_then_stop)
     monkeypatch.setattr(store, "acquire_service_lease", acquire)
+    release = MagicMock(wraps=store.release_service_lease)
+    monkeypatch.setattr(store, "release_service_lease", release)
     github = FakeGitHub(changed_path="uv.lock")
     github.list_installations = AsyncMock()  # type: ignore[attr-defined]
     reconciler = Reconciler(settings(), github, store, "reconciler")  # type: ignore[arg-type]
@@ -1800,9 +1802,54 @@ async def test_shutdown_winning_during_election_does_not_report_an_attempt(
     await reconciler.run_iteration(stop)
 
     acquire.assert_called_once()
+    release.assert_called_once_with("open-pr-reconciler", "reconciler")
+    assert original_acquire("open-pr-reconciler", "replacement", 300) is True
     github.list_installations.assert_not_awaited()  # type: ignore[attr-defined]
     attempts.labels.assert_not_called()
     last_success.set_to_current_time.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_lease_release_error_reports_election_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stop = asyncio.Event()
+    store = migrated_store(f"sqlite:///{tmp_path / 'reconcile-release-failure.db'}")
+    event_loop = asyncio.get_running_loop()
+    original_acquire = store.acquire_service_lease
+
+    def acquire_then_stop(name: str, owner: str, lease_seconds: int) -> bool:
+        stop_visible = threading.Event()
+
+        def mark_stopped() -> None:
+            stop.set()
+            stop_visible.set()
+
+        event_loop.call_soon_threadsafe(mark_stopped)
+        assert stop_visible.wait(timeout=1)
+        return original_acquire(name, owner, lease_seconds)
+
+    monkeypatch.setattr(store, "acquire_service_lease", acquire_then_stop)
+    monkeypatch.setattr(
+        store,
+        "release_service_lease",
+        MagicMock(side_effect=RuntimeError("database unavailable")),
+    )
+    github = FakeGitHub(changed_path="uv.lock")
+    github.list_installations = AsyncMock()  # type: ignore[attr-defined]
+    reconciler = Reconciler(settings(), github, store, "reconciler")  # type: ignore[arg-type]
+    attempts = MagicMock()
+    last_success = MagicMock()
+    monkeypatch.setattr(service_module, "RECONCILIATIONS", attempts)
+    monkeypatch.setattr(service_module, "RECONCILIATION_LAST_SUCCESS", last_success)
+
+    await reconciler.run_iteration(stop)
+
+    attempts.labels.assert_called_once_with("failure")
+    attempts.labels.return_value.inc.assert_called_once_with()
+    last_success.set_to_current_time.assert_not_called()
+    github.list_installations.assert_not_awaited()  # type: ignore[attr-defined]
+    assert original_acquire("open-pr-reconciler", "replacement", 300) is False
 
 
 @pytest.mark.asyncio

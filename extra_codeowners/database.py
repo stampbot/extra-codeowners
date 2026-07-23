@@ -2073,6 +2073,17 @@ class QueueStore:
                 continue
         return False
 
+    def release_service_lease(self, name: str, owner: str) -> bool:
+        """Release a named lease only while it still belongs to the caller."""
+        with self.session() as session:
+            released = session.execute(
+                delete(ServiceLease).where(
+                    ServiceLease.name == name,
+                    ServiceLease.owner == owner,
+                )
+            )
+            return getattr(released, "rowcount", 0) == 1
+
     def pending_count(self) -> int:
         """Return queued and leased pending work count."""
         with self._sessions() as session:

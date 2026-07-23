@@ -1995,6 +1995,11 @@ class Reconciler:
         if not acquired:
             return None
         if stop_event.is_set():
+            await asyncio.to_thread(
+                self.store.release_service_lease,
+                "open-pr-reconciler",
+                self.owner,
+            )
             return None
         done = asyncio.Event()
         lost = asyncio.Event()

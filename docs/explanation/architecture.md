@@ -281,11 +281,13 @@ the last-success timestamp. The organization-policy repository is never
 included in reconciliation.
 
 Shutdown before a scan begins records no attempt, including when election is
-still in progress. Shutdown during a scan records a partial result. Once a scan
-begins, either shutdown or lease loss stops further discovery. The reconciler
-checks both conditions between retention operations, after each GitHub
-response and before the next page, and before each repository scan and queue
-insertion. An insertion that already committed remains queued. After a
+still in progress. If that election acquired the singleton lease, the process
+releases it before returning. A release error is an election failure rather
+than an idle shutdown. Shutdown during a scan records a partial result. Once a
+scan begins, either shutdown or lease loss stops further discovery. The
+reconciler checks both conditions between retention operations, after each
+GitHub response and before the next page, and before each repository scan and
+queue insertion. An insertion that already committed remains queued. After a
 boundary observes either condition, no later reconciliation discovery or queue
 operation starts; lease-heartbeat shutdown and final bookkeeping still run.
 The reconciler does not cancel the GitHub or database operation already in
