@@ -59,6 +59,7 @@ def test_uv_version_is_identical_locally_in_containers_and_in_workflows() -> Non
     for script in (
         "build_release_spine.py",
         "container_evidence.py",
+        "release_controller.py",
         "release_readiness.py",
         "release_spine.py",
     ):
@@ -79,6 +80,16 @@ def test_dependency_audit_uses_locked_mode_without_frozen_mode() -> None:
     assert "--no-cache" in workflow
     assert "--no-python-downloads" in workflow
     assert "--preview-features audit-command" in workflow
+
+
+def test_ci_checks_lockfile_freshness_outside_frozen_mode() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    lock_check = workflow.split("      - name: Verify lockfile is current\n", 1)[1].split(
+        "\n      - name:", 1
+    )[0]
+
+    assert 'UV_FROZEN: "false"' in lock_check
+    assert "run: uv lock --check" in lock_check
 
 
 def test_pinned_uv_exposes_the_scheduled_audit_interface_without_network() -> None:

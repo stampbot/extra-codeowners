@@ -44,6 +44,12 @@ jobs:
           enable-cache: true
           cache-dependency-glob: uv.lock
 
+      - name: Verify lockfile is current
+        env:
+          # The workflow-wide frozen mode skips freshness resolution.
+          UV_FROZEN: "false"
+        run: uv lock --check
+
       - name: Install locked dependencies
         run: uv sync --all-groups --frozen
 
@@ -59,6 +65,7 @@ jobs:
           .github/scripts/build_python_artifacts.py
           .github/scripts/build_release_spine.py
           .github/scripts/container_evidence.py
+          .github/scripts/release_controller.py
           .github/scripts/release_spine.py
           .github/scripts/release_readiness.py
 

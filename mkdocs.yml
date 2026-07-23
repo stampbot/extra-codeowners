@@ -49,6 +49,7 @@ nav:
       - Project status: reference/project-status.md
       - Configuration: reference/configuration.md
       - Checks and evaluation: reference/checks.md
+      - DCO evidence contract: reference/dco-evidence.md
       - Command line: reference/cli.md
       - GitHub permissions and events: reference/github-permissions.md
       - HTTP API: reference/http-api.md
@@ -56,6 +57,7 @@ nav:
       - Container evidence policy: reference/container-evidence-policy.md
       - Raw OCI release-spine format: reference/release-spine-format.md
       - Container evidence release contract: reference/container-evidence-release-contract.md
+      - Immutable release controller contract: reference/immutable-release-controller.md
   - Explanation:
       - Native CODEOWNERS comparison: explanation/native-codeowners.md
       - Architecture: explanation/architecture.md
