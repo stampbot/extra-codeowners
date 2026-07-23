@@ -63,10 +63,12 @@ jobs:
         run: >-
           uv run mypy extra_codeowners tests
           .github/scripts/build_python_artifacts.py
+          .github/scripts/build_python_distribution_spine.py
           .github/scripts/build_release_spine.py
           .github/scripts/container_evidence.py
           .github/scripts/github_release_api.py
           .github/scripts/immutable_release_preflight.py
+          .github/scripts/python_distribution_spine.py
           .github/scripts/release_controller.py
           .github/scripts/release_spine.py
           .github/scripts/release_readiness.py

@@ -411,14 +411,25 @@ trusts artifacts from a different workflow run.
 
 ```mermaid
 flowchart LR
-    CI[Pull request or main CI] --> CIP[Reusable Python proof]
-    CIP --> CIC[CI candidates and evidence]
-    Manual[Manual dispatch] --> MP[Reusable Python proof]
-    MP --> MA[Five-file proof artifact]
-    Tag[Validated tag] --> TP[Reusable Python proof]
-    TP --> Scan[Read-only candidate scan]
+    CI[Pull request or main CI] --> Proof[Reusable Python proof]
+    Manual[Manual dispatch] --> Proof
+    Tag[Validated tag] --> Proof
+    Proof --> Selected[Selected five-file artifact]
+    Proof --> Raw[Verified raw spine and record]
+    Selected --> CIC[CI containers and evidence]
+    Selected --> Scan[Read-only tagged candidate scan]
+    Raw --> Stop[No downstream consumer yet]
     Gate[Unconditional publication blocker] -. prevents .-> Publish[Privileged release jobs]
 ```
+
+Each caller gets a separate proof in its own run. CI keeps its required-check
+wrapper, and the tagged scan downloads the selected artifact by immutable ID.
+The reusable workflow also converts that selection into a [raw
+Python-distribution
+spine](../reference/python-distribution-spine-format.md). A separate read-only
+job verifies the spine and its record without opening the wheel or source
+distribution. No container, evidence, or publication job consumes the raw
+pair yet.
 
 The current container evidence binds CPython's top-level identity to exact
 runtime files and retains its pinned recipe, source archive, and source-carried

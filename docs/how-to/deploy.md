@@ -49,6 +49,17 @@ tagged candidate scan creates and verifies a fresh proof in the same workflow
 run. Neither path publishes an image or gives an operator a supported way to
 build one.
 
+The reusable workflow also emits a [raw spine and canonical
+record](../reference/python-distribution-spine-format.md). A read-only job
+verifies that pair without opening the wheel or source-distribution archive.
+No downstream release-evidence or publication job consumes it. Issue
+[#32](https://github.com/stampbot/extra-codeowners/issues/32) still tracks the
+release handoff.
+
+Do not replace this proof with a generic ZIP extraction, an unverified wheel,
+empty Docker build arguments, or a project build that relies on ambient
+configuration.
+
 CI also records CPython as a top-level runtime component. The evidence binds
 the interpreter to exact platform identity files and retains the pinned build
 recipe, source archive, source-carried license, and historical ineffective
