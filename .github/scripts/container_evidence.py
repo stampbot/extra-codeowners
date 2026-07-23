@@ -100,6 +100,8 @@ MAX_HISTORICAL_RECORD_ENTRIES = MAX_RECORD_ENTRIES
 MAX_CYCLONEDX_COMPONENTS = 10_000
 MAX_CYCLONEDX_HASHES = 16
 MAX_CYCLONEDX_LICENSES = 16
+MAX_CYCLONEDX_OBSERVATION_FIELDS = 16
+MAX_CYCLONEDX_OBSERVATION_VALUES = 16
 MAX_COMPONENT_FIELD_LENGTH = 512
 MAX_COMPONENT_KEY_LENGTH = 2 * MAX_COMPONENT_FIELD_LENGTH + 32
 MAX_LICENSE_FIELD_LENGTH = 16 * 1024
@@ -599,8 +601,18 @@ def checked_cyclonedx_scalar(
     return checked
 
 
-def validate_bounded_observation_json(value: object, source: str) -> None:
-    """Bound raw review-sensitive JSON retained from an upstream SBOM."""
+def validate_bounded_observation_json(
+    value: object,
+    source: str,
+    *,
+    component_children: bool = False,
+) -> None:
+    """Bound raw review-sensitive JSON retained from an upstream SBOM.
+
+    The component walker owns a direct ``components`` child array. All other
+    arrays keep the smaller observation limit, including arrays nested below
+    extension fields that happen to use the same name.
+    """
 
     if value is None or isinstance(value, bool):
         return
@@ -623,16 +635,22 @@ def validate_bounded_observation_json(value: object, source: str) -> None:
             raise EvidenceError(f"CycloneDX {source} is not a bounded text value")
         return
     if isinstance(value, list):
-        if len(value) > MAX_CYCLONEDX_LICENSES:
+        if len(value) > MAX_CYCLONEDX_OBSERVATION_VALUES:
             raise EvidenceError(f"CycloneDX {source} has too many values")
         for index, item in enumerate(value):
             validate_bounded_observation_json(item, f"{source}[{index}]")
         return
     if isinstance(value, dict):
-        if len(value) > MAX_CYCLONEDX_LICENSES:
+        if len(value) > MAX_CYCLONEDX_OBSERVATION_FIELDS:
             raise EvidenceError(f"CycloneDX {source} has too many fields")
         for key, item in value.items():
             checked_cyclonedx_scalar(key, f"{source} key")
+            if component_children and key == "components":
+                if not isinstance(item, list):
+                    raise EvidenceError(f"CycloneDX {source} has invalid nested components")
+                if len(item) > MAX_CYCLONEDX_COMPONENTS:
+                    raise EvidenceError(f"CycloneDX {source} has too many nested components")
+                continue
             validate_bounded_observation_json(item, f"{source}.{key}")
         return
     raise EvidenceError(f"CycloneDX {source} has an unsupported JSON value")
@@ -887,7 +905,11 @@ def parse_cyclonedx_sbom(content: bytes, path: str) -> dict[str, Any]:
             raise EvidenceError(f"embedded CycloneDX SBOM has too many components: {path}")
         projection, bom_ref = cyclonedx_component_observation(raw, location)
         assert isinstance(raw, dict)
-        validate_bounded_observation_json(raw, f"raw component in {location}")
+        validate_bounded_observation_json(
+            raw,
+            f"raw component in {location}",
+            component_children=True,
+        )
         flattened.append((projection, bom_ref, metadata_root, top_level, raw))
         children = raw.get("components", [])
         if not isinstance(children, list):
