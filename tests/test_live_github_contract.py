@@ -1400,7 +1400,7 @@ def test_repository_recovery_coordinates_are_flushed_before_requests(
             expected=expected,
         )
 
-    monkeypatch.setattr(contract_module.sys, "stdout", BufferedOutput())
+    monkeypatch.setattr("tools.live_github_contract.sys.stdout", BufferedOutput())
     monkeypatch.setattr(operator, "status", status)
     monkeypatch.setattr(operator, "request", request)
     fixture = repository_creation_fixture(operator)
@@ -1425,7 +1425,7 @@ def test_repository_creation_recovers_an_unknown_accepted_request(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     sleeps: list[int] = []
-    monkeypatch.setattr(contract_module.time, "sleep", sleeps.append)
+    monkeypatch.setattr("tools.live_github_contract.time.sleep", sleeps.append)
     operator = StubClient([404, 404, 404, 200], [create_error, None])
     fixture = repository_creation_fixture(operator)
 
@@ -1461,7 +1461,7 @@ def test_repository_creation_absence_remains_manual_after_bounded_recovery(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     sleeps: list[int] = []
-    monkeypatch.setattr(contract_module.time, "sleep", sleeps.append)
+    monkeypatch.setattr("tools.live_github_contract.time.sleep", sleeps.append)
     operator = StubClient(
         [404] * (contract_module.REPOSITORY_RECOVERY_ATTEMPTS + 1),
         [httpx.ReadTimeout("private transport detail")],
@@ -1498,7 +1498,7 @@ def test_main_never_reports_cleanup_success_after_ambiguous_absence(
     )
     fixture = repository_creation_fixture(operator)
     fixture.config = runtime
-    monkeypatch.setattr(contract_module.time, "sleep", lambda _: None)
+    monkeypatch.setattr("tools.live_github_contract.time.sleep", lambda _: None)
     monkeypatch.setattr(Config, "from_environment", classmethod(lambda cls: runtime))
     monkeypatch.setattr(contract_module, "Fixture", lambda supplied: fixture)
     monkeypatch.setattr(fixture, "run", fixture._create_repository)
