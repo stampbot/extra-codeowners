@@ -4,6 +4,11 @@ This reference defines the minimum evidence contract for a future supported
 Extra CODEOWNERS container release. It is an acceptance boundary, not a current
 asset list or a runnable verification procedure.
 
+The [raw OCI release spine](release-spine-format.md) now freezes one internal
+transport: a canonical record and an opaque byte-range file for exactly two
+platforms. CI proves that transport with a synthetic fixture. The spine is not
+a release asset, a recipient evidence archive, or permission to publish.
+
 !!! danger "No current release satisfies this contract"
     Extra CODEOWNERS does not publish a supported container release today. Do
     not substitute pull-request artifacts, manual-run artifacts, or the old
@@ -23,6 +28,11 @@ contract:
 | [#18](https://github.com/stampbot/extra-codeowners/issues/18) | Complete notice and corresponding-source records for the four native-wheel owners that remain after Greenlet, MarkupSafe, and SQLAlchemy. |
 | [#28](https://github.com/stampbot/extra-codeowners/issues/28) | Separate unprivileged collection from publication authority, freeze the wire format, and ship an adversarially tested recipient verifier and how-to. |
 | [#32](https://github.com/stampbot/extra-codeowners/issues/32) | Retain the reproducible Python proof in release evidence and pass it to the isolated publication jobs, which must bind the exact selected wheel to the installed runtime. |
+
+The raw spine includes an adversarially tested transport verifier. It does not
+finish [#28](https://github.com/stampbot/extra-codeowners/issues/28), which
+still requires a separate recipient verifier and a runnable how-to for the
+final release assets.
 
 The collector has completed the CPython identity and source portion of #18 and
 the Greenlet, MarkupSafe, and SQLAlchemy native-owner portions on both
@@ -276,6 +286,16 @@ Rootless parse phases must have no network, no secrets, no Docker socket, an
 immutable input, read-only mounts where practical, and explicit memory, CPU,
 process, file-count, and disk quotas. The privileged phase accepts only
 bounded, schema-validated, digest-addressed outputs from that boundary.
+
+The raw spine can carry OCI objects across the unprivileged-to-privileged
+boundary, but it does not complete the boundary by itself. The root OCI index
+digest must come from the pinned build action, outside the spine record. A
+future publisher must consume only the bounded object snapshot returned from
+the descriptor retained by successful spine verification. The verifier hashes
+the entire snapshot before exposing it and never rereads the source for that
+snapshot. A publisher must not reopen a verified path or finalize a manifest,
+tag, release, or other reference until the verification context exits
+successfully.
 
 ## Retention and mirror behavior
 
