@@ -671,7 +671,7 @@ def cyclonedx_component_observation(value: object, source: str) -> tuple[dict[st
     if not isinstance(raw_hashes, list) or len(raw_hashes) > MAX_CYCLONEDX_HASHES:
         raise EvidenceError(f"CycloneDX component has invalid hashes: {source}")
     hashes: list[dict[str, str]] = []
-    seen_hashes: set[tuple[str, str]] = set()
+    seen_hash_algorithms: set[str] = set()
     for index, raw_hash in enumerate(raw_hashes):
         record = require_exact_fields(
             raw_hash,
@@ -686,10 +686,10 @@ def cyclonedx_component_observation(value: object, source: str) -> tuple[dict[st
         )
         if re.fullmatch(r"[0-9A-Fa-f]+", content) is None or len(content) % 2:
             raise EvidenceError(f"CycloneDX component has an invalid hash: {source}")
-        identity = (algorithm, content)
-        if identity in seen_hashes:
-            raise EvidenceError(f"CycloneDX component repeats a hash: {source}")
-        seen_hashes.add(identity)
+        algorithm_identity = algorithm.casefold()
+        if algorithm_identity in seen_hash_algorithms:
+            raise EvidenceError(f"CycloneDX component repeats a hash algorithm: {source}")
+        seen_hash_algorithms.add(algorithm_identity)
         hashes.append({"alg": algorithm, "content": content})
     hashes.sort(key=lambda item: (item["alg"], item["content"]))
 

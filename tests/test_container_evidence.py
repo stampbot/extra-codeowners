@@ -3991,6 +3991,33 @@ def test_native_component_v7_crate_review_binds_purl_hash_and_normalized_license
     with pytest.raises(evidence.EvidenceError, match="crate review differs"):
         evidence.validate_native_component_policy_schema(wrong_hash)
 
+    conflicting_hash = copy.deepcopy(policy)
+    for records in conflicting_hash["native_component_coverage"].values():
+        owner = records[0]
+        sbom = owner["sboms"][0]
+        sbom["observation"]["components"][0]["hashes"].append(
+            {"alg": "SHA-256", "content": "d" * 64}
+        )
+        body = {
+            field: sbom["observation"][field]
+            for field in (
+                "metadata_component",
+                "metadata_root_echo",
+                "upstream_invalid_duplicate_bom_ref",
+                "components",
+            )
+        }
+        sbom["observation"]["observation_sha256"] = evidence.sha256_bytes(
+            evidence.canonical_json(body)
+        )
+        rebind_policy_observation_digest(
+            owner,
+            sbom_path=sbom["path"],
+            observation_sha256=sbom["observation"]["observation_sha256"],
+        )
+    with pytest.raises(evidence.EvidenceError, match="repeats a hash algorithm"):
+        evidence.validate_native_component_policy_schema(conflicting_hash)
+
     wrong_observed_license = copy.deepcopy(policy)
     for records in wrong_observed_license["native_component_coverage"].values():
         owner = records[0]
@@ -7326,6 +7353,19 @@ def test_real_cffi_libffi_candidate_cannot_replace_missing_build_provenance() ->
     assert evidence.sha256_bytes(wheel) == (
         "dbf7c7a88e2bac086f06d14577332760bdeecc42bdec8ac4077f6260557d9326"
     )
+    libffi_notice = (
+        Path(__file__).parent
+        / "fixtures"
+        / "container_evidence"
+        / "v7"
+        / "real"
+        / "libffi-3.4.6.LICENSE"
+    ).read_bytes()
+    assert evidence.sha256_bytes(libffi_notice) == (
+        "67894089811f93fca47a76f85e017da6f8582d4ba0905963c6e0f1ad6df7a195"
+    )
+    assert b"Copyright (c) 1996-2024  Anthony Green, Red Hat, Inc and others." in libffi_notice
+    assert b"The above copyright notice and this permission notice shall be" in libffi_notice
     with zipfile.ZipFile(io.BytesIO(wheel)) as archive:
         members = archive.namelist()
         assert not any(".dist-info/sboms/" in member for member in members)
@@ -7542,6 +7582,41 @@ def test_cyclonedx_projection_preserves_roots_hashes_and_license_observations() 
         "changed-license.cdx.json",
     )
     assert changed["observation_sha256"] != parsed["observation_sha256"]
+
+
+@pytest.mark.parametrize(
+    "hashes",
+    (
+        [
+            {"alg": "SHA-256", "content": "a" * 64},
+            {"alg": "SHA-256", "content": "b" * 64},
+        ],
+        [
+            {"alg": "SHA-256", "content": "a" * 64},
+            {"alg": "sha-256", "content": "b" * 64},
+        ],
+        [
+            {"alg": "SHA-256", "content": "a" * 64},
+            {"alg": "SHA-256", "content": "a" * 64},
+        ],
+    ),
+)
+def test_cyclonedx_projection_rejects_duplicate_hash_algorithms(
+    hashes: list[dict[str, str]],
+) -> None:
+    component = {
+        "type": "library",
+        "name": "demo-crate",
+        "version": "1.2.3",
+        "purl": "pkg:cargo/demo-crate@1.2.3",
+        "hashes": hashes,
+    }
+
+    with pytest.raises(evidence.EvidenceError, match="repeats a hash algorithm"):
+        evidence.parse_cyclonedx_sbom(
+            cyclonedx_sbom(components=[component]),
+            "duplicate-hash-algorithm.cdx.json",
+        )
 
 
 def test_cyclonedx_projection_retains_one_exact_metadata_root_echo() -> None:

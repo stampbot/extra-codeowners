@@ -218,6 +218,11 @@ The collector parses every CycloneDX JSON document below a wheel's
 - declared hash records
 - declared licenses
 
+The collector rejects two hash records that name the same algorithm, even when
+their spelling differs only by case. Without this check, one component could
+carry the expected source digest and a conflicting digest. Source binding would
+find the expected value and ignore the conflict.
+
 The observation also has a digest over its canonical parsed content. Policy
 references include that digest and the installed SBOM path, so a reference
 can't drift to a similar component in another document.

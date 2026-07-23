@@ -306,6 +306,10 @@ An SBOM record pins `path`, `sha256`, its exact `observation`, and a
 - the sorted component occurrences, including `type`, `name`, `version`,
   `purl`, `bom_ref`, hashes, and raw license observations.
 
+Each occurrence may contain at most one digest for a hash algorithm. Duplicate
+algorithm names, including case-only aliases, fail validation because they make
+source binding ambiguous.
+
 Occurrence references contain `sbom_path`, `observation_sha256`,
 `identity_kind`, and `purl`; a `bom-ref` identity also contains `bom_ref`.
 A nonempty `bom-ref` is the document-local identity. The PURL is the fallback

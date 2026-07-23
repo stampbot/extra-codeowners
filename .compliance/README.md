@@ -98,6 +98,11 @@ Four owners remain open, so `source_completeness.complete` is `false`.
 `distribution_approval.approved` also remains `false`. The ledger records
 progress. It does not grant permission to distribute the image.
 
+The repository retains one CFFI wheel as a hostile test fixture. Its adjacent
+libffi 3.4.6 license preserves the notice required for that copy, but it does
+not identify the exact libffi archive used to build the wheel. The
+`unproven-libffi-build-input` omission therefore stays open.
+
 ## Raw OCI release spine
 
 CI also checks the [raw OCI release-spine format](../docs/reference/release-spine-format.md).
