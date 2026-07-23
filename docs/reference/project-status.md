@@ -1,6 +1,6 @@
 # Project status
 
-Last verified: 2026-07-21.
+Last verified: 2026-07-22.
 
 Extra CODEOWNERS is under active development. You can run the source as a
 self-hosted GitHub App in a disposable environment, but the project does not
@@ -19,6 +19,21 @@ The repository contains:
 
 The source is useful for evaluation and development. It is not a supported
 release.
+
+## DCO hardening status
+
+The source also contains a bounded, side-effect-free DCO evaluator and the
+read-only GitHub client methods it needs. The evaluator uses an exact
+base-to-head comparison and returns a decision bound to the repository, pull
+request, base SHA, and head SHA.
+
+This path is dormant: no service or workflow calls it, and it cannot publish a
+required check. The checked-in DCO workflow remains active, so a pull request
+can still change the checker that evaluates that same pull request.
+
+The [DCO evidence contract](dco-evidence.md) records the new validation layer
+and the work that must surround it. [Issue #40][issue-40] tracks independent
+execution, publication guards, and live repository-rule testing.
 
 ## Not available yet
 
@@ -71,3 +86,5 @@ has an availability date.
 
 Follow the linked issues for current evidence and decisions. This page should
 change whenever one of these availability or safety claims changes.
+
+[issue-40]: https://github.com/stampbot/extra-codeowners/issues/40
