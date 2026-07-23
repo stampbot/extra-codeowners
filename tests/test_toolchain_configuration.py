@@ -164,7 +164,7 @@ def test_reusable_workflow_proves_one_native_cross_architecture_distribution() -
         encoding="utf-8"
     )
     proof = workflow.split("  native-proof:\n", 1)[1].split("  select:\n", 1)[0]
-    selector = workflow.split("  select:\n", 1)[1]
+    selector = workflow.split("  select:\n", 1)[1].split("  raw-producer:\n", 1)[0]
 
     assert "  workflow_call:\n" in workflow
     assert "  workflow_dispatch:\n" in workflow
@@ -174,7 +174,7 @@ def test_reusable_workflow_proves_one_native_cross_architecture_distribution() -
         "wheel-sha256",
         "selection-record-sha256",
     ):
-        assert f"value: ${{{{ jobs.select.outputs.{output} }}}}" in workflow
+        assert f"value: ${{{{ jobs.raw-consumer.outputs.{output} }}}}" in workflow
 
     assert "name: Native proof (${{ matrix.architecture }})" in proof
     assert proof.count("runner: ubuntu-24.04\n") == 1

@@ -1028,7 +1028,12 @@ def test_container_test_stage_carries_spine_scripts() -> None:
     dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
     test_stage = dockerfile.split("FROM builder AS test\n", 1)[1].split("\nFROM ", 1)[0]
 
-    for script in ("build_release_spine.py", "release_spine.py"):
+    for script in (
+        "build_python_distribution_spine.py",
+        "build_release_spine.py",
+        "python_distribution_spine.py",
+        "release_spine.py",
+    ):
         assert f"!.github/scripts/{script}" in dockerignore
         assert f".github/scripts/{script}" in test_stage
 

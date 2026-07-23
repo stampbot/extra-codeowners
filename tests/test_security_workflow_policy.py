@@ -295,7 +295,7 @@ def test_reusable_python_distribution_workflow_has_only_read_authority() -> None
         "pull_request_target:",
     ):
         assert forbidden not in source
-    assert source.count("timeout-minutes:") == 2
+    assert source.count("timeout-minutes:") == 4
     assert source.count("persist-credentials: false") == source.count("actions/checkout@")
     for line in source.splitlines():
         if "uses:" in line:

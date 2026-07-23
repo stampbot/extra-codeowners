@@ -9,6 +9,12 @@ transport: a canonical record and an opaque byte-range file for exactly two
 platforms. CI proves that transport with a synthetic fixture. The spine is not
 a release asset, a recipient evidence archive, or permission to publish.
 
+The [raw Python-distribution
+spine](python-distribution-spine-format.md) similarly carries the selected
+five-file application proof without archive parsing in its read-only consumer.
+The reusable workflow verifies that pair but does not retain it as release
+evidence or pass it to a publication job.
+
 !!! danger "No current release satisfies this contract"
     Extra CODEOWNERS does not publish a supported container release today. Do
     not substitute pull-request artifacts, manual-run artifacts, or the old

@@ -53,6 +53,14 @@ requires the two architecture proofs to be byte-identical. It then selects one
 exact five-file proof. Both container candidates install that selected wheel
 without rebuilding it.
 
+The reusable proof workflow also packs those five selected files into a [raw
+Python-distribution
+spine](../reference/python-distribution-spine-format.md) and a canonical
+record. A separate read-only job verifies both raw artifacts by immutable ID
+without opening the wheel or source distribution. That pair remains an
+internal transport proof. No downstream release-evidence or publication job
+retains or consumes it.
+
 Stable OCI labels bind the source revision, wheel SHA-256, and selection-record
 SHA-256. Run metadata separately binds the GitHub Actions artifact ID and
 archive digest. The run-scoped identity stays out of the image labels, so a

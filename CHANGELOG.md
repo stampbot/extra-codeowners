@@ -55,6 +55,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Rel
 - Reproducible uv and mise development tasks.
 - A reusable, manually runnable Python distribution proof shared by CI and the
   read-only tagged candidate scan.
+- A bounded raw Python-distribution spine and canonical record, verified through
+  direct `archive: false` artifacts without archive parsing in the consumer.
 - A bounded raw OCI release-spine builder and standalone verifier, with a
   two-file `archive: false` CI transport proof, immutable pre-exposure object
   verification, and no publication authority.
