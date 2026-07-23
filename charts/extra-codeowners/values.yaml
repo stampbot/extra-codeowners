@@ -194,7 +194,7 @@ networkPolicy:
   # networkPolicy.egress contains complete Kubernetes NetworkPolicy egress rules.
   egress: []
 
-# terminationGracePeriodSeconds allows leased work to stop before pod termination.
+# The 30-second default leaves cleanup time after one 20-second GitHub request.
 terminationGracePeriodSeconds: 30
 
 # priorityClassName assigns a pre-existing Kubernetes PriorityClass.

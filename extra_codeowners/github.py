@@ -9,8 +9,8 @@ import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
-from typing import Any, Final, NoReturn
-from urllib.parse import quote
+from typing import Any, Final, Literal, NoReturn
+from urllib.parse import parse_qsl, quote, urlsplit
 
 import httpx
 import jwt
@@ -38,6 +38,10 @@ MAX_CONFIG_BYTES: Final = 1_000_000
 MAX_CODEOWNERS_BYTES: Final = 3 * 1024 * 1024
 
 _REPOSITORY_FULL_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+_LINK_PARAMETER_RE = re.compile(
+    r""";\s*([!#$%&'*+\-.^_`|~0-9A-Za-z]+)\s*=\s*"""
+    r"""(?:"((?:\\.|[^"\\])*)"|([^;,\s]+))\s*"""
+)
 
 _DCO_PULL_COMMITS_QUERY: Final = """\
 query DcoPullCommits(
@@ -165,6 +169,10 @@ class GitHubError(RuntimeError):
     """Base class for GitHub API failures."""
 
 
+class GitHubOperationStoppedError(GitHubError):
+    """The caller requested a stop between GitHub API operations."""
+
+
 class GitHubAPIError(GitHubError):
     """A non-success GitHub API response."""
 
@@ -231,6 +239,9 @@ class GitHubClient:
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self.app_id = app_id
+        if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
+            raise ValueError("timeout_seconds must be a finite positive number")
+        self._request_deadline_seconds = timeout_seconds
         try:
             loaded_key = serialization.load_pem_private_key(private_key.encode(), password=None)
         except (TypeError, ValueError) as error:
@@ -266,7 +277,13 @@ class GitHubClient:
         }
         return str(jwt.encode(payload, self._private_key, algorithm="RS256"))
 
-    async def _installation_token(self, installation_id: int) -> str:
+    async def _installation_token(
+        self,
+        installation_id: int,
+        *,
+        stop: asyncio.Event | None = None,
+    ) -> str:
+        self._raise_if_stopped(stop)
         cached = self._tokens.get(installation_id)
         now = datetime.now(UTC)
         if cached is not None and cached.expires_at > now + timedelta(minutes=5):
@@ -274,6 +291,7 @@ class GitHubClient:
 
         lock = self._token_locks.setdefault(installation_id, asyncio.Lock())
         async with lock:
+            self._raise_if_stopped(stop)
             cached = self._tokens.get(installation_id)
             if cached is not None and cached.expires_at > now + timedelta(minutes=5):
                 return cached.value
@@ -289,7 +307,9 @@ class GitHubClient:
                         "pull_requests": "read",
                     }
                 },
+                stop=stop,
             )
+            self._raise_if_stopped(stop)
             token = response.get("token")
             expires_at = response.get("expires_at")
             if not isinstance(token, str) or not isinstance(expires_at, str):
@@ -310,6 +330,7 @@ class GitHubClient:
         json: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,
         allow_not_found: bool = False,
+        stop: asyncio.Event | None = None,
     ) -> dict[str, Any]:
         if app_authenticated == (installation_id is not None):
             msg = "request must use exactly one authentication mode"
@@ -322,6 +343,7 @@ class GitHubClient:
             params=params,
             json=json,
             headers=headers,
+            stop=stop,
         )
         if allow_not_found and response.status_code == 404:
             return {}
@@ -346,22 +368,40 @@ class GitHubClient:
         params: dict[str, Any] | None = None,
         json: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,
+        stop: asyncio.Event | None = None,
     ) -> httpx.Response:
         """Send an authenticated request, refreshing a rejected installation token once."""
         attempts = 1 if app_authenticated else 2
         for attempt in range(attempts):
+            self._raise_if_stopped(stop)
             if app_authenticated:
                 token = self._app_jwt()
             else:
                 assert installation_id is not None
-                token = await self._installation_token(installation_id)
-            response = await self._http.request(
-                method,
-                path,
-                params=params,
-                json=json,
-                headers={**(headers or {}), "Authorization": f"Bearer {token}"},
-            )
+                token = await self._installation_token(installation_id, stop=stop)
+            self._raise_if_stopped(stop)
+            try:
+                async with asyncio.timeout(self._request_deadline_seconds):
+                    response = await self._http.request(
+                        method,
+                        path,
+                        params=params,
+                        json=json,
+                        headers={**(headers or {}), "Authorization": f"Bearer {token}"},
+                    )
+            except TimeoutError as error:
+                if stop is not None and stop.is_set():
+                    raise GitHubOperationStoppedError(
+                        "GitHub operation stopped during a request"
+                    ) from error
+                raise GitHubError("GitHub API request exceeded its wall-clock deadline") from error
+            except httpx.TimeoutException as error:
+                if stop is not None and stop.is_set():
+                    raise GitHubOperationStoppedError(
+                        "GitHub operation stopped during a request"
+                    ) from error
+                raise
+            self._raise_if_stopped(stop)
             if response.status_code != 401 or app_authenticated or attempt > 0:
                 return response
             assert installation_id is not None
@@ -500,18 +540,22 @@ class GitHubClient:
         *,
         params: dict[str, Any] | None = None,
         max_items: int | None = None,
+        stop: asyncio.Event | None = None,
     ) -> list[dict[str, Any]]:
         query = {**(params or {}), "per_page": 100}
         items: list[dict[str, Any]] = []
         page = 1
         while True:
+            self._raise_if_stopped(stop)
             query["page"] = page
             response = await self._authenticated_response(
                 "GET",
                 path,
                 installation_id=installation_id,
                 params=query,
+                stop=stop,
             )
+            self._raise_if_stopped(stop)
             if not response.is_success:
                 self._raise_api_error(response, "GET", path)
             page_items = response.json()
@@ -526,10 +570,149 @@ class GitHubClient:
                 if max_items is not None and len(items) > max_items:
                     msg = f"GET {path} exceeded the supported {max_items}-item limit"
                     raise PullRequestTooLargeError(msg)
-            if len(page_items) < 100:
+            if not self._response_has_next_page(response, page, len(page_items)):
                 break
             page += 1
         return items
+
+    @staticmethod
+    def _raise_if_stopped(stop: asyncio.Event | None) -> None:
+        if stop is not None and stop.is_set():
+            raise GitHubOperationStoppedError("GitHub operation stopped between requests")
+
+    @staticmethod
+    def _split_link_header(value: str) -> list[str]:
+        """Split a Link field without treating URL or quoted commas as separators."""
+        parts: list[str] = []
+        start = 0
+        in_url = False
+        in_quote = False
+        escaped = False
+        for index, character in enumerate(value):
+            if in_quote:
+                if escaped:
+                    escaped = False
+                elif character == "\\":
+                    escaped = True
+                elif character == '"':
+                    in_quote = False
+                continue
+            if character == '"':
+                in_quote = True
+            elif character == "<":
+                if in_url:
+                    raise GitHubError("GitHub pagination Link header is malformed")
+                in_url = True
+            elif character == ">":
+                if not in_url:
+                    raise GitHubError("GitHub pagination Link header is malformed")
+                in_url = False
+            elif character == "," and not in_url:
+                part = value[start:index].strip()
+                if not part:
+                    raise GitHubError("GitHub pagination Link header is malformed")
+                parts.append(part)
+                start = index + 1
+        if in_url or in_quote or escaped:
+            raise GitHubError("GitHub pagination Link header is malformed")
+        part = value[start:].strip()
+        if not part:
+            raise GitHubError("GitHub pagination Link header is malformed")
+        parts.append(part)
+        return parts
+
+    @classmethod
+    def _next_link_target(
+        cls,
+        response: httpx.Response,
+    ) -> str | None | Literal[False]:
+        """Return the unique next target, False for a terminal Link, or None if absent."""
+        values = response.headers.get_list("link")
+        if not values:
+            return None
+        entries = cls._split_link_header(",".join(values))
+        next_target: str | None = None
+        for entry in entries:
+            match = re.match(r"^\s*<([^<>]+)>\s*", entry)
+            if match is None:
+                raise GitHubError("GitHub pagination Link header is malformed")
+            target = match.group(1)
+            position = match.end()
+            parameters: dict[str, str] = {}
+            while position < len(entry):
+                parameter = _LINK_PARAMETER_RE.match(entry, position)
+                if parameter is None:
+                    raise GitHubError("GitHub pagination Link header is malformed")
+                name = parameter.group(1).casefold()
+                if name in parameters:
+                    raise GitHubError("GitHub pagination Link header repeats a parameter")
+                quoted_value = parameter.group(2)
+                value = (
+                    re.sub(r"\\(.)", r"\1", quoted_value)
+                    if quoted_value is not None
+                    else parameter.group(3)
+                )
+                parameters[name] = value
+                position = parameter.end()
+            relations = parameters.get("rel", "").casefold().split()
+            if "next" not in relations:
+                continue
+            if next_target is not None:
+                raise GitHubError("GitHub pagination Link header has multiple next links")
+            next_target = target
+        return next_target if next_target is not None else False
+
+    @classmethod
+    def _response_has_next_page(
+        cls,
+        response: httpx.Response,
+        current_page: int,
+        page_item_count: int,
+        *,
+        full_page_fallback: bool = True,
+    ) -> bool:
+        """Validate pagination metadata and decide whether another page exists."""
+        target = cls._next_link_target(response)
+        if target is None:
+            return full_page_fallback and page_item_count == 100
+        if target is False:
+            return False
+
+        try:
+            next_url = urlsplit(target)
+            request_url = urlsplit(str(response.request.url))
+            next_port = next_url.port
+            request_port = request_url.port
+        except ValueError as error:
+            raise GitHubError("GitHub pagination next link is invalid") from error
+        if (
+            not next_url.scheme
+            or not next_url.netloc
+            or next_url.username is not None
+            or next_url.password is not None
+            or next_url.fragment
+            or next_url.scheme.casefold() != request_url.scheme.casefold()
+            or next_url.hostname is None
+            or request_url.hostname is None
+            or next_url.hostname.casefold() != request_url.hostname.casefold()
+            or next_port != request_port
+            or next_url.path != request_url.path
+        ):
+            raise GitHubError("GitHub pagination next link does not match the request endpoint")
+        page_values = [
+            value
+            for name, value in parse_qsl(next_url.query, keep_blank_values=True)
+            if name == "page"
+        ]
+        expected_page = current_page + 1
+        if (
+            len(page_values) != 1
+            or not page_values[0].isascii()
+            or not page_values[0].isdecimal()
+            or int(page_values[0]) != expected_page
+        ):
+            raise GitHubError("GitHub pagination next link has an invalid page number")
+        return True
 
     async def _bounded_json_request(
         self,
@@ -1258,17 +1441,24 @@ class GitHubClient:
             raise GitHubError(msg)
         return result_id
 
-    async def list_installations(self) -> list[dict[str, Any]]:
+    async def list_installations(
+        self,
+        *,
+        stop: asyncio.Event | None = None,
+    ) -> list[dict[str, Any]]:
         """List every installation visible to the App JWT."""
         items: list[dict[str, Any]] = []
         page = 1
         while True:
+            self._raise_if_stopped(stop)
             response = await self._authenticated_response(
                 "GET",
                 "/app/installations",
                 app_authenticated=True,
                 params={"per_page": 100, "page": page},
+                stop=stop,
             )
+            self._raise_if_stopped(stop)
             if not response.is_success:
                 self._raise_api_error(response, "GET", "/app/installations")
             values = response.json()
@@ -1280,22 +1470,46 @@ class GitHubClient:
                     msg = "expected object items from GET /app/installations"
                     raise GitHubError(msg)
                 items.append(item)
-            if len(values) < 100:
+            if not self._response_has_next_page(response, page, len(values)):
                 return items
             page += 1
 
-    async def list_installation_repositories(self, installation_id: int) -> list[dict[str, Any]]:
+    async def list_installation_repositories(
+        self,
+        installation_id: int,
+        *,
+        stop: asyncio.Event | None = None,
+    ) -> list[dict[str, Any]]:
         """List repositories granted to one installation."""
         result: list[dict[str, Any]] = []
+        expected_total: int | None = None
         page = 1
         while True:
-            response = await self._request(
+            self._raise_if_stopped(stop)
+            response = await self._authenticated_response(
                 "GET",
                 "/installation/repositories",
                 installation_id=installation_id,
                 params={"per_page": 100, "page": page},
+                stop=stop,
             )
-            repositories = response.get("repositories")
+            self._raise_if_stopped(stop)
+            if not response.is_success:
+                self._raise_api_error(response, "GET", "/installation/repositories")
+            payload = response.json()
+            if not isinstance(payload, dict):
+                msg = "expected object response from GET /installation/repositories"
+                raise GitHubError(msg)
+            total_count = payload.get("total_count")
+            if isinstance(total_count, bool) or not isinstance(total_count, int) or total_count < 0:
+                msg = "installation repositories response omitted a nonnegative integer total_count"
+                raise GitHubError(msg)
+            if expected_total is None:
+                expected_total = total_count
+            elif total_count != expected_total:
+                msg = "installation repositories response changed total_count between pages"
+                raise GitHubError(msg)
+            repositories = payload.get("repositories")
             if not isinstance(repositories, list):
                 msg = "installation repositories response omitted repositories"
                 raise GitHubError(msg)
@@ -1304,16 +1518,38 @@ class GitHubClient:
                     msg = "expected object items from GET /installation/repositories"
                     raise GitHubError(msg)
                 result.append(item)
-            if len(repositories) < 100:
+            if len(result) > expected_total:
+                msg = "installation repositories response exceeded total_count"
+                raise GitHubError(msg)
+            has_next = self._response_has_next_page(
+                response,
+                page,
+                len(repositories),
+                full_page_fallback=len(result) < expected_total,
+            )
+            if has_next and len(result) >= expected_total:
+                msg = "installation repositories response has a next page after total_count"
+                raise GitHubError(msg)
+            if not has_next:
+                if len(result) != expected_total:
+                    msg = "installation repositories response ended before total_count"
+                    raise GitHubError(msg)
                 return result
             page += 1
 
-    async def list_open_pulls(self, installation_id: int, repository: str) -> list[dict[str, Any]]:
+    async def list_open_pulls(
+        self,
+        installation_id: int,
+        repository: str,
+        *,
+        stop: asyncio.Event | None = None,
+    ) -> list[dict[str, Any]]:
         """List open pull requests for reconciliation."""
         return await self._get_list(
             f"/repos/{repository}/pulls",
             installation_id,
             params={"state": "open", "sort": "updated", "direction": "desc"},
+            stop=stop,
         )
 
     async def list_commit_pulls(

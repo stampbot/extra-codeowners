@@ -34,11 +34,11 @@ API `403` or `429` responses, and every unexplained long-lived
 
 A replica that observes another process holding the reconciler lease does not
 record an attempt. An election error is a failure. A partial attempt means the
-process lost its lease or could not safely scan an installation or queue its
-pull requests. This includes GitHub request failures, invalid GitHub responses,
-and database errors while adding queue jobs. Work from healthy installations
-may still be queued, but a partial attempt does not refresh the last-success
-gauge.
+process lost its lease, began graceful shutdown, or could not safely scan an
+installation or queue its pull requests. This includes GitHub request failures,
+invalid GitHub responses, and database errors while adding queue jobs. Work
+from healthy installations may still be queued, but a partial attempt does not
+refresh the last-success gauge.
 
 A malformed top-level installation response fails the whole attempt before the
 service processes any installation. Once that list passes validation, a
@@ -49,6 +49,15 @@ If GitHub returns something other than the expected list or includes a
 non-object item, the client rejects it before field validation. The service
 then logs a fixed reconciliation event and error template instead. Neither path
 logs the rejected value.
+
+During graceful shutdown, the reconciler checks the stop signal before the
+next retention operation, GitHub page or API request, repository scan, and
+queue insertion. It does not cancel an operation already in progress. Each
+GitHub request has a 20-second wall-clock deadline. PostgreSQL connect, pool,
+and statement waits also have fixed limits, but a multi-statement database
+operation and local cleanup add to the shutdown time. The chart's 30-second
+default is a starting point, not proof that every environment will drain
+before its grace expires.
 
 In a deployment with several replicas, compare the newest gauge value across
 them. One practical alert expression is

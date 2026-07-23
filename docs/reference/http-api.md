@@ -99,7 +99,9 @@ Prometheus also publishes generated counter and histogram series, plus Python ru
 `success` means the elected process completed the scan of every visible,
 unsuspended installation and validated every repository and open pull request
 returned by GitHub. `partial` means the process lost its lease or could not
-safely scan at least one installation or queue its pull requests.
+safely scan at least one installation or queue its pull requests. Graceful
+shutdown also records a partial attempt and does not advance the last-success
+timestamp.
 Per-installation failures include GitHub request errors, malformed payloads,
 and database errors while adding queue jobs. Work queued before that failure
 remains durable, and the scan continues with later installations while it

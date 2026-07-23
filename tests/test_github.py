@@ -22,6 +22,7 @@ from extra_codeowners.github import (
     GitHubAPIError,
     GitHubClient,
     GitHubError,
+    GitHubOperationStoppedError,
     GitHubRateLimitError,
     PullRequestTooLargeError,
 )
@@ -706,7 +707,13 @@ async def test_reconciliation_list_endpoints_paginate(private_key: str) -> None:
                 ),
             )
         if path == "/installation/repositories":
-            return httpx.Response(200, json={"repositories": [{"full_name": "example/project"}]})
+            return httpx.Response(
+                200,
+                json={
+                    "total_count": 1,
+                    "repositories": [{"full_name": "example/project"}],
+                },
+            )
         if path == "/repos/example/project/pulls":
             page = int(request.url.params["page"])
             pull_pages.append(page)
@@ -727,6 +734,191 @@ async def test_reconciliation_list_endpoints_paginate(private_key: str) -> None:
     assert await client.list_installation_repositories(2) == [{"full_name": "example/project"}]
     assert len(await client.list_open_pulls(2, "example/project")) == 101
     assert pull_pages == [1, 2]
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_list_endpoints_honor_short_pages_with_next_links(
+    private_key: str,
+) -> None:
+    requested: list[tuple[str, int]] = []
+
+    def response_with_next(
+        request: httpx.Request,
+        payload: object,
+    ) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json=payload,
+            headers={
+                "Link": (
+                    f'<https://api.github.com{request.url.path}?per_page=100&page=2>; rel="next"'
+                )
+            },
+        )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path.endswith("/access_tokens"):
+            return httpx.Response(201, json=token_response())
+        page = int(request.url.params["page"])
+        requested.append((path, page))
+        payload: object
+        if path == "/app/installations":
+            payload = [{"id": page, "suspended_at": None}]
+            return (
+                response_with_next(request, payload)
+                if page == 1
+                else httpx.Response(200, json=payload)
+            )
+        if path == "/installation/repositories":
+            payload = {
+                "total_count": 2,
+                "repositories": [{"full_name": f"example/project-{page}"}],
+            }
+            return (
+                response_with_next(request, payload)
+                if page == 1
+                else httpx.Response(200, json=payload)
+            )
+        if path == "/repos/example/project/pulls":
+            payload = [{"number": page}]
+            return (
+                response_with_next(request, payload)
+                if page == 1
+                else httpx.Response(200, json=payload)
+            )
+        return httpx.Response(404)
+
+    client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
+
+    assert len(await client.list_installations()) == 2
+    assert len(await client.list_installation_repositories(2)) == 2
+    assert len(await client.list_open_pulls(2, "example/project")) == 2
+    await client.close()
+
+    assert requested == [
+        ("/app/installations", 1),
+        ("/app/installations", 2),
+        ("/installation/repositories", 1),
+        ("/installation/repositories", 2),
+        ("/repos/example/project/pulls", 1),
+        ("/repos/example/project/pulls", 2),
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("endpoint", ["installations", "repositories", "pulls"])
+async def test_reconciliation_list_endpoints_reject_malformed_link_headers(
+    private_key: str,
+    endpoint: str,
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/access_tokens"):
+            return httpx.Response(201, json=token_response())
+        payload: object = (
+            {"total_count": 1, "repositories": [{"full_name": "example/project"}]}
+            if endpoint == "repositories"
+            else [{"id": 1}]
+        )
+        return httpx.Response(200, json=payload, headers={"Link": "not-a-link"})
+
+    client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
+    with pytest.raises(GitHubError, match="Link header is malformed"):
+        if endpoint == "installations":
+            await client.list_installations()
+        elif endpoint == "repositories":
+            await client.list_installation_repositories(2)
+        else:
+            await client.list_open_pulls(2, "example/project")
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_installation_listing_stops_before_following_a_next_link(
+    private_key: str,
+) -> None:
+    stop = asyncio.Event()
+    pages: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        page = int(request.url.params["page"])
+        pages.append(page)
+        stop.set()
+        return httpx.Response(
+            200,
+            json=[{"id": 1, "suspended_at": None}],
+            headers={
+                "Link": (
+                    '<https://api.github.com/app/installations?per_page=100&page=2>; rel="next"'
+                )
+            },
+        )
+
+    client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
+    with pytest.raises(GitHubOperationStoppedError, match="stopped"):
+        await client.list_installations(stop=stop)
+    await client.close()
+
+    assert pages == [1]
+
+
+@pytest.mark.asyncio
+async def test_repository_listing_stops_after_token_exchange_before_repository_request(
+    private_key: str,
+) -> None:
+    stop = asyncio.Event()
+    paths: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        paths.append(request.url.path)
+        if request.url.path.endswith("/access_tokens"):
+            stop.set()
+            return httpx.Response(201, json=token_response())
+        raise AssertionError("repository request started after stop")
+
+    client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
+    with pytest.raises(GitHubOperationStoppedError, match="stopped"):
+        await client.list_installation_repositories(2, stop=stop)
+    await client.close()
+
+    assert paths == ["/app/installations/2/access_tokens"]
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_request_has_an_absolute_wall_clock_deadline(
+    private_key: str,
+) -> None:
+    never_respond = asyncio.Event()
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        await never_respond.wait()
+        return httpx.Response(200, json=[])
+
+    client = GitHubClient(
+        1,
+        private_key,
+        timeout_seconds=0.01,
+        transport=httpx.MockTransport(handler),
+    )
+    with pytest.raises(GitHubError, match="wall-clock deadline"):
+        await asyncio.wait_for(client.list_installations(), timeout=0.5)
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_timeout_after_stop_is_reported_as_stopped(
+    private_key: str,
+) -> None:
+    stop = asyncio.Event()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        stop.set()
+        raise httpx.ReadTimeout("request timed out", request=request)
+
+    client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
+    with pytest.raises(GitHubOperationStoppedError, match="stopped during"):
+        await client.list_installations(stop=stop)
     await client.close()
 
 
@@ -1178,12 +1370,19 @@ async def test_installation_repository_listing_paginates(
             return httpx.Response(
                 200,
                 json={
+                    "total_count": 101,
                     "repositories": [
                         {"full_name": f"example/repository-{index}"} for index in range(100)
-                    ]
+                    ],
                 },
             )
-        return httpx.Response(200, json={"repositories": [{"full_name": "example/final"}]})
+        return httpx.Response(
+            200,
+            json={
+                "total_count": 101,
+                "repositories": [{"full_name": "example/final"}],
+            },
+        )
 
     client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
     repositories = await client.list_installation_repositories(2)
@@ -1196,6 +1395,35 @@ async def test_installation_repository_listing_paginates(
 
 
 @pytest.mark.asyncio
+async def test_installation_repository_listing_accepts_complete_full_terminal_page(
+    private_key: str,
+) -> None:
+    requests = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal requests
+        if request.url.path.endswith("/access_tokens"):
+            return httpx.Response(201, json=token_response())
+        requests += 1
+        return httpx.Response(
+            200,
+            json={
+                "total_count": 100,
+                "repositories": [
+                    {"full_name": f"example/repository-{index}"} for index in range(100)
+                ],
+            },
+        )
+
+    client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
+    repositories = await client.list_installation_repositories(2)
+    await client.close()
+
+    assert requests == 1
+    assert len(repositories) == 100
+
+
+@pytest.mark.asyncio
 async def test_installation_repository_listing_rejects_malformed_items(
     private_key: str,
 ) -> None:
@@ -1205,10 +1433,11 @@ async def test_installation_repository_listing_rejects_malformed_items(
         return httpx.Response(
             200,
             json={
+                "total_count": 2,
                 "repositories": [
                     {"full_name": "example/project"},
                     "malformed",
-                ]
+                ],
             },
         )
 
@@ -1223,10 +1452,108 @@ async def test_installation_repository_listing_requires_list(private_key: str) -
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path.endswith("/access_tokens"):
             return httpx.Response(201, json=token_response())
-        return httpx.Response(200, json={})
+        return httpx.Response(200, json={"total_count": 0})
 
     client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
     with pytest.raises(GitHubError, match="omitted repositories"):
+        await client.list_installation_repositories(2)
+    await client.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("total_count", [None, True, -1, "1"])
+async def test_installation_repository_listing_requires_nonnegative_integer_total(
+    private_key: str,
+    total_count: object,
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/access_tokens"):
+            return httpx.Response(201, json=token_response())
+        payload: dict[str, object] = {"repositories": []}
+        if total_count is not None:
+            payload["total_count"] = total_count
+        return httpx.Response(200, json=payload)
+
+    client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
+    with pytest.raises(GitHubError, match="nonnegative integer total_count"):
+        await client.list_installation_repositories(2)
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_installation_repository_listing_rejects_changed_total_between_pages(
+    private_key: str,
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/access_tokens"):
+            return httpx.Response(201, json=token_response())
+        page = int(request.url.params["page"])
+        payload = {
+            "total_count": 2 if page == 1 else 3,
+            "repositories": [{"full_name": f"example/project-{page}"}],
+        }
+        headers = (
+            {
+                "Link": (
+                    "<https://api.github.com/installation/repositories?"
+                    'per_page=100&page=2>; rel="next"'
+                )
+            }
+            if page == 1
+            else {}
+        )
+        return httpx.Response(200, json=payload, headers=headers)
+
+    client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
+    with pytest.raises(GitHubError, match="changed total_count"):
+        await client.list_installation_repositories(2)
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_installation_repository_listing_rejects_terminal_incomplete_total(
+    private_key: str,
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/access_tokens"):
+            return httpx.Response(201, json=token_response())
+        return httpx.Response(
+            200,
+            json={
+                "total_count": 2,
+                "repositories": [{"full_name": "example/project"}],
+            },
+        )
+
+    client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
+    with pytest.raises(GitHubError, match="ended before total_count"):
+        await client.list_installation_repositories(2)
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_installation_repository_listing_rejects_next_link_after_total(
+    private_key: str,
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/access_tokens"):
+            return httpx.Response(201, json=token_response())
+        return httpx.Response(
+            200,
+            json={
+                "total_count": 1,
+                "repositories": [{"full_name": "example/project"}],
+            },
+            headers={
+                "Link": (
+                    "<https://api.github.com/installation/repositories?"
+                    'per_page=100&page=2>; rel="next"'
+                )
+            },
+        )
+
+    client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
+    with pytest.raises(GitHubError, match="next page after total_count"):
         await client.list_installation_repositories(2)
     await client.close()
 

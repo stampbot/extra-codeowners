@@ -263,11 +263,31 @@ The elected process runs both retention tasks before it asks GitHub for the
 installation list, so a discovery failure does not postpone cleanup. A
 background heartbeat renews the lease while a scan runs.
 
+GitHub's `Link` header controls pagination when it is present. The client
+validates that each `rel="next"` URL names the same endpoint and exactly the
+next page, even when the current page contains fewer than 100 records. A
+100-record page triggers a compatibility fallback only when GitHub omits the
+header. Repository discovery also requires a nonnegative `total_count` that
+stays unchanged across pages and equals the final number of records. Duplicate
+installation IDs, repository names, or pull-request numbers fail validation;
+a duplicate page cannot stand in for omitted work.
+
 If the heartbeat loses the lease, the service records a partial attempt. It
 does the same when it cannot safely scan an installation or queue its pull
 requests. Work already queued remains durable. Only a complete scan advances
 the last-success timestamp. The organization-policy repository is never
 included in reconciliation.
+
+Shutdown also produces a partial attempt. The application stop signal is
+checked between retention operations, after each GitHub response and before
+the next page, and before each repository scan and queue insertion. An
+insertion that already committed remains queued. After a boundary observes the
+signal, no later operation starts. The reconciler does not cancel the GitHub or
+database operation already in progress. A GitHub request has a 20-second
+wall-clock deadline. PostgreSQL connect, pool, and statement waits use the
+fixed limits in [Runtime configuration](../reference/configuration.md); a
+multi-statement operation and local cleanup can add time after the current
+wait.
 
 Because the installation list defines the scope of the whole scan, the
 reconciler validates every record before processing any installation. One
