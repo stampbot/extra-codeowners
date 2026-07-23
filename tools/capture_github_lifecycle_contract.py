@@ -11,7 +11,6 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Final
-from urllib.parse import parse_qsl, urlsplit
 
 from tools.live_github_contract import (
     API_VERSION,
@@ -20,6 +19,7 @@ from tools.live_github_contract import (
     ContractError,
     JsonObject,
     RestClient,
+    delivery_summaries_bounded,
     sanitize_delivery,
 )
 
@@ -28,18 +28,14 @@ DELIVERY_LIST_LIMIT: Final = 100
 DELIVERY_PAGE_LIMIT: Final = 8
 DELIVERY_PAGE_SIZE: Final = 100
 DETAIL_LIMIT: Final = 24
-LINK_HEADER_LIMIT: Final = 8192
-CURSOR_LIMIT: Final = 1024
 REVISION: Final = re.compile(r"^[0-9a-f]{40}$")
 UTC_TIMESTAMP: Final = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
-LINK_RELATIONS: Final = frozenset({"first", "last", "next", "prev"})
 SUMMARY_DETAIL_FIELDS: Final = (
     "guid",
     "redelivery",
     "duration",
     "status",
     "status_code",
-    "repository_id",
     "throttled_at",
 )
 SUPPORTED_DELIVERIES: Final = frozenset(
@@ -99,125 +95,6 @@ def _timestamp(value: str, name: str) -> datetime:
         return datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
     except ValueError as error:
         raise ContractError(f"{name} must be a valid UTC timestamp") from error
-
-
-def _malformed_link() -> ContractError:
-    return ContractError("GitHub delivery Link header is malformed or ambiguous")
-
-
-def _next_link_target(value: str | None) -> str | None:
-    if value is None:
-        return None
-    if (
-        not value
-        or len(value) > LINK_HEADER_LIMIT
-        or any(character in value for character in "\r\n\0")
-    ):
-        raise _malformed_link()
-
-    links: dict[str, str] = {}
-    position = 0
-    while position < len(value):
-        while position < len(value) and value[position] in " \t":
-            position += 1
-        if position >= len(value) or value[position] != "<":
-            raise _malformed_link()
-        target_end = value.find(">", position + 1)
-        if target_end < 0:
-            raise _malformed_link()
-        target = value[position + 1 : target_end]
-        if not target or any(character.isspace() or ord(character) < 0x21 for character in target):
-            raise _malformed_link()
-        position = target_end + 1
-
-        while position < len(value) and value[position] in " \t":
-            position += 1
-        if position >= len(value) or value[position] != ";":
-            raise _malformed_link()
-        position += 1
-        while position < len(value) and value[position] in " \t":
-            position += 1
-        if value[position : position + 3].lower() != "rel":
-            raise _malformed_link()
-        position += 3
-        while position < len(value) and value[position] in " \t":
-            position += 1
-        if position >= len(value) or value[position] != "=":
-            raise _malformed_link()
-        position += 1
-        while position < len(value) and value[position] in " \t":
-            position += 1
-        if position >= len(value) or value[position] != '"':
-            raise _malformed_link()
-        relation_end = value.find('"', position + 1)
-        if relation_end < 0:
-            raise _malformed_link()
-        relation = value[position + 1 : relation_end].lower()
-        if relation not in LINK_RELATIONS or relation in links:
-            raise _malformed_link()
-        links[relation] = target
-        position = relation_end + 1
-
-        while position < len(value) and value[position] in " \t":
-            position += 1
-        if position == len(value):
-            break
-        if value[position] != ",":
-            raise _malformed_link()
-        position += 1
-        if position == len(value):
-            raise _malformed_link()
-
-    return links.get("next")
-
-
-def _next_cursor(link_header: str | None) -> str | None:
-    target = _next_link_target(link_header)
-    if target is None:
-        return None
-    try:
-        parsed = urlsplit(target)
-        port = parsed.port
-        query = parse_qsl(
-            parsed.query,
-            keep_blank_values=True,
-            strict_parsing=True,
-            max_num_fields=3,
-        )
-    except ValueError as error:
-        raise _malformed_link() from error
-    if (
-        parsed.scheme.lower() != "https"
-        or parsed.hostname is None
-        or parsed.hostname.lower() != "api.github.com"
-        or parsed.username is not None
-        or parsed.password is not None
-        or port is not None
-        or parsed.path != "/app/hook/deliveries"
-        or parsed.fragment
-        or not query
-    ):
-        raise _malformed_link()
-
-    values: dict[str, str] = {}
-    for name, item in query:
-        if name not in {"cursor", "per_page"} or name in values:
-            raise _malformed_link()
-        values[name] = item
-    cursor = values.get("cursor")
-    if (
-        cursor is None
-        or not cursor
-        or len(cursor) > CURSOR_LIMIT
-        or any(ord(character) < 0x21 or ord(character) > 0x7E for character in cursor)
-    ):
-        raise _malformed_link()
-    per_page = values.get("per_page")
-    if per_page is not None and (
-        not per_page.isdecimal() or not 1 <= int(per_page) <= DELIVERY_PAGE_SIZE
-    ):
-        raise _malformed_link()
-    return cursor
 
 
 def _expected_deliveries(value: str) -> tuple[str, ...]:
@@ -329,6 +206,7 @@ def _validate_status_metadata(delivery: JsonObject, description: str) -> tuple[b
     status_code = delivery.get("status_code")
     if not isinstance(redelivery, bool):
         raise ContractError(f"GitHub delivery {description} omitted Boolean redelivery metadata")
+    # GitHub's REST schema requires an integer but does not publish minimum or maximum bounds.
     if isinstance(status_code, bool) or not isinstance(status_code, int):
         raise ContractError(f"GitHub delivery {description} omitted integer status metadata")
     return redelivery, status_code
@@ -339,37 +217,43 @@ def _canonical_contract(value: JsonObject) -> str:
 
 
 def _delivery_summaries(client: RestClient) -> tuple[list[JsonObject], bool, int]:
-    summaries: list[JsonObject] = []
-    seen_cursors: set[str] = set()
-    cursor: str | None = None
-    pages_read = 0
+    return delivery_summaries_bounded(
+        client,
+        list_limit=DELIVERY_LIST_LIMIT,
+        page_limit=DELIVERY_PAGE_LIMIT,
+        page_size=DELIVERY_PAGE_SIZE,
+    )
 
-    while pages_read < DELIVERY_PAGE_LIMIT and len(summaries) < DELIVERY_LIST_LIMIT:
-        page_size = min(DELIVERY_PAGE_SIZE, DELIVERY_LIST_LIMIT - len(summaries))
-        params: dict[str, str | int] = {"per_page": page_size}
-        if cursor is not None:
-            params["cursor"] = cursor
-        response, link_header = client.request_with_link(
-            "GET",
-            "/app/hook/deliveries",
-            params=params,
-        )
-        pages_read += 1
-        if not isinstance(response, list) or any(not isinstance(item, dict) for item in response):
-            raise ContractError("GitHub delivery listing is not a list of objects")
-        if len(response) > page_size:
-            raise ContractError("GitHub delivery listing exceeded the requested page size")
-        summaries.extend(response)
 
-        next_cursor = _next_cursor(link_header)
-        if next_cursor is None:
-            return summaries, True, pages_read
-        if next_cursor in seen_cursors:
-            raise ContractError("GitHub delivery pagination repeated a cursor")
-        seen_cursors.add(next_cursor)
-        cursor = next_cursor
+def _valid_repository_id(value: object, *, nullable: bool) -> bool:
+    return (nullable and value is None) or (type(value) is int and value > 0)
 
-    return summaries, False, pages_read
+
+def _validate_repository_metadata(
+    summary: JsonObject,
+    detail: JsonObject,
+    *,
+    repository_event: bool,
+) -> None:
+    summary_has_repository = "repository_id" in summary
+    detail_has_repository = "repository_id" in detail
+    if summary_has_repository != detail_has_repository or (
+        repository_event and not summary_has_repository
+    ):
+        raise ContractError("GitHub delivery detail repository metadata does not match its summary")
+    if not summary_has_repository:
+        return
+
+    summary_repository = summary["repository_id"]
+    detail_repository = detail["repository_id"]
+    nullable = not repository_event
+    if (
+        not _valid_repository_id(summary_repository, nullable=nullable)
+        or not _valid_repository_id(detail_repository, nullable=nullable)
+        or type(detail_repository) is not type(summary_repository)
+        or detail_repository != summary_repository
+    ):
+        raise ContractError("GitHub delivery detail repository metadata does not match its summary")
 
 
 def _validate_detail(
@@ -392,6 +276,11 @@ def _validate_detail(
         raise ContractError("GitHub delivery detail does not match its summary")
     if summary_status != detail_status:
         raise ContractError("GitHub delivery detail metadata does not match its summary")
+    _validate_repository_metadata(
+        summary,
+        detail,
+        repository_event=key.startswith("repository."),
+    )
     if any(
         field not in detail
         or type(detail[field]) is not type(summary[field])

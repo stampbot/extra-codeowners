@@ -12,9 +12,10 @@ lifecycle delivery shapes.
     organization ruleset.
 
 The fixture cleans up after a normal result, an error, or `Ctrl+C`. A power
-loss, forced process kill, host failure, or loss of operator access can leave
-resources behind. Keep the repository URL printed by the tool until you have
-confirmed cleanup.
+loss, forced process kill, host failure, or loss of operator access can still
+leave resources behind. Before it sends the create request, the fixture prints
+the repository owner, high-entropy name, and URL. Keep those recovery
+coordinates until the report confirms cleanup.
 
 This procedure gives you three different kinds of evidence:
 
@@ -170,8 +171,11 @@ mise run bootstrap
 mise run test:github-contract
 ```
 
-The fixture prints the private repository URL as soon as GitHub creates it.
-Keep that line until cleanup is confirmed.
+Before creating anything, the fixture prints the generated repository's owner,
+name, and URL. It checks that the name is unused, then sends the create
+request. Keep that block until cleanup is confirmed. It is the recovery path
+if GitHub creates the repository but the response is lost or cannot be
+decoded.
 
 Each mergeability transition can take up to 90 seconds. The fixture also
 leaves a possible inherited success untouched for five seconds after it opens
@@ -189,6 +193,13 @@ response, a transition that never settles, or cleanup failure. A determinate
 unsafe result is written as `false`; the command does not hide it by turning
 the observation into a fixture error.
 
+The webhook-log probe follows GitHub's validated `rel="next"` cursor. Each
+poll reads at most 300 summaries in three requests of up to 100 summaries.
+When the probe reaches that bound while another page remains, it can still
+record a delivery it found. It cannot conclude that an unseen delivery was
+absent. The affected observation is marked `incomplete`, and the configured
+run is incomplete.
+
 `EXTRA_CODEOWNERS_LIVE_KEEP_REPOSITORY=true` skips all GitHub resource cleanup
 for fixture development. It retains both the repository and the active
 organization ruleset, and it prevents `configured_run_complete` from becoming
@@ -204,7 +215,10 @@ jq -e '
   .schema_version == 2 and
   .result == "observed" and
   .cleanup_succeeded == true and
-  .evidence_completeness.configured_run_complete == true
+  .evidence_completeness.configured_run_complete == true and
+  .evidence_completeness.webhook_capture_metadata_valid == true and
+  .evidence_completeness.incomplete == [] and
+  .webhook_capture.incomplete_observations == []
 ' live-github-contract-report.json
 ```
 
@@ -221,6 +235,9 @@ jq '{
   not_run: .evidence_completeness.not_run,
   missing: .evidence_completeness.missing,
   invalid: .evidence_completeness.invalid,
+  incomplete: .evidence_completeness.incomplete,
+  repository_creation: .fixture.repository_creation_state,
+  webhook_capture,
   manual: .evidence_completeness.manual_evidence_required
 }' live-github-contract-report.json
 ```
@@ -231,6 +248,8 @@ Pay attention to the distinction:
 - `not_run` means an optional or inapplicable probe was deliberately skipped.
 - `missing` means the run ended before recording the probe.
 - `invalid` means the report contains a value outside the schema.
+- `incomplete` means the delivery-list bound prevented a reliable
+  present-or-absent answer.
 
 If you need the complete automated provider evidence set, configure the
 approver App and require:
@@ -247,9 +266,20 @@ manual evidence list open.
 The fixture prints the organization ruleset's recovery name before it creates
 the rule. After creation, it also prints the numeric ruleset ID. If cleanup
 failed, delete that organization ruleset before deleting the printed
-repository. If GitHub accepted the create request but the response was lost,
-find the rule by its recovery name in the organization's ruleset settings.
-Do not assume a failed or interrupted process removed either resource.
+repository.
+
+Check `fixture.repository_creation_state` before closing the incident:
+
+- `not_attempted` means the fixture never sent the repository create request.
+- `response_confirmed_cleaned`, `response_unknown_cleaned`, and
+  `response_unknown_resolved_absent` are terminal cleanup states.
+- `manual_cleanup_required` means the fixture could not prove the repository
+  absent or delete it. Use the printed URL.
+- A state ending in `_retained` means cleanup was deliberately disabled.
+- `attempted_response_unknown` means the report was written before recovery
+  reached a conclusion.
+
+Do not assume that a failed or interrupted process removed either resource.
 
 ### 4. Inspect the report before sharing it
 

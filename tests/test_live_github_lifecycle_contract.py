@@ -518,6 +518,76 @@ def test_capture_rejects_summary_detail_metadata_mismatch(
     assert "private-detail-guid" not in str(caught.value)
 
 
+def test_repository_lifecycle_delivery_requires_matching_positive_repository_ids(
+    tmp_path: Path,
+) -> None:
+    listed = summary(1, event="repository", action="renamed")
+    listed["repository_id"] = 789
+    fetched = detail(1, event="repository", action="renamed")
+    fetched["repository_id"] = 789
+    client = CaptureClient([[listed], fetched])
+
+    report = capture_lifecycle_contracts(
+        capture_config(tmp_path, expected=("repository.renamed",)),
+        client=cast(RestClient, client),
+    )
+
+    assert report["capture_complete"] is True
+    assert report["observations"]["repository.renamed"]["state"] == "observed"
+
+
+@pytest.mark.parametrize("repository_id", [True, False, 0, -1, "789", None])
+def test_repository_lifecycle_delivery_rejects_non_positive_repository_ids(
+    tmp_path: Path,
+    repository_id: object,
+) -> None:
+    listed = summary(1, event="repository", action="renamed")
+    listed["repository_id"] = repository_id
+    fetched = detail(1, event="repository", action="renamed")
+    fetched["repository_id"] = repository_id
+    client = CaptureClient([[listed], fetched])
+
+    with pytest.raises(ContractError, match="repository metadata"):
+        capture_lifecycle_contracts(
+            capture_config(tmp_path, expected=("repository.renamed",)),
+            client=cast(RestClient, client),
+        )
+
+
+def test_repository_lifecycle_delivery_rejects_missing_repository_ids(
+    tmp_path: Path,
+) -> None:
+    client = CaptureClient(
+        [
+            [summary(1, event="repository", action="renamed")],
+            detail(1, event="repository", action="renamed"),
+        ]
+    )
+
+    with pytest.raises(ContractError, match="repository metadata"):
+        capture_lifecycle_contracts(
+            capture_config(tmp_path, expected=("repository.renamed",)),
+            client=cast(RestClient, client),
+        )
+
+
+def test_non_repository_lifecycle_delivery_accepts_nullable_repository_ids(
+    tmp_path: Path,
+) -> None:
+    listed = summary(1, event="installation", action="unsuspend")
+    listed["repository_id"] = None
+    fetched = detail(1, event="installation", action="unsuspend")
+    fetched["repository_id"] = None
+    client = CaptureClient([[listed], fetched])
+
+    report = capture_lifecycle_contracts(
+        capture_config(tmp_path, expected=("installation.unsuspend",)),
+        client=cast(RestClient, client),
+    )
+
+    assert report["capture_complete"] is True
+
+
 def test_capture_rejects_summary_metadata_missing_from_detail(tmp_path: Path) -> None:
     listed = summary(1, event="installation", action="unsuspend")
     listed["guid"] = "private-summary-guid"

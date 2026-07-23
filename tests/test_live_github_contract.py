@@ -18,8 +18,8 @@ from tools.live_github_contract import (
     Fixture,
     RestClient,
     contract_interpretation,
-    delivery_targets_repository,
     evidence_completeness,
+    installation_add_targets_repository,
     merge_attempt_was_blocked,
     required_check_has_expected_source,
     sanitize_delivery,
@@ -77,6 +77,31 @@ class StubClient:
             raise response
         return response
 
+    def request_with_link(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: dict[str, str | int] | None = None,
+        expected: tuple[int, ...] = (200,),
+    ) -> tuple[Any, str | None]:
+        self.requests.append((method, path))
+        self.transcript.append(
+            {
+                "method": method,
+                "path": path,
+                "body": None,
+                "params": params,
+                "expected": expected,
+            }
+        )
+        response = self.responses.pop(0) if self.responses else None
+        if isinstance(response, Exception):
+            raise response
+        if isinstance(response, tuple):
+            return cast(tuple[Any, str | None], response)
+        return response, None
+
     def close(self) -> None:
         self.closed = True
         if self.close_error is not None:
@@ -124,9 +149,23 @@ def config(*, approver: AppCredentials | None = None, keep_repository: bool = Fa
     )
 
 
+def complete_webhook_capture(*, incomplete: object = None) -> dict[str, Any]:
+    return {
+        "delivery_list_limit": contract_module.WEBHOOK_DELIVERY_LIST_LIMIT,
+        "delivery_page_limit": contract_module.WEBHOOK_DELIVERY_PAGE_LIMIT,
+        "delivery_page_size": contract_module.WEBHOOK_DELIVERY_PAGE_SIZE,
+        "delivery_window_complete": not bool(incomplete),
+        "incomplete_observations": [] if incomplete is None else incomplete,
+        "last_poll_pages_read": 1,
+        "pages_read_total": 1,
+        "poll_count": 1,
+    }
+
+
 def fixture_without_network(selection_client: StubClient | None = None) -> Fixture:
     fixture = object.__new__(Fixture)
     fixture.config = config()
+    fixture.repository_name = "fixture-repository"
     fixture.repository = "fixture-org/fixture-repository"
     fixture.repository_id = 789
     fixture.repository_selection = cast(RestClient | None, selection_client)
@@ -245,6 +284,7 @@ def test_evidence_completeness_distinguishes_false_null_and_missing() -> None:
         "cleanup_succeeded": True,
         "fixture": {"checker_repository_selection": "all"},
         "assertions": assertions,
+        "webhook_capture": complete_webhook_capture(),
     }
 
     completeness = evidence_completeness(report, approver_configured=False)
@@ -271,6 +311,7 @@ def test_evidence_completeness_accepts_false_but_requires_configured_approver() 
         "cleanup_succeeded": True,
         "fixture": {"checker_repository_selection": "all"},
         "assertions": assertions,
+        "webhook_capture": complete_webhook_capture(),
     }
 
     assert evidence_completeness(report, approver_configured=False)["configured_run_complete"]
@@ -286,6 +327,91 @@ def test_evidence_completeness_accepts_false_but_requires_configured_approver() 
         evidence_completeness(selected, approver_configured=False)["configured_run_complete"]
         is False
     )
+
+
+@pytest.mark.parametrize(
+    "incomplete",
+    [
+        ["unknown_observation"],
+        [
+            "pull_request_opened_delivery_observed",
+            "pull_request_opened_delivery_observed",
+        ],
+        ["pull_request_opened_delivery_observed"],
+        "pull_request_opened_delivery_observed",
+    ],
+)
+def test_evidence_completeness_rejects_malformed_or_contradictory_capture_metadata(
+    incomplete: object,
+) -> None:
+    report = {
+        "result": "observed",
+        "cleanup_succeeded": True,
+        "fixture": {"checker_repository_selection": "all"},
+        "assertions": {
+            **dict.fromkeys(contract_module.CORE_OBSERVATIONS, False),
+            **dict.fromkeys(contract_module.APP_REVIEW_OBSERVATIONS),
+            **dict.fromkeys(contract_module.DIAGNOSTIC_OBSERVATIONS),
+        },
+        "webhook_capture": complete_webhook_capture(incomplete=incomplete),
+    }
+
+    completeness = evidence_completeness(report, approver_configured=False)
+
+    assert completeness["webhook_capture_metadata_valid"] is False
+    assert completeness["configured_run_complete"] is False
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("delivery_list_limit", 100),
+        ("delivery_window_complete", 1),
+        ("last_poll_pages_read", 0),
+        ("pages_read_total", True),
+        ("poll_count", 2),
+    ],
+)
+def test_evidence_completeness_rejects_inconsistent_capture_bounds(
+    field: str,
+    value: object,
+) -> None:
+    capture = complete_webhook_capture()
+    capture[field] = value
+    report = {
+        "result": "observed",
+        "cleanup_succeeded": True,
+        "fixture": {"checker_repository_selection": "all"},
+        "assertions": {
+            **dict.fromkeys(contract_module.CORE_OBSERVATIONS, False),
+            **dict.fromkeys(contract_module.APP_REVIEW_OBSERVATIONS),
+            **dict.fromkeys(contract_module.DIAGNOSTIC_OBSERVATIONS),
+        },
+        "webhook_capture": capture,
+    }
+
+    completeness = evidence_completeness(report, approver_configured=False)
+
+    assert completeness["webhook_capture_metadata_valid"] is False
+    assert completeness["configured_run_complete"] is False
+
+
+def test_evidence_completeness_requires_webhook_capture_metadata() -> None:
+    report = {
+        "result": "observed",
+        "cleanup_succeeded": True,
+        "fixture": {"checker_repository_selection": "all"},
+        "assertions": {
+            **dict.fromkeys(contract_module.CORE_OBSERVATIONS, False),
+            **dict.fromkeys(contract_module.APP_REVIEW_OBSERVATIONS),
+            **dict.fromkeys(contract_module.DIAGNOSTIC_OBSERVATIONS),
+        },
+    }
+
+    completeness = evidence_completeness(report, approver_configured=False)
+
+    assert completeness["webhook_capture_metadata_valid"] is False
+    assert completeness["configured_run_complete"] is False
 
 
 @pytest.mark.parametrize(("status_code", "blocked"), [(200, False), (405, True), (409, True)])
@@ -566,33 +692,133 @@ def test_delivery_sanitizer_rejects_missing_or_invalid_status_metadata(
         sanitize_delivery(delivery)
 
 
-def test_delivery_repository_match_handles_installation_repository_lists() -> None:
+def test_installation_add_requires_the_fixture_in_repositories_added() -> None:
     delivery = {
         "request": {
             "payload": {
+                "action": "added",
+                "installation": {"id": 456},
                 "repositories_added": [
                     {"id": 123, "full_name": "example/one"},
                     {"id": 456, "full_name": "example/two"},
-                ]
+                ],
+                "repositories_removed": [],
             }
         }
     }
 
-    assert delivery_targets_repository(delivery, 456)
-    assert not delivery_targets_repository(delivery, 789)
+    assert installation_add_targets_repository(
+        delivery,
+        repository_id=456,
+        installation_id=456,
+    )
+    assert not installation_add_targets_repository(
+        delivery,
+        repository_id=789,
+        installation_id=456,
+    )
 
 
-def test_delivery_repository_match_rejects_boolean_ids() -> None:
+def test_installation_add_rejects_boolean_ids() -> None:
     delivery = {
         "request": {
             "payload": {
-                "repository": {"id": True},
+                "action": "added",
+                "installation": {"id": 456},
                 "repositories_added": [{"id": True}],
+                "repositories_removed": [],
             }
         }
     }
 
-    assert not delivery_targets_repository(delivery, 1)
+    with pytest.raises(ContractError, match="positive integer"):
+        installation_add_targets_repository(
+            delivery,
+            repository_id=1,
+            installation_id=456,
+        )
+
+
+def test_installation_add_ignores_repository_field_and_removed_only_target() -> None:
+    payload = {
+        "action": "added",
+        "installation": {"id": 456},
+        "repository": {"id": 789},
+        "repositories_added": [{"id": 999}],
+        "repositories_removed": [{"id": 789}],
+    }
+
+    assert not installation_add_targets_repository(
+        {"request": {"payload": payload}},
+        repository_id=789,
+        installation_id=456,
+    )
+
+
+def test_installation_add_rejects_missing_change_lists() -> None:
+    delivery = {
+        "request": {
+            "payload": {
+                "action": "added",
+                "installation": {"id": 456},
+                "repository": {"id": 789},
+            }
+        }
+    }
+
+    with pytest.raises(ContractError, match="repositories_added"):
+        installation_add_targets_repository(
+            delivery,
+            repository_id=789,
+            installation_id=456,
+        )
+
+
+def test_installation_add_rejects_contradictory_change_lists() -> None:
+    delivery = {
+        "request": {
+            "payload": {
+                "action": "added",
+                "installation": {"id": 456},
+                "repositories_added": [{"id": 789}],
+                "repositories_removed": [{"id": 789}],
+            }
+        }
+    }
+
+    with pytest.raises(ContractError, match="both change lists"):
+        installation_add_targets_repository(
+            delivery,
+            repository_id=789,
+            installation_id=456,
+        )
+
+
+@pytest.mark.parametrize(
+    ("action", "installation_id"),
+    [("removed", 456), ("added", 999), ("added", True)],
+)
+def test_installation_add_rejects_wrong_action_or_installation(
+    action: str,
+    installation_id: object,
+) -> None:
+    delivery = {
+        "request": {
+            "payload": {
+                "action": action,
+                "installation": {"id": installation_id},
+                "repositories_added": [{"id": 789}],
+                "repositories_removed": [],
+            }
+        }
+    }
+
+    with pytest.raises(ContractError, match=r"action|installation"):
+        installation_add_targets_repository(
+            delivery,
+            repository_id=789,
+            installation_id=456,
+        )
 
 
 def delivery_detail(
@@ -668,8 +894,10 @@ def test_webhook_capture_transcript_records_only_sanitized_contracts(
     ]
     added = delivery_detail(3, event="installation_repositories", action="added")
     added["request"]["payload"] = {
+        "action": "added",
         "installation": {"id": 456},
         "repositories_added": [{"id": 789, "full_name": "private/name"}],
+        "repositories_removed": [],
         "sender": {"login": "private-user"},
     }
     client = StubClient(
@@ -737,8 +965,10 @@ def test_selected_webhook_capture_waits_for_a_delayed_targeted_add(
     )
     added = delivery_detail(3, event="installation_repositories", action="added")
     added["request"]["payload"] = {
+        "action": "added",
         "installation": {"id": 456},
         "repositories_added": [{"id": 789, "full_name": "private/name"}],
+        "repositories_removed": [],
     }
     client = StubClient(
         [],
@@ -814,8 +1044,10 @@ def test_unrelated_add_does_not_complete_selected_webhook_capture(
         repository_id=999,
     )
     unrelated["request"]["payload"] = {
+        "action": "added",
         "installation": {"id": 456},
         "repositories_added": [{"id": 999, "full_name": "private/other"}],
+        "repositories_removed": [],
     }
     client = StubClient(
         [],
@@ -838,6 +1070,93 @@ def test_unrelated_add_does_not_complete_selected_webhook_capture(
 
     assert fixture.report["assertions"]["installation_repository_added_delivery_observed"] is False
     assert len(fixture.report["webhook_contracts"]) == 2
+
+
+def test_webhook_capture_follows_validated_pagination_in_a_busy_app(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first_page = [
+        delivery_summary(
+            delivery_id,
+            event="push",
+            action="completed",
+            installation_id=999,
+            repository_id=None,
+        )
+        for delivery_id in range(1, 101)
+    ]
+    next_link = (
+        "<https://api.github.com/app/hook/deliveries"
+        '?per_page=100&cursor=private-cursor>; rel="next"'
+    )
+    second_page = [
+        delivery_summary(101, event="pull_request", action="opened"),
+        delivery_summary(102, event="pull_request", action="edited"),
+    ]
+    client = StubClient(
+        [],
+        [
+            (first_page, next_link),
+            second_page,
+            delivery_detail(101, event="pull_request", action="opened"),
+            delivery_detail(102, event="pull_request", action="edited"),
+        ],
+    )
+    fixture = webhook_fixture(client, selection="all")
+    monkeypatch.setattr("tools.live_github_contract.time.sleep", lambda _: None)
+
+    fixture._capture_webhook_contracts()
+
+    capture = fixture.report["webhook_capture"]
+    assert capture["delivery_window_complete"] is True
+    assert capture["last_poll_pages_read"] == 2
+    assert capture["pages_read_total"] == 2
+    assert capture["incomplete_observations"] == []
+    assert fixture.report["assertions"]["pull_request_opened_delivery_observed"] is True
+    assert fixture.report["assertions"]["pull_request_retarget_delivery_observed"] is True
+    assert "private-cursor" not in repr(fixture.report)
+    assert "api.github.com" not in repr(fixture.report)
+
+
+def test_truncated_webhook_window_marks_unseen_selected_add_incomplete(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    summaries = [
+        delivery_summary(1, event="pull_request", action="opened"),
+        delivery_summary(2, event="pull_request", action="edited"),
+    ]
+    next_link = (
+        "<https://api.github.com/app/hook/deliveries"
+        '?per_page=100&cursor=private-cursor>; rel="next"'
+    )
+    client = StubClient(
+        [],
+        [
+            (summaries, next_link),
+            delivery_detail(1, event="pull_request", action="opened"),
+            delivery_detail(2, event="pull_request", action="edited"),
+        ],
+    )
+    fixture = webhook_fixture(client, selection="selected")
+    monotonic_values = iter((0.0, 0.0, 31.0))
+    monkeypatch.setattr(contract_module, "WEBHOOK_DELIVERY_PAGE_LIMIT", 1)
+    monkeypatch.setattr(
+        "tools.live_github_contract.time.monotonic",
+        lambda: next(monotonic_values),
+    )
+    monkeypatch.setattr("tools.live_github_contract.time.sleep", lambda _: None)
+
+    fixture._capture_webhook_contracts()
+
+    assertion_name = "installation_repository_added_delivery_observed"
+    assert assertion_name not in fixture.report["assertions"]
+    assert fixture.report["webhook_capture"]["delivery_window_complete"] is False
+    assert fixture.report["webhook_capture"]["incomplete_observations"] == [assertion_name]
+    completeness = evidence_completeness(fixture.report, approver_configured=False)
+    assert completeness["observations"][assertion_name] == "incomplete"
+    assert completeness["incomplete"] == [assertion_name]
+    assert completeness["configured_observations_complete"] is False
+    assert "private-cursor" not in repr(fixture.report)
 
 
 @pytest.mark.parametrize(
@@ -886,7 +1205,7 @@ def test_fixture_run_follows_the_complete_check_transition_transcript(
     fixture.operator = cast(
         RestClient,
         StubClient(
-            [],
+            [404],
             [
                 {"id": 789, "default_branch": "main"},
                 {"object": {"sha": "a" * 40}},
@@ -990,6 +1309,138 @@ def test_fixture_run_follows_the_complete_check_transition_transcript(
     assert report["assertions"]["shared_head_invalidation_blocks_both_pull_requests"] is True
     assert report["assertions"]["shared_head_inherits_success_before_invalidation"] is True
     assert report["interpretation"]["github_contract_fail_closed"] is False
+
+
+def repository_creation_fixture(operator: StubClient) -> Fixture:
+    fixture = fixture_without_network()
+    fixture.operator = cast(RestClient, operator)
+    fixture.repository_created = False
+    fixture.repository_creation_attempted = False
+    fixture.repository_creation_outcome_unknown = False
+    fixture.repository_creation_state = "not_attempted"
+    fixture.organization_ruleset_name = "fixture organization rule"
+    fixture.organization_ruleset_id = None
+    fixture.organization_ruleset_creation_attempted = False
+    fixture.checker = None
+    fixture.approver = None
+    fixture.report = {
+        "fixture": {"repository_creation_state": "not_attempted"},
+        "assertions": {},
+    }
+    return fixture
+
+
+def test_fixture_uses_a_128_bit_repository_suffix(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    private_key = tmp_path / "checker.pem"
+    private_key.write_text("not parsed while the fixture is initialized")
+    runtime = replace(
+        config(),
+        checker=AppCredentials(123, 456, private_key),
+    )
+    requested_bytes: list[int] = []
+
+    def token_hex(byte_count: int) -> str:
+        requested_bytes.append(byte_count)
+        return "a" * (byte_count * 2)
+
+    monkeypatch.setattr("tools.live_github_contract.secrets.token_hex", token_hex)
+
+    fixture = Fixture(runtime)
+    try:
+        assert requested_bytes == [16]
+        assert fixture.repository_name == f"extra-codeowners-contract-{'a' * 32}"
+        assert fixture.report["fixture"]["repository_creation_state"] == "not_attempted"
+    finally:
+        assert fixture.close() == []
+
+
+@pytest.mark.parametrize(
+    "create_error",
+    [
+        json.JSONDecodeError("private JSON detail", "private document", 0),
+        httpx.ReadTimeout("private transport detail"),
+    ],
+    ids=["invalid-json", "transport-loss"],
+)
+def test_repository_creation_recovers_an_unknown_accepted_request(
+    create_error: Exception,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    operator = StubClient([404, 200], [create_error, None])
+    fixture = repository_creation_fixture(operator)
+
+    with pytest.raises(type(create_error)):
+        fixture._create_repository()
+
+    output = capsys.readouterr().out
+    assert output.index("owner: fixture-org") < output.index("name: fixture-repository")
+    assert "URL: https://github.com/fixture-org/fixture-repository" in output
+    assert fixture.repository_creation_attempted is True
+    assert fixture.repository_creation_outcome_unknown is True
+    assert fixture.report["fixture"]["repository_creation_state"] == ("attempted_response_unknown")
+
+    assert fixture.close() == []
+    assert fixture.report["fixture"]["repository_creation_state"] == "response_unknown_cleaned"
+    assert [request["method"] for request in operator.transcript] == [
+        "GET",
+        "POST",
+        "GET",
+        "DELETE",
+    ]
+    assert "private" not in repr(fixture.report)
+
+
+def test_repository_creation_resolves_an_unknown_request_that_created_nothing() -> None:
+    operator = StubClient(
+        [404, 404],
+        [httpx.ReadTimeout("private transport detail")],
+    )
+    fixture = repository_creation_fixture(operator)
+
+    with pytest.raises(httpx.ReadTimeout):
+        fixture._create_repository()
+
+    assert fixture.close() == []
+    assert fixture.report["fixture"]["repository_creation_state"] == (
+        "response_unknown_resolved_absent"
+    )
+    assert [request["method"] for request in operator.transcript] == ["GET", "POST", "GET"]
+
+
+def test_repository_creation_cleans_up_after_a_malformed_success_body() -> None:
+    operator = StubClient([404], [None, None])
+    fixture = repository_creation_fixture(operator)
+
+    with pytest.raises(ContractError, match="created repository"):
+        fixture._create_repository()
+
+    assert fixture.repository_created is True
+    assert fixture.repository_creation_outcome_unknown is False
+    assert fixture.close() == []
+    assert fixture.report["fixture"]["repository_creation_state"] == "response_confirmed_cleaned"
+    assert [request["method"] for request in operator.transcript] == [
+        "GET",
+        "POST",
+        "DELETE",
+    ]
+
+
+def test_repository_creation_recovery_failure_requires_manual_cleanup() -> None:
+    operator = StubClient(
+        [404, 503],
+        [httpx.ReadTimeout("private transport detail")],
+    )
+    fixture = repository_creation_fixture(operator)
+
+    with pytest.raises(httpx.ReadTimeout):
+        fixture._create_repository()
+
+    assert fixture.close() == ["repository recovery failed (ContractError)"]
+    assert fixture.report["fixture"]["repository_creation_state"] == "manual_cleanup_required"
+    assert "private" not in repr(fixture.report)
 
 
 def test_cleanup_transcript_discovers_the_ruleset_and_closes_clients() -> None:
@@ -1189,8 +1640,12 @@ def test_main_writes_machine_readable_completeness(
         def __init__(self, supplied: Config) -> None:
             assert supplied is runtime
             self.report = {
-                "fixture": {"checker_repository_selection": "all"},
+                "fixture": {
+                    "checker_repository_selection": "all",
+                    "repository_creation_state": "not_attempted",
+                },
                 "assertions": assertions,
+                "webhook_capture": complete_webhook_capture(),
             }
 
         def run(self) -> dict[str, Any]:

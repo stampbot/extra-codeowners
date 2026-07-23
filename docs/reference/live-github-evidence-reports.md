@@ -42,13 +42,14 @@ The repository fixture writes `live-github-contract-report.json` unless
 | `api_version` | GitHub REST API version sent with every request. |
 | `source_revision` | Full source commit supplied by the operator. |
 | `started_at`, `finished_at` | Fixture timestamps. |
-| `fixture` | Installation selection modes and whether fixture resources were deliberately kept. |
+| `fixture` | Installation selection modes, repository cleanup intent, and repository-creation recovery state. |
 | `assertions` | Raw, named observations. Values are `true`, `false`, or `null`. |
 | `webhook_contracts` | Event metadata and payload key sets, without delivery IDs or payload values. |
+| `webhook_capture` | Delivery-list bounds, polling counts, final window completeness, and observations left incomplete by pagination. |
 | `interpretation` | The fixture's narrow interpretation of the Check Run and ruleset observations. Present only when the fixture reaches interpretation. |
 | `result` | `observed`, `failed`, or `interrupted`. |
 | `failure_type` | Exception class when `result` is `failed`; no provider error text is retained. |
-| `cleanup_succeeded` | True only when cleanup was attempted, reported no error, and the repository was not deliberately kept. |
+| `cleanup_succeeded` | True only when cleanup reported no error, an uncertain repository create was resolved, and resources were not deliberately kept. |
 | `cleanup_failure_count` | Number of cleanup failures, when nonzero. |
 | `evidence_completeness` | Machine-readable account of which probes returned a determinate value. |
 
@@ -69,7 +70,8 @@ Each raw assertion has one corresponding state under
 | `true` | `observed_true` | The probe ran and observed the condition. |
 | `false` | `observed_false` | The probe ran and did not observe the condition. |
 | `null` | `not_run` | The fixture deliberately skipped an optional or inapplicable probe. |
-| Key absent | `missing` | The run ended before it recorded the probe. |
+| Key absent and named by `webhook_capture.incomplete_observations` | `incomplete` | A delivery-list bound prevented the fixture from deciding whether the delivery was absent. |
+| Key absent otherwise | `missing` | The run ended before it recorded the probe. |
 | Any other value | `invalid` | The report does not satisfy this schema. |
 
 False is evidence. It is not favorable evidence by definition. For example, a
@@ -77,8 +79,8 @@ false expected-source observation is complete enough to diagnose but unsafe
 for rollout.
 
 The completeness object also groups names into `observed_false`, `not_run`,
-`missing`, and `invalid` arrays. These arrays make omissions visible without
-requiring a consumer to infer meaning from JSON truthiness.
+`missing`, `invalid`, and `incomplete` arrays. These arrays make omissions
+visible without requiring a consumer to infer meaning from JSON truthiness.
 
 ### Completeness fields
 
@@ -95,21 +97,28 @@ request delivery probes. It also includes:
 
 - `result` to be `observed`
 - cleanup to have succeeded
-- the checker installation selection to be `all` or `selected`.
+- the checker installation selection to be `all` or `selected`
+- valid webhook-capture completeness metadata.
 
 It says that the configured automated run is complete. It does not say that
 every observation was true, that the GitHub contract failed closed, or that
 the service is ready for production.
 
 `full_automated_observations_complete` requires determinate values for all
-core and App-review probes, even when the optional approver was not configured
-for this run. It does not include cleanup, deployed service tests, or manual
-lifecycle work. Use it to find missing provider evidence, never as a release
-gate by itself.
+core and App-review probes plus valid webhook-capture metadata, even when the
+optional approver was not configured for this run. It does not include
+cleanup, deployed service tests, or manual lifecycle work. Use it to find
+missing provider evidence, never as a release gate by itself.
 
 `manual_evidence_required` names the remaining deployed delivery,
 reconciliation, lifecycle, access-loss, and merge-handback work. The automated
 fixture never marks those items complete.
+
+`webhook_capture_metadata_valid` requires the capture object, the documented
+bounds, Boolean window state, internally consistent positive counters, and a
+well-formed incomplete-observation list. The list cannot contain duplicates,
+name a non-webhook assertion, or contradict a raw assertion.
+`configured_run_complete` cannot be true when any of those checks fail.
 
 Require the configured automated evidence with:
 
@@ -118,7 +127,10 @@ jq -e '
   .schema_version == 2 and
   .result == "observed" and
   .cleanup_succeeded == true and
-  .evidence_completeness.configured_run_complete == true
+  .evidence_completeness.configured_run_complete == true and
+  .evidence_completeness.webhook_capture_metadata_valid == true and
+  .evidence_completeness.incomplete == [] and
+  .webhook_capture.incomplete_observations == []
 ' live-github-contract-report.json
 ```
 
@@ -132,6 +144,9 @@ jq '{
   not_run: .evidence_completeness.not_run,
   missing: .evidence_completeness.missing,
   invalid: .evidence_completeness.invalid,
+  incomplete: .evidence_completeness.incomplete,
+  repository_creation: .fixture.repository_creation_state,
+  webhook_capture,
   manual: .evidence_completeness.manual_evidence_required
 }' live-github-contract-report.json
 ```
@@ -170,6 +185,63 @@ The diagnostic observations are:
 | `in_progress_merge_state_blocked` | Did mergeability settle on `blocked` after invalidation? |
 | `in_progress_merge_attempt_blocked` | Did the merge API reject the attempt? This is `null` when the state probe did not block. |
 | `installation_repository_added_delivery_observed` | Did a selected-repositories installation expose the add event for the fixture repository? This is `null` for an all-repositories installation. |
+
+### Repository creation recovery
+
+The fixture generates a 128-bit random repository suffix. Before the POST
+request, it prints the owner, name, and URL and verifies that the name is
+unused. The operator therefore has recovery coordinates even when GitHub
+accepts the request but the response is lost or malformed.
+
+`fixture.repository_creation_state` is one of:
+
+| State | Meaning |
+| --- | --- |
+| `not_attempted` | The fixture has not sent the create request. |
+| `attempted_response_unknown` | The request was sent, but the fixture does not yet know whether GitHub created the repository. |
+| `response_confirmed` | GitHub returned the expected create response; cleanup has not yet recorded its outcome. |
+| `response_confirmed_cleaned` | The confirmed repository was deleted. |
+| `response_unknown_resolved_absent` | A recovery read proved that the uncertain create left no repository. |
+| `response_unknown_cleaned` | A recovery read found the uncertain repository, and the fixture deleted it. |
+| `manual_cleanup_required` | Recovery or deletion failed. Use the printed URL and verify cleanup manually. |
+| `response_confirmed_retained`, `response_unknown_retained` | Cleanup was deliberately disabled. |
+
+An uncertain create is not treated as absent. Cleanup probes the exact
+high-entropy name. `cleanup_succeeded` remains false if that probe or deletion
+fails.
+
+### Repository webhook capture
+
+Each webhook-log poll reads at most 300 delivery summaries across three pages
+of up to 100 items. Pagination follows only a validated cursor from GitHub's
+`rel="next"` link and never follows a response-supplied URL. The report stores
+the bounds, poll count, final poll's page count, total pages read, and whether
+the final delivery window was complete. It does not store cursors or URLs.
+
+| `webhook_capture` field | Meaning |
+| --- | --- |
+| `delivery_list_limit` | Maximum summaries read in one poll; currently `300`. |
+| `delivery_page_limit` | Maximum delivery-list requests in one poll; currently `3`. |
+| `delivery_page_size` | Maximum summaries requested on one page; currently `100`. |
+| `delivery_window_complete` | Whether the final poll reached a page without `rel="next"`. |
+| `incomplete_observations` | Assertions left undecidable because the final poll reached a bound with another page remaining. |
+| `last_poll_pages_read` | Delivery-list requests made by the final poll. |
+| `pages_read_total` | Delivery-list requests made across every poll. |
+| `poll_count` | Polls completed during the bounded capture period. |
+
+A delivery found inside a truncated window is positive evidence. An unseen
+delivery is not negative evidence while `rel="next"` still points beyond the
+bound. In that case the raw assertion is omitted and its name appears in
+`webhook_capture.incomplete_observations` and
+`evidence_completeness.incomplete`.
+
+For `installation_repositories.added`, the fixture applies
+[GitHub's documented payload contract][webhook-payloads]. It accepts the
+delivery only when its payload action is `added`, its installation ID matches
+the checker, and the fixture repository's positive integer ID appears in
+`repositories_added`. Both change lists must be well-formed, and the same
+repository cannot appear in both. A generic `repository` field or
+`repositories_removed` entry is not evidence of an add.
 
 ## Lifecycle delivery report, schema 1
 
@@ -271,6 +343,12 @@ The collector requires matching response-status and redelivery metadata in
 both records. Conflicting or missing metadata fails the capture instead of
 combining two deliveries into one observation.
 
+For a `repository.*` event, both records must contain the same positive
+integer `repository_id`; booleans, strings, zero, negative values, null, and
+omission fail the capture. Other event families may omit `repository_id` or
+set it to null, as allowed by GitHub's delivery schema. When present and
+non-null, it must still be a matching positive integer.
+
 For each unique delivery shape, `contracts` retains only:
 
 - event and action
@@ -281,6 +359,10 @@ For each unique delivery shape, `contracts` retains only:
 Delivery IDs, installation IDs, repository IDs, actor names, headers,
 pagination URLs and cursors, signatures, payload values, response bodies, and
 provider error messages are not written.
+
+GitHub's delivery schema defines `status_code` as an integer without a minimum
+or maximum. The collectors therefore reject booleans and non-integers but do
+not invent a numeric range that GitHub does not publish.
 
 A lifecycle configuration error happens before capture starts, so it does not
 write a report.
@@ -302,3 +384,4 @@ the sanitized report whenever the command got far enough to write one.
 
 [app-deliveries]: https://docs.github.com/en/rest/apps/webhooks?apiVersion=2026-03-10#list-deliveries-for-an-app-webhook
 [rest-pagination]: https://docs.github.com/en/rest/using-the-rest-api/using-pagination-in-the-rest-api
+[webhook-payloads]: https://docs.github.com/en/webhooks/webhook-events-and-payloads#installation_repositories

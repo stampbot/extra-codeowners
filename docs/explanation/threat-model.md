@@ -131,7 +131,9 @@ expected-source rulesets, App reviews, and sanitized webhook payloads against a
 disposable GitHub.com repository. A run is evidence for the tested API and
 account at that recorded time. It cannot prove instant or reliable webhook
 delivery, and it does not remove the production blocker while success can be
-inherited before invalidation.
+inherited before invalidation. Its delivery-log probe follows GitHub's
+pagination metadata within fixed bounds. When another page remains, an unseen
+delivery is incomplete evidence, not evidence that the delivery was absent.
 
 ## Why some paths cannot be delegated
 
