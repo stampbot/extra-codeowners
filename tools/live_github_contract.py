@@ -27,7 +27,37 @@ import jwt
 API_VERSION: Final = "2026-03-10"
 API_URL: Final = "https://api.github.com"
 CONFIRMATION_PREFIX: Final = "delete-disposable-repository-in:"
-REPORT_SCHEMA_VERSION: Final = 1
+REPORT_SCHEMA_VERSION: Final = 2
+
+CORE_OBSERVATIONS: Final = (
+    "organization_ruleset_expected_source",
+    "repository_ruleset_expected_source",
+    "completed_success_to_in_progress_blocks_merge",
+    "shared_head_inherits_success_before_invalidation",
+    "shared_head_invalidation_blocks_both_pull_requests",
+    "retarget_inherits_commit_scoped_success_before_invalidation",
+    "pull_request_opened_delivery_observed",
+    "pull_request_retarget_delivery_observed",
+)
+APP_REVIEW_OBSERVATIONS: Final = (
+    "numeric_approval_rule_blocks_before_app_review",
+    "app_review_attributed_to_bot",
+    "app_review_counts_as_numeric_approval",
+)
+DIAGNOSTIC_OBSERVATIONS: Final = (
+    "in_progress_merge_state_blocked",
+    "in_progress_merge_attempt_blocked",
+    "installation_repository_added_delivery_observed",
+)
+MANUAL_EVIDENCE_REQUIRED: Final = (
+    "deployed_webhook_delay_and_redelivery",
+    "deployed_webhook_loss_and_reconciliation",
+    "installation_lifecycle_delivery_contracts",
+    "repository_rename_transfer_and_deletion",
+    "installation_suspension_and_deletion",
+    "repository_selection_access_removal",
+    "authority_loss_merge_handback",
+)
 
 JsonObject = dict[str, Any]
 
@@ -188,7 +218,7 @@ class RestClient:
     def close(self) -> None:
         self._http.close()
 
-    def request(
+    def _request_response(
         self,
         method: str,
         path: str,
@@ -196,7 +226,7 @@ class RestClient:
         body: JsonObject | None = None,
         params: dict[str, str | int] | None = None,
         expected: tuple[int, ...] = (200,),
-    ) -> Any:
+    ) -> httpx.Response:
         response = self._http.request(method, path, json=body, params=params)
         if response.status_code not in expected:
             message = ""
@@ -210,9 +240,48 @@ class RestClient:
             raise ContractError(
                 f"GitHub API {method} {path} returned {response.status_code}{message}"
             )
+        return response
+
+    @staticmethod
+    def _response_body(response: httpx.Response) -> Any:
         if response.status_code == 204 or not response.content:
             return None
         return response.json()
+
+    def request(
+        self,
+        method: str,
+        path: str,
+        *,
+        body: JsonObject | None = None,
+        params: dict[str, str | int] | None = None,
+        expected: tuple[int, ...] = (200,),
+    ) -> Any:
+        response = self._request_response(
+            method,
+            path,
+            body=body,
+            params=params,
+            expected=expected,
+        )
+        return self._response_body(response)
+
+    def request_with_link(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: dict[str, str | int] | None = None,
+        expected: tuple[int, ...] = (200,),
+    ) -> tuple[Any, str | None]:
+        """Return a response body and only its pagination Link header."""
+        response = self._request_response(
+            method,
+            path,
+            params=params,
+            expected=expected,
+        )
+        return self._response_body(response), response.headers.get("link")
 
     def status(
         self,
@@ -296,20 +365,50 @@ def required_check_has_expected_source(ruleset: JsonObject, *, context: str, app
     return False
 
 
+def _positive_delivery_integer(value: Any, description: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ContractError(f"GitHub delivery {description} is not a positive integer")
+    return cast(int, value)
+
+
+def _delivery_pair(delivery: JsonObject, description: str) -> tuple[str, str]:
+    event = delivery.get("event")
+    action = delivery.get("action")
+    if not isinstance(event, str) or not event or not isinstance(action, str) or not action:
+        raise ContractError(f"GitHub delivery {description} omitted event or action")
+    return event, action
+
+
+def _delivery_status(delivery: JsonObject, description: str) -> tuple[bool, int]:
+    redelivery = delivery.get("redelivery")
+    status_code = delivery.get("status_code")
+    if not isinstance(redelivery, bool):
+        raise ContractError(f"GitHub delivery {description} omitted Boolean redelivery metadata")
+    if isinstance(status_code, bool) or not isinstance(status_code, int):
+        raise ContractError(f"GitHub delivery {description} omitted integer status metadata")
+    return redelivery, status_code
+
+
 def sanitize_delivery(delivery: JsonObject) -> JsonObject:
     """Reduce a raw App delivery to metadata and payload field names."""
+    redelivery, status_code = _delivery_status(delivery, "detail")
     request = delivery.get("request")
     payload = request.get("payload") if isinstance(request, dict) else None
     shape: JsonObject = {}
     if isinstance(payload, dict):
         shape["root_keys"] = sorted(str(key) for key in payload)
         for name in (
+            "account",
+            "changes",
+            "enterprise",
             "installation",
             "organization",
             "pull_request",
+            "repositories",
             "repositories_added",
             "repositories_removed",
             "repository",
+            "requester",
             "sender",
         ):
             value = payload.get(name)
@@ -322,29 +421,72 @@ def sanitize_delivery(delivery: JsonObject) -> JsonObject:
         "action": delivery.get("action") if isinstance(delivery.get("action"), str) else None,
         "event": delivery.get("event") if isinstance(delivery.get("event"), str) else None,
         "payload_shape": shape,
-        "redelivery": delivery.get("redelivery") is True,
-        "status_code": (
-            delivery.get("status_code") if isinstance(delivery.get("status_code"), int) else None
-        ),
+        "redelivery": redelivery,
+        "status_code": status_code,
     }
 
 
 def delivery_targets_repository(delivery: JsonObject, repository_id: int) -> bool:
     """Return whether a delivery payload identifies the disposable repository."""
+
+    def matches_repository(value: Any) -> bool:
+        return isinstance(value, int) and not isinstance(value, bool) and value == repository_id
+
     request = delivery.get("request")
     payload = request.get("payload") if isinstance(request, dict) else None
     if not isinstance(payload, dict):
         return False
     repository = payload.get("repository")
-    if isinstance(repository, dict) and repository.get("id") == repository_id:
+    if isinstance(repository, dict) and matches_repository(repository.get("id")):
         return True
     for field in ("repositories_added", "repositories_removed"):
         repositories = payload.get(field)
         if isinstance(repositories, list) and any(
-            isinstance(item, dict) and item.get("id") == repository_id for item in repositories
+            isinstance(item, dict) and matches_repository(item.get("id")) for item in repositories
         ):
             return True
     return False
+
+
+def _validate_webhook_detail(
+    summary: JsonObject,
+    detail: JsonObject,
+    *,
+    expected_pair: tuple[str, str],
+    installation_id: int,
+    repository_id: int,
+) -> None:
+    summary_id = _positive_delivery_integer(summary.get("id"), "summary ID")
+    detail_id = _positive_delivery_integer(detail.get("id"), "detail ID")
+    summary_installation = _positive_delivery_integer(
+        summary.get("installation_id"),
+        "summary installation ID",
+    )
+    detail_installation = _positive_delivery_integer(
+        detail.get("installation_id"),
+        "detail installation ID",
+    )
+    if (
+        detail_id != summary_id
+        or summary_installation != installation_id
+        or detail_installation != installation_id
+        or _delivery_pair(summary, "summary") != expected_pair
+        or _delivery_pair(detail, "detail") != expected_pair
+        or _delivery_status(summary, "summary") != _delivery_status(detail, "detail")
+    ):
+        raise ContractError("GitHub delivery detail does not match its summary")
+
+    if expected_pair[0] == "pull_request":
+        summary_repository = _positive_delivery_integer(
+            summary.get("repository_id"),
+            "summary repository ID",
+        )
+        detail_repository = _positive_delivery_integer(
+            detail.get("repository_id"),
+            "detail repository ID",
+        )
+        if summary_repository != repository_id or detail_repository != repository_id:
+            raise ContractError("GitHub delivery detail does not match its fixture repository")
 
 
 def _status_check_rule(context: str, app_id: int) -> JsonObject:
@@ -396,6 +538,73 @@ def contract_interpretation(assertions: JsonObject) -> JsonObject:
             else "fixture does not cover deployed webhook delivery and reconciliation"
         ),
         "scope": "GitHub rules and Check Run behavior only; deployment delivery is separate",
+    }
+
+
+def _observation_state(assertions: JsonObject, name: str) -> str:
+    if name not in assertions:
+        return "missing"
+    value = assertions[name]
+    if value is None:
+        return "not_run"
+    if value is True:
+        return "observed_true"
+    if value is False:
+        return "observed_false"
+    return "invalid"
+
+
+def evidence_completeness(report: JsonObject, *, approver_configured: bool) -> JsonObject:
+    """Describe which evidence this report contains without interpreting false as absent."""
+    assertions_value = report.get("assertions")
+    assertions = assertions_value if isinstance(assertions_value, dict) else {}
+    names = (*CORE_OBSERVATIONS, *APP_REVIEW_OBSERVATIONS, *DIAGNOSTIC_OBSERVATIONS)
+    observations = {name: _observation_state(assertions, name) for name in names}
+
+    fixture = report.get("fixture")
+    selection = fixture.get("checker_repository_selection") if isinstance(fixture, dict) else None
+    configured_required = list(CORE_OBSERVATIONS)
+    if approver_configured:
+        configured_required.extend(APP_REVIEW_OBSERVATIONS)
+    if selection == "selected":
+        configured_required.append("installation_repository_added_delivery_observed")
+
+    def observed(name: str) -> bool:
+        return observations[name] in {"observed_true", "observed_false"}
+
+    configured_observations_complete = all(observed(name) for name in configured_required)
+    full_automated_complete = all(
+        observed(name) for name in (*CORE_OBSERVATIONS, *APP_REVIEW_OBSERVATIONS)
+    )
+    report_result = report.get("result")
+    cleanup_succeeded = report.get("cleanup_succeeded")
+    selection_valid = selection in {"all", "selected"}
+    return {
+        "configured_run_complete": (
+            report_result == "observed"
+            and cleanup_succeeded is True
+            and selection_valid
+            and configured_observations_complete
+        ),
+        "configured_observations_complete": configured_observations_complete,
+        "full_automated_observations_complete": full_automated_complete,
+        "configured_required": configured_required,
+        "full_automated_required": [
+            *CORE_OBSERVATIONS,
+            *APP_REVIEW_OBSERVATIONS,
+        ],
+        "observations": observations,
+        "observed_false": sorted(
+            name for name, state in observations.items() if state == "observed_false"
+        ),
+        "not_run": sorted(name for name, state in observations.items() if state == "not_run"),
+        "missing": sorted(name for name, state in observations.items() if state == "missing"),
+        "invalid": sorted(name for name, state in observations.items() if state == "invalid"),
+        "manual_evidence_required": list(MANUAL_EVIDENCE_REQUIRED),
+        "scope": (
+            "automated GitHub fixture only; lifecycle, deployed delivery, and "
+            "authority-loss evidence remain separate"
+        ),
     }
 
 
@@ -452,6 +661,7 @@ class Fixture:
         self.default_branch = ""
         self.organization_ruleset_name = f"Extra CODEOWNERS contract {self.repository_name}"
         self.organization_ruleset_id: int | None = None
+        self.organization_ruleset_creation_attempted = False
         self.report: JsonObject = {
             "schema_version": REPORT_SCHEMA_VERSION,
             "api_version": API_VERSION,
@@ -658,6 +868,8 @@ class Fixture:
     def _create_rulesets(self) -> None:
         assert self.repository_id is not None
         rule = _status_check_rule(self.config.check_name, self.config.checker.app_id)
+        sys.stdout.write(f"Organization ruleset recovery name: {self.organization_ruleset_name}\n")
+        self.organization_ruleset_creation_attempted = True
         org_ruleset = _object(
             self.operator.request(
                 "POST",
@@ -681,6 +893,10 @@ class Fixture:
             "organization ruleset",
         )
         self.organization_ruleset_id = _integer(org_ruleset.get("id"), "organization ruleset ID")
+        sys.stdout.write(
+            "Created disposable organization ruleset "
+            f"{self.organization_ruleset_name!r} (ID {self.organization_ruleset_id})\n"
+        )
         repository_ruleset = _object(
             self.operator.request(
                 "POST",
@@ -773,56 +989,86 @@ class Fixture:
         client = self.checker_auth.jwt_client()
         try:
             deadline = time.monotonic() + 30
-            matching: list[JsonObject] = []
-            while time.monotonic() < deadline:
-                deliveries = client.request("GET", "/app/hook/deliveries", params={"per_page": 100})
-                if isinstance(deliveries, list):
-                    summaries = [item for item in deliveries if isinstance(item, dict)]
-                    matching = [
-                        item
-                        for item in summaries
-                        if item.get("installation_id") == self.config.checker.installation_id
-                        and (
-                            item.get("repository_id") == self.repository_id
-                            or item.get("event") == "installation_repositories"
-                        )
-                    ]
-                actions = {(item.get("event"), item.get("action")) for item in matching}
-                if ("pull_request", "opened") in actions and ("pull_request", "edited") in actions:
-                    break
-                time.sleep(1)
-            selected: list[JsonObject] = []
+            fixture_report = _object(self.report["fixture"], "fixture report")
+            selected_installation = fixture_report["checker_repository_selection"] == "selected"
             wanted = {
                 ("installation_repositories", "added"),
                 ("pull_request", "edited"),
                 ("pull_request", "opened"),
             }
-            seen: set[tuple[Any, Any]] = set()
-            for summary in matching:
-                key = (summary.get("event"), summary.get("action"))
-                delivery_id = summary.get("id")
-                if key not in wanted or key in seen or not isinstance(delivery_id, int):
-                    continue
-                detail = client.request("GET", f"/app/hook/deliveries/{delivery_id}")
-                if isinstance(detail, dict) and (
-                    key != ("installation_repositories", "added")
-                    or (
-                        self.repository_id is not None
-                        and delivery_targets_repository(detail, self.repository_id)
-                    )
+            required = {
+                ("pull_request", "edited"),
+                ("pull_request", "opened"),
+            }
+            if selected_installation:
+                required.add(("installation_repositories", "added"))
+            contracts: dict[tuple[str, str], JsonObject] = {}
+            inspected_ids: set[int] = set()
+            while time.monotonic() < deadline:
+                deliveries = client.request("GET", "/app/hook/deliveries", params={"per_page": 100})
+                if not isinstance(deliveries, list) or any(
+                    not isinstance(item, dict) for item in deliveries
                 ):
-                    selected.append(sanitize_delivery(detail))
-                    seen.add(key)
-            self.report["webhook_contracts"] = selected
+                    raise ContractError("GitHub delivery listing is not a list of objects")
+                for summary in deliveries:
+                    event = summary.get("event")
+                    if event not in {"installation_repositories", "pull_request"}:
+                        continue
+                    pair = _delivery_pair(summary, "summary")
+                    if pair not in wanted or pair in contracts:
+                        continue
+                    summary_installation = _positive_delivery_integer(
+                        summary.get("installation_id"),
+                        "summary installation ID",
+                    )
+                    if summary_installation != self.config.checker.installation_id:
+                        continue
+                    if pair[0] == "pull_request":
+                        summary_repository = _positive_delivery_integer(
+                            summary.get("repository_id"),
+                            "summary repository ID",
+                        )
+                        if summary_repository != self.repository_id:
+                            continue
+                    delivery_id = _positive_delivery_integer(summary.get("id"), "summary ID")
+                    if delivery_id in inspected_ids:
+                        continue
+                    inspected_ids.add(delivery_id)
+                    detail = client.request("GET", f"/app/hook/deliveries/{delivery_id}")
+                    if not isinstance(detail, dict):
+                        raise ContractError("GitHub delivery detail is not an object")
+                    assert self.repository_id is not None
+                    _validate_webhook_detail(
+                        summary,
+                        detail,
+                        expected_pair=pair,
+                        installation_id=self.config.checker.installation_id,
+                        repository_id=self.repository_id,
+                    )
+                    if pair == ("installation_repositories", "added") and not (
+                        delivery_targets_repository(detail, self.repository_id)
+                    ):
+                        continue
+                    contracts[pair] = sanitize_delivery(detail)
+                if required <= contracts.keys():
+                    break
+                time.sleep(1)
+            seen = set(contracts)
+            self.report["webhook_contracts"] = [contracts[pair] for pair in sorted(contracts)]
             assertions = _object(self.report["assertions"], "report assertions")
             opened_observed = ("pull_request", "opened") in seen
             retarget_observed = ("pull_request", "edited") in seen
             assertions["pull_request_opened_delivery_observed"] = opened_observed
             assertions["pull_request_retarget_delivery_observed"] = retarget_observed
             assertions["installation_repository_added_delivery_observed"] = (
-                "installation_repositories",
-                "added",
-            ) in seen
+                (
+                    "installation_repositories",
+                    "added",
+                )
+                in seen
+                if selected_installation
+                else None
+            )
             if not opened_observed or not retarget_observed:
                 raise ContractError(
                     "the checker App did not expose both pull_request.opened and "
@@ -959,30 +1205,47 @@ class Fixture:
 
     def close(self) -> list[str]:
         errors: list[str] = []
+
+        def record_failure(operation: str, error: Exception) -> None:
+            errors.append(f"{operation} failed ({type(error).__name__})")
+
         if self.config.keep_repository:
-            sys.stdout.write(f"Keeping fixture repository https://github.com/{self.repository}\n")
+            sys.stdout.write(
+                "Cleanup disabled; retaining any created fixture repository "
+                f"https://github.com/{self.repository} and organization ruleset "
+                f"{self.organization_ruleset_name!r}\n"
+            )
         else:
             ruleset_id = self.organization_ruleset_id
-            if ruleset_id is None and self.repository_created:
+            ruleset_attempted = getattr(
+                self,
+                "organization_ruleset_creation_attempted",
+                ruleset_id is not None,
+            )
+            if ruleset_id is None and ruleset_attempted:
                 try:
                     rulesets = self.operator.request(
                         "GET",
                         f"/orgs/{quote(self.config.organization)}/rulesets",
                         params={"per_page": 100},
                     )
-                    if isinstance(rulesets, list):
-                        matching_ids = [
-                            _integer(item.get("id"), "organization ruleset ID")
-                            for item in rulesets
-                            if isinstance(item, dict)
-                            and item.get("name") == self.organization_ruleset_name
-                            and isinstance(item.get("id"), int)
-                            and not isinstance(item.get("id"), bool)
-                        ]
-                        if len(matching_ids) == 1:
-                            ruleset_id = matching_ids[0]
-                except ContractError as error:
-                    errors.append(f"organization ruleset discovery failed: {error}")
+                    if not isinstance(rulesets, list):
+                        raise ContractError("GitHub organization ruleset listing is not a list")
+                    matching_ids = [
+                        _integer(item.get("id"), "organization ruleset ID")
+                        for item in rulesets
+                        if isinstance(item, dict)
+                        and item.get("name") == self.organization_ruleset_name
+                        and isinstance(item.get("id"), int)
+                        and not isinstance(item.get("id"), bool)
+                    ]
+                    if len(matching_ids) != 1:
+                        raise ContractError(
+                            "GitHub organization ruleset recovery did not find exactly one rule"
+                        )
+                    ruleset_id = matching_ids[0]
+                except Exception as error:
+                    record_failure("organization ruleset discovery", error)
             if ruleset_id is not None:
                 try:
                     self.operator.request(
@@ -990,20 +1253,26 @@ class Fixture:
                         (f"/orgs/{quote(self.config.organization)}/rulesets/{ruleset_id}"),
                         expected=(204,),
                     )
-                except ContractError as error:
-                    errors.append(f"organization ruleset cleanup failed: {error}")
+                except Exception as error:
+                    record_failure("organization ruleset cleanup", error)
             if self.repository_created:
                 try:
                     self.operator.request("DELETE", self.repo_path, expected=(204,))
-                except ContractError as error:
-                    errors.append(f"repository cleanup failed: {error}")
-        if self.checker is not None:
-            self.checker.close()
-        if self.approver is not None:
-            self.approver.close()
-        if self.repository_selection is not None:
-            self.repository_selection.close()
-        self.operator.close()
+                except Exception as error:
+                    record_failure("repository cleanup", error)
+        clients = (
+            ("checker client close", self.checker),
+            ("approver client close", self.approver),
+            ("repository-selection client close", self.repository_selection),
+            ("operator client close", self.operator),
+        )
+        for operation, client in clients:
+            if client is None:
+                continue
+            try:
+                client.close()
+            except Exception as error:
+                record_failure(operation, error)
         return errors
 
 
@@ -1038,13 +1307,20 @@ def main() -> int:
         exit_code = 1
     else:
         report["result"] = "observed"
-    cleanup_errors = fixture.close()
+    try:
+        cleanup_errors = fixture.close()
+    except Exception as error:
+        cleanup_errors = [f"fixture cleanup failed ({type(error).__name__})"]
     report["cleanup_succeeded"] = not cleanup_errors and not config.keep_repository
     if cleanup_errors:
         report["cleanup_failure_count"] = len(cleanup_errors)
         for cleanup_error in cleanup_errors:
             sys.stderr.write(f"{cleanup_error}\n")
         exit_code = 1
+    report["evidence_completeness"] = evidence_completeness(
+        report,
+        approver_configured=config.approver is not None,
+    )
     config.report_file.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
     sys.stdout.write(f"Wrote sanitized report to {config.report_file}\n")
     return exit_code
