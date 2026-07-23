@@ -9348,7 +9348,7 @@ def alpine_recipe_exception(
     if not isinstance(links, list) or len(links) > MAX_COMPONENTS:
         raise EvidenceError(f"invalid allowed recipe links for {key}")
     validated_links: list[Mapping[str, str]] = []
-    seen_links: set[tuple[str, str, str]] = set()
+    seen_paths: set[str] = set()
     for link in links:
         if not isinstance(link, dict) or set(link) != {"path", "target", "type"}:
             raise EvidenceError(f"invalid allowed recipe link policy for {key}")
@@ -9365,13 +9365,19 @@ def alpine_recipe_exception(
         if path != path_value:
             raise EvidenceError(f"non-canonical allowed recipe link path for {key}")
         checked_link_target(target)
+        target_path = str(checked_path(target))
+        if (
+            target_path != target
+            or path == target_path
+            or PurePosixPath(path).parent != PurePosixPath(target_path).parent
+        ):
+            raise EvidenceError(f"allowed recipe link must target one canonical sibling for {key}")
         if link_type not in {"symlink", "hardlink"}:
             raise EvidenceError(f"invalid allowed recipe link type for {key}: {link_type}")
-        identity = (path, target, link_type)
-        if identity in seen_links:
+        if path in seen_paths:
             raise EvidenceError(f"duplicate allowed recipe link policy for {key}: {path}")
-        seen_links.add(identity)
-        validated_links.append({"path": path, "target": target, "type": link_type})
+        seen_paths.add(path)
+        validated_links.append({"path": path, "target": target_path, "type": link_type})
     if not dynamic and not validated_links:
         raise EvidenceError(f"Alpine recipe exception grants nothing for {key}")
     return dynamic, tuple(validated_links)

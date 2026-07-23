@@ -3829,6 +3829,58 @@ def test_owner_sdist_subtree_uses_a_canonical_link_free_manifest() -> None:
         )
 
 
+def test_owner_sdist_zip_subtree_tracks_top_level_roots() -> None:
+    source_file = b"int demo(void) { return 0; }\n"
+    manifest = [
+        {
+            "path": "demo.c",
+            "type": "file",
+            "mode": 0o644,
+            "size": len(source_file),
+            "sha256": evidence.sha256_bytes(source_file),
+        }
+    ]
+    source = {
+        "path": "src/native",
+        "member_count": 1,
+        "expanded_size": len(source_file),
+        "tree_sha256": evidence.sha256_bytes(evidence.canonical_json(manifest)),
+    }
+    archive = source_zip_bytes(
+        [
+            ("demo-1.0/", b""),
+            ("demo-1.0/src/", b""),
+            ("demo-1.0/src/native/", b""),
+            ("demo-1.0/src/native/demo.c", source_file),
+            ("demo-1.0/README.md", b"demo\n"),
+        ]
+    )
+
+    assert (
+        evidence.verify_owner_sdist_subtree(
+            archive,
+            source_id="owner-sdist:python:demo@1.0#src/native",
+            source=source,
+            archive_name="demo-1.0.zip",
+        )
+        == manifest
+    )
+
+    multiple_roots = source_zip_bytes(
+        [
+            ("demo-1.0/src/native/demo.c", source_file),
+            ("other-root/README.md", b"other\n"),
+        ]
+    )
+    with pytest.raises(evidence.EvidenceError, match="one top-level root"):
+        evidence.verify_owner_sdist_subtree(
+            multiple_roots,
+            source_id="owner-sdist:python:demo@1.0#src/native",
+            source=source,
+            archive_name="demo-1.0.zip",
+        )
+
+
 def test_native_component_v7_policy_separates_observation_review_and_closure() -> None:
     policy = native_component_v7_policy_case()
     evidence.validate_native_component_policy_schema(policy)
@@ -9513,6 +9565,20 @@ def test_policy_schema_rejects_malformed_nested_strings_and_recipe_links() -> No
     exception["allowed_links"] = [{"path": None, "target": 1, "type": []}]
     with pytest.raises(evidence.EvidenceError, match="allowed recipe link"):
         evidence.validate_policy_schema(malformed_link)
+
+    unresolved_target = copy.deepcopy(policy)
+    exception = next(iter(unresolved_target["alpine_recipe_exceptions"].values()))
+    exception["allowed_links"][0]["target"] = "alpine-baselayout.post-install"
+    with pytest.raises(evidence.EvidenceError, match="one canonical sibling"):
+        evidence.validate_policy_schema(unresolved_target)
+
+    duplicate_path = copy.deepcopy(policy)
+    exception = next(iter(duplicate_path["alpine_recipe_exceptions"].values()))
+    duplicate = copy.deepcopy(exception["allowed_links"][0])
+    duplicate["target"] = duplicate["target"].replace("post-install", "pre-install")
+    exception["allowed_links"].append(duplicate)
+    with pytest.raises(evidence.EvidenceError, match="duplicate allowed recipe link"):
+        evidence.validate_policy_schema(duplicate_path)
 
     malformed_rationale = copy.deepcopy(policy)
     exception = next(iter(malformed_rationale["alpine_recipe_exceptions"].values()))

@@ -27,11 +27,11 @@
       "allowed_links": [
         {
           "path": "aports-60a7585bbab2fa0f762504eb617dbca90216e31f-main-alpine-baselayout/main/alpine-baselayout/alpine-baselayout.post-upgrade",
-          "target": "alpine-baselayout.post-install",
+          "target": "aports-60a7585bbab2fa0f762504eb617dbca90216e31f-main-alpine-baselayout/main/alpine-baselayout/alpine-baselayout.post-install",
           "type": "symlink"
         }
       ],
-      "rationale": "The commit-pinned recipe subtree contains one non-source maintainer-script alias; its exact safe relative target is reviewed and it cannot replace APKBUILD or a checksummed source."
+      "rationale": "The commit-pinned recipe subtree contains one non-source maintainer-script alias; its exact resolved sibling target is reviewed and it cannot replace APKBUILD or a checksummed source."
     },
     "alpine-keys@b9f23becced4d7b3ccc0fa0f28530243ccd314a0": {
       "allow_dynamic_sources": true,
