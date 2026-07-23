@@ -1980,9 +1980,16 @@ class Reconciler:
             if suspended:
                 continue
             try:
-                repositories = _reconciliation_repositories(
-                    await self.github.list_installation_repositories(installation_id)
+                repository_records = await self.github.list_installation_repositories(
+                    installation_id
                 )
+                if lost.is_set():
+                    return ReconciliationOutcome(
+                        queued=queued,
+                        failed_installations=failed_installations,
+                        lease_lost=True,
+                    )
+                repositories = _reconciliation_repositories(repository_records)
                 for full_name, archived in repositories:
                     if lost.is_set():
                         return ReconciliationOutcome(

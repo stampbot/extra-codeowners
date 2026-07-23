@@ -1715,9 +1715,12 @@ async def test_reconciler_enqueues_open_pull_requests(tmp_path: Path) -> None:
 
     assert queued == ReconciliationOutcome(queued=1)
     assert store.pending_count() == 2
+    assert store.pending_shared_head_invalidation_count() == 1
     assert store.shared_head_generation(2, "example/project", HEAD) == 1
 
     assert await reconciler.reconcile_once() == ReconciliationOutcome(queued=0)
+    assert store.pending_count() == 2
+    assert store.pending_shared_head_invalidation_count() == 1
     assert store.shared_head_generation(2, "example/project", HEAD) == 1
 
 
@@ -1817,7 +1820,8 @@ async def test_lease_loss_observed_after_scan_is_folded_into_iteration_outcome(
     attempts.labels.assert_called_once_with("partial")
     attempts.labels.return_value.inc.assert_called_once_with()
     last_success.set_to_current_time.assert_not_called()
-    assert store.pending_count() == 1
+    assert store.pending_count() == 2
+    assert store.pending_shared_head_invalidation_count() == 1
 
 
 @pytest.mark.asyncio
@@ -1836,20 +1840,57 @@ async def test_reconciliation_prunes_before_discovery_and_stops_after_lease_loss
     github.list_installations = list_installations_after_lease_loss  # type: ignore[attr-defined]
     github.list_installation_repositories = AsyncMock()  # type: ignore[attr-defined]
     store = migrated_store(f"sqlite:///{tmp_path / 'reconcile-prune-order.db'}")
-    original_prune = store.prune_deliveries
+    original_delivery_prune = store.prune_deliveries
+    original_shared_head_prune = store.prune_shared_head_epochs
 
-    def record_prune(boundary: datetime) -> int:
+    def record_delivery_prune(boundary: datetime) -> int:
         order.append("prune_deliveries")
-        return original_prune(boundary)
+        return original_delivery_prune(boundary)
 
-    monkeypatch.setattr(store, "prune_deliveries", record_prune)
+    def record_shared_head_prune(boundary: datetime) -> int:
+        order.append("prune_shared_head_epochs")
+        return original_shared_head_prune(boundary)
+
+    monkeypatch.setattr(store, "prune_deliveries", record_delivery_prune)
+    monkeypatch.setattr(store, "prune_shared_head_epochs", record_shared_head_prune)
     reconciler = Reconciler(settings(), github, store, "reconciler")  # type: ignore[arg-type]
 
     outcome = await reconciler._reconcile_owned(lost)
 
     assert outcome == ReconciliationOutcome(queued=0, lease_lost=True)
-    assert order == ["prune_deliveries", "discover_installations"]
+    assert order == [
+        "prune_deliveries",
+        "prune_shared_head_epochs",
+        "discover_installations",
+    ]
     github.list_installation_repositories.assert_not_awaited()  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_stops_between_delivery_and_shared_head_pruning_after_lease_loss(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lost = asyncio.Event()
+    github = FakeGitHub(changed_path="uv.lock")
+    github.list_installations = AsyncMock()  # type: ignore[attr-defined]
+    store = migrated_store(f"sqlite:///{tmp_path / 'reconcile-prune-lease-loss.db'}")
+    original_delivery_prune = store.prune_deliveries
+    shared_head_prune = MagicMock(wraps=store.prune_shared_head_epochs)
+
+    def prune_deliveries_then_lose_lease(boundary: datetime) -> int:
+        result = original_delivery_prune(boundary)
+        lost.set()
+        return result
+
+    monkeypatch.setattr(store, "prune_deliveries", prune_deliveries_then_lose_lease)
+    monkeypatch.setattr(store, "prune_shared_head_epochs", shared_head_prune)
+    reconciler = Reconciler(settings(), github, store, "reconciler")  # type: ignore[arg-type]
+
+    outcome = await reconciler._reconcile_owned(lost)
+
+    assert outcome == ReconciliationOutcome(queued=0, lease_lost=True)
+    shared_head_prune.assert_not_called()
+    github.list_installations.assert_not_awaited()  # type: ignore[attr-defined]
 
 
 @pytest.mark.asyncio
@@ -1921,7 +1962,8 @@ async def test_reconciliation_stops_pull_loop_when_lease_loss_becomes_visible(
 
     assert outcome == ReconciliationOutcome(queued=1, lease_lost=True)
     assert enqueue.call_count == 1
-    assert store.pending_count() == 1
+    assert store.pending_count() == 2
+    assert store.pending_shared_head_invalidation_count() == 1
     claimed = store.claim("test-worker", 60)
     assert claimed is not None
     assert claimed.pull_number == 1
@@ -1988,7 +2030,8 @@ async def test_partial_reconciliation_queues_healthy_installations_and_recovers(
     attempts.labels.assert_called_once_with("partial")
     attempts.labels.return_value.inc.assert_called_once_with()
     last_success.set_to_current_time.assert_not_called()
-    assert store.pending_count() == 1
+    assert store.pending_count() == 2
+    assert store.pending_shared_head_invalidation_count() == 1
     first = store.claim("test-worker", 60)
     assert first is not None
     assert first.repository_full_name == "example/healthy"
@@ -2001,7 +2044,8 @@ async def test_partial_reconciliation_queues_healthy_installations_and_recovers(
     attempts.labels.assert_called_once_with("success")
     attempts.labels.return_value.inc.assert_called_once_with()
     last_success.set_to_current_time.assert_called_once_with()
-    assert store.pending_count() == 2
+    assert store.pending_count() == 4
+    assert store.pending_shared_head_invalidation_count() == 2
     repositories: set[str] = set()
     for _ in range(2):
         claimed = store.claim("test-worker", 60)
@@ -2127,7 +2171,8 @@ async def test_malformed_repository_batch_is_partial_and_later_installations_con
     outcome = await reconciler.reconcile_once()
 
     assert outcome == ReconciliationOutcome(queued=1, failed_installations=1)
-    assert store.pending_count() == 1
+    assert store.pending_count() == 2
+    assert store.pending_shared_head_invalidation_count() == 1
     github.list_open_pulls.assert_awaited_once_with(  # type: ignore[attr-defined]
         3, "example/healthy"
     )
@@ -2180,7 +2225,8 @@ async def test_malformed_pull_batch_is_partial_and_later_installations_continue(
     outcome = await reconciler.reconcile_once()
 
     assert outcome == ReconciliationOutcome(queued=1, failed_installations=1)
-    assert store.pending_count() == 1
+    assert store.pending_count() == 2
+    assert store.pending_shared_head_invalidation_count() == 1
     logger.warning.assert_called_once_with(
         "installation_reconciliation_payload_invalid",
         installation_id=2,
@@ -2223,7 +2269,8 @@ async def test_malformed_pull_number_is_partial_and_later_installations_continue
     outcome = await reconciler.reconcile_once()
 
     assert outcome == ReconciliationOutcome(queued=1, failed_installations=1)
-    assert store.pending_count() == 1
+    assert store.pending_count() == 2
+    assert store.pending_shared_head_invalidation_count() == 1
     logger.warning.assert_called_once_with(
         "installation_reconciliation_payload_invalid",
         installation_id=2,
@@ -2276,7 +2323,8 @@ async def test_malformed_pull_head_is_partial_and_later_installations_continue(
     outcome = await reconciler.reconcile_once()
 
     assert outcome == ReconciliationOutcome(queued=1, failed_installations=1)
-    assert store.pending_count() == 1
+    assert store.pending_count() == 2
+    assert store.pending_shared_head_invalidation_count() == 1
     logger.warning.assert_called_once_with(
         "installation_reconciliation_payload_invalid",
         installation_id=2,
@@ -2311,6 +2359,8 @@ async def test_reconciliation_intentionally_skips_suspended_installations_and_ar
     outcome = await reconciler.reconcile_once()
 
     assert outcome == ReconciliationOutcome(queued=1)
+    assert store.pending_count() == 2
+    assert store.pending_shared_head_invalidation_count() == 1
     github.list_installation_repositories.assert_awaited_once_with(2)  # type: ignore[attr-defined]
     github.list_open_pulls.assert_awaited_once_with(  # type: ignore[attr-defined]
         2, "example/healthy"
@@ -2346,10 +2396,14 @@ async def test_reconciler_recovers_missed_shared_head_open_and_fails_closed(
     service = EvaluationService(settings(), github, store)  # type: ignore[arg-type]
 
     assert await reconciler.reconcile_once() == ReconciliationOutcome(queued=2)
+    assert store.pending_count() == 3
+    assert store.pending_shared_head_invalidation_count() == 1
     invalidation = store.claim_shared_head_invalidation("head-worker", 60)
     assert invalidation is not None
     await service.invalidate_shared_head(invalidation, asyncio.Event())
     assert store.complete_shared_head_invalidation(invalidation)
+    assert store.pending_count() == 2
+    assert store.pending_shared_head_invalidation_count() == 0
     for _ in range(2):
         claimed = store.claim("worker", 60)
         assert claimed is not None

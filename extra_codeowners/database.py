@@ -794,6 +794,8 @@ class QueueStore:
         request: JobRequest,
         delivery_id: str | None = None,
         shared_head_generation: int | None = None,
+        *,
+        preserve_different_head: bool = False,
     ) -> None:
         now = utcnow()
         authority_generation = (
@@ -825,17 +827,26 @@ class QueueStore:
         }
         if delivery_id is not None:
             values["last_delivery_id"] = delivery_id
-        updated = session.execute(
-            update(EvaluationJob)
-            .where(
-                EvaluationJob.installation_id == request.installation_id,
-                EvaluationJob.repository_full_name == request.repository_full_name,
-                EvaluationJob.pull_number == request.pull_number,
-            )
-            .values(**values)
+        key = (
+            EvaluationJob.installation_id == request.installation_id,
+            EvaluationJob.repository_full_name == request.repository_full_name,
+            EvaluationJob.pull_number == request.pull_number,
         )
+        update_conditions = list(key)
+        if preserve_different_head:
+            update_conditions.append(
+                or_(
+                    EvaluationJob.head_sha_hint.is_(None),
+                    EvaluationJob.head_sha_hint == request.head_sha_hint,
+                )
+            )
+        updated = session.execute(update(EvaluationJob).where(*update_conditions).values(**values))
         if getattr(updated, "rowcount", 0) == 1:
             return
+        if preserve_different_head:
+            existing_id = session.scalar(select(EvaluationJob.id).where(*key))
+            if existing_id is not None:
+                return
         session.add(
             EvaluationJob(
                 installation_id=request.installation_id,
@@ -937,6 +948,7 @@ class QueueStore:
                         session,
                         request,
                         shared_head_generation=shared_head_generation,
+                        preserve_different_head=True,
                     )
                 return True
             except IntegrityError:
