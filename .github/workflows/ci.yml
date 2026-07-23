@@ -606,11 +606,23 @@ jobs:
     needs:
       - python-distribution
       - release-spine-transport-producer
+    if: ${{ always() }}
     permissions:
       contents: read
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
+      - name: Require a complete raw OCI release-spine producer
+        shell: bash
+        env:
+          PRODUCER_RESULT: ${{ needs.release-spine-transport-producer.result }}
+        run: |
+          set -euo pipefail
+          if [ "$PRODUCER_RESULT" != success ]; then
+            echo "Raw OCI release-spine producer result was $PRODUCER_RESULT, not success." >&2
+            exit 1
+          fi
+
       - name: Check out repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -640,6 +652,7 @@ jobs:
           digest-mismatch: error
 
       - name: Verify the bounded raw transport
+        shell: bash
         env:
           INDEX_DIGEST: ${{ needs.release-spine-transport-producer.outputs.index-digest }}
           PYTHON_ARTIFACT_DIGEST: ${{ needs.python-distribution.outputs.artifact-digest }}
