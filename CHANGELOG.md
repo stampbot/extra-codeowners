@@ -47,6 +47,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Rel
 - Reproducible uv and mise development tasks.
 - A reusable, manually runnable Python distribution proof shared by CI and the
   read-only tagged candidate scan.
+- A bounded raw OCI release-spine builder and standalone verifier, with a
+  two-file `archive: false` CI transport proof, immutable pre-exposure object
+  verification, and no publication authority.
+- An offline-tested immutable-release controller core with exact draft
+  ownership, retained asset descriptors, response-loss reconciliation, and no
+  deletion or replacement authority.
 - A non-root container, Helm chart source, and supply-chain workflows.
 - Schema-v6 container evidence that binds CPython runtime/source identities,
   retains every exact locked native wheel and raw embedded SBOM, and closes

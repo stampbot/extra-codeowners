@@ -60,6 +60,19 @@ owner still open. Four native-wheel owners remain unresolved, so
 `false`. The ledger is evidence of incremental progress; it is not permission
 to distribute the image.
 
+## Raw OCI release spine
+
+CI also checks the [raw OCI release-spine format](../docs/reference/release-spine-format.md).
+That check is an internal transport proof, not compliance evidence. It generates
+a two-platform fixture and carries it in two unarchived workflow artifacts.
+
+The spine holds opaque OCI object bytes and a canonical range record. It neither
+inspects layers nor proves component, notice, source, SBOM, signature,
+attestation, or publication completeness. A future release consumer must get
+the root index digest directly from the pinned build action, outside the spine
+record. It must also consume only the authenticated chunks that the verifier
+copied from its open file descriptor, without reopening the path.
+
 ## Release guardrails
 
 Collector success is not a legal determination and does not enable

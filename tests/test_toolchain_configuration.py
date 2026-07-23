@@ -55,10 +55,15 @@ def test_uv_version_is_identical_locally_in_containers_and_in_workflows() -> Non
     assert image.group("version") == reviewed_version
     assert "COPY pyproject.toml uv.lock README.md mise.toml requirements-build.txt ./" in dockerfile
     assert "COPY .github/scripts/build_python_artifacts.py ./.github/scripts/" in dockerfile
-    assert (
-        "COPY .github/scripts/container_evidence.py .github/scripts/release_readiness.py "
-        "./.github/scripts/"
-    ) in dockerfile
+    test_stage = dockerfile.split("FROM builder AS test\n", 1)[1].split("\nFROM ", 1)[0]
+    for script in (
+        "build_release_spine.py",
+        "container_evidence.py",
+        "release_controller.py",
+        "release_readiness.py",
+        "release_spine.py",
+    ):
+        assert f".github/scripts/{script}" in test_stage
     assert '["uv", "--version"]' in dockerfile
     assert "if actual != expected:" in dockerfile
     assert "digest-selected uv is" in dockerfile
@@ -335,3 +340,18 @@ def test_dockerfile_can_only_install_the_selected_application_wheel() -> None:
 def test_workflows_do_not_pass_the_removed_vcs_ref_build_argument() -> None:
     workflows = "\n".join(path.read_text() for path in Path(".github/workflows").glob("*.yml"))
     assert "VCS_REF" not in workflows
+
+
+def test_release_spine_scripts_are_in_every_python_type_check_entrypoint() -> None:
+    required = {
+        ".github/scripts/build_release_spine.py",
+        ".github/scripts/release_spine.py",
+    }
+    sources = {
+        "mise": (ROOT / "mise.toml").read_text(encoding="utf-8"),
+        "CI": (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8"),
+        "release": (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8"),
+    }
+    for source_name, source in sources.items():
+        for path in required:
+            assert path in source, f"{source_name} does not type-check {path}"

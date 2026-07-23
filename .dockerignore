@@ -6,7 +6,10 @@
 !.github/scripts/
 .github/scripts/*
 !.github/scripts/build_python_artifacts.py
+!.github/scripts/build_release_spine.py
 !.github/scripts/container_evidence.py
+!.github/scripts/release_controller.py
+!.github/scripts/release_spine.py
 !.github/scripts/release_readiness.py
 !.github/workflows/
 .github/workflows/*
