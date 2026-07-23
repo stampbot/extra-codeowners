@@ -10,7 +10,9 @@ work under issues
 [#28](https://github.com/stampbot/extra-codeowners/issues/28), and
 [#32](https://github.com/stampbot/extra-codeowners/issues/32). The
 [GitHub release API adapter contract](github-release-api-adapter.md) documents
-the separate network boundary.
+the separate publication boundary. The
+[immutable-release preflight contract](immutable-release-preflight.md)
+documents the implemented but unwired **Administration: read** boundary.
 
 The controller lives in `.github/scripts/release_controller.py`. Its narrow
 `ReleaseAPI` protocol deliberately has no operation for deleting a release,
@@ -160,14 +162,15 @@ The post-publication checks detect the resulting incident, but the controller
 cannot repair or delete an immutable release. See GitHub's [immutable release
 contract](https://docs.github.com/en/code-security/concepts/supply-chain-security/immutable-releases).
 
-The controller also cannot discover safely whether immutable releases are
-enabled. GitHub's repository preflight endpoint requires Administration read,
-which the future contents-write publication token must not receive. Before any
-workflow can call this controller, a separate narrowly privileged step must
-check `GET /repos/{owner}/{repo}/immutable-releases`, bind the successful result
-to the exact repository ID, and make it a hard publication prerequisite. If
-that setting is off, publishing first and inspecting `immutable: false`
-afterward would already have exposed a mutable release.
+The controller cannot discover safely whether immutable releases are enabled.
+GitHub's repository preflight endpoint requires the **Administration: read**
+repository permission. The future **Contents: write** publication token must
+not receive it. The repository now contains a separate
+[read-only preflight contract](immutable-release-preflight.md) that binds a
+positive result to the exact repository ID and workflow run. No workflow
+captures or consumes that record yet. If the setting is off, publishing first
+and inspecting `immutable: false` afterward would already have exposed a
+mutable release.
 
 ## Ambiguous responses and recovery
 
@@ -194,7 +197,7 @@ The controller proves state-machine and byte-identity rules in offline tests.
 It does not yet:
 
 - receive a token or call the concrete GitHub API adapter from a workflow
-- prove through a separate preflight that immutable releases are enabled
+- consume a verified immutable-release preflight record
 - define the final release asset set
 - prove that source, notice, SBOM, signature, or attestation evidence is
   complete

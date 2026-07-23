@@ -59,6 +59,7 @@ nav:
       - Container evidence release contract: reference/container-evidence-release-contract.md
       - Immutable release controller contract: reference/immutable-release-controller.md
       - GitHub release API adapter contract: reference/github-release-api-adapter.md
+      - Immutable-release preflight contract: reference/immutable-release-preflight.md
   - Explanation:
       - Native CODEOWNERS comparison: explanation/native-codeowners.md
       - Architecture: explanation/architecture.md

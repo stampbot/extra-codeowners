@@ -35,6 +35,21 @@ The [DCO evidence contract](dco-evidence.md) records the new validation layer
 and the work that must surround it. [Issue #40][issue-40] tracks independent
 execution, publication guards, and live repository-rule testing.
 
+## Immutable-release hardening status
+
+The source contains three dormant parts of a future GitHub release path: an
+offline [release controller](immutable-release-controller.md), a
+[release API adapter](github-release-api-adapter.md) that needs
+**Contents: write**, and a read-only
+[immutable-release preflight](immutable-release-preflight.md). The preflight
+binds GitHub's positive setting response to one repository and workflow run.
+Its verifier can check the raw record later without receiving the
+**Administration: read** token.
+
+No workflow calls these parts or passes them a privileged token. They are
+reviewable contracts, not a working release path. Tagged publication remains
+blocked while the distribution issues below are open.
+
 ## Not available yet
 
 The project does not currently publish or operate:

@@ -432,8 +432,11 @@ need complete records for the surfaces they expose.
 
 The tagged workflow contains intended image, chart, Python, SBOM, provenance,
 signature, and GitHub-release jobs. An unconditional blocker keeps every
-privileged job unreachable. Four issues describe the remaining release
-boundary:
+privileged job unreachable. The repository also contains a dormant release
+controller, publication API adapter, and read-only immutable-release preflight.
+No workflow connects them or supplies their tokens.
+
+Four issues describe the remaining release boundary:
 
 - [#18](https://github.com/stampbot/extra-codeowners/issues/18): source and
   notice completeness
