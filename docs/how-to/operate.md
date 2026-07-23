@@ -24,13 +24,54 @@ pull-request activity.
 | `extra_codeowners_shared_head_invalidations_total{result="failed"}` | No unexplained increase |
 | `extra_codeowners_dead_jobs` | `0` |
 | `extra_codeowners_webhook_failures_total` | No unexplained increase |
-| `extra_codeowners_reconciliations_total{result="failure"}` | No unexplained increase |
-| `extra_codeowners_reconciliation_last_success_timestamp_seconds` | Newer than the reconciliation objective |
+| `extra_codeowners_reconciliations_total{result!="success"}` | No unexplained increase |
+| `extra_codeowners_reconciliation_last_success_timestamp_seconds` | A complete run on at least one replica falls within the reconciliation objective |
 | `extra_codeowners_insecure_changes_enabled` | `0` unless an approved exception is active |
 
 Also watch evaluation latency and failures, PostgreSQL latency, repeated GitHub
 API `403` or `429` responses, and every unexplained long-lived
 `in_progress` check.
+
+A replica that observes another process holding the reconciler lease does not
+record an attempt. Shutdown before a scan begins does not record one either.
+When shutdown wins during election, the process releases any lease it just
+acquired; a database error during acquisition or release is an election
+failure. A partial attempt means the process lost its lease, an active scan was
+interrupted by graceful shutdown, or the process could not safely scan an
+installation or queue its pull requests. This includes GitHub request failures,
+invalid GitHub responses, and database errors while adding queue jobs. Work
+from healthy installations may still be queued, but a partial attempt does not
+refresh the last-success gauge.
+
+A malformed top-level installation response fails the whole attempt before the
+service processes any installation. Once that list passes validation, a
+malformed repository or open pull request list fails only the affected
+installation. Work already queued stays queued, and the reconciler continues
+with later installations. Field-level validation logs use fixed reason codes.
+If GitHub returns something other than the expected list or includes a
+non-object item, the client rejects it before field validation. The service
+then logs a fixed reconciliation event and error template instead. Neither path
+logs the rejected value.
+
+During graceful shutdown or after lease loss, an active reconciler stops before
+the next retention operation, GitHub page or API request, repository scan, and
+queue insertion. Neither condition cancels an operation already in progress.
+Each reconciliation request has a 20-second wall-clock deadline. PostgreSQL
+connect, pool, and statement waits also have fixed limits, but a
+multi-statement database operation and local cleanup add to the shutdown time.
+
+Kubernetes applies one grace period to the whole pod. The server may finish
+active HTTP work before application shutdown begins, and the worker finishes
+an active invalidation, authority, or evaluation job before observing the stop
+signal. Some worker response streams have inactivity limits rather than one
+wall-clock deadline. Treat the chart's 30-second default as a starting point.
+Measure worst-case drain time in your environment and increase
+`terminationGracePeriodSeconds` to cover it.
+
+In a deployment with several replicas, compare the newest gauge value across
+them. One practical alert expression is
+`time() - max(extra_codeowners_reconciliation_last_success_timestamp_seconds)`,
+with a threshold equal to your reconciliation objective.
 
 If an instance is meant to run background work, enable both the worker and
 reconciler and confirm that both health-response fields are `true`. Keep
@@ -75,7 +116,8 @@ The elected reconciler prunes expired delivery IDs and logs
 rows, but only after the latest generation was invalidated, no evaluation
 references that installation, repository, and head, and no invalidation lease
 remains. Those removals use the `shared_head_epochs_pruned` log event.
-Disabling reconciliation disables both cleanup tasks.
+Both cleanup tasks run before GitHub installation discovery, so a discovery
+failure does not postpone them. Disabling reconciliation disables both tasks.
 
 An expired ID may be accepted again if GitHub redelivers it. That does not
 restore old authorization evidence. The delivery creates or coalesces a fresh

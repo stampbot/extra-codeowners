@@ -259,8 +259,50 @@ check to `in_progress`.
 The same singleton lease controls pruning of delivery IDs and old shared-head
 rows. A shared-head row is eligible only after its latest generation was
 invalidated, no evaluation references it, and no invalidation lease remains.
-Long scans renew the lease between installations. The organization-policy
-repository is never included in reconciliation.
+The elected process runs both retention tasks before it asks GitHub for the
+installation list, so a discovery failure does not postpone cleanup. A
+background heartbeat renews the lease while a scan runs.
+
+GitHub's `Link` header controls pagination when it is present. The client
+validates that each `rel="next"` URL keeps the same origin, endpoint, and every
+query parameter except `page`, which must advance by exactly one. For array
+responses without a count, a 100-record page triggers a compatibility request
+only when GitHub omits the header. Repository discovery instead requires a
+nonnegative `total_count` that stays unchanged across pages. Without a next
+link, repository discovery requests another page only when the current page
+has 100 records and that count remains unsatisfied. The client rejects a
+terminal result that disagrees with the count. Duplicate installation IDs,
+repository names, or pull-request numbers also fail validation.
+
+If the heartbeat loses the lease, the service records a partial attempt. It
+does the same when it cannot safely scan an installation or queue its pull
+requests. Work already queued remains durable. Only a complete scan advances
+the last-success timestamp. The organization-policy repository is never
+included in reconciliation.
+
+Shutdown before a scan begins records no attempt, including when election is
+still in progress. If that election acquired the singleton lease, the process
+releases it before returning. A release error is an election failure rather
+than an idle shutdown. Shutdown during a scan records a partial result. Once a
+scan begins, either shutdown or lease loss stops further discovery. The
+reconciler checks both conditions between retention operations, after each
+GitHub response and before the next page, and before each repository scan and
+queue insertion. An insertion that already committed remains queued. After a
+boundary observes either condition, no later reconciliation discovery or queue
+operation starts; lease-heartbeat shutdown and final bookkeeping still run.
+The reconciler does not cancel the GitHub or database operation already in
+progress. A GitHub request has a 20-second wall-clock deadline. PostgreSQL
+connect, pool, and statement waits use the fixed limits in
+[Runtime configuration](../reference/configuration.md); a multi-statement
+operation and local cleanup can add time after the current wait.
+
+Because the installation list defines the scope of the whole scan, the
+reconciler validates every record before processing any installation. One
+malformed installation record fails the attempt; the reconciler does not
+process the valid records around it. Repository and open pull request lists are
+scoped to one installation. Malformed data in either list fails that
+installation, but later installations still run. A suspended installation or
+archived repository is skipped only after its record passes validation.
 
 A shorter interval narrows some missed-event windows but spends more GitHub API
 budget and causes more temporary blocking. It does not make the system strongly

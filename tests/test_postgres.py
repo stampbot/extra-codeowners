@@ -526,6 +526,14 @@ def test_claim_and_service_lease_election_are_atomic(postgres_store: QueueStore)
         elected = list(executor.map(elect, range(workers)))
 
     assert elected.count(True) == 1
+    winner = f"candidate-{elected.index(True)}"
+    assert postgres_store.release_service_lease("integration-reconciler", "outsider") is False
+    assert (
+        postgres_store.acquire_service_lease("integration-reconciler", "replacement", 60) is False
+    )
+    assert postgres_store.release_service_lease("integration-reconciler", winner) is True
+    assert postgres_store.acquire_service_lease("integration-reconciler", "replacement", 60) is True
+    assert postgres_store.release_service_lease("integration-reconciler", winner) is False
 
 
 def test_postgres_advisory_guard_orders_writers_and_survives_connection_loss(

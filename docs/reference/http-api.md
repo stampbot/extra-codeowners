@@ -91,10 +91,39 @@ The endpoint returns Prometheus text format. Extra CODEOWNERS defines these appl
 | `extra_codeowners_shared_head_invalidations_total` | counter | Durable exact-head invalidation attempts, labeled by `completed`, `failed`, `rate_limited`, or `superseded`. |
 | `extra_codeowners_dead_jobs` | gauge | Legacy or manually introduced terminal rows. Runtime failures remain pending, so this should remain `0`. |
 | `extra_codeowners_insecure_changes_enabled` | gauge | `1` while built-in non-delegable paths are disabled; otherwise `0`. |
-| `extra_codeowners_reconciliations_total` | counter | Reconciliation attempts, labeled with `result="success"` or `result="failure"`. |
-| `extra_codeowners_reconciliation_last_success_timestamp_seconds` | gauge | Unix timestamp of the most recent successful open-pull-request reconciliation. |
+| `extra_codeowners_reconciliations_total` | counter | Reconciliation outcomes, labeled with `result="success"`, `result="partial"`, or `result="failure"`. A process that observes another lease owner does not increment the counter. An election error counts as a failure. |
+| `extra_codeowners_reconciliation_last_success_timestamp_seconds` | gauge | Unix timestamp of the most recent complete reconciliation by this process. A partial or failed attempt does not update it. |
 
 Prometheus also publishes generated counter and histogram series, plus Python runtime and process collectors. Metric labels must never contain repository names, pull-request titles, actor names, paths, or delivery IDs. Those values would create unbounded cardinality and disclose private repository metadata.
+
+`success` means the elected process completed the scan of every visible,
+unsuspended installation and validated every repository and open pull request
+returned by GitHub. `partial` means the process lost its lease or could not
+safely scan at least one installation or queue its pull requests. If graceful
+shutdown interrupts an elected attempt, that attempt is also partial and does
+not advance the last-success timestamp. An idle or unelected shutdown records
+no attempt.
+
+Per-installation failures include GitHub request errors, malformed payloads,
+and database errors while adding queue jobs. Work queued before that failure
+remains durable, and the scan continues with later installations while it
+still owns the lease. `failure` means the attempt stopped before it could
+return a scan result. This includes a malformed top-level installation list;
+the service validates that whole list before processing any installation.
+
+Reconciliation accepts installation IDs and pull-request numbers only as
+positive JSON integers. It rejects booleans, strings, nulls, zero, and negative
+values. `suspended_at` must be null or a timezone-aware ISO 8601 timestamp, and
+`archived` must be a JSON boolean. Every open pull request must contain an
+object-valued `head` with a full 40- or 64-character lowercase hexadecimal
+commit ID. Field-level validation failures log a fixed reason code and omit the
+rejected value. If GitHub returns something other than the expected list or
+includes a non-object item, the client rejects it before field validation. The
+service then logs a fixed reconciliation event and error template; it still
+omits the rejected value.
+
+The last-success gauge belongs to one service process. For a deployment with
+several replicas, alert on the newest value across all replicas.
 
 ## `POST /webhooks/github`
 

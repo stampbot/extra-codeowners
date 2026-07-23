@@ -201,6 +201,11 @@ Advisory-lock acquisition replaces the statement timeout with that operation's b
 
 Secret-file readers remove at most one terminal LF or CRLF, as commonly added by secret tooling, and preserve all other bytes. Inline private keys may use literal `\n` sequences for PEM line breaks; webhook secrets are not newline-expanded. Empty credential values do not make the service ready.
 
+GitHub connect, pool, read, and write waits each use a fixed 20-second
+inactivity timeout. The client also applies a 20-second wall-clock deadline to
+each non-streaming request, including the reconciliation requests used during
+graceful shutdown. These limits are not runtime settings.
+
 ### Queue and reconciliation settings
 
 | Environment variable | Type | Default | Constraints and effect |

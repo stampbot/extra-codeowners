@@ -194,7 +194,9 @@ networkPolicy:
   # networkPolicy.egress contains complete Kubernetes NetworkPolicy egress rules.
   egress: []
 
-# terminationGracePeriodSeconds allows leased work to stop before pod termination.
+# terminationGracePeriodSeconds is the whole pod's drain budget for HTTP work,
+# worker jobs, reconciliation, and cleanup. Set it above the measured worst-case
+# drain time.
 terminationGracePeriodSeconds: 30
 
 # priorityClassName assigns a pre-existing Kubernetes PriorityClass.
