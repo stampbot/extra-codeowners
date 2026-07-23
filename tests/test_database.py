@@ -4,7 +4,7 @@ from time import monotonic
 from typing import cast
 
 import pytest
-from sqlalchemy import Table, inspect, update
+from sqlalchemy import Table, inspect, select, update
 from sqlalchemy.exc import IntegrityError
 
 from extra_codeowners.database import (
@@ -15,6 +15,7 @@ from extra_codeowners.database import (
     QueueStore,
     SchemaMetadata,
     ServiceLease,
+    SharedHeadEpoch,
     utcnow,
 )
 from extra_codeowners.migrations import upgrade_database
@@ -121,6 +122,113 @@ def test_delivery_acceptance_is_atomic_and_idempotent(tmp_path: Path) -> None:
     assert store.accept_delivery("delivery-1", "pull_request", request()) is True
     assert store.accept_delivery("delivery-1", "pull_request", request()) is False
     assert store.pending_count() == 1
+    assert store.shared_head_generation(17, "example/project", "a" * 40) == 1
+
+
+def test_duplicate_delivery_does_not_advance_shared_head_epoch(tmp_path: Path) -> None:
+    store = make_store(tmp_path)
+
+    assert store.accept_delivery("same-delivery", "pull_request", request()) is True
+    assert store.accept_delivery("same-delivery", "pull_request", request()) is False
+
+    assert store.shared_head_generation(17, "example/project", "a" * 40) == 1
+    claimed = store.claim("worker", 60)
+    assert claimed is not None
+    assert claimed.shared_head_generation == 1
+
+
+def test_returning_to_an_old_head_advances_its_epoch_without_aba(tmp_path: Path) -> None:
+    store = make_store(tmp_path)
+    first_head = "a" * 40
+    second_head = "b" * 40
+
+    assert store.accept_delivery(
+        "first-head",
+        "pull_request",
+        JobRequest(17, "example/project", 41, "pull_request.opened", first_head),
+    )
+    stale_first = store.claim("first-worker", 60)
+    assert stale_first is not None
+    assert stale_first.shared_head_generation == 1
+
+    assert store.accept_delivery(
+        "second-head",
+        "pull_request",
+        JobRequest(17, "example/project", 42, "pull_request.synchronize", second_head),
+    )
+    assert store.accept_delivery(
+        "first-head-again",
+        "pull_request",
+        JobRequest(17, "example/project", 43, "pull_request.synchronize", first_head),
+    )
+
+    assert store.shared_head_generation(17, "example/project", first_head) == 2
+    assert store.shared_head_generation(17, "example/project", second_head) == 1
+    assert store.shared_head_generation_is_current(stale_first, first_head) is False
+
+
+def test_shared_head_epoch_cleanup_waits_for_queued_or_leased_jobs(tmp_path: Path) -> None:
+    store = make_store(tmp_path)
+    assert store.accept_delivery("delivery-1", "pull_request", request())
+    boundary = utcnow() - timedelta(days=1)
+    with store.session() as session:
+        epoch = session.scalar(select(SharedHeadEpoch))
+        assert epoch is not None
+        epoch.changed_at = boundary - timedelta(days=1)
+
+    assert store.prune_shared_head_epochs(boundary) == 0
+    claimed = store.claim("worker", 60)
+    assert claimed is not None
+    assert store.prune_shared_head_epochs(boundary) == 0
+
+    store.complete(claimed, "worker")
+
+    assert store.prune_shared_head_epochs(boundary) == 1
+    assert store.shared_head_generation(17, "example/project", "a" * 40) == 0
+
+
+@pytest.mark.parametrize(
+    "head",
+    [
+        None,
+        "",
+        "a" * 39,
+        "a" * 41,
+        "a" * 63,
+        "a" * 65,
+        "A" * 40,
+        "a" * 39 + " ",
+        "a" * 39 + "/",
+        "é" * 40,
+    ],
+)
+def test_accepted_direct_trigger_requires_a_canonical_head(
+    tmp_path: Path,
+    head: str | None,
+) -> None:
+    store = make_store(tmp_path)
+
+    with pytest.raises(ValueError, match="head_sha"):
+        store.accept_delivery(
+            "missing-head",
+            "pull_request",
+            JobRequest(17, "example/project", 42, "pull_request.opened", head),
+        )
+
+    assert store.pending_count() == 0
+
+
+def test_sha256_head_uses_an_independent_durable_key(tmp_path: Path) -> None:
+    store = make_store(tmp_path)
+    head = "b" * 64
+
+    assert store.accept_delivery(
+        "sha256-head",
+        "pull_request",
+        JobRequest(17, "example/project", 42, "pull_request.opened", head),
+    )
+
+    assert store.shared_head_generation(17, "example/project", head) == 1
 
 
 def test_delivery_invalidation_state_is_replay_safe(tmp_path: Path) -> None:
@@ -155,6 +263,50 @@ def test_delivery_retries_a_racing_job_insert_without_dropping_trigger(
 
     assert store.accept_delivery("delivery-race", "pull_request", request()) is True
     assert store.pending_count() == 1
+    assert store.shared_head_generation(17, "example/project", "a" * 40) == 1
+
+
+def test_delivery_epoch_and_enqueue_roll_back_together(tmp_path: Path) -> None:
+    store = make_store(tmp_path)
+    assert store.accept_delivery("first", "pull_request", request())
+    original = store._enqueue_in_session
+
+    def fail_enqueue(*args: object, **kwargs: object) -> None:
+        del args, kwargs
+        raise RuntimeError("simulated enqueue failure")
+
+    store._enqueue_in_session = fail_enqueue  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError, match="simulated enqueue failure"):
+        store.accept_delivery(
+            "rolled-back",
+            "pull_request_review",
+            request(reason="pull_request_review.submitted"),
+        )
+    store._enqueue_in_session = original  # type: ignore[method-assign]
+
+    assert store.shared_head_generation(17, "example/project", "a" * 40) == 1
+    assert store.delivery_needs_invalidation("rolled-back") is False
+
+
+def test_hintless_internal_claim_captures_current_shared_head_epoch(tmp_path: Path) -> None:
+    store = make_store(tmp_path)
+    store.enqueue(JobRequest(17, "example/project", 41, "periodic_reconciliation"))
+    assert store.accept_delivery(
+        "direct-other-pull",
+        "pull_request",
+        JobRequest(17, "example/project", 42, "pull_request.opened", "a" * 40),
+    )
+    claimed = store.claim("worker", 60)
+    assert claimed is not None
+    assert claimed.pull_number == 41
+    assert claimed.head_sha_hint is None
+
+    bound = store.bind_claim_to_head(claimed, "a" * 40)
+
+    assert bound is not None
+    assert bound.head_sha_hint == "a" * 40
+    assert bound.shared_head_generation == 1
+    assert store.shared_head_generation_is_current(bound, "a" * 40) is True
 
 
 def test_jobs_coalesce_and_new_generation_survives_old_completion(tmp_path: Path) -> None:

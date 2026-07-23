@@ -58,8 +58,10 @@ before parsing any field that can affect authorization. For mapped events,
 
 Ingress records the delivery and its pull-request or authority work in one
 database transaction. Repeated triggers for one installation, repository, and
-pull request coalesce behind a generation counter. An older worker cannot
-delete work that arrived during its evaluation.
+pull request coalesce behind a generation counter. A direct trigger also
+advances the generation shared by every pull request on that repository and
+head commit. An older worker cannot delete new work or replace another pull
+request's invalidation with stale evidence.
 
 Direct pull-request, review, and check-rerequest events use a bounded fast path.
 After the durable transaction commits, ingress fetches the current pull request
@@ -138,13 +140,15 @@ then applies several publication fences:
 
 - the base and head still match
 - the pull-request generation is still current
+- the shared generation for the head commit is still current
 - the enqueue-time authority epoch is still current
 - no relevant authority fan-out remains pending or retrying
 - the publication guard permits this write.
 
-After writing a completed Check Run, the worker checks its generation once
-more. If a direct trigger committed during publication, it restores the check
-to `in_progress`, leaving the newer generation to evaluate next.
+The worker checks the shared generation while it holds the same head-level
+guard used for Check Run writes. It checks again after GitHub returns. If a
+direct trigger committed during that request, the worker restores
+`in_progress` before releasing the guard. The newer generation evaluates next.
 
 Pull-request and authority failures stay pending. They retry indefinitely with
 exponential backoff capped by
@@ -165,9 +169,11 @@ active and backoff-delayed jobs alone so a slow scan cannot reset retry state or
 starve long-running work. An idle pull request is reconsidered each interval,
 which temporarily moves its check to `in_progress`.
 
-The same singleton lease controls pruning of delivery IDs older than the
-configured retention period. Long scans renew the lease between installations.
-The organization-policy repository is never included in reconciliation.
+The same singleton lease controls pruning of delivery IDs and unreferenced
+shared-head generations older than the configured retention period. A queued
+or leased job keeps its exact head generation. Long scans renew the lease
+between installations. The organization-policy repository is never included
+in reconciliation.
 
 A shorter interval narrows some missed-event windows but spends more GitHub API
 budget and causes more temporary blocking. It does not make the system strongly
@@ -219,7 +225,8 @@ fresh evidence and the final fences.
 
 SQLite keeps local development simple. Production startup requires PostgreSQL
 because all instances must share delivery deduplication, queue leases, retry
-state, authority epochs, publication guards, and audit records.
+state, authority and shared-head generations, publication guards, and audit
+records.
 
 PostgreSQL operations use fixed fail-fast budgets: three seconds to connect,
 two seconds to obtain a pooled connection, and three seconds for an ordinary

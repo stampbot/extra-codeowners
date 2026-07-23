@@ -13,6 +13,8 @@ from extra_codeowners.manifest import ManifestService
 from extra_codeowners.migrations import upgrade_database
 from extra_codeowners.settings import Settings
 
+HEAD = "a" * 40
+
 
 class StubGitHub:
     def __init__(self) -> None:
@@ -30,7 +32,7 @@ class StubGitHub:
             "number": number,
             "state": "open",
             "html_url": f"https://github.com/{repository}/pull/{number}",
-            "head": {"sha": "abc123"},
+            "head": {"sha": HEAD},
             "base": {"sha": "base123", "ref": "main"},
             "labels": [],
         }
@@ -101,7 +103,7 @@ def test_health_and_signed_webhook_ingestion(tmp_path: Path) -> None:
         "installation": {"id": 10},
         "repository": {"full_name": "example/project"},
         "number": 7,
-        "pull_request": {"number": 7, "head": {"sha": "abc123"}},
+        "pull_request": {"number": 7, "head": {"sha": HEAD}},
     }
     body = json.dumps(payload).encode()
 
@@ -130,7 +132,7 @@ def test_webhook_fast_path_failure_is_durable_and_replayable(tmp_path: Path) -> 
             "repository": {"full_name": "example/project"},
             "pull_request": {
                 "number": 7,
-                "head": {"sha": "abc123"},
+                "head": {"sha": HEAD},
             },
             "review": {"state": "approved"},
         }
@@ -205,7 +207,7 @@ def test_org_config_repository_webhook_is_acknowledged_but_not_queued(tmp_path: 
         "installation": {"id": 10},
         "repository": {"full_name": "example/.github"},
         "number": 7,
-        "pull_request": {"number": 7, "head": {"sha": "abc123"}},
+        "pull_request": {"number": 7, "head": {"sha": HEAD}},
     }
     body = json.dumps(payload).encode()
 

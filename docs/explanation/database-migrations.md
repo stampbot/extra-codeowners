@@ -2,9 +2,9 @@
 
 Extra CODEOWNERS decides whether a pull request may merge, and its database is
 part of that decision. The database records pending revocations, accepted
-webhooks, authority generations, leases, and audit evidence. A database with
-the wrong schema can still answer a health query while omitting state that the
-authorization path needs.
+webhooks, authority and shared-head generations, leases, and audit evidence. A
+database with the wrong schema can still answer a health query while omitting
+state that the authorization path needs.
 
 For that reason, the service refuses to start against an incompatible schema.
 It does not try to repair one on the way up.

@@ -67,8 +67,11 @@ Set it long enough to cover GitHub redelivery and incident investigation, but
 don't retain private metadata longer than you can justify.
 
 The elected reconciler prunes expired delivery IDs and logs
-`webhook_deliveries_pruned` when it removes any. Disabling reconciliation
-also disables automatic pruning.
+`webhook_deliveries_pruned` when it removes any. It also prunes old shared-head
+generations, but only after no queued or leased evaluation references that
+installation, repository, and head. Those removals use the
+`shared_head_epochs_pruned` log event. Disabling reconciliation disables both
+cleanup tasks.
 
 An expired ID may be accepted again if GitHub redelivers it. That does not
 restore old authorization evidence. The delivery creates or coalesces a fresh

@@ -14,7 +14,15 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DBAPIError
 
 import extra_codeowners.migrations as migrations
-from extra_codeowners.database import Base, ClaimedJob, EvaluationJob, JobRequest, QueueStore
+from extra_codeowners.database import (
+    DATABASE_MIGRATION_HEAD,
+    Base,
+    ClaimedJob,
+    EvaluationJob,
+    JobRequest,
+    QueueStore,
+    SharedHeadEpoch,
+)
 from extra_codeowners.migrations import (
     BASELINE_REVISION,
     MIGRATION_LOCK_KEY,
@@ -76,9 +84,13 @@ def test_concurrent_delivery_generations_are_not_lost(postgres_store: QueueStore
 
     with postgres_store.session() as session:
         generation = session.scalar(select(EvaluationJob.generation))
+        shared_generation = session.scalar(select(EvaluationJob.shared_head_generation))
+        epoch = session.scalar(select(SharedHeadEpoch.generation))
 
     assert accepted == [True] * workers
     assert generation == workers
+    assert shared_generation == workers
+    assert epoch == workers
     assert postgres_store.pending_count() == 1
 
 
@@ -192,7 +204,7 @@ def test_concurrent_migrations_create_one_valid_schema() -> None:
         with ThreadPoolExecutor(max_workers=len(stores)) as executor:
             list(executor.map(migrate, stores))
         assert all(store.database_available() for store in stores)
-        assert current_revision(url) == "0002_retry_dead_jobs"
+        assert current_revision(url) == DATABASE_MIGRATION_HEAD
     finally:
         Base.metadata.drop_all(stores[0].engine)
         with stores[0].engine.begin() as connection:
@@ -296,7 +308,7 @@ def test_interrupted_postgres_migration_rolls_back_and_retries(
 
     monkeypatch.setattr(migrations, "_apply_upgrade", real_upgrade)
     upgrade_database(url, lock_timeout_seconds=1)
-    assert current_revision(url) == "0002_retry_dead_jobs"
+    assert current_revision(url) == DATABASE_MIGRATION_HEAD
 
     final = QueueStore(url)
     Base.metadata.drop_all(final.engine)
@@ -326,9 +338,9 @@ def test_postgres_pre_alembic_schema_adoption_is_strict_and_usable() -> None:
     Base.metadata.drop_all(store.engine)
     with store.engine.begin() as connection:
         connection.execute(text("DROP TABLE IF EXISTS alembic_version"))
-    Base.metadata.create_all(store.engine)
+    upgrade_database(url, revision=BASELINE_REVISION)
     with store.engine.begin() as connection:
-        connection.execute(text("INSERT INTO schema_metadata VALUES (1, 1)"))
+        connection.execute(text("DROP TABLE alembic_version"))
 
     upgrade_database(url, adopt_pre_alembic_schema=True)
 
@@ -369,7 +381,7 @@ def test_postgres_revision_0001_matches_immutable_adoption_contract() -> None:
         upgrade_database(url, adopt_pre_alembic_schema=True)
 
         store.initialize()
-        assert current_revision(url) == "0002_retry_dead_jobs"
+        assert current_revision(url) == DATABASE_MIGRATION_HEAD
     finally:
         Base.metadata.drop_all(store.engine)
         with store.engine.begin() as connection:
@@ -447,10 +459,10 @@ def test_postgres_pre_alembic_adoption_rejects_behavior_changes(
     Base.metadata.drop_all(store.engine)
     with store.engine.begin() as connection:
         connection.execute(text("DROP TABLE IF EXISTS alembic_version"))
-    Base.metadata.create_all(store.engine)
+    upgrade_database(url, revision=BASELINE_REVISION)
     try:
         with store.engine.begin() as connection:
-            connection.execute(text("INSERT INTO schema_metadata VALUES (1, 1)"))
+            connection.execute(text("DROP TABLE alembic_version"))
             for statement in alter_statements:
                 connection.execute(text(statement))
 

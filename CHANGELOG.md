@@ -27,6 +27,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Rel
 - Generation guards before and after check publication.
 - Configurable webhook-delivery retention.
 - Installation authority epochs that permanently fence older queued work.
+- Repository-and-commit epochs that fence Check Run publication across pull
+  requests sharing a head commit.
 - Installation-wide fencing when the organization-policy repository is removed, or when repository-removal evidence is missing or malformed.
 - A documented handoff for ordinary repository removal after the App loses access.
 - Broad authority work scheduled ahead of base-specific work.

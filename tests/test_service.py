@@ -283,6 +283,100 @@ async def test_shared_head_commit_fails_closed_across_pull_requests(tmp_path: Pa
 
 
 @pytest.mark.asyncio
+async def test_cross_pull_trigger_fences_stale_shared_head_success(tmp_path: Path) -> None:
+    github = FakeGitHub(changed_path="uv.lock")
+    store = migrated_store(f"sqlite:///{tmp_path / 'cross-pull-fence.db'}")
+    service = EvaluationService(settings(), github, store)  # type: ignore[arg-type]
+    claimed = job(store)
+    final_read_entered = asyncio.Event()
+    allow_final_read = asyncio.Event()
+    original_get_pull = github.get_pull
+    first_pull_reads = 0
+
+    async def pause_first_pull_final_read(
+        installation_id: int,
+        repository: str,
+        number: int,
+    ) -> dict[str, Any]:
+        nonlocal first_pull_reads
+        if number == 3:
+            first_pull_reads += 1
+            if first_pull_reads == 2:
+                final_read_entered.set()
+                await allow_final_read.wait()
+        return await original_get_pull(installation_id, repository, number)
+
+    github.get_pull = pause_first_pull_final_read  # type: ignore[method-assign]
+    stale_evaluation = asyncio.create_task(service.evaluate_job(claimed))
+    await final_read_entered.wait()
+
+    second_pull_trigger = JobRequest(
+        installation_id=2,
+        repository_full_name="example/project",
+        pull_number=4,
+        reason="pull_request_review.submitted",
+        head_sha_hint=HEAD,
+    )
+    assert store.accept_delivery(
+        "second-pull-review",
+        "pull_request_review",
+        second_pull_trigger,
+    )
+    assert await service.invalidate_for_trigger(second_pull_trigger) is True
+
+    allow_final_read.set()
+    await asyncio.wait_for(stale_evaluation, timeout=1)
+
+    assert [check["status"] for check in github.checks] == [
+        "in_progress",
+        "in_progress",
+    ]
+    assert all(check.get("conclusion") is None for check in github.checks)
+    assert store.shared_head_generation(2, "example/project", HEAD) == 1
+
+
+@pytest.mark.asyncio
+async def test_cross_pull_trigger_during_completion_restores_blocking_check(
+    tmp_path: Path,
+) -> None:
+    github = FakeGitHub(changed_path="uv.lock")
+    store = migrated_store(f"sqlite:///{tmp_path / 'cross-pull-postflight.db'}")
+    service = EvaluationService(settings(), github, store)  # type: ignore[arg-type]
+    claimed = job(store)
+    original_upsert = github.upsert_check_run
+    accepted = False
+
+    async def accept_other_pull_during_completion(*args: Any, **kwargs: Any) -> int:
+        nonlocal accepted
+        result = await original_upsert(*args, **kwargs)
+        if kwargs.get("status") == "completed" and not accepted:
+            accepted = True
+            assert store.accept_delivery(
+                "other-pull-during-completion",
+                "pull_request",
+                JobRequest(
+                    installation_id=2,
+                    repository_full_name="example/project",
+                    pull_number=4,
+                    reason="pull_request.labeled",
+                    head_sha_hint=HEAD,
+                ),
+            )
+        return result
+
+    github.upsert_check_run = accept_other_pull_during_completion  # type: ignore[method-assign]
+
+    await service.evaluate_job(claimed)
+
+    assert [check["status"] for check in github.checks] == [
+        "in_progress",
+        "completed",
+        "in_progress",
+    ]
+    assert github.checks[-1].get("conclusion") is None
+
+
+@pytest.mark.asyncio
 async def test_direct_human_owner_without_write_access_is_not_accepted(tmp_path: Path) -> None:
     github = FakeGitHub(changed_path="uv.lock", reviewer_type="User")
     original = github.get_file_text

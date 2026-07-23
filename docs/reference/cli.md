@@ -70,7 +70,7 @@ The migration options are:
 On success, the final line names the bundled revision:
 
 ```text
-Database is at migration 0002_retry_dead_jobs.
+Database is at migration 0003_shared_head_epochs.
 ```
 
 Production mode applies the same PostgreSQL and transport checks as `serve`. A PostgreSQL migration takes a session advisory lock, waits no longer than the selected lock timeout, and limits each SQL statement to 60 seconds. PostgreSQL releases the lock if the migrator's connection closes after a failure or interruption.
@@ -88,7 +88,7 @@ uv run python -m extra_codeowners database check
 On success, the final line names the compatible revision:
 
 ```text
-Database migration 0002_retry_dead_jobs is compatible.
+Database migration 0003_shared_head_epochs is compatible.
 ```
 
 The command exits nonzero when it cannot connect or when any required compatibility evidence is missing or wrong. It checks the single Alembic revision, the application compatibility marker, required tables and columns, column types and lengths, nullability, PostgreSQL timestamp time-zone mode, generated-value behavior, primary keys, and the presence of required named indexes and unique constraints. It does not print the database URL or stored repository metadata.

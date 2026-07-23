@@ -686,6 +686,23 @@ class EvaluationService:
             if pull_state == "closed":
                 return
 
+            if job.head_sha_hint is not None and job.head_sha_hint != head_sha:
+                await asyncio.to_thread(
+                    self.store.enqueue,
+                    JobRequest(
+                        installation_id=job.installation_id,
+                        repository_full_name=job.repository_full_name,
+                        pull_number=job.pull_number,
+                        reason="head_changed_before_evaluation",
+                        head_sha_hint=head_sha,
+                    ),
+                )
+                return
+            bound_job = await asyncio.to_thread(self.store.bind_claim_to_head, job, head_sha)
+            if bound_job is None:
+                return
+            job = bound_job
+
             managed_check = await self.github.has_check_run(
                 job.installation_id,
                 job.repository_full_name,
@@ -709,6 +726,12 @@ class EvaluationService:
             # stale success visible while GitHub or the database is unavailable.
             async with self._check_write_guard(job.installation_id, head_sha):
                 if not await asyncio.to_thread(self.store.is_current_claim, job):
+                    return
+                if not await asyncio.to_thread(
+                    self.store.shared_head_generation_is_current,
+                    job,
+                    head_sha,
+                ):
                     return
                 await self.github.upsert_check_run(
                     job.installation_id,
@@ -824,6 +847,12 @@ class EvaluationService:
                     # ordered after this completion, even if this process dies.
                     if not await asyncio.to_thread(self.store.is_current_claim, job):
                         return
+                    if not await asyncio.to_thread(
+                        self.store.shared_head_generation_is_current,
+                        job,
+                        head_sha,
+                    ):
+                        return
                     if await asyncio.to_thread(self.store.has_blocking_authority, job, base_ref):
                         raise AuthorityChangePendingError(
                             "accepted authority change arrived during evaluation"
@@ -838,6 +867,12 @@ class EvaluationService:
                             "distinct commit before approval",
                         )
                         title = "CODEOWNER approval required"
+                    if not await asyncio.to_thread(
+                        self.store.shared_head_generation_is_current,
+                        job,
+                        head_sha,
+                    ):
+                        return
                     await self.github.upsert_check_run(
                         job.installation_id,
                         job.repository_full_name,
@@ -851,6 +886,30 @@ class EvaluationService:
                         details_url=details_url,
                         external_id=external_id,
                     )
+                    if not await asyncio.to_thread(
+                        self.store.shared_head_generation_is_current,
+                        job,
+                        head_sha,
+                    ):
+                        # A different pull request can accept a direct trigger
+                        # for this commit while the GitHub request is in
+                        # flight. Restore a blocking result before releasing
+                        # the shared head writer.
+                        await self.github.upsert_check_run(
+                            job.installation_id,
+                            job.repository_full_name,
+                            head_sha,
+                            self.settings.check_name,
+                            status="in_progress",
+                            title="Re-evaluating CODEOWNER approvals",
+                            summary=(
+                                "New review or pull-request evidence arrived; approval is "
+                                "blocked pending re-evaluation."
+                            ),
+                            details_url=details_url,
+                            external_id=external_id,
+                        )
+                        return
 
                 # If a trigger committed while the completion request was in
                 # flight, restore a blocking state ourselves. The shared writer
@@ -1247,6 +1306,12 @@ class Reconciler:
         pruned = await asyncio.to_thread(self.store.prune_deliveries, retention_boundary)
         if pruned:
             log.info("webhook_deliveries_pruned", deliveries=pruned)
+        pruned_epochs = await asyncio.to_thread(
+            self.store.prune_shared_head_epochs,
+            retention_boundary,
+        )
+        if pruned_epochs:
+            log.info("shared_head_epochs_pruned", epochs=pruned_epochs)
         queued = 0
         for installation in await self.github.list_installations():
             if lost.is_set():

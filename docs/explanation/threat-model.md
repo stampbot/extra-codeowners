@@ -83,12 +83,12 @@ of the security contract.
 | An application changes its own approval policy or decision code | Make Stampbot's root `/stampbot.toml` non-delegable by default. Require organization guardrails for every other enrolled App's local configuration and transitive decision inputs. | Extra CODEOWNERS cannot infer arbitrary App control files. An incomplete inventory can permit self-expansion. |
 | A forged or modified webhook asks for success | Verify HMAC-SHA256 over the raw body before parsing, then fetch authorization evidence from GitHub. | A stolen webhook secret permits forged triggers, but not forged GitHub API evidence. |
 | A crafted path, owner, or diagnostic forges trusted-looking Check Run content | Use a fixed evidence layout, render controls visibly, escape Markdown prose, and HTML-escape code-like values. | Check details still expose decision metadata to anyone who can view the repository. |
-| GitHub redelivers an event | Deduplicate `X-GitHub-Delivery` transactionally and prune delivery IDs after a configurable retention period. | An expired ID may enqueue another evaluation, but authorization evidence is fetched again. Retention must cover the operator's redelivery window. |
+| GitHub redelivers an event | Deduplicate `X-GitHub-Delivery` transactionally. A duplicate advances neither the pull-request generation nor the shared-head generation. Prune delivery IDs after a configurable retention period. | An expired ID may enqueue another evaluation, but authorization evidence is fetched again. Retention must cover the operator's redelivery window. |
 | A webhook is missed | Subscribe to authority changes, reconcile accessible open pull requests periodically, and support operator-requested GitHub redelivery. | A stale result can remain until reconciliation. |
 | A head or base-branch commit arrives during evaluation | Require reviews for the exact head, fetch base and head again before publishing, and enqueue direct or base-ref fan-out work. | GitHub's check display remains eventually consistent during rapid changes. |
 | Contributor-controlled branch names create an unbounded base-push queue | Coalesce the same base ref, retain at most 100 distinct base-ref rows per installation and repository, collapse overflow into one conservative repository-wide job, and claim broader authority work first. | A repository-wide job uses more GitHub API calls than a base-specific job and can temporarily increase merge latency. |
-| Several pull requests share one head commit but need different decisions | Refuse success when another open pull request already uses the head. Invalidate on pull-request open and retarget events. | A pull request opened or retargeted after success can inherit that commit-scoped result until its webhook is processed. This blocks production use of the check. |
-| A mapped review, label, pull-request, or rerequest trigger races with evaluation | Record the trigger durably, attempt bounded immediate invalidation, verify the database generation before and after completion, and restore `in_progress` after a publication race. | The fast path is best-effort so the webhook can return promptly. If the Check Runs API is unavailable, success can remain visible until the durable worker reaches GitHub. |
+| Several pull requests share one head commit but need different decisions | Refuse success when another open pull request already uses the head. Invalidate on pull-request open and retarget events. Every accepted direct trigger advances a durable generation shared by the installation, repository, and head. A writer checks its captured generation while holding the head publication guard. | A pull request opened or retargeted after success can inherit that commit-scoped result until its webhook is accepted. This blocks production use of the check. |
+| A mapped review, label, pull-request, or rerequest trigger races with evaluation | Record the trigger, its pull-request generation, and its shared-head generation in one transaction. Attempt bounded immediate invalidation. Before and after completion, verify both generations while holding the head publication guard; restore `in_progress` when a generation changes during publication. | The fast path is best-effort so the webhook can return promptly. If the Check Runs API is unavailable, success can remain visible until the durable worker reaches GitHub. |
 | A policy label is renamed or deleted | Subscribe to label-definition events, fan out repository evaluation, and fetch current pull-request label names. | Success may remain visible while processing and fan-out finish, or until reconciliation recovers a missed delivery. |
 | A rename moves content across ownership boundaries | Evaluate both the old and new path. | GitHub must provide the previous path. Incomplete rename evidence fails closed. |
 | GitHub truncates a very large pull request | Paginate and reject evaluation at GitHub's 3,000-file API maximum because completeness can no longer be proved. | Such a pull request must be split before it can use Extra CODEOWNERS. |
@@ -115,8 +115,10 @@ Implementation details may change. These properties may not:
 6. Both names of a renamed file are evaluated.
 7. Check publication is bound to the exact evaluated head and the expected App
    source.
-8. A known superseding database generation cannot leave the prior generation
-   successful; the check stays or returns to `in_progress`.
+8. A worker that observes a superseding pull-request or shared-head generation
+   never publishes its stale completed result. If the generation changes during
+   a successful publication request, the worker returns the check to
+   `in_progress` before releasing the writer guard.
 9. Relevant pending or retrying authority fan-out prevents publication of a
    completed result.
 10. Credentials and raw private payloads never appear in logs, metrics, checks,
@@ -126,8 +128,9 @@ Implementation details may change. These properties may not:
 
 Invariant 7 has an important limit. GitHub does not offer a pull-request-scoped
 required Check Run, so two pull requests can inherit the check attached to one
-commit. Shared-head detection at publication time and fast webhook invalidation
-reduce that window; they cannot eliminate it.
+commit. Shared-head detection, the durable shared generation, and fast webhook
+invalidation reduce that window; they cannot eliminate it before GitHub
+delivers and Extra CODEOWNERS accepts the relevant event.
 
 The opt-in [live GitHub contract fixture](../how-to/run-live-github-contract.md)
 measures required-check invalidation, shared-head inheritance, retargeting,

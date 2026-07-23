@@ -416,6 +416,16 @@ Complete the
 `migrations.enabled: true` unless a separate controlled process has
 already applied the exact target head.
 
+> **Warning**
+>
+> The pre-upgrade hook runs before Helm applies the `Recreate` Deployment
+> change. It does not stop the old pods. Before an upgrade from
+> `0002_retry_dead_jobs` to `0003_shared_head_epochs`, stop public webhook
+> routing, scale the existing Deployment to zero, wait for pod termination and
+> the configured worker lease period, and only then run `helm upgrade`. Start
+> only the target image after the migration. Restore ingress after readiness,
+> then confirm reconciliation visited every accessible open pull request.
+
 Migration defaults are:
 
 - a 60-second PostgreSQL advisory-lock wait
@@ -427,11 +437,12 @@ The target migration Job stops Helm before the Deployment changes if it fails.
 Use migration-only Secret, environment, volume, and mount values for database
 authentication or CA material. Never attach runtime App credentials.
 
-The default `Recreate` strategy avoids overlap between old and new
-application pods, but webhook processing pauses briefly. GitHub does not
-automatically redeliver failed deliveries. Inspect and redeliver them after
-readiness returns, then confirm reconciliation converges every open pull
-request.
+The default `Recreate` strategy avoids overlap between old and new application
+pods after the migration hook. It does not satisfy a migration ledger that
+requires old workers to stop before migration. Webhook processing pauses
+briefly. GitHub does not automatically redeliver failed deliveries. Inspect
+and redeliver them after readiness returns, then confirm reconciliation
+visited every accessible open pull request.
 
 Before a future upgrade, obtain and verify the next supported image, record its
 platform digest, and use the chart from the matching reviewed release:

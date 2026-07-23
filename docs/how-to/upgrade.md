@@ -48,7 +48,7 @@ extra-codeowners database check
 For version 0.1.0, a compatible database prints:
 
 ```text
-Database migration 0002_retry_dead_jobs is compatible.
+Database migration 0003_shared_head_epochs is compatible.
 ```
 
 Record the reported revision, current image digest, chart revision, PostgreSQL
@@ -68,6 +68,25 @@ For zero event loss at the upgrade snapshot, stop webhook ingress and every
 application process first. Otherwise, record the snapshot time. After a
 restore, you will need to redeliver later GitHub events and reconcile every
 open pull request.
+
+Migration `0003_shared_head_epochs` requires the stronger option: stop webhook
+ingress and every older worker before migration begins. An old process checks
+database compatibility at startup and readiness, not before every queue claim.
+Leaving one alive could let it publish without the new shared-head fence.
+
+For an upgrade from `0002_retry_dead_jobs` to
+`0003_shared_head_epochs`, keep this order:
+
+1. Stop webhook ingress.
+2. Stop every old worker and reconciler. Wait for graceful shutdown and for
+   the configured worker lease period to pass, so no old request or lease
+   remains active.
+3. Create and verify the backup in steps 3 and 4.
+4. Run the target migration in step 5.
+5. Start only code that requires `0003_shared_head_epochs`.
+6. Complete the health checks in step 6, then restore ingress.
+7. Confirm that the startup reconciliation visits every accessible open pull
+   request.
 
 ## 3. Create the backup
 
@@ -132,7 +151,7 @@ extra-codeowners database migrate --lock-timeout-seconds 60
 For version 0.1.0, success prints:
 
 ```text
-Database is at migration 0002_retry_dead_jobs.
+Database is at migration 0003_shared_head_epochs.
 ```
 
 The migrator:
@@ -154,21 +173,26 @@ It runs the target image with migration-only database settings. It does not
 inherit runtime environment sources, GitHub credential volumes, or App
 secrets.
 
+Before an upgrade to `0003_shared_head_epochs`, drain public ingress and scale
+the existing Extra CODEOWNERS Deployment to zero. Confirm that no old worker
+or reconciler remains, then start the Helm upgrade. The pre-upgrade hook does
+not stop existing pods for you.
+
 The defaults allow 60 seconds for the advisory lock, set Kubernetes
 `backoffLimit` to `0`, and stop the complete Job after 180 seconds.
 A failed hook stops Helm before it replaces application pods. Preserve its logs
 before the default one-hour Job time-to-live expires.
 
-The old process may still be active while the pre-upgrade hook runs. Every
-revision must therefore avoid unbounded table rewrites, destructive operations,
-and external API calls during that overlap. This rule protects in-flight work;
-it does not promise compatibility between application versions at different
-migration heads.
+Unless an upgrade-ledger entry requires a full drain, the old process may
+still be active while the pre-upgrade hook runs. Every revision must avoid
+unbounded table rewrites, destructive operations, and external API calls
+during that overlap. This rule protects in-flight work; it does not promise
+compatibility between application versions at different migration heads.
 
 ## 6. Deploy and verify
 
 Run `database check` from the target artifact before starting the service.
-Then deploy it and confirm:
+Start only the target artifact. Then confirm:
 
 - `/health/ready` returns HTTP 200 and reports the database, worker, and
   reconciler ready
@@ -179,8 +203,9 @@ Then deploy it and confirm:
   App.
 
 If ingress was paused, restore it only after every check passes. Inspect failed
-GitHub deliveries after the outage boundary and redeliver them manually.
-Confirm that scheduled reconciliation covers every open pull request.
+GitHub deliveries after the outage boundary and redeliver them manually. Wait
+for the startup reconciliation to finish, and confirm that it visited every
+accessible open pull request.
 
 ## Roll back the application
 

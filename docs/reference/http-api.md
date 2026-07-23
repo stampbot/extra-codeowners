@@ -106,7 +106,17 @@ GitHub sends a JSON body with these headers:
 
 The service verifies the signature before parsing JSON. The JSON root must be an object, and `action`, when present, must be a string. An authenticated mapped delivery is recorded in the same database transaction as its evaluation or authority fan-out work.
 
-For a direct pull-request, review, or rerequest trigger, ingress makes one bounded attempt to fetch the current pull request and policy. It creates or updates the managed current-head check as `in_progress` when policy exists. If policy is absent, it updates only an existing managed check. A repository with neither policy nor an existing managed check is skipped.
+For a direct pull-request, review, or rerequest trigger, the signed payload must
+identify the head as exactly 40 or 64 lowercase ASCII hexadecimal characters.
+Ingress advances that head's shared generation in the same transaction as the
+delivery and pull-request job. A malformed identifier returns `400`; the
+service does not create a partial fence.
+
+Ingress then makes one bounded attempt to fetch the current pull request and
+policy. It creates or updates the managed current-head check as `in_progress`
+when policy exists. If policy is absent, it updates only an existing managed
+check. A repository with neither policy nor an existing managed check is
+skipped.
 
 Full evaluation happens asynchronously. A `202` response for a mapped trigger means the service stored durable work, not that the pull request passed or that the fast-path Check Run update reached GitHub.
 

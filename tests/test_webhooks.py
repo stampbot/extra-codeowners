@@ -32,7 +32,7 @@ def pull_payload(action: str = "opened") -> dict[str, object]:
         "installation": {"id": 10},
         "repository": {"full_name": "example/project"},
         "number": 7,
-        "pull_request": {"number": 7, "head": {"sha": "abc123"}},
+        "pull_request": {"number": 7, "head": {"sha": "a" * 40}},
     }
 
 
@@ -56,6 +56,34 @@ def test_review_dismissal_triggers_re_evaluation() -> None:
 
     assert job is not None
     assert job.reason == "pull_request_review.dismissed"
+
+
+@pytest.mark.parametrize(
+    "head",
+    [
+        None,
+        {},
+        {"sha": ""},
+        {"sha": "a" * 39},
+        {"sha": "a" * 41},
+        {"sha": "a" * 63},
+        {"sha": "a" * 65},
+        {"sha": "A" * 40},
+        {"sha": "a" * 39 + " "},
+        {"sha": "a" * 39 + "/"},
+        {"sha": "é" * 40},
+    ],
+)
+def test_direct_pull_trigger_requires_authoritative_canonical_head(
+    head: object,
+) -> None:
+    payload = pull_payload()
+    pull = payload["pull_request"]
+    assert isinstance(pull, dict)
+    pull["head"] = head
+
+    with pytest.raises(WebhookError, match="head"):
+        evaluation_job(signed(payload))
 
 
 def test_invalid_signature_is_rejected_before_json_is_trusted() -> None:
@@ -129,7 +157,7 @@ def test_check_run_rerequest_maps_single_pull() -> None:
             "installation": {"id": 10},
             "repository": {"full_name": "example/project"},
             "check_run": {
-                "head_sha": "abc123",
+                "head_sha": "a" * 40,
                 "pull_requests": [{"number": 7}],
             },
         },
@@ -140,6 +168,23 @@ def test_check_run_rerequest_maps_single_pull() -> None:
 
     assert job is not None
     assert job.reason == "check_run.rerequested"
+
+
+def test_check_run_rerequest_requires_authoritative_head() -> None:
+    webhook = signed(
+        {
+            "action": "rerequested",
+            "installation": {"id": 10},
+            "repository": {"full_name": "example/project"},
+            "check_run": {
+                "pull_requests": [{"number": 7}],
+            },
+        },
+        event="check_run",
+    )
+
+    with pytest.raises(WebhookError, match=r"check_run\.head_sha"):
+        evaluation_job(webhook)
 
 
 def test_installation_event_becomes_installation_authority_job() -> None:

@@ -8,7 +8,7 @@ import json
 from dataclasses import dataclass
 from typing import Any, Final
 
-from extra_codeowners.database import AuthorityRequest, JobRequest
+from extra_codeowners.database import AuthorityRequest, JobRequest, validate_head_sha
 
 MAX_WEBHOOK_BYTES: Final = 10 * 1024 * 1024
 PULL_REQUEST_ACTIONS: Final = frozenset(
@@ -109,6 +109,17 @@ def _installation_id(payload: dict[str, Any]) -> int:
     return _positive_int(installation.get("id"), "installation.id")
 
 
+def _head_sha(value: Any, field: str) -> str:
+    if not isinstance(value, str):
+        raise WebhookError(f"webhook {field} must be a non-empty commit identifier")
+    try:
+        return validate_head_sha(value)
+    except ValueError as error:
+        raise WebhookError(
+            f"webhook {field} must be exactly 40 or 64 lowercase hexadecimal characters"
+        ) from error
+
+
 def _pull_request_job(webhook: VerifiedWebhook) -> JobRequest:
     pull = webhook.payload.get("pull_request")
     if not isinstance(pull, dict):
@@ -116,13 +127,15 @@ def _pull_request_job(webhook: VerifiedWebhook) -> JobRequest:
         raise WebhookError(msg)
     number = _positive_int(pull.get("number") or webhook.payload.get("number"), "pull number")
     head = pull.get("head")
-    head_sha = head.get("sha") if isinstance(head, dict) else None
+    if not isinstance(head, dict):
+        raise WebhookError("webhook omitted pull_request.head")
+    head_sha = _head_sha(head.get("sha"), "pull_request.head.sha")
     return JobRequest(
         installation_id=_installation_id(webhook.payload),
         repository_full_name=_repository_name(webhook.payload),
         pull_number=number,
         reason=f"{webhook.event}.{webhook.action or 'received'}",
-        head_sha_hint=head_sha if isinstance(head_sha, str) else None,
+        head_sha_hint=head_sha,
     )
 
 
@@ -225,13 +238,13 @@ def evaluation_job(
         if not isinstance(pulls, list) or len(pulls) != 1 or not isinstance(pulls[0], dict):
             return None
         number = _positive_int(pulls[0].get("number"), "check_run pull number")
-        head_sha = check_run.get("head_sha")
+        head_sha = _head_sha(check_run.get("head_sha"), "check_run.head_sha")
         return JobRequest(
             installation_id=_installation_id(webhook.payload),
             repository_full_name=_repository_name(webhook.payload),
             pull_number=number,
             reason="check_run.rerequested",
-            head_sha_hint=head_sha if isinstance(head_sha, str) else None,
+            head_sha_hint=head_sha,
         )
     if webhook.event == "push":
         return _push_authority_job(

@@ -1,6 +1,6 @@
 # Project status
 
-Last verified: 2026-07-22.
+Last verified: 2026-07-23.
 
 Extra CODEOWNERS is under active development. You can run the source as a
 self-hosted GitHub App in a disposable environment, but the project does not
@@ -59,6 +59,14 @@ pull request with the same head. It cannot stop a second pull request from
 appearing after success, so that new pull request may briefly inherit the old
 result. The stale result remains until the service processes a related event or
 its periodic reconciler finds the new pull request.
+
+Once the service accepts a direct trigger, it advances a durable generation
+shared by every pull request on that head. An older worker checks that
+generation under the head writer guard and cannot publish stale evidence. If
+the fast path moved the check to `in_progress`, the older worker cannot replace
+that result with a stale completion. This closes the cross-worker publication
+race after acceptance; it cannot protect the period before GitHub delivers the
+event.
 
 [Issue #1](https://github.com/stampbot/extra-codeowners/issues/1) tracks the
 live contract tests and design work. Until it closes, keep GitHub's native

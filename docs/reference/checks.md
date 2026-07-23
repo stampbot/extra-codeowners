@@ -27,7 +27,9 @@ For an open pull request in an enrolled repository, Extra CODEOWNERS:
 
 1. Fetches the pull request and records its current base and head revisions. The authoritative `base.repo.full_name` must match the queued repository. A mismatch is discarded before any policy read or Check Run write, so a delayed old-name delivery cannot revive work after a rename or transfer.
 2. Creates or updates the App's named Check Run on the head as `in_progress`. This revokes an earlier success before mutable approval evidence is collected. A repository with no policy and no existing managed check remains unenrolled and gets no check.
-3. Confirms that the worker still owns the current leased database generation. A newer trigger leaves the check blocking for the superseding generation.
+3. Confirms that the worker still owns the current leased pull-request
+   generation and the shared generation captured for this head. A newer direct
+   trigger on any pull request using that head leaves the check blocking.
 4. Loads and validates repository policy. When policy is enabled, it also loads organization policy and standard `CODEOWNERS` from their defined revisions. Disabled policy finishes with a diagnostic failure instead of collecting approval evidence.
 5. For enabled policy, checks the reported changed-file count, then paginates GitHub's pull-files API. API or transport failures leave the check blocking while the durable job retries. A count of 3,000 or more produces a diagnostic failure because GitHub cannot prove that the list is complete.
 6. Evaluates both the old and new path of every rename.
@@ -36,9 +38,15 @@ For an open pull request in an enrolled repository, Extra CODEOWNERS:
 9. Otherwise, considers application approvals for the current head. The review actor and independently fetched App metadata must match organization enrollment. The delegation must match the path and owner set, and its label restrictions must all pass.
 10. Rejects application substitution for every effective non-delegable path.
 11. Fetches the pull request again before publication. A changed state, base ref, base commit, head commit, changed-file count, or label set discards the result and queues another evaluation.
-12. Under the publication guards, rechecks the evaluation generation and the installation authority epoch stored when the row was enqueued. It also refuses to finish while relevant authority fan-out is pending, including during retry backoff.
+12. Under the publication guards, rechecks the pull-request generation, the
+    shared-head generation, and the installation authority epoch stored when
+    the row was enqueued. It also refuses to finish while relevant authority
+    fan-out is pending, including during retry backoff.
 13. Before publishing success, confirms that the head belongs to exactly this one open pull request. A shared head produces failure because GitHub Check Runs belong to commits, not individual pull requests.
-14. Checks for a newer generation again after GitHub accepts the completed Check Run. If a trigger raced with publication, the service immediately returns the check to `in_progress` for the next evaluation.
+14. Checks the shared-head generation again after GitHub accepts the completed
+    Check Run and before releasing the head writer guard. If a trigger raced
+    with publication, the service immediately returns the check to
+    `in_progress` for the next evaluation.
 
 GitHub documents the 3,000-file ceiling in [List pull request files](https://docs.github.com/en/rest/pulls/pulls#list-pull-requests-files). Extra CODEOWNERS fails at exactly 3,000 because it cannot tell whether GitHub truncated that response.
 
