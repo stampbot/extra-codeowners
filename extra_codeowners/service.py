@@ -104,6 +104,39 @@ class ReconciliationOutcome:
         return self.failed_installations == 0 and not self.lease_lost and not self.stopped
 
 
+class _CombinedEvent(asyncio.Event):
+    """An event whose state follows any of its source events."""
+
+    def __init__(self, *sources: asyncio.Event) -> None:
+        super().__init__()
+        self._sources = sources
+
+    def is_set(self) -> bool:
+        """Return immediately when this event or any source event is set."""
+        return super().is_set() or any(source.is_set() for source in self._sources)
+
+
+@asynccontextmanager
+async def _combine_events(*sources: asyncio.Event) -> AsyncIterator[asyncio.Event]:
+    """Yield one event that wakes and reads as set when any source is set."""
+    combined = _CombinedEvent(*sources)
+
+    async def relay(source: asyncio.Event) -> None:
+        await source.wait()
+        combined.set()
+
+    relays = [
+        asyncio.create_task(relay(source), name=f"combined-event-{index}")
+        for index, source in enumerate(sources)
+    ]
+    try:
+        yield combined
+    finally:
+        for task in relays:
+            task.cancel()
+        await asyncio.gather(*relays, return_exceptions=True)
+
+
 class _ReconciliationPayloadError(ValueError):
     """A GitHub reconciliation record failed local structural validation."""
 
@@ -1954,12 +1987,14 @@ class Reconciler:
         """Discover open pull requests, or return ``None`` when another process is elected."""
         stop_event = stop or asyncio.Event()
         if stop_event.is_set():
-            return ReconciliationOutcome(queued=0, stopped=True)
+            return None
         lease_seconds = max(300, self.settings.reconcile_interval_seconds * 2)
         acquired = await asyncio.to_thread(
             self.store.acquire_service_lease, "open-pr-reconciler", self.owner, lease_seconds
         )
         if not acquired:
+            return None
+        if stop_event.is_set():
             return None
         done = asyncio.Event()
         lost = asyncio.Event()
@@ -1985,6 +2020,16 @@ class Reconciler:
     ) -> ReconciliationOutcome:
         """Perform one reconciliation while the heartbeat owns the lease."""
         stop_event = stop or asyncio.Event()
+        async with _combine_events(lost, stop_event) as request_stop:
+            return await self._reconcile_owned_scan(lost, stop_event, request_stop)
+
+    async def _reconcile_owned_scan(
+        self,
+        lost: asyncio.Event,
+        stop_event: asyncio.Event,
+        request_stop: asyncio.Event,
+    ) -> ReconciliationOutcome:
+        """Perform the elected scan with one request-level interruption signal."""
         queued = 0
         failed_installations = 0
 
@@ -2018,9 +2063,9 @@ class Reconciler:
         if interrupted():
             return interruption_outcome()
         try:
-            installation_records = await self.github.list_installations(stop=stop_event)
+            installation_records = await self.github.list_installations(stop=request_stop)
         except GitHubOperationStoppedError:
-            return interruption_outcome(operation_stopped=True)
+            return interruption_outcome(operation_stopped=not interrupted())
         if interrupted():
             return interruption_outcome()
         installations = _reconciliation_installations(installation_records)
@@ -2032,7 +2077,7 @@ class Reconciler:
             try:
                 repository_records = await self.github.list_installation_repositories(
                     installation_id,
-                    stop=stop_event,
+                    stop=request_stop,
                 )
                 if interrupted():
                     return interruption_outcome()
@@ -2047,7 +2092,7 @@ class Reconciler:
                     pull_records = await self.github.list_open_pulls(
                         installation_id,
                         full_name,
-                        stop=stop_event,
+                        stop=request_stop,
                     )
                     if interrupted():
                         return interruption_outcome()
@@ -2067,7 +2112,7 @@ class Reconciler:
                         )
                         queued += int(added)
             except GitHubOperationStoppedError:
-                return interruption_outcome(operation_stopped=True)
+                return interruption_outcome(operation_stopped=not interrupted())
             except _ReconciliationPayloadError as error:
                 failed_installations += 1
                 log.warning(

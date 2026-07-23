@@ -33,13 +33,13 @@ API `403` or `429` responses, and every unexplained long-lived
 `in_progress` check.
 
 A replica that observes another process holding the reconciler lease does not
-record an attempt. An election error is a failure. A partial attempt means the
-process lost its lease, an elected attempt was interrupted by graceful
-shutdown, or the process could not safely scan an installation or queue its
-pull requests. This includes GitHub request failures, invalid GitHub responses,
-and database errors while adding queue jobs. Work from healthy installations
-may still be queued, but a partial attempt does not refresh the last-success
-gauge.
+record an attempt. Shutdown before a scan begins does not record one either.
+An election error is a failure. A partial attempt means the process lost its
+lease, an active scan was interrupted by graceful shutdown, or the process
+could not safely scan an installation or queue its pull requests. This includes
+GitHub request failures, invalid GitHub responses, and database errors while
+adding queue jobs. Work from healthy installations may still be queued, but a
+partial attempt does not refresh the last-success gauge.
 
 A malformed top-level installation response fails the whole attempt before the
 service processes any installation. Once that list passes validation, a
@@ -51,12 +51,12 @@ non-object item, the client rejects it before field validation. The service
 then logs a fixed reconciliation event and error template instead. Neither path
 logs the rejected value.
 
-During graceful shutdown, an active reconciler checks the stop signal before
+During graceful shutdown or after lease loss, an active reconciler stops before
 the next retention operation, GitHub page or API request, repository scan, and
-queue insertion. It does not cancel an operation already in progress. Each
-reconciliation request has a 20-second wall-clock deadline. PostgreSQL connect,
-pool, and statement waits also have fixed limits, but a multi-statement
-database operation and local cleanup add to the shutdown time.
+queue insertion. Neither condition cancels an operation already in progress.
+Each reconciliation request has a 20-second wall-clock deadline. PostgreSQL
+connect, pool, and statement waits also have fixed limits, but a
+multi-statement database operation and local cleanup add to the shutdown time.
 
 Kubernetes applies one grace period to the whole pod. The server may finish
 active HTTP work before application shutdown begins, and the worker finishes

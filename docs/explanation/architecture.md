@@ -280,16 +280,17 @@ requests. Work already queued remains durable. Only a complete scan advances
 the last-success timestamp. The organization-policy repository is never
 included in reconciliation.
 
-If shutdown interrupts an elected attempt, the service records a partial
-result. An idle or unelected shutdown records no attempt. The application stop
-signal is checked between retention operations, after each GitHub response and
-before the next page, and before each repository scan and queue insertion. An
-insertion that already committed remains queued. After a boundary observes the
-signal, no later reconciliation discovery or queue operation starts; lease
-heartbeat shutdown and final bookkeeping still run. The reconciler does not
-cancel the GitHub or database operation already in progress. A GitHub request
-has a 20-second wall-clock deadline. PostgreSQL connect, pool, and statement
-waits use the fixed limits in
+Shutdown before a scan begins records no attempt, including when election is
+still in progress. Shutdown during a scan records a partial result. Once a scan
+begins, either shutdown or lease loss stops further discovery. The reconciler
+checks both conditions between retention operations, after each GitHub
+response and before the next page, and before each repository scan and queue
+insertion. An insertion that already committed remains queued. After a
+boundary observes either condition, no later reconciliation discovery or queue
+operation starts; lease-heartbeat shutdown and final bookkeeping still run.
+The reconciler does not cancel the GitHub or database operation already in
+progress. A GitHub request has a 20-second wall-clock deadline. PostgreSQL
+connect, pool, and statement waits use the fixed limits in
 [Runtime configuration](../reference/configuration.md); a multi-statement
 operation and local cleanup can add time after the current wait.
 

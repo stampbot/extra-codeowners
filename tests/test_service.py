@@ -1743,6 +1743,82 @@ async def test_unelected_reconciler_does_not_report_an_attempt(
 
 
 @pytest.mark.asyncio
+async def test_shutdown_before_election_does_not_report_an_attempt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stop = asyncio.Event()
+    stop.set()
+    store = migrated_store(f"sqlite:///{tmp_path / 'reconcile-stopped-before-election.db'}")
+    acquire = MagicMock(wraps=store.acquire_service_lease)
+    monkeypatch.setattr(store, "acquire_service_lease", acquire)
+    github = FakeGitHub(changed_path="uv.lock")
+    github.list_installations = AsyncMock()  # type: ignore[attr-defined]
+    reconciler = Reconciler(settings(), github, store, "reconciler")  # type: ignore[arg-type]
+    attempts = MagicMock()
+    last_success = MagicMock()
+    monkeypatch.setattr(service_module, "RECONCILIATIONS", attempts)
+    monkeypatch.setattr(service_module, "RECONCILIATION_LAST_SUCCESS", last_success)
+
+    await reconciler.run_iteration(stop)
+
+    acquire.assert_not_called()
+    github.list_installations.assert_not_awaited()  # type: ignore[attr-defined]
+    attempts.labels.assert_not_called()
+    last_success.set_to_current_time.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_winning_during_election_does_not_report_an_attempt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stop = asyncio.Event()
+    store = migrated_store(f"sqlite:///{tmp_path / 'reconcile-stopped-during-election.db'}")
+    event_loop = asyncio.get_running_loop()
+
+    def acquire_then_stop(name: str, owner: str, lease_seconds: int) -> bool:
+        del name, owner, lease_seconds
+        stop_visible = threading.Event()
+
+        def mark_stopped() -> None:
+            stop.set()
+            stop_visible.set()
+
+        event_loop.call_soon_threadsafe(mark_stopped)
+        assert stop_visible.wait(timeout=1)
+        return True
+
+    acquire = MagicMock(side_effect=acquire_then_stop)
+    monkeypatch.setattr(store, "acquire_service_lease", acquire)
+    github = FakeGitHub(changed_path="uv.lock")
+    github.list_installations = AsyncMock()  # type: ignore[attr-defined]
+    reconciler = Reconciler(settings(), github, store, "reconciler")  # type: ignore[arg-type]
+    attempts = MagicMock()
+    last_success = MagicMock()
+    monkeypatch.setattr(service_module, "RECONCILIATIONS", attempts)
+    monkeypatch.setattr(service_module, "RECONCILIATION_LAST_SUCCESS", last_success)
+
+    await reconciler.run_iteration(stop)
+
+    acquire.assert_called_once()
+    github.list_installations.assert_not_awaited()  # type: ignore[attr-defined]
+    attempts.labels.assert_not_called()
+    last_success.set_to_current_time.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_combined_reconciliation_event_wakes_for_either_source() -> None:
+    first = asyncio.Event()
+    second = asyncio.Event()
+
+    async with service_module._combine_events(first, second) as combined:
+        waiter = asyncio.create_task(combined.wait())
+        second.set()
+        await asyncio.wait_for(waiter, timeout=1)
+
+        assert combined.is_set()
+
+
+@pytest.mark.asyncio
 async def test_lost_reconciliation_lease_reports_partial_without_success_timestamp(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1932,7 +2008,7 @@ async def test_reconciliation_stops_between_delivery_and_shared_head_pruning_aft
 async def test_reconciliation_stop_after_installation_scan_prevents_repository_calls(
     tmp_path: Path,
 ) -> None:
-    stop = asyncio.Event()
+    shutdown = asyncio.Event()
     github = FakeGitHub(changed_path="uv.lock")
 
     async def list_installations_then_stop(
@@ -1940,7 +2016,7 @@ async def test_reconciliation_stop_after_installation_scan_prevents_repository_c
         stop: asyncio.Event | None = None,
     ) -> list[dict[str, Any]]:
         assert stop is not None
-        stop.set()
+        shutdown.set()
         return [{"id": 2, "suspended_at": None}]
 
     github.list_installations = list_installations_then_stop  # type: ignore[attr-defined]
@@ -1948,7 +2024,7 @@ async def test_reconciliation_stop_after_installation_scan_prevents_repository_c
     store = migrated_store(f"sqlite:///{tmp_path / 'reconcile-stop-installations.db'}")
     reconciler = Reconciler(settings(), github, store, "reconciler")  # type: ignore[arg-type]
 
-    outcome = await reconciler._reconcile_owned(asyncio.Event(), stop)
+    outcome = await reconciler._reconcile_owned(asyncio.Event(), shutdown)
 
     assert outcome == ReconciliationOutcome(queued=0, stopped=True)
     github.list_installation_repositories.assert_not_awaited()  # type: ignore[attr-defined]
@@ -1976,7 +2052,7 @@ async def test_reconciliation_stopped_error_is_never_reported_as_complete(
 async def test_reconciler_task_exits_within_grace_after_stop_during_repository_scan(
     tmp_path: Path,
 ) -> None:
-    stop = asyncio.Event()
+    shutdown = asyncio.Event()
     github = FakeGitHub(changed_path="uv.lock")
     github.list_installations = AsyncMock(  # type: ignore[attr-defined]
         return_value=[{"id": 2, "suspended_at": None}]
@@ -1989,7 +2065,7 @@ async def test_reconciler_task_exits_within_grace_after_stop_during_repository_s
     ) -> list[dict[str, Any]]:
         del installation_id
         assert stop is not None
-        stop.set()
+        shutdown.set()
         return [{"full_name": "example/project", "archived": False}]
 
     github.list_installation_repositories = (  # type: ignore[attr-defined]
@@ -1999,7 +2075,7 @@ async def test_reconciler_task_exits_within_grace_after_stop_during_repository_s
     store = migrated_store(f"sqlite:///{tmp_path / 'reconcile-stop-repositories.db'}")
     reconciler = Reconciler(settings(), github, store, "reconciler")  # type: ignore[arg-type]
 
-    await asyncio.wait_for(reconciler.run(stop), timeout=1)
+    await asyncio.wait_for(reconciler.run(shutdown), timeout=1)
 
     github.list_open_pulls.assert_not_awaited()  # type: ignore[attr-defined]
     assert store.pending_count() == 0
@@ -2038,6 +2114,52 @@ async def test_reconciliation_does_not_enqueue_pulls_returned_after_lease_loss(
     outcome = await reconciler._reconcile_owned(lost)
 
     assert outcome == ReconciliationOutcome(queued=0, lease_lost=True)
+    assert store.pending_count() == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "listing",
+    ["list_installations", "list_installation_repositories", "list_open_pulls"],
+)
+async def test_lease_loss_stops_paginated_reconciliation_listing(
+    tmp_path: Path,
+    listing: str,
+) -> None:
+    lost = asyncio.Event()
+    pages: list[int] = []
+    github = FakeGitHub(changed_path="uv.lock")
+    github.list_installations = AsyncMock(  # type: ignore[attr-defined]
+        return_value=[{"id": 2, "suspended_at": None}]
+    )
+    github.list_installation_repositories = AsyncMock(  # type: ignore[attr-defined]
+        return_value=[{"full_name": "example/project", "archived": False}]
+    )
+    github.list_open_pulls = AsyncMock(  # type: ignore[attr-defined]
+        return_value=[{"number": 3, "head": {"sha": HEAD}}]
+    )
+
+    async def lose_lease_after_first_page(
+        *args: Any,
+        stop: asyncio.Event | None = None,
+    ) -> list[dict[str, Any]]:
+        del args
+        assert stop is not None
+        pages.append(1)
+        lost.set()
+        assert stop.is_set()
+        if not stop.is_set():  # pragma: no cover - documents the forbidden request
+            pages.append(2)
+        raise GitHubOperationStoppedError("stopped before page 2")
+
+    setattr(github, listing, lose_lease_after_first_page)
+    store = migrated_store(f"sqlite:///{tmp_path / f'reconcile-{listing}-pagination.db'}")
+    reconciler = Reconciler(settings(), github, store, "reconciler")  # type: ignore[arg-type]
+
+    outcome = await reconciler._reconcile_owned(lost)
+
+    assert outcome == ReconciliationOutcome(queued=0, lease_lost=True)
+    assert pages == [1]
     assert store.pending_count() == 0
 
 
