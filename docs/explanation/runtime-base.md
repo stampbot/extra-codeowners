@@ -137,12 +137,19 @@ digests must match.
 
 ### Native-owner evidence coverage
 
-Greenlet, MarkupSafe, and SQLAlchemy have closed-world coverage on both
-architectures.
+Cryptography, Greenlet, MarkupSafe, and SQLAlchemy have closed-world coverage
+on both architectures.
 Greenlet binds the exact wheel and sdist, accounts for every native payload,
 and reproduces the component identities observed in its embedded SBOM. The
 bundle separately retains the Alpine GCC recipe, source archive, and notices
 reviewed for the SBOM's `libgcc` and `libstdc++` identities.
+
+Cryptography binds 32 registry observations to exact crates.io archives and
+their `Cargo.lock` checksums. The bundle also retains the sdist's canonical
+`src/rust` subtree, the project license texts, and the official checksummed
+OpenSSL 4.0.1 release and license. The arm64 `NotpineForGHA` PURL stays in the
+raw observation. A relationship links that `libgcc` occurrence to Greenlet's
+reviewed Alpine GCC source because the payload bytes match exactly.
 
 MarkupSafe binds the exact wheel, its one `_speedups` native payload, and the
 80,313-byte sdist. It has no embedded SBOM, and its payload disposition treats
@@ -154,7 +161,11 @@ SQLAlchemy binds the exact wheel, five `cyextension` payloads, and the
 disposed as owner code. The sdist carries the project's Cython sources, but
 this evidence does not prove reproducibility or close the compiler toolchain.
 
-Four other native-wheel owners retain explicit, structured omissions. Their
+The Cryptography closure also stops short of reproducibility or build
+provenance: retained source agreement does not prove that those inputs produced
+either wheel.
+
+Three other native-wheel owners retain explicit, structured omissions. Their
 open review state is why
 [issue #18](https://github.com/stampbot/extra-codeowners/issues/18) still blocks
 distribution.

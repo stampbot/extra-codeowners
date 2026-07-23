@@ -19,8 +19,8 @@ or release authority from running.
 Four open issues define the evidence and publication path covered by this
 guide:
 
-- [#18](https://github.com/stampbot/extra-codeowners/issues/18) covers the four
-  native-wheel owners that remain after Greenlet, MarkupSafe, and SQLAlchemy.
+- [#18](https://github.com/stampbot/extra-codeowners/issues/18) covers CFFI,
+  Psycopg, and Pydantic Core source closure.
 - [#28](https://github.com/stampbot/extra-codeowners/issues/28) covers the
   privilege-separated release pipeline and bounded recipient verifier.
 - [#32](https://github.com/stampbot/extra-codeowners/issues/32) covers retaining
@@ -687,6 +687,7 @@ for architecture in amd64 arm64; do
       and .platform == $platform
       and .complete == false
       and ([.resolved_owners[].owner] == [
+        "python:cryptography@48.0.1",
         "python:greenlet@3.5.3",
         "python:markupsafe@3.0.3",
         "python:sqlalchemy@2.0.51"
@@ -698,10 +699,6 @@ for architecture in amd64 arm64; do
         {
           "owner": "python:cffi@2.1.0",
           "omissions": ["unproven-libffi-build-input"]
-        },
-        {
-          "owner": "python:cryptography@48.0.1",
-          "omissions": ["unresolved-rust-and-openssl-sources"]
         },
         {
           "owner": "python:psycopg-binary@3.3.4",
@@ -723,10 +720,9 @@ for architecture in amd64 arm64; do
         "python:greenlet@3.5.3",
         "python:psycopg-binary@3.3.4"
       ])
-      and .remaining_owner_count == 4
+      and .remaining_owner_count == 3
       and (.remaining_owner_names == [
         "python:cffi@2.1.0",
-        "python:cryptography@48.0.1",
         "python:psycopg-binary@3.3.4",
         "python:pydantic-core@2.46.4"
       ])
@@ -860,6 +856,7 @@ inventory assertion.
 
 On both platforms, the ledger must contain these closed owners:
 
+- `python:cryptography@48.0.1`
 - `python:greenlet@3.5.3`
 - `python:markupsafe@3.0.3`
 - `python:sqlalchemy@2.0.51`.
@@ -869,7 +866,6 @@ It must retain these open records and exact omission IDs:
 | Owner | Omission IDs |
 | --- | --- |
 | `python:cffi@2.1.0` | `unproven-libffi-build-input` |
-| `python:cryptography@48.0.1` | `unresolved-rust-and-openssl-sources` |
 | `python:psycopg-binary@3.3.4` | `missing-libpq-sbom`, `unreviewed-bundled-library-sources` |
 | `python:pydantic-core@2.46.4` | `missing-libgcc-sbom`, `unreviewed-cargo-sources` |
 
@@ -885,8 +881,8 @@ role. A matching reference in a different omission does not close the gap.
 The ledger must also report:
 
 - `complete: false`
-- `remaining_owner_count: 4`
-- the same four owner names in `remaining_owner_names`
+- `remaining_owner_count: 3`
+- the same three owner names in `remaining_owner_names`
 - one reviewed `metadata-root-echo` anomaly for each Cryptography, Greenlet,
   and Psycopg auditwheel document.
 
@@ -903,6 +899,17 @@ license. Closing native owners must not weaken that evidence.
 Greenlet is closed because its record directly reviews its retained
 occurrences, binds the exact platform wheel and owner sdist, records all five
 native payloads, and retains the reviewed Alpine GCC source and notices.
+Cryptography closes its 32 registry observations with exact crates.io archives,
+Cargo manifests, checksums, and notices. Confirm that each crate's notice list
+exactly matches every license or notice file in its archive. The local Rust
+observations must match the retained subtree path, local PURLs, identities, and
+reviewed license. The OpenSSL observation must match the release name, version,
+archive URL, SHA-256, and reviewed license.
+
+The arm64 `NotpineForGHA` PURL remains literal. Only its byte-identical
+`libgcc` payload points to Greenlet's closed evidence. This record does not
+claim wheel reproducibility or build provenance.
+
 MarkupSafe closes one `_speedups` role with no embedded SBOM. SQLAlchemy closes
 five `cyextension` roles with no embedded SBOM. Those owner dispositions prove
 wheel ownership; they do not prove reproducibility or infer unobserved
@@ -916,8 +923,8 @@ or corresponding-source delivery.
 
 Raw path/hash baselines make each surface visible. Only a closed review with
 the required exact sources, notices, and relationships can make the derived
-ledger complete. Issue #18 must close all four records before a supported
-release can pass this gate.
+ledger complete. Issue #18 must close the remaining three records before a
+supported release can pass this gate.
 
 ## 6. Run the repository gates
 

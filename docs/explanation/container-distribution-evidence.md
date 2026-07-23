@@ -16,7 +16,7 @@ publish a supported container image yet.
 | Evidence subject | Each CI archive names its local image configuration digest because CI does not publish a platform manifest. |
 | Public `main` image | Disabled; the publication job has been removed. |
 | Tagged release | Blocked before any job can publish an image, chart, Python package, or GitHub release. |
-| Source closure | CPython, Greenlet, MarkupSafe, and SQLAlchemy are resolved on both platforms; four native-wheel owners remain incomplete. |
+| Source closure | CPython, Cryptography, Greenlet, MarkupSafe, and SQLAlchemy are resolved on both platforms; three native-wheel owners remain incomplete. |
 
 The release workflow can still validate source, build proof, and scan a
 candidate with repository-read permission. A separate job then fails before
@@ -82,10 +82,10 @@ of that proof in release evidence and its handoff to the future isolated
 publication path.
 
 CPython has a normalized top-level component record with exact runtime
-identity, recipe, source, and license evidence. Greenlet, MarkupSafe, and
-SQLAlchemy have closed native-owner reviews on both platforms. Four other
-owners have exact observations and explicit omissions, but their reviews remain
-open.
+identity, recipe, source, and license evidence. Cryptography, Greenlet,
+MarkupSafe, and SQLAlchemy have closed native-owner reviews on both platforms.
+Three other owners have exact observations and explicit omissions, but their
+reviews remain open.
 Issue [#18](https://github.com/stampbot/extra-codeowners/issues/18) tracks that
 work. Until it closes, the derived ledger keeps
 `source_completeness.complete` false and the approval-required gate rejects the
@@ -167,8 +167,8 @@ occurrence identities fail collection. Every `.pyc` or `.pyo` occurrence under
 This replay establishes which wheel owns each file occurrence and whether the
 installed executable bytes match the wheel. The native-component ledger uses
 that ownership to review one complete wheel at a time. It does not infer which
-source or nested SBOM component produced an individual file. Greenlet,
-MarkupSafe, and SQLAlchemy are resolved; four other owners still lack
+source or nested SBOM component produced an individual file. Cryptography,
+Greenlet, MarkupSafe, and SQLAlchemy are resolved; three other owners still lack
 corresponding-source closure, so overall source completeness remains false.
 
 ### CPython runtime identity and source binding
@@ -298,8 +298,8 @@ Native component sources form a tagged union. The collector supports:
 - a commit-pinned Alpine aports recipe plus every checksummed distfile
 - a crates.io archive bound to its manifest identity, checksum, raw license,
   normalized license, and reviewed notices
-- a canonical, link-free subtree manifest inside the wheel owner's exact
-  source distribution
+- a canonical, link-free subtree inside the wheel owner's exact source
+  distribution, with pinned Cargo workspace and package manifests
 - an upstream release archive bound to a pinned checksum document with one
   exact filename record
 
@@ -311,9 +311,10 @@ Rust source closure has one additional check. A crates.io review must include
 the exact `Cargo.lock` member from the owner's retained sdist, its hash and
 size, the sorted crates.io source IDs represented by SBOM observations, and
 the exact registry packages found only in the lockfile. Bundle generation
-reparses the retained lockfile. It rejects missing or duplicate packages,
-foreign registries, checksum drift, unaccounted registry packages, and local
-Cargo packages that do not match reviewed owner-sdist observations.
+reparses the retained lockfile and the pinned Cargo manifests. It rejects
+missing or duplicate packages, foreign registries, checksum drift, unaccounted
+registry packages, and local Cargo packages that disagree with the workspace,
+the reviewed subtree, or the SBOM observations.
 
 This proves agreement among the SBOM, lockfile, registry archive, manifest,
 license, and notices. It does not prove that those sources built the wheel.
@@ -326,16 +327,21 @@ owner with complete dispositions and source evidence can be `closed`. An
 `review.unresolved_items`. Removing an owner from policy fails exact coverage;
 it does not turn the owner into an inferred unresolved record.
 
-The current closed owners are Greenlet, MarkupSafe, and SQLAlchemy. MarkupSafe
-and SQLAlchemy have no embedded SBOM, so their SBOM and component-review arrays
-are empty while their native payload sets remain exact.
+The current closed owners are Cryptography, Greenlet, MarkupSafe, and
+SQLAlchemy. Cryptography directly reviews 32 crates.io archives, the local Rust
+subtree in its exact sdist, and the official checksummed OpenSSL 4.0.1 release.
+Its arm64 `NotpineForGHA` PURL remains literal. A relationship links that exact
+`libgcc` occurrence to Greenlet's closed Alpine GCC evidence because the
+payload bytes match. This is source-retention closure, not proof that the
+retained inputs built either wheel.
 
-Four owners are still open:
+MarkupSafe and SQLAlchemy have no embedded SBOM, so their SBOM and
+component-review arrays are empty while their native payload sets remain exact.
+
+Three owners are still open:
 
 - CFFI has no embedded native-component inventory, and its upstream build did
   not record the digest of the libffi 3.4.6 source it downloaded.
-- Cryptography still needs complete Rust and OpenSSL source, license, notice,
-  and build-material evidence.
 - Psycopg still lacks a `libpq` SBOM observation and reviewed source closure
   for its bundled libraries.
 - Pydantic Core still lacks a `libgcc` observation and retained source closure
@@ -505,9 +511,9 @@ unprivileged pinned fetch
   -> short-lived isolated publication and signing authority
 ```
 
-Before those phases may publish, the other four native-wheel owners must move
-from `open` to `closed`, or those wheels must be replaced with builds linked
-against separately inventoried packages.
+Before those phases may publish, the remaining three native-wheel owners must
+move from `open` to `closed`, or those wheels must be replaced with builds
+linked against separately inventoried packages.
 
 The parsing phases must run rootless with `--network none`, immutable inputs,
 read-only mounts where practical, and explicit size limits. The first parse
@@ -523,12 +529,12 @@ must fail verification.
 ## Trust boundary and residual risk
 
 The review archive records what the collector observed and fetched under
-reviewed policy. Greenlet, MarkupSafe, and SQLAlchemy are closed, but four
-native-wheel owners are not, so the archive is not component/source complete
-today. Even a future complete archive would not prove upstream metadata is
-correct, identify every copyright holder, or decide whether a delivery
-mechanism satisfies every jurisdiction. Hashes protect reviewed bytes from
-silent mutation; they do not make the original source trustworthy.
+reviewed policy. Cryptography, Greenlet, MarkupSafe, and SQLAlchemy are closed,
+but three native-wheel owners are not, so the archive is not component/source
+complete today. Even a future complete archive would not prove upstream
+metadata is correct, identify every copyright holder, or decide whether a
+delivery mechanism satisfies every jurisdiction. Hashes protect reviewed bytes
+from silent mutation; they do not make the original source trustworthy.
 
 A maintainer must review both platforms and separately approve recipient
 delivery. Qualified legal review remains necessary before a paid hosted

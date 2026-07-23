@@ -71,17 +71,27 @@ verification instead of becoming an inferred gap.
 | Owner | State | Evidence still missing |
 | --- | --- | --- |
 | `python:cffi@2.1.0` | Open | `unproven-libffi-build-input` |
-| `python:cryptography@48.0.1` | Open | `unresolved-rust-and-openssl-sources` |
+| `python:cryptography@48.0.1` | Closed | None |
 | `python:greenlet@3.5.3` | Closed | None |
 | `python:markupsafe@3.0.3` | Closed | None |
 | `python:psycopg-binary@3.3.4` | Open | `missing-libpq-sbom`, `unreviewed-bundled-library-sources` |
 | `python:pydantic-core@2.46.4` | Open | `missing-libgcc-sbom`, `unreviewed-cargo-sources` |
 | `python:sqlalchemy@2.0.51` | Closed | None |
 
+Cryptography binds all 32 registry components to their exact crates.io
+archives, manifests, checksums, licenses, and notices. Its retained sdist
+supplies the exact local Rust subtree and `Cargo.lock`. The source record pins
+the workspace manifest and all eight package manifests. The OpenSSL 4.0.1
+record supplies the official archive, checksum document, and license. The arm64
+auditwheel PURL remains `NotpineForGHA`. A relationship links that `libgcc`
+occurrence to Greenlet's closed Alpine GCC evidence because the payload bytes
+match exactly.
+
 Greenlet's reviewed components use the commit-pinned Alpine GCC recipe and
 source archive. MarkupSafe and SQLAlchemy have no embedded SBOM, so their
 closed records contain empty SBOM and component-review arrays. Their native
-payloads are still exact.
+payloads are still exact. None of these records claims that a wheel is
+reproducible from the retained sources or proves which build produced it.
 
 The policy can describe four immutable native-source forms: an Alpine aports
 recipe and distfiles, a crates.io archive, a verified subtree of the owner's
@@ -94,7 +104,7 @@ appear in `unresolved_owners` with their full evidence and omissions.
 `source_completeness` is derived in `MANIFEST.json`; it is not trusted as an
 input from `inventory/components.json`.
 
-Four owners remain open, so `source_completeness.complete` is `false`.
+Three owners remain open, so `source_completeness.complete` is `false`.
 `distribution_approval.approved` also remains `false`. The ledger records
 progress. It does not grant permission to distribute the image.
 

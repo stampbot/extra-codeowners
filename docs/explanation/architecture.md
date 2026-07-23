@@ -459,11 +459,15 @@ runtime files and retains its pinned recipe, source archive, and source-carried
 license. It also replays historical Python installs from each layer's `RECORD`.
 Greenlet now has closed-world coverage on both architectures: exact wheel and
 sdist identity, complete native-file ownership, embedded-component identity,
-Alpine GCC source, and reviewed notices. MarkupSafe and SQLAlchemy also bind
-their exact wheels and sdists to complete native-payload sets. Both have no
-embedded SBOM and explicitly treat their payloads as owner code. Four other
-native-wheel owners retain structured open omissions for the surfaces that
-still lack complete evidence.
+Alpine GCC source, and reviewed notices. Cryptography binds its 32 crates.io
+components, local Rust subtree, and OpenSSL 4.0.1 release to the literal SBOM
+observations while reusing Greenlet's closed `libgcc` evidence only when the
+platform payload bytes match. MarkupSafe and SQLAlchemy also bind their exact
+wheels and sdists to complete native-payload sets. Both have no embedded SBOM
+and explicitly treat their payloads as owner code. Three other native-wheel
+owners retain structured open omissions for the surfaces that still lack
+complete evidence. These records retain sources and notices; they do not claim
+wheel reproducibility or build provenance.
 
 The tagged workflow contains intended image, chart, Python, SBOM, provenance,
 signature, and GitHub-release jobs. An unconditional blocker keeps every

@@ -1174,6 +1174,75 @@ def rebind_policy_observation_bom_ref(
             )
 
 
+def rebind_policy_observation_purl(
+    value: object,
+    *,
+    sbom_path: str,
+    old_purl: str,
+    new_purl: str,
+) -> None:
+    """Update every exact policy reference to one intentionally changed PURL."""
+
+    if isinstance(value, dict):
+        if value.get("sbom_path") == sbom_path and value.get("purl") == old_purl:
+            value["purl"] = new_purl
+        for item in value.values():
+            rebind_policy_observation_purl(
+                item,
+                sbom_path=sbom_path,
+                old_purl=old_purl,
+                new_purl=new_purl,
+            )
+    elif isinstance(value, list):
+        for item in value:
+            rebind_policy_observation_purl(
+                item,
+                sbom_path=sbom_path,
+                old_purl=old_purl,
+                new_purl=new_purl,
+            )
+
+
+def rehash_policy_sbom(owner: dict[str, Any], sbom: dict[str, Any]) -> None:
+    """Recompute one intentionally mutated SBOM projection and its exact references."""
+
+    observation = sbom["observation"]
+    body = {
+        field: observation[field]
+        for field in (
+            "metadata_component",
+            "metadata_root_echo",
+            "upstream_invalid_duplicate_bom_ref",
+            "components",
+        )
+    }
+    observation_sha256 = evidence.sha256_bytes(evidence.canonical_json(body))
+    observation["observation_sha256"] = observation_sha256
+    rebind_policy_observation_digest(
+        owner,
+        sbom_path=sbom["path"],
+        observation_sha256=observation_sha256,
+    )
+
+
+def recanonicalize_policy_observation_references(value: object) -> None:
+    """Sort every intentionally mutated observation-reference list."""
+
+    if isinstance(value, dict):
+        for item in value.values():
+            recanonicalize_policy_observation_references(item)
+    elif isinstance(value, list):
+        for item in value:
+            recanonicalize_policy_observation_references(item)
+        if value and all(isinstance(item, dict) and "identity_kind" in item for item in value):
+            value.sort(
+                key=lambda item: evidence.validate_observation_reference(
+                    item,
+                    "mutated policy observation",
+                )
+            )
+
+
 def rewrite_native_wheel(
     content: bytes,
     *,
@@ -3579,6 +3648,24 @@ def test_native_component_source_union_accepts_all_v7_variants() -> None:
         "kind": "owner-sdist-subpath",
         "owner": "python:demo@1.0",
         "path": "src/native",
+        "reviewed_license": "MIT",
+        "workspace_manifest": {
+            "member": "demo-1.0/Cargo.toml",
+            "sha256": "e" * 64,
+            "size": 100,
+        },
+        "cargo_packages": [
+            {
+                "path": ".",
+                "name": "demo-native",
+                "version": "1.0.0",
+                "manifest": {
+                    "member": "demo-1.0/src/native/Cargo.toml",
+                    "sha256": "f" * 64,
+                    "size": 100,
+                },
+            }
+        ],
         "tree_sha256": "9" * 64,
         "member_count": 4,
         "expanded_size": 8192,
@@ -3605,6 +3692,7 @@ def test_native_component_source_union_accepts_all_v7_variants() -> None:
             "size": 100,
         },
         "checksum_filename": "openssl-4.0.1.tar.gz",
+        "reviewed_license": "Apache-2.0",
         "notices": [
             {
                 "member": "openssl-4.0.1/LICENSE.txt",
@@ -3646,11 +3734,44 @@ def test_native_component_source_union_rejects_legacy_and_ambiguous_records() ->
             "size": 10,
         },
         "checksum_filename": "different.tar.gz",
+        "reviewed_license": "MIT",
         "notices": [{"member": "LICENSE", "sha256": "3" * 64, "size": 10}],
     }
     with pytest.raises(evidence.EvidenceError, match="checksum filename"):
         evidence.native_component_sources(
             {"native_component_sources": {"upstream-release:demo@1.0": ambiguous}}
+        )
+
+
+@pytest.mark.parametrize(
+    ("source_id", "kind"),
+    (
+        ("owner-sdist:python:demo@1.0#src/native", "owner-sdist-subpath"),
+        ("upstream-release:demo@1.0", "checksummed-upstream-release"),
+    ),
+)
+def test_bundle_reconnects_source_reviewed_license_to_exact_consumers(
+    source_id: str,
+    kind: str,
+) -> None:
+    source = {"kind": kind, "reviewed_license": "MIT"}
+    evidence.validate_bundle_source_reviewed_license_binding(
+        source_id,
+        source,
+        {"MIT"},
+    )
+
+    with pytest.raises(evidence.EvidenceError, match="bundle review license differs"):
+        evidence.validate_bundle_source_reviewed_license_binding(
+            source_id,
+            source,
+            {"Apache-2.0"},
+        )
+    with pytest.raises(evidence.EvidenceError, match="bundle review license differs"):
+        evidence.validate_bundle_source_reviewed_license_binding(
+            source_id,
+            source,
+            None,
         )
 
 
@@ -3743,6 +3864,29 @@ def test_crates_io_archive_binds_manifest_license_and_notices() -> None:
             archive,
             source_id="crates-io:demo-crate@1.2.3",
             source=changed,
+        )
+
+    removed_notice = copy.deepcopy(source)
+    removed_notice["notices"] = []
+    with pytest.raises(evidence.EvidenceError, match="notice inventory differs"):
+        evidence.verify_crates_io_archive(
+            archive,
+            source_id="crates-io:demo-crate@1.2.3",
+            source=removed_notice,
+        )
+
+    extra_notice_archive = tar_bytes(
+        {
+            "demo-crate-1.2.3/Cargo.toml": manifest,
+            "demo-crate-1.2.3/LICENSE": notice,
+            "demo-crate-1.2.3/NOTICE": b"Additional notice\n",
+        }
+    )
+    with pytest.raises(evidence.EvidenceError, match="notice inventory differs"):
+        evidence.verify_crates_io_archive(
+            extra_notice_archive,
+            source_id="crates-io:demo-crate@1.2.3",
+            source=source,
         )
 
     linked = tar_bytes(
@@ -3888,6 +4032,161 @@ def test_owner_sdist_zip_subtree_tracks_top_level_roots() -> None:
             source_id="owner-sdist:python:demo@1.0#src/native",
             source=source,
             archive_name="demo-1.0.zip",
+        )
+
+
+def owner_sdist_cargo_package_case() -> tuple[
+    bytes,
+    dict[str, Any],
+    list[dict[str, Any]],
+    set[tuple[str, str | None]],
+]:
+    """Build one exact owner-sdist Cargo workspace and its reviewed subtree."""
+
+    workspace_manifest = (
+        b'[workspace]\nmembers = ["src/native/", "src/native/child"]\n\n'
+        b'[workspace.package]\nversion = "1.0.0"\nlicense = "MIT"\n'
+    )
+    root_manifest = (
+        b'[package]\nname = "demo-native"\nversion.workspace = true\nlicense.workspace = true\n'
+    )
+    child_manifest = (
+        b'[package]\nname = "demo-child"\nversion.workspace = true\nlicense.workspace = true\n'
+    )
+    root_source = b"pub fn root() {}\n"
+    child_source = b"pub fn child() {}\n"
+    subtree_files = {
+        "Cargo.toml": root_manifest,
+        "child/Cargo.toml": child_manifest,
+        "child/src/lib.rs": child_source,
+        "src/lib.rs": root_source,
+    }
+    subtree = [
+        {
+            "path": path,
+            "type": "file",
+            "mode": 0o644,
+            "size": len(content),
+            "sha256": evidence.sha256_bytes(content),
+        }
+        for path, content in sorted(subtree_files.items())
+    ]
+    notice = b"MIT fixture license\n"
+    archive = tar_bytes(
+        {
+            "demo-1.0/Cargo.toml": workspace_manifest,
+            **{f"demo-1.0/src/native/{path}": content for path, content in subtree_files.items()},
+            "demo-1.0/LICENSE": notice,
+        }
+    )
+    source = {
+        "kind": "owner-sdist-subpath",
+        "owner": "python:demo@1.0",
+        "path": "src/native",
+        "tree_sha256": evidence.sha256_bytes(evidence.canonical_json(subtree)),
+        "member_count": len(subtree),
+        "expanded_size": sum(len(content) for content in subtree_files.values()),
+        "reviewed_license": "MIT",
+        "workspace_manifest": {
+            "member": "demo-1.0/Cargo.toml",
+            "sha256": evidence.sha256_bytes(workspace_manifest),
+            "size": len(workspace_manifest),
+        },
+        "cargo_packages": [
+            {
+                "path": ".",
+                "name": "demo-native",
+                "version": "1.0.0",
+                "manifest": {
+                    "member": "demo-1.0/src/native/Cargo.toml",
+                    "sha256": evidence.sha256_bytes(root_manifest),
+                    "size": len(root_manifest),
+                },
+            },
+            {
+                "path": "child",
+                "name": "demo-child",
+                "version": "1.0.0",
+                "manifest": {
+                    "member": "demo-1.0/src/native/child/Cargo.toml",
+                    "sha256": evidence.sha256_bytes(child_manifest),
+                    "size": len(child_manifest),
+                },
+            },
+        ],
+        "notices": [
+            {
+                "member": "demo-1.0/LICENSE",
+                "sha256": evidence.sha256_bytes(notice),
+                "size": len(notice),
+            }
+        ],
+    }
+    bindings: set[tuple[str, str | None]] = {
+        (".", "src/lib.rs"),
+        ("child", None),
+    }
+    return archive, source, subtree, bindings
+
+
+def test_owner_sdist_cargo_packages_bind_exact_manifests_and_source_files() -> None:
+    archive, source, expected_subtree, bindings = owner_sdist_cargo_package_case()
+    source_id = "owner-sdist:python:demo@1.0#src/native"
+    evidence.validate_owner_subpath_component_source(source_id, source)
+    subtree = evidence.verify_owner_sdist_subtree(
+        archive,
+        source_id=source_id,
+        source=source,
+        archive_name="demo-1.0.tar.gz",
+    )
+    assert subtree == expected_subtree
+    evidence.verify_owner_sdist_cargo_packages(
+        archive,
+        source_id=source_id,
+        source=source,
+        archive_name="demo-1.0.tar.gz",
+        subtree=subtree,
+        bindings=bindings,
+    )
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    (
+        ("path", "omits reviewed Cargo manifests"),
+        ("name", "identity or license differs"),
+        ("version", "identity or license differs"),
+        ("license", "identity or license differs"),
+        ("fragment", "observation source path is absent"),
+    ),
+)
+def test_owner_sdist_cargo_packages_reject_coordinated_source_substitution(
+    mutation: str,
+    message: str,
+) -> None:
+    archive, source, subtree, bindings = owner_sdist_cargo_package_case()
+    if mutation == "path":
+        package = source["cargo_packages"][1]
+        package["path"] = "nonexistent"
+        package["manifest"]["member"] = "demo-1.0/src/native/nonexistent/Cargo.toml"
+    elif mutation == "name":
+        source["cargo_packages"][1]["name"] = "unrelated-local-crate"
+    elif mutation == "version":
+        source["cargo_packages"][1]["version"] = "9.9.9"
+    elif mutation == "license":
+        source["reviewed_license"] = "GPL-3.0-only"
+    else:
+        bindings.remove((".", "src/lib.rs"))
+        bindings.add((".", "src/nonexistent.rs"))
+
+    with pytest.raises(evidence.EvidenceError, match=message):
+        evidence.verify_owner_sdist_cargo_packages(
+            archive,
+            source_id="owner-sdist:python:demo@1.0#src/native",
+            source=source,
+            archive_name="demo-1.0.tar.gz",
+            subtree=subtree,
+            bindings=bindings,
         )
 
 
@@ -4447,7 +4746,7 @@ def test_native_component_lock_binding_accepts_exact_reviewed_source_fallback() 
         )
 
 
-def test_committed_native_owner_policy_is_exact_and_incomplete() -> None:
+def test_committed_native_owner_policy_closes_cryptography_and_remains_incomplete() -> None:
     policy = cast(dict[str, Any], json.loads(Path(".compliance/container-policy.json").read_text()))
     evidence.validate_policy_schema(policy)
 
@@ -4459,6 +4758,196 @@ def test_committed_native_owner_policy_is_exact_and_incomplete() -> None:
     assert source["recipe"]["sha256"] == (
         "5c623d22ac85b64f1dab2346cee6991432723cc7983ec7cb13a5b58692bfc658"
     )
+    crate_source_ids = {
+        source_id
+        for source_id, source_record in policy["native_component_sources"].items()
+        if source_record["kind"] == "crates-io"
+    }
+    assert crate_source_ids == {
+        "crates-io:asn1@0.24.1",
+        "crates-io:asn1_derive@0.24.1",
+        "crates-io:base64@0.22.1",
+        "crates-io:bitflags@2.11.1",
+        "crates-io:cc@1.2.61",
+        "crates-io:cfg-if@1.0.4",
+        "crates-io:find-msvc-tools@0.1.9",
+        "crates-io:foreign-types-shared@0.1.1",
+        "crates-io:foreign-types@0.3.2",
+        "crates-io:heck@0.5.0",
+        "crates-io:itoa@1.0.18",
+        "crates-io:libc@0.2.186",
+        "crates-io:once_cell@1.21.4",
+        "crates-io:openssl-macros@0.1.1",
+        "crates-io:openssl-sys@0.9.115",
+        "crates-io:openssl@0.10.79",
+        "crates-io:pem@3.0.6",
+        "crates-io:pkg-config@0.3.33",
+        "crates-io:portable-atomic@1.13.1",
+        "crates-io:proc-macro2@1.0.106",
+        "crates-io:pyo3-build-config@0.28.3",
+        "crates-io:pyo3-ffi@0.28.3",
+        "crates-io:pyo3-macros-backend@0.28.3",
+        "crates-io:pyo3-macros@0.28.3",
+        "crates-io:pyo3@0.28.3",
+        "crates-io:quote@1.0.45",
+        "crates-io:self_cell@1.2.2",
+        "crates-io:shlex@1.3.0",
+        "crates-io:syn@2.0.117",
+        "crates-io:target-lexicon@0.13.5",
+        "crates-io:unicode-ident@1.0.24",
+        "crates-io:vcpkg@0.2.15",
+    }
+    assert all(
+        source_record["notices"]
+        and source_record["crate"]["sha256"]
+        and source_record["manifest"]["sha256"]
+        for source_id, source_record in policy["native_component_sources"].items()
+        if source_id in crate_source_ids
+    )
+    local_source_id = "owner-sdist:python:cryptography@48.0.1#src/rust"
+    local_source = policy["native_component_sources"][local_source_id]
+    assert {
+        key: value
+        for key, value in local_source.items()
+        if key not in {"cargo_packages", "workspace_manifest"}
+    } == {
+        "expanded_size": 1221863,
+        "kind": "owner-sdist-subpath",
+        "member_count": 113,
+        "notices": [
+            {
+                "member": "cryptography-48.0.1/LICENSE",
+                "sha256": ("3e0c7c091a948b82533ba98fd7cbb40432d6f1a9acbf85f5922d2f99a93ae6bb"),
+                "size": 197,
+            },
+            {
+                "member": "cryptography-48.0.1/LICENSE.APACHE",
+                "sha256": ("aac73b3148f6d1d7111dbca32099f68d26c644c6813ae1e4f05f6579aa2663fe"),
+                "size": 11360,
+            },
+            {
+                "member": "cryptography-48.0.1/LICENSE.BSD",
+                "sha256": ("602c4c7482de6479dd2e9793cda275e5e63d773dacd1eca689232ab7008fb4fb"),
+                "size": 1532,
+            },
+        ],
+        "owner": "python:cryptography@48.0.1",
+        "path": "src/rust",
+        "reviewed_license": "Apache-2.0 OR BSD-3-Clause",
+        "tree_sha256": "201bc453ace982c914570aa70b70f7e65e2d3f547ba69bd1eb38304bbb39d357",
+    }
+    assert [
+        (
+            package["path"],
+            package["name"],
+            package["version"],
+            package["manifest"]["member"],
+            package["manifest"]["sha256"],
+            package["manifest"]["size"],
+        )
+        for package in local_source["cargo_packages"]
+    ] == [
+        (
+            ".",
+            "cryptography-rust",
+            "0.1.0",
+            "cryptography-48.0.1/src/rust/Cargo.toml",
+            "255631745bb2f077f26cf7cdbfa9ee831f96ed0c013e9fa0dce3e78af43abc54",
+            1526,
+        ),
+        (
+            "cryptography-cffi",
+            "cryptography-cffi",
+            "0.1.0",
+            "cryptography-48.0.1/src/rust/cryptography-cffi/Cargo.toml",
+            "233dcd723ad23d0aea9717215eb6596272b11c5cb6796edeff93c6704be2fcbe",
+            423,
+        ),
+        (
+            "cryptography-crypto",
+            "cryptography-crypto",
+            "0.1.0",
+            "cryptography-48.0.1/src/rust/cryptography-crypto/Cargo.toml",
+            "5d3499ad8c4e564a789453bcd721782250435735e94407d8de061dc7fc57b32d",
+            235,
+        ),
+        (
+            "cryptography-keepalive",
+            "cryptography-keepalive",
+            "0.1.0",
+            "cryptography-48.0.1/src/rust/cryptography-keepalive/Cargo.toml",
+            "abe27146fda8c55a9ff3758bbcf34527b7fa42c677d7166d746cc9e541d37732",
+            235,
+        ),
+        (
+            "cryptography-key-parsing",
+            "cryptography-key-parsing",
+            "0.1.0",
+            "cryptography-48.0.1/src/rust/cryptography-key-parsing/Cargo.toml",
+            "69904d1b1a7383a415924e379c496303f15e87bcb7a45a94512a43887b71480b",
+            788,
+        ),
+        (
+            "cryptography-openssl",
+            "cryptography-openssl",
+            "0.1.0",
+            "cryptography-48.0.1/src/rust/cryptography-openssl/Cargo.toml",
+            "3109ef1f8a226c07e5728ac5a9475893a721694529d7d4dba4ef241bfb237399",
+            608,
+        ),
+        (
+            "cryptography-x509",
+            "cryptography-x509",
+            "0.1.0",
+            "cryptography-48.0.1/src/rust/cryptography-x509/Cargo.toml",
+            "70252c64c92650285f8f6effac3cfc0a9ecc65c4af047ff33ae828e8ed1efb87",
+            230,
+        ),
+        (
+            "cryptography-x509-verification",
+            "cryptography-x509-verification",
+            "0.1.0",
+            "cryptography-48.0.1/src/rust/cryptography-x509-verification/Cargo.toml",
+            "a3e20dcc02bc1ac52bdcd8f0b919b04b23d4d6dec03e1d487a16b387b511af3e",
+            338,
+        ),
+    ]
+    assert local_source["workspace_manifest"] == {
+        "member": "cryptography-48.0.1/Cargo.toml",
+        "sha256": "1ee5c3835911f8750ff6e7fa9477766a2d1f64daaf00d29c50db2cceefa42eb7",
+        "size": 977,
+    }
+    openssl_source_id = "upstream-release:openssl@4.0.1"
+    assert policy["native_component_sources"][openssl_source_id] == {
+        "archive": {
+            "sha256": "2db3f3a0d6ea4b59e1f094ace2c8cd536dffb87cdc39084c5afa1e6f7f37dd09",
+            "size": 55079428,
+            "url": (
+                "https://github.com/openssl/openssl/releases/download/"
+                "openssl-4.0.1/openssl-4.0.1.tar.gz"
+            ),
+        },
+        "checksum_document": {
+            "sha256": "3d46819187b899851e74f5478a73bf8a645afaa1e25864cd8e87e76bb03a364e",
+            "size": 87,
+            "url": (
+                "https://github.com/openssl/openssl/releases/download/"
+                "openssl-4.0.1/openssl-4.0.1.tar.gz.sha256"
+            ),
+        },
+        "checksum_filename": "openssl-4.0.1.tar.gz",
+        "kind": "checksummed-upstream-release",
+        "name": "openssl",
+        "notices": [
+            {
+                "member": "openssl-4.0.1/LICENSE.txt",
+                "sha256": ("7d5450cb2d142651b8afa315b5f238efc805dad827d91ba367d8516bc9d49e7a"),
+                "size": 10175,
+            }
+        ],
+        "reviewed_license": "Apache-2.0",
+        "version": "4.0.1",
+    }
 
     expected_owners = [
         "python:cffi@2.1.0",
@@ -4471,7 +4960,7 @@ def test_committed_native_owner_policy_is_exact_and_incomplete() -> None:
     ]
     expected_states = {
         "python:cffi@2.1.0": "open",
-        "python:cryptography@48.0.1": "open",
+        "python:cryptography@48.0.1": "closed",
         "python:greenlet@3.5.3": "closed",
         "python:markupsafe@3.0.3": "closed",
         "python:psycopg-binary@3.3.4": "open",
@@ -4480,7 +4969,7 @@ def test_committed_native_owner_policy_is_exact_and_incomplete() -> None:
     }
     expected_omissions = {
         "python:cffi@2.1.0": ["unproven-libffi-build-input"],
-        "python:cryptography@48.0.1": ["unresolved-rust-and-openssl-sources"],
+        "python:cryptography@48.0.1": [],
         "python:greenlet@3.5.3": [],
         "python:markupsafe@3.0.3": [],
         "python:psycopg-binary@3.3.4": [
@@ -4503,6 +4992,44 @@ def test_committed_native_owner_policy_is_exact_and_incomplete() -> None:
             record["owner"]: [omission["id"] for omission in record["known_omissions"]]
             for record in owners
         } == expected_omissions
+        cryptography = next(
+            record for record in owners if record["owner"] == "python:cryptography@48.0.1"
+        )
+        assert cryptography["cargo_lock"] == {
+            "member": "cryptography-48.0.1/Cargo.lock",
+            "non_sbom_packages": [],
+            "sha256": "585b66741011c621f66405ee9392b9fd35b62a7dbdabba6e37edc8cbad5c5a9a",
+            "size": 8521,
+            "source_ids": sorted(crate_source_ids),
+        }
+        assert {
+            review["source"] for review in cryptography["component_reviews"]
+        } == crate_source_ids | {local_source_id, openssl_source_id}
+        rust_sbom = next(
+            sbom
+            for sbom in cryptography["sboms"]
+            if sbom["path"].endswith("/cryptography-rust.cyclonedx.json")
+        )
+        assert rust_sbom["metadata_root"] == {
+            "anomaly_review": None,
+            "kind": "embedded-component",
+        }
+        assert rust_sbom["observation"]["metadata_component"]["purl"] == (
+            "pkg:cargo/cryptography-rust@0.1.0?download_url=file://."
+        )
+        rust_payload = next(
+            disposition
+            for disposition in cryptography["payload_dispositions"]
+            if disposition["role"] == "cryptography/hazmat/bindings/_rust.abi3.so"
+        )
+        assert rust_payload["kind"] == "sbom-components"
+        assert len(rust_payload["observations"]) == 42
+        relationship = cryptography["canonical_relationships"][0]
+        expected_namespace = "alpine" if platform == "linux/amd64" else "NotpineForGHA"
+        assert relationship["observation"]["purl"] == (
+            f"pkg:apk/{expected_namespace}/libgcc@14.2.0-r6"
+        )
+        assert relationship["reference_observation"]["purl"] == ("pkg:apk/alpine/libgcc@14.2.0-r6")
         pydantic = next(
             record for record in owners if record["owner"] == "python:pydantic-core@2.46.4"
         )
@@ -4520,6 +5047,273 @@ def test_committed_native_owner_policy_is_exact_and_incomplete() -> None:
             )
             == 3
         )
+
+        inventory = {
+            "platform": platform,
+            "components": [
+                {
+                    "ecosystem": "python",
+                    "name": record["owner"].removeprefix("python:").rsplit("@", maxsplit=1)[0],
+                    "version": record["owner"].rsplit("@", maxsplit=1)[1],
+                }
+                for record in owners
+            ],
+            "wheel_installations": [{"owner": record["owner"]} for record in owners],
+            "native_payloads": [
+                {"owner": record["owner"], **payload}
+                for record in owners
+                for payload in record["native_payloads"]
+            ],
+            "embedded_sboms": [
+                {
+                    "owner": record["owner"],
+                    "path": sbom["path"],
+                    "sha256": sbom["sha256"],
+                    "cyclonedx": sbom["observation"],
+                }
+                for record in owners
+                for sbom in record["sboms"]
+            ],
+        }
+        ledger = evidence.native_component_coverage_ledger(inventory, policy)
+        assert [record["owner"] for record in ledger["resolved_owners"]] == [
+            "python:cryptography@48.0.1",
+            "python:greenlet@3.5.3",
+            "python:markupsafe@3.0.3",
+            "python:sqlalchemy@2.0.51",
+        ]
+        assert [record["owner"] for record in ledger["unresolved_owners"]] == [
+            "python:cffi@2.1.0",
+            "python:psycopg-binary@3.3.4",
+            "python:pydantic-core@2.46.4",
+        ]
+        assert {
+            "complete": ledger["complete"],
+            "remaining_owner_count": ledger["remaining_owner_count"],
+            "remaining_owner_names": ledger["remaining_owner_names"],
+        } == {
+            "complete": False,
+            "remaining_owner_count": 3,
+            "remaining_owner_names": [
+                "python:cffi@2.1.0",
+                "python:psycopg-binary@3.3.4",
+                "python:pydantic-core@2.46.4",
+            ],
+        }
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ("source", "path", "identity", "purl", "license", "coordinated-local-package"),
+)
+def test_committed_cryptography_owner_sdist_review_rejects_semantic_substitution(
+    mutation: str,
+) -> None:
+    policy = cast(dict[str, Any], json.loads(Path(".compliance/container-policy.json").read_text()))
+    source_id = "owner-sdist:python:cryptography@48.0.1#src/rust"
+    source = policy["native_component_sources"][source_id]
+
+    if mutation == "path":
+        replacement_id = "owner-sdist:python:cryptography@48.0.1#src/other"
+        source = policy["native_component_sources"].pop(source_id)
+        source["path"] = "src/other"
+        policy["native_component_sources"][replacement_id] = source
+        for records in policy["native_component_coverage"].values():
+            cryptography = next(
+                record for record in records if record["owner"] == "python:cryptography@48.0.1"
+            )
+            review = next(
+                record
+                for record in cryptography["component_reviews"]
+                if record["source"] == source_id
+            )
+            review["source"] = replacement_id
+    elif mutation == "license":
+        source["reviewed_license"] = "GPL-3.0-only"
+        for records in policy["native_component_coverage"].values():
+            cryptography = next(
+                record for record in records if record["owner"] == "python:cryptography@48.0.1"
+            )
+            review = next(
+                record
+                for record in cryptography["component_reviews"]
+                if record["source"] == source_id
+            )
+            review["reviewed_license"] = "GPL-3.0-only"
+    else:
+        for records in policy["native_component_coverage"].values():
+            cryptography = next(
+                record for record in records if record["owner"] == "python:cryptography@48.0.1"
+            )
+            review = next(
+                record
+                for record in cryptography["component_reviews"]
+                if record["source"] == source_id
+            )
+            if mutation == "source":
+                review["source"] = "upstream-release:openssl@4.0.1"
+                review["reviewed_license"] = "Apache-2.0"
+                continue
+            sbom = next(
+                record
+                for record in cryptography["sboms"]
+                if record["path"].endswith("/cryptography-rust.cyclonedx.json")
+            )
+            if mutation == "coordinated-local-package":
+                component = next(
+                    record
+                    for record in sbom["observation"]["components"]
+                    if record["purl"]
+                    == ("pkg:cargo/cryptography-cffi@0.1.0?download_url=file://cryptography-cffi")
+                )
+                old_purl = component["purl"]
+                old_bom_ref = component["bom_ref"]
+                new_purl = (
+                    "pkg:cargo/unrelated-local-crate@9.9.9?download_url=file://nonexistent-subdir"
+                )
+                new_bom_ref = old_bom_ref.replace(
+                    "/cryptography-cffi#",
+                    "/nonexistent-subdir#",
+                )
+                component.update(
+                    {
+                        "name": "unrelated-local-crate",
+                        "version": "9.9.9",
+                        "purl": new_purl,
+                        "bom_ref": new_bom_ref,
+                    }
+                )
+                sbom["observation"]["components"].sort(key=evidence.cyclonedx_component_sort_key)
+                rebind_policy_observation_purl(
+                    cryptography,
+                    sbom_path=sbom["path"],
+                    old_purl=old_purl,
+                    new_purl=new_purl,
+                )
+                rebind_policy_observation_bom_ref(
+                    cryptography,
+                    sbom_path=sbom["path"],
+                    old_bom_ref=old_bom_ref,
+                    new_bom_ref=new_bom_ref,
+                )
+                rehash_policy_sbom(cryptography, sbom)
+                recanonicalize_policy_observation_references(cryptography)
+                cryptography["component_reviews"].sort(
+                    key=lambda record: tuple(
+                        evidence.validate_observation_reference(
+                            reference,
+                            "mutated component review",
+                        )
+                        for reference in record["observations"]
+                    )
+                )
+                continue
+            component = sbom["observation"]["metadata_component"]
+            assert component is not None
+            if mutation == "identity":
+                component["name"] = "unrelated-local-crate"
+            else:
+                old_purl = component["purl"]
+                new_purl = old_purl.replace("file://.", "file://unrelated-local-crate")
+                component["purl"] = new_purl
+                rebind_policy_observation_purl(
+                    cryptography,
+                    sbom_path=sbom["path"],
+                    old_purl=old_purl,
+                    new_purl=new_purl,
+                )
+            rehash_policy_sbom(cryptography, sbom)
+
+    with pytest.raises(
+        evidence.EvidenceError,
+        match=(
+            r"owner-sdist review differs|upstream review differs|"
+            r"Cargo package manifest differs"
+        ),
+    ):
+        evidence.validate_native_component_policy_schema(policy)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "source",
+        "identity",
+        "purl",
+        "url",
+        "version",
+        "hash",
+        "review-license",
+        "source-license",
+    ),
+)
+def test_committed_cryptography_upstream_review_rejects_semantic_substitution(
+    mutation: str,
+) -> None:
+    policy = cast(dict[str, Any], json.loads(Path(".compliance/container-policy.json").read_text()))
+    source_id = "upstream-release:openssl@4.0.1"
+    source = policy["native_component_sources"][source_id]
+
+    if mutation == "url":
+        source["archive"]["url"] = "https://example.com/releases/openssl-4.0.1.tar.gz"
+    elif mutation == "hash":
+        source["archive"]["sha256"] = "0" * 64
+    elif mutation == "source-license":
+        source["reviewed_license"] = "GPL-3.0-only"
+    elif mutation == "version":
+        replacement_id = "upstream-release:openssl@4.0.2"
+        source = policy["native_component_sources"].pop(source_id)
+        source["version"] = "4.0.2"
+        policy["native_component_sources"][replacement_id] = source
+        for records in policy["native_component_coverage"].values():
+            cryptography = next(
+                record for record in records if record["owner"] == "python:cryptography@48.0.1"
+            )
+            review = next(
+                record
+                for record in cryptography["component_reviews"]
+                if record["source"] == source_id
+            )
+            review["source"] = replacement_id
+    else:
+        for records in policy["native_component_coverage"].values():
+            cryptography = next(
+                record for record in records if record["owner"] == "python:cryptography@48.0.1"
+            )
+            review = next(
+                record
+                for record in cryptography["component_reviews"]
+                if record["source"] == source_id
+            )
+            if mutation == "source":
+                review["source"] = "owner-sdist:python:cryptography@48.0.1#src/rust"
+                review["reviewed_license"] = "Apache-2.0 OR BSD-3-Clause"
+                continue
+            if mutation == "review-license":
+                review["reviewed_license"] = "GPL-3.0-only"
+                continue
+            sbom = next(
+                record for record in cryptography["sboms"] if record["path"].endswith("/sbom.json")
+            )
+            component = sbom["observation"]["components"][0]
+            if mutation == "identity":
+                component["name"] = "libressl"
+            else:
+                old_purl = component["purl"]
+                new_purl = old_purl.replace("github.com/openssl", "example.com/openssl")
+                component["purl"] = new_purl
+                rebind_policy_observation_purl(
+                    cryptography,
+                    sbom_path=sbom["path"],
+                    old_purl=old_purl,
+                    new_purl=new_purl,
+                )
+            rehash_policy_sbom(cryptography, sbom)
+
+    with pytest.raises(
+        evidence.EvidenceError, match=r"owner-sdist review differs|upstream review differs"
+    ):
+        evidence.validate_native_component_policy_schema(policy)
 
 
 @pytest.mark.parametrize(
@@ -4550,7 +5344,7 @@ def test_known_omission_dispositions_bind_the_named_omission(
                 observation["observation_sha256"],
                 observation["metadata_component"],
             )
-            cryptography["known_omissions"].append(
+            cryptography["known_omissions"] = [
                 {
                     "id": "unrelated-metadata-root-review",
                     "component": {
@@ -4563,16 +5357,31 @@ def test_known_omission_dispositions_bind_the_named_omission(
                     "payload_roles": [],
                     "missing_evidence": ["exact-source"],
                     "reason": "Adversarial fixture assigns the root to another omission.",
-                }
-            )
+                },
+                {
+                    "id": "unproven-metadata-root",
+                    "component": {
+                        "type": "library",
+                        "name": "unproven-root",
+                        "version": "1",
+                        "purl": "",
+                    },
+                    "observations": [],
+                    "payload_roles": [],
+                    "missing_evidence": ["exact-source"],
+                    "reason": "Adversarial fixture leaves the cited root unproven.",
+                },
+            ]
             cryptography["known_omissions"].sort(key=lambda record: record["id"])
+            cryptography["review"]["state"] = "open"
+            cryptography["review"]["reason"] = "Adversarial fixture reopens the root."
             cryptography["review"]["unresolved_items"] = [
                 record["id"] for record in cryptography["known_omissions"]
             ]
             anomaly_review = copy.deepcopy(sbom["metadata_root"]["anomaly_review"])
             sbom["metadata_root"] = {
                 "kind": "known-omission",
-                "omission": "unresolved-rust-and-openssl-sources",
+                "omission": "unproven-metadata-root",
                 "anomaly_review": anomaly_review,
             }
         else:
@@ -4608,9 +5417,12 @@ def test_native_relationship_requires_payload_observation_mapping(side: str, mes
                 for record in cryptography["payload_dispositions"]
                 if record["role"] == relationship["payload_role"]
             )
-            disposition["observations"] = [
-                copy.deepcopy(cryptography["known_omissions"][0]["observations"][0])
-            ]
+            unrelated = next(
+                record
+                for record in cryptography["payload_dispositions"]
+                if record["role"] == "cryptography/hazmat/bindings/_rust.abi3.so"
+            )
+            disposition["observations"] = [copy.deepcopy(unrelated["observations"][0])]
         else:
             disposition = next(
                 record
@@ -4742,6 +5554,58 @@ def test_native_component_notice_retention_is_exact(tmp_path: Path) -> None:
 
     assert len(retained) == 1
     assert (tmp_path / retained[0]).read_bytes() == content
+
+
+def test_reviewed_native_notice_retention_deduplicates_identical_named_payloads(
+    tmp_path: Path,
+) -> None:
+    apache = b"Apache license"
+    mit = b"MIT license"
+
+    retained = evidence.retain_reviewed_native_notices(
+        {
+            "pyo3-0.28.3/COPYING": apache,
+            "pyo3-0.28.3/LICENSE-APACHE": apache,
+            "pyo3-0.28.3/LICENSE-MIT": mit,
+            "pyo3-0.28.3/pyo3-runtime/LICENSE-APACHE": apache,
+            "pyo3-0.28.3/pyo3-runtime/LICENSE-MIT": mit,
+        },
+        component_directory="native-pyo3",
+        root=tmp_path,
+        budget=evidence.BundleBudget(),
+    )
+
+    assert retained == [
+        f"licenses/from-source/native-pyo3/{evidence.sha256_bytes(apache)[:12]}-COPYING",
+        f"licenses/from-source/native-pyo3/{evidence.sha256_bytes(apache)[:12]}-LICENSE-APACHE",
+        f"licenses/from-source/native-pyo3/{evidence.sha256_bytes(mit)[:12]}-LICENSE-MIT",
+    ]
+    assert (tmp_path / retained[0]).read_bytes() == apache
+    assert (tmp_path / retained[1]).read_bytes() == apache
+    assert (tmp_path / retained[2]).read_bytes() == mit
+
+
+def test_reviewed_native_notice_retention_rejects_digest_prefix_collisions(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    first = b"first license"
+    second = b"second license"
+    digests = {
+        first: f"{'a' * 12}{'1' * 52}",
+        second: f"{'a' * 12}{'2' * 52}",
+    }
+    monkeypatch.setattr(evidence, "sha256_bytes", digests.__getitem__)
+
+    with pytest.raises(evidence.EvidenceError, match="duplicate bundle path"):
+        evidence.retain_reviewed_native_notices(
+            {
+                "first/LICENSE": first,
+                "second/LICENSE": second,
+            },
+            component_directory="native-prefix-collision",
+            root=tmp_path,
+            budget=evidence.BundleBudget(),
+        )
 
 
 @pytest.mark.parametrize(
@@ -7558,6 +8422,7 @@ def test_real_cffi_libffi_candidate_cannot_replace_missing_build_provenance() ->
             "size": 100,
         },
         "checksum_filename": "v3.4.6.tar.gz",
+        "reviewed_license": "MIT",
         "notices": [
             {
                 "member": "libffi-3.4.6/LICENSE",
