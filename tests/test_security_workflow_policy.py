@@ -77,6 +77,15 @@ def _workflow_jobs(source: str) -> dict[str, str]:
     }
 
 
+def _named_step(job: str, name: str) -> str:
+    """Return one named step body from a top-level job body."""
+    marker = f"      - name: {name}\n"
+    _, separator, tail = job.partition(marker)
+    assert separator, f"missing {name!r} step"
+    next_step = re.search(r"(?m)^      - (?:name|uses):", tail)
+    return tail[: next_step.start()] if next_step is not None else tail
+
+
 @pytest.mark.parametrize("workflow_name", SECURITY_WORKFLOWS)
 def test_security_workflows_run_for_every_pull_request_base_and_retarget(
     workflow_name: str,
@@ -442,3 +451,174 @@ def test_ci_distribution_wrapper_rejects_incomplete_or_malformed_outputs(
 
     assert result.returncode != 0
     assert not output.exists()
+
+
+def _assert_ci_raw_spine_transport_merge_gate(source: str) -> None:
+    jobs = _workflow_jobs(source)
+    transport = jobs["release-spine-transport-consumer"]
+    expected_gate = (
+        "      - name: Require a complete raw OCI release-spine producer\n"
+        "        shell: bash\n"
+        "        env:\n"
+        "          PRODUCER_RESULT: "
+        "${{ needs.release-spine-transport-producer.result }}\n"
+        "        run: |\n"
+        "          set -euo pipefail\n"
+        '          if [ "$PRODUCER_RESULT" != success ]; then\n'
+        '            echo "Raw OCI release-spine producer result was '
+        '$PRODUCER_RESULT, not success." >&2\n'
+        "            exit 1\n"
+        "          fi\n\n"
+    )
+
+    assert transport.startswith("    name: Raw OCI release-spine transport\n")
+    assert (
+        "    needs:\n"
+        "      - python-distribution\n"
+        "      - release-spine-transport-producer\n"
+        "    if: ${{ always() }}\n" in transport
+    )
+    assert transport.count("    if: ${{ always() }}\n") == 1
+    assert "    permissions:\n      contents: read\n" in transport
+    assert "    strategy:" not in transport
+    assert "continue-on-error:" not in transport
+    _, separator, steps = transport.partition("    steps:\n")
+    assert separator
+    assert steps.startswith(expected_gate)
+    verification = _named_step(transport, "Verify the bounded raw transport")
+    assert verification.startswith("        shell: bash\n")
+    assert not re.search(r"(?m)^        if:", verification)
+
+
+def test_ci_raw_spine_transport_is_a_fail_closed_merge_gate() -> None:
+    source = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
+
+    _assert_ci_raw_spine_transport_merge_gate(source)
+
+
+@pytest.mark.parametrize(
+    ("target", "replacement"),
+    (
+        (
+            "    name: Raw OCI release-spine transport\n",
+            "    name: Raw OCI release-spine transport changed\n",
+        ),
+        (
+            "\n    if: ${{ always() }}\n    permissions:\n",
+            "\n    permissions:\n",
+        ),
+        (
+            "      - release-spine-transport-producer\n    if: ${{ always() }}\n",
+            "    if: ${{ always() }}\n",
+        ),
+        (
+            "PRODUCER_RESULT: ${{ needs.release-spine-transport-producer.result }}",
+            "PRODUCER_RESULT: success",
+        ),
+        (
+            "      - name: Require a complete raw OCI release-spine producer\n"
+            "        shell: bash\n",
+            "      - name: Require a complete raw OCI release-spine producer\n",
+        ),
+        (
+            'if [ "$PRODUCER_RESULT" != success ]; then',
+            'if [ "$PRODUCER_RESULT" = success ]; then',
+        ),
+        (
+            '            echo "Raw OCI release-spine producer result was '
+            '$PRODUCER_RESULT, not success." >&2\n'
+            "            exit 1\n",
+            '            echo "Raw OCI release-spine producer result was '
+            '$PRODUCER_RESULT, not success." >&2\n'
+            "            exit 0\n",
+        ),
+        (
+            "      - name: Verify the bounded raw transport\n        shell: bash\n",
+            "      - name: Verify the bounded raw transport\n"
+            "        if: ${{ false }}\n"
+            "        shell: bash\n",
+        ),
+        (
+            "      - name: Verify the bounded raw transport\n        shell: bash\n",
+            '      - name: Verify the bounded raw transport\n        shell: "bash {0} || true"\n',
+        ),
+    ),
+)
+def test_ci_raw_spine_transport_policy_rejects_gate_tampering(
+    target: str, replacement: str
+) -> None:
+    source = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
+    assert source.count(target) == 1
+    tampered = source.replace(target, replacement, 1)
+
+    with pytest.raises(AssertionError):
+        _assert_ci_raw_spine_transport_merge_gate(tampered)
+
+
+@pytest.mark.parametrize(
+    ("target", "replacement"),
+    (
+        (
+            "name: CI\n",
+            'name: CI\n\ndefaults:\n  run:\n    shell: "bash {0} || true"\n',
+        ),
+        (
+            "    name: Raw OCI release-spine transport\n",
+            "    name: Raw OCI release-spine transport\n"
+            "    defaults:\n"
+            "      run:\n"
+            '        shell: "bash {0} || true"\n',
+        ),
+    ),
+)
+def test_ci_raw_spine_transport_critical_steps_override_run_shell_defaults(
+    target: str, replacement: str
+) -> None:
+    source = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
+    assert source.count(target) == 1
+    source_with_unsafe_default = source.replace(target, replacement, 1)
+
+    _assert_ci_raw_spine_transport_merge_gate(source_with_unsafe_default)
+
+
+@pytest.mark.skipif(BASH is None, reason="the hardened runtime intentionally contains no shell")
+def test_ci_raw_spine_transport_gate_accepts_a_successful_producer() -> None:
+    source = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
+    script = _run_script(source, "Require a complete raw OCI release-spine producer")
+
+    assert BASH is not None
+    result = subprocess.run(  # noqa: S603 - deliberately exercises the reviewed workflow script
+        [BASH, "-c", script],
+        cwd=ROOT,
+        env=os.environ | {"PRODUCER_RESULT": "success"},
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize("producer_result", ("failure", "cancelled", "skipped", ""))
+@pytest.mark.skipif(BASH is None, reason="the hardened runtime intentionally contains no shell")
+def test_ci_raw_spine_transport_gate_rejects_incomplete_producers(
+    producer_result: str,
+) -> None:
+    source = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
+    script = _run_script(source, "Require a complete raw OCI release-spine producer")
+
+    assert BASH is not None
+    result = subprocess.run(  # noqa: S603 - deliberately exercises the reviewed workflow script
+        [BASH, "-c", script],
+        cwd=ROOT,
+        env=os.environ | {"PRODUCER_RESULT": producer_result},
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert (
+        f"Raw OCI release-spine producer result was {producer_result}, not success."
+        in result.stderr
+    )
