@@ -1,239 +1,332 @@
-# Raw Python-distribution spine format
+# Raw Python distribution spine
 
-This page defines the raw transport produced by
-`.github/workflows/python-distribution.yml`. It is for maintainers who change
-the Python build proof, artifact handoff, or future release pipeline.
+The Python distribution spine carries five already-built files across a CI
+trust boundary without asking the receiving job to unpack an archive. It is an
+internal transport format, not a package format and not a public release
+artifact.
 
-**Status: internal transport only.** The reusable workflow builds and verifies
-the raw artifacts, but no downstream release-evidence or publication job
-consumes them. Issue
-[#32](https://github.com/stampbot/extra-codeowners/issues/32) tracks that
-handoff. A passing workflow proves this transport contract; it does not make
-the application publishable.
+Use this page when changing the Python proof workflow, the release workflow, or
+either spine script. Application operators do not need to configure the spine.
 
-The workflow uploads two raw artifacts alongside the selected five-file ZIP:
+## Current status
 
-| Artifact | Media type | Purpose |
-| --- | --- | --- |
-| `extra-codeowners-python-SOURCE_SHA-artifact-SELECTED_ID-attempt-PRODUCER_ATTEMPT.bin` | `application/vnd.stampbot.python-distribution-spine.v1+octet-stream` | Five selected files concatenated in one fixed order. |
-| `extra-codeowners-python-SOURCE_SHA-artifact-SELECTED_ID-attempt-PRODUCER_ATTEMPT.spine.json` | `application/vnd.stampbot.python-distribution-spine.v1+json` | Canonical identity, file ranges, and digests. |
+The reusable `Python distribution proof` workflow builds and verifies the
+spine. Its read-only consumer also materializes the five files, so a manual
+workflow dispatch exercises the complete transport.
 
-Both uploads use GitHub Actions' `archive: false` transport. A separate
-read-only job downloads each file by immutable artifact ID with
-`skip-decompress: true`, then checks its upload-action digest and content. The
-selected ZIP remains the input to current container consumers.
+The tagged release workflow contains a privileged Python job that would consume
+the same raw artifacts, attest the wheel and source distribution, and sign both
+files. That job still depends directly on the failing `publication-block` job
+tracked in [issue #28](https://github.com/stampbot/extra-codeowners/issues/28).
+This code therefore defines and tests the handoff without enabling publication.
+
+The existing selected-distribution ZIP remains in place for the read-only
+container scan. Removing that older path is separate work.
 
 ```mermaid
 flowchart LR
-    ZIP[Selected five-file ZIP] --> Producer[Read-only raw producer]
-    Producer --> Spine[Raw spine]
-    Producer --> Record[Canonical record]
-    Spine --> Verifier[Separate read-only verifier]
-    Record --> Verifier
-    Verifier --> Stop[STOP: no release consumer]
+    A[Native amd64 and arm64 builds] --> B[Unprivileged selection]
+    B --> C[Raw spine and canonical record]
+    C --> D[Read-only verifier and materializer]
+    C -. blocked by publication-block .-> E[Attest and sign wheel and sdist]
 ```
 
-The reusable workflow exports the producer attempt, reusable-workflow ref and
-commit, artifact IDs, and artifact digests only after the verifier succeeds.
-Future consumers must retain those values instead of substituting identity
-from their own job.
+## Transport artifacts
 
-## Trust inputs
+The producer uploads two files directly with `archive: false`:
 
-Pass every value below to the verifier separately from the downloaded record:
+| Artifact | Media type | Contents |
+| --- | --- | --- |
+| `extra-codeowners-python-SOURCE_SHA-artifact-SELECTED_ID-attempt-PRODUCER_ATTEMPT.bin` | `application/vnd.stampbot.python-distribution-spine.v1+octet-stream` | The five selected files concatenated in a fixed order. |
+| `extra-codeowners-python-SOURCE_SHA-artifact-SELECTED_ID-attempt-PRODUCER_ATTEMPT.spine.json` | `application/vnd.stampbot.python-distribution-spine.v1+json` | Canonical identity, byte ranges, sizes, and digests. |
+
+Consumers download both files by immutable artifact ID with
+`skip-decompress: true`. The provider digest from each pinned upload step must
+match the downloaded bytes. A mutable artifact name, pattern, repository, or
+run lookup is not part of this handoff.
+
+Raw filenames include the selected artifact ID and the producer's run attempt.
+The consumer uses that exported attempt rather than its own attempt, so rerunning
+only a failed consumer still addresses the producer's original files. Direct
+artifacts are never overwritten.
+
+## Trusted identity
+
+The record is untrusted input. A consumer supplies every authority-bearing
+value separately:
 
 | Value | Trusted source |
 | --- | --- |
-| Repository ID and name | GitHub workflow context. |
-| Source revision and run ID | Calling workflow context. |
-| Producer run attempt | Output written by the raw producer from its own `GITHUB_RUN_ATTEMPT`. |
-| Reusable workflow ref and commit | Current job identity from `job.workflow_ref` and `job.workflow_sha`. |
-| Selected artifact ID and provider SHA-256 | Pinned upload step in the selection job. |
-| Wheel and selection-record SHA-256 | Validated selection-job outputs. |
-| Raw spine and record provider SHA-256 values | Their pinned direct-upload steps. |
+| Repository ID and name | GitHub workflow context |
+| Source revision and run ID | Calling workflow context |
+| Producer run attempt | Raw-producer output written from its `GITHUB_RUN_ATTEMPT` |
+| Reusable workflow ref and commit | Verified raw-consumer outputs derived from `job.workflow_ref` and `job.workflow_sha` |
+| Selected artifact ID and provider SHA-256 | Pinned selection upload step |
+| Wheel and selection-record SHA-256 | Validated selection outputs |
+| Spine and record provider SHA-256 | Pinned direct-upload steps |
 
-GitHub associates the `github` context of a reusable run with its caller. The
-`job.workflow_ref` and `job.workflow_sha` values identify the reusable workflow
-that defines the current job. The workflow uses those job values when they are
-available. Direct runs fall back to the equivalent `github` values. See
-GitHub's [contexts
+The verifier rejects a record unless every value matches. Passing values copied
+from the record would remove this trust boundary.
+
+GitHub gives a reusable workflow its caller's `github` context. The current
+job's `job.workflow_ref` and `job.workflow_sha` identify the reusable workflow
+itself. The workflow uses those job values when available and falls back to the
+corresponding `github` values. See the [GitHub Actions contexts
 reference](https://docs.github.com/en/actions/reference/workflows-and-actions/contexts#job-context).
 
-The workflow ref's repository must equal the calling repository in the record.
-This contract covers the repository's local reusable workflow, not a
-cross-repository distribution service.
-
-These values are trust anchors only when the workflow revision that supplies
-them has already been accepted. The current PR check runs candidate workflow
-code with read-only permissions. It is useful test evidence, not a privilege
-boundary against a malicious workflow change. Tagged publication remains
-blocked until a trusted release consumer can verify retained evidence without
-running candidate-controlled code with publication authority.
+The workflow ref must name the same repository and workflow path recorded by
+the caller. Cross-repository proof workflows are not supported.
 
 ## Canonical record
 
-The record is ASCII JSON with sorted object keys, compact separators, escaped
-non-ASCII characters, and one final line feed. Duplicate keys, floating-point
-values, non-finite numbers, alternate encodings, and unknown fields are
-invalid. The top-level value is depth 1. The maximum depth is 8, the maximum
-JSON value count is 1,024, and the encoded record may not exceed 128 KiB.
+The record is ASCII JSON with:
 
-The top-level object has exactly these fields:
+- keys sorted at every object level
+- compact separators
+- non-ASCII characters escaped
+- exactly one trailing line feed.
+
+Duplicate keys, floats, non-finite numbers, unknown fields, and alternate JSON
+encodings are invalid. The parser accepts at most 1,024 JSON values at a maximum
+depth of 8.
+
+The top-level object contains exactly these fields:
 
 | Field | Requirement |
 | --- | --- |
-| `schema_version` | Integer `1`, not a boolean. |
-| `media_type` | `application/vnd.stampbot.python-distribution-spine.v1+json`. |
-| `repository` | Exact `id` and `name` matching trusted workflow values. |
-| `run` | Exact producer `id` and `attempt`. |
-| `source` | Exact 40-character lowercase `revision`. |
-| `workflow` | Exact `.github/workflows/` `path`, full `ref`, and 40-character lowercase `sha`. |
-| `selected_artifact` | Immutable `id` and provider `sha256` of the selected five-file ZIP. |
-| `selection` | Trusted `wheel_sha256` and `record_sha256`. |
-| `spine` | Exact `filename`, media type, byte `size`, and `sha256`. |
-| `files` | The five exact contiguous file-range records. |
+| `schema_version` | Integer `1`; booleans are invalid |
+| `media_type` | `application/vnd.stampbot.python-distribution-spine.v1+json` |
+| `repository` | Exact trusted `id` and `name` |
+| `run` | Exact trusted `id` and producer `attempt` |
+| `source` | Exact 40-character lowercase `revision` |
+| `workflow` | Exact `.github/workflows/` `path`, full `ref`, and 40-character lowercase `sha` |
+| `selected_artifact` | Immutable `id` and provider `sha256` for the selected five-file ZIP |
+| `selection` | Trusted `wheel_sha256` and selection `record_sha256` |
+| `spine` | Exact `filename`, media type, byte `size`, and `sha256` |
+| `files` | Five contiguous file-range records |
 
-Artifact and run IDs are canonical positive decimal strings no larger than
-`2^63 - 1`. SHA-256 values are 64 lowercase hexadecimal characters. The
-workflow ref must bind its repository and path to a safe branch, tag, or pull
-request ref.
+Run and artifact IDs are positive decimal strings no larger than `2^63 - 1`.
+SHA-256 values are 64 lowercase hexadecimal characters. Workflow refs are
+limited to safe branch, tag, and pull-request refs.
 
 ## File ranges
 
-Each file record has exactly `filename`, `kind`, `offset`, `sha256`, and
-`size`. Ranges start at offset zero, have no gaps, overlaps, aliases, or
-trailing bytes, and cover the entire spine in this order:
+Each file record contains exactly `filename`, `kind`, `offset`, `sha256`, and
+`size`. The ranges begin at byte zero, cover the spine completely, and permit no
+gap, overlap, alias, prefix, or trailing byte.
 
-1. `build-record-amd64` as `python-build-record-amd64.json`.
-2. `build-record-arm64` as `python-build-record-arm64.json`.
-3. `selection-record` as `python-selection-record.json`.
-4. `sdist` as the selected `PROJECT-VERSION.tar.gz`.
-5. `wheel` as the selected `PROJECT-VERSION-py3-none-any.whl`.
+The order is fixed:
 
-The wheel and source-distribution filenames must contain the same captured
-project-and-version identity string. The verifier compares that string exactly;
-it does not normalize it at this boundary. Every file digest must be distinct.
-The wheel range digest must equal the trusted wheel digest, and the
-selection-record range digest must equal the trusted selection-record digest.
+1. `python-build-record-amd64.json` as `build-record-amd64`
+2. `python-build-record-arm64.json` as `build-record-arm64`
+3. `python-selection-record.json` as `selection-record`
+4. the selected `PROJECT-VERSION.tar.gz` as `sdist`
+5. the selected `PROJECT-VERSION-py3-none-any.whl` as `wheel`.
 
-| Bound | Value |
+The wheel and source-distribution filenames must carry the same literal project
+and version identity. This boundary compares that identity exactly; it does not
+normalize package names or versions. Every file digest must be distinct. The
+wheel and selection-record range digests must also match their trusted workflow
+outputs.
+
+| Bound | Maximum |
 | --- | ---: |
-| Canonical spine record | 128 KiB |
-| Build record or selection record range | 4 MiB each |
-| Wheel or source distribution | 64 MiB each |
+| Canonical record | 128 KiB |
+| Each build or selection record | 4 MiB |
+| Wheel | 64 MiB |
+| Source distribution | 64 MiB |
 | Complete spine | 140 MiB |
-| Verification read chunk | 1 MiB |
+| One verification read | 1 MiB |
 
 ## Selection projection
 
-The consumer does not open the wheel or source-distribution archive. It parses
-only the bounded, canonical selection record. That record must bind:
+The verifier parses only the bounded selection record. It does not open the
+wheel or source-distribution archive.
 
-- source revision and selected `amd64` architecture.
-- distinct amd64 and arm64 proof-record digests, filenames, and expected
-  machine names.
-- source-distribution and wheel filenames, sizes, and SHA-256 values.
+The selection record must bind:
 
-Each projected value must match its verified spine range. This checks the
-five-file relationship without adding a ZIP, tar, gzip, network, or process
-parser to the consumer.
+- the source revision and selected `amd64` architecture
+- distinct amd64 and arm64 build-record digests
+- each build-record filename and expected machine name
+- the wheel and source-distribution filenames, sizes, and SHA-256 values.
 
-The producer has a different job. It downloads the selected ZIP by immutable
-ID and invokes the existing selection verifier before packing the five files.
-All archive parsing stays in that read-only producer.
+Those values must match the already verified spine ranges. No ZIP, tar, gzip,
+network, subprocess, or build-backend parser exists in the consumer.
 
-## File handling and exposure
+The unprivileged producer has a different role. It downloads the selected ZIP
+by immutable ID, runs the existing selection verifier, and then packs the five
+known files into the spine.
 
-The selected directory must be a real directory. Builder inputs, the record,
-and the spine must be single-link regular files. The scripts use no-follow
-opens, compare each open descriptor with its path, and recheck device, inode,
-mode, link count, ownership, size, modification time, and change time. Output
-files use mode `0600` and exclusive creation.
+## Materialization contract
 
-Those checks protect the final path components under the runner-created
-working directories. They do not make an attacker-controlled ancestor
-directory safe. Keep downloads and outputs under GitHub's `RUNNER_TEMP`, as the
-workflow does.
+`materialize` accepts a record, a spine, all trusted identity values, and a new
+output directory. The output path must be absolute and contain no `..`
+component. Its parent must already exist, be owned by the current user, and
+grant no permissions to group or other users. The output itself must not exist.
 
-The verifier reads the record through one descriptor. It then opens the spine
-once and hashes the complete file and every range in order.
-`VerifiedSpine.file_chunks(FILENAME)` copies one recorded file into private
-immutable chunks of at most 1 MiB, verifies the complete digest, and returns
-the tuple only after that check succeeds. One call can retain up to 64 MiB plus
-Python and tuple overhead.
+Before reading either artifact, the materializer walks every directory from `/`
+to the output parent. Each component is opened relative to the retained parent
+descriptor with `O_DIRECTORY | O_NOFOLLOW`. An ancestor is trusted only when
+its owner is UID 0 or the current effective UID. Group- or other-writable
+ancestors are rejected, with one Linux exception: a sticky directory owned by
+root may lead to a child owned by root or the current user. That exception is
+what permits the usual `/tmp/CURRENT_USER_DIRECTORY/...` path without allowing
+another UID to replace the current user's child.
 
-A future publisher must consume only those authenticated chunks and must stage
-one file at a time. It may upload content-addressed bytes inside the context,
-but it must not finalize a release, manifest, tag, or other reference until the
-verification context exits successfully. No current caller performs that
-publication step.
+Some user namespaces display an unmapped owner of `/` as Linux overflow UID
+65534. The materializer treats that value as root-equivalent only when `/`
+grants no write permission to group or other users and a bounded read of
+`/proc/self/uid_map` proves all three conditions below:
 
-Given the same five input files and the same trusted identity values, directory
-entry order and file metadata do not change the spine or record bytes. The
-source revision, selected-artifact ID, and producer attempt are identity
-inputs, so changing any of them intentionally changes the filenames and
-record.
+- namespace UID 0 is unmapped
+- UID 65534 is also unmapped
+- the current effective UID is mapped and is not 65534.
 
-## Reruns
+Materialization rejects effective UID 65534 before it trusts any root owner.
+Outside this namespace exception, it also rejects 65534 as root authority. The
+map proves that no process in the namespace owns that identity. Host root and
+any authority outside the user namespace remain part of the root trust boundary.
 
-Raw filenames bind both the immutable selected-artifact ID and the producer's
-run attempt. That keeps a rerun of the producer from colliding with direct
-artifacts created during an earlier attempt. The producer exports its attempt,
-and the consumer uses that exact value in the filenames and record identity.
-Rerunning only a failed consumer therefore keeps using the successful
-producer's attempt instead of looking for nonexistent files from the consumer's
-newer attempt. Existing direct artifacts are never overwritten.
+The operation proceeds as follows:
 
-The older native-proof handoff still names both architecture artifacts with
-the current workflow attempt. If selection fails after both native jobs have
-succeeded, rerun all jobs rather than only failed jobs. A failed-only rerun
-would look for native artifacts from the new attempt even though the successful
-native jobs produced them under the previous attempt. This limitation predates
-the raw bridge.
+1. Retain the verified descriptor chain from `/` to the private parent. Open the
+   record and spine without following their final path components.
+2. Verify the provider digests, complete spine digest, all five ranges, and the
+   selection projection.
+3. Create a hidden staging directory with mode `0700`.
+4. Rehash each range, then create its staged file with no-follow and exclusive
+   flags. Each file is mode `0600` and is flushed before use.
+5. Recheck the open spine and its path after all five files have been written.
+6. Recheck every retained ancestry descriptor and path entry, including owner
+   and mode, then confirm that the destination remains absent.
+7. Publish with Linux `renameat2(RENAME_NOREPLACE)`. The operation fails closed
+   when that syscall or flag is unavailable, and it never replaces a destination
+   that appears after the preceding check.
+8. Recheck the complete ancestry again and require the destination entry to have
+   the staged directory's exact device, inode, mode, and owner.
+
+Until step 7, the requested output path does not exist. On a handled failure, the
+materializer uses its retained descriptors and tries to remove the staged files.
+Cleanup is best effort: an I/O error, interruption, or process termination can
+prevent it. A failure after the rename can therefore leave the requested path in
+place, although the materializer never publishes it before all five files have
+passed verification.
+
+Use a disposable private parent for every call. If the command returns nonzero,
+do not consume anything below that parent. Remove the whole parent before you
+retry.
+
+A successful output contains exactly the two native build records, the
+selection record, the source distribution, and the wheel.
+
+If another process creates even an empty destination before the no-replace
+rename, that competing directory remains untouched and materialization fails.
+If an ancestor changes before or immediately after publication, the retained
+descriptors expose the mismatch. The materializer then attempts cleanup through
+the original parent descriptor.
+
+These checks exclude path replacement by unrelated UIDs. A process running as
+the same effective UID, root, or the host-side authority behind an unmapped user
+namespace is inside the trust boundary. Those identities must not modify the
+materialization ancestry concurrently.
+
+## File identity checks
+
+Record and spine inputs must be single-link regular files. The scripts compare
+each opened descriptor with its path and recheck device, inode, mode, link
+count, ownership, size, modification time, and change time. Symlinks and hard
+links are rejected. Every output-ancestry component is also a retained,
+descriptor-relative no-follow open; a symlink anywhere in that chain is
+invalid.
+
+`VerifiedSpine.file_chunks(FILENAME)` rereads one recorded range into immutable
+chunks of at most 1 MiB and returns nothing until the complete digest matches.
+One call can retain up to 64 MiB plus Python object overhead. The materializer
+consumes those chunks while the verified spine descriptor remains open and does
+not expose its final directory until the verification context exits cleanly.
 
 ## Commands
 
-Run these commands from the repository root with any project-supported Python.
-They need no credentials and make no changes:
+Run the help commands from the repository root with Python 3.12 or newer. They
+read local files, need no credentials, and make no changes:
 
 ```bash
 python .github/scripts/build_python_distribution_spine.py --help
 python .github/scripts/python_distribution_spine.py verify --help
+python .github/scripts/python_distribution_spine.py materialize --help
 ```
 
-The builder adds these options to the shared identity options:
+The materialization example requires Linux with `renameat2` support and uses
+Bash. Set `RECORD_PATH` and `SPINE_PATH` to the directly downloaded raw
+artifacts. Set the other uppercase variables from the trusted-identity table
+above; do not copy them from the record.
 
-| Option | Value |
-| --- | --- |
-| `--directory` | Verified five-file selection directory. |
-| `--spine-output` | New path with the exact source-, artifact-, and attempt-bound `.bin` filename. |
-| `--record-output` | New path with the matching `.spine.json` filename. |
+Create a private parent before calling `materialize`:
 
-The verifier's `verify` command adds:
+```bash
+MATERIALIZATION_PARENT="$(mktemp -d)"
+chmod 0700 "$MATERIALIZATION_PARENT"
+OUTPUT="$MATERIALIZATION_PARENT/files"
+```
 
-| Option | Value |
-| --- | --- |
-| `--record` | Downloaded canonical record path. |
-| `--spine` | Downloaded raw spine path. |
-| `--record-artifact-sha256` | Upload-action digest for the raw record. |
-| `--spine-artifact-sha256` | Upload-action digest for the raw spine. |
+`mktemp -d` normally creates an owner-private directory below root-owned sticky
+`/tmp`, which satisfies the ancestry rule. The workflows create an equivalent
+mode-`0700` child below `RUNNER_TEMP`; a self-hosted runner must keep the
+ancestors of `RUNNER_TEMP` within the ownership and write-permission rules above.
 
-Both commands require the same identity options:
+Call the materializer with both artifact paths, both provider digests, and every
+trusted identity:
 
-| Option | Value |
-| --- | --- |
-| `--repository-id`, `--repository-name` | Repository identity from the workflow context. |
-| `--run-id`, `--run-attempt` | Producer workflow-run identity. |
-| `--source-revision` | Exact candidate commit. |
-| `--workflow-path`, `--workflow-ref`, `--workflow-sha` | Workflow definition identity. |
-| `--selected-artifact-id`, `--selected-artifact-sha256` | Selected ZIP identity. |
-| `--wheel-sha256`, `--selection-record-sha256` | Validated selection outputs. |
+```bash
+python .github/scripts/python_distribution_spine.py materialize \
+  --record "$RECORD_PATH" \
+  --spine "$SPINE_PATH" \
+  --output "$OUTPUT" \
+  --record-artifact-sha256 "$RECORD_ARTIFACT_SHA256" \
+  --spine-artifact-sha256 "$SPINE_ARTIFACT_SHA256" \
+  --repository-id "$REPOSITORY_ID" \
+  --repository-name "$REPOSITORY_NAME" \
+  --run-id "$RUN_ID" \
+  --run-attempt "$PRODUCER_RUN_ATTEMPT" \
+  --source-revision "$SOURCE_REVISION" \
+  --workflow-path .github/workflows/python-distribution.yml \
+  --workflow-ref "$WORKFLOW_REF" \
+  --workflow-sha "$WORKFLOW_SHA" \
+  --selected-artifact-id "$SELECTED_ARTIFACT_ID" \
+  --selected-artifact-sha256 "$SELECTED_ARTIFACT_SHA256" \
+  --wheel-sha256 "$WHEEL_SHA256" \
+  --selection-record-sha256 "$SELECTION_RECORD_SHA256"
+```
 
-Passing values copied from the record would erase the trust boundary. Success
-returns exit status 0. A contract violation returns 1 with a
-`Python-distribution spine ... error:` message. Invalid command syntax returns
-2.
+A successful command creates `$OUTPUT` with mode `0700` and five mode-`0600`
+files. After a nonzero result, do not read `$OUTPUT`, even if the path exists;
+discard `$MATERIALIZATION_PARENT` instead.
 
-The builder creates outputs exclusively. After a failed build, treat either
-output path as incomplete and discard the job's temporary directory. Do not
-reuse a partial file or enable overwrite behavior for a retry.
+## What verification does not prove
+
+A valid spine proves that five byte sequences match the supplied workflow
+identity and selection evidence. It does not prove that:
+
+- either distribution is safe to install
+- archive members are well formed
+- the source is free of malicious code
+- the files were published or retained permanently
+- the caller has release authority.
+
+The blocked Python job is configured to attest and sign only the materialized
+wheel and source distribution. It uploads the three JSON records to a separate,
+run-scoped selection-evidence artifact for future release-assembler work. The
+GitHub release job does not consume that evidence artifact, so this handoff does
+not choose a future public release asset set.
+
+The raw producer retains its direct artifacts for five days. The blocked
+privileged job is configured for seven-day run artifacts if it is eventually
+enabled. Neither retention period is archival storage.
+
+## Rerun limitation in the older handoff
+
+The native amd64 and arm64 artifacts still use the current workflow attempt in
+their names. If selection fails after both native jobs succeed, rerun all jobs.
+A failed-jobs-only rerun would search for native artifacts named with the new
+attempt even though the successful jobs used the previous one. The direct raw
+spine handoff does not have this limitation.

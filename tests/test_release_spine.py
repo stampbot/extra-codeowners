@@ -1313,11 +1313,11 @@ def test_container_test_stage_carries_spine_scripts() -> None:
         assert f".github/scripts/{script}" in test_stage
 
 
-def test_release_workflow_cannot_publish_the_transport_spine() -> None:
+def test_release_workflow_cannot_publish_the_oci_transport_spine() -> None:
     source = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
 
     assert "python .github/scripts/build_release_spine.py" not in source
     assert "python .github/scripts/release_spine.py verify" not in source
     assert "archive: false" not in source
-    assert "skip-decompress: true" not in source
     assert "extra-codeowners-image-" not in source
+    assert "needs.release-spine-transport" not in source

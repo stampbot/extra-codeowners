@@ -175,6 +175,23 @@ def verify(bundle: BuiltSpine, expected: Any | None = None) -> Any:
     )
 
 
+def materialize(bundle: BuiltSpine, output: Path) -> Any:
+    return python_distribution_spine.materialize(
+        bundle.record,
+        bundle.spine,
+        output,
+        bundle.expected,
+        record_artifact_sha256=sha256(bundle.record),
+        spine_artifact_sha256=sha256(bundle.spine),
+    )
+
+
+def private_directory(path: Path) -> Path:
+    path.mkdir(mode=0o700)
+    path.chmod(0o700)
+    return path
+
+
 def write_record(bundle: BuiltSpine, record: object) -> str:
     bundle.record.write_bytes(python_distribution_spine.canonical_json(record))
     return sha256(bundle.record)
@@ -211,6 +228,535 @@ def test_build_and_verify_exact_five_file_spine(built_spine: BuiltSpine) -> None
             "selection_record_sha256": built_spine.expected.selection_record_sha256,
         }
     ]
+
+
+def test_materialize_atomically_exposes_exact_verified_files(built_spine: BuiltSpine) -> None:
+    parent = private_directory(built_spine.directory.parent / "materialized")
+    output = parent / "files"
+
+    materialized = materialize(built_spine, output)
+
+    assert output.stat().st_mode & 0o777 == 0o700
+    assert [item.filename for item in materialized] == [
+        item["filename"] for item in verify(built_spine)["files"]
+    ]
+    assert {path.name for path in output.iterdir()} == {
+        path.name for path in built_spine.directory.iterdir()
+    }
+    for path in output.iterdir():
+        assert path.is_file()
+        assert not path.is_symlink()
+        assert path.stat().st_mode & 0o777 == 0o600
+        assert path.read_bytes() == (built_spine.directory / path.name).read_bytes()
+
+
+def test_materialized_files_use_nofollow_exclusive_creation(
+    built_spine: BuiltSpine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    parent = private_directory(built_spine.directory.parent / "materialized")
+    output = parent / "files"
+    actual_open = os.open
+    output_opens: list[tuple[int, tuple[int, ...]]] = []
+    expected_names = {path.name for path in built_spine.directory.iterdir()}
+
+    def observed_open(
+        path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        flags: int,
+        *mode: int,
+        dir_fd: int | None = None,
+    ) -> int:
+        if isinstance(path, str) and path in expected_names and flags & os.O_WRONLY:
+            output_opens.append((flags, mode))
+        return actual_open(path, flags, *mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(python_distribution_spine.os, "open", observed_open)
+
+    materialize(built_spine, output)
+
+    assert len(output_opens) == 5
+    for flags, mode in output_opens:
+        assert flags & os.O_NOFOLLOW
+        assert flags & os.O_EXCL
+        assert flags & os.O_CREAT
+        assert mode == (0o600,)
+
+
+def test_materialization_ancestry_is_opened_descriptor_relative(
+    built_spine: BuiltSpine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    parent = private_directory(built_spine.directory.parent / "materialized")
+    actual_open = os.open
+    directory_opens: list[tuple[str, int, int | None]] = []
+
+    def observed_open(
+        path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        flags: int,
+        *mode: int,
+        dir_fd: int | None = None,
+    ) -> int:
+        if flags & os.O_DIRECTORY:
+            directory_opens.append((os.fsdecode(path), flags, dir_fd))
+        return actual_open(path, flags, *mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(python_distribution_spine.os, "open", observed_open)
+
+    materialize(built_spine, parent / "files")
+
+    assert directory_opens[0][0] == "/"
+    assert directory_opens[0][2] is None
+    for name, flags, parent_descriptor in directory_opens[1:]:
+        assert "/" not in name
+        assert parent_descriptor is not None
+        assert flags & os.O_DIRECTORY
+        assert flags & os.O_NOFOLLOW
+
+
+def test_materialize_verifies_every_range_before_creating_staging(
+    built_spine: BuiltSpine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    parent = private_directory(built_spine.directory.parent / "materialized")
+    output = parent / "files"
+    record = copy.deepcopy(verify(built_spine))
+    wheel = next(item for item in record["files"] if item["kind"] == "wheel")
+    content = bytearray(built_spine.spine.read_bytes())
+    content[wheel["offset"]] ^= 1
+    built_spine.spine.write_bytes(content)
+    record["spine"]["sha256"] = sha256(built_spine.spine)
+    record_artifact_sha256 = write_record(built_spine, record)
+    staging_calls = 0
+    actual_create = python_distribution_spine._create_staging_directory
+
+    def observed_create(parent_descriptor: int) -> tuple[int, str]:
+        nonlocal staging_calls
+        staging_calls += 1
+        descriptor, name = actual_create(parent_descriptor)
+        assert isinstance(descriptor, int)
+        assert isinstance(name, str)
+        return descriptor, name
+
+    monkeypatch.setattr(
+        python_distribution_spine,
+        "_create_staging_directory",
+        observed_create,
+    )
+
+    with pytest.raises(python_distribution_spine.SpineError, match="digest mismatch"):
+        python_distribution_spine.materialize(
+            built_spine.record,
+            built_spine.spine,
+            output,
+            built_spine.expected,
+            record_artifact_sha256=record_artifact_sha256,
+            spine_artifact_sha256=sha256(built_spine.spine),
+        )
+
+    assert staging_calls == 0
+    assert not output.exists()
+    assert not tuple(parent.iterdir())
+
+
+def test_materialize_cleans_private_staging_after_partial_write(
+    built_spine: BuiltSpine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    parent = private_directory(built_spine.directory.parent / "materialized")
+    output = parent / "files"
+    actual_write = os.write
+    writes = 0
+
+    def fail_second_write(descriptor: int, content: bytes | memoryview) -> int:
+        nonlocal writes
+        writes += 1
+        if writes == 2:
+            raise OSError("synthetic materialization failure")
+        return actual_write(descriptor, content)
+
+    monkeypatch.setattr(python_distribution_spine.os, "write", fail_second_write)
+
+    with pytest.raises(python_distribution_spine.SpineError, match="cannot write"):
+        materialize(built_spine, output)
+
+    assert writes == 2
+    assert not output.exists()
+    assert not tuple(parent.iterdir())
+
+
+def test_materialize_cleans_staging_when_source_changes_before_exposure(
+    built_spine: BuiltSpine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    parent = private_directory(built_spine.directory.parent / "materialized")
+    output = parent / "files"
+    actual_write = python_distribution_spine._write_materialized_file
+    metadata = built_spine.spine.stat()
+
+    def mutate_after_last_file(
+        descriptor: int,
+        item: Any,
+        chunks: tuple[bytes, ...],
+        created: list[str],
+    ) -> None:
+        actual_write(descriptor, item, chunks, created)
+        if item.filename.endswith(".whl"):
+            os.utime(
+                built_spine.spine,
+                ns=(metadata.st_atime_ns, metadata.st_mtime_ns + 1_000_000_000),
+            )
+
+    monkeypatch.setattr(
+        python_distribution_spine,
+        "_write_materialized_file",
+        mutate_after_last_file,
+    )
+
+    with pytest.raises(python_distribution_spine.SpineError, match="changed"):
+        materialize(built_spine, output)
+
+    assert not output.exists()
+    assert not tuple(parent.iterdir())
+
+
+def test_materialize_never_replaces_an_existing_destination(built_spine: BuiltSpine) -> None:
+    parent = private_directory(built_spine.directory.parent / "materialized")
+    output = parent / "files"
+    output.mkdir()
+    marker = output / "keep"
+    marker.write_text("do not replace", encoding="utf-8")
+
+    with pytest.raises(python_distribution_spine.SpineError, match="already exists"):
+        materialize(built_spine, output)
+
+    assert marker.read_text(encoding="utf-8") == "do not replace"
+    assert {path.name for path in parent.iterdir()} == {"files"}
+
+
+def test_materialize_requires_an_owner_private_parent(built_spine: BuiltSpine) -> None:
+    parent = private_directory(built_spine.directory.parent / "materialized")
+    parent.chmod(0o750)
+
+    with pytest.raises(python_distribution_spine.SpineError, match="owner-controlled private"):
+        materialize(built_spine, parent / "files")
+
+
+def test_materialize_rejects_a_symlink_in_nonfinal_ancestry(built_spine: BuiltSpine) -> None:
+    base = private_directory(built_spine.directory.parent / "ancestry")
+    actual = private_directory(base / "actual")
+    parent = private_directory(actual / "materialized")
+    linked = base / "linked"
+    linked.symlink_to(actual, target_is_directory=True)
+
+    with pytest.raises(python_distribution_spine.SpineError, match="without symlinks"):
+        materialize(built_spine, linked / "materialized" / "files")
+
+    assert not tuple(parent.iterdir())
+
+
+def test_materialize_rejects_a_nonsticky_writable_ancestor(built_spine: BuiltSpine) -> None:
+    base = private_directory(built_spine.directory.parent / "ancestry")
+    writable = private_directory(base / "writable")
+    parent = private_directory(writable / "materialized")
+    writable.chmod(0o770)
+
+    with pytest.raises(python_distribution_spine.SpineError, match="unsafe writable"):
+        materialize(built_spine, parent / "files")
+
+    assert not tuple(parent.iterdir())
+
+
+def test_root_owned_sticky_ancestor_allows_a_current_user_child(tmp_path: Path) -> None:
+    root = python_distribution_spine._directory_identity(os.stat("/"), "test root")
+    root_uid = python_distribution_spine._root_authority_uid(root)
+    temporary_root = Path(tmp_path.anchor) / tmp_path.parts[1]
+    sticky = python_distribution_spine._directory_identity(
+        os.stat(temporary_root), "test temporary root"
+    )
+    child = python_distribution_spine._directory_identity(os.stat(tmp_path), "test child")
+
+    assert sticky.uid == root_uid
+    assert sticky.mode & python_distribution_spine.stat.S_ISVTX
+    python_distribution_spine._require_trusted_transition(sticky, child, root_uid)
+
+
+def test_sticky_writable_ancestor_requires_root_ownership(tmp_path: Path) -> None:
+    root = python_distribution_spine._directory_identity(os.stat("/"), "test root")
+    root_uid = python_distribution_spine._root_authority_uid(root)
+    if os.geteuid() == root_uid:
+        pytest.skip("root and current-user ownership are identical")
+    child = python_distribution_spine._directory_identity(os.stat(tmp_path), "test child")
+    user_sticky = dataclasses.replace(
+        child,
+        mode=(child.mode & ~0o7777) | 0o41777,
+        uid=os.geteuid(),
+    )
+
+    with pytest.raises(python_distribution_spine.SpineError, match="unsafe writable"):
+        python_distribution_spine._require_trusted_transition(user_sticky, child, root_uid)
+
+
+def test_root_sticky_ancestor_rejects_an_untrusted_child_owner(tmp_path: Path) -> None:
+    root = python_distribution_spine._directory_identity(os.stat("/"), "test root")
+    root_uid = python_distribution_spine._root_authority_uid(root)
+    temporary_root = Path(tmp_path.anchor) / tmp_path.parts[1]
+    sticky = python_distribution_spine._directory_identity(
+        os.stat(temporary_root), "test temporary root"
+    )
+    child = python_distribution_spine._directory_identity(os.stat(tmp_path), "test child")
+    untrusted = dataclasses.replace(child, uid=424242)
+
+    with pytest.raises(python_distribution_spine.SpineError, match="untrusted owner"):
+        python_distribution_spine._require_trusted_transition(sticky, untrusted, root_uid)
+
+
+def test_current_overflow_uid_is_rejected_before_the_root_owner_fast_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = python_distribution_spine._directory_identity(os.stat("/"), "test root")
+    ordinary_root = dataclasses.replace(root, uid=python_distribution_spine.ROOT_UID)
+    monkeypatch.setattr(
+        python_distribution_spine.os,
+        "geteuid",
+        lambda: python_distribution_spine.LINUX_OVERFLOW_UID,
+    )
+    monkeypatch.setattr(
+        python_distribution_spine,
+        "_linux_uid_map",
+        lambda: pytest.fail("ordinary root ownership must not read the namespace map"),
+    )
+
+    with pytest.raises(python_distribution_spine.SpineError, match="cannot run"):
+        python_distribution_spine._root_authority_uid(ordinary_root)
+
+
+def test_overflow_root_accepts_an_ordinary_mapped_effective_uid(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = python_distribution_spine._directory_identity(os.stat("/"), "test root")
+    overflow_root = dataclasses.replace(
+        root,
+        mode=(root.mode & ~0o7777) | 0o40755,
+        uid=python_distribution_spine.LINUX_OVERFLOW_UID,
+    )
+    effective_uid = 1000
+    monkeypatch.setattr(python_distribution_spine.os, "geteuid", lambda: effective_uid)
+    monkeypatch.setattr(
+        python_distribution_spine,
+        "_linux_uid_map",
+        lambda: ((effective_uid, 100000, 1),),
+    )
+
+    assert (
+        python_distribution_spine._root_authority_uid(overflow_root)
+        == python_distribution_spine.LINUX_OVERFLOW_UID
+    )
+
+
+def test_overflow_root_rejects_group_or_other_write_permission(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = python_distribution_spine._directory_identity(os.stat("/"), "test root")
+    writable_overflow_root = dataclasses.replace(
+        root,
+        mode=root.mode | 0o022,
+        uid=python_distribution_spine.LINUX_OVERFLOW_UID,
+    )
+    monkeypatch.setattr(python_distribution_spine.os, "geteuid", lambda: 1000)
+    monkeypatch.setattr(
+        python_distribution_spine,
+        "_linux_uid_map",
+        lambda: pytest.fail("an unsafe root must be rejected before reading the namespace map"),
+    )
+
+    with pytest.raises(python_distribution_spine.SpineError, match="untrusted owner"):
+        python_distribution_spine._root_authority_uid(writable_overflow_root)
+
+
+def test_materialize_rejects_ancestor_rebind_before_publication(
+    built_spine: BuiltSpine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = built_spine.directory.parent
+    ancestor = private_directory(root / "ancestry")
+    private_directory(ancestor / "materialized")
+    detached = root / "detached-ancestry"
+    actual_write = python_distribution_spine._write_materialized_file
+
+    def rebind_after_last_file(
+        descriptor: int,
+        item: Any,
+        chunks: tuple[bytes, ...],
+        created: list[str],
+    ) -> None:
+        actual_write(descriptor, item, chunks, created)
+        if item.filename.endswith(".whl"):
+            ancestor.rename(detached)
+            replacement = private_directory(root / "ancestry")
+            private_directory(replacement / "materialized")
+
+    monkeypatch.setattr(
+        python_distribution_spine,
+        "_write_materialized_file",
+        rebind_after_last_file,
+    )
+
+    with pytest.raises(python_distribution_spine.SpineError, match="ancestry changed"):
+        materialize(built_spine, ancestor / "materialized" / "files")
+
+    assert not (ancestor / "materialized" / "files").exists()
+    assert not tuple((detached / "materialized").iterdir())
+
+
+def test_materialize_rejects_ancestor_rebind_after_publication(
+    built_spine: BuiltSpine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = built_spine.directory.parent
+    ancestor = private_directory(root / "ancestry")
+    parent = private_directory(ancestor / "materialized")
+    output = parent / "files"
+    detached = root / "detached-ancestry"
+    actual_rename = python_distribution_spine._rename_noreplace
+
+    def publish_then_rebind(
+        source_descriptor: int,
+        source_name: str,
+        destination_descriptor: int,
+        destination_name: str,
+    ) -> None:
+        actual_rename(
+            source_descriptor,
+            source_name,
+            destination_descriptor,
+            destination_name,
+        )
+        ancestor.rename(detached)
+        replacement = private_directory(root / "ancestry")
+        private_directory(replacement / "materialized")
+
+    monkeypatch.setattr(
+        python_distribution_spine,
+        "_rename_noreplace",
+        publish_then_rebind,
+    )
+
+    with pytest.raises(python_distribution_spine.SpineError, match="ancestry changed"):
+        materialize(built_spine, output)
+
+    assert not output.exists()
+    assert not tuple((detached / "materialized").iterdir())
+
+
+def test_rename_noreplace_preserves_a_racing_empty_destination(
+    built_spine: BuiltSpine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    parent = private_directory(built_spine.directory.parent / "materialized")
+    output = parent / "files"
+    actual_rename = python_distribution_spine._rename_noreplace
+    competing_inode: int | None = None
+
+    def create_destination_then_rename(
+        source_descriptor: int,
+        source_name: str,
+        destination_descriptor: int,
+        destination_name: str,
+    ) -> None:
+        nonlocal competing_inode
+        os.mkdir(destination_name, 0o700, dir_fd=destination_descriptor)
+        competing_inode = os.stat(
+            destination_name,
+            dir_fd=destination_descriptor,
+            follow_symlinks=False,
+        ).st_ino
+        actual_rename(
+            source_descriptor,
+            source_name,
+            destination_descriptor,
+            destination_name,
+        )
+
+    monkeypatch.setattr(
+        python_distribution_spine,
+        "_rename_noreplace",
+        create_destination_then_rename,
+    )
+
+    with pytest.raises(python_distribution_spine.SpineError, match="appeared"):
+        materialize(built_spine, output)
+
+    assert competing_inode is not None
+    assert output.stat().st_ino == competing_inode
+    assert not tuple(output.iterdir())
+    assert {path.name for path in parent.iterdir()} == {"files"}
+
+
+def test_materialize_fails_closed_without_linux_renameat2(
+    built_spine: BuiltSpine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    parent = private_directory(built_spine.directory.parent / "materialized")
+
+    class MissingRenameat2:
+        pass
+
+    monkeypatch.setattr(
+        python_distribution_spine.ctypes,
+        "CDLL",
+        lambda *args, **kwargs: MissingRenameat2(),
+    )
+
+    with pytest.raises(python_distribution_spine.SpineError, match="refusing to publish"):
+        materialize(built_spine, parent / "files")
+
+    assert not tuple(parent.iterdir())
+
+
+@pytest.mark.parametrize(
+    "mappings",
+    [
+        ((0, 0, 1), (os.geteuid(), os.geteuid(), 1)),
+        (
+            (os.geteuid(), os.geteuid(), 1),
+            (
+                python_distribution_spine.LINUX_OVERFLOW_UID,
+                python_distribution_spine.LINUX_OVERFLOW_UID,
+                1,
+            ),
+        ),
+        ((424242, 424242, 1),),
+    ],
+)
+def test_overflow_root_uid_requires_an_unmapped_root_namespace(
+    monkeypatch: pytest.MonkeyPatch,
+    mappings: tuple[tuple[int, int, int], ...],
+) -> None:
+    root = python_distribution_spine._directory_identity(os.stat("/"), "test root")
+    overflow_root = dataclasses.replace(
+        root,
+        uid=python_distribution_spine.LINUX_OVERFLOW_UID,
+    )
+    monkeypatch.setattr(
+        python_distribution_spine,
+        "_linux_uid_map",
+        lambda: mappings,
+    )
+
+    with pytest.raises(python_distribution_spine.SpineError, match="not an unmapped-root"):
+        python_distribution_spine._root_authority_uid(overflow_root)
+
+
+def test_current_root_authority_is_numerically_proven() -> None:
+    root = python_distribution_spine._directory_identity(os.stat("/"), "test root")
+    authority = python_distribution_spine._root_authority_uid(root)
+
+    assert authority in {
+        python_distribution_spine.ROOT_UID,
+        python_distribution_spine.LINUX_OVERFLOW_UID,
+    }
+    if authority == python_distribution_spine.LINUX_OVERFLOW_UID:
+        mappings = python_distribution_spine._linux_uid_map()
+        assert not python_distribution_spine._uid_is_mapped(
+            python_distribution_spine.ROOT_UID,
+            mappings,
+        )
+        assert not python_distribution_spine._uid_is_mapped(
+            python_distribution_spine.LINUX_OVERFLOW_UID,
+            mappings,
+        )
+        assert python_distribution_spine._uid_is_mapped(os.geteuid(), mappings)
 
 
 def test_verified_file_exposure_is_an_immutable_tuple(built_spine: BuiltSpine) -> None:
@@ -677,7 +1223,9 @@ def test_consumer_has_an_explicit_module_and_call_surface() -> None:
     assert imported_modules == {
         "argparse",
         "contextlib",
+        "ctypes",
         "dataclasses",
+        "errno",
         "hashlib",
         "json",
         "os",
@@ -693,13 +1241,32 @@ def test_consumer_has_an_explicit_module_and_call_surface() -> None:
     assert from_modules == {"__future__", "collections.abc", "pathlib", "typing"}
     allowed_calls = {
         "argparse": {"ArgumentParser"},
-        "contextlib": set(),
+        "contextlib": {"suppress"},
+        "ctypes": {"CDLL", "get_errno"},
         "dataclasses": {"dataclass"},
+        "errno": set(),
         "hashlib": {"sha256"},
         "json": {"dumps", "loads"},
-        "os": {"close", "fstat", "open", "pread", "read", "stat"},
+        "os": {
+            "close",
+            "fchmod",
+            "fsencode",
+            "fsync",
+            "fstat",
+            "geteuid",
+            "getpid",
+            "mkdir",
+            "open",
+            "pread",
+            "read",
+            "rmdir",
+            "stat",
+            "unlink",
+            "urandom",
+            "write",
+        },
         "re": {"compile"},
-        "stat": {"S_ISREG"},
+        "stat": {"S_ISDIR", "S_ISREG", "S_IMODE"},
         "sys": set(),
     }
     observed: dict[str, set[str]] = {module: set() for module in allowed_calls}
@@ -738,6 +1305,12 @@ def test_consumer_has_an_explicit_module_and_call_surface() -> None:
             )
         )
     }.intersection(forbidden_high_level_file_calls)
+    assert not imported_modules.intersection(
+        {"gzip", "shutil", "subprocess", "tarfile", "tempfile", "zipfile"}
+    )
+    assert "os.rename(" not in source
+    assert "libc.renameat2" in source
+    assert "RENAME_NOREPLACE" in source
 
 
 def test_raw_workflow_uses_immutable_two_artifact_transport() -> None:
@@ -766,6 +1339,10 @@ def test_raw_workflow_uses_immutable_two_artifact_transport() -> None:
     assert "artifact-ids: ${{ needs.raw-producer.outputs.record-artifact-id }}" in raw_downloads
     assert "needs.select.outputs.artifact-id" not in raw_downloads
     assert "build_python_artifacts.py" not in consumer
+    assert "python_distribution_spine.py materialize" in consumer
+    assert '--output "$materialized"' in consumer
+    assert 'mkdir "$materialization_parent"' in consumer
+    assert 'materialized_files=("$materialized"/*)' in consumer
     assert "skip-decompress: false" not in consumer
     assert "run-attempt: ${{ steps.build.outputs.run-attempt }}" in producer
     assert "PRODUCER_RUN_ATTEMPT: ${{ needs.raw-producer.outputs.run-attempt }}" in consumer
@@ -779,6 +1356,15 @@ def test_raw_workflow_uses_immutable_two_artifact_transport() -> None:
     assert workflow_sha in producer
     assert workflow_ref in consumer
     assert workflow_sha in consumer
+    assert "\npermissions:\n  contents: read\n" in source
+    for authority in (
+        "attestations: write",
+        "contents: write",
+        "id-token: write",
+        "packages: write",
+        "pull-requests: write",
+    ):
+        assert authority not in consumer
 
 
 def test_reusable_outputs_are_gated_by_the_raw_consumer() -> None:
@@ -810,16 +1396,64 @@ def test_reusable_outputs_are_gated_by_the_raw_consumer() -> None:
         assert f"printf '{output}=%s\\n'" in verified_outputs
 
 
-def test_release_workflow_has_no_python_spine_publication_authority() -> None:
+def test_blocked_release_job_consumes_only_the_same_run_raw_spine() -> None:
     source = (WORKFLOWS / "release.yml").read_text(encoding="utf-8")
+    privileged = source.split("\n  python:\n", 1)[1].split("\n  image:\n", 1)[0]
+    downloads, materializer = privileged.split(
+        "      - name: Materialize the same-run verified distribution\n", 1
+    )
 
     assert "python .github/scripts/build_python_distribution_spine.py" not in source
     assert "python .github/scripts/python_distribution_spine.py verify" not in source
-    assert "extra-codeowners-python-" not in source
+    assert "      - publication-block" in privileged
+    assert "      - python-distribution-proof" in privileged
+    assert downloads.count("actions/download-artifact@") == 2
+    assert downloads.count("skip-decompress: true") == 2
+    assert downloads.count("digest-mismatch: error") == 2
+    assert (
+        "artifact-ids: ${{ needs.python-distribution-proof.outputs.spine-artifact-id }}"
+        in downloads
+    )
+    assert (
+        "artifact-ids: ${{ needs.python-distribution-proof.outputs.record-artifact-id }}"
+        in downloads
+    )
+    assert "python_distribution_spine.py materialize" in materializer
+    assert '--run-id "$GITHUB_RUN_ID"' in materializer
+    assert '--source-revision "$GITHUB_SHA"' in materializer
+    assert '--workflow-ref "$WORKFLOW_REF"' in materializer
+    assert '--workflow-sha "$WORKFLOW_SHA"' in materializer
+    assert "uv sync" not in privileged
+    assert "uv build" not in privileged
+    assert "setup-uv" not in privileged
+    assert "build_python_artifacts.py" not in privileged
+    assert "verify-selection" not in privileged
+    assert " unzip " not in privileged
+    assert " tar " not in privileged
+
+
+def test_blocked_release_job_attests_only_materialized_archives_and_retains_records() -> None:
+    source = (WORKFLOWS / "release.yml").read_text(encoding="utf-8")
+    privileged = source.split("\n  python:\n", 1)[1].split("\n  image:\n", 1)[0]
+    release = source.split("\n  release:\n", 1)[1]
+
+    assert "${{ steps.materialize.outputs.wheel }}" in privileged
+    assert "${{ steps.materialize.outputs.sdist }}" in privileged
+    assert 'for artifact in "$WHEEL" "$SDIST"; do' in privileged
+    for record in (
+        "python-build-record-amd64.json",
+        "python-build-record-arm64.json",
+        "python-selection-record.json",
+    ):
+        assert f"${{{{ steps.materialize.outputs.directory }}}}/{record}" in privileged
+    assert "name: python-distribution-selection-evidence" in privileged
+    assert "python-distribution-selection-evidence" not in release
 
 
 def test_cli_requires_all_out_of_band_identities() -> None:
     with pytest.raises(SystemExit):
         python_distribution_spine.main(["verify"])
+    with pytest.raises(SystemExit):
+        python_distribution_spine.main(["materialize"])
     with pytest.raises(SystemExit):
         builder.main([])

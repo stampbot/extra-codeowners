@@ -56,7 +56,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Rel
 - A reusable, manually runnable Python distribution proof shared by CI and the
   read-only tagged candidate scan.
 - A bounded raw Python-distribution spine and canonical record, verified through
-  direct `archive: false` artifacts without archive parsing in the consumer.
+  direct `archive: false` artifacts without archive parsing in the consumer,
+  plus atomic five-file materialization for the manually runnable proof and the
+  still-blocked privileged release job. Materialization retains and rechecks a
+  no-follow ancestry chain and publishes with Linux no-replace rename semantics.
 - A bounded raw OCI release-spine builder and standalone verifier, with a
   real two-platform BuildKit directory export, a rerun-safe two-file
   `archive: false` CI transport proof, immutable pre-exposure object

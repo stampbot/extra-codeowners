@@ -418,8 +418,10 @@ flowchart LR
     Proof --> Raw[Verified raw spine and record]
     Selected --> CIC[CI containers and evidence]
     Selected --> Scan[Read-only tagged candidate scan]
-    Raw --> Stop[No downstream consumer yet]
-    Gate[Unconditional publication blocker] -. prevents .-> Publish[Privileged release jobs]
+    Raw --> Materialize[Read-only materialization]
+    Raw -. configured consumer .-> Python[Attest and sign wheel and sdist]
+    Gate[Unconditional publication blocker] -. prevents .-> Python
+    Gate -. prevents .-> Publish[Privileged release jobs]
 ```
 
 Each caller gets a separate proof in its own run. CI keeps its required-check
@@ -427,9 +429,14 @@ wrapper, and the tagged scan downloads the selected artifact by immutable ID.
 The reusable workflow also converts that selection into a [raw
 Python-distribution
 spine](../reference/python-distribution-spine-format.md). A separate read-only
-job verifies the spine and its record without opening the wheel or source
-distribution. No container, evidence, or publication job consumes the raw
-pair yet.
+job verifies the spine and atomically materializes its five files without
+opening the wheel or source-distribution archives.
+
+The tagged workflow also defines a privileged Python job that would materialize
+the same files, attest and sign the two distributions, and retain the three
+selection records. The unconditional publication blocker makes that job
+unreachable. Its evidence artifact does not flow into the GitHub release job,
+so issue #32 remains open.
 
 The current container evidence binds CPython's top-level identity to exact
 runtime files and retains its pinned recipe, source archive, and source-carried
