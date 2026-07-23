@@ -1,64 +1,95 @@
 # Container distribution evidence
 
-This directory holds the reviewed policy for Extra CODEOWNERS container
-evidence. It is an allowlist, not runtime configuration. A change to a package,
-source archive, license, base layer, native payload, or embedded SBOM must be
-matched by an intentional policy update.
+This directory holds the reviewed allowlist for Extra CODEOWNERS container
+evidence. It isn't runtime configuration. If a package, source archive, license,
+base layer, native payload, or embedded software bill of materials (SBOM)
+changes, the policy must change with it.
 
-The current policy schema is `6`. Evidence predicates use
-`application/vnd.stampbot.container-evidence.v6+tar+gzip`. The collector
-rejects older schemas, unknown fields, and records that no longer match the
-image.
+The current policy schema is `7`. Evidence predicates use
+`application/vnd.stampbot.container-evidence.v7+tar+gzip`. The collector
+rejects schema 6 and every other version; there is no compatibility reader or
+automatic migration.
 
-## What the evidence covers
+## What schema 7 records
 
-The collector inventories every distributed image layer, including bytes hidden
-by a later whiteout. It binds CPython to its installed runtime files, the pinned
-Docker Official Python recipe, the exact source archive, and the source-carried
-license. It also retains the exact locked wheel and raw embedded SBOM for every
-Python package that owns native code or an SBOM.
+The collector inventories every distributed image layer, including bytes that
+a later whiteout hides. It binds CPython to the installed runtime, the pinned
+Docker Official Python recipe, the exact source archive, and its license. For
+each Python wheel with native code or an embedded SBOM, it also retains the
+locked wheel, native payloads, and raw SBOM bytes.
 
-Schema 6 closes one wheel owner at a time. Greenlet, MarkupSafe, and SQLAlchemy
-are resolved on both supported architectures.
+Schema 7 keeps observation separate from review:
 
-The Greenlet record:
+- An SBOM observation preserves the document path and digest plus each exact
+  component occurrence: type, name, version, package URL (PURL), `bom-ref`,
+  hashes, and declared licenses.
+- A review cites an occurrence by SBOM path, observation digest, PURL, and
+  `bom-ref` when one exists. The review then names the source and the project's
+  reviewed license expression.
+- A payload disposition says whether a native file belongs to the wheel owner,
+  corresponds to reviewed SBOM occurrences, or remains part of a known
+  omission.
+- A known omission records the affected observations and payload roles, the
+  missing evidence, and the exact reason the owner remains open.
 
-- binds the exact platform wheel and Greenlet sdist from `uv.lock`
-- records all five native files as one exact path-and-digest set, with each
-  cross-platform role derived from its installed path
-- binds the retained auditwheel SBOM and its exact component, source, and
-  reviewed-license set
-- requires each nested package URL to keep one identity, source, and reviewed
-  license across every resolved owner and SBOM
-- pins Alpine's `gcc` recipe at commit
-  `fbf60319be3bbaf6dd32ef55cc6fb7189e05c266`
-- verifies the recipe-selected GCC 14.2.0 source archive and retains its
-  reviewed `COPYING3` and `COPYING.RUNTIME` files.
+Each `known-omission` metadata root or payload disposition must point to the
+exact omission that lists its observation or role. A reference listed under a
+different omission does not satisfy that claim.
 
-The MarkupSafe record binds the exact platform wheel, the 80,313-byte sdist from
-`uv.lock`, and the wheel's one `_speedups` extension. It also records explicit
-empty SBOM and embedded-component sets. An empty set is evidence that the
-reviewed wheel contains no such surface; omitting the field is a schema error.
+`bom-ref` is the occurrence identity when it is present. A PURL is only the
+fallback when `bom-ref` is empty. This matters for the Psycopg wheel: its SBOM
+contains four distinct `krb5` occurrences and two distinct `libldap`
+occurrences with repeated PURLs. Schema 7 keeps all six because their
+`bom-ref` values are unique. It rejects repeated PURLs when any occurrence
+lacks a unique, nonempty `bom-ref`.
 
-The SQLAlchemy record binds the exact platform wheel, the 9,912,201-byte sdist,
-and all five `cyextension` payloads. The wheels contain no embedded SBOM or
-separately packaged native library, so the SBOM and component sets are empty.
-Each extension names only the platform musl runtime as a dynamic dependency.
-The source archive carries the project's Cython sources and no bundled
-third-party native code.
+Some auditwheel documents repeat their metadata root as a canonically identical
+top-level component, including the same `bom-ref`. The collector accepts only
+that narrow upstream anomaly. The policy must classify the root and carry a
+`metadata-root-echo` review with a reason. The coverage ledger reports the
+reviewed anomaly; it never silently removes it.
 
-These records prove exact co-membership in each reviewed wheel. They do not
-prove how an individual binary was built. Greenlet's SBOM does not relate a
-component to a file path, hash, or SONAME, so the policy does not assign a file
-to the Greenlet sdist, `libgcc`, or `libstdc++`. MarkupSafe and SQLAlchemy have
-no embedded SBOM. Their exact sdists do not prove how the compiled extensions
-were built or explain every binary byte.
+The only cross-owner relationship is
+`same-component-by-payload-equivalence`. It requires byte-identical payloads,
+matching component identity, a directly reviewed target in a closed owner, and
+source and target payload dispositions that cite the exact observations being
+related.
 
-`inventory/native-component-coverage.json` records that result and lists every
-owner still open. Four native-wheel owners remain unresolved, so
-`source_completeness.complete` and `distribution_approval.approved` both remain
-`false`. The ledger is evidence of incremental progress; it is not permission
-to distribute the image.
+## Current closure
+
+Every observed native-wheel owner has a policy record on both architectures.
+The record is either `closed` or `open`; an unconfigured owner fails
+verification instead of becoming an inferred gap.
+
+| Owner | State | Evidence still missing |
+| --- | --- | --- |
+| `python:cffi@2.1.0` | Open | `missing-native-sbom` |
+| `python:cryptography@48.0.1` | Open | `unresolved-rust-and-openssl-sources` |
+| `python:greenlet@3.5.3` | Closed | None |
+| `python:markupsafe@3.0.3` | Closed | None |
+| `python:psycopg-binary@3.3.4` | Open | `missing-libpq-sbom`, `unreviewed-bundled-library-sources` |
+| `python:pydantic-core@2.46.4` | Open | `missing-libgcc-sbom`, `unreviewed-cargo-sources` |
+| `python:sqlalchemy@2.0.51` | Closed | None |
+
+Greenlet's reviewed components use the commit-pinned Alpine GCC recipe and
+source archive. MarkupSafe and SQLAlchemy have no embedded SBOM, so their
+closed records contain empty SBOM and component-review arrays. Their native
+payloads are still exact.
+
+The policy can describe four immutable native-source forms: an Alpine aports
+recipe and distfiles, a crates.io archive, a verified subtree of the owner's
+source distribution, or an upstream archive accompanied by a pinned checksum
+document. The bundle retains the exact reviewed notices for every used source.
+
+`inventory/native-component-coverage.json` derives the result from policy and
+the observed image. Closed records appear in `resolved_owners`; open records
+appear in `unresolved_owners` with their full evidence and omissions.
+`source_completeness` is derived in `MANIFEST.json`; it is not trusted as an
+input from `inventory/components.json`.
+
+Four owners remain open, so `source_completeness.complete` is `false`.
+`distribution_approval.approved` also remains `false`. The ledger records
+progress. It does not grant permission to distribute the image.
 
 ## Raw OCI release spine
 
@@ -76,17 +107,17 @@ copied from its open file descriptor, without reopening the path.
 
 ## Release guardrails
 
-Collector success is not a legal determination and does not enable
-publication. The repository has no `main` publication job, and tagged release
-publication remains blocked by:
+Collector success is neither a legal determination nor publication authority.
+The repository has no `main` publication job, and tagged publication remains
+blocked by:
 
 - [source completeness #18](https://github.com/stampbot/extra-codeowners/issues/18)
 - [publication privilege separation #28](https://github.com/stampbot/extra-codeowners/issues/28)
-- [selected build-proof handoff #32](https://github.com/stampbot/extra-codeowners/issues/32).
+- [selected build-proof handoff #32](https://github.com/stampbot/extra-codeowners/issues/32)
 
 An [older GHCR preview](https://github.com/stampbot/extra-codeowners/issues/30)
 is unsupported and incomplete. Do not deploy or mirror it. Pull-request CI
-artifacts are short-lived, unsigned review inputs, not release assets.
+artifacts are short-lived, unsigned review inputs rather than release assets.
 
 Follow [Review container evidence](../docs/how-to/review-container-evidence.md)
 to inspect both platform artifacts and the policy that accepted them.

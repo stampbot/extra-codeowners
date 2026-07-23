@@ -83,12 +83,14 @@ publication path.
 
 CPython has a normalized top-level component record with exact runtime
 identity, recipe, source, and license evidence. Greenlet, MarkupSafe, and
-SQLAlchemy now have closed-world native-owner coverage on both platforms. Four
-other owners do not yet have complete records for their observed surfaces.
+SQLAlchemy have closed native-owner reviews on both platforms. Four other
+owners have exact observations and explicit omissions, but their reviews remain
+open.
 Issue [#18](https://github.com/stampbot/extra-codeowners/issues/18) tracks that
-work. Until it closes, the collector sets `source_completeness.complete` to
-`false` and rejects distribution approval. Issue #28 independently blocks
-tagged publication. Passing CI does not override either condition.
+work. Until it closes, the derived ledger keeps
+`source_completeness.complete` false and the approval-required gate rejects the
+candidate. Issue #28 independently blocks tagged publication. Passing CI does
+not override either condition.
 
 ## How the CI collector builds the evidence
 
@@ -119,11 +121,12 @@ every layer against the bytes it received. It then:
 8. selects one hash-locked platform wheel for each native or SBOM owner,
    verifies its complete archive `RECORD` against the historical installation,
    and retains the wheel and raw SBOM bytes under `artifacts/native-wheels/`
-9. validates the closed-world native-component policy, writes a per-owner
-   coverage ledger, and binds each resolved owner to its exact locked source
+9. validates every schema-7 owner observation, disposition, review, omission,
+   and cross-owner relationship; writes the derived coverage ledger; and binds
+   each closed owner to its exact locked source
 10. retrieves the hash-pinned source and license material, including the
-    Greenlet/GCC component source and notices, and produces a deterministic,
-    explicitly incomplete review archive.
+    Greenlet/GCC component source and notices, and produces a deterministic
+    review archive whose manifest derives the current incomplete state.
 
 ### Historical Python installation replay
 
@@ -202,108 +205,131 @@ approve distribution.
 
 ### Structured native and SBOM identities
 
-Path and hash baselines show that a payload changed, but they do not say what
-the bytes contain. The collector therefore parses every embedded CycloneDX JSON
-SBOM under a wheel's `.dist-info/sboms/` directory. It accepts specification
-versions 1.4 through 1.6, flattens nested components into canonical
-type/name/version/package-URL identities, and rejects conflicting identity or
-package-URL mappings within each SBOM. Identities remain scoped to their source
-document across wheels: independent builders can describe the same display
-identity with different package-URL namespaces. The exact SBOM bytes, path,
-digest, and `RECORD` owner preserve both observations without treating either
-document as a global identity authority.
+Path and hash baselines tell us that a file changed. They don't tell us what
+the file contains, and an SBOM doesn't necessarily tell us which component
+produced a file. Schema 7 keeps those facts separate.
 
-The collector also identifies every ELF payload anywhere under `/opt/venv`,
-including an executable without a shared-library suffix. It requires a
-64-bit, little-endian ELF header whose machine matches the image platform:
-x86-64 for `linux/amd64` and AArch64 for `linux/arm64`.
+The collector parses every CycloneDX JSON document below a wheel's
+`.dist-info/sboms/` directory. It accepts specification versions 1.4 through
+1.6 and retains a bounded observation for each component:
 
-Each structured SBOM or ELF record retains its raw layer occurrence and the
-wheel owner established by historical `RECORD` replay. Reviewed policy still
-pins the raw path, digest, size, mode, UID, and GID. Bundle generation now
-selects that owner's exact platform wheel from `uv.lock`, verifies its complete
-archive `RECORD`, and matches its installed files to the historical record.
-The bundle keeps the wheel and a separately addressed copy of every raw SBOM.
+- type, name, version, and package URL (PURL)
+- `bom-ref`
+- declared hash records
+- declared licenses
 
-This proves which wheel supplied the bytes. Schema 6 adds closed-world coverage
-for individual wheel owners. Every owner record carries explicit
-`native_payloads`, `sboms`, and owner-level `components` sets. At least one
-native or SBOM surface must exist. The component set must be the canonical
-union of the components represented by the SBOM records. Empty sets are valid
-evidence; omitted sets are not. Missing, extra, duplicated, cross-platform,
-conflicting, or stale records fail.
+The observation also has a digest over its canonical parsed content. Policy
+references include that digest and the installed SBOM path, so a reference
+can't drift to a similar component in another document.
 
-Those are parallel evidence sets, not a file-provenance map. Greenlet's
-auditwheel SBOM lists `libgcc` and `libstdc++` identities and dependencies, but
-it contains no relationship from either component to a file path, file hash, or
-SONAME. The schema therefore keeps all five native files in one owner-level
-`native_payloads` set. It deliberately has no owner-source payload field and no
-component payload field. The exact Greenlet sdist proves the reviewed owner's
-source selection; it does not explain any individual native file. Likewise,
-the nested component source and license records review the SBOM identities
-without claiming that a particular file came from either component.
+#### Repeated PURLs are occurrences, not aliases
 
-Installed filenames still vary by architecture. Wheel repair can add a
-platform-specific hash, and a CPython extension filename includes the target
-architecture. The validator derives each role from its exact path: it removes
-the reviewed virtual-environment `site-packages` prefix, collapses the CPython
-platform ABI suffix, and removes a valid auditwheel filename hash. Every other
-part of the relative path remains unchanged. A policy cannot move a role to a
-different path, even if its overall role set stays the same. Schema validation
-also requires both platforms to contain the same derived role set. This path
-projection compares files; it does not attribute them to a source or SBOM
-component.
+A PURL describes a package identity. It doesn't always identify one occurrence
+inside a document. The Psycopg auditwheel SBOM demonstrates the difference: it
+contains four `krb5` occurrences and two `libldap` occurrences. Each group
+shares a PURL, but every occurrence has its own `bom-ref`.
 
-The same validation gives every package URL one global normalized identity,
-source, and reviewed license across resolved owners and SBOMs.
+Schema 7 uses a nonempty `bom-ref` as the document-local occurrence identity.
+It falls back to the PURL only when `bom-ref` is empty. A document may repeat a
+PURL only when every repetition has a unique, nonempty `bom-ref`; duplicate
+`bom-ref` values and mixed fallback identities fail. This preserves the six
+Psycopg observations instead of silently collapsing them into two packages.
 
-Greenlet is the first resolved owner. On each platform, the reviewed wheel
-contains three extension modules, two libraries under `greenlet.libs/`, and one
-auditwheel SBOM. The policy separately binds the Greenlet 3.5.3 sdist and an
-Alpine GCC source record for the SBOM's `libgcc` and `libstdc++` components. The
-GCC record pins:
+PURLs and `bom-ref` values remain scoped to their source document. Independent
+builders can use different namespaces or build paths for the same component.
+The policy compares normalized review semantics across architectures without
+rewriting the literal observations retained for either wheel.
 
-- Alpine aports commit `fbf60319be3bbaf6dd32ef55cc6fb7189e05c266`
-- the exact `main/gcc` recipe-subtree archive
-- the recipe's literal version, package release, and aggregate license field
-- the recipe-selected `gcc-14.2.0.tar.xz` distfile by size and SHA-512
-- the SHA-256 and size of `COPYING3` and `COPYING.RUNTIME` in that archive.
+#### Metadata roots need an explicit disposition
 
-The SBOM does not declare license expressions for those nested components. The
-policy records `GPL-3.0-or-later WITH GCC-exception-3.1` as the project's
-reviewed expression and separately preserves the aggregate license text from
-`APKBUILD`. The evidence does not present that review as upstream metadata or
-legal advice.
+An SBOM metadata component can describe the wheel owner, an embedded component,
+or a known omission. It can also be absent. Policy records that decision for
+each document.
 
-MarkupSafe is the second resolved owner. Each platform wheel has one
-`_speedups` extension and no embedded SBOM. The policy binds that one native
-role, its exact platform path and digest, the exact locked wheel, and the
-80,313-byte MarkupSafe 3.0.3 sdist. Its `sboms` and owner-level `components`
-sets are explicitly empty. That closes the observed wheel surface without
-inventing a component or build claim. The sdist and its BSD-3-Clause license
-files are retained as exact source evidence; they do not prove that every byte
-in the extension was reproducibly produced from that archive.
+Auditwheel currently emits one narrow anomaly for the Cryptography, Greenlet,
+and Psycopg wheels: the document repeats its metadata root as a canonically
+identical top-level component with the same `bom-ref`. The parser accepts only
+that exact echo. Policy must add a `metadata-root-echo` anomaly review with a
+reason, and the coverage ledger reports it in
+`observed_sbom_anomalies`. A changed or unreviewed echo fails.
 
-SQLAlchemy is the third resolved owner. Each platform wheel contains five
-`cyextension` modules and no embedded SBOM or separately packaged native
-library. Every module's dynamic section names only the platform musl runtime.
-The policy binds all five paths, roles, and digests to the exact locked wheel
-and the 9,912,201-byte SQLAlchemy 2.0.51 sdist. Its `sboms` and `components`
-sets are explicitly empty.
+#### Observation, review, and payload claims stay separate
 
-The sdist carries the five project-authored `.pyx` files, one supporting
-`.pxd`, no generated C source, and no separately attributable bundled
-third-party native code. The collector retains that exact sdist and its MIT
-license. The owner-level component set remains empty because SQLAlchemy's wheel
-has no embedded SBOM; schema 6 derives the set from embedded SBOM components.
-Cython and GCC are build tools, not distributed SQLAlchemy components. Musl
-remains independently inventoried as part of the platform. This evidence does
-not prove that the wheels are reproducible or close the compiler toolchain.
+An owner record covers every native payload and embedded SBOM in one wheel.
+Each native payload has an exact installed path, digest, size, and a
+platform-neutral role derived from its path. Every payload then receives one
+disposition:
 
-The derived `inventory/native-component-coverage.json` file repeats every
-resolved record and lists the raw native and SBOM observations for unresolved
-owners. Greenlet, MarkupSafe, and SQLAlchemy are resolved on both platforms.
-Four owners remain unresolved, so source completeness remains false.
+- `owner` for code treated as part of the Python project
+- `sbom-components` for a payload associated with cited SBOM occurrences
+- `known-omission` when the needed provenance is still missing
+
+A `known-omission` disposition names one omission, and that exact omission must
+list the affected observation or payload role. The validator does not treat
+unrelated omissions as a shared pool of exceptions.
+
+A component review cites exact observation occurrences, an immutable source
+record, and the project's reviewed license expression. The SBOM's declared
+license remains in the observation. These are two different facts.
+
+The schema does not invent a component-to-file relationship. Auditwheel may
+list `libgcc` and `libstdc++` without mapping either component to a path, hash,
+or SONAME. A payload disposition can say which observations are relevant to
+the payload, but the retained SBOM still shows the limits of the upstream
+claim.
+
+Schema 7 has one deliberately narrow relationship for evidence shared between
+owners. `same-component-by-payload-equivalence` requires the source and target
+payloads to be byte-identical. Each named payload disposition must cite its
+corresponding observation, and the target observation must have a direct
+review in a closed owner. Relationships cannot chain. The current policy uses
+this for Cryptography's bundled `libgcc`, whose bytes match Greenlet's reviewed
+`libgcc` payload.
+
+#### Sources are verified by kind
+
+Native component sources form a tagged union. The collector supports:
+
+- a commit-pinned Alpine aports recipe plus every checksummed distfile
+- a crates.io archive bound to its manifest identity, checksum, raw license,
+  normalized license, and reviewed notices
+- a canonical, link-free subtree manifest inside the wheel owner's exact
+  source distribution
+- an upstream release archive bound to a pinned checksum document with one
+  exact filename record
+
+Every used source retains its exact reviewed notices. Unused source records
+fail policy validation, so adding a source without connecting it to a review
+doesn't create evidence.
+
+#### Open and closed are policy states
+
+Every observed native-wheel owner must have a record on both platforms. An
+owner with complete dispositions and source evidence can be `closed`. An
+`open` owner must list known omissions, a reason, and the same omission IDs in
+`review.unresolved_items`. Removing an owner from policy fails exact coverage;
+it does not turn the owner into an inferred unresolved record.
+
+The current closed owners are Greenlet, MarkupSafe, and SQLAlchemy. MarkupSafe
+and SQLAlchemy have no embedded SBOM, so their SBOM and component-review arrays
+are empty while their native payload sets remain exact.
+
+Four owners are still open:
+
+- CFFI has no embedded native-component inventory.
+- Cryptography still needs complete Rust and OpenSSL source, license, notice,
+  and build-material evidence.
+- Psycopg still lacks a `libpq` SBOM observation and reviewed source closure
+  for its bundled libraries.
+- Pydantic Core still lacks a `libgcc` observation and retained source closure
+  for the crates represented by its SBOM.
+
+`inventory/native-component-coverage.json` copies closed records into
+`resolved_owners` and open records into `unresolved_owners`. It also names the
+remaining owners and reports reviewed upstream SBOM anomalies.
+`MANIFEST.json` derives `source_completeness` from that ledger. The component
+inventory no longer supplies a completeness assertion that policy could
+accidentally trust.
 
 ### Failed jobs can still leave diagnostics
 
@@ -417,7 +443,7 @@ change breaks the policy comparison.
 A top-level `LicenseRef-*` resolution requires an exact component set, a
 nonempty rationale, and one source-carried notice path and SHA-256 for every
 covered component. An unrelated file with a plausible name cannot satisfy the
-pin. Schema 6 rejects `LicenseRef-*` in native-component expressions
+pin. Schema 7 rejects `LicenseRef-*` in native-component expressions
 because those components do not use the top-level custom-license evidence
 ledger. The current public-domain resolutions bind these exact records:
 
@@ -460,10 +486,9 @@ unprivileged pinned fetch
   -> short-lived isolated publication and signing authority
 ```
 
-Before those phases may publish, the same closed-world coverage now used for
-Greenlet, MarkupSafe, and SQLAlchemy must cover the other four native-wheel
-owners, or those wheels must be replaced with builds linked against separately
-inventoried packages.
+Before those phases may publish, the other four native-wheel owners must move
+from `open` to `closed`, or those wheels must be replaced with builds linked
+against separately inventoried packages.
 
 The parsing phases must run rootless with `--network none`, immutable inputs,
 read-only mounts where practical, and explicit size limits. The first parse

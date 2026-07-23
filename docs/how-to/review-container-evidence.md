@@ -677,7 +677,7 @@ for architecture in amd64 arm64; do
     --policy "$POLICY" \
     --output "$DIFF_ROOT/${architecture}-native-component-coverage.json"
   jq -e --arg platform "$platform" '
-      .schema_version == 6
+      .schema_version == 7
       and .platform == $platform
       and .complete == false
       and ([.resolved_owners[].owner] == [
@@ -685,7 +685,45 @@ for architecture in amd64 arm64; do
         "python:markupsafe@3.0.3",
         "python:sqlalchemy@2.0.51"
       ])
-      and (.unresolved_owners | length == 4)
+      and ([.unresolved_owners[] | {
+        owner,
+        omissions: [.known_omissions[].id]
+      }] == [
+        {
+          "owner": "python:cffi@2.1.0",
+          "omissions": ["missing-native-sbom"]
+        },
+        {
+          "owner": "python:cryptography@48.0.1",
+          "omissions": ["unresolved-rust-and-openssl-sources"]
+        },
+        {
+          "owner": "python:psycopg-binary@3.3.4",
+          "omissions": [
+            "missing-libpq-sbom",
+            "unreviewed-bundled-library-sources"
+          ]
+        },
+        {
+          "owner": "python:pydantic-core@2.46.4",
+          "omissions": [
+            "missing-libgcc-sbom",
+            "unreviewed-cargo-sources"
+          ]
+        }
+      ])
+      and ([.observed_sbom_anomalies[].owner] == [
+        "python:cryptography@48.0.1",
+        "python:greenlet@3.5.3",
+        "python:psycopg-binary@3.3.4"
+      ])
+      and .remaining_owner_count == 4
+      and (.remaining_owner_names == [
+        "python:cffi@2.1.0",
+        "python:cryptography@48.0.1",
+        "python:psycopg-binary@3.3.4",
+        "python:pydantic-core@2.46.4"
+      ])
     ' "$DIFF_ROOT/${architecture}-native-component-coverage.json" >/dev/null
   LC_ALL=C sed -n 'l' \
     "$DIFF_ROOT/${architecture}-native-component-coverage.json"
@@ -758,23 +796,27 @@ Review source policy with these precise boundaries:
 - Alpine policy pins every `ORIGIN@APORTS_COMMIT`, recipe-subtree hash, verified
   `sha512sums` input, and any narrow parser exception; never execute an
   `APKBUILD`
-- native-component coverage must reproduce the resolved owner's complete
-  native path-and-digest set, use the role derived from each path, and keep the
-  same derived role set across platforms. A role cannot be moved between
-  payload records. Coverage must carry explicit native, SBOM, and owner-level
-  component sets, reproduce every embedded-SBOM component, and bind the wheel
-  and owner sdist to `uv.lock`. The owner component set must equal the canonical
-  union represented by its SBOMs. Empty sets are evidence and must not be
-  omitted. Component records must not
-  contain payload fields: the SBOM provides no file, hash, or SONAME
-  relationship. One package URL cannot acquire a different identity, source,
-  or reviewed license in another owner or SBOM. The Greenlet record separately
-  pins the Alpine 3.22 GCC recipe, distfile, and source-carried notices reviewed
-  for the SBOM's `libgcc` and `libstdc++` identities. MarkupSafe must contain
-  one `_speedups` native role and explicit empty SBOM and component sets.
-  SQLAlchemy must contain its five `cyextension` roles and the same explicit
-  empty sets. Do not add Cython, GCC, or musl as nested SQLAlchemy components
-  without distributed component evidence
+- native-component coverage must reproduce every owner's complete native
+  path, digest, and size set, derive each role from its path, and preserve the
+  same role set across platforms. Review every CycloneDX occurrence by
+  `bom-ref`, falling back to PURL only when `bom-ref` is empty. A repeated PURL
+  is valid only when every occurrence has its own nonempty, unique `bom-ref`.
+  Check each metadata-root echo against its explicit anomaly review. Every
+  payload needs an owner, SBOM-observation, or known-omission disposition;
+  every SBOM observation must be directly reviewed, omitted, assigned as the
+  owner root, or covered by a narrowly validated relationship. For a
+  relationship, confirm that both named payload dispositions cite the
+  corresponding source and target observations. Open reviews must retain
+  exact omissions and cannot appear in `resolved_owners`. The wheel and owner
+  sdist still bind to `uv.lock`
+- native-component sources are a tagged union. Review commit-pinned Alpine
+  recipe and distfile records, canonical crates.io archives and manifests,
+  canonical owner-sdist subtrees, and upstream archives bound by strict
+  checksum documents according to their kind. Each directly reviewed
+  occurrence must bind one source and reviewed license, every source must be
+  used, and source-carried notices must match exact member hashes and sizes.
+  Do not infer a component-to-file mapping merely because an SBOM and payload
+  share a wheel
 - Docker Official Python policy pins the multi-platform index, exact ordered
   base diff IDs, recipe, recipe license, CPython source archive, and exact
   source-carried `LICENSE` and `Include/patchlevel.h`; the source version and
@@ -785,7 +827,7 @@ Review source policy with these precise boundaries:
   executable mode at `HEAD`, using recursive `git ls-tree -rz` and `git show`;
   it is not a mutable working-tree copy and is not described as `git archive`
 - every top-level `LicenseRef-*` must name exactly the covered components and
-  pin the source-carried notice path and digest for each one; schema 6 rejects
+  pin the source-carried notice path and digest for each one; schema 7 rejects
   `LicenseRef-*` in nested native-component expressions.
 
 The nested evidence tar is checksum-bound by the predicate and sidecar, but the
@@ -797,62 +839,72 @@ procedure.
 
 ## 5. Confirm the remaining source-completeness gap stays explicit
 
-Both component inventories must contain exactly:
+The raw component inventory no longer accepts a `source_completeness` field.
+The trusted helper derives the decision from
+`inventory/native-component-coverage.json` and writes it to
+`MANIFEST.json.source_completeness`. Confirm the ledger, not a caller-supplied
+inventory assertion.
 
-```json
-{
-  "complete": false,
-  "reason": "Four native-wheel owners still lack closed-world component/source coverage in issue #18; public distribution remains blocked pending issue #28."
-}
-```
+On both platforms, the ledger must contain these closed owners:
 
-Do not weaken or remove that state. The coverage ledger must resolve Greenlet
-MarkupSafe, and SQLAlchemy on both platforms. It must list the other four
-owners as unresolved and remain `complete: false`. Issue #18 must close those
-remaining records with exact observed surfaces and the applicable notice and
-corresponding-source evidence.
+- `python:greenlet@3.5.3`
+- `python:markupsafe@3.0.3`
+- `python:sqlalchemy@2.0.51`.
 
-CPython is no longer part of the incomplete status. The trusted helper requires
-one effective top-level CPython component per platform, binds its four runtime
-identities to the all-layer inventory and reviewed base boundary, and verifies
-the pinned recipe, source archive, source-carried version header, and license
-evidence. That closes the CPython tranche without making the entire image
-source-complete.
+It must retain these open records and exact omission IDs:
 
-Greenlet is also no longer part of the incomplete status. Its resolved ledger
-record binds the exact platform wheel and owner sdist, records all five native
-payloads as one owner-level set, reproduces both nested SBOM component
-identities, and pins the GCC recipe, source archive, and reviewed notices. This
-proves exact co-membership in the wheel, not a component-to-file mapping. Treat
-a missing Greenlet record as policy drift that requires a separate review.
+| Owner | Omission IDs |
+| --- | --- |
+| `python:cffi@2.1.0` | `missing-native-sbom` |
+| `python:cryptography@48.0.1` | `unresolved-rust-and-openssl-sources` |
+| `python:psycopg-binary@3.3.4` | `missing-libpq-sbom`, `unreviewed-bundled-library-sources` |
+| `python:pydantic-core@2.46.4` | `missing-libgcc-sbom`, `unreviewed-cargo-sources` |
 
-MarkupSafe is no longer part of the incomplete status either. Its resolved
-record binds the exact platform wheel, its single `_speedups` payload, and the
-80,313-byte sdist from `uv.lock`. The explicit empty SBOM and component sets
-must match the observed wheel. They do not prove that the sdist explains every
-byte in the compiled extension. Treat a missing MarkupSafe record as policy
-drift that requires a separate review.
+Do not accept a shortened unresolved summary. Each open ledger entry is the
+full policy record, including observations, dispositions, source decisions,
+structured omissions, and the open review reason. Its
+`review.unresolved_items` list must exactly equal its omission IDs.
 
-SQLAlchemy is no longer part of the incomplete status. Its record binds the
-exact platform wheel, all five `cyextension` roles, and the 9,912,201-byte
-sdist from `uv.lock`. The wheel has no embedded SBOM or separately packaged
-native library, so its SBOM and component sets are empty. This evidence does
-not prove reproducibility or close the compiler toolchain. Treat a missing
-SQLAlchemy record, or any owner resolved beyond these three, as policy drift
-that requires a separate review.
+For every `known-omission` metadata root or payload disposition, confirm that
+the specifically named omission lists the observation reference or payload
+role. A matching reference in a different omission does not close the gap.
 
-The trusted helper has already validated `wheel_installations` against
-the all-layer file inventory. It requires every historical installation to bind
-its canonical owner, METADATA, WHEEL, RECORD, tags, purelib state, and normalized
-owned occurrences. It also preserves the effective-only
-`python_record_ownership` projection. Do not treat that attribution evidence as
-component expansion or corresponding-source delivery.
+The ledger must also report:
 
-Raw path/hash baselines make every surface visible. The separate coverage
-ledger says which owners have corresponding-source closure; a raw baseline by
-itself does not satisfy source delivery. `wheel_identity_files` also retains
-base-image WHEEL and RECORD occurrences outside `/opt/venv`; those records have
-no runtime virtual-environment installation to replay.
+- `complete: false`
+- `remaining_owner_count: 4`
+- the same four owner names in `remaining_owner_names`
+- one reviewed `metadata-root-echo` anomaly for each Cryptography, Greenlet,
+  and Psycopg auditwheel document.
+
+Inspect the occurrence counts rather than grouping by PURL. Psycopg must retain
+four krb5 and two libldap occurrences, each separated by a unique nonempty
+`bom-ref`. A metadata-root echo is a separately reported upstream anomaly; it
+is not another component review.
+
+CPython is not part of the open ledger. Its top-level component and four
+runtime identities remain bound to the all-layer inventory, reviewed base
+boundary, Docker Official Python recipe, source archive, version header, and
+license. Closing native owners must not weaken that evidence.
+
+Greenlet is closed because its record directly reviews its retained
+occurrences, binds the exact platform wheel and owner sdist, records all five
+native payloads, and retains the reviewed Alpine GCC source and notices.
+MarkupSafe closes one `_speedups` role with no embedded SBOM. SQLAlchemy closes
+five `cyextension` roles with no embedded SBOM. Those owner dispositions prove
+wheel ownership; they do not prove reproducibility or infer unobserved
+toolchain components.
+
+`wheel_installations` remains separate attribution evidence. The helper binds
+each historical installation to its METADATA, WHEEL, RECORD, tags, purelib
+state, and normalized owned occurrences, then derives the effective-only
+`python_record_ownership` projection. Do not treat this as component expansion
+or corresponding-source delivery.
+
+Raw path/hash baselines make each surface visible. Only a closed review with
+the required exact sources, notices, and relationships can make the derived
+ledger complete. Issue #18 must close all four records before a supported
+release can pass this gate.
 
 ## 6. Run the repository gates
 
@@ -941,9 +993,9 @@ GitHub CLI, bind that operation to the same head with
 ## 8. Keep distribution denied
 
 Keep `distribution_approval.approved` set to `false`. The current executable
-schema requires source completeness to remain false and rejects an attempt to
-require distribution approval. The tag workflow independently stops before
-privileged jobs, there is no `main` publication job to enable, and issue #32's
+schema derives an incomplete native-owner ledger and therefore rejects the
+approval-required gate. The tag workflow independently stops before privileged
+jobs, there is no `main` publication job to enable, and issue #32's
 release-evidence and publication handoff remains a separate requirement.
 
 A future supported release must satisfy the
