@@ -7,7 +7,7 @@ from typing import Any, cast
 
 import pytest
 
-import tools.capture_github_lifecycle_contract as lifecycle_module
+from tools import capture_github_lifecycle_contract as lifecycle_module
 from tools.capture_github_lifecycle_contract import (
     CaptureConfig,
     capture_lifecycle_contracts,

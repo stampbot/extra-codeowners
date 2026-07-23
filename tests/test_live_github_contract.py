@@ -9,7 +9,7 @@ import httpx
 import pytest
 import respx
 
-import tools.live_github_contract as contract_module
+from tools import live_github_contract as contract_module
 from tools.live_github_contract import (
     AppAuth,
     AppCredentials,
@@ -1354,7 +1354,8 @@ def test_fixture_uses_a_128_bit_repository_suffix(
         assert fixture.repository_name == f"extra-codeowners-contract-{'a' * 32}"
         assert fixture.report["fixture"]["repository_creation_state"] == "not_attempted"
     finally:
-        assert fixture.close() == []
+        cleanup_errors = fixture.close()
+        assert cleanup_errors == []
 
 
 def test_repository_recovery_coordinates_are_flushed_before_requests(
@@ -1408,7 +1409,8 @@ def test_repository_recovery_coordinates_are_flushed_before_requests(
     fixture._create_repository()
 
     assert events[:4] == ["write", "flush", "GET", "POST"]
-    assert fixture.close() == []
+    cleanup_errors = fixture.close()
+    assert cleanup_errors == []
 
 
 @pytest.mark.parametrize(
@@ -1439,7 +1441,8 @@ def test_repository_creation_recovers_an_unknown_accepted_request(
     assert fixture.repository_creation_outcome_unknown is True
     assert fixture.report["fixture"]["repository_creation_state"] == ("attempted_response_unknown")
 
-    assert fixture.close() == []
+    cleanup_errors = fixture.close()
+    assert cleanup_errors == []
     assert fixture.report["fixture"]["repository_creation_state"] == "response_unknown_cleaned"
     assert [request["method"] for request in operator.transcript] == [
         "GET",
@@ -1471,7 +1474,8 @@ def test_repository_creation_absence_remains_manual_after_bounded_recovery(
     with pytest.raises(httpx.ReadTimeout):
         fixture._create_repository()
 
-    assert fixture.close() == ["repository recovery failed (ContractError)"]
+    cleanup_errors = fixture.close()
+    assert cleanup_errors == ["repository recovery failed (ContractError)"]
     assert fixture.report["fixture"]["repository_creation_state"] == "manual_cleanup_required"
     assert [request["method"] for request in operator.transcript] == [
         "GET",
@@ -1524,7 +1528,8 @@ def test_repository_creation_cleans_up_after_a_malformed_success_body() -> None:
 
     assert fixture.repository_created is True
     assert fixture.repository_creation_outcome_unknown is False
-    assert fixture.close() == []
+    cleanup_errors = fixture.close()
+    assert cleanup_errors == []
     assert fixture.report["fixture"]["repository_creation_state"] == "response_confirmed_cleaned"
     assert [request["method"] for request in operator.transcript] == [
         "GET",
@@ -1543,7 +1548,8 @@ def test_repository_creation_recovery_failure_requires_manual_cleanup() -> None:
     with pytest.raises(httpx.ReadTimeout):
         fixture._create_repository()
 
-    assert fixture.close() == ["repository recovery failed (ContractError)"]
+    cleanup_errors = fixture.close()
+    assert cleanup_errors == ["repository recovery failed (ContractError)"]
     assert fixture.report["fixture"]["repository_creation_state"] == "manual_cleanup_required"
     assert "private" not in repr(fixture.report)
 
@@ -1570,7 +1576,8 @@ def test_cleanup_transcript_discovers_the_ruleset_and_closes_clients() -> None:
     fixture.approver = cast(RestClient, approver)
     fixture.repository_selection = cast(RestClient, repository_selection)
 
-    assert fixture.close() == []
+    cleanup_errors = fixture.close()
+    assert cleanup_errors == []
 
     assert [request["path"] for request in operator.transcript] == [
         "/orgs/fixture-org/rulesets",
@@ -1599,7 +1606,8 @@ def test_cleanup_records_each_failure_and_still_closes_clients() -> None:
     fixture.checker = cast(RestClient, checker)
     fixture.approver = None
 
-    assert fixture.close() == [
+    cleanup_errors = fixture.close()
+    assert cleanup_errors == [
         "organization ruleset cleanup failed (ContractError)",
         "repository cleanup failed (ContractError)",
     ]
@@ -1718,7 +1726,8 @@ def test_keep_mode_names_both_retained_resources_and_closes_clients(
     fixture.checker = cast(RestClient, checker)
     fixture.approver = None
 
-    assert fixture.close() == []
+    cleanup_errors = fixture.close()
+    assert cleanup_errors == []
 
     output = capsys.readouterr().out
     assert "retaining any created fixture repository" in output
