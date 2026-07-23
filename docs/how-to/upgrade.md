@@ -48,7 +48,7 @@ extra-codeowners database check
 For version 0.1.0, a compatible database prints:
 
 ```text
-Database migration 0002_retry_dead_jobs is compatible.
+Database migration 0003_shared_head_epochs is compatible.
 ```
 
 Record the reported revision, current image digest, chart revision, PostgreSQL
@@ -67,7 +67,96 @@ not contain events accepted after its snapshot.
 For zero event loss at the upgrade snapshot, stop webhook ingress and every
 application process first. Otherwise, record the snapshot time. After a
 restore, you will need to redeliver later GitHub events and reconcile every
-open pull request.
+open pull request. Treat reconciliation as advisory and independently verify
+each current check before relying on it.
+
+Migration `0003_shared_head_epochs` requires the stronger option: stop webhook
+ingress and every older worker before migration begins. An old process checks
+database compatibility at startup and readiness, not before every queue claim.
+Leaving one alive could let it publish without the new shared-head fence.
+
+For an upgrade from `0002_retry_dead_jobs` to
+`0003_shared_head_epochs`, keep this order:
+
+1. Stop webhook ingress.
+2. Stop every controller that can recreate an old worker, then stop every old
+   worker and reconciler. Wait for graceful shutdown and for both the worker
+   and reconciler lease periods to pass, so no old request or lease remains
+   active.
+3. Create and verify the backup in steps 3 and 4.
+4. Run the target migration in step 5.
+5. Start only code that requires `0003_shared_head_epochs`.
+6. Complete the health checks in step 6, then restore ingress.
+7. Treat startup reconciliation as advisory. Independently inventory
+   accessible open pull requests and verify their current checks while native
+   code-owner enforcement remains active.
+
+### Drain a Kubernetes release
+
+Setting a Deployment to zero is not a stable drain while a Horizontal Pod
+Autoscaler (HPA) or GitOps controller can change it back. Suspend reconciliation
+for the exact Argo CD Application, Flux resource, or other controller before
+you alter the workload. Record its previous state. The controller must not
+recreate the HPA, change the Deployment replica count, or sync an old image
+until the target is ready.
+
+From a trusted POSIX shell with the intended `kubectl` context, set these
+values. Replace `DEPLOYMENT` if the chart uses a name override. Set the two
+intervals to the deployed `EXTRA_CODEOWNERS_WORKER_LEASE_SECONDS` and
+`EXTRA_CODEOWNERS_RECONCILE_INTERVAL_SECONDS` values:
+
+```bash
+NAMESPACE=extra-codeowners
+RELEASE=extra-codeowners
+DEPLOYMENT=extra-codeowners
+WORKER_LEASE_SECONDS=120
+RECONCILE_INTERVAL_SECONDS=300
+RECONCILER_LEASE_SECONDS=$((RECONCILE_INTERVAL_SECONDS * 2))
+if [ "$RECONCILER_LEASE_SECONDS" -lt 300 ]; then
+  RECONCILER_LEASE_SECONDS=300
+fi
+DRAIN_WAIT_SECONDS="$WORKER_LEASE_SECONDS"
+if [ "$RECONCILER_LEASE_SECONDS" -gt "$DRAIN_WAIT_SECONDS" ]; then
+  DRAIN_WAIT_SECONDS="$RECONCILER_LEASE_SECONDS"
+fi
+```
+
+After webhook ingress is stopped and GitOps reconciliation is suspended,
+remove the HPA and drain the Deployment:
+
+```bash
+kubectl --namespace "$NAMESPACE" delete \
+  horizontalpodautoscaler "$DEPLOYMENT" --ignore-not-found
+kubectl --namespace "$NAMESPACE" scale \
+  deployment "$DEPLOYMENT" --replicas=0
+kubectl --namespace "$NAMESPACE" wait \
+  --for=delete pod \
+  --selector="app.kubernetes.io/instance=$RELEASE,app.kubernetes.io/component=application" \
+  --timeout=5m
+sleep "$DRAIN_WAIT_SECONDS"
+```
+
+Verify the drain before migration:
+
+```bash
+test "$(
+  kubectl --namespace "$NAMESPACE" get deployment "$DEPLOYMENT" \
+    --output=jsonpath='{.spec.replicas}'
+)" = "0"
+test -z "$(
+  kubectl --namespace "$NAMESPACE" get pods \
+    --selector="app.kubernetes.io/instance=$RELEASE,app.kubernetes.io/component=application" \
+    --output=name
+)"
+if kubectl --namespace "$NAMESPACE" get \
+  horizontalpodautoscaler "$DEPLOYMENT" >/dev/null 2>&1; then
+  echo "the autoscaler is still active" >&2
+  exit 1
+fi
+```
+
+All three checks are silent on success. If any check fails, stop. Find the
+controller that restored the resource, suspend it, and repeat the drain.
 
 ## 3. Create the backup
 
@@ -132,7 +221,7 @@ extra-codeowners database migrate --lock-timeout-seconds 60
 For version 0.1.0, success prints:
 
 ```text
-Database is at migration 0002_retry_dead_jobs.
+Database is at migration 0003_shared_head_epochs.
 ```
 
 The migrator:
@@ -154,33 +243,159 @@ It runs the target image with migration-only database settings. It does not
 inherit runtime environment sources, GitHub credential volumes, or App
 secrets.
 
+Before an upgrade to `0003_shared_head_epochs`, complete the Kubernetes drain
+in step 2. Confirm that no HPA, old worker, or reconciler remains. The
+pre-upgrade hook does not stop existing pods or suspend GitOps for you.
+
+Keep GitOps reconciliation suspended for both Helm updates below. Set
+`TARGET_CHART` to the reviewed chart path or immutable OCI reference, and set
+`TARGET_VALUES` to a complete reviewed values file. That file must name the
+target image by digest and explicitly declare the final autoscaling settings:
+
+```bash
+TARGET_CHART=/path/to/reviewed/extra-codeowners-chart
+TARGET_VALUES=/path/to/reviewed/target-values.yaml
+```
+
+Run the migration upgrade with autoscaling forced off. One target pod starts
+after the pre-upgrade hook succeeds:
+
+```bash
+helm upgrade "$RELEASE" "$TARGET_CHART" \
+  --namespace "$NAMESPACE" \
+  --reset-values \
+  --values "$TARGET_VALUES" \
+  --set autoscaling.enabled=false \
+  --set replicaCount=1 \
+  --wait \
+  --timeout=5m
+```
+
+Do not remove the temporary autoscaling override during this first update.
+Verify the database head and target pod in step 6 before you restore the final
+autoscaling configuration.
+If a GitOps platform does not let an operator perform these two ordered Helm
+updates while its reconciliation is suspended, stop and write a
+platform-specific plan that preserves the same drain, migration, and
+verification boundaries.
+
 The defaults allow 60 seconds for the advisory lock, set Kubernetes
 `backoffLimit` to `0`, and stop the complete Job after 180 seconds.
 A failed hook stops Helm before it replaces application pods. Preserve its logs
 before the default one-hour Job time-to-live expires.
 
-The old process may still be active while the pre-upgrade hook runs. Every
-revision must therefore avoid unbounded table rewrites, destructive operations,
-and external API calls during that overlap. This rule protects in-flight work;
-it does not promise compatibility between application versions at different
-migration heads.
+Unless an upgrade-ledger entry requires a full drain, the old process may
+still be active while the pre-upgrade hook runs. Every revision must avoid
+unbounded table rewrites, destructive operations, and external API calls
+during that overlap. This rule protects in-flight work; it does not promise
+compatibility between application versions at different migration heads.
 
 ## 6. Deploy and verify
 
-Run `database check` from the target artifact before starting the service.
-Then deploy it and confirm:
+For a package or container deployment, run `database check` from the target
+artifact before you start the service. Start only the target artifact.
+
+For Helm, the first `helm upgrade --wait` in step 5 has already started one
+target pod. Verify the hook's exact success message and that pod's rollout
+before the second update. Set `CHANGE_RECORD_DIR` to an existing,
+access-controlled directory outside the working tree. The second update
+deletes the first hook Job and its Kubernetes logs, so preserve that evidence
+now:
+
+```bash
+CHANGE_RECORD_DIR=/path/to/access-controlled/change-record
+FIRST_MIGRATION_LOG="$CHANGE_RECORD_DIR/extra-codeowners-0003-first-migration.log"
+test -d "$CHANGE_RECORD_DIR"
+test ! -e "$FIRST_MIGRATION_LOG"
+kubectl --namespace "$NAMESPACE" wait \
+  --for=condition=complete "job/$DEPLOYMENT-migrate" \
+  --timeout=5m
+(
+  umask 077
+  kubectl --namespace "$NAMESPACE" logs \
+    "job/$DEPLOYMENT-migrate" --container=migrate >"$FIRST_MIGRATION_LOG"
+)
+grep --fixed-strings --line-regexp \
+  'Database is at migration 0003_shared_head_epochs.' \
+  "$FIRST_MIGRATION_LOG"
+kubectl --namespace "$NAMESPACE" rollout status \
+  "deployment/$DEPLOYMENT" --timeout=5m
+test "$(
+  kubectl --namespace "$NAMESPACE" get deployment "$DEPLOYMENT" \
+    --output=jsonpath='{.status.readyReplicas}'
+)" = "1"
+```
+
+Every command must succeed. The exact migration line proves that the hook
+observed the target head; rollout status proves that the target pod passed its
+readiness probe.
+
+The first target pod should acquire the reconciler lease immediately because
+the drain waited out the old lease. At INFO level, its
+`reconciliation_complete` event is useful liveness evidence. It is not
+coverage evidence: the current scan can return a partial count after lease
+loss and can skip malformed GitHub records.
+
+Keep native code-owner enforcement active. Use a GitHub-side inventory,
+independent of Extra CODEOWNERS, to enumerate every repository available to
+the App and every open pull request in those repositories. For each pull
+request, verify a current-head check from the expected App. Rerequest a stale
+check; for a missing check, redeliver or recreate a mapped trigger. Wait for a
+blocking or completed current-head result. If you cannot complete that
+inventory, record the gap and retain the fail-closed maintenance posture.
+
+Then confirm:
 
 - `/health/ready` returns HTTP 200 and reports the database, worker, and
   reconciler ready
-- the migration Job ran once at the expected revision
+- the initial migration Job completed at the expected revision
 - pending queue depth returns to its normal range
-- reconciliation records a recent success
 - a disposable pull request receives a current-head check from the expected
   App.
 
-If ingress was paused, restore it only after every check passes. Inspect failed
-GitHub deliveries after the outage boundary and redeliver them manually.
-Confirm that scheduled reconciliation covers every open pull request.
+Keep ingress paused after these checks. Restore the reviewed final autoscaling
+settings with a second Helm update:
+
+```bash
+helm upgrade "$RELEASE" "$TARGET_CHART" \
+  --namespace "$NAMESPACE" \
+  --reset-values \
+  --values "$TARGET_VALUES" \
+  --wait \
+  --timeout=5m
+```
+
+The `before-hook-creation` policy deletes the first migration Job and its
+cluster logs before this second hook starts. Preserve and verify the second
+hook's evidence too:
+
+```bash
+SECOND_MIGRATION_LOG="$CHANGE_RECORD_DIR/extra-codeowners-0003-final-migration.log"
+test ! -e "$SECOND_MIGRATION_LOG"
+(
+  umask 077
+  kubectl --namespace "$NAMESPACE" logs \
+    "job/$DEPLOYMENT-migrate" --container=migrate >"$SECOND_MIGRATION_LOG"
+)
+grep --fixed-strings --line-regexp \
+  'Database is at migration 0003_shared_head_epochs.' \
+  "$SECOND_MIGRATION_LOG"
+```
+
+The second migrator takes the same advisory lock, confirms that the database
+is already at `0003_shared_head_epochs`, and exits without changing the
+schema.
+
+Verify the target Deployment and final autoscaling state. The HPA must exist
+when the reviewed values enable autoscaling and must be absent when they
+disable it. Then resume GitOps reconciliation and confirm that it does not
+reintroduce the old image, chart, or temporary autoscaling override.
+
+Restore webhook ingress only after those checks pass. Inspect failed GitHub
+deliveries after the outage boundary and redeliver them manually. Treat
+reconciliation output as advisory until the service reports strict,
+per-installation scan outcomes. Keep native enforcement active for any pull
+request whose current check you did not verify independently.
 
 ## Roll back the application
 
@@ -200,7 +415,8 @@ If the head changed, restore the verified pre-migration backup:
 5. Run `database check` from the previous application artifact.
 6. Point the previous deployment at the restored database.
 7. Verify current GitHub state. Redeliver every event after the recovery point
-   and wait for reconciliation before removing native protection.
+   and independently verify every accessible open pull request before removing
+   native protection. Reconciliation output alone is not coverage proof.
 
 Never restore over the only copy of the failed database. Never infer approval
 from queue rows recovered from a backup; the worker must fetch current GitHub

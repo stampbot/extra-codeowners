@@ -20,6 +20,8 @@ pull-request activity.
 | `/health/live` | HTTP 200 on every serving instance |
 | `/health/ready` | HTTP 200, with database and configured background tasks ready |
 | `extra_codeowners_queue_depth` | Returns to the local baseline after webhook bursts |
+| `extra_codeowners_shared_head_invalidation_depth` | Returns to `0`; a sustained value means exact-commit revocations are waiting |
+| `extra_codeowners_shared_head_invalidations_total{result="failed"}` | No unexplained increase |
 | `extra_codeowners_dead_jobs` | `0` |
 | `extra_codeowners_webhook_failures_total` | No unexplained increase |
 | `extra_codeowners_reconciliations_total{result="failure"}` | No unexplained increase |
@@ -37,10 +39,12 @@ healthy. Every node also needs an accurate UTC clock. Clock skew can break
 GitHub authentication, setup-state expiry, and database leases.
 
 Reconciliation requests work only for open pull requests that do not already
-have a queue row. A reconciled check briefly returns to `in_progress` while
-the worker fetches current evidence. Choose an interval that balances that
-short merge interruption against stale-evidence exposure, GitHub API use, and
-your recovery objective.
+have a queue row. When the response includes a canonical head, the database
+advances that head's shared generation in the same transaction that inserts
+the row. A reconciled check briefly returns to `in_progress` while the worker
+fetches current evidence. Choose an interval that balances that short merge
+interruption against stale-evidence exposure, GitHub API use, and your recovery
+objective.
 
 The service does not expose remaining GitHub rate-limit quota. Watch API
 failures instead, and keep the service limited to disposable repositories
@@ -67,8 +71,11 @@ Set it long enough to cover GitHub redelivery and incident investigation, but
 don't retain private metadata longer than you can justify.
 
 The elected reconciler prunes expired delivery IDs and logs
-`webhook_deliveries_pruned` when it removes any. Disabling reconciliation
-also disables automatic pruning.
+`webhook_deliveries_pruned` when it removes any. It also prunes old shared-head
+rows, but only after the latest generation was invalidated, no evaluation
+references that installation, repository, and head, and no invalidation lease
+remains. Those removals use the `shared_head_epochs_pruned` log event.
+Disabling reconciliation disables both cleanup tasks.
 
 An expired ID may be accepted again if GitHub redelivers it. That does not
 restore old authorization evidence. The delivery creates or coalesces a fresh
@@ -159,33 +166,57 @@ The command prints only aggregate counts:
 pending=N dead=N
 ```
 
-Both counts combine pull-request evaluation and authority fan-out jobs.
-Ordinary failures remain pending, so `dead` should be zero. Migration
-`0002_retry_dead_jobs` reactivates terminal rows from the earlier
-pre-release retry contract. Treat a later terminal row as incompatible or
-manually introduced state and investigate it.
+`pending` combines exact-head invalidation, pull-request evaluation, and
+authority fan-out. `dead` covers only legacy or manually introduced evaluation
+and authority rows. Ordinary failures remain pending, so `dead` should be
+zero. Migration `0002_retry_dead_jobs` reactivates terminal rows from the
+earlier pre-release retry contract. Treat a later terminal row as incompatible
+or manually introduced state and investigate it.
 
-Authority work runs before ordinary pull-request work. Installation-wide work
-splits into repository fences. Repository-wide work replaces older
-base-specific rows, and more than 100 distinct base refs for one repository
-collapse into a conservative repository-wide job.
+Exact-head invalidation runs first, then authority work, then ordinary
+pull-request evaluation. Installation-wide authority work splits into
+repository fences. Repository-wide work replaces older base-specific rows, and
+more than 100 distinct base refs for one repository collapse into a
+conservative repository-wide job.
 
 For a mapped pull-request, review, or check-rerequest delivery, ingress stores
 the trigger and then makes a bounded attempt to move the managed check to
 `in_progress`. If a fast-path API call fails or times out, the service logs
 `webhook_check_invalidation_deferred`, increments the webhook failure
-counter with reason `invalidation_fast_path`, and still returns `202`
-because the durable job remains authoritative.
+counter with reason `invalidation_fast_path`, and still returns `202` because
+the exact-head invalidation row remains authoritative.
 
 If the evaluator is unavailable, ingress retains the delivery but returns
 `503`. Redeliver after recovery.
 
-Before reading mutable approval evidence, the worker keeps the current-head
-check `in_progress`. A later trigger, an exception, or unresolved authority
-fan-out therefore remains blocking. Evaluation and authority failures retry
-forever. Ordinary exponential delay stops growing at
+The exact-head worker updates an existing managed check by ID and queues every
+open pull request that GitHub currently reports on that commit. It does not
+create a check for a historical commit. Logs use
+`shared_head_invalidation_completed`, `shared_head_invalidation_failed`,
+`shared_head_invalidation_superseded`, and
+`shared_head_invalidation_lease_lost` to distinguish completion, retry, and
+fencing.
+
+Before reading mutable approval evidence, the evaluation worker keeps the
+current-head check `in_progress`. It cannot publish until the exact-head
+generation finishes. A later trigger, an exception, or unresolved authority
+fan-out therefore remains blocking. Invalidation, evaluation, and authority
+failures retry forever. Ordinary exponential delay stops growing at
 `EXTRA_CODEOWNERS_WORKER_RETRY_MAX_SECONDS`; GitHub rate limits use their
 own bounded delay.
+
+An error or cancellation during the completed write is a special case because
+GitHub may have applied the result before the client lost its response. The
+same uncertainty applies to a database error or cancellation during the
+post-publication check. The worker attempts a shielded reset to `in_progress`
+while it still holds the head writer guard and then preserves the original
+failure for retry. The
+`completed_check_blocking_reset_failed` and
+`completed_check_blocking_reset_cancelled` events mean the reset request itself
+failed or ended cancelled. An ordinary evaluation cancellation that completes
+the shielded reset emits neither event. A hard process stop or failed reset can
+leave the completed result visible, so keep native enforcement in place and
+verify that durable retry or a later trigger restores the blocking check.
 
 A long-lived `in_progress` check with repeated failures needs a database,
 network, credential, permission, or GitHub recovery. It does not need a
@@ -196,13 +227,15 @@ manufactured result.
 If GitHub did not receive a successful response, restore service health and use
 **Redeliver**. GitHub doesn't redeliver failures on its own.
 
-A duplicate direct trigger can resume a deferred invalidation attempt.
-Otherwise, delivery deduplication leaves the committed job in place. Scheduled
-reconciliation creates a job only when none exists.
+A duplicate direct trigger can retry the bounded fast path. Otherwise,
+delivery deduplication leaves the committed exact-head invalidation and
+evaluation in place. Scheduled reconciliation creates work only when the pull
+request has no evaluation row.
 
 Fix the dependency, credential, permission, or policy problem and let pending
-work retry. Don't reset attempts to accelerate a retry storm. Use
-`requeue-dead` only for a legacy or manually introduced terminal row.
+work retry. A nonzero exact-head invalidation depth means evaluations cannot
+publish at that generation. Don't reset attempts to accelerate a retry storm.
+Use `requeue-dead` only for a legacy or manually introduced terminal row.
 
 Never mark work complete in the database or publish a success manually.
 

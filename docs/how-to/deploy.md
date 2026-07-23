@@ -305,11 +305,20 @@ previously verified compatible image, keep native code-owner enforcement in
 place and preserve the database and sanitized logs for investigation.
 
 The Helm chart runs a bounded pre-upgrade migration Job and uses a `Recreate`
-Deployment strategy. The old process may remain active while the hook runs,
-but old and new application pods do not overlap after the hook. Expect a short
-webhook interruption. GitHub does not automatically redeliver failed
-deliveries, so inspect and redeliver them after readiness returns. Then confirm
-that reconciliation is converging every open pull request.
+Deployment strategy. `Recreate` prevents old and new application pods from
+overlapping after the hook, but it does not stop old pods before the hook.
+Before `0003_shared_head_epochs`, route webhook traffic away and scale the old
+Deployment to zero. An HPA or GitOps controller can undo that scale operation,
+so suspend reconciliation and remove the HPA first. Follow the
+[controller-safe drain procedure](upgrade.md#drain-a-kubernetes-release), wait
+for termination and both the worker and reconciler lease periods, and then
+start the upgrade.
+
+Expect a webhook interruption. GitHub does not automatically redeliver failed
+deliveries, so inspect and redeliver them after readiness returns.
+Reconciliation output is advisory; independently inventory accessible open
+pull requests and retain native enforcement for any current check you did not
+verify.
 
 Keep one replica and `Recreate` until you have tested the selected versions,
 database schema, leases, and termination behavior together. Use

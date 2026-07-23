@@ -21,12 +21,13 @@ still owns changes to application code, workflows, and Stampbot's own policy.
 > [!CAUTION]
 > Extra CODEOWNERS is alpha software. Do not replace GitHub's native **Require
 > review from Code Owners** rule on a production repository yet. GitHub attaches
-> a Check Run to a commit rather than to one pull request, which leaves an
-> unresolved stale-success window when the same commit appears in another pull
-> request. [Issue #1](https://github.com/stampbot/extra-codeowners/issues/1)
-> tracks the live proof and fix. Neither releases nor public images are
-> supported, and there is no hosted service or Marketplace Action. An older
-> public GHCR preview remains discoverable; do not deploy it. See the
+> a Check Run to a commit rather than to one pull request. Extra CODEOWNERS now
+> records and retries an exact-commit revocation when a pull request reuses that
+> commit, but the control still needs live GitHub proof.
+> [Issue #1](https://github.com/stampbot/extra-codeowners/issues/1) tracks that
+> proof. Neither releases nor public images are supported, and there is no
+> hosted service or Marketplace Action. An older public GHCR preview remains
+> discoverable; do not deploy it. See the
 > [current project status](docs/reference/project-status.md) before testing it.
 
 ## Why a separate check?

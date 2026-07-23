@@ -21,7 +21,16 @@ EVALUATION_SECONDS = Histogram(
     "extra_codeowners_evaluation_seconds",
     "Time spent evaluating one pull request",
 )
-QUEUE_DEPTH = Gauge("extra_codeowners_queue_depth", "Pending durable evaluation jobs")
+QUEUE_DEPTH = Gauge("extra_codeowners_queue_depth", "Pending durable work items")
+SHARED_HEAD_INVALIDATION_DEPTH = Gauge(
+    "extra_codeowners_shared_head_invalidation_depth",
+    "Exact commit generations awaiting durable Check Run invalidation",
+)
+SHARED_HEAD_INVALIDATIONS = Counter(
+    "extra_codeowners_shared_head_invalidations_total",
+    "Durable exact-head invalidation attempts",
+    ("result",),
+)
 DEAD_JOBS = Gauge(
     "extra_codeowners_dead_jobs",
     "Legacy terminal rows that startup should automatically reactivate",

@@ -1003,6 +1003,70 @@ async def test_has_check_run_ignores_foreign_and_malformed_runs(private_key: str
 
 
 @pytest.mark.asyncio
+async def test_existing_check_id_and_reset_never_post_a_new_check(private_key: str) -> None:
+    methods: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/access_tokens"):
+            return httpx.Response(201, json=token_response())
+        methods.append(request.method)
+        if request.method == "GET":
+            return httpx.Response(
+                200,
+                json={
+                    "check_runs": [
+                        {"id": 99, "name": "check", "app": {"id": 1}},
+                    ]
+                },
+            )
+        assert request.method == "PATCH"
+        assert request.url.path.endswith("/check-runs/99")
+        payload = json.loads(request.content)
+        assert payload["status"] == "in_progress"
+        assert "conclusion" not in payload
+        return httpx.Response(200, json={"id": 99})
+
+    client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
+    check_run_id = await client.existing_check_run_id(
+        2,
+        "example/project",
+        "a" * 40,
+        "check",
+    )
+    assert check_run_id == 99
+    await client.reset_check_run(
+        2,
+        "example/project",
+        check_run_id,
+        "check",
+        title="reset",
+        summary="pending",
+    )
+    assert methods == ["GET", "PATCH"]
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_reset_check_rejects_changed_response_id(private_key: str) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/access_tokens"):
+            return httpx.Response(201, json=token_response())
+        return httpx.Response(200, json={"id": 100})
+
+    client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
+    with pytest.raises(GitHubError, match="changed the requested check ID"):
+        await client.reset_check_run(
+            2,
+            "example/project",
+            99,
+            "check",
+            title="reset",
+            summary="pending",
+        )
+    await client.close()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("status", "conclusion", "message"),
     [

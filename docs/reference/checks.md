@@ -23,11 +23,33 @@ Standard `CODEOWNERS` lookup follows GitHub's precedence: `.github/CODEOWNERS`, 
 
 ## Evaluation sequence
 
-For an open pull request in an enrolled repository, Extra CODEOWNERS:
+Exact-head invalidation is a worker phase that runs before authority fan-out
+and ordinary pull-request evaluation:
 
-1. Fetches the pull request and records its current base and head revisions. The authoritative `base.repo.full_name` must match the queued repository. A mismatch is discarded before any policy read or Check Run write, so a delayed old-name delivery cannot revive work after a rename or transfer.
-2. Creates or updates the App's named Check Run on the head as `in_progress`. This revokes an earlier success before mutable approval evidence is collected. A repository with no policy and no existing managed check remains unenrolled and gets no check.
-3. Confirms that the worker still owns the current leased database generation. A newer trigger leaves the check blocking for the superseding generation.
+1. The worker claims one pending generation for an exact commit.
+2. If this App already owns its named Check Run on that commit, the worker
+   updates it by ID to `in_progress`. Exact-head invalidation never creates a
+   check.
+3. It fetches current state for every pull-request candidate GitHub reports and
+   queues each one that remains open on the commit.
+4. It marks that exact generation invalidated only after the reset and fan-out
+   finish. A lost lease or newer generation leaves the work pending.
+
+After exact-head invalidation, Extra CODEOWNERS evaluates an open pull request
+in an enrolled repository:
+
+1. Fetches the pull request and records its current base and head revisions.
+   The authoritative `base.repo.full_name` must match the queued repository. A
+   mismatch is discarded before any policy read or Check Run write, so a
+   delayed old-name delivery cannot revive work after a rename or transfer.
+2. Creates or updates the App's named Check Run on the current pull-request
+   head as `in_progress`. This revokes an earlier success before mutable
+   approval evidence is collected. A repository with no policy and no existing
+   managed check remains unenrolled and gets no check.
+3. Confirms that the worker still owns the current leased pull-request
+   generation. The captured shared generation must be current and its
+   exact-head invalidation must have finished. A newer direct trigger on any
+   pull request using that head leaves the check blocking.
 4. Loads and validates repository policy. When policy is enabled, it also loads organization policy and standard `CODEOWNERS` from their defined revisions. Disabled policy finishes with a diagnostic failure instead of collecting approval evidence.
 5. For enabled policy, checks the reported changed-file count, then paginates GitHub's pull-files API. API or transport failures leave the check blocking while the durable job retries. A count of 3,000 or more produces a diagnostic failure because GitHub cannot prove that the list is complete.
 6. Evaluates both the old and new path of every rename.
@@ -35,10 +57,26 @@ For an open pull request in an enrolled repository, Extra CODEOWNERS:
 8. Accepts a qualifying human's latest effective approval only when that review targets the exact current head.
 9. Otherwise, considers application approvals for the current head. The review actor and independently fetched App metadata must match organization enrollment. The delegation must match the path and owner set, and its label restrictions must all pass.
 10. Rejects application substitution for every effective non-delegable path.
-11. Fetches the pull request again before publication. A changed state, base ref, base commit, head commit, changed-file count, or label set discards the result and queues another evaluation.
-12. Under the publication guards, rechecks the evaluation generation and the installation authority epoch stored when the row was enqueued. It also refuses to finish while relevant authority fan-out is pending, including during retry backoff.
+11. Fetches the pull request again before publication. A closed pull request
+    stops here. If the pull request remains open but its base ref, base commit,
+    head commit, changed-file count, or label set changed, the worker discards
+    the result. It advances the current head's shared generation and queues
+    another evaluation in the same transaction.
+12. Under the publication guards, rechecks the pull-request generation, the
+    shared-head generation, its completed exact-head invalidation, and the
+    installation authority epoch stored when the row was enqueued. It also
+    refuses to finish while relevant authority fan-out is pending, including
+    during retry backoff.
 13. Before publishing success, confirms that the head belongs to exactly this one open pull request. A shared head produces failure because GitHub Check Runs belong to commits, not individual pull requests.
-14. Checks for a newer generation again after GitHub accepts the completed Check Run. If a trigger raced with publication, the service immediately returns the check to `in_progress` for the next evaluation.
+14. Rechecks the evaluation claim immediately before the completed Check Run
+    write. It treats an exception or cancellation during that write as an
+    uncertain outcome because GitHub may already have applied it. The service
+    attempts a shielded reset to `in_progress` before releasing the head writer
+    guard, then preserves the original failure.
+15. Checks the pull-request claim, shared-head generation, and completed
+    invalidation again after a completed write returns. A lost claim, changed
+    generation, database error, or task cancellation also triggers the
+    shielded reset. Database errors remain pending for retry.
 
 GitHub documents the 3,000-file ceiling in [List pull request files](https://docs.github.com/en/rest/pulls/pulls#list-pull-requests-files). Extra CODEOWNERS fails at exactly 3,000 because it cannot tell whether GitHub truncated that response.
 
@@ -55,7 +93,16 @@ The service applies these limits before it can authorize a pull request:
 | Current human approvals multiplied by relevant same-organization CODEOWNER teams | At most 250 | A larger membership-query set produces a diagnostic failure instead of skipping teams. |
 | Conservative changed-path and policy-pattern estimate | At most 2,000,000 matches | A larger estimate produces a diagnostic failure before expensive matching. The estimate reserves two paths for every changed file to cover renames. |
 
-Changed-file, review, membership, and match-operation limits produce failure without truncating or skipping authorization evidence. Oversized policy and `CODEOWNERS` fetches follow the blocking retry behavior in the table. Other GitHub API, rate-limit, transport, and database exceptions also keep an existing check blocking and leave the job pending. Large pull requests must be split, or redundant policy and `CODEOWNERS` patterns reduced. Ownership must not be weakened to fit the budget.
+Changed-file, review, membership, and match-operation limits produce failure
+without truncating or skipping authorization evidence. Oversized policy and
+`CODEOWNERS` fetches follow the blocking retry behavior in the table.
+Exceptions before completed publication keep an existing check blocking and
+leave the job pending. An uncertain completed write or post-publication
+database exception triggers the shielded reset described above. If that GitHub
+request fails, the completed result can remain visible while the job retries.
+
+Large pull requests must be split, or redundant policy and `CODEOWNERS`
+patterns reduced. Ownership must not be weakened to fit the budget.
 
 ## Authority fan-out order and bounds
 
@@ -67,9 +114,18 @@ The worker claims authority work from broadest scope to narrowest:
 
 An installation-wide job creates a current repository-wide fence for each accessible, unarchived target. A repository-wide job removes older base-specific rows for that installation and repository because it covers every open pull request there.
 
+For each affected open pull request, fan-out advances the exact-head
+invalidation generation and queues evaluation in one transaction. It then
+attempts a best-effort fast reset. A successful reset does not create another
+generation.
+
 Repeated pushes to one base ref coalesce. One installation and repository may retain at most 100 distinct base-ref rows. A 101st distinct ref replaces them with one repository-wide job, which reevaluates all open pull requests while bounding queue growth from contributor-controlled branch names.
 
-Evaluation and authority exceptions remain pending. Ordinary failures retry indefinitely with exponential backoff capped by `EXTRA_CODEOWNERS_WORKER_RETRY_MAX_SECONDS`. A GitHub rate-limit response uses its own bounded provider delay. Authority invalidation cannot be abandoned after a dependency failure because an earlier success may still be visible.
+Exact-head invalidation, evaluation, and authority exceptions remain pending.
+Ordinary failures retry indefinitely with exponential backoff capped by
+`EXTRA_CODEOWNERS_WORKER_RETRY_MAX_SECONDS`. A GitHub rate-limit response uses
+its own bounded provider delay. Invalidation cannot be abandoned after a
+dependency failure because an earlier success may still be visible.
 
 ## Owner-set behavior
 
@@ -139,7 +195,7 @@ The result for each terminal or retry condition is listed below.
 
 | Condition | Check behavior |
 | --- | --- |
-| Evaluation is running, retrying after a dependency exception, or superseded by newer evidence | Keep the managed check `in_progress`. Pending work retries indefinitely with bounded delay. |
+| Exact-head invalidation or evaluation is running, retrying after a dependency exception, or superseded by newer evidence | Keep the managed check `in_progress`. Pending work retries indefinitely with bounded delay. |
 | Relevant authority fan-out is pending or retrying | Keep the check `in_progress` until the fan-out succeeds. Do not bypass or manually complete it. |
 | Every owned path's owner set is satisfied and evidence remains current | Publish `success` for the evaluated head. |
 | A required human or application approval is missing or ineligible | Publish `failure` with the unresolved owner sets and paths. |
@@ -167,13 +223,42 @@ The GitHub adapter caps the output title at 255 characters. Summary and detail t
 
 ## Eventual consistency
 
-Webhook processing and Check Run display are eventually consistent. For a mapped pull-request or review trigger, ingress first records the delivery and then makes a bounded attempt to set the managed check to `in_progress`. A repository with no policy and no previous managed check is skipped.
+Webhook processing and Check Run display are eventually consistent. For a
+mapped pull-request or review trigger, ingress records the delivery, exact-head
+invalidation, and evaluation together. It then makes a bounded attempt to set
+the managed check to `in_progress`. A repository with no policy and no previous
+managed check is skipped.
 
-A fast-path timeout or GitHub API error is logged and acknowledged after durable acceptance. GitHub does not automatically redeliver failed webhooks, so the durable worker remains authoritative. It puts the check into a blocking state before collecting mutable evidence and restores that state if publication races with a newer trigger.
+A fast-path timeout or GitHub API error is logged and acknowledged after
+durable acceptance. GitHub does not automatically redeliver failed webhooks,
+so the exact-head invalidation worker remains authoritative. It resets an
+existing managed check on the accepted commit and fetches every associated
+candidate GitHub returns. Evaluation waits until that generation finishes.
 
-GitHub [creates a Check Run for a commit](https://docs.github.com/en/rest/checks/runs#create-a-check-run), while changed paths, labels, base revision, and reviews belong to a pull request. The publication-time uniqueness check prevents success when another open pull request already uses the head. It cannot stop a pull request opened or retargeted later from temporarily inheriting that commit's earlier success. The next webhook or scheduled reconciliation invalidates it, but neither mechanism removes the window.
+The GitHub reset can still fail after the database accepted the event. A hard
+process stop or API failure can leave the completed result visible until fast
+invalidation or durable retry reaches GitHub.
 
-This commit-to-pull-request inheritance window blocks production use. Extra CODEOWNERS does not provide native-equivalent enforcement until the window is removed or live GitHub contract testing proves a safe control.
+GitHub [creates a Check Run for a commit](https://docs.github.com/en/rest/checks/runs#create-a-check-run),
+while changed paths, labels, base revision, and reviews belong to a pull
+request. The publication-time uniqueness check prevents success when another
+open pull request already uses the head. It cannot stop a pull request opened
+or retargeted later from temporarily inheriting that commit's earlier success.
+Acceptance makes revocation for the payload's exact head durable, even if the
+originating pull request closes or moves before a worker reaches it. Scheduled
+reconciliation creates the same kind of exact-head work when it recovers a
+missing evaluation. Neither mechanism removes the period before GitHub
+delivers an event and the service accepts it.
+
+Shared-head discovery paginates GitHub's commit-to-pulls endpoint and fails
+closed if it receives a 101st candidate. The service fetches and validates the
+current state of every returned candidate. The response has no completeness
+marker, so an omitted candidate remains undetectable. Live contract testing in
+issue #1 must establish whether that provider assumption is acceptable.
+
+This commit-to-pull-request inheritance window still blocks production use.
+Extra CODEOWNERS does not provide native-equivalent enforcement until live
+GitHub contract testing proves the durable control against GitHub's behavior.
 
 Durable routes use mutable `owner/repository` names rather than immutable repository IDs. Each evaluation row therefore records the installation authority epoch current at enqueue time. A repository rename, transfer, or installation-owner rename advances that epoch and schedules installation-wide fan-out.
 

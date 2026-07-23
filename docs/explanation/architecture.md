@@ -27,6 +27,8 @@ flowchart LR
     GH[GitHub webhook] --> Ingress[Authenticated ingress]
     Ingress --> Queue[(Durable work and audit store)]
     Ingress --> Fast[Bounded check invalidation]
+    Queue --> Invalidate[Exact-head invalidation worker]
+    Invalidate --> Queue
     Queue --> Fanout[Authority fan-out worker]
     Fanout --> Queue
     Queue --> Worker[Pull-request worker]
@@ -41,10 +43,14 @@ trigger also gets a short opportunity to move the managed check back to
 `in_progress`. Changes with wider authority impact—such as team membership,
 policy, repository identity, or installation scope—enter a fan-out queue.
 
-The pull-request worker fetches the current base, head, changed files, reviews,
-team state, CODEOWNERS, and both policy scopes. The pure evaluator returns a
-decision and explanation. The worker publishes only after proving that the
-revisions, queue generation, and authority state are still current.
+The durable worker drains exact-head invalidation first. That phase resets an
+existing managed check on the affected commit and queues every returned
+candidate that is still open on that commit. Authority fan-out runs next.
+Ordinary pull-request work then fetches the current base, head, changed files,
+reviews, team state, CODEOWNERS, and both policy scopes. The pure evaluator
+returns a decision and explanation. The worker publishes only after proving
+that the revisions, queue generation, completed invalidation, and authority
+state are still current.
 
 The scheduled reconciler supplies work for accessible open pull requests that
 have gone idle. It is recovery for a missed event, not a source of stronger
@@ -56,23 +62,34 @@ consistency.
 before parsing any field that can affect authorization. For mapped events,
 `X-GitHub-Delivery` is the deduplication key.
 
-Ingress records the delivery and its pull-request or authority work in one
-database transaction. Repeated triggers for one installation, repository, and
-pull request coalesce behind a generation counter. An older worker cannot
-delete work that arrived during its evaluation.
+Ingress records a direct delivery, its pull-request work, and a pending
+revocation for the payload's exact head in one database transaction. The
+delivery also remembers the exact shared-head generation it created. A
+redelivery gets that same token; it cannot borrow a newer generation.
+
+Repeated triggers for one installation, repository, and pull request coalesce
+behind a generation counter. The shared-head generation is separate because a
+Check Run belongs to a commit, not to one pull request. An older worker cannot
+delete new work or replace another pull request's revocation with stale
+evidence.
 
 Direct pull-request, review, and check-rerequest events use a bounded fast path.
 After the durable transaction commits, ingress fetches the current pull request
-and policy and tries to create or update the App's Check Run as `in_progress`.
-If policy has disappeared but the App still owns a check of that name on the
-head, the fast path invalidates that check too. A repository with neither
-policy nor an existing managed check is not enrolled and produces no check.
+and tries to reset the App's check on the accepted head to `in_progress`. The
+generation token prevents a delayed handler from resetting a newer completed
+result. If the pull request already moved to another head, ingress records
+separate work for the live head and keeps the accepted head's revocation.
+
+The fast path updates an existing managed check even when policy has
+disappeared. It creates a check only when the accepted head is still the
+current head of an open pull request and policy exists. A closed or historical
+head with no managed check stays untouched.
 
 The fast path is best effort. Its timeout is bounded by
 `EXTRA_CODEOWNERS_WEBHOOK_INVALIDATION_TIMEOUT_SECONDS` and remains below
 GitHub's delivery deadline. Once work is safely stored, an API error or timeout
-is logged and counted, but ingress still returns `202`. The worker remains the
-authority and makes the check blocking before evaluation.
+is logged and counted, but ingress still returns `202`. The exact-head
+invalidation worker remains authoritative.
 
 Authority events need stricter ordering. Before an installation-wide authority
 epoch can advance, ingress acquires a database-backed publication guard. If it
@@ -86,6 +103,52 @@ acknowledged without retention, and the App's own check updates do not feed
 back into its queue. If the process has no evaluator, it stores a mapped direct
 delivery but returns `503`; it cannot claim the work will converge without a
 worker.
+
+## Durable exact-head invalidation
+
+Each shared-head row carries two generation values. `generation` is the newest
+accepted work. `invalidated_generation` is the newest generation whose exact
+Check Run reset and pull-request fan-out finished. A gap between them is
+durable queue work.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Pending: accept trigger
+    Pending --> Leased: claim exact generation
+    Leased --> Pending: retry or rate limit
+    Leased --> Invalidated: reset existing check and fan out
+    Leased --> Pending: newer generation
+    Invalidated --> [*]: evaluations may publish
+```
+
+Workers claim this queue before authority fan-out or ordinary evaluation. The
+claim has a renewable lease. Before the worker sends a mutating GitHub request,
+it checks the lease owner, expiry, and generation while holding the
+installation-and-head writer guard. A replacement owner or newer generation
+therefore fences the old worker before its reset.
+
+The worker looks up the existing Check Run by App, name, repository, and exact
+head, then updates that run by ID. It never creates a check while processing a
+historical head. If no managed check exists, the revocation finishes without a
+GitHub write. There is nothing to reset.
+
+Next, the worker asks GitHub which pull requests use the commit. It rejects
+malformed or contradictory responses. It fetches every returned candidate and
+confirms its current number, state, head, and base repository. The worker
+queues only candidates that are now open on the exact commit, at the same
+shared generation. A pull request that has moved to another head keeps its
+newer work.
+
+The client paginates the commit-to-pulls endpoint and fails closed if GitHub
+returns a 101st candidate. GitHub does not provide a completeness marker, so
+the worker cannot detect an omitted pull request. Every returned candidate gets
+an authoritative read; the candidate set itself remains a provider assumption
+that issue #1 must test on live GitHub.
+
+Failures remain pending with bounded backoff, and GitHub rate limits use their
+own delay. An evaluation can publish only when its captured generation equals
+both the current generation and `invalidated_generation`. This makes the
+revocation a prerequisite, not a best-effort side effect.
 
 ## Durable authority ordering
 
@@ -138,13 +201,33 @@ then applies several publication fences:
 
 - the base and head still match
 - the pull-request generation is still current
+- the shared generation for the head commit is still current
+- the same shared generation has finished exact-head invalidation
 - the enqueue-time authority epoch is still current
 - no relevant authority fan-out remains pending or retrying
 - the publication guard permits this write.
 
-After writing a completed Check Run, the worker checks its generation once
-more. If a direct trigger committed during publication, it restores the check
-to `in_progress`, leaving the newer generation to evaluate next.
+The worker checks the pull-request claim and shared generation while it holds
+the same head-level guard used for Check Run writes. Shared-head discovery can
+take many GitHub calls, so it checks the pull-request claim again immediately
+before publishing.
+
+A completed write can have an uncertain outcome when the client raises or is
+cancelled: GitHub may have applied the result before the response was lost.
+After a completed write returns, the worker rechecks both the claim and shared
+generation. An uncertain write, lost claim, changed generation, database error,
+or task cancellation triggers a shielded reset to `in_progress` before the
+guard is released. The original error remains retryable.
+
+The queued head can be stale, and the final pull-request read can uncover a
+missed head, base, or label change. In either case, the worker advances the
+live head's shared generation and queues replacement work in one transaction.
+That makes every older claim for the commit stale, including claims held by
+workers evaluating another pull request.
+
+That reset is still a GitHub API request. A hard process stop can interrupt it,
+and GitHub can reject or time it out. In either case, a completed result may
+remain visible until fast invalidation or durable retry reaches GitHub.
 
 Pull-request and authority failures stay pending. They retry indefinitely with
 exponential backoff capped by
@@ -159,15 +242,25 @@ Webhooks are a change signal, not a complete recovery system. The endpoint may
 be unavailable, GitHub may not redeliver, and access loss can make an old check
 unreachable. The reconciler covers the recoverable middle ground.
 
-At each interval, one elected reconciler scans accessible open pull requests
-and creates work only when a pull request has no evaluation job. It leaves
-active and backoff-delayed jobs alone so a slow scan cannot reset retry state or
-starve long-running work. An idle pull request is reconsidered each interval,
-which temporarily moves its check to `in_progress`.
+At each interval, one elected reconciler scans accessible open pull requests.
+When a pull request has no evaluation job and GitHub supplies a canonical head,
+one transaction advances that head's shared generation, makes its exact-head
+invalidation pending, and inserts the evaluation. If the internal job did not
+know its head when queued, its first authoritative pull-request read advances
+the head and binds the evaluation in one transaction. A lost claim rolls back
+that tentative advancement.
 
-The same singleton lease controls pruning of delivery IDs older than the
-configured retention period. Long scans renew the lease between installations.
-The organization-policy repository is never included in reconciliation.
+If an evaluation row already exists, reconciliation changes neither row nor
+generation. This fences an in-flight evaluation when reconciliation recovers
+genuinely missing work without resetting active or backoff-delayed jobs. An
+idle pull request is reconsidered each interval, which temporarily moves its
+check to `in_progress`.
+
+The same singleton lease controls pruning of delivery IDs and old shared-head
+rows. A shared-head row is eligible only after its latest generation was
+invalidated, no evaluation references it, and no invalidation lease remains.
+Long scans renew the lease between installations. The organization-policy
+repository is never included in reconciliation.
 
 A shorter interval narrows some missed-event windows but spends more GitHub API
 budget and causes more temporary blocking. It does not make the system strongly
@@ -198,28 +291,29 @@ A successful webhook response means that the trigger is durably queued. It is
 not a merge decision.
 
 ```text
-GitHub             ingress             durable store        worker
+GitHub             ingress             durable store        workers
   | signed event      |                       |                 |
   |------------------>| verify and store      |                 |
-  |                    |---------------------->| new generation  |
+  |                    |---------------------->| generation,     |
+  |                    |                       | revocation, job |
   |<------------------| 202 after durable work|                 |
-  |                    |                       |---------------> |
-  |<------------------------------------------------------------| fetch current evidence
-  |------------------------------------------------------------>| evidence
-  |                    |                       |     evaluate and recheck fences
-  |<------------------------------------------------------------| complete exact-head check
-  |                    |                       |<--------------- | verify generation again
+  |                    |                       |---------------> | reset exact-head check
+  |<------------------------------------------------------------| PATCH existing check
+  |                    |                       |---------------> | evaluate current PR
+  |<------------------------------------------------------------| publish after all fences
 ```
 
-The quick invalidation can happen before or after the `202` depending on the
-trigger and API timing. The completed result comes only from the worker after
-fresh evidence and the final fences.
+Ingress attempts the quick invalidation before returning `202`. If the request
+times out, GitHub may still apply it after the response. Either way, the durable
+reset has to finish before an evaluation may publish. A completed result comes
+only after fresh evidence and the final fences.
 
 ## Durable store and deployment
 
 SQLite keeps local development simple. Production startup requires PostgreSQL
-because all instances must share delivery deduplication, queue leases, retry
-state, authority epochs, publication guards, and audit records.
+because all instances must share delivery deduplication, exact-head
+invalidation progress, queue leases, retry state, authority and shared-head
+generations, publication guards, and audit records.
 
 PostgreSQL operations use fixed fail-fast budgets: three seconds to connect,
 two seconds to obtain a pooled connection, and three seconds for an ordinary

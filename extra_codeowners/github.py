@@ -1138,6 +1138,61 @@ class GitHubClient:
             is not None
         )
 
+    async def existing_check_run_id(
+        self,
+        installation_id: int,
+        repository: str,
+        head_sha: str,
+        check_name: str,
+    ) -> int | None:
+        """Return this App's latest exact check ID without creating one."""
+        return await self._latest_check_run_id(
+            installation_id,
+            repository,
+            head_sha,
+            check_name,
+        )
+
+    async def reset_check_run(
+        self,
+        installation_id: int,
+        repository: str,
+        check_run_id: int,
+        check_name: str,
+        *,
+        title: str,
+        summary: str,
+        text: str = "",
+        details_url: str | None = None,
+        external_id: str | None = None,
+    ) -> None:
+        """PATCH one known App check to blocking state without a POST fallback."""
+        payload: dict[str, Any] = {
+            "name": check_name,
+            "status": "in_progress",
+            "started_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+            "output": {
+                "title": title[:255],
+                "summary": summary[:65535],
+                "text": text[:65535],
+            },
+        }
+        if details_url is not None:
+            payload["details_url"] = details_url
+        if external_id is not None:
+            payload["external_id"] = external_id[:255]
+        result = await self._request(
+            "PATCH",
+            f"/repos/{repository}/check-runs/{check_run_id}",
+            installation_id=installation_id,
+            json=payload,
+        )
+        candidate = result.get("id")
+        if not isinstance(candidate, int) or isinstance(candidate, bool):
+            raise GitHubError("check-run response omitted its integer ID")
+        if candidate != check_run_id:
+            raise GitHubError("check-run response changed the requested check ID")
+
     async def upsert_check_run(
         self,
         installation_id: int,
