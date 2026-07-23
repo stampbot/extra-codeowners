@@ -36,12 +36,13 @@ WEBHOOK_DELIVERY_LIST_LIMIT: Final = 300
 WEBHOOK_DELIVERY_PAGE_LIMIT: Final = 3
 WEBHOOK_DELIVERY_PAGE_SIZE: Final = 100
 WEBHOOK_CAPTURE_SECONDS: Final = 30
+REPOSITORY_RECOVERY_ATTEMPTS: Final = 6
+REPOSITORY_RECOVERY_INTERVAL_SECONDS: Final = 5
 REPOSITORY_CLEANUP_STATES: Final = frozenset(
     {
         "not_attempted",
         "response_confirmed_cleaned",
         "response_unknown_cleaned",
-        "response_unknown_resolved_absent",
     }
 )
 
@@ -966,6 +967,10 @@ class Fixture:
             f"  name: {self.repository_name}\n"
             f"  URL: https://github.com/{self.repository}\n"
         )
+        # The POST can succeed even when its response is lost. Make the recovery
+        # coordinates durable in redirected logs before any request can create
+        # the repository.
+        sys.stdout.flush()
         preflight_status = self.operator.status("GET", self.repo_path)
         if preflight_status != 404:
             raise ContractError(
@@ -1597,21 +1602,34 @@ class Fixture:
             )
             if creation_outcome_unknown:
                 try:
-                    recovery_status = self.operator.status("GET", self.repo_path)
-                    if recovery_status == 404:
-                        self.repository_creation_outcome_unknown = False
-                        self._set_repository_creation_state("response_unknown_resolved_absent")
-                    elif recovery_status == 200:
-                        self.operator.request("DELETE", self.repo_path, expected=(204,))
-                        self.repository_creation_outcome_unknown = False
-                        self.repository_created = False
-                        self._set_repository_creation_state("response_unknown_cleaned")
+                    for attempt in range(REPOSITORY_RECOVERY_ATTEMPTS):
+                        recovery_status = self.operator.status("GET", self.repo_path)
+                        if recovery_status == 200:
+                            self.operator.request("DELETE", self.repo_path, expected=(204,))
+                            self.repository_creation_outcome_unknown = False
+                            self.repository_created = False
+                            self._set_repository_creation_state("response_unknown_cleaned")
+                            break
+                        if recovery_status != 404:
+                            raise ContractError(
+                                "repository recovery probe returned an unexpected status"
+                            )
+                        if attempt + 1 < REPOSITORY_RECOVERY_ATTEMPTS:
+                            time.sleep(REPOSITORY_RECOVERY_INTERVAL_SECONDS)
                     else:
+                        # A transport failure leaves the POST outcome unknowable.
+                        # Repeated 404s reduce the chance of delayed visibility but
+                        # cannot prove that GitHub never accepted the create.
                         raise ContractError(
-                            "repository recovery probe returned an unexpected status"
+                            "repository remained absent during bounded recovery; "
+                            "manual verification is required"
                         )
                 except Exception as error:
                     self._set_repository_creation_state("manual_cleanup_required")
+                    sys.stderr.write(
+                        "Manual repository verification required: "
+                        f"https://github.com/{self.repository}\n"
+                    )
                     record_failure("repository recovery", error)
             elif getattr(self, "repository_created", False):
                 try:
@@ -1694,10 +1712,13 @@ def main() -> int:
         for cleanup_error in cleanup_errors:
             sys.stderr.write(f"{cleanup_error}\n")
         exit_code = 1
-    report["evidence_completeness"] = evidence_completeness(
+    completeness = evidence_completeness(
         report,
         approver_configured=config.approver is not None,
     )
+    report["evidence_completeness"] = completeness
+    if exit_code == 0 and completeness.get("configured_run_complete") is not True:
+        exit_code = 1
     config.report_file.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
     sys.stdout.write(f"Wrote sanitized report to {config.report_file}\n")
     return exit_code

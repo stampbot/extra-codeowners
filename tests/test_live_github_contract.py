@@ -1357,6 +1357,60 @@ def test_fixture_uses_a_128_bit_repository_suffix(
         assert fixture.close() == []
 
 
+def test_repository_recovery_coordinates_are_flushed_before_requests(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+
+    class BufferedOutput:
+        def write(self, value: str) -> int:
+            events.append("write")
+            return len(value)
+
+        def flush(self) -> None:
+            events.append("flush")
+
+    operator = StubClient([404], [{}, None])
+    original_status = operator.status
+    original_request = operator.request
+
+    def status(
+        method: str,
+        path: str,
+        *,
+        body: dict[str, Any] | None = None,
+    ) -> int:
+        events.append(method)
+        return original_status(method, path, body=body)
+
+    def request(
+        method: str,
+        path: str,
+        *,
+        body: dict[str, Any] | None = None,
+        params: dict[str, str | int] | None = None,
+        expected: tuple[int, ...] = (200,),
+    ) -> Any:
+        events.append(method)
+        return original_request(
+            method,
+            path,
+            body=body,
+            params=params,
+            expected=expected,
+        )
+
+    monkeypatch.setattr(contract_module.sys, "stdout", BufferedOutput())
+    monkeypatch.setattr(operator, "status", status)
+    monkeypatch.setattr(operator, "request", request)
+    fixture = repository_creation_fixture(operator)
+
+    fixture._create_repository()
+
+    assert events[:4] == ["write", "flush", "GET", "POST"]
+    assert fixture.close() == []
+
+
 @pytest.mark.parametrize(
     "create_error",
     [
@@ -1368,8 +1422,11 @@ def test_fixture_uses_a_128_bit_repository_suffix(
 def test_repository_creation_recovers_an_unknown_accepted_request(
     create_error: Exception,
     capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    operator = StubClient([404, 200], [create_error, None])
+    sleeps: list[int] = []
+    monkeypatch.setattr(contract_module.time, "sleep", sleeps.append)
+    operator = StubClient([404, 404, 404, 200], [create_error, None])
     fixture = repository_creation_fixture(operator)
 
     with pytest.raises(type(create_error)):
@@ -1388,14 +1445,25 @@ def test_repository_creation_recovers_an_unknown_accepted_request(
         "GET",
         "POST",
         "GET",
+        "GET",
+        "GET",
         "DELETE",
+    ]
+    assert sleeps == [
+        contract_module.REPOSITORY_RECOVERY_INTERVAL_SECONDS,
+        contract_module.REPOSITORY_RECOVERY_INTERVAL_SECONDS,
     ]
     assert "private" not in repr(fixture.report)
 
 
-def test_repository_creation_resolves_an_unknown_request_that_created_nothing() -> None:
+def test_repository_creation_absence_remains_manual_after_bounded_recovery(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    sleeps: list[int] = []
+    monkeypatch.setattr(contract_module.time, "sleep", sleeps.append)
     operator = StubClient(
-        [404, 404],
+        [404] * (contract_module.REPOSITORY_RECOVERY_ATTEMPTS + 1),
         [httpx.ReadTimeout("private transport detail")],
     )
     fixture = repository_creation_fixture(operator)
@@ -1403,11 +1471,48 @@ def test_repository_creation_resolves_an_unknown_request_that_created_nothing() 
     with pytest.raises(httpx.ReadTimeout):
         fixture._create_repository()
 
-    assert fixture.close() == []
-    assert fixture.report["fixture"]["repository_creation_state"] == (
-        "response_unknown_resolved_absent"
+    assert fixture.close() == ["repository recovery failed (ContractError)"]
+    assert fixture.report["fixture"]["repository_creation_state"] == "manual_cleanup_required"
+    assert [request["method"] for request in operator.transcript] == [
+        "GET",
+        "POST",
+        *(["GET"] * contract_module.REPOSITORY_RECOVERY_ATTEMPTS),
+    ]
+    assert sleeps == [contract_module.REPOSITORY_RECOVERY_INTERVAL_SECONDS] * (
+        contract_module.REPOSITORY_RECOVERY_ATTEMPTS - 1
     )
-    assert [request["method"] for request in operator.transcript] == ["GET", "POST", "GET"]
+    assert (
+        "Manual repository verification required: https://github.com/fixture-org/fixture-repository"
+    ) in capsys.readouterr().err
+
+
+def test_main_never_reports_cleanup_success_after_ambiguous_absence(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    report_file = tmp_path / "ambiguous-create-report.json"
+    runtime = replace(config(), report_file=report_file)
+    operator = StubClient(
+        [404] * (contract_module.REPOSITORY_RECOVERY_ATTEMPTS + 1),
+        [httpx.ReadTimeout("private transport detail")],
+    )
+    fixture = repository_creation_fixture(operator)
+    fixture.config = runtime
+    monkeypatch.setattr(contract_module.time, "sleep", lambda _: None)
+    monkeypatch.setattr(Config, "from_environment", classmethod(lambda cls: runtime))
+    monkeypatch.setattr(contract_module, "Fixture", lambda supplied: fixture)
+    monkeypatch.setattr(fixture, "run", fixture._create_repository)
+
+    assert contract_module.main() == 1
+
+    report = json.loads(report_file.read_text())
+    assert report["result"] == "failed"
+    assert report["failure_type"] == "ReadTimeout"
+    assert report["fixture"]["repository_creation_state"] == "manual_cleanup_required"
+    assert report["cleanup_succeeded"] is False
+    assert report["cleanup_failure_count"] == 1
+    assert report["evidence_completeness"]["configured_run_complete"] is False
+    assert "private transport detail" not in json.dumps(report)
 
 
 def test_repository_creation_cleans_up_after_a_malformed_success_body() -> None:
@@ -1664,6 +1769,48 @@ def test_main_writes_machine_readable_completeness(
     assert report["cleanup_succeeded"] is True
     assert report["evidence_completeness"]["configured_run_complete"] is True
     assert report["evidence_completeness"]["full_automated_observations_complete"] is False
+
+
+def test_main_exits_nonzero_when_a_configured_observation_is_incomplete(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    report_file = tmp_path / "incomplete-report.json"
+    runtime = replace(config(), report_file=report_file)
+    assertions = dict.fromkeys(contract_module.CORE_OBSERVATIONS, False)
+
+    class IncompleteFixture:
+        def __init__(self, supplied: Config) -> None:
+            assert supplied is runtime
+            self.report = {
+                "fixture": {
+                    "checker_repository_selection": "selected",
+                    "repository_creation_state": "not_attempted",
+                },
+                "assertions": assertions,
+                "webhook_capture": complete_webhook_capture(
+                    incomplete=["installation_repository_added_delivery_observed"]
+                ),
+            }
+
+        def run(self) -> dict[str, Any]:
+            return self.report
+
+        def close(self) -> list[str]:
+            return []
+
+    monkeypatch.setattr(Config, "from_environment", classmethod(lambda cls: runtime))
+    monkeypatch.setattr(contract_module, "Fixture", IncompleteFixture)
+
+    assert contract_module.main() == 1
+
+    report = json.loads(report_file.read_text())
+    assert report["result"] == "observed"
+    assert report["cleanup_succeeded"] is True
+    assert report["evidence_completeness"]["configured_run_complete"] is False
+    assert report["evidence_completeness"]["incomplete"] == [
+        "installation_repository_added_delivery_observed"
+    ]
 
 
 def test_main_marks_failed_observation_and_cleanup_as_incomplete(

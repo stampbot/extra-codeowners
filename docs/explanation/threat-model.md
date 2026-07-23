@@ -134,6 +134,9 @@ delivery, and it does not remove the production blocker while success can be
 inherited before invalidation. Its delivery-log probe follows GitHub's
 pagination metadata within fixed bounds. When another page remains, an unseen
 delivery is incomplete evidence, not evidence that the delivery was absent.
+The same rule applies to cleanup: after an ambiguous repository create,
+repeated 404 responses trigger manual verification rather than a successful
+cleanup claim.
 
 ## Why some paths cannot be delegated
 

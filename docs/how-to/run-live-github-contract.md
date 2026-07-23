@@ -14,8 +14,8 @@ lifecycle delivery shapes.
 The fixture cleans up after a normal result, an error, or `Ctrl+C`. A power
 loss, forced process kill, host failure, or loss of operator access can still
 leave resources behind. Before it sends the create request, the fixture prints
-the repository owner, high-entropy name, and URL. Keep those recovery
-coordinates until the report confirms cleanup.
+and flushes the repository owner, high-entropy name, and URL. Keep those
+recovery coordinates until the report confirms cleanup.
 
 This procedure gives you three different kinds of evidence:
 
@@ -188,10 +188,10 @@ export EXTRA_CODEOWNERS_LIVE_OBSERVATION_SECONDS=15
 mise run test:github-contract
 ```
 
-The command exits nonzero for invalid configuration, an indeterminate GitHub
-response, a transition that never settles, or cleanup failure. A determinate
-unsafe result is written as `false`; the command does not hide it by turning
-the observation into a fixture error.
+The command exits nonzero for invalid configuration, an indeterminate or
+incomplete GitHub observation, a transition that never settles, or cleanup
+failure. A determinate unsafe result is written as `false`; the command does
+not hide it by turning the observation into a fixture error.
 
 The webhook-log probe follows GitHub's validated `rel="next"` cursor. Each
 poll reads at most 300 summaries in three requests of up to 100 summaries.
@@ -271,10 +271,11 @@ repository.
 Check `fixture.repository_creation_state` before closing the incident:
 
 - `not_attempted` means the fixture never sent the repository create request.
-- `response_confirmed_cleaned`, `response_unknown_cleaned`, and
-  `response_unknown_resolved_absent` are terminal cleanup states.
+- `response_confirmed_cleaned` and `response_unknown_cleaned` are terminal
+  cleanup states.
 - `manual_cleanup_required` means the fixture could not prove the repository
-  absent or delete it. Use the printed URL.
+  absent or delete it. This includes an uncertain create that remained 404
+  throughout bounded recovery. Use the printed URL and verify it manually.
 - A state ending in `_retained` means cleanup was deliberately disabled.
 - `attempted_response_unknown` means the report was written before recovery
   reached a conclusion.

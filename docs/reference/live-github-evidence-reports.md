@@ -189,9 +189,9 @@ The diagnostic observations are:
 ### Repository creation recovery
 
 The fixture generates a 128-bit random repository suffix. Before the POST
-request, it prints the owner, name, and URL and verifies that the name is
-unused. The operator therefore has recovery coordinates even when GitHub
-accepts the request but the response is lost or malformed.
+request, it prints and flushes the owner, name, and URL, then verifies that the
+name is unused. The operator therefore has recovery coordinates even when
+GitHub accepts the request but the response is lost or malformed.
 
 `fixture.repository_creation_state` is one of:
 
@@ -201,14 +201,16 @@ accepts the request but the response is lost or malformed.
 | `attempted_response_unknown` | The request was sent, but the fixture does not yet know whether GitHub created the repository. |
 | `response_confirmed` | GitHub returned the expected create response; cleanup has not yet recorded its outcome. |
 | `response_confirmed_cleaned` | The confirmed repository was deleted. |
-| `response_unknown_resolved_absent` | A recovery read proved that the uncertain create left no repository. |
 | `response_unknown_cleaned` | A recovery read found the uncertain repository, and the fixture deleted it. |
-| `manual_cleanup_required` | Recovery or deletion failed. Use the printed URL and verify cleanup manually. |
+| `manual_cleanup_required` | Recovery could not prove the result, or deletion failed. Use the printed URL and verify cleanup manually. |
 | `response_confirmed_retained`, `response_unknown_retained` | Cleanup was deliberately disabled. |
 
-An uncertain create is not treated as absent. Cleanup probes the exact
-high-entropy name. `cleanup_succeeded` remains false if that probe or deletion
-fails.
+An uncertain create is never treated as absent. Cleanup polls the exact
+high-entropy name for a bounded interval and deletes it if it appears. If every
+probe returns 404, the report still requires manual cleanup verification:
+bounded absence cannot prove that an accepted create will never become
+visible. `cleanup_succeeded` remains false until the tool has deleted a
+repository it found.
 
 ### Repository webhook capture
 
@@ -371,8 +373,8 @@ write a report.
 
 | Command | Code | Meaning |
 | --- | --- | --- |
-| Repository fixture | `0` | The fixture obtained determinate automated observations. Inspect completeness and values separately. |
-| Repository fixture | `1` | Setup, observation, or cleanup failed. |
+| Repository fixture | `0` | The configured automated observations are determinate and cleanup succeeded. Inspect the observed values separately. |
+| Repository fixture | `1` | Setup, observation, completeness, or cleanup failed. |
 | Repository fixture | `2` | Configuration or credentials were rejected before the fixture started. |
 | Repository fixture | `130` | The operator interrupted the fixture; cleanup was attempted. |
 | Lifecycle collector | `0` | The bounded window and details were complete, and every expected event was observed. |
