@@ -687,26 +687,46 @@ async def test_existing_check_run_is_updated(private_key: str) -> None:
 
 @pytest.mark.asyncio
 async def test_reconciliation_list_endpoints_paginate(private_key: str) -> None:
+    installation_pages: list[int] = []
+    pull_pages: list[int] = []
+
     def handler(request: httpx.Request) -> httpx.Response:
         path = request.url.path
         if path.endswith("/access_tokens"):
             return httpx.Response(201, json=token_response())
         if path == "/app/installations":
             page = int(request.url.params["page"])
+            installation_pages.append(page)
             return httpx.Response(
-                200, json=[{"id": index} for index in range(100)] if page == 1 else []
+                200,
+                json=(
+                    [{"id": index + 1, "suspended_at": None} for index in range(100)]
+                    if page == 1
+                    else [{"id": 101, "suspended_at": None}]
+                ),
             )
         if path == "/installation/repositories":
             return httpx.Response(200, json={"repositories": [{"full_name": "example/project"}]})
         if path == "/repos/example/project/pulls":
-            return httpx.Response(200, json=[{"number": 3}])
+            page = int(request.url.params["page"])
+            pull_pages.append(page)
+            return httpx.Response(
+                200,
+                json=(
+                    [{"number": index + 1} for index in range(100)]
+                    if page == 1
+                    else [{"number": 101}]
+                ),
+            )
         return httpx.Response(404)
 
     client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
 
-    assert len(await client.list_installations()) == 100
+    assert len(await client.list_installations()) == 101
+    assert installation_pages == [1, 2]
     assert await client.list_installation_repositories(2) == [{"full_name": "example/project"}]
-    assert await client.list_open_pulls(2, "example/project") == [{"number": 3}]
+    assert len(await client.list_open_pulls(2, "example/project")) == 101
+    assert pull_pages == [1, 2]
     await client.close()
 
 

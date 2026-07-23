@@ -265,6 +265,14 @@ records a partial attempt without discarding work found elsewhere. Only a
 complete scan advances the last-success timestamp. The organization-policy
 repository is never included in reconciliation.
 
+Because the installation list defines the scope of the whole scan, the
+reconciler validates every record before doing any other reconciliation work.
+One malformed installation record fails the attempt; the reconciler does not
+process the valid records around it. Repository and open pull request lists
+are scoped to one installation. Malformed data in either list fails that
+installation, but later installations still run. A suspended installation or
+archived repository is skipped only after its record passes validation.
+
 A shorter interval narrows some missed-event windows but spends more GitHub API
 budget and causes more temporary blocking. It does not make the system strongly
 consistent. Merge queues add a separate `merge_group` state that this version

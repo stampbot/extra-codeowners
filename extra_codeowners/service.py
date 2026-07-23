@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any, Final, Literal
 
@@ -107,7 +107,20 @@ class _ReconciliationPayloadError(ValueError):
 
     def __init__(
         self,
-        reason: Literal["invalid_installation_id", "invalid_repository_full_name"],
+        reason: Literal[
+            "invalid_installation_batch",
+            "invalid_installation_record",
+            "invalid_installation_id",
+            "invalid_installation_suspended_at",
+            "invalid_repository_batch",
+            "invalid_repository_record",
+            "invalid_repository_full_name",
+            "invalid_repository_archived",
+            "invalid_pull_batch",
+            "invalid_pull_record",
+            "invalid_pull_number",
+            "invalid_pull_head",
+        ],
     ) -> None:
         super().__init__(reason)
         self.reason = reason
@@ -133,6 +146,95 @@ def _reconciliation_repository_full_name(value: Any) -> str:
     ):
         raise _ReconciliationPayloadError("invalid_repository_full_name")
     return full_name
+
+
+def _reconciliation_suspended(value: Any) -> bool:
+    """Return whether a well-formed installation record is suspended."""
+    if value is None:
+        return False
+    if (
+        not isinstance(value, str)
+        or not value
+        or value != value.strip()
+        or len(value) > 64
+        or "T" not in value
+    ):
+        raise _ReconciliationPayloadError("invalid_installation_suspended_at")
+    normalized = f"{value[:-1]}+00:00" if value.endswith("Z") else value
+    try:
+        timestamp = datetime.fromisoformat(normalized)
+    except ValueError:
+        raise _ReconciliationPayloadError("invalid_installation_suspended_at") from None
+    if timestamp.tzinfo is None or timestamp.utcoffset() is None:
+        raise _ReconciliationPayloadError("invalid_installation_suspended_at")
+    return True
+
+
+def _reconciliation_installations(value: Any) -> tuple[tuple[int, bool], ...]:
+    """Validate the complete top-level installation response before using it."""
+    if not isinstance(value, list):
+        raise _ReconciliationPayloadError("invalid_installation_batch")
+    installations: list[tuple[int, bool]] = []
+    for record in value:
+        if not isinstance(record, dict):
+            raise _ReconciliationPayloadError("invalid_installation_record")
+        if "suspended_at" not in record:
+            raise _ReconciliationPayloadError("invalid_installation_suspended_at")
+        installations.append(
+            (
+                _reconciliation_installation_id(record.get("id")),
+                _reconciliation_suspended(record["suspended_at"]),
+            )
+        )
+    return tuple(installations)
+
+
+def _reconciliation_repository(value: Any) -> tuple[str, bool]:
+    """Validate one repository record without coercing provider data."""
+    if not isinstance(value, dict):
+        raise _ReconciliationPayloadError("invalid_repository_record")
+    archived = value.get("archived")
+    if type(archived) is not bool:
+        raise _ReconciliationPayloadError("invalid_repository_archived")
+    return _reconciliation_repository_full_name(value.get("full_name")), archived
+
+
+def _reconciliation_repositories(value: Any) -> tuple[tuple[str, bool], ...]:
+    """Validate an installation's complete repository batch."""
+    if not isinstance(value, list):
+        raise _ReconciliationPayloadError("invalid_repository_batch")
+    return tuple(_reconciliation_repository(record) for record in value)
+
+
+def _reconciliation_head_sha(value: Any) -> str:
+    """Return a canonical full Git object ID from an open-pull record."""
+    if (
+        not isinstance(value, str)
+        or len(value) not in {40, 64}
+        or any(character not in "0123456789abcdef" for character in value)
+    ):
+        raise _ReconciliationPayloadError("invalid_pull_head")
+    return value
+
+
+def _reconciliation_pull(value: Any) -> tuple[int, str]:
+    """Validate one open-pull record without accepting Python bools as integers."""
+    if not isinstance(value, dict):
+        raise _ReconciliationPayloadError("invalid_pull_record")
+    number = value.get("number")
+    if type(number) is not int or number <= 0:
+        raise _ReconciliationPayloadError("invalid_pull_number")
+    head = value.get("head")
+    if not isinstance(head, dict):
+        raise _ReconciliationPayloadError("invalid_pull_head")
+    return number, _reconciliation_head_sha(head.get("sha"))
+
+
+def _reconciliation_pulls(value: Any) -> tuple[tuple[int, str], ...]:
+    """Validate one repository's complete open-pull batch."""
+    if not isinstance(value, list):
+        raise _ReconciliationPayloadError("invalid_pull_batch")
+    return tuple(_reconciliation_pull(record) for record in value)
 
 
 def _failure(code: str, message: str) -> EvaluationResult:
@@ -1834,13 +1936,17 @@ class Reconciler:
             name="reconciler-lease",
         )
         try:
-            return await self._reconcile_owned(lost)
+            outcome = await self._reconcile_owned(lost)
         finally:
             done.set()
             await asyncio.gather(heartbeat)
+        if lost.is_set() and not outcome.lease_lost:
+            outcome = replace(outcome, lease_lost=True)
+        return outcome
 
     async def _reconcile_owned(self, lost: asyncio.Event) -> ReconciliationOutcome:
         """Perform one reconciliation while the heartbeat owns the lease."""
+        installations = _reconciliation_installations(await self.github.list_installations())
         retention_boundary = datetime.now(UTC) - timedelta(
             days=self.settings.webhook_delivery_retention_days
         )
@@ -1855,36 +1961,34 @@ class Reconciler:
             log.info("shared_head_epochs_pruned", epochs=pruned_epochs)
         queued = 0
         failed_installations = 0
-        for installation in await self.github.list_installations():
+        for installation_id, suspended in installations:
             if lost.is_set():
                 return ReconciliationOutcome(
                     queued=queued,
                     failed_installations=failed_installations,
                     lease_lost=True,
                 )
-            installation_id: int | None = None
+            if suspended:
+                continue
             try:
-                if installation.get("suspended_at") is not None:
-                    continue
-                installation_id = _reconciliation_installation_id(installation.get("id"))
-                repositories = await self.github.list_installation_repositories(installation_id)
-                for repository in repositories:
+                repositories = _reconciliation_repositories(
+                    await self.github.list_installation_repositories(installation_id)
+                )
+                for full_name, archived in repositories:
                     if lost.is_set():
                         return ReconciliationOutcome(
                             queued=queued,
                             failed_installations=failed_installations,
                             lease_lost=True,
                         )
-                    if repository.get("archived") is True:
+                    if archived:
                         continue
-                    full_name = _reconciliation_repository_full_name(repository.get("full_name"))
                     if self.settings.is_organization_config_repository(full_name):
                         continue
-                    for pull in await self.github.list_open_pulls(installation_id, full_name):
-                        number = pull.get("number")
-                        head = pull.get("head")
-                        if not isinstance(number, int):
-                            continue
+                    pulls = _reconciliation_pulls(
+                        await self.github.list_open_pulls(installation_id, full_name)
+                    )
+                    for number, head_sha in pulls:
                         added = await asyncio.to_thread(
                             self.store.enqueue_if_absent,
                             JobRequest(
@@ -1892,11 +1996,7 @@ class Reconciler:
                                 repository_full_name=full_name,
                                 pull_number=number,
                                 reason="periodic_reconciliation",
-                                head_sha_hint=(
-                                    head.get("sha")
-                                    if isinstance(head, dict) and isinstance(head.get("sha"), str)
-                                    else None
-                                ),
+                                head_sha_hint=head_sha,
                             ),
                         )
                         queued += int(added)

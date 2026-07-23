@@ -96,12 +96,22 @@ The endpoint returns Prometheus text format. Extra CODEOWNERS defines these appl
 
 Prometheus also publishes generated counter and histogram series, plus Python runtime and process collectors. Metric labels must never contain repository names, pull-request titles, actor names, paths, or delivery IDs. Those values would create unbounded cardinality and disclose private repository metadata.
 
-`success` means the elected process inspected every visible, unsuspended
-installation and structurally accounted for every repository response.
-`partial` means at least one installation failed, GitHub returned an invalid
-installation or repository identity, or the process lost its lease; work found
-in other installations remains queued. `failure` means the attempt stopped
-before it could return a scan result.
+`success` means the elected process completed the scan of every visible,
+unsuspended installation and validated every repository and open pull request
+returned by GitHub. `partial` means at least one installation's API request or
+response failed, or the process lost its lease. Work queued before that failure
+remains durable, and the scan continues with later installations while it
+still owns the lease. `failure` means the attempt stopped before it could
+return a scan result. This includes a malformed top-level installation list;
+the service validates that whole list before processing any installation.
+
+Reconciliation accepts installation IDs and pull-request numbers only as
+positive JSON integers. It rejects booleans, strings, nulls, zero, and negative
+values. `suspended_at` must be null or a timezone-aware ISO 8601 timestamp, and
+`archived` must be a JSON boolean. Every open pull request must contain an
+object-valued `head` with a full 40- or 64-character lowercase hexadecimal
+commit ID. The validation log contains a fixed reason code, not the rejected
+value.
 
 The last-success gauge belongs to one service process. For a deployment with
 several replicas, alert on the newest value across all replicas.
