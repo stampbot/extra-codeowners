@@ -1946,21 +1946,30 @@ class Reconciler:
 
     async def _reconcile_owned(self, lost: asyncio.Event) -> ReconciliationOutcome:
         """Perform one reconciliation while the heartbeat owns the lease."""
-        installations = _reconciliation_installations(await self.github.list_installations())
+        queued = 0
+        failed_installations = 0
+        if lost.is_set():
+            return ReconciliationOutcome(queued=queued, lease_lost=True)
         retention_boundary = datetime.now(UTC) - timedelta(
             days=self.settings.webhook_delivery_retention_days
         )
         pruned = await asyncio.to_thread(self.store.prune_deliveries, retention_boundary)
         if pruned:
             log.info("webhook_deliveries_pruned", deliveries=pruned)
+        if lost.is_set():
+            return ReconciliationOutcome(queued=queued, lease_lost=True)
         pruned_epochs = await asyncio.to_thread(
             self.store.prune_shared_head_epochs,
             retention_boundary,
         )
         if pruned_epochs:
             log.info("shared_head_epochs_pruned", epochs=pruned_epochs)
-        queued = 0
-        failed_installations = 0
+        if lost.is_set():
+            return ReconciliationOutcome(queued=queued, lease_lost=True)
+        installation_records = await self.github.list_installations()
+        if lost.is_set():
+            return ReconciliationOutcome(queued=queued, lease_lost=True)
+        installations = _reconciliation_installations(installation_records)
         for installation_id, suspended in installations:
             if lost.is_set():
                 return ReconciliationOutcome(
@@ -1985,10 +1994,21 @@ class Reconciler:
                         continue
                     if self.settings.is_organization_config_repository(full_name):
                         continue
-                    pulls = _reconciliation_pulls(
-                        await self.github.list_open_pulls(installation_id, full_name)
-                    )
+                    pull_records = await self.github.list_open_pulls(installation_id, full_name)
+                    if lost.is_set():
+                        return ReconciliationOutcome(
+                            queued=queued,
+                            failed_installations=failed_installations,
+                            lease_lost=True,
+                        )
+                    pulls = _reconciliation_pulls(pull_records)
                     for number, head_sha in pulls:
+                        if lost.is_set():
+                            return ReconciliationOutcome(
+                                queued=queued,
+                                failed_installations=failed_installations,
+                                lease_lost=True,
+                            )
                         added = await asyncio.to_thread(
                             self.store.enqueue_if_absent,
                             JobRequest(

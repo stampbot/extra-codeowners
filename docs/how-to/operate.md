@@ -92,7 +92,8 @@ The elected reconciler prunes expired delivery IDs and logs
 rows, but only after the latest generation was invalidated, no evaluation
 references that installation, repository, and head, and no invalidation lease
 remains. Those removals use the `shared_head_epochs_pruned` log event.
-Disabling reconciliation disables both cleanup tasks.
+Both cleanup tasks run before GitHub installation discovery, so a discovery
+failure does not postpone them. Disabling reconciliation disables both tasks.
 
 An expired ID may be accepted again if GitHub redelivers it. That does not
 restore old authorization evidence. The delivery creates or coalesces a fresh

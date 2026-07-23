@@ -1821,6 +1821,113 @@ async def test_lease_loss_observed_after_scan_is_folded_into_iteration_outcome(
 
 
 @pytest.mark.asyncio
+async def test_reconciliation_prunes_before_discovery_and_stops_after_lease_loss(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lost = asyncio.Event()
+    order: list[str] = []
+    github = FakeGitHub(changed_path="uv.lock")
+
+    async def list_installations_after_lease_loss() -> list[dict[str, Any]]:
+        order.append("discover_installations")
+        lost.set()
+        return [{"id": 2, "suspended_at": None}]
+
+    github.list_installations = list_installations_after_lease_loss  # type: ignore[attr-defined]
+    github.list_installation_repositories = AsyncMock()  # type: ignore[attr-defined]
+    store = migrated_store(f"sqlite:///{tmp_path / 'reconcile-prune-order.db'}")
+    original_prune = store.prune_deliveries
+
+    def record_prune(boundary: datetime) -> int:
+        order.append("prune_deliveries")
+        return original_prune(boundary)
+
+    monkeypatch.setattr(store, "prune_deliveries", record_prune)
+    reconciler = Reconciler(settings(), github, store, "reconciler")  # type: ignore[arg-type]
+
+    outcome = await reconciler._reconcile_owned(lost)
+
+    assert outcome == ReconciliationOutcome(queued=0, lease_lost=True)
+    assert order == ["prune_deliveries", "discover_installations"]
+    github.list_installation_repositories.assert_not_awaited()  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_does_not_enqueue_pulls_returned_after_lease_loss(
+    tmp_path: Path,
+) -> None:
+    lost = asyncio.Event()
+    github = FakeGitHub(changed_path="uv.lock")
+    github.list_installations = AsyncMock(  # type: ignore[attr-defined]
+        return_value=[{"id": 2, "suspended_at": None}]
+    )
+    github.list_installation_repositories = AsyncMock(  # type: ignore[attr-defined]
+        return_value=[{"full_name": "example/project", "archived": False}]
+    )
+
+    async def list_pulls_after_lease_loss(
+        installation_id: int, repository: str
+    ) -> list[dict[str, Any]]:
+        lost.set()
+        return [
+            {"number": 1, "head": {"sha": HEAD}},
+            {"number": 2, "head": {"sha": BASE}},
+        ]
+
+    github.list_open_pulls = list_pulls_after_lease_loss  # type: ignore[attr-defined]
+    store = migrated_store(f"sqlite:///{tmp_path / 'reconcile-pulls-after-loss.db'}")
+    reconciler = Reconciler(settings(), github, store, "reconciler")  # type: ignore[arg-type]
+
+    outcome = await reconciler._reconcile_owned(lost)
+
+    assert outcome == ReconciliationOutcome(queued=0, lease_lost=True)
+    assert store.pending_count() == 0
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_stops_pull_loop_when_lease_loss_becomes_visible(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lost = asyncio.Event()
+    github = FakeGitHub(changed_path="uv.lock")
+    github.list_installations = AsyncMock(  # type: ignore[attr-defined]
+        return_value=[{"id": 2, "suspended_at": None}]
+    )
+    github.list_installation_repositories = AsyncMock(  # type: ignore[attr-defined]
+        return_value=[{"full_name": "example/project", "archived": False}]
+    )
+    github.list_open_pulls = AsyncMock(  # type: ignore[attr-defined]
+        return_value=[
+            {"number": 1, "head": {"sha": HEAD}},
+            {"number": 2, "head": {"sha": BASE}},
+        ]
+    )
+    store = migrated_store(f"sqlite:///{tmp_path / 'reconcile-pull-loop-loss.db'}")
+    original_enqueue = store.enqueue_if_absent
+
+    class EnqueueResult:
+        def __init__(self, added: bool) -> None:
+            self.added = added
+
+        def __int__(self) -> int:
+            lost.set()
+            return int(self.added)
+
+    enqueue = MagicMock(side_effect=lambda request: EnqueueResult(original_enqueue(request)))
+    monkeypatch.setattr(store, "enqueue_if_absent", enqueue)
+    reconciler = Reconciler(settings(), github, store, "reconciler")  # type: ignore[arg-type]
+
+    outcome = await reconciler._reconcile_owned(lost)
+
+    assert outcome == ReconciliationOutcome(queued=1, lease_lost=True)
+    assert enqueue.call_count == 1
+    assert store.pending_count() == 1
+    claimed = store.claim("test-worker", 60)
+    assert claimed is not None
+    assert claimed.pull_number == 1
+
+
+@pytest.mark.asyncio
 async def test_reconciliation_exception_reports_failure_without_success_timestamp(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

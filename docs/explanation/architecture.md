@@ -259,17 +259,20 @@ check to `in_progress`.
 The same singleton lease controls pruning of delivery IDs and old shared-head
 rows. A shared-head row is eligible only after its latest generation was
 invalidated, no evaluation references it, and no invalidation lease remains.
-A background heartbeat renews the lease while a scan runs. If the heartbeat
-loses the lease or one installation cannot be scanned safely, the service
-records a partial attempt without discarding work found elsewhere. Only a
-complete scan advances the last-success timestamp. The organization-policy
-repository is never included in reconciliation.
+The elected process runs both retention tasks before it asks GitHub for the
+installation list, so a discovery failure does not postpone cleanup. A
+background heartbeat renews the lease while a scan runs.
+
+If the heartbeat loses the lease or one installation cannot be scanned safely,
+the service records a partial attempt without discarding work found elsewhere.
+Only a complete scan advances the last-success timestamp. The
+organization-policy repository is never included in reconciliation.
 
 Because the installation list defines the scope of the whole scan, the
-reconciler validates every record before doing any other reconciliation work.
-One malformed installation record fails the attempt; the reconciler does not
-process the valid records around it. Repository and open pull request lists
-are scoped to one installation. Malformed data in either list fails that
+reconciler validates every record before processing any installation. One
+malformed installation record fails the attempt; the reconciler does not
+process the valid records around it. Repository and open pull request lists are
+scoped to one installation. Malformed data in either list fails that
 installation, but later installations still run. A suspended installation or
 archived repository is skipped only after its record passes validation.
 
