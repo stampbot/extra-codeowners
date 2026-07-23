@@ -183,6 +183,7 @@ The archive must contain at least these entry points:
 | `sources/python/` | Locked and reviewed-fallback top-level Python sources. |
 | `sources/alpine/` | Commit-pinned recipe subtrees and every local or downloaded source named by their verified checksums. |
 | `sources/native-components/` | Hash-addressed native-source artifacts or verified subtree manifests for directly reviewed components nested inside wheels. An owner-sdist source reuses the exact archive under `sources/python/`. |
+| `sources/cargo-locks/` | Exact `Cargo.lock` bytes verified from retained owner sdists for owners with crates.io reviews. The policy binds the original member path, digest, size, reviewed source IDs, and complete lock-only registry remainder. |
 
 ### Current native-wheel manifest records
 
@@ -254,7 +255,7 @@ not reduced to path/hash summaries. The current open records are:
 
 | Owner | Omission IDs |
 | --- | --- |
-| `python:cffi@2.1.0` | `missing-native-sbom` |
+| `python:cffi@2.1.0` | `unproven-libffi-build-input` |
 | `python:cryptography@48.0.1` | `unresolved-rust-and-openssl-sources` |
 | `python:psycopg-binary@3.3.4` | `missing-libpq-sbom`, `unreviewed-bundled-library-sources` |
 | `python:pydantic-core@2.46.4` | `missing-libgcc-sbom`, `unreviewed-cargo-sources` |
@@ -274,6 +275,15 @@ directory is the first 20 hexadecimal characters of SHA-256 over the source ID:
 For `owner-sdist-subpath`, the exact locked archive remains under
 `sources/python/`; the native-source directory retains the verified subtree
 manifest.
+
+Any owner with a crates.io component review must also carry a non-null
+`cargo_lock` record. Collection extracts the exact named lockfile from the
+retained owner sdist and checks the complete registry package set. Reviewed
+crate entries must match their source archive checksums; every other crates.io
+entry must appear in the sorted `non_sbom_packages` remainder. Foreign
+registries, missing or duplicate packages, checksum drift, and unexplained
+local packages fail collection. The verified bytes are retained below
+`sources/cargo-locks/`.
 
 The raw component inventory does not carry a `source_completeness` assertion.
 `MANIFEST.json.source_completeness` is derived from the coverage ledger. A

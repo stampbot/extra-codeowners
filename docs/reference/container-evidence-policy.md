@@ -277,6 +277,7 @@ Each owner record has exactly these fields:
 | `owner` | Canonical `python:NAME@VERSION`, unique on the platform. |
 | `wheel` | Exact HTTPS URL, SHA-256, and positive size for the platform wheel. The filename must match the owner and the supported CPython 3.14 musllinux platform. |
 | `owner_source` | Exact HTTPS URL, SHA-256, and size for the owner sdist; it must equal the `uv.lock` source record. |
+| `cargo_lock` | `null` unless the owner directly reviews a crates.io source; otherwise, the exact retained owner-sdist lockfile context described below. |
 | `native_payloads` | Sorted records with derived `role`, installed `path`, SHA-256, and positive `size`. |
 | `sboms` | Sorted, hash-pinned CycloneDX observations and a disposition for each metadata root. |
 | `component_reviews` | Direct source and reviewed-license decisions over exact SBOM occurrences. |
@@ -367,6 +368,33 @@ disposition must cite its corresponding observation. The target owner must be
 closed, the target observation must be directly reviewed there, and targets
 cannot be reused or form chains.
 
+### Cargo lock context
+
+A direct review of any `crates-io` source requires a non-null `cargo_lock`
+record. A non-null record without a crate review is invalid. The record has
+exactly these fields:
+
+| Field | Contract |
+| --- | --- |
+| `member` | Canonical owner-sdist member path whose basename is `Cargo.lock`. |
+| `sha256` | Lowercase SHA-256 of the exact lockfile bytes. |
+| `size` | Positive byte size, no greater than 8 MiB. |
+| `source_ids` | Sorted, unique source IDs that exactly match the crates.io sources used by this owner's component reviews. |
+| `non_sbom_packages` | Sorted, unique crates.io package records present in the lockfile but absent from those reviewed SBOM sources. Each record has exact `name`, `version`, registry URL, and checksum. |
+
+Bundle generation reads this member from the already retained owner sdist and
+accepts Cargo lockfile versions 3 and 4. Every registry package must use the
+canonical crates.io registry and must appear exactly once in either
+`source_ids` or `non_sbom_packages`. The lockfile checksum for a reviewed crate
+must equal the checksum of its retained official archive. Local lockfile
+packages must match Cargo PURLs assigned to the owner root or to reviewed
+owner-sdist subpaths.
+
+The verified lockfile is retained under
+`sources/cargo-locks/OWNER_DIGEST_PREFIX/Cargo.lock`. It is checksum-bound by
+the archive, while its member identity and digest remain in the reviewed
+policy. This closes a source-set accounting gap; it is not build provenance.
+
 ### Source tagged union
 
 `native_component_sources` accepts four source kinds. Every record has a
@@ -379,6 +407,13 @@ records.
 | `crates-io` | `crates-io:NAME@VERSION`; the canonical crates.io archive, exact `NAME-VERSION/Cargo.toml`, raw and normalized license, and retained notices. Archive root, manifest name/version/license, PURL, archive hash, and reviewed expression are bound together. |
 | `owner-sdist-subpath` | `owner-sdist:OWNER#PATH`; a canonical subtree of that same owner's locked sdist, with tree SHA-256, member count, expanded size, and notices. Tar and ZIP parsers reject unsafe paths, duplicate members, devices, sparse files, and links. |
 | `checksummed-upstream-release` | `upstream-release:NAME@VERSION`; an exact archive, exact checksum document, selected filename, and notices. The strict GNU-style checksum parser requires exactly one matching record. |
+
+For crates.io records, `raw_license` must match the exact Cargo manifest.
+`normalized_license` normally preserves the same value. The one supported
+legacy rewrite is `MIT/Apache-2.0` to `MIT OR Apache-2.0`; any other difference
+fails. A directly reviewed crate observation must carry exactly one supported
+CycloneDX license expression or SPDX ID, and it must equal
+`normalized_license`.
 
 All configured sources must be used. The two platforms must agree on sources,
 review decisions, omissions, relationships, and logical observations.
@@ -402,7 +437,7 @@ The current ledger closes Greenlet 3.5.3, MarkupSafe 3.0.3, and SQLAlchemy
 
 | Owner | Open omission IDs |
 | --- | --- |
-| `python:cffi@2.1.0` | `missing-native-sbom` |
+| `python:cffi@2.1.0` | `unproven-libffi-build-input` |
 | `python:cryptography@48.0.1` | `unresolved-rust-and-openssl-sources` |
 | `python:psycopg-binary@3.3.4` | `missing-libpq-sbom`, `unreviewed-bundled-library-sources` |
 | `python:pydantic-core@2.46.4` | `missing-libgcc-sbom`, `unreviewed-cargo-sources` |

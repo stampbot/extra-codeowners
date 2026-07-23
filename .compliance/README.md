@@ -55,6 +55,13 @@ matching component identity, a directly reviewed target in a closed owner, and
 source and target payload dispositions that cite the exact observations being
 related.
 
+Crate reviews also carry an exact `Cargo.lock` context from the retained owner
+sdist. The context names every reviewed crates.io source and every registry
+package that is present in the lockfile but absent from the SBOM. Bundle
+generation reparses that lockfile and rejects a missing package, an unexpected
+package, a foreign registry, or a checksum mismatch. Owners without a crate
+review use `cargo_lock: null`.
+
 ## Current closure
 
 Every observed native-wheel owner has a policy record on both architectures.
@@ -63,7 +70,7 @@ verification instead of becoming an inferred gap.
 
 | Owner | State | Evidence still missing |
 | --- | --- | --- |
-| `python:cffi@2.1.0` | Open | `missing-native-sbom` |
+| `python:cffi@2.1.0` | Open | `unproven-libffi-build-input` |
 | `python:cryptography@48.0.1` | Open | `unresolved-rust-and-openssl-sources` |
 | `python:greenlet@3.5.3` | Closed | None |
 | `python:markupsafe@3.0.3` | Closed | None |

@@ -691,7 +691,7 @@ for architecture in amd64 arm64; do
       }] == [
         {
           "owner": "python:cffi@2.1.0",
-          "omissions": ["missing-native-sbom"]
+          "omissions": ["unproven-libffi-build-input"]
         },
         {
           "owner": "python:cryptography@48.0.1",
@@ -815,6 +815,12 @@ Review source policy with these precise boundaries:
   checksum documents according to their kind. Each directly reviewed
   occurrence must bind one source and reviewed license, every source must be
   used, and source-carried notices must match exact member hashes and sizes.
+  For every owner with a crates.io review, inspect the exact `cargo_lock`
+  member, hash, and size from the retained owner sdist. Its sorted `source_ids`
+  must equal the crate sources used by reviews, and `non_sbom_packages` must
+  account for every other crates.io lock entry with its exact checksum. A
+  target-specific or inactive package belongs in that remainder; it must not
+  disappear merely because the wheel SBOM omitted it.
   Do not infer a component-to-file mapping merely because an SBOM and payload
   share a wheel
 - Docker Official Python policy pins the multi-platform index, exact ordered
@@ -855,7 +861,7 @@ It must retain these open records and exact omission IDs:
 
 | Owner | Omission IDs |
 | --- | --- |
-| `python:cffi@2.1.0` | `missing-native-sbom` |
+| `python:cffi@2.1.0` | `unproven-libffi-build-input` |
 | `python:cryptography@48.0.1` | `unresolved-rust-and-openssl-sources` |
 | `python:psycopg-binary@3.3.4` | `missing-libpq-sbom`, `unreviewed-bundled-library-sources` |
 | `python:pydantic-core@2.46.4` | `missing-libgcc-sbom`, `unreviewed-cargo-sources` |

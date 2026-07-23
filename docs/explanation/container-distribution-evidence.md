@@ -302,6 +302,17 @@ Every used source retains its exact reviewed notices. Unused source records
 fail policy validation, so adding a source without connecting it to a review
 doesn't create evidence.
 
+Rust source closure has one additional check. A crates.io review must include
+the exact `Cargo.lock` member from the owner's retained sdist, its hash and
+size, the sorted crates.io source IDs represented by SBOM observations, and
+the exact registry packages found only in the lockfile. Bundle generation
+reparses the retained lockfile. It rejects missing or duplicate packages,
+foreign registries, checksum drift, unaccounted registry packages, and local
+Cargo packages that do not match reviewed owner-sdist observations.
+
+This proves agreement among the SBOM, lockfile, registry archive, manifest,
+license, and notices. It does not prove that those sources built the wheel.
+
 #### Open and closed are policy states
 
 Every observed native-wheel owner must have a record on both platforms. An
@@ -316,13 +327,15 @@ are empty while their native payload sets remain exact.
 
 Four owners are still open:
 
-- CFFI has no embedded native-component inventory.
+- CFFI has no embedded native-component inventory, and its upstream build did
+  not record the digest of the libffi 3.4.6 source it downloaded.
 - Cryptography still needs complete Rust and OpenSSL source, license, notice,
   and build-material evidence.
 - Psycopg still lacks a `libpq` SBOM observation and reviewed source closure
   for its bundled libraries.
 - Pydantic Core still lacks a `libgcc` observation and retained source closure
-  for the crates represented by its SBOM.
+  for the crates represented by its SBOM. Its bundled `libgcc` identifies GCC
+  12.4.0, not the reviewed Alpine GCC 14.2 payload used by other owners.
 
 `inventory/native-component-coverage.json` copies closed records into
 `resolved_owners` and open records into `unresolved_owners`. It also names the

@@ -4153,25 +4153,28 @@
     "linux/amd64": [
       {
         "canonical_relationships": [],
+        "cargo_lock": null,
         "component_reviews": [],
         "known_omissions": [
           {
             "component": {
-              "name": "cffi-native-extension",
+              "name": "libffi",
               "purl": "",
               "type": "library",
-              "version": "2.1.0"
+              "version": "3.4.6"
             },
-            "id": "missing-native-sbom",
+            "id": "unproven-libffi-build-input",
             "missing_evidence": [
-              "component-inventory",
-              "payload-provenance"
+              "build-material-attestation",
+              "exact-source",
+              "sbom-observation",
+              "source-payload-relationship"
             ],
             "observations": [],
             "payload_roles": [
               "_cffi_backend.cpython-314.so"
             ],
-            "reason": "The wheel contains a native extension but does not embed a component SBOM that identifies its compiled dependency surface."
+            "reason": "The upstream wheel workflow selected libffi 3.4.6, but it recorded no digest for the downloaded source and the wheel embeds no component SBOM. A current tag archive is not proof of the bytes used to build this payload."
           }
         ],
         "native_payloads": [
@@ -4191,15 +4194,15 @@
         "payload_dispositions": [
           {
             "kind": "known-omission",
-            "omission": "missing-native-sbom",
+            "omission": "unproven-libffi-build-input",
             "role": "_cffi_backend.cpython-314.so"
           }
         ],
         "review": {
-          "reason": "The native extension has no embedded component inventory.",
+          "reason": "The exact libffi build input and its relationship to the native extension are unproven.",
           "state": "open",
           "unresolved_items": [
-            "missing-native-sbom"
+            "unproven-libffi-build-input"
           ]
         },
         "sboms": [],
@@ -4232,6 +4235,7 @@
             "reference_payload_role": "greenlet.libs/libgcc_s.so.1"
           }
         ],
+        "cargo_lock": null,
         "component_reviews": [],
         "known_omissions": [
           {
@@ -5390,6 +5394,7 @@
       },
       {
         "canonical_relationships": [],
+        "cargo_lock": null,
         "component_reviews": [
           {
             "observations": [
@@ -5561,6 +5566,7 @@
       },
       {
         "canonical_relationships": [],
+        "cargo_lock": null,
         "component_reviews": [],
         "known_omissions": [],
         "native_payloads": [
@@ -5597,6 +5603,7 @@
       },
       {
         "canonical_relationships": [],
+        "cargo_lock": null,
         "component_reviews": [],
         "known_omissions": [
           {
@@ -6214,6 +6221,7 @@
       },
       {
         "canonical_relationships": [],
+        "cargo_lock": null,
         "component_reviews": [],
         "known_omissions": [
           {
@@ -6221,7 +6229,7 @@
               "name": "libgcc",
               "purl": "",
               "type": "library",
-              "version": "14.2.0-r6"
+              "version": "12.4.0"
             },
             "id": "missing-libgcc-sbom",
             "missing_evidence": [
@@ -8526,6 +8534,7 @@
       },
       {
         "canonical_relationships": [],
+        "cargo_lock": null,
         "component_reviews": [],
         "known_omissions": [],
         "native_payloads": [
@@ -8604,25 +8613,28 @@
     "linux/arm64": [
       {
         "canonical_relationships": [],
+        "cargo_lock": null,
         "component_reviews": [],
         "known_omissions": [
           {
             "component": {
-              "name": "cffi-native-extension",
+              "name": "libffi",
               "purl": "",
               "type": "library",
-              "version": "2.1.0"
+              "version": "3.4.6"
             },
-            "id": "missing-native-sbom",
+            "id": "unproven-libffi-build-input",
             "missing_evidence": [
-              "component-inventory",
-              "payload-provenance"
+              "build-material-attestation",
+              "exact-source",
+              "sbom-observation",
+              "source-payload-relationship"
             ],
             "observations": [],
             "payload_roles": [
               "_cffi_backend.cpython-314.so"
             ],
-            "reason": "The wheel contains a native extension but does not embed a component SBOM that identifies its compiled dependency surface."
+            "reason": "The upstream wheel workflow selected libffi 3.4.6, but it recorded no digest for the downloaded source and the wheel embeds no component SBOM. A current tag archive is not proof of the bytes used to build this payload."
           }
         ],
         "native_payloads": [
@@ -8642,15 +8654,15 @@
         "payload_dispositions": [
           {
             "kind": "known-omission",
-            "omission": "missing-native-sbom",
+            "omission": "unproven-libffi-build-input",
             "role": "_cffi_backend.cpython-314.so"
           }
         ],
         "review": {
-          "reason": "The native extension has no embedded component inventory.",
+          "reason": "The exact libffi build input and its relationship to the native extension are unproven.",
           "state": "open",
           "unresolved_items": [
-            "missing-native-sbom"
+            "unproven-libffi-build-input"
           ]
         },
         "sboms": [],
@@ -8683,6 +8695,7 @@
             "reference_payload_role": "greenlet.libs/libgcc_s.so.1"
           }
         ],
+        "cargo_lock": null,
         "component_reviews": [],
         "known_omissions": [
           {
@@ -9841,6 +9854,7 @@
       },
       {
         "canonical_relationships": [],
+        "cargo_lock": null,
         "component_reviews": [
           {
             "observations": [
@@ -10012,6 +10026,7 @@
       },
       {
         "canonical_relationships": [],
+        "cargo_lock": null,
         "component_reviews": [],
         "known_omissions": [],
         "native_payloads": [
@@ -10048,6 +10063,7 @@
       },
       {
         "canonical_relationships": [],
+        "cargo_lock": null,
         "component_reviews": [],
         "known_omissions": [
           {
@@ -10665,6 +10681,7 @@
       },
       {
         "canonical_relationships": [],
+        "cargo_lock": null,
         "component_reviews": [],
         "known_omissions": [
           {
@@ -10672,7 +10689,7 @@
               "name": "libgcc",
               "purl": "",
               "type": "library",
-              "version": "14.2.0-r6"
+              "version": "12.4.0"
             },
             "id": "missing-libgcc-sbom",
             "missing_evidence": [
@@ -12977,6 +12994,7 @@
       },
       {
         "canonical_relationships": [],
+        "cargo_lock": null,
         "component_reviews": [],
         "known_omissions": [],
         "native_payloads": [

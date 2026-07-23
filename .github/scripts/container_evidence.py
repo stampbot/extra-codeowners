@@ -116,6 +116,8 @@ MAX_ALPINE_DISTFILES = 64
 MAX_ALPINE_RECIPE_LINKS = 64
 MAX_OWNER_SUBTREE_MEMBERS = 100_000
 MAX_OWNER_SUBTREE_BYTES = 256 * 1024 * 1024
+MAX_CARGO_LOCK_BYTES = 8 * 1024 * 1024
+MAX_CARGO_LOCK_PACKAGES = 100_000
 MAX_BUNDLE_DOWNLOADS = 10_000
 MAX_BUNDLE_DOWNLOAD_BYTES = 1024 * 1024 * 1024
 MAX_BUNDLE_FILES = 100_000
@@ -168,6 +170,8 @@ PACKAGE_URL = re.compile(
     r"^pkg:[a-z][a-z0-9.+-]*/[^\s/?#]+(?:/[^\s/?#]+)*(?:@[^\s/?#]+)?"
     r"(?:\?[^\s#]+)?(?:#[^\s]+)?$"
 )
+CARGO_CRATES_IO_SOURCE = "registry+https://github.com/rust-lang/crates.io-index"
+CARGO_PACKAGE_NAME = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]*$")
 NORMALIZE_NAME = re.compile(r"[-_.]+")
 APK_PACKAGE_NAME = re.compile(r"^(?:[a-z0-9]|\.[a-z0-9])[a-z0-9+_.-]{0,199}$")
 APK_ORIGIN = re.compile(r"^[a-z0-9][a-z0-9+_.-]{0,199}$")
@@ -4066,6 +4070,11 @@ def validate_crates_io_component_source(source_id: str, raw_record: object) -> M
             != value
         ):
             raise EvidenceError(f"native-component source {source_id} has an invalid {field}")
+    expected_normalized_license = (
+        "MIT OR Apache-2.0" if record["raw_license"] == "MIT/Apache-2.0" else record["raw_license"]
+    )
+    if record["normalized_license"] != expected_normalized_license:
+        raise EvidenceError(f"native-component source {source_id} license normalization differs")
     notices = validate_native_source_notices(record["notices"], source_id)
     if any(notice["member"] == expected_member for notice in notices):
         raise EvidenceError(f"native-component source {source_id} repeats its manifest as a notice")
@@ -4194,6 +4203,337 @@ def native_component_sources(policy: Mapping[str, Any]) -> Mapping[str, Mapping[
             raise EvidenceError(f"native-component source {source_id} has an unsupported kind")
         sources[source_id] = validator(source_id, raw_record)
     return sources
+
+
+def cargo_package_identity(value: object, source: str) -> tuple[str, str, str, str]:
+    """Validate one exact crates.io ``Cargo.lock`` package identity."""
+
+    record = require_exact_fields(
+        value,
+        {"name", "version", "source", "checksum"},
+        source,
+    )
+    name = record["name"]
+    version = record["version"]
+    registry = record["source"]
+    checksum = record["checksum"]
+    if (
+        not isinstance(name, str)
+        or checked_scalar(name, f"{source} name") != name
+        or CARGO_PACKAGE_NAME.fullmatch(name) is None
+        or not isinstance(version, str)
+        or checked_scalar(version, f"{source} version") != version
+        or registry != CARGO_CRATES_IO_SOURCE
+        or not isinstance(checksum, str)
+        or re.fullmatch(r"[0-9a-f]{64}", checksum) is None
+    ):
+        raise EvidenceError(f"{source} has an invalid package identity")
+    return name, version, registry, checksum
+
+
+def validate_cargo_lock_context(
+    value: object,
+    *,
+    owner: str,
+    sources: Mapping[str, Mapping[str, Any]],
+    crate_source_ids: set[str],
+) -> Mapping[str, Any] | None:
+    """Validate the exact lockfile context required by crates.io reviews."""
+
+    if value is None:
+        if crate_source_ids:
+            raise EvidenceError(
+                f"native-component coverage {owner} crate reviews require Cargo.lock context"
+            )
+        return None
+    if not crate_source_ids:
+        raise EvidenceError(
+            f"native-component coverage {owner} has Cargo.lock context without crate reviews"
+        )
+    record = require_exact_fields(
+        value,
+        {"member", "sha256", "size", "source_ids", "non_sbom_packages"},
+        f"native-component coverage {owner} Cargo.lock",
+    )
+    member = record["member"]
+    digest = record["sha256"]
+    size = record["size"]
+    if (
+        not isinstance(member, str)
+        or str(
+            checked_canonical_path(
+                member,
+                f"native-component coverage {owner} Cargo.lock member",
+            )
+        )
+        != member
+        or PurePosixPath(member).name != "Cargo.lock"
+        or not isinstance(digest, str)
+        or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+        or not isinstance(size, int)
+        or isinstance(size, bool)
+        or not 0 < size <= MAX_CARGO_LOCK_BYTES
+    ):
+        raise EvidenceError(f"native-component coverage {owner} has invalid Cargo.lock identity")
+
+    raw_source_ids = record["source_ids"]
+    if (
+        not isinstance(raw_source_ids, list)
+        or len(raw_source_ids) > MAX_CARGO_LOCK_PACKAGES
+        or not all(isinstance(source_id, str) for source_id in raw_source_ids)
+        or raw_source_ids != sorted(set(raw_source_ids))
+        or set(raw_source_ids) != crate_source_ids
+    ):
+        raise EvidenceError(
+            f"native-component coverage {owner} Cargo.lock source IDs differ from crate reviews"
+        )
+    for source_id in raw_source_ids:
+        source_record = sources.get(source_id)
+        if source_record is None or source_record["kind"] != "crates-io":
+            raise EvidenceError(
+                f"native-component coverage {owner} Cargo.lock has a non-crate source ID"
+            )
+
+    raw_non_sbom = record["non_sbom_packages"]
+    if not isinstance(raw_non_sbom, list) or len(raw_non_sbom) > MAX_CARGO_LOCK_PACKAGES:
+        raise EvidenceError(
+            f"native-component coverage {owner} Cargo.lock has invalid non-SBOM packages"
+        )
+    non_sbom = [
+        cargo_package_identity(
+            package,
+            f"native-component coverage {owner} Cargo.lock non-SBOM package {index}",
+        )
+        for index, package in enumerate(raw_non_sbom)
+    ]
+    if non_sbom != sorted(set(non_sbom)):
+        raise EvidenceError(
+            f"native-component coverage {owner} Cargo.lock non-SBOM packages are not canonical"
+        )
+    reviewed_identities = {
+        (str(sources[source_id]["name"]), str(sources[source_id]["version"]))
+        for source_id in raw_source_ids
+    }
+    if reviewed_identities & {(name, version) for name, version, _source, _checksum in non_sbom}:
+        raise EvidenceError(
+            f"native-component coverage {owner} Cargo.lock repeats a reviewed crate as non-SBOM"
+        )
+    return record
+
+
+def cargo_purl_identity(value: object, source: str) -> tuple[str, str] | None:
+    """Return one Cargo name/version identity, or ``None`` for another ecosystem."""
+
+    if not isinstance(value, str) or not value.startswith("pkg:cargo/"):
+        return None
+    package = value.removeprefix("pkg:cargo/").split("?", maxsplit=1)[0].split("#", maxsplit=1)[0]
+    if "/" in package or "@" not in package:
+        raise EvidenceError(f"{source} has an invalid Cargo purl")
+    raw_name, raw_version = package.rsplit("@", maxsplit=1)
+    try:
+        name = urllib.parse.unquote(raw_name, errors="strict")
+        version = urllib.parse.unquote(raw_version, errors="strict")
+    except UnicodeDecodeError as exc:
+        raise EvidenceError(f"{source} has an invalid Cargo purl") from exc
+    if (
+        CARGO_PACKAGE_NAME.fullmatch(name) is None
+        or not version
+        or checked_scalar(version, f"{source} Cargo version") != version
+    ):
+        raise EvidenceError(f"{source} has an invalid Cargo purl")
+    return name, version
+
+
+def cyclonedx_reviewed_license(value: object, source: str) -> str:
+    """Return one exact supported CycloneDX license observation."""
+
+    if not isinstance(value, list) or len(value) != 1:
+        raise EvidenceError(f"{source} must have exactly one license observation")
+    record = value[0]
+    if not isinstance(record, dict):
+        raise EvidenceError(f"{source} has an unsupported license observation")
+    if set(record) == {"expression"}:
+        expression = record["expression"]
+    elif set(record) == {"license"}:
+        license_record = record["license"]
+        if not isinstance(license_record, dict) or set(license_record) != {"id"}:
+            raise EvidenceError(f"{source} has an unsupported license observation")
+        expression = license_record["id"]
+    else:
+        raise EvidenceError(f"{source} has an unsupported license observation")
+    if (
+        not isinstance(expression, str)
+        or checked_scalar(
+            expression,
+            source,
+            max_length=MAX_LICENSE_FIELD_LENGTH,
+        )
+        != expression
+    ):
+        raise EvidenceError(f"{source} has an invalid license observation")
+    return expression
+
+
+def verify_owner_cargo_lock(
+    owner_context: Mapping[str, Any],
+    sources: Mapping[str, Mapping[str, Any]],
+    owner_archive: bytes,
+    *,
+    archive_name: str,
+) -> bytes | None:
+    """Verify exact lockfile membership and crate checksums in one retained owner sdist."""
+
+    owner = str(owner_context["owner"])
+    lock_context = owner_context["record"]["cargo_lock"]
+    if lock_context is None:
+        return None
+    member = str(lock_context["member"])
+    found = reviewed_files_from_source_archive(
+        owner_archive,
+        archive_name=archive_name,
+        source_id=f"{owner} Cargo.lock",
+        expected={
+            member: {
+                "sha256": lock_context["sha256"],
+                "size": lock_context["size"],
+            }
+        },
+        max_member_bytes=MAX_CARGO_LOCK_BYTES,
+    )
+    if set(found) != {member}:
+        raise EvidenceError(f"retained owner sdist omits exact Cargo.lock member for {owner}")
+    content = found[member]
+    try:
+        document = tomllib.loads(content.decode("utf-8"))
+    except (UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
+        raise EvidenceError(f"retained owner Cargo.lock is invalid for {owner}") from exc
+    if not isinstance(document, dict) or set(document) != {"version", "package"}:
+        raise EvidenceError(f"retained owner Cargo.lock has an unexpected shape for {owner}")
+    lock_version = document["version"]
+    raw_packages = document["package"]
+    if (
+        not isinstance(lock_version, int)
+        or isinstance(lock_version, bool)
+        or lock_version not in {3, 4}
+        or not isinstance(raw_packages, list)
+        or not 1 <= len(raw_packages) <= MAX_CARGO_LOCK_PACKAGES
+    ):
+        raise EvidenceError(f"retained owner Cargo.lock has invalid bounds for {owner}")
+
+    registry_packages: dict[tuple[str, str], tuple[str, str, str, str]] = {}
+    local_packages: set[tuple[str, str]] = set()
+    for index, raw_package in enumerate(raw_packages):
+        if not isinstance(raw_package, dict) or not {"name", "version"} <= set(raw_package):
+            raise EvidenceError(f"retained owner Cargo.lock has an invalid package for {owner}")
+        if set(raw_package) - {"name", "version", "source", "checksum", "dependencies"}:
+            raise EvidenceError(
+                f"retained owner Cargo.lock package has unexpected fields for {owner}"
+            )
+        dependencies = raw_package.get("dependencies", [])
+        if (
+            not isinstance(dependencies, list)
+            or len(dependencies) > MAX_CARGO_LOCK_PACKAGES
+            or not all(
+                isinstance(dependency, str)
+                and checked_scalar(
+                    dependency,
+                    f"retained owner Cargo.lock dependency {index}",
+                )
+                == dependency
+                for dependency in dependencies
+            )
+        ):
+            raise EvidenceError(
+                f"retained owner Cargo.lock package has invalid dependencies for {owner}"
+            )
+        name = raw_package["name"]
+        version = raw_package["version"]
+        if (
+            not isinstance(name, str)
+            or checked_scalar(name, f"retained owner Cargo.lock package {index} name") != name
+            or CARGO_PACKAGE_NAME.fullmatch(name) is None
+            or not isinstance(version, str)
+            or checked_scalar(version, f"retained owner Cargo.lock package {index} version")
+            != version
+        ):
+            raise EvidenceError(f"retained owner Cargo.lock has an invalid package for {owner}")
+        identity = (name, version)
+        registry = raw_package.get("source")
+        checksum = raw_package.get("checksum")
+        if registry is None:
+            if checksum is not None or identity in local_packages or identity in registry_packages:
+                raise EvidenceError(
+                    f"retained owner Cargo.lock repeats or corrupts a local package for {owner}"
+                )
+            local_packages.add(identity)
+            continue
+        if registry != CARGO_CRATES_IO_SOURCE:
+            raise EvidenceError(f"retained owner Cargo.lock uses a foreign registry for {owner}")
+        canonical = cargo_package_identity(
+            {
+                "name": name,
+                "version": version,
+                "source": registry,
+                "checksum": checksum,
+            },
+            f"retained owner Cargo.lock package {index}",
+        )
+        if identity in registry_packages or identity in local_packages:
+            raise EvidenceError(f"retained owner Cargo.lock repeats a package for {owner}")
+        registry_packages[identity] = canonical
+
+    expected_registry: dict[tuple[str, str], tuple[str, str, str, str]] = {}
+    for source_id in lock_context["source_ids"]:
+        source_record = sources[source_id]
+        identity = (str(source_record["name"]), str(source_record["version"]))
+        expected_registry[identity] = (
+            identity[0],
+            identity[1],
+            CARGO_CRATES_IO_SOURCE,
+            str(source_record["crate"]["sha256"]),
+        )
+    for package in lock_context["non_sbom_packages"]:
+        canonical = cargo_package_identity(package, f"{owner} Cargo.lock non-SBOM package")
+        identity = (canonical[0], canonical[1])
+        if identity in expected_registry:
+            raise EvidenceError(f"{owner} Cargo.lock repeats a reviewed package")
+        expected_registry[identity] = canonical
+    if registry_packages != expected_registry:
+        raise EvidenceError(
+            f"retained owner Cargo.lock registry packages differ from reviewed context for {owner}"
+        )
+
+    expected_local: set[tuple[str, str]] = set()
+    for reference in owner_context["owner_root_observations"]:
+        observation = owner_context["observations"][reference]
+        cargo_identity = cargo_purl_identity(
+            observation["purl"],
+            f"{owner} Cargo owner root",
+        )
+        if cargo_identity is not None:
+            expected_local.add(cargo_identity)
+    for review in owner_context["record"]["component_reviews"]:
+        source_record = sources[str(review["source"])]
+        if source_record["kind"] != "owner-sdist-subpath":
+            continue
+        for raw_reference in review["observations"]:
+            reference = validate_observation_reference(
+                raw_reference,
+                f"{owner} local Cargo observation",
+            )
+            observation = owner_context["observations"][reference]
+            cargo_identity = cargo_purl_identity(
+                observation["purl"],
+                f"{owner} local Cargo observation",
+            )
+            if cargo_identity is not None:
+                expected_local.add(cargo_identity)
+    if local_packages != expected_local:
+        raise EvidenceError(
+            "retained owner Cargo.lock local packages differ from reviewed "
+            f"observations for {owner}"
+        )
+    return content
 
 
 def verify_upstream_checksum_document(
@@ -4648,7 +4988,15 @@ def validate_component_review_source_binding(
         )
     for reference in references:
         observation = observations[reference]
-        if observation["purl"] != expected_purl or expected_hash not in observation["hashes"]:
+        observed_license = cyclonedx_reviewed_license(
+            observation["licenses"],
+            f"native-component coverage {owner} crate review {source_id}",
+        )
+        if (
+            observation["purl"] != expected_purl
+            or expected_hash not in observation["hashes"]
+            or observed_license != source_record["normalized_license"]
+        ):
             raise EvidenceError(
                 f"native-component coverage {owner} crate review differs from {source_id}"
             )
@@ -4669,6 +5017,7 @@ def validate_native_owner_review(
             "owner",
             "wheel",
             "owner_source",
+            "cargo_lock",
             "native_payloads",
             "sboms",
             "component_reviews",
@@ -4861,6 +5210,7 @@ def validate_native_owner_review(
     if not isinstance(raw_reviews, list) or len(raw_reviews) > MAX_COMPONENT_REVIEWS:
         raise EvidenceError(f"native-component coverage {owner} has invalid component reviews")
     reviewed_observations: set[ObservationReferenceKey] = set()
+    crate_source_ids: set[str] = set()
     review_order: list[tuple[ObservationReferenceKey, ...]] = []
     for review_index, raw_review in enumerate(raw_reviews):
         review = require_exact_fields(
@@ -4885,6 +5235,8 @@ def validate_native_owner_review(
         if not isinstance(source_id, str) or source_id not in sources:
             raise EvidenceError(f"native-component coverage {owner} review has an unknown source")
         used_sources.add(source_id)
+        if sources[source_id]["kind"] == "crates-io":
+            crate_source_ids.add(source_id)
         reviewed_license = review["reviewed_license"]
         if (
             not isinstance(reviewed_license, str)
@@ -4912,6 +5264,12 @@ def validate_native_owner_review(
         raise EvidenceError(
             f"native-component coverage {owner} component reviews are not canonical"
         )
+    cargo_lock = validate_cargo_lock_context(
+        owner_record["cargo_lock"],
+        owner=owner,
+        sources=sources,
+        crate_source_ids=crate_source_ids,
+    )
 
     raw_omissions = owner_record["known_omissions"]
     if not isinstance(raw_omissions, list) or len(raw_omissions) > MAX_KNOWN_OMISSIONS:
@@ -5250,7 +5608,9 @@ def validate_native_owner_review(
         "record": owner_record,
         "owner": owner,
         "state": state,
+        "cargo_lock": cargo_lock,
         "observations": observations,
+        "owner_root_observations": owner_root_observations,
         "reviewed_observations": reviewed_observations,
         "relationship_observations": relationship_observations,
         "payloads": {str(payload["role"]): payload for payload in payloads},
@@ -5570,6 +5930,7 @@ def native_owner_semantic_projection(
     return {
         "owner": record["owner"],
         "owner_source": record["owner_source"],
+        "cargo_lock": record["cargo_lock"],
         "native_payload_roles": [payload["role"] for payload in record["native_payloads"]],
         "sboms": sboms,
         "component_reviews": reviews,
@@ -8667,6 +9028,7 @@ def reviewed_files_from_source_archive(
     archive_name: str,
     source_id: str,
     expected: Mapping[str, Mapping[str, Any]],
+    max_member_bytes: int = MAX_LICENSE_BYTES,
 ) -> dict[str, bytes]:
     """Validate a hostile archive and return the reviewed regular files it contains."""
 
@@ -8700,7 +9062,7 @@ def reviewed_files_from_source_archive(
                 content = read_source_zip_payload(
                     archive,
                     entry,
-                    max_bytes=MAX_LICENSE_BYTES,
+                    max_bytes=max_member_bytes,
                     purpose="reviewed source file",
                 )
                 requirement = expected[path]
@@ -8755,6 +9117,10 @@ def reviewed_files_from_source_archive(
                     raise EvidenceError(f"source archive exceeds the size limit: {source_id}")
                 if path not in expected:
                     continue
+                if member.size > max_member_bytes:
+                    raise EvidenceError(
+                        f"reviewed source file exceeds its size limit: {source_id}/{path}"
+                    )
                 content = read_member(tar_source, member)
                 requirement = expected[path]
                 if (
@@ -10468,6 +10834,36 @@ def build_bundle(
                 sources=source_policies,
                 used_sources=set(),
             )
+            if context["cargo_lock"] is not None:
+                _owner, owner_name, owner_version = parse_native_owner(
+                    owner_record["owner"],
+                    "Cargo.lock source owner",
+                )
+                cached_owner_source = python_source_archives.get((owner_name, owner_version))
+                if cached_owner_source is None:
+                    raise EvidenceError(
+                        "native owner with Cargo.lock context has no retained Python "
+                        f"source archive: {owner_record['owner']}"
+                    )
+                owner_archive, _owner_urls, owner_relative = cached_owner_source
+                cargo_lock = verify_owner_cargo_lock(
+                    context,
+                    source_policies,
+                    owner_archive,
+                    archive_name=owner_relative,
+                )
+                assert cargo_lock is not None
+                lock_relative = (
+                    "sources/cargo-locks/"
+                    f"{sha256_bytes(str(owner_record['owner']).encode())[:20]}/Cargo.lock"
+                )
+                write_file(
+                    root,
+                    lock_relative,
+                    cargo_lock,
+                    budget=budget,
+                    max_bytes=MAX_CARGO_LOCK_BYTES,
+                )
             for component_review in owner_record["component_reviews"]:
                 source_id = str(component_review["source"])
                 for raw_reference in component_review["observations"]:

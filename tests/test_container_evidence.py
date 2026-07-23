@@ -10,6 +10,7 @@ import stat
 import subprocess
 import sys
 import tarfile
+import tomllib
 import zipfile
 import zlib
 from collections.abc import Iterable
@@ -1033,6 +1034,7 @@ def native_component_v7_policy_case() -> dict[str, Any]:
                 "owner": fixture_owner["owner"],
                 "wheel": copy.deepcopy(fixture_owner["wheel"]),
                 "owner_source": copy.deepcopy(fixture_owner["owner_source"]),
+                "cargo_lock": None,
                 "native_payloads": native_payloads,
                 "sboms": [
                     {
@@ -3955,6 +3957,13 @@ def test_native_component_v7_crate_review_binds_purl_hash_and_normalized_license
                 "reviewed_license": "MIT OR Apache-2.0",
             }
         ]
+        owner["cargo_lock"] = {
+            "member": "demo-1.0/Cargo.lock",
+            "sha256": "e" * 64,
+            "size": 100,
+            "source_ids": [source_id],
+            "non_sbom_packages": [],
+        }
         owner["payload_dispositions"][0]["observations"] = [reference]
     evidence.validate_native_component_policy_schema(policy)
 
@@ -3981,6 +3990,215 @@ def test_native_component_v7_crate_review_binds_purl_hash_and_normalized_license
         )
     with pytest.raises(evidence.EvidenceError, match="crate review differs"):
         evidence.validate_native_component_policy_schema(wrong_hash)
+
+    wrong_observed_license = copy.deepcopy(policy)
+    for records in wrong_observed_license["native_component_coverage"].values():
+        owner = records[0]
+        sbom = owner["sboms"][0]
+        sbom["observation"]["components"][0]["licenses"] = [{"expression": "GPL-3.0-only"}]
+        body = {
+            field: sbom["observation"][field]
+            for field in (
+                "metadata_component",
+                "metadata_root_echo",
+                "upstream_invalid_duplicate_bom_ref",
+                "components",
+            )
+        }
+        sbom["observation"]["observation_sha256"] = evidence.sha256_bytes(
+            evidence.canonical_json(body)
+        )
+        rebind_policy_observation_digest(
+            owner,
+            sbom_path=sbom["path"],
+            observation_sha256=sbom["observation"]["observation_sha256"],
+        )
+    with pytest.raises(evidence.EvidenceError, match="crate review differs"):
+        evidence.validate_native_component_policy_schema(wrong_observed_license)
+
+
+def test_native_component_v7_crate_review_requires_exact_cargo_lock_context() -> None:
+    policy = native_component_v7_policy_case()
+    source_id = "crates-io:demo-crate@1.2.3"
+    source = {
+        "kind": "crates-io",
+        "name": "demo-crate",
+        "version": "1.2.3",
+        "crate": {
+            "url": "https://static.crates.io/crates/demo-crate/demo-crate-1.2.3.crate",
+            "sha256": "a" * 64,
+            "size": 100,
+        },
+        "manifest": {
+            "member": "demo-crate-1.2.3/Cargo.toml",
+            "sha256": "b" * 64,
+            "size": 100,
+        },
+        "raw_license": "MIT",
+        "normalized_license": "MIT",
+        "notices": [
+            {
+                "member": "demo-crate-1.2.3/LICENSE",
+                "sha256": "c" * 64,
+                "size": 100,
+            }
+        ],
+    }
+    policy["native_component_sources"] = {source_id: source}
+    for records in policy["native_component_coverage"].values():
+        owner = records[0]
+        sbom = owner["sboms"][0]
+        component = sbom["observation"]["components"][0]
+        component.update(
+            {
+                "name": "demo-crate",
+                "version": "1.2.3",
+                "purl": "pkg:cargo/demo-crate@1.2.3",
+                "bom_ref": "pkg:cargo/demo-crate@1.2.3",
+                "hashes": [{"alg": "SHA-256", "content": "a" * 64}],
+                "licenses": [{"license": {"id": "MIT"}}],
+            }
+        )
+        body = {
+            field: sbom["observation"][field]
+            for field in (
+                "metadata_component",
+                "metadata_root_echo",
+                "upstream_invalid_duplicate_bom_ref",
+                "components",
+            )
+        }
+        sbom["observation"]["observation_sha256"] = evidence.sha256_bytes(
+            evidence.canonical_json(body)
+        )
+        reference = evidence.retained_observation_reference(
+            sbom["path"],
+            sbom["observation"]["observation_sha256"],
+            component,
+        )
+        owner["component_reviews"] = [
+            {
+                "observations": [reference],
+                "source": source_id,
+                "reviewed_license": "MIT",
+            }
+        ]
+        owner["payload_dispositions"][0]["observations"] = [reference]
+
+    with pytest.raises(evidence.EvidenceError, match=r"require Cargo\.lock context"):
+        evidence.validate_native_component_policy_schema(policy)
+
+    for records in policy["native_component_coverage"].values():
+        records[0]["cargo_lock"] = {
+            "member": "demo-1.0/Cargo.lock",
+            "sha256": "d" * 64,
+            "size": 100,
+            "source_ids": [source_id],
+            "non_sbom_packages": [],
+        }
+    evidence.validate_native_component_policy_schema(policy)
+
+    wrong_sources = copy.deepcopy(policy)
+    for records in wrong_sources["native_component_coverage"].values():
+        records[0]["cargo_lock"]["source_ids"] = []
+    with pytest.raises(evidence.EvidenceError, match="source IDs differ"):
+        evidence.validate_native_component_policy_schema(wrong_sources)
+
+    overlap = copy.deepcopy(policy)
+    for records in overlap["native_component_coverage"].values():
+        records[0]["cargo_lock"]["non_sbom_packages"] = [
+            {
+                "name": "demo-crate",
+                "version": "1.2.3",
+                "source": evidence.CARGO_CRATES_IO_SOURCE,
+                "checksum": "a" * 64,
+            }
+        ]
+    with pytest.raises(evidence.EvidenceError, match="repeats a reviewed crate"):
+        evidence.validate_native_component_policy_schema(overlap)
+
+    cross_platform_drift = copy.deepcopy(policy)
+    cross_platform_drift["native_component_coverage"]["linux/arm64"][0]["cargo_lock"]["sha256"] = (
+        "e" * 64
+    )
+    with pytest.raises(evidence.EvidenceError, match="semantics differ across platforms"):
+        evidence.validate_native_component_policy_schema(cross_platform_drift)
+
+
+def test_cargo_lock_verifier_rejects_missing_duplicate_foreign_and_unreviewed_packages() -> None:
+    source_id = "crates-io:demo-crate@1.2.3"
+    checksum_a = "a" * 64
+    checksum_b = "b" * 64
+    sources = {
+        source_id: {
+            "kind": "crates-io",
+            "name": "demo-crate",
+            "version": "1.2.3",
+            "crate": {"sha256": checksum_a},
+        }
+    }
+    package = (
+        "[[package]]\n"
+        'name = "demo-crate"\n'
+        'version = "1.2.3"\n'
+        f'source = "{evidence.CARGO_CRATES_IO_SOURCE}"\n'
+        f'checksum = "{checksum_a}"\n'
+    )
+    valid = f"version = 4\n\n{package}".encode()
+
+    def verify(content: bytes, *, context_content: bytes | None = None) -> None:
+        expected = content if context_content is None else context_content
+        context = {
+            "owner": "python:demo@1.0",
+            "owner_root_observations": set(),
+            "observations": {},
+            "record": {
+                "cargo_lock": {
+                    "member": "demo-1.0/Cargo.lock",
+                    "sha256": evidence.sha256_bytes(expected),
+                    "size": len(expected),
+                    "source_ids": [source_id],
+                    "non_sbom_packages": [],
+                },
+                "component_reviews": [],
+            },
+        }
+        evidence.verify_owner_cargo_lock(
+            context,
+            sources,
+            tar_bytes({"demo-1.0/Cargo.lock": content}),
+            archive_name="demo-1.0.tar.gz",
+        )
+
+    verify(valid)
+
+    missing = valid.replace(b"demo-crate", b"other-crate")
+    with pytest.raises(evidence.EvidenceError, match="registry packages differ"):
+        verify(missing)
+
+    duplicate = valid + b"\n" + package.encode()
+    with pytest.raises(evidence.EvidenceError, match="repeats a package"):
+        verify(duplicate)
+
+    foreign = valid.replace(
+        evidence.CARGO_CRATES_IO_SOURCE.encode(),
+        b"registry+https://example.com/index",
+    )
+    with pytest.raises(evidence.EvidenceError, match="foreign registry"):
+        verify(foreign)
+
+    extra = (
+        valid
+        + b"\n[[package]]\n"
+        + b'name = "lock-only"\nversion = "9.0.0"\n'
+        + f'source = "{evidence.CARGO_CRATES_IO_SOURCE}"\n'.encode()
+        + f'checksum = "{checksum_b}"\n'.encode()
+    )
+    with pytest.raises(evidence.EvidenceError, match="registry packages differ"):
+        verify(extra)
+
+    with pytest.raises(evidence.EvidenceError, match="reviewed source file differs"):
+        verify(valid + b"\n", context_content=valid)
 
 
 def test_native_component_v7_open_owner_requires_exact_unresolved_evidence() -> None:
@@ -4141,7 +4359,7 @@ def test_committed_native_owner_policy_is_exact_and_incomplete() -> None:
         "python:sqlalchemy@2.0.51": "closed",
     }
     expected_omissions = {
-        "python:cffi@2.1.0": ["missing-native-sbom"],
+        "python:cffi@2.1.0": ["unproven-libffi-build-input"],
         "python:cryptography@48.0.1": ["unresolved-rust-and-openssl-sources"],
         "python:greenlet@3.5.3": [],
         "python:markupsafe@3.0.3": [],
@@ -4165,6 +4383,15 @@ def test_committed_native_owner_policy_is_exact_and_incomplete() -> None:
             record["owner"]: [omission["id"] for omission in record["known_omissions"]]
             for record in owners
         } == expected_omissions
+        pydantic = next(
+            record for record in owners if record["owner"] == "python:pydantic-core@2.46.4"
+        )
+        libgcc = next(
+            omission
+            for omission in pydantic["known_omissions"]
+            if omission["id"] == "missing-libgcc-sbom"
+        )
+        assert libgcc["component"]["version"] == "12.4.0"
         assert (
             sum(
                 sbom["metadata_root"]["anomaly_review"] is not None
@@ -6697,6 +6924,477 @@ def auditwheel_fixture_bytes(filename: str) -> bytes:
         b"".join(fixture.read_bytes().splitlines()),
         validate=True,
     )
+
+
+def real_v7_fixture_bytes(filename: str) -> bytes:
+    fixture = (
+        Path(__file__).parent
+        / "fixtures"
+        / "container_evidence"
+        / "v7"
+        / "real"
+        / f"{filename}.b64"
+    )
+    return base64.b64decode(
+        b"".join(fixture.read_bytes().splitlines()),
+        validate=True,
+    )
+
+
+def real_v7_crate_bytes(name: str, version: str) -> bytes:
+    fixture = (
+        Path(__file__).parent
+        / "fixtures"
+        / "container_evidence"
+        / "v7"
+        / "real"
+        / "crates"
+        / f"{name}-{version}.crate.b64"
+    )
+    return base64.b64decode(
+        b"".join(fixture.read_bytes().splitlines()),
+        validate=True,
+    )
+
+
+def real_rust_cargo_lock_case(
+    *,
+    owner: str,
+    sbom_filename: str,
+    installed_sbom_path: str,
+    lock_filename: str,
+    lock_member: str,
+    metadata_is_owner: bool,
+) -> tuple[
+    dict[str, Any],
+    dict[str, dict[str, Any]],
+    bytes,
+    dict[str, Any],
+]:
+    """Build a verification context from exact locked-package Rust evidence."""
+
+    raw_sbom = real_v7_fixture_bytes(sbom_filename)
+    parsed = evidence.parse_cyclonedx_sbom(raw_sbom, sbom_filename)
+    sbom_path = f"opt/venv/lib/python3.14/site-packages/{installed_sbom_path}"
+    observation_sha256 = parsed["observation_sha256"]
+    observations: dict[tuple[str, str, str, str, str], dict[str, Any]] = {}
+    owner_roots: set[tuple[str, str, str, str, str]] = set()
+    local_references: list[dict[str, str]] = []
+    sources: dict[str, dict[str, Any]] = {}
+
+    projected = [
+        *([parsed["metadata_component"]] if parsed["metadata_component"] is not None else []),
+        *parsed["components"],
+    ]
+    for index, component in enumerate(projected):
+        reference = evidence.retained_observation_reference(
+            sbom_path,
+            observation_sha256,
+            component,
+        )
+        key = evidence.validate_observation_reference(
+            reference,
+            f"real Rust fixture observation {index}",
+        )
+        observations[key] = component
+        identity = evidence.cargo_purl_identity(
+            component["purl"],
+            f"real Rust fixture observation {index}",
+        )
+        if identity is None:
+            continue
+        if "download_url=file:" in component["purl"]:
+            if index == 0 and parsed["metadata_component"] is not None and metadata_is_owner:
+                owner_roots.add(key)
+            else:
+                local_references.append(reference)
+            continue
+        hashes = [item["content"] for item in component["hashes"] if item["alg"] == "SHA-256"]
+        assert len(hashes) == 1
+        name, version = identity
+        source_id = f"crates-io:{name}@{version}"
+        sources[source_id] = {
+            "kind": "crates-io",
+            "name": name,
+            "version": version,
+            "crate": {"sha256": hashes[0]},
+        }
+
+    local_source_id = f"owner-sdist:{owner}#src/rust"
+    sources[local_source_id] = {
+        "kind": "owner-sdist-subpath",
+        "owner": owner,
+    }
+    lock_bytes = real_v7_fixture_bytes(lock_filename)
+    lock = tomllib.loads(lock_bytes.decode("utf-8"))
+    reviewed = {
+        (record["name"], record["version"])
+        for source_id, record in sources.items()
+        if source_id.startswith("crates-io:")
+    }
+    non_sbom_packages = sorted(
+        (
+            {
+                "name": package["name"],
+                "version": package["version"],
+                "source": package["source"],
+                "checksum": package["checksum"],
+            }
+            for package in lock["package"]
+            if package.get("source") == evidence.CARGO_CRATES_IO_SOURCE
+            and (package["name"], package["version"]) not in reviewed
+        ),
+        key=lambda record: (
+            record["name"],
+            record["version"],
+            record["source"],
+            record["checksum"],
+        ),
+    )
+    cargo_lock = {
+        "member": lock_member,
+        "sha256": evidence.sha256_bytes(lock_bytes),
+        "size": len(lock_bytes),
+        "source_ids": sorted(
+            source_id for source_id in sources if source_id.startswith("crates-io:")
+        ),
+        "non_sbom_packages": non_sbom_packages,
+    }
+    component_reviews = (
+        [
+            {
+                "observations": sorted(
+                    local_references,
+                    key=evidence.canonical_json,
+                ),
+                "source": local_source_id,
+                "reviewed_license": "fixture-only",
+            }
+        ]
+        if local_references
+        else []
+    )
+    context = {
+        "owner": owner,
+        "owner_root_observations": owner_roots,
+        "observations": observations,
+        "record": {
+            "cargo_lock": cargo_lock,
+            "component_reviews": component_reviews,
+        },
+    }
+    archive = tar_bytes({lock_member: lock_bytes})
+    return context, sources, archive, parsed
+
+
+@pytest.mark.parametrize(
+    ("name", "version", "crate_sha256"),
+    (
+        (
+            "cfg-if",
+            "1.0.0",
+            "baf1de4339761588bc0619e3cbc0120ee582ebb74b53b4efbf79117bd2da40fd",
+        ),
+        (
+            "lexical-parse-float",
+            "1.0.5",
+            "de6f9cb01fb0b08060209a057c048fcbab8717b4c1ecd2eac66ebfe39a65b0f2",
+        ),
+        (
+            "lexical-parse-integer",
+            "1.0.5",
+            "72207aae22fc0a121ba7b6d479e42cbfea549af1479c3f3a4f12c70dd66df12e",
+        ),
+        (
+            "lexical-util",
+            "1.0.6",
+            "5a82e24bf537fd24c177ffbbdc6ebcc8d54732c35b50a3f28cc3f4e4c949a0b3",
+        ),
+        (
+            "stable_deref_trait",
+            "1.2.0",
+            "a8f112729512f8e442d81f95a8a7ddf2b7c6b8a1a6f509a95864142b30cab2d3",
+        ),
+        (
+            "version_check",
+            "0.9.5",
+            "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a",
+        ),
+    ),
+)
+def test_real_pydantic_legacy_crate_licenses_preserve_raw_slash_spelling(
+    name: str,
+    version: str,
+    crate_sha256: str,
+) -> None:
+    crate = real_v7_crate_bytes(name, version)
+    assert evidence.sha256_bytes(crate) == crate_sha256
+    pydantic_sbom = evidence.parse_cyclonedx_sbom(
+        real_v7_fixture_bytes("pydantic_core-2.46.4.pydantic-core.cyclonedx.json"),
+        "Pydantic Core legacy-license fixture",
+    )
+    observed = [
+        component
+        for component in pydantic_sbom["components"]
+        if component["purl"] == f"pkg:cargo/{name}@{version}"
+    ]
+    assert len(observed) == 1
+    assert {"alg": "SHA-256", "content": crate_sha256} in observed[0]["hashes"]
+
+    manifest_member = f"{name}-{version}/Cargo.toml"
+    reviewed_files: dict[str, bytes] = {}
+    with tarfile.open(fileobj=io.BytesIO(crate), mode="r:*") as archive:
+        for member in archive:
+            if not member.isfile():
+                continue
+            if member.name != manifest_member and evidence.LICENSE_NAME.search(member.name) is None:
+                continue
+            stream = archive.extractfile(member)
+            assert stream is not None
+            reviewed_files[member.name] = stream.read()
+    manifest = reviewed_files[manifest_member]
+    assert tomllib.loads(manifest.decode("utf-8"))["package"]["license"] == "MIT/Apache-2.0"
+
+    notices = [
+        {
+            "member": member,
+            "sha256": evidence.sha256_bytes(content),
+            "size": len(content),
+        }
+        for member, content in sorted(reviewed_files.items())
+        if member != manifest_member
+    ]
+    source_id = f"crates-io:{name}@{version}"
+    source = {
+        "kind": "crates-io",
+        "name": name,
+        "version": version,
+        "crate": {
+            "url": f"https://static.crates.io/crates/{name}/{name}-{version}.crate",
+            "sha256": crate_sha256,
+            "size": len(crate),
+        },
+        "manifest": {
+            "member": manifest_member,
+            "sha256": evidence.sha256_bytes(manifest),
+            "size": len(manifest),
+        },
+        "raw_license": "MIT/Apache-2.0",
+        "normalized_license": "MIT OR Apache-2.0",
+        "notices": notices,
+    }
+    validated = evidence.validate_crates_io_component_source(source_id, source)
+    assert validated["raw_license"] == "MIT/Apache-2.0"
+    assert validated["normalized_license"] == "MIT OR Apache-2.0"
+    assert (
+        evidence.verify_crates_io_archive(
+            crate,
+            source_id=source_id,
+            source=validated,
+        )
+        == reviewed_files
+    )
+    if name == "cfg-if":
+        false_normalization = copy.deepcopy(source)
+        false_normalization["normalized_license"] = "MIT"
+        with pytest.raises(evidence.EvidenceError, match="normalization differs"):
+            evidence.validate_crates_io_component_source(source_id, false_normalization)
+
+
+def test_real_pydantic_cargo_lock_accounts_for_87_crates_and_16_lock_only_packages() -> None:
+    context, sources, archive, parsed = real_rust_cargo_lock_case(
+        owner="python:pydantic-core@2.46.4",
+        sbom_filename="pydantic_core-2.46.4.pydantic-core.cyclonedx.json",
+        installed_sbom_path=("pydantic_core-2.46.4.dist-info/sboms/pydantic-core.cyclonedx.json"),
+        lock_filename="pydantic_core-2.46.4.Cargo.lock",
+        lock_member="pydantic_core-2.46.4/Cargo.lock",
+        metadata_is_owner=True,
+    )
+    assert (
+        evidence.sha256_bytes(
+            real_v7_fixture_bytes("pydantic_core-2.46.4.pydantic-core.cyclonedx.json")
+        )
+        == "b2da43ae9b1f9f388f8845b6f96df645d16b7e5c8f9f9f2fa8e64ef894b59598"
+    )
+    assert len(parsed["components"]) == 88
+    assert len(context["record"]["cargo_lock"]["source_ids"]) == 87
+    assert len(context["record"]["cargo_lock"]["non_sbom_packages"]) == 16
+    assert [
+        (package["name"], package["version"])
+        for package in context["record"]["cargo_lock"]["non_sbom_packages"]
+    ] == [
+        ("bitflags", "2.9.1"),
+        ("bumpalo", "3.19.0"),
+        ("cc", "1.0.101"),
+        ("js-sys", "0.3.77"),
+        ("log", "0.4.27"),
+        ("portable-atomic", "1.6.0"),
+        ("r-efi", "5.2.0"),
+        ("rustversion", "1.0.17"),
+        ("wasi", "0.14.2+wasi-0.2.4"),
+        ("wasm-bindgen", "0.2.100"),
+        ("wasm-bindgen-backend", "0.2.100"),
+        ("wasm-bindgen-macro", "0.2.100"),
+        ("wasm-bindgen-macro-support", "0.2.100"),
+        ("wasm-bindgen-shared", "0.2.100"),
+        ("wit-bindgen-rt", "0.39.0"),
+        ("zerocopy-derive", "0.8.25"),
+    ]
+    assert evidence.verify_owner_cargo_lock(
+        context,
+        sources,
+        archive,
+        archive_name="pydantic_core-2.46.4.tar.gz",
+    ) == real_v7_fixture_bytes("pydantic_core-2.46.4.Cargo.lock")
+
+    missing_lock_only = copy.deepcopy(context)
+    missing_lock_only["record"]["cargo_lock"]["non_sbom_packages"].pop()
+    with pytest.raises(evidence.EvidenceError, match="registry packages differ"):
+        evidence.verify_owner_cargo_lock(
+            missing_lock_only,
+            sources,
+            archive,
+            archive_name="pydantic_core-2.46.4.tar.gz",
+        )
+
+    changed_source = copy.deepcopy(sources)
+    changed_source[context["record"]["cargo_lock"]["source_ids"][0]]["crate"]["sha256"] = "0" * 64
+    with pytest.raises(evidence.EvidenceError, match="registry packages differ"):
+        evidence.verify_owner_cargo_lock(
+            context,
+            changed_source,
+            archive,
+            archive_name="pydantic_core-2.46.4.tar.gz",
+        )
+
+
+def test_real_cryptography_cargo_lock_and_openssl_observation_are_retained() -> None:
+    context, sources, archive, parsed = real_rust_cargo_lock_case(
+        owner="python:cryptography@48.0.1",
+        sbom_filename="cryptography-48.0.1.cryptography-rust.cyclonedx.json",
+        installed_sbom_path=(
+            "cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+        ),
+        lock_filename="cryptography-48.0.1.Cargo.lock",
+        lock_member="cryptography-48.0.1/Cargo.lock",
+        metadata_is_owner=False,
+    )
+    assert (
+        evidence.sha256_bytes(
+            real_v7_fixture_bytes("cryptography-48.0.1.cryptography-rust.cyclonedx.json")
+        )
+        == "9b2b3873832a3999a192327543e07e9cdcd66f083fd77a009054ace71cc6e92f"
+    )
+    assert len(parsed["components"]) == 40
+    assert len(context["record"]["cargo_lock"]["source_ids"]) == 32
+    assert context["record"]["cargo_lock"]["non_sbom_packages"] == []
+    assert evidence.verify_owner_cargo_lock(
+        context,
+        sources,
+        archive,
+        archive_name="cryptography-48.0.1.tar.gz",
+    ) == real_v7_fixture_bytes("cryptography-48.0.1.Cargo.lock")
+
+    openssl_raw = real_v7_fixture_bytes("cryptography-48.0.1.openssl.cyclonedx.json")
+    assert evidence.sha256_bytes(openssl_raw) == (
+        "58f780e03ba9030ff66b3ed9e02c06e72a9f0a477caa3ae4299ab3e7b81c5f50"
+    )
+    openssl = evidence.parse_cyclonedx_sbom(openssl_raw, "cryptography OpenSSL fixture")
+    assert openssl["components"] == [
+        {
+            "type": "library",
+            "name": "openssl",
+            "version": "4.0.1",
+            "purl": (
+                "pkg:generic/openssl@4.0.1?download_url=https://github.com/openssl/"
+                "openssl/releases/download/openssl-4.0.1/openssl-4.0.1.tar.gz"
+            ),
+            "bom_ref": "",
+            "hashes": [
+                {
+                    "alg": "SHA-256",
+                    "content": "2db3f3a0d6ea4b59e1f094ace2c8cd536dffb87cdc39084c5afa1e6f7f37dd09",
+                }
+            ],
+            "licenses": [],
+        }
+    ]
+
+
+def test_real_cffi_libffi_candidate_cannot_replace_missing_build_provenance() -> None:
+    wheel = real_v7_fixture_bytes("cffi-2.1.0-cp314-musllinux-x86_64.whl")
+    assert evidence.sha256_bytes(wheel) == (
+        "dbf7c7a88e2bac086f06d14577332760bdeecc42bdec8ac4077f6260557d9326"
+    )
+    with zipfile.ZipFile(io.BytesIO(wheel)) as archive:
+        members = archive.namelist()
+        assert not any(".dist-info/sboms/" in member for member in members)
+        native_members = [member for member in members if member.endswith(".so")]
+        assert native_members == ["_cffi_backend.cpython-314-x86_64-linux-musl.so"]
+        extension = archive.read(native_members[0])
+    assert evidence.sha256_bytes(extension) == (
+        "d2ee0b7499f1b3fd3ee5bc6c7b90ee9d6111fdfb9901d32cff7cf462f094321f"
+    )
+    assert b"cffistatic_ffi_call" in extension
+    assert b"ffi_prep_cif" in extension
+    assert b"libffi.so" not in extension
+
+    policy = cast(dict[str, Any], json.loads(Path(".compliance/container-policy.json").read_text()))
+    for platform in ("linux/amd64", "linux/arm64"):
+        owner = next(
+            record
+            for record in policy["native_component_coverage"][platform]
+            if record["owner"] == "python:cffi@2.1.0"
+        )
+        assert owner["sboms"] == []
+        assert owner["review"]["state"] == "open"
+        assert owner["known_omissions"] == [
+            {
+                "component": {
+                    "name": "libffi",
+                    "purl": "",
+                    "type": "library",
+                    "version": "3.4.6",
+                },
+                "id": "unproven-libffi-build-input",
+                "missing_evidence": [
+                    "build-material-attestation",
+                    "exact-source",
+                    "sbom-observation",
+                    "source-payload-relationship",
+                ],
+                "observations": [],
+                "payload_roles": ["_cffi_backend.cpython-314.so"],
+                "reason": owner["known_omissions"][0]["reason"],
+            }
+        ]
+
+    candidate = copy.deepcopy(policy)
+    candidate["native_component_sources"]["upstream-release:libffi@3.4.6"] = {
+        "kind": "checksummed-upstream-release",
+        "name": "libffi",
+        "version": "3.4.6",
+        "archive": {
+            "url": "https://github.com/libffi/libffi/archive/refs/tags/v3.4.6.tar.gz",
+            "sha256": "9ac790464c1eb2f5ab5809e978a1683e9393131aede72d1b0a0703771d3c6cda",
+            "size": 1_000_000,
+        },
+        "checksum_document": {
+            "url": "https://example.com/libffi-3.4.6.tar.gz.sha256",
+            "sha256": "1" * 64,
+            "size": 100,
+        },
+        "checksum_filename": "v3.4.6.tar.gz",
+        "notices": [
+            {
+                "member": "libffi-3.4.6/LICENSE",
+                "sha256": "2" * 64,
+                "size": 100,
+            }
+        ],
+    }
+    with pytest.raises(evidence.EvidenceError, match="missing, extra, or unused"):
+        evidence.validate_native_component_policy_schema(candidate)
 
 
 @pytest.mark.parametrize(
