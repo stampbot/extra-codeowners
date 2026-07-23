@@ -9701,15 +9701,18 @@ def retain_reviewed_native_notices(
     root: Path,
     budget: BundleBudget,
 ) -> list[str]:
-    """Write exact reviewed native-source notices under deterministic paths."""
+    """Retain one copy of each reviewed native notice name and payload."""
 
     written: list[str] = []
+    retained: set[tuple[str, str]] = set()
     for notice_member, content in sorted(found.items()):
         digest = sha256_bytes(content)
-        relative = (
-            f"licenses/from-source/{component_directory}/"
-            f"{digest[:12]}-{PurePosixPath(notice_member).name}"
-        )
+        basename = PurePosixPath(notice_member).name
+        identity = (digest, basename)
+        if identity in retained:
+            continue
+        retained.add(identity)
+        relative = f"licenses/from-source/{component_directory}/{digest[:12]}-{basename}"
         write_file(root, relative, content, budget=budget)
         written.append(relative)
     return written
@@ -9796,17 +9799,12 @@ def retain_native_component_notices(
             f"native-component source omits reviewed notices: {source_id}: {missing}"
         )
 
-    component_directory = f"native-{source['origin']}-{source['version']}"
-    written: list[str] = []
-    for notice_member, content in sorted(found.items()):
-        digest = sha256_bytes(content)
-        relative = (
-            f"licenses/from-source/{component_directory}/"
-            f"{digest[:12]}-{PurePosixPath(notice_member).name}"
-        )
-        write_file(root, relative, content, budget=budget)
-        written.append(relative)
-    return written
+    return retain_reviewed_native_notices(
+        found,
+        component_directory=f"native-{source['origin']}-{source['version']}",
+        root=root,
+        budget=budget,
+    )
 
 
 def source_policy_entry(policy: Mapping[str, Any], name: str, version: str) -> dict[str, Any]:

@@ -5556,6 +5556,58 @@ def test_native_component_notice_retention_is_exact(tmp_path: Path) -> None:
     assert (tmp_path / retained[0]).read_bytes() == content
 
 
+def test_reviewed_native_notice_retention_deduplicates_identical_named_payloads(
+    tmp_path: Path,
+) -> None:
+    apache = b"Apache license"
+    mit = b"MIT license"
+
+    retained = evidence.retain_reviewed_native_notices(
+        {
+            "pyo3-0.28.3/COPYING": apache,
+            "pyo3-0.28.3/LICENSE-APACHE": apache,
+            "pyo3-0.28.3/LICENSE-MIT": mit,
+            "pyo3-0.28.3/pyo3-runtime/LICENSE-APACHE": apache,
+            "pyo3-0.28.3/pyo3-runtime/LICENSE-MIT": mit,
+        },
+        component_directory="native-pyo3",
+        root=tmp_path,
+        budget=evidence.BundleBudget(),
+    )
+
+    assert retained == [
+        f"licenses/from-source/native-pyo3/{evidence.sha256_bytes(apache)[:12]}-COPYING",
+        f"licenses/from-source/native-pyo3/{evidence.sha256_bytes(apache)[:12]}-LICENSE-APACHE",
+        f"licenses/from-source/native-pyo3/{evidence.sha256_bytes(mit)[:12]}-LICENSE-MIT",
+    ]
+    assert (tmp_path / retained[0]).read_bytes() == apache
+    assert (tmp_path / retained[1]).read_bytes() == apache
+    assert (tmp_path / retained[2]).read_bytes() == mit
+
+
+def test_reviewed_native_notice_retention_rejects_digest_prefix_collisions(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    first = b"first license"
+    second = b"second license"
+    digests = {
+        first: f"{'a' * 12}{'1' * 52}",
+        second: f"{'a' * 12}{'2' * 52}",
+    }
+    monkeypatch.setattr(evidence, "sha256_bytes", digests.__getitem__)
+
+    with pytest.raises(evidence.EvidenceError, match="duplicate bundle path"):
+        evidence.retain_reviewed_native_notices(
+            {
+                "first/LICENSE": first,
+                "second/LICENSE": second,
+            },
+            component_directory="native-prefix-collision",
+            root=tmp_path,
+            budget=evidence.BundleBudget(),
+        )
+
+
 @pytest.mark.parametrize(
     ("archive", "message"),
     (
