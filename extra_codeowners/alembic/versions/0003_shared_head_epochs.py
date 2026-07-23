@@ -7,6 +7,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
+__all__ = ("branch_labels", "depends_on", "down_revision", "revision")
+
 revision: str = "0003_shared_head_epochs"
 down_revision: str | None = "0002_retry_dead_jobs"
 branch_labels: str | Sequence[str] | None = None
