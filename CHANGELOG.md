@@ -63,6 +63,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Rel
   deletion or replacement authority.
 - A standard-library GitHub release API adapter with fixed routing, bounded
   responses, descriptor-based uploads, and no workflow or token wiring.
+- A read-only immutable-release preflight contract that binds GitHub's setting
+  to one repository and workflow run without sharing publication authority.
 - A non-root container, Helm chart source, and supply-chain workflows.
 - Schema-v6 container evidence that binds CPython runtime/source identities,
   retains every exact locked native wheel and raw embedded SBOM, and closes

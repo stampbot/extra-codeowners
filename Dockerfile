@@ -100,6 +100,7 @@ COPY .github/dependabot.yml ./.github/dependabot.yml
 COPY .github/scripts/build_release_spine.py \
      .github/scripts/container_evidence.py \
      .github/scripts/github_release_api.py \
+     .github/scripts/immutable_release_preflight.py \
      .github/scripts/release_controller.py \
      .github/scripts/release_readiness.py \
      .github/scripts/release_spine.py \
