@@ -448,8 +448,11 @@ opening the wheel or source-distribution archives.
 The tagged workflow also defines a privileged Python job that would materialize
 the same files, attest and sign the two distributions, and retain the three
 selection records. The unconditional publication blocker makes that job
-unreachable. Its evidence artifact does not flow into the GitHub release job,
-so issue #32 remains open.
+unreachable. A separate blocked, read-only
+[candidate assembler](../reference/release-asset-candidate-format.md) would
+revalidate the raw pair and inventory the three records beside the current
+candidate files. Its output explicitly forbids publication and does not flow
+into the GitHub release job, so issue #32 remains open.
 
 The current container evidence binds CPython's top-level identity to exact
 runtime files and retains its pinned recipe, source archive, and source-carried
@@ -468,16 +471,20 @@ privileged job unreachable. The repository also contains a dormant release
 controller, publication API adapter, and read-only immutable-release preflight.
 No workflow connects them or supplies their tokens.
 
-Four issues describe the remaining release boundary:
+Six issues define the first supported release boundary:
 
+- [#1](https://github.com/stampbot/extra-codeowners/issues/1): live Check Run
+  invalidation and App-review contract
 - [#18](https://github.com/stampbot/extra-codeowners/issues/18): source and
   notice completeness
+- [#25](https://github.com/stampbot/extra-codeowners/issues/25): first
+  immutable release publication
 - [#28](https://github.com/stampbot/extra-codeowners/issues/28): privilege
   separation between untrusted parsing and publication
+- [#30](https://github.com/stampbot/extra-codeowners/issues/30): old public
+  preview image disposition
 - [#32](https://github.com/stampbot/extra-codeowners/issues/32): retained
-  application build-proof handoff
-- [#25](https://github.com/stampbot/extra-codeowners/issues/25): first
-  immutable release publication.
+  application build-proof handoff.
 
 Workflow definitions are not evidence that an artifact exists. No supported
 release has been published.

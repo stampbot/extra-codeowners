@@ -16,7 +16,8 @@ build proof, and scan a candidate with repository-read permission, but a
 separate blocker prevents every job with package-write, signing, attestation,
 or release authority from running.
 
-Four open issues define the remaining boundary:
+Four open issues define the evidence and publication path covered by this
+guide:
 
 - [#18](https://github.com/stampbot/extra-codeowners/issues/18) covers the four
   native-wheel owners that remain after Greenlet, MarkupSafe, and SQLAlchemy.
@@ -27,6 +28,11 @@ Four open issues define the remaining boundary:
   publication jobs.
 - [#25](https://github.com/stampbot/extra-codeowners/issues/25) covers the first
   immutable GitHub release after the evidence and privilege boundaries close.
+
+Issues [#1](https://github.com/stampbot/extra-codeowners/issues/1) and
+[#30](https://github.com/stampbot/extra-codeowners/issues/30) independently
+block the first supported release. They cover the live App contract and the old
+public preview image, not the pull-request evidence reviewed here.
 
 Pull-request CI already binds the hash-pinned PEP 517 proof and exact installed
 application wheel into both platform artifacts. Read-only manual runs and the

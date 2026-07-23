@@ -61,6 +61,7 @@ def test_uv_version_is_identical_locally_in_containers_and_in_workflows() -> Non
         "container_evidence.py",
         "github_release_api.py",
         "immutable_release_preflight.py",
+        "release_asset_assembler.py",
         "release_controller.py",
         "release_readiness.py",
         "release_spine.py",

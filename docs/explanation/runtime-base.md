@@ -2,10 +2,8 @@
 
 The current runtime choice is accepted for CI compatibility evaluation. It is
 not yet accepted for distribution. The evaluation was made on 2026-07-14, and
-tagged publication remains blocked by [issue #18](https://github.com/stampbot/extra-codeowners/issues/18),
-[issue #28](https://github.com/stampbot/extra-codeowners/issues/28),
-[issue #32](https://github.com/stampbot/extra-codeowners/issues/32), and
-[issue #25](https://github.com/stampbot/extra-codeowners/issues/25).
+tagged publication remains blocked by the
+[First supported release work](../reference/project-status.md#distribution-blockers).
 
 Both Dockerfile stages use the Docker Official Image
 `python:3.14.6-alpine3.24`, pinned to this multi-platform index digest:
@@ -215,12 +213,10 @@ versions.
 The main-branch image publication job is gone. Current CI does not push, sign,
 or attest a development image, and it does not verify an upstream signature for
 the Docker Official Image. Tagged publication is structurally disabled while
-issues [#18](https://github.com/stampbot/extra-codeowners/issues/18),
-[#25](https://github.com/stampbot/extra-codeowners/issues/25),
-[#28](https://github.com/stampbot/extra-codeowners/issues/28), and
-[#32](https://github.com/stampbot/extra-codeowners/issues/32) remain open. The
-reviewed digest prevents substitution after review; Renovate and review of the
-new build are the trust path for changed base content.
+the [First supported release
+milestone](../reference/project-status.md#distribution-blockers) has open
+issues. The reviewed digest prevents substitution after review; Renovate and
+review of the new build are the trust path for changed base content.
 
 Per-platform SBOMs enumerate aggregate packages and declared licenses. They do
 not prove that every redistribution duty has been met. Extra CODEOWNERS is

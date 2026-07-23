@@ -14,6 +14,12 @@ the separate publication boundary. The
 [immutable-release preflight contract](immutable-release-preflight.md)
 documents the implemented but unwired **Administration: read** boundary.
 
+The blocked release workflow also contains a read-only
+[candidate assembler](release-asset-candidate-format.md). Its output is
+deliberately not this controller's manifest: it records incomplete source
+evidence, an unfrozen final asset policy, and `publication_allowed: false`.
+There is no adapter from that candidate record to `ReleasePlan`.
+
 The controller lives in `.github/scripts/release_controller.py`. Its narrow
 `ReleaseAPI` protocol deliberately has no operation for deleting a release,
 asset, or tag, and no operation for replacing an existing asset.

@@ -37,8 +37,9 @@ execution, publication guards, and live repository-rule testing.
 
 ## Immutable-release hardening status
 
-The source contains three dormant parts of a future GitHub release path: an
-offline [release controller](immutable-release-controller.md), a
+The source contains three unconnected parts of a future privileged GitHub
+release path: an offline
+[release controller](immutable-release-controller.md), a
 [release API adapter](github-release-api-adapter.md) that needs
 **Contents: write**, and a read-only
 [immutable-release preflight](immutable-release-preflight.md). The preflight
@@ -46,9 +47,11 @@ binds GitHub's positive setting response to one repository and workflow run.
 Its verifier can check the raw record later without receiving the
 **Administration: read** token.
 
-No workflow calls these parts or passes them a privileged token. They are
-reviewable contracts, not a working release path. Tagged publication remains
-blocked while the distribution issues below are open.
+No workflow calls those three parts or passes them a privileged token. A fourth
+piece, the [blocked release candidate assembler](release-asset-candidate-format.md),
+is wired only downstream of the failing publication block. It has repository
+read permission and emits a record that explicitly forbids publication. These
+are reviewable contracts, not a working release path.
 
 ## Not available yet
 
@@ -99,11 +102,12 @@ live contract tests and design work. Until it closes, keep GitHub's native
 Tagged publication is structurally disabled. These issues describe the work
 that must finish before the first supported release:
 
+- [#1: prove the live Check Run and App-review contracts](https://github.com/stampbot/extra-codeowners/issues/1)
 - [#18: complete notices and corresponding-source evidence](https://github.com/stampbot/extra-codeowners/issues/18)
+- [#25: publish the first release as an immutable GitHub release](https://github.com/stampbot/extra-codeowners/issues/25)
 - [#28: separate archive parsing from publication authority](https://github.com/stampbot/extra-codeowners/issues/28)
 - [#30: decide the disposition of the unsupported GHCR preview](https://github.com/stampbot/extra-codeowners/issues/30)
-- [#32: retain and bind the selected Python build proof](https://github.com/stampbot/extra-codeowners/issues/32)
-- [#25: publish the first release as an immutable GitHub release](https://github.com/stampbot/extra-codeowners/issues/25).
+- [#32: retain and bind the selected Python build proof](https://github.com/stampbot/extra-codeowners/issues/32).
 
 CI already records substantial container and Python evidence. That work makes
 the remaining gaps visible; it does not approve the current artifacts for

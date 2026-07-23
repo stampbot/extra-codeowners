@@ -103,6 +103,7 @@ COPY .github/scripts/build_python_distribution_spine.py \
      .github/scripts/github_release_api.py \
      .github/scripts/immutable_release_preflight.py \
      .github/scripts/python_distribution_spine.py \
+     .github/scripts/release_asset_assembler.py \
      .github/scripts/release_controller.py \
      .github/scripts/release_readiness.py \
      .github/scripts/release_spine.py \
