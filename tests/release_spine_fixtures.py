@@ -54,6 +54,9 @@ def generate_layout(
     """Write a deterministic two-platform OCI layout and return its root digest."""
 
     layout.mkdir(mode=0o755)
+    # The pinned BuildKit directory exporter leaves containerd's empty ingest
+    # root beside the OCI Image Layout entries.
+    (layout / "ingest").mkdir()
     blob_root = layout / "blobs" / "sha256"
     blob_root.mkdir(parents=True)
     (layout / "oci-layout").write_bytes(_json_bytes({"imageLayoutVersion": "1.0.0"}))

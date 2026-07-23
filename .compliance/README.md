@@ -63,8 +63,9 @@ to distribute the image.
 ## Raw OCI release spine
 
 CI also checks the [raw OCI release-spine format](../docs/reference/release-spine-format.md).
-That check is an internal transport proof, not compliance evidence. It generates
-a two-platform fixture and carries it in two unarchived workflow artifacts.
+That check is an internal transport proof, not compliance evidence. It builds a
+real two-platform candidate with pinned BuildKit, then packs its reachable OCI
+objects into two unarchived workflow artifacts.
 
 The spine holds opaque OCI object bytes and a canonical range record. It neither
 inspects layers nor proves component, notice, source, SBOM, signature,

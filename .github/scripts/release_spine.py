@@ -73,6 +73,8 @@ class ExpectedIdentity:
 
     repository_id: str
     repository_name: str
+    run_id: str
+    run_attempt: str
     source_revision: str
     version: str
     workflow_path: str
@@ -283,12 +285,28 @@ def _projection(value: Mapping[str, Any]) -> dict[str, object]:
     }
 
 
-def expected_spine_filename(source_revision: str) -> str:
-    return f"extra-codeowners-image-{source_revision}.bin"
+def expected_spine_filename(
+    source_revision: str,
+    python_artifact_id: str,
+    run_id: str,
+    run_attempt: str,
+) -> str:
+    return (
+        f"extra-codeowners-image-{source_revision}-python-artifact-{python_artifact_id}"
+        f"-run-{run_id}-attempt-{run_attempt}.bin"
+    )
 
 
-def expected_record_filename(source_revision: str) -> str:
-    return f"extra-codeowners-image-{source_revision}.spine.json"
+def expected_record_filename(
+    source_revision: str,
+    python_artifact_id: str,
+    run_id: str,
+    run_attempt: str,
+) -> str:
+    return (
+        f"extra-codeowners-image-{source_revision}-python-artifact-{python_artifact_id}"
+        f"-run-{run_id}-attempt-{run_attempt}.spine.json"
+    )
 
 
 def validate_expected_identity(expected: ExpectedIdentity) -> None:
@@ -296,6 +314,8 @@ def validate_expected_identity(expected: ExpectedIdentity) -> None:
 
     _decimal_id(expected.repository_id, "expected repository ID")
     _scalar(expected.repository_name, "expected repository name", REPOSITORY)
+    _decimal_id(expected.run_id, "expected run ID")
+    _decimal_id(expected.run_attempt, "expected run attempt")
     _scalar(expected.source_revision, "expected source revision", HEX40, maximum=40)
     _scalar(expected.version, "expected version", VERSION, maximum=64)
     _scalar(expected.workflow_path, "expected workflow path", WORKFLOW_PATH)
@@ -339,6 +359,7 @@ def validate_record(value: object, expected: ExpectedIdentity) -> Mapping[str, A
             "platforms",
             "python_distribution",
             "repository",
+            "run",
             "schema_version",
             "source",
             "spine",
@@ -356,6 +377,12 @@ def validate_record(value: object, expected: ExpectedIdentity) -> Mapping[str, A
         raise SpineError("repository ID does not match the trusted workflow value")
     if _scalar(repository["name"], "repository name", REPOSITORY) != expected.repository_name:
         raise SpineError("repository name does not match the trusted workflow value")
+
+    run = _exact_mapping(record["run"], {"attempt", "id"}, "run")
+    if _decimal_id(run["id"], "run ID") != expected.run_id:
+        raise SpineError("run ID does not match the trusted workflow value")
+    if _decimal_id(run["attempt"], "run attempt") != expected.run_attempt:
+        raise SpineError("run attempt does not match the trusted workflow value")
 
     source = _exact_mapping(record["source"], {"revision", "version"}, "source")
     if (
@@ -411,8 +438,13 @@ def validate_record(value: object, expected: ExpectedIdentity) -> Mapping[str, A
 
     spine = _exact_mapping(record["spine"], {"filename", "media_type", "sha256", "size"}, "spine")
     filename = _scalar(spine["filename"], "spine filename", SAFE_FILENAME, maximum=255)
-    if filename != expected_spine_filename(expected.source_revision):
-        raise SpineError("spine filename is not bound to the source revision")
+    if filename != expected_spine_filename(
+        expected.source_revision,
+        expected.python_artifact_id,
+        expected.run_id,
+        expected.run_attempt,
+    ):
+        raise SpineError("spine filename is not bound to the Python artifact and producer run")
     if spine["media_type"] != SPINE_MEDIA_TYPE:
         raise SpineError("spine has an unsupported media type")
     _scalar(spine["sha256"], "spine SHA-256", HEX64, maximum=64)
@@ -657,8 +689,13 @@ def verify(
     expected_record_hash = _scalar(
         record_artifact_sha256, "record artifact provider SHA-256", HEX64, maximum=64
     )
-    if record_path.name != expected_record_filename(expected.source_revision):
-        raise SpineError("record filename is not bound to the source revision")
+    if record_path.name != expected_record_filename(
+        expected.source_revision,
+        expected.python_artifact_id,
+        expected.run_id,
+        expected.run_attempt,
+    ):
+        raise SpineError("record filename is not bound to the Python artifact and producer run")
     record, actual_record_hash = load_record(record_path, expected)
     if actual_record_hash != expected_record_hash:
         raise SpineError("record artifact provider digest does not match its bytes")
@@ -674,6 +711,8 @@ def verify(
 def add_identity_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--repository-id", required=True)
     parser.add_argument("--repository-name", required=True)
+    parser.add_argument("--run-id", required=True)
+    parser.add_argument("--run-attempt", required=True)
     parser.add_argument("--source-revision", required=True)
     parser.add_argument("--version", required=True)
     parser.add_argument("--workflow-path", required=True)
@@ -693,6 +732,8 @@ def expected_from_args(args: argparse.Namespace) -> ExpectedIdentity:
     return ExpectedIdentity(
         repository_id=args.repository_id,
         repository_name=args.repository_name,
+        run_id=args.run_id,
+        run_attempt=args.run_attempt,
         source_revision=args.source_revision,
         version=args.version,
         workflow_path=args.workflow_path,

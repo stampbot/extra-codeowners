@@ -7047,7 +7047,7 @@ def test_container_build_toolchain_is_exactly_pinned_and_renovate_managed() -> N
     )
     qemu_action = "docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8"
     buildx_action = "docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c"
-    for workflow, expected_count in ((ci, 1), (release, 2)):
+    for workflow, expected_count in ((ci, 2), (release, 2)):
         assert workflow.count(qemu_action) == expected_count
         assert workflow.count(buildx_action) == expected_count
         assert workflow.count(qemu) == expected_count

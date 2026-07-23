@@ -6,8 +6,10 @@ asset list or a runnable verification procedure.
 
 The [raw OCI release spine](release-spine-format.md) now freezes one internal
 transport: a canonical record and an opaque byte-range file for exactly two
-platforms. CI proves that transport with a synthetic fixture. The spine is not
-a release asset, a recipient evidence archive, or permission to publish.
+platforms. CI uses pinned Buildx and BuildKit versions to export a real
+candidate to a local OCI directory, then verifies the two raw artifacts in a
+separate read-only job. The spine is not a release asset, a recipient evidence
+archive, or permission to publish.
 
 The [raw Python-distribution
 spine](python-distribution-spine-format.md) similarly carries the selected

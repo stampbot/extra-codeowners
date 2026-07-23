@@ -9,6 +9,8 @@ import importlib.util
 import json
 import os
 import re
+import shutil
+import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,6 +27,7 @@ WORKFLOW_SHA = "2" * 40
 WHEEL_SHA256 = "a" * 64
 SELECTION_SHA256 = "b" * 64
 PYTHON_ARTIFACT_SHA256 = "c" * 64
+BASH = shutil.which("bash")
 
 
 def load_script(name: str) -> ModuleType:
@@ -54,6 +57,8 @@ def expected_identity(*, index_digest: str = f"sha256:{'0' * 64}") -> Any:
     return release_spine.ExpectedIdentity(
         repository_id="123456",
         repository_name="stampbot/extra-codeowners",
+        run_id="777777",
+        run_attempt="2",
         source_revision=REVISION,
         version="0.1.0",
         workflow_path=".github/workflows/ci.yml",
@@ -147,8 +152,18 @@ def built_spine(tmp_path: Path) -> BuiltSpine:
     layout = tmp_path / "layout"
     index_digest = make_layout(layout, provisional)
     expected = release_spine.dataclasses.replace(provisional, index_digest=index_digest)
-    spine = tmp_path / release_spine.expected_spine_filename(REVISION)
-    record = tmp_path / release_spine.expected_record_filename(REVISION)
+    spine = tmp_path / release_spine.expected_spine_filename(
+        REVISION,
+        expected.python_artifact_id,
+        expected.run_id,
+        expected.run_attempt,
+    )
+    record = tmp_path / release_spine.expected_record_filename(
+        REVISION,
+        expected.python_artifact_id,
+        expected.run_id,
+        expected.run_attempt,
+    )
     builder.build(layout, spine, record, index_digest, expected)
     return BuiltSpine(layout, spine, record, index_digest, expected)
 
@@ -173,6 +188,10 @@ def test_build_and_verify_complete_two_platform_spine(built_spine: BuiltSpine) -
         ("arm64", "linux"),
     ]
     assert record["spine"]["sha256"] == sha256(built_spine.spine)
+    assert record["run"] == {
+        "attempt": built_spine.expected.run_attempt,
+        "id": built_spine.expected.run_id,
+    }
     assert built_spine.record.read_bytes() == release_spine.canonical_json(record)
     assert record["platforms"][0]["layers"] == record["platforms"][1]["layers"]
     assert sum(item["kind"] == "layer" for item in record["objects"]) == 1
@@ -202,12 +221,52 @@ def test_build_is_deterministic_across_layout_metadata(tmp_path: Path) -> None:
         if index:
             for path in layout.rglob("*"):
                 os.utime(path, ns=(1_900_000_000_000_000_000,) * 2, follow_symlinks=False)
-        spine = root / release_spine.expected_spine_filename(REVISION)
-        record = root / release_spine.expected_record_filename(REVISION)
+        spine = root / release_spine.expected_spine_filename(
+            REVISION,
+            expected.python_artifact_id,
+            expected.run_id,
+            expected.run_attempt,
+        )
+        record = root / release_spine.expected_record_filename(
+            REVISION,
+            expected.python_artifact_id,
+            expected.run_id,
+            expected.run_attempt,
+        )
         builder.build(layout, spine, record, digest, expected)
         outputs.append((spine.read_bytes(), record.read_bytes()))
 
     assert outputs[0] == outputs[1]
+
+
+def test_raw_filenames_bind_python_artifact_run_and_attempt() -> None:
+    first = release_spine.expected_spine_filename(REVISION, "789012", "777777", "2")
+    second = release_spine.expected_spine_filename(REVISION, "789012", "777777", "3")
+    other_run = release_spine.expected_spine_filename(REVISION, "789012", "777778", "2")
+    other_artifact = release_spine.expected_spine_filename(REVISION, "789013", "777777", "2")
+
+    assert len({first, second, other_run, other_artifact}) == 4
+    assert first.endswith("-python-artifact-789012-run-777777-attempt-2.bin")
+    assert (
+        release_spine.expected_record_filename(REVISION, "789012", "777777", "2")
+        == first.removesuffix(".bin") + ".spine.json"
+    )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("run_id", "0"),
+        ("run_id", str(release_spine.MAX_ID + 1)),
+        ("run_attempt", "01"),
+        ("run_attempt", str(release_spine.MAX_ID + 1)),
+    ],
+)
+def test_run_identity_is_a_bounded_canonical_decimal(field: str, value: str) -> None:
+    expected = release_spine.dataclasses.replace(expected_identity(), **{field: value})
+
+    with pytest.raises(release_spine.SpineError):
+        release_spine.validate_expected_identity(expected)
 
 
 def test_builder_requests_owner_only_output_mode(
@@ -225,6 +284,16 @@ def test_builder_requests_owner_only_output_mode(
     os.close(descriptor)
 
     assert requested_modes == [0o600]
+
+
+def test_builder_never_overwrites_an_existing_output(tmp_path: Path) -> None:
+    output = tmp_path / "spine.bin"
+    output.write_bytes(b"existing")
+
+    with pytest.raises(release_spine.SpineError, match="cannot create"):
+        builder._create_output(output, "test")
+
+    assert output.read_bytes() == b"existing"
 
 
 @pytest.mark.parametrize(
@@ -295,6 +364,8 @@ def test_record_rejects_unknown_fields(built_spine: BuiltSpine) -> None:
     [
         ("repository_id", "999"),
         ("repository_name", "stampbot/other"),
+        ("run_id", "777778"),
+        ("run_attempt", "3"),
         ("source_revision", "3" * 40),
         ("version", "0.2.0"),
         ("workflow_path", ".github/workflows/release.yml"),
@@ -377,6 +448,10 @@ def test_cli_cannot_substitute_the_trusted_root_digest(
             expected.repository_id,
             "--repository-name",
             expected.repository_name,
+            "--run-id",
+            expected.run_id,
+            "--run-attempt",
+            expected.run_attempt,
             "--source-revision",
             expected.source_revision,
             "--version",
@@ -751,6 +826,40 @@ def test_builder_rejects_orphan_blob(tmp_path: Path) -> None:
         builder.inspect_layout(layout, digest, expected)
 
 
+def test_builder_accepts_the_empty_pinned_buildkit_ingest_root(tmp_path: Path) -> None:
+    provisional = expected_identity()
+    layout = tmp_path / "layout"
+    digest = make_layout(layout, provisional)
+    expected = release_spine.dataclasses.replace(provisional, index_digest=digest)
+
+    builder.inspect_layout(layout, digest, expected)
+
+    assert (layout / "ingest").is_dir()
+    assert not any((layout / "ingest").iterdir())
+
+
+@pytest.mark.parametrize("mutation", ["missing", "file", "symlink", "nonempty"])
+def test_builder_rejects_a_noncanonical_buildkit_ingest_root(tmp_path: Path, mutation: str) -> None:
+    provisional = expected_identity()
+    layout = tmp_path / "layout"
+    digest = make_layout(layout, provisional)
+    expected = release_spine.dataclasses.replace(provisional, index_digest=digest)
+    ingest = layout / "ingest"
+    ingest.rmdir()
+    if mutation == "file":
+        ingest.write_bytes(b"unexpected")
+    elif mutation == "symlink":
+        target = tmp_path / "ingest-target"
+        target.mkdir()
+        ingest.symlink_to(target, target_is_directory=True)
+    elif mutation == "nonempty":
+        ingest.mkdir()
+        (ingest / "partial").write_bytes(b"unexpected")
+
+    with pytest.raises(release_spine.SpineError, match=r"top-level|real directory|not empty"):
+        builder.inspect_layout(layout, digest, expected)
+
+
 def test_builder_rejects_symlink_blob(tmp_path: Path) -> None:
     provisional = expected_identity()
     layout = tmp_path / "layout"
@@ -872,8 +981,20 @@ def test_builder_rejects_total_overflow_before_copying_the_object(
     with pytest.raises(release_spine.SpineError, match="total size limit"):
         builder.build(
             tmp_path / "unused-layout",
-            tmp_path / release_spine.expected_spine_filename(REVISION),
-            tmp_path / release_spine.expected_record_filename(REVISION),
+            tmp_path
+            / release_spine.expected_spine_filename(
+                REVISION,
+                expected.python_artifact_id,
+                expected.run_id,
+                expected.run_attempt,
+            ),
+            tmp_path
+            / release_spine.expected_record_filename(
+                REVISION,
+                expected.python_artifact_id,
+                expected.run_id,
+                expected.run_attempt,
+            ),
             expected.index_digest,
             expected,
         )
@@ -978,6 +1099,95 @@ def test_privileged_verifier_has_an_explicit_module_call_surface() -> None:
     }.intersection(forbidden_high_level_file_calls)
 
 
+def workflow_run_script(source: str, step_name: str) -> str:
+    step = f"      - name: {step_name}\n"
+    _, separator, tail = source.partition(step)
+    assert separator, f"missing {step_name!r} step"
+    _, separator, tail = tail.partition("        run: |\n")
+    assert separator, f"missing run script for {step_name!r}"
+    lines: list[str] = []
+    for line in tail.splitlines():
+        if line and not line.startswith("          "):
+            break
+        lines.append(line[10:] if line else "")
+    return "\n".join(lines)
+
+
+def candidate_identity_environment(
+    temporary: Path, output: Path, *, attempt: str
+) -> dict[str, str]:
+    return os.environ | {
+        "CANDIDATE_REGISTRY": "ghcr.io",
+        "CANDIDATE_REPOSITORY": "stampbot/extra-codeowners",
+        "GITHUB_OUTPUT": str(output),
+        "GITHUB_RUN_ATTEMPT": attempt,
+        "GITHUB_RUN_ID": "777777",
+        "GITHUB_SHA": REVISION,
+        "PATH": f"{Path(sys.executable).parent}:{os.environ['PATH']}",
+        "PYTHON_ARTIFACT_DIGEST": PYTHON_ARTIFACT_SHA256,
+        "PYTHON_ARTIFACT_ID": "789012",
+        "RUNNER_TEMP": str(temporary),
+        "SELECTION_RECORD_SHA256": SELECTION_SHA256,
+        "WHEEL_SHA256": WHEEL_SHA256,
+    }
+
+
+@pytest.mark.skipif(BASH is None, reason="the hardened runtime intentionally contains no shell")
+def test_candidate_identity_script_makes_rerun_safe_outputs(tmp_path: Path) -> None:
+    source = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    script = workflow_run_script(source, "Prepare immutable candidate identity")
+    outputs: list[dict[str, str]] = []
+
+    assert BASH is not None
+    for attempt in ("2", "3"):
+        output = tmp_path / f"github-output-{attempt}"
+        result = subprocess.run(  # noqa: S603 - executes the reviewed fixed workflow script
+            [BASH, "-c", script],
+            cwd=ROOT,
+            env=candidate_identity_environment(tmp_path, output, attempt=attempt),
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stderr
+        outputs.append(
+            dict(line.split("=", 1) for line in output.read_text(encoding="utf-8").splitlines())
+        )
+
+    assert outputs[0]["run-id"] == outputs[1]["run-id"] == "777777"
+    assert outputs[0]["run-attempt"] == "2"
+    assert outputs[1]["run-attempt"] == "3"
+    assert outputs[0]["layout-path"] != outputs[1]["layout-path"]
+    assert outputs[0]["record-path"] != outputs[1]["record-path"]
+    assert outputs[0]["spine-path"] != outputs[1]["spine-path"]
+    assert outputs[0]["oci-output"] == (
+        f"type=oci,dest={outputs[0]['layout-path']},tar=false,name={outputs[0]['candidate-name']}"
+    )
+    assert outputs[0]["spine-path"].endswith("-python-artifact-789012-run-777777-attempt-2.bin")
+
+
+@pytest.mark.skipif(BASH is None, reason="the hardened runtime intentionally contains no shell")
+def test_candidate_identity_script_refuses_an_existing_layout(tmp_path: Path) -> None:
+    source = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    script = workflow_run_script(source, "Prepare immutable candidate identity")
+    output = tmp_path / "github-output"
+    (tmp_path / "release-spine-layout-run-777777-attempt-2").mkdir()
+
+    assert BASH is not None
+    result = subprocess.run(  # noqa: S603 - executes the reviewed fixed workflow script
+        [BASH, "-c", script],
+        cwd=ROOT,
+        env=candidate_identity_environment(tmp_path, output, attempt="2"),
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "Refusing to overwrite an existing OCI layout" in result.stderr
+    assert not output.exists()
+
+
 def test_ci_proves_two_separate_raw_artifact_transports() -> None:
     source = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     producer = source.split("  release-spine-transport-producer:\n", 1)[1].split(
@@ -993,10 +1203,55 @@ def test_ci_proves_two_separate_raw_artifact_transports() -> None:
     assert producer.count("archive: false") == 2
     assert producer.count("retention-days: 1") == 2
     assert "name: artifact" not in producer
-    assert "index-digest: ${{ steps.build.outputs.index-digest }}" in producer
-    assert "version: ${{ steps.build.outputs.version }}" in producer
+    assert "index-digest: ${{ steps.build-image.outputs.digest }}" in producer
+    assert "version: ${{ steps.identity.outputs.version }}" in producer
+    assert "run-id: ${{ steps.identity.outputs.run-id }}" in producer
+    assert "run-attempt: ${{ steps.identity.outputs.run-attempt }}" in producer
     assert "record-artifact-id: ${{ steps.upload-record.outputs.artifact-id }}" in producer
     assert "spine-artifact-id: ${{ steps.upload-spine.outputs.artifact-id }}" in producer
+
+    assert producer.count("actions/download-artifact@3e5f45b2cfb91720") == 1
+    selected_download = producer.split(
+        "      - name: Download the selected Python distribution by immutable ID\n", 1
+    )[1].split("      - name: Verify the selected Python distribution\n", 1)[0]
+    assert "artifact-ids: ${{ needs.python-distribution.outputs.artifact-id }}" in (
+        selected_download
+    )
+    assert "digest-mismatch: error" in selected_download
+    assert "name:" not in selected_download
+    assert "pattern:" not in selected_download
+    assert producer.index("verify-selection") < producer.index("docker/build-push-action@")
+    assert "verified-python=${{ steps.selected-python.outputs.download-path }}" in producer
+    assert "APPLICATION_SOURCE_REVISION=${{ github.sha }}" in producer
+    assert (
+        "APPLICATION_WHEEL_SHA256=${{ needs.python-distribution.outputs.wheel-sha256 }}" in producer
+    )
+    assert (
+        "APPLICATION_SELECTION_RECORD_SHA256=${{ "
+        "needs.python-distribution.outputs.selection-record-sha256 }}" in producer
+    )
+
+    assert producer.count("docker/setup-qemu-action@96fe6ef7f33517b6") == 1
+    assert producer.count("docker/setup-buildx-action@bb05f3f5519dd87d") == 1
+    assert producer.count("docker/build-push-action@53b7df96c91f9c12") == 1
+    assert producer.count("cache-image: false") == 1
+    assert "moby/buildkit:v0.30.0@sha256:0168606be2315b7c" in producer
+    assert "oci-output=type=oci,dest=%s,tar=false,name=%s" in producer
+    assert "outputs: ${{ steps.identity.outputs.oci-output }}" in producer
+    assert "platforms: linux/amd64,linux/arm64" in producer
+    assert "provenance: false" in producer
+    assert "push: false" in producer
+    assert "sbom: false" in producer
+    assert "target: runtime" in producer
+    assert 'DOCKER_BUILD_RECORD_UPLOAD: "false"' in producer
+    assert "tests/release_spine_fixtures.py" not in producer
+    assert "index.json" not in producer
+    assert "INDEX_DIGEST: ${{ steps.build-image.outputs.digest }}" in producer
+    assert '--index-digest "$INDEX_DIGEST"' in producer
+    assert "${basename}-python-artifact-${PYTHON_ARTIFACT_ID}" in producer
+    assert "${basename}-run-${GITHUB_RUN_ID}-attempt-${GITHUB_RUN_ATTEMPT}" in producer
+    assert '--run-id "$GITHUB_RUN_ID"' in producer
+    assert '--run-attempt "$GITHUB_RUN_ATTEMPT"' in producer
 
     assert consumer.count("actions/download-artifact@3e5f45b2cfb91720") == 2
     assert consumer.count("skip-decompress: true") == 2
@@ -1010,7 +1265,27 @@ def test_ci_proves_two_separate_raw_artifact_transports() -> None:
     assert '--index-digest "$INDEX_DIGEST"' in consumer
     assert "VERSION: ${{ needs.release-spine-transport-producer.outputs.version }}" in consumer
     assert '--version "$VERSION"' in consumer
+    assert (
+        "PRODUCER_RUN_ATTEMPT: >-\n"
+        "            ${{ needs.release-spine-transport-producer.outputs.run-attempt }}" in consumer
+    )
+    assert (
+        "PRODUCER_RUN_ID: ${{ needs.release-spine-transport-producer.outputs.run-id }}" in consumer
+    )
+    assert "${basename}-run-${PRODUCER_RUN_ID}-attempt-${PRODUCER_RUN_ATTEMPT}" in consumer
+    assert '--run-id "$PRODUCER_RUN_ID"' in consumer
+    assert '--run-attempt "$PRODUCER_RUN_ATTEMPT"' in consumer
     assert 'record["index"]' not in consumer
+    for forbidden in (
+        "build_release_spine.py",
+        "docker/",
+        "docker ",
+        "gzip",
+        "index.json",
+        "tar ",
+        "tarfile",
+    ):
+        assert forbidden not in consumer
 
     for job in (producer, consumer):
         assert re.search(r"(?m)^\s+[A-Za-z-]+:\s+write\s*$", job) is None
