@@ -91,10 +91,20 @@ The endpoint returns Prometheus text format. Extra CODEOWNERS defines these appl
 | `extra_codeowners_shared_head_invalidations_total` | counter | Durable exact-head invalidation attempts, labeled by `completed`, `failed`, `rate_limited`, or `superseded`. |
 | `extra_codeowners_dead_jobs` | gauge | Legacy or manually introduced terminal rows. Runtime failures remain pending, so this should remain `0`. |
 | `extra_codeowners_insecure_changes_enabled` | gauge | `1` while built-in non-delegable paths are disabled; otherwise `0`. |
-| `extra_codeowners_reconciliations_total` | counter | Reconciliation attempts, labeled with `result="success"` or `result="failure"`. |
-| `extra_codeowners_reconciliation_last_success_timestamp_seconds` | gauge | Unix timestamp of the most recent successful open-pull-request reconciliation. |
+| `extra_codeowners_reconciliations_total` | counter | Reconciliation outcomes, labeled with `result="success"`, `result="partial"`, or `result="failure"`. A process that observes another lease owner does not increment the counter. An election error counts as a failure. |
+| `extra_codeowners_reconciliation_last_success_timestamp_seconds` | gauge | Unix timestamp of the most recent complete reconciliation by this process. A partial or failed attempt does not update it. |
 
 Prometheus also publishes generated counter and histogram series, plus Python runtime and process collectors. Metric labels must never contain repository names, pull-request titles, actor names, paths, or delivery IDs. Those values would create unbounded cardinality and disclose private repository metadata.
+
+`success` means the elected process inspected every visible, unsuspended
+installation and structurally accounted for every repository response.
+`partial` means at least one installation failed, GitHub returned an invalid
+installation or repository identity, or the process lost its lease; work found
+in other installations remains queued. `failure` means the attempt stopped
+before it could return a scan result.
+
+The last-success gauge belongs to one service process. For a deployment with
+several replicas, alert on the newest value across all replicas.
 
 ## `POST /webhooks/github`
 

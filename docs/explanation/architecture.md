@@ -259,7 +259,10 @@ check to `in_progress`.
 The same singleton lease controls pruning of delivery IDs and old shared-head
 rows. A shared-head row is eligible only after its latest generation was
 invalidated, no evaluation references it, and no invalidation lease remains.
-Long scans renew the lease between installations. The organization-policy
+A background heartbeat renews the lease while a scan runs. If the heartbeat
+loses the lease or one installation cannot be scanned safely, the service
+records a partial attempt without discarding work found elsewhere. Only a
+complete scan advances the last-success timestamp. The organization-policy
 repository is never included in reconciliation.
 
 A shorter interval narrows some missed-event windows but spends more GitHub API

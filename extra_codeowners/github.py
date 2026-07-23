@@ -1275,7 +1275,11 @@ class GitHubClient:
             if not isinstance(values, list):
                 msg = "expected list response from GET /app/installations"
                 raise GitHubError(msg)
-            items.extend(item for item in values if isinstance(item, dict))
+            for item in values:
+                if not isinstance(item, dict):
+                    msg = "expected object items from GET /app/installations"
+                    raise GitHubError(msg)
+                items.append(item)
             if len(values) < 100:
                 return items
             page += 1
@@ -1295,7 +1299,11 @@ class GitHubClient:
             if not isinstance(repositories, list):
                 msg = "installation repositories response omitted repositories"
                 raise GitHubError(msg)
-            result.extend(item for item in repositories if isinstance(item, dict))
+            for item in repositories:
+                if not isinstance(item, dict):
+                    msg = "expected object items from GET /installation/repositories"
+                    raise GitHubError(msg)
+                result.append(item)
             if len(repositories) < 100:
                 return result
             page += 1

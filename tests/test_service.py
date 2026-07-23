@@ -5,10 +5,11 @@ import threading
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
 
+import extra_codeowners.service as service_module
 from extra_codeowners.codeowners import parse_codeowners
 from extra_codeowners.database import (
     AuthorityJob,
@@ -26,6 +27,7 @@ from extra_codeowners.service import (
     AuthorityChangePendingError,
     EvaluationService,
     Reconciler,
+    ReconciliationOutcome,
     Worker,
 )
 from extra_codeowners.settings import Settings
@@ -1711,12 +1713,248 @@ async def test_reconciler_enqueues_open_pull_requests(tmp_path: Path) -> None:
 
     queued = await reconciler.reconcile_once()
 
-    assert queued == 1
+    assert queued == ReconciliationOutcome(queued=1)
     assert store.pending_count() == 2
     assert store.shared_head_generation(2, "example/project", HEAD) == 1
 
-    assert await reconciler.reconcile_once() == 0
+    assert await reconciler.reconcile_once() == ReconciliationOutcome(queued=0)
     assert store.shared_head_generation(2, "example/project", HEAD) == 1
+
+
+@pytest.mark.asyncio
+async def test_unelected_reconciler_does_not_report_an_attempt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = migrated_store(f"sqlite:///{tmp_path / 'reconcile-election.db'}")
+    assert store.acquire_service_lease("open-pr-reconciler", "elected", 300)
+    github = FakeGitHub(changed_path="uv.lock")
+    reconciler = Reconciler(settings(), github, store, "unelected")  # type: ignore[arg-type]
+    attempts = MagicMock()
+    last_success = MagicMock()
+    monkeypatch.setattr(service_module, "RECONCILIATIONS", attempts)
+    monkeypatch.setattr(service_module, "RECONCILIATION_LAST_SUCCESS", last_success)
+
+    await reconciler.run_iteration()
+
+    attempts.labels.assert_not_called()
+    last_success.set_to_current_time.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_lost_reconciliation_lease_reports_partial_without_success_timestamp(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    github = FakeGitHub(changed_path="uv.lock")
+    github.list_installations = AsyncMock(  # type: ignore[attr-defined]
+        return_value=[{"id": 2, "suspended_at": None}]
+    )
+    lost = asyncio.Event()
+
+    async def list_repositories_after_lease_loss(
+        installation_id: int,
+    ) -> list[dict[str, Any]]:
+        lost.set()
+        return [{"full_name": "example/project", "archived": False}]
+
+    github.list_installation_repositories = (  # type: ignore[attr-defined]
+        list_repositories_after_lease_loss
+    )
+    store = migrated_store(f"sqlite:///{tmp_path / 'reconcile-lost-lease.db'}")
+    reconciler = Reconciler(settings(), github, store, "reconciler")  # type: ignore[arg-type]
+    outcome = await reconciler._reconcile_owned(lost)
+    assert outcome == ReconciliationOutcome(queued=0, lease_lost=True)
+    monkeypatch.setattr(
+        reconciler,
+        "reconcile_once",
+        AsyncMock(return_value=outcome),
+    )
+    attempts = MagicMock()
+    last_success = MagicMock()
+    monkeypatch.setattr(service_module, "RECONCILIATIONS", attempts)
+    monkeypatch.setattr(service_module, "RECONCILIATION_LAST_SUCCESS", last_success)
+
+    await reconciler.run_iteration()
+
+    attempts.labels.assert_called_once_with("partial")
+    attempts.labels.return_value.inc.assert_called_once_with()
+    last_success.set_to_current_time.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_exception_reports_failure_without_success_timestamp(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    github = FakeGitHub(changed_path="uv.lock")
+    store = migrated_store(f"sqlite:///{tmp_path / 'reconcile-failure.db'}")
+    reconciler = Reconciler(settings(), github, store, "reconciler")  # type: ignore[arg-type]
+    monkeypatch.setattr(
+        store,
+        "acquire_service_lease",
+        MagicMock(side_effect=RuntimeError("database unavailable")),
+    )
+    attempts = MagicMock()
+    last_success = MagicMock()
+    monkeypatch.setattr(service_module, "RECONCILIATIONS", attempts)
+    monkeypatch.setattr(service_module, "RECONCILIATION_LAST_SUCCESS", last_success)
+
+    await reconciler.run_iteration()
+
+    attempts.labels.assert_called_once_with("failure")
+    attempts.labels.return_value.inc.assert_called_once_with()
+    last_success.set_to_current_time.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_partial_reconciliation_queues_healthy_installations_and_recovers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    github = FakeGitHub(changed_path="uv.lock")
+    github.list_installations = AsyncMock(  # type: ignore[attr-defined]
+        return_value=[
+            {"id": 2, "suspended_at": None},
+            {"id": 3, "suspended_at": None},
+        ]
+    )
+    github.list_installation_repositories = AsyncMock(  # type: ignore[attr-defined]
+        side_effect=[
+            GitHubError("installation temporarily unavailable"),
+            [{"full_name": "example/healthy", "archived": False}],
+            [{"full_name": "example/recovered", "archived": False}],
+            [{"full_name": "example/healthy", "archived": False}],
+        ]
+    )
+
+    async def open_pulls(installation_id: int, repository: str) -> list[dict[str, Any]]:
+        number = 2 if repository == "example/recovered" else 3
+        return [{"number": number, "head": {"sha": HEAD}}]
+
+    github.list_open_pulls = open_pulls  # type: ignore[attr-defined]
+    store = migrated_store(f"sqlite:///{tmp_path / 'reconcile-partial.db'}")
+    reconciler = Reconciler(settings(), github, store, "reconciler")  # type: ignore[arg-type]
+    attempts = MagicMock()
+    last_success = MagicMock()
+    monkeypatch.setattr(service_module, "RECONCILIATIONS", attempts)
+    monkeypatch.setattr(service_module, "RECONCILIATION_LAST_SUCCESS", last_success)
+
+    await reconciler.run_iteration()
+
+    attempts.labels.assert_called_once_with("partial")
+    attempts.labels.return_value.inc.assert_called_once_with()
+    last_success.set_to_current_time.assert_not_called()
+    assert store.pending_count() == 1
+    first = store.claim("test-worker", 60)
+    assert first is not None
+    assert first.repository_full_name == "example/healthy"
+    store.complete(first, first.lease_owner)
+
+    attempts.reset_mock()
+    last_success.reset_mock()
+    await reconciler.run_iteration()
+
+    attempts.labels.assert_called_once_with("success")
+    attempts.labels.return_value.inc.assert_called_once_with()
+    last_success.set_to_current_time.assert_called_once_with()
+    assert store.pending_count() == 2
+    repositories: set[str] = set()
+    for _ in range(2):
+        claimed = store.claim("test-worker", 60)
+        assert claimed is not None
+        repositories.add(claimed.repository_full_name)
+        store.complete(claimed, claimed.lease_owner)
+    assert repositories == {"example/healthy", "example/recovered"}
+
+
+@pytest.mark.asyncio
+async def test_malformed_reconciliation_identities_are_partial_and_safely_logged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    github = FakeGitHub(changed_path="uv.lock")
+    github.list_installations = AsyncMock(  # type: ignore[attr-defined]
+        return_value=[
+            {"id": "secret-installation-value", "suspended_at": None},
+            {"id": 2, "suspended_at": None},
+            {"id": 3, "suspended_at": None},
+            {"id": 4, "suspended_at": None},
+            {"id": 5, "suspended_at": None},
+        ]
+    )
+    github.list_installation_repositories = AsyncMock(  # type: ignore[attr-defined]
+        side_effect=[
+            [{"full_name": None, "archived": False}],
+            [{"full_name": "missing-slash", "archived": False}],
+            [{"full_name": "secret\nowner/repository", "archived": False}],
+            [{"full_name": "example/healthy", "archived": False}],
+        ]
+    )
+    github.list_open_pulls = AsyncMock(  # type: ignore[attr-defined]
+        return_value=[{"number": 3, "head": {"sha": HEAD}}]
+    )
+    store = migrated_store(f"sqlite:///{tmp_path / 'reconcile-invalid-payload.db'}")
+    reconciler = Reconciler(settings(), github, store, "reconciler")  # type: ignore[arg-type]
+    logger = MagicMock()
+    monkeypatch.setattr(service_module, "log", logger)
+
+    outcome = await reconciler.reconcile_once()
+
+    assert outcome == ReconciliationOutcome(queued=1, failed_installations=4)
+    assert store.pending_count() == 1
+    assert logger.warning.call_args_list == [
+        call(
+            "installation_reconciliation_payload_invalid",
+            installation_id=None,
+            reason="invalid_installation_id",
+        ),
+        call(
+            "installation_reconciliation_payload_invalid",
+            installation_id=2,
+            reason="invalid_repository_full_name",
+        ),
+        call(
+            "installation_reconciliation_payload_invalid",
+            installation_id=3,
+            reason="invalid_repository_full_name",
+        ),
+        call(
+            "installation_reconciliation_payload_invalid",
+            installation_id=4,
+            reason="invalid_repository_full_name",
+        ),
+    ]
+    assert "secret-installation-value" not in repr(logger.warning.call_args_list)
+    assert "missing-slash" not in repr(logger.warning.call_args_list)
+    assert "secret\\nowner/repository" not in repr(logger.warning.call_args_list)
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_intentionally_skips_suspended_installations_and_archives(
+    tmp_path: Path,
+) -> None:
+    github = FakeGitHub(changed_path="uv.lock")
+    github.list_installations = AsyncMock(  # type: ignore[attr-defined]
+        return_value=[
+            {"id": 1, "suspended_at": "2026-07-22T00:00:00Z"},
+            {"id": 2, "suspended_at": None},
+        ]
+    )
+    github.list_installation_repositories = AsyncMock(  # type: ignore[attr-defined]
+        return_value=[
+            {"archived": True},
+            {"full_name": "example/healthy", "archived": False},
+        ]
+    )
+    github.list_open_pulls = AsyncMock(  # type: ignore[attr-defined]
+        return_value=[{"number": 3, "head": {"sha": HEAD}}]
+    )
+    store = migrated_store(f"sqlite:///{tmp_path / 'reconcile-intentional-skips.db'}")
+    reconciler = Reconciler(settings(), github, store, "reconciler")  # type: ignore[arg-type]
+
+    outcome = await reconciler.reconcile_once()
+
+    assert outcome == ReconciliationOutcome(queued=1)
+    github.list_installation_repositories.assert_awaited_once_with(2)  # type: ignore[attr-defined]
+    github.list_open_pulls.assert_awaited_once_with(  # type: ignore[attr-defined]
+        2, "example/healthy"
+    )
 
 
 @pytest.mark.asyncio
@@ -1747,7 +1985,7 @@ async def test_reconciler_recovers_missed_shared_head_open_and_fails_closed(
     reconciler = Reconciler(settings(), github, store, "reconciler")  # type: ignore[arg-type]
     service = EvaluationService(settings(), github, store)  # type: ignore[arg-type]
 
-    assert await reconciler.reconcile_once() == 2
+    assert await reconciler.reconcile_once() == ReconciliationOutcome(queued=2)
     invalidation = store.claim_shared_head_invalidation("head-worker", 60)
     assert invalidation is not None
     await service.invalidate_shared_head(invalidation, asyncio.Event())

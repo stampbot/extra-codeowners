@@ -24,13 +24,22 @@ pull-request activity.
 | `extra_codeowners_shared_head_invalidations_total{result="failed"}` | No unexplained increase |
 | `extra_codeowners_dead_jobs` | `0` |
 | `extra_codeowners_webhook_failures_total` | No unexplained increase |
-| `extra_codeowners_reconciliations_total{result="failure"}` | No unexplained increase |
-| `extra_codeowners_reconciliation_last_success_timestamp_seconds` | Newer than the reconciliation objective |
+| `extra_codeowners_reconciliations_total{result=~"partial\|failure"}` | No unexplained increase |
+| `extra_codeowners_reconciliation_last_success_timestamp_seconds` | A complete run on at least one replica falls within the reconciliation objective |
 | `extra_codeowners_insecure_changes_enabled` | `0` unless an approved exception is active |
 
 Also watch evaluation latency and failures, PostgreSQL latency, repeated GitHub
 API `403` or `429` responses, and every unexplained long-lived
 `in_progress` check.
+
+A replica that observes another process holding the reconciler lease does not
+record an attempt. An election error is a failure. A partial attempt may still
+queue work from healthy installations, but it does not refresh the
+last-success gauge. Invalid installation or repository identities also produce
+a partial result. In a deployment with several replicas, compare the newest
+gauge value across them. One practical alert expression is
+`time() - max(extra_codeowners_reconciliation_last_success_timestamp_seconds)`,
+with a threshold equal to your reconciliation objective.
 
 If an instance is meant to run background work, enable both the worker and
 reconciler and confirm that both health-response fields are `true`. Keep

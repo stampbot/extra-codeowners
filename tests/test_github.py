@@ -1125,6 +1125,7 @@ async def test_check_run_response_requires_integer_id(private_key: str) -> None:
     [
         (httpx.Response(502, content=b"unavailable"), "returned 502"),
         (httpx.Response(200, json={"installations": []}), "expected list response"),
+        (httpx.Response(200, json=[{"id": 1}, "malformed"]), "expected object items"),
     ],
 )
 async def test_installation_listing_fails_closed(
@@ -1143,20 +1144,22 @@ async def test_installation_listing_fails_closed(
 
 
 @pytest.mark.asyncio
-async def test_installation_repository_listing_paginates_and_filters_shapes(
+async def test_installation_repository_listing_paginates(
     private_key: str,
 ) -> None:
+    requested_pages: list[int] = []
+
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path.endswith("/access_tokens"):
             return httpx.Response(201, json=token_response())
         page = int(request.url.params["page"])
+        requested_pages.append(page)
         if page == 1:
             return httpx.Response(
                 200,
                 json={
                     "repositories": [
-                        *({"full_name": f"example/repository-{index}"} for index in range(99)),
-                        "malformed",
+                        {"full_name": f"example/repository-{index}"} for index in range(100)
                     ]
                 },
             )
@@ -1166,8 +1169,33 @@ async def test_installation_repository_listing_paginates_and_filters_shapes(
     repositories = await client.list_installation_repositories(2)
     await client.close()
 
-    assert len(repositories) == 100
+    assert requested_pages == [1, 2]
+    assert len(repositories) == 101
+    assert repositories[0] == {"full_name": "example/repository-0"}
     assert repositories[-1] == {"full_name": "example/final"}
+
+
+@pytest.mark.asyncio
+async def test_installation_repository_listing_rejects_malformed_items(
+    private_key: str,
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/access_tokens"):
+            return httpx.Response(201, json=token_response())
+        return httpx.Response(
+            200,
+            json={
+                "repositories": [
+                    {"full_name": "example/project"},
+                    "malformed",
+                ]
+            },
+        )
+
+    client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
+    with pytest.raises(GitHubError, match="expected object items"):
+        await client.list_installation_repositories(2)
+    await client.close()
 
 
 @pytest.mark.asyncio

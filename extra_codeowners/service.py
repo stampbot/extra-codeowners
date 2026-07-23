@@ -5,8 +5,9 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any, Final
+from typing import Any, Final, Literal
 
 import structlog
 from pydantic import ValidationError
@@ -85,6 +86,53 @@ class SharedHeadLeaseLostError(RuntimeError):
 
 class SharedHeadInvalidationPendingError(RuntimeError):
     """A current evaluation must wait for its exact-head reset and fan-out."""
+
+
+@dataclass(frozen=True, slots=True)
+class ReconciliationOutcome:
+    """Result of one elected open-pull-request reconciliation."""
+
+    queued: int
+    failed_installations: int = 0
+    lease_lost: bool = False
+
+    @property
+    def complete(self) -> bool:
+        """Whether the reconciler inspected every visible, unsuspended installation."""
+        return self.failed_installations == 0 and not self.lease_lost
+
+
+class _ReconciliationPayloadError(ValueError):
+    """A GitHub reconciliation record failed local structural validation."""
+
+    def __init__(
+        self,
+        reason: Literal["invalid_installation_id", "invalid_repository_full_name"],
+    ) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
+def _reconciliation_installation_id(value: Any) -> int:
+    """Return a valid GitHub installation ID without coercing untrusted data."""
+    if type(value) is not int or value <= 0:
+        raise _ReconciliationPayloadError("invalid_installation_id")
+    return value
+
+
+def _reconciliation_repository_full_name(value: Any) -> str:
+    """Return a canonical GitHub repository identity for reconciliation."""
+    if not isinstance(value, str):
+        raise _ReconciliationPayloadError("invalid_repository_full_name")
+    try:
+        full_name = normalize_repository_full_name(value)
+    except ValueError:
+        raise _ReconciliationPayloadError("invalid_repository_full_name") from None
+    if not full_name.isascii() or any(
+        not (character.isalnum() or character in "._-/") for character in full_name
+    ):
+        raise _ReconciliationPayloadError("invalid_repository_full_name")
+    return full_name
 
 
 def _failure(code: str, message: str) -> EvaluationResult:
@@ -1771,14 +1819,14 @@ class Reconciler:
                 lost.set()
                 return
 
-    async def reconcile_once(self) -> int:
-        """Discover and enqueue open pull requests across installations."""
+    async def reconcile_once(self) -> ReconciliationOutcome | None:
+        """Discover open pull requests, or return ``None`` when another process is elected."""
         lease_seconds = max(300, self.settings.reconcile_interval_seconds * 2)
         acquired = await asyncio.to_thread(
             self.store.acquire_service_lease, "open-pr-reconciler", self.owner, lease_seconds
         )
         if not acquired:
-            return 0
+            return None
         done = asyncio.Event()
         lost = asyncio.Event()
         heartbeat = asyncio.create_task(
@@ -1791,7 +1839,7 @@ class Reconciler:
             done.set()
             await asyncio.gather(heartbeat)
 
-    async def _reconcile_owned(self, lost: asyncio.Event) -> int:
+    async def _reconcile_owned(self, lost: asyncio.Event) -> ReconciliationOutcome:
         """Perform one reconciliation while the heartbeat owns the lease."""
         retention_boundary = datetime.now(UTC) - timedelta(
             days=self.settings.webhook_delivery_retention_days
@@ -1806,20 +1854,30 @@ class Reconciler:
         if pruned_epochs:
             log.info("shared_head_epochs_pruned", epochs=pruned_epochs)
         queued = 0
+        failed_installations = 0
         for installation in await self.github.list_installations():
             if lost.is_set():
-                return queued
-            installation_id = installation.get("id")
-            if not isinstance(installation_id, int) or installation.get("suspended_at") is not None:
-                continue
+                return ReconciliationOutcome(
+                    queued=queued,
+                    failed_installations=failed_installations,
+                    lease_lost=True,
+                )
+            installation_id: int | None = None
             try:
+                if installation.get("suspended_at") is not None:
+                    continue
+                installation_id = _reconciliation_installation_id(installation.get("id"))
                 repositories = await self.github.list_installation_repositories(installation_id)
                 for repository in repositories:
                     if lost.is_set():
-                        return queued
-                    full_name = repository.get("full_name")
-                    if not isinstance(full_name, str) or repository.get("archived") is True:
+                        return ReconciliationOutcome(
+                            queued=queued,
+                            failed_installations=failed_installations,
+                            lease_lost=True,
+                        )
+                    if repository.get("archived") is True:
                         continue
+                    full_name = _reconciliation_repository_full_name(repository.get("full_name"))
                     if self.settings.is_organization_config_repository(full_name):
                         continue
                     for pull in await self.github.list_open_pulls(installation_id, full_name):
@@ -1842,20 +1900,48 @@ class Reconciler:
                             ),
                         )
                         queued += int(added)
+            except _ReconciliationPayloadError as error:
+                failed_installations += 1
+                log.warning(
+                    "installation_reconciliation_payload_invalid",
+                    installation_id=installation_id,
+                    reason=error.reason,
+                )
             except Exception:
+                failed_installations += 1
                 log.exception("installation_reconciliation_failed", installation_id=installation_id)
-        return queued
+        return ReconciliationOutcome(
+            queued=queued,
+            failed_installations=failed_installations,
+            lease_lost=lost.is_set(),
+        )
+
+    async def run_iteration(self) -> None:
+        """Run and report one scheduled reconciliation attempt."""
+        try:
+            outcome = await self.reconcile_once()
+        except Exception:
+            RECONCILIATIONS.labels("failure").inc()
+            log.exception("reconciliation_failed")
+            return
+        if outcome is None:
+            return
+        if not outcome.complete:
+            RECONCILIATIONS.labels("partial").inc()
+            log.warning(
+                "reconciliation_partial",
+                pull_requests_queued=outcome.queued,
+                failed_installations=outcome.failed_installations,
+                lease_lost=outcome.lease_lost,
+            )
+            return
+        RECONCILIATIONS.labels("success").inc()
+        RECONCILIATION_LAST_SUCCESS.set_to_current_time()
+        log.info("reconciliation_complete", pull_requests_queued=outcome.queued)
 
     async def run(self, stop: asyncio.Event) -> None:
         """Reconcile immediately and then at the configured interval."""
         while not stop.is_set():
-            try:
-                count = await self.reconcile_once()
-                RECONCILIATIONS.labels("success").inc()
-                RECONCILIATION_LAST_SUCCESS.set_to_current_time()
-                log.info("reconciliation_complete", pull_requests_queued=count)
-            except Exception:
-                RECONCILIATIONS.labels("failure").inc()
-                log.exception("reconciliation_failed")
+            await self.run_iteration()
             with suppress(TimeoutError):
                 await asyncio.wait_for(stop.wait(), self.settings.reconcile_interval_seconds)
