@@ -10,6 +10,11 @@ so the network boundary can be reviewed and tested before any workflow receives
 release authority. The final asset policy, privileged workflow handoff, and
 operator recovery procedure remain separate work.
 
+The separate
+[immutable-release preflight contract](immutable-release-preflight.md) needs
+the **Administration: read** repository permission. Do not add that permission
+to this adapter's **Contents: write** publication token.
+
 ## Construction and routing
 
 `GitHubReleaseAPI` requires a token and an exact `OWNER/REPOSITORY` name in its
@@ -147,9 +152,9 @@ write authority still depend directly on the unconditional
 Adding this adapter does not supply a token, grant a permission, invoke a
 mutation, or make tagged publication reachable.
 
-Future wiring must also consume repository-ID-bound evidence from GitHub's
-immutable-releases preflight before it invokes the controller. That endpoint
-requires Administration read, so it belongs in a separate narrowly privileged
-step; the contents-write publication token must not be broadened to perform the
-check itself. Publication stays blocked until that evidence handoff and its
-live contract test exist.
+Future wiring must consume the repository-ID-bound record produced by the
+[immutable-release preflight](immutable-release-preflight.md) before it invokes
+the controller. That endpoint requires the **Administration: read** repository
+permission, so it belongs in a separate job. The **Contents: write**
+publication token must not perform the check itself. Publication stays blocked
+until that evidence handoff and its live contract test exist.
