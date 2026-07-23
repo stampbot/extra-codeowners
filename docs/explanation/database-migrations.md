@@ -18,13 +18,20 @@ is not an upgrade plan.
 
 The migration command and the running service have different jobs:
 
-```mermaid
-flowchart LR
-  Artifact[Reviewed target artifact] --> Migrator[Explicit migration command]
-  Migrator -->|bounded advisory lock| PostgreSQL[(PostgreSQL)]
-  PostgreSQL --> Validator[Startup schema validator]
-  Validator -->|exact head and required structure| Service[Webhook, worker, reconciler]
-  Validator -->|missing or incompatible| Block[Startup fails closed]
+```text
+reviewed target artifact
+          |
+          v
+explicit migration command -- bounded advisory lock --> PostgreSQL
+                                                        |
+                                                        v
+                                              startup schema validator
+                                                |                 |
+                              exact head and structure      missing or incompatible
+                                                |                 |
+                                                v                 v
+                                     webhook, worker,       startup fails
+                                     and reconciler         closed
 ```
 
 Only the migrator changes the schema. On PostgreSQL, concurrent migrators

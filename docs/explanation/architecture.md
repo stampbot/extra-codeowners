@@ -22,20 +22,24 @@ The implementation follows four rules:
 
 ## From event to decision
 
-```mermaid
-flowchart LR
-    GH[GitHub webhook] --> Ingress[Authenticated ingress]
-    Ingress --> Queue[(Durable work and audit store)]
-    Ingress --> Fast[Bounded check invalidation]
-    Queue --> Invalidate[Exact-head invalidation worker]
-    Invalidate --> Queue
-    Queue --> Fanout[Authority fan-out worker]
-    Fanout --> Queue
-    Queue --> Worker[Pull-request worker]
-    Reconciler[Periodic reconciler] --> Queue
-    Worker --> Evidence[Fresh GitHub evidence]
-    Evidence --> Evaluator[Network-free evaluator]
-    Evaluator --> Check[Check Run on exact head]
+```text
+GitHub webhook
+      |
+      v
+authenticated ingress ------> bounded check invalidation
+      |
+      v
+durable work and audit store <------ periodic reconciler
+      |
+      +--> exact-head invalidation worker
+      +--> authority fan-out worker
+      `--> pull-request worker --> fresh GitHub evidence
+                                      |
+                                      v
+                              network-free evaluator
+                                      |
+                                      v
+                              Check Run on exact head
 ```
 
 In words, ingress authenticates and stores a trigger. A direct pull-request
@@ -111,14 +115,20 @@ accepted work. `invalidated_generation` is the newest generation whose exact
 Check Run reset and pull-request fan-out finished. A gap between them is
 durable queue work.
 
-```mermaid
-stateDiagram-v2
-    [*] --> Pending: accept trigger
-    Pending --> Leased: claim exact generation
-    Leased --> Pending: retry or rate limit
-    Leased --> Invalidated: reset existing check and fan out
-    Leased --> Pending: newer generation
-    Invalidated --> [*]: evaluations may publish
+```text
+accept trigger
+      |
+      v
+   pending <--------- retry, rate limit, or newer generation
+      |                                  ^
+      v                                  |
+leased exact generation -----------------+
+      |
+      v
+reset existing check and fan out
+      |
+      v
+generation invalidated; evaluations may publish
 ```
 
 Workers claim this queue before authority fan-out or ordinary evaluation. The
@@ -409,19 +419,22 @@ CI, manual proof runs, and the tagged read-only scan call one reusable Python
 proof workflow. Each caller builds its own proof inside its own run; no caller
 trusts artifacts from a different workflow run.
 
-```mermaid
-flowchart LR
-    CI[Pull request or main CI] --> Proof[Reusable Python proof]
-    Manual[Manual dispatch] --> Proof
-    Tag[Validated tag] --> Proof
-    Proof --> Selected[Selected five-file artifact]
-    Proof --> Raw[Verified raw spine and record]
-    Selected --> CIC[CI containers and evidence]
-    Selected --> Scan[Read-only tagged candidate scan]
-    Raw --> Materialize[Read-only materialization]
-    Raw -. configured consumer .-> Python[Attest and sign wheel and sdist]
-    Gate[Unconditional publication blocker] -. prevents .-> Python
-    Gate -. prevents .-> Publish[Privileged release jobs]
+```text
+pull request or main CI --+
+manual dispatch ----------+--> reusable Python proof
+validated tag ------------+            |
+                           +------------+-------------+
+                           |                          |
+                           v                          v
+                selected five-file           verified raw spine
+                    artifact                    and record
+                    |      |                    |       |
+                    v      v                    v       v
+             CI containers  read-only        read-only  configured sign and
+              and evidence  tag scan       materialize  attest consumer
+
+unconditional publication blocker -X-> configured sign and attest consumer
+unconditional publication blocker -X-> privileged release jobs
 ```
 
 Each caller gets a separate proof in its own run. CI keeps its required-check

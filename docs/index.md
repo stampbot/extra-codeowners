@@ -1,62 +1,63 @@
 # Extra CODEOWNERS documentation
 
-Extra CODEOWNERS lets a human code owner or a specifically enrolled GitHub App
-satisfy ownership for selected files. Human ownership stays in the standard
-`CODEOWNERS` file. App identity and delegated paths live in separate policy.
-
-The service evaluates the current pull request and publishes one GitHub Check
-Run. It does not submit reviews or grant applications new repository access.
+Extra CODEOWNERS publishes a GitHub check that accepts either a human
+CODEOWNER approval or an approval from a specifically enrolled GitHub App.
+People and teams stay in `CODEOWNERS`; App authority lives in separate policy.
 
 !!! warning "Development and test use only"
 
     Extra CODEOWNERS is not ready to replace GitHub's native code-owner rule on
-    a production repository. A Check Run belongs to a commit, while the
-    evidence used here belongs to one pull request. Read the
-    [current project status](reference/project-status.md) before installing or
-    testing the App.
+    a production repository. Read the
+    [current project status](reference/project-status.md) before you install or
+    test it.
 
-## Start with your task
+## Start here
 
-### Evaluate the idea
+If this is your first visit, read the
+[native CODEOWNERS comparison](explanation/native-codeowners.md). It explains
+what the extra check replaces, what stays with GitHub, and why App delegation
+uses a separate policy file.
 
-Read [the native CODEOWNERS comparison](explanation/native-codeowners.md) for
-the problem and intended repository-rule composition. Then use the
-[threat model](explanation/threat-model.md) to decide whether the trust split
-fits your repository.
+Then choose the task that matches what you're doing.
 
-The short version is:
+### Run the first check
 
-1. `CODEOWNERS` names people and teams.
-2. Organization policy enrolls an App by immutable GitHub identity.
-3. Repository policy delegates paths, owners, and optional label conditions.
-4. An existing human or eligible App approval can satisfy each owner set.
+The [first-check tutorial](tutorials/development-installation.md) starts with a
+clean checkout and a disposable GitHub organization. It uses a human approval
+so you can prove the checker works before you introduce another App.
 
-### Build a development installation
-
-Follow the [development installation tutorial](tutorials/development-installation.md).
-It starts the service, connects a disposable GitHub App, and exercises one
-delegated pull request.
-
-When you already have a running development service, use the focused guides:
+### Register and configure the App
 
 - [Register an App with the setup URL](how-to/register-app.md)
 - [Configure organization and repository policy](how-to/configure.md)
 - [Prepare repository rules in a disposable repository](how-to/prepare-repository-rules.md)
-- [Run the live GitHub contract fixture](how-to/run-live-github-contract.md).
+- [Run the live GitHub contract fixture](how-to/run-live-github-contract.md)
 
-### Plan a future deployment
+### Understand a check result
 
-There is no supported image or chart release yet. If you are planning an
-evaluation, start with the [future-deployment guide](how-to/deploy.md) to see
-what is implemented and what remains blocked. The
-[operations and recovery guide](how-to/operate.md) and
-[upgrade guide](how-to/upgrade.md) document the contracts a future deployment
-must satisfy; they are not a production-readiness claim.
+Use [Troubleshoot a check](how-to/troubleshoot-check.md) when you are looking at
+a failed, pending, or missing check on a pull request. It starts with the text
+GitHub shows and tells you when an operator needs to get involved.
 
-### Look up exact behavior
+The [checks reference](reference/checks.md) contains the complete evaluation
+contract.
 
-Use the reference pages when you need a field, limit, permission, route, or
-failure state:
+### Operate a development deployment
+
+There is no supported image or chart release yet. The deployment, upgrade, and
+operations guides describe the contract implemented by the current source:
+
+- [Prepare a future deployment](how-to/deploy.md)
+- [Upgrade, back up, and restore](how-to/upgrade.md)
+- [Operate and recover](how-to/operate.md)
+
+These pages are useful for evaluation and design review. They are not a
+production-readiness claim.
+
+## Reference
+
+Use the reference pages for exact fields, limits, permissions, routes, and
+failure behavior:
 
 - [configuration](reference/configuration.md)
 - [checks and evaluation](reference/checks.md)
@@ -65,16 +66,22 @@ failure state:
 - [HTTP API](reference/http-api.md)
 - [project status](reference/project-status.md).
 
-The container-evidence pages document review and release work that remains
-blocked. They describe evidence and safety requirements; they do not mark the
-current candidates as distributable.
+## Understand the design
 
-### Understand the design
+The [architecture](explanation/architecture.md) follows a webhook from
+authenticated ingress to a Check Run. The
+[threat model](explanation/threat-model.md) explains who holds authority and
+where fail-closed behavior still depends on GitHub delivery.
 
-The [architecture](explanation/architecture.md) follows a webhook from receipt
-through durable work and reconciliation. The other explanation pages cover
-the choices behind database migrations, property tests, the runtime base, and
-container evidence.
+The other explanation pages cover database migrations, property tests, and the
+runtime base image.
+
+## Maintainer and release engineering
+
+Supply-chain evidence, release candidates, DCO hardening, and publication
+controls are project-maintainer work. They have their own
+[maintainer documentation index](maintainers/index.md) so they don't interrupt
+the setup and policy paths above.
 
 ## Get help or contribute
 

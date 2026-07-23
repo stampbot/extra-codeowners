@@ -24,36 +24,44 @@ markdown_extensions:
       permalink: true
   - pymdownx.details
   - pymdownx.highlight
-  - pymdownx.superfences:
-      custom_fences:
-        - name: mermaid
-          class: mermaid
-          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.superfences
 
 nav:
   - Home: index.md
   - Tutorial:
-      - Development installation: tutorials/development-installation.md
+      - Run your first check: tutorials/development-installation.md
   - How-to guides:
       - Register a GitHub App: how-to/register-app.md
       - Configure policy: how-to/configure.md
       - Prepare repository rules: how-to/prepare-repository-rules.md
-      - Run the live GitHub contract: how-to/run-live-github-contract.md
+      - Troubleshoot a check: how-to/troubleshoot-check.md
       - Prepare a future deployment: how-to/deploy.md
       - Upgrade, back up, and restore: how-to/upgrade.md
       - Operate and recover: how-to/operate.md
-      - Respond to dependency audit: how-to/respond-to-dependency-audit.md
-      - Review stacked pull requests: how-to/review-stacked-pull-requests.md
-      - Review CI container evidence: how-to/review-container-evidence.md
   - Reference:
       - Project status: reference/project-status.md
       - Configuration: reference/configuration.md
       - Checks and evaluation: reference/checks.md
-      - DCO evidence contract: reference/dco-evidence.md
       - Command line: reference/cli.md
       - GitHub permissions and events: reference/github-permissions.md
       - HTTP API: reference/http-api.md
       - Database upgrade notes: reference/upgrade-notes.md
+  - Explanation:
+      - Native CODEOWNERS comparison: explanation/native-codeowners.md
+      - Architecture: explanation/architecture.md
+      - Database migrations: explanation/database-migrations.md
+      - Threat model: explanation/threat-model.md
+      - Property testing: explanation/property-testing.md
+  - Maintainer and release engineering:
+      - Overview: maintainers/index.md
+      - Run the live GitHub contract: how-to/run-live-github-contract.md
+      - Respond to dependency audit: how-to/respond-to-dependency-audit.md
+      - Review stacked pull requests: how-to/review-stacked-pull-requests.md
+      - Update the tutorial webhook relay: maintainers/update-tutorial-relay.md
+      - Review CI container evidence: how-to/review-container-evidence.md
+      - DCO evidence contract: reference/dco-evidence.md
+      - Runtime base image decision: explanation/runtime-base.md
+      - Container distribution evidence: explanation/container-distribution-evidence.md
       - Container evidence policy: reference/container-evidence-policy.md
       - Raw Python-distribution spine format: reference/python-distribution-spine-format.md
       - Raw OCI release-spine format: reference/release-spine-format.md
@@ -61,11 +69,3 @@ nav:
       - Immutable release controller contract: reference/immutable-release-controller.md
       - GitHub release API adapter contract: reference/github-release-api-adapter.md
       - Immutable-release preflight contract: reference/immutable-release-preflight.md
-  - Explanation:
-      - Native CODEOWNERS comparison: explanation/native-codeowners.md
-      - Architecture: explanation/architecture.md
-      - Database migrations: explanation/database-migrations.md
-      - Threat model: explanation/threat-model.md
-      - Runtime base image decision: explanation/runtime-base.md
-      - Container distribution evidence: explanation/container-distribution-evidence.md
-      - Property testing: explanation/property-testing.md

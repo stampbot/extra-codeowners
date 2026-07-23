@@ -52,3 +52,8 @@ docs/reference/*
 !README.md
 !docs/reference/upgrade-notes.md
 !.python-version
+!docs/
+!docs/**
+!examples/
+!examples/**
+!mise.tutorial.toml
