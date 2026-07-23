@@ -96,8 +96,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Rel
   empty SBOM and component sets. SQLAlchemy binds its exact wheels,
   9,912,201-byte sdist, five native roles, and the same explicit empty sets.
   These records do not claim the sdists explain every binary byte or prove
-  reproducible builds. The other four native-wheel owners and overall source
+  reproducible builds. The other three native-wheel owners and overall source
   completeness remain explicitly unresolved.
+- A closed Cryptography 48.0.1 native-owner record that binds all 32 crates.io
+  components to exact archives, manifests, checksums, licenses, and notices.
+  It also retains the sdist's local Rust subtree, pins its Cargo workspace and
+  package manifests, and retains the official checksummed OpenSSL 4.0.1
+  release. Local and upstream reviews must match their source paths, identities,
+  PURLs, hashes, and reviewed license expressions. Crate notice policy must
+  exactly cover every license or notice file in each archive. The arm64
+  `NotpineForGHA` observation remains literal and shares Greenlet's closed
+  Alpine GCC evidence only through exact `libgcc` payload equivalence. This
+  record does not claim wheel reproducibility or build provenance.
 - Diátaxis documentation, a threat model, operating guides, and Read the Docs configuration.
 - Bounded pull-request and scheduled property tests for untrusted parsing and policy inputs.
 - Machine-readable live GitHub evidence completeness that distinguishes false,

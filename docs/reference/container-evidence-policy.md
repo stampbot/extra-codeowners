@@ -170,7 +170,7 @@ Approval is necessary but not sufficient. The collector also requires the
 derived ledger's exact complete-source status. Normal verification rejects
 `approved: true` while that ledger is incomplete; the
 `--require-distribution-approval` gate additionally requires a complete,
-attributed approval. Four native-wheel owners remain open under issue #18, so
+attributed approval. Three native-wheel owners remain open under issue #18, so
 that gate cannot pass. Issue #28 independently keeps publication authority out
 of the collector. Issue #32 still requires the selected application proof to
 reach release evidence and the future publication jobs.
@@ -415,9 +415,9 @@ records.
 | Kind | Required identity and verification |
 | --- | --- |
 | `alpine-aports` | `alpine:ORIGIN@VERSION`; a commit-pinned aports recipe, exact release distfiles, literal recipe identity and license, bounded sibling symlink exceptions, and retained notices. Every upstream recipe source must appear once with its exact checksum. Each allowed symlink must resolve directly to a retained regular sibling. |
-| `crates-io` | `crates-io:NAME@VERSION`; the canonical crates.io archive, exact `NAME-VERSION/Cargo.toml`, raw and normalized license, and retained notices. Archive root, manifest name/version/license, PURL, archive hash, and reviewed expression are bound together. |
-| `owner-sdist-subpath` | `owner-sdist:OWNER#PATH`; a canonical subtree of that same owner's locked sdist, with tree SHA-256, member count, expanded size, and notices. Tar and ZIP parsers reject unsafe paths, duplicate members, devices, sparse files, and links. |
-| `checksummed-upstream-release` | `upstream-release:NAME@VERSION`; an exact archive, exact checksum document, selected filename, and notices. The strict GNU-style checksum parser requires exactly one matching record. |
+| `crates-io` | `crates-io:NAME@VERSION`; the canonical crates.io archive, exact `NAME-VERSION/Cargo.toml`, raw and normalized license, and retained notices. Archive root, manifest name/version/license, PURL, archive hash, and reviewed expression are bound together. Every regular archive member whose name denotes a license or notice must appear in the policy's exact notice set. |
+| `owner-sdist-subpath` | `owner-sdist:OWNER#PATH`; a canonical subtree of that same owner's locked sdist, with tree SHA-256, member count, expanded size, Cargo workspace and package manifests, reviewed license, and notices. Tar and ZIP parsers reject unsafe paths, duplicate members, devices, sparse files, and links. |
+| `checksummed-upstream-release` | `upstream-release:NAME@VERSION`; an exact archive, exact checksum document, selected filename, reviewed license, and notices. The observation name, version, download PURL, and SHA-256 must identify that archive. The strict GNU-style checksum parser requires exactly one matching record. |
 
 For crates.io records, `raw_license` must match the exact Cargo manifest.
 `normalized_license` normally preserves the same value. The one supported
@@ -425,6 +425,18 @@ legacy rewrite is `MIT/Apache-2.0` to `MIT OR Apache-2.0`; any other difference
 fails. A directly reviewed crate observation must carry exactly one supported
 CycloneDX license expression or SPDX ID, and it must equal
 `normalized_license`.
+
+Owner-subtree package records pin each Cargo package's path, name, version, and
+exact `Cargo.toml` bytes. Each local observation must name one of those
+packages. Its PURL path and file `bom-ref` must agree, and a PURL fragment must
+name a regular file in the verified subtree. Bundle generation parses the
+pinned workspace and package manifests, resolves inherited version and license
+fields, and requires the package list to match the workspace members exactly.
+
+Owner-subtree and checksummed-release reviews carry the same
+`reviewed_license` expression as their source record. Bundle generation
+rechecks that equality before it associates retained notice bytes with the
+reviewed component occurrences.
 
 All configured sources must be used. The two platforms must agree on sources,
 review decisions, omissions, relationships, and logical observations.
@@ -443,19 +455,18 @@ platform-specific identifiers from creating false review drift.
 owners are copied in full to `unresolved_owners`. The count and names are
 derived from that open list.
 
-The current ledger closes Greenlet 3.5.3, MarkupSafe 3.0.3, and SQLAlchemy
-2.0.51. These four owners remain deliberately open:
+The current ledger closes Cryptography 48.0.1, Greenlet 3.5.3, MarkupSafe
+3.0.3, and SQLAlchemy 2.0.51. These three owners remain deliberately open:
 
 | Owner | Open omission IDs |
 | --- | --- |
 | `python:cffi@2.1.0` | `unproven-libffi-build-input` |
-| `python:cryptography@48.0.1` | `unresolved-rust-and-openssl-sources` |
 | `python:psycopg-binary@3.3.4` | `missing-libpq-sbom`, `unreviewed-bundled-library-sources` |
 | `python:pydantic-core@2.46.4` | `missing-libgcc-sbom`, `unreviewed-cargo-sources` |
 
 Each platform also reports three reviewed metadata-root-echo anomalies: the
 Cryptography, Greenlet, and Psycopg auditwheel documents. The ledger therefore
-reports `complete: false`, `remaining_owner_count: 4`, and the four sorted
+reports `complete: false`, `remaining_owner_count: 3`, and the three sorted
 owner names. `MANIFEST.json.source_completeness` is derived from this ledger;
 the raw component inventory has no caller-controlled completeness field.
 

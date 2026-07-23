@@ -39,7 +39,7 @@ contract:
 
 | Issue | Work still required |
 | --- | --- |
-| [#18](https://github.com/stampbot/extra-codeowners/issues/18) | Complete notice and corresponding-source records for the four native-wheel owners that remain after Greenlet, MarkupSafe, and SQLAlchemy. |
+| [#18](https://github.com/stampbot/extra-codeowners/issues/18) | Complete notice and corresponding-source records for CFFI, Psycopg, and Pydantic Core. |
 | [#28](https://github.com/stampbot/extra-codeowners/issues/28) | Separate unprivileged collection from publication authority, freeze the wire format, and ship an adversarially tested recipient verifier and how-to. |
 | [#32](https://github.com/stampbot/extra-codeowners/issues/32) | Bind the retained Python selection records and exact wheel digest into the complete release evidence, then bind the installed runtime to that same wheel. |
 
@@ -49,21 +49,29 @@ still requires a separate recipient verifier and a runnable how-to for the
 final release assets.
 
 The collector has completed the CPython identity and source portion of #18 and
-the Greenlet, MarkupSafe, and SQLAlchemy native-owner portions on both
-platforms. It retains the exact locked platform wheel for every native-payload
-or embedded-SBOM owner and a separately addressed copy of each raw SBOM. For
-Greenlet, it also binds the owner sdist, the complete five-file native set,
-each embedded component, the exact Alpine GCC recipe and distfile, and
-reviewed source notices. These exact sets prove co-membership in the wheel.
-The SBOM has no component-to-file map, so the evidence does not assign an
-individual native file to the owner source or a nested component.
+the Cryptography, Greenlet, MarkupSafe, and SQLAlchemy native-owner portions on
+both platforms. It retains the exact locked platform wheel for every
+native-payload or embedded-SBOM owner and a separately addressed copy of each
+raw SBOM. For Greenlet, it also binds the owner sdist, the complete five-file
+native set, each embedded component, the exact Alpine GCC recipe and distfile,
+and reviewed source notices. These exact sets prove co-membership in the
+wheel. The SBOM has no component-to-file map, so the evidence does not assign
+an individual native file to the owner source or a nested component.
+
+Cryptography adds exact archives, checksums, manifests, licenses, and notices
+for 32 crates.io components. Its record also retains the sdist's local Rust
+subtree and the official checksummed OpenSSL 4.0.1 release. The arm64
+`NotpineForGHA` observation remains literal. A relationship links it to
+Greenlet's reviewed Alpine GCC evidence because the `libgcc` payload bytes
+match exactly.
 
 MarkupSafe adds one exact native payload, no SBOM observations, and an owner
 payload disposition. SQLAlchemy adds five exact native payloads with the same
 review shape. Each record binds the exact owner sdist as source evidence, not
-proof that every binary byte came from that archive. Four owners remain open;
-their full review records make each gap inspectable without pretending to
-close it.
+proof that every binary byte came from that archive. The Cryptography record
+also does not claim wheel reproducibility or build provenance. Three owners
+remain open; their full review records make each gap inspectable without
+pretending to close it.
 
 The collector also replays wheel `RECORD` ownership for historical Python
 installations whose bytes remain in lower layers. A release inventory must keep
@@ -259,12 +267,12 @@ not reduced to path/hash summaries. The current open records are:
 | Owner | Omission IDs |
 | --- | --- |
 | `python:cffi@2.1.0` | `unproven-libffi-build-input` |
-| `python:cryptography@48.0.1` | `unresolved-rust-and-openssl-sources` |
 | `python:psycopg-binary@3.3.4` | `missing-libpq-sbom`, `unreviewed-bundled-library-sources` |
 | `python:pydantic-core@2.46.4` | `missing-libgcc-sbom`, `unreviewed-cargo-sources` |
 
-Greenlet, MarkupSafe, and SQLAlchemy are closed. The resulting ledger has
-`complete: false`, `remaining_owner_count: 4`, and the four sorted owner names.
+Cryptography, Greenlet, MarkupSafe, and SQLAlchemy are closed. The resulting
+ledger has `complete: false`, `remaining_owner_count: 3`, and the three sorted
+owner names.
 
 Native sources use a four-way tagged union: commit-pinned Alpine aports
 sources, canonical crates.io archives, canonical subtrees of the locked owner

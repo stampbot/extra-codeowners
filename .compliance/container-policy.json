@@ -4104,6 +4104,11 @@
       "url": "https://raw.githubusercontent.com/spdx/license-list-data/421fbabbe80c94c58c12316af1bc6a2dca2362bc/text/LGPL-3.0-only.txt"
     },
     {
+      "id": "LLVM-exception",
+      "sha256": "e34c58338bd89d43e709e226610d8f32b3e3c47f4ad9a99a8dc1d4ac7842488e",
+      "url": "https://raw.githubusercontent.com/spdx/license-list-data/421fbabbe80c94c58c12316af1bc6a2dca2362bc/text/LLVM-exception.txt"
+    },
+    {
       "id": "MIT",
       "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5",
       "url": "https://raw.githubusercontent.com/spdx/license-list-data/421fbabbe80c94c58c12316af1bc6a2dca2362bc/text/MIT.txt"
@@ -4127,6 +4132,11 @@
       "id": "Python-2.0.1",
       "sha256": "1d165c0d255094285fe6ce754b431b9efc1e7df547db4aed5c3b3d082e5d5aaa",
       "url": "https://raw.githubusercontent.com/spdx/license-list-data/421fbabbe80c94c58c12316af1bc6a2dca2362bc/text/Python-2.0.1.txt"
+    },
+    {
+      "id": "Unicode-3.0",
+      "sha256": "f7db81051789b729fea528a63ec4c938fdcb93d9d61d97dc8cc2e9df6d47f2a1",
+      "url": "https://raw.githubusercontent.com/spdx/license-list-data/421fbabbe80c94c58c12316af1bc6a2dca2362bc/text/Unicode-3.0.txt"
     },
     {
       "id": "X11",
@@ -4235,23 +4245,582 @@
             "reference_payload_role": "greenlet.libs/libgcc_s.so.1"
           }
         ],
-        "cargo_lock": null,
-        "component_reviews": [],
-        "known_omissions": [
+        "cargo_lock": {
+          "member": "cryptography-48.0.1/Cargo.lock",
+          "non_sbom_packages": [],
+          "sha256": "585b66741011c621f66405ee9392b9fd35b62a7dbdabba6e37edc8cbad5c5a9a",
+          "size": 8521,
+          "source_ids": [
+            "crates-io:asn1@0.24.1",
+            "crates-io:asn1_derive@0.24.1",
+            "crates-io:base64@0.22.1",
+            "crates-io:bitflags@2.11.1",
+            "crates-io:cc@1.2.61",
+            "crates-io:cfg-if@1.0.4",
+            "crates-io:find-msvc-tools@0.1.9",
+            "crates-io:foreign-types-shared@0.1.1",
+            "crates-io:foreign-types@0.3.2",
+            "crates-io:heck@0.5.0",
+            "crates-io:itoa@1.0.18",
+            "crates-io:libc@0.2.186",
+            "crates-io:once_cell@1.21.4",
+            "crates-io:openssl-macros@0.1.1",
+            "crates-io:openssl-sys@0.9.115",
+            "crates-io:openssl@0.10.79",
+            "crates-io:pem@3.0.6",
+            "crates-io:pkg-config@0.3.33",
+            "crates-io:portable-atomic@1.13.1",
+            "crates-io:proc-macro2@1.0.106",
+            "crates-io:pyo3-build-config@0.28.3",
+            "crates-io:pyo3-ffi@0.28.3",
+            "crates-io:pyo3-macros-backend@0.28.3",
+            "crates-io:pyo3-macros@0.28.3",
+            "crates-io:pyo3@0.28.3",
+            "crates-io:quote@1.0.45",
+            "crates-io:self_cell@1.2.2",
+            "crates-io:shlex@1.3.0",
+            "crates-io:syn@2.0.117",
+            "crates-io:target-lexicon@0.13.5",
+            "crates-io:unicode-ident@1.0.24",
+            "crates-io:vcpkg@0.2.15"
+          ]
+        },
+        "component_reviews": [
           {
-            "component": {
-              "name": "cryptography-native-dependencies",
-              "purl": "",
-              "type": "library",
-              "version": "48.0.1"
-            },
-            "id": "unresolved-rust-and-openssl-sources",
-            "missing_evidence": [
-              "build-material-attestation",
-              "exact-source",
-              "license-evidence",
-              "notice-evidence"
+            "observations": [
+              {
+                "bom_ref": "path+file:///__w/cryptography/cryptography/tmpwheelhouse/.tmpugHncX/cryptography-48.0.1/src/rust#cryptography-rust@0.1.0",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "7d64848d2ebc4862dbfa72197dd2465656c6edc7b5ce1ef563dce47f868fc453",
+                "purl": "pkg:cargo/cryptography-rust@0.1.0?download_url=file://.",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+              },
+              {
+                "bom_ref": "path+file:///__w/cryptography/cryptography/tmpwheelhouse/.tmpugHncX/cryptography-48.0.1/src/rust#cryptography-rust@0.1.0 bin-target-0",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "7d64848d2ebc4862dbfa72197dd2465656c6edc7b5ce1ef563dce47f868fc453",
+                "purl": "pkg:cargo/cryptography-rust@0.1.0?download_url=file://.#src/lib.rs",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+              },
+              {
+                "bom_ref": "path+file:///__w/cryptography/cryptography/tmpwheelhouse/.tmpugHncX/cryptography-48.0.1/src/rust/cryptography-cffi#0.1.0",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "7d64848d2ebc4862dbfa72197dd2465656c6edc7b5ce1ef563dce47f868fc453",
+                "purl": "pkg:cargo/cryptography-cffi@0.1.0?download_url=file://cryptography-cffi",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+              },
+              {
+                "bom_ref": "path+file:///__w/cryptography/cryptography/tmpwheelhouse/.tmpugHncX/cryptography-48.0.1/src/rust/cryptography-crypto#0.1.0",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "7d64848d2ebc4862dbfa72197dd2465656c6edc7b5ce1ef563dce47f868fc453",
+                "purl": "pkg:cargo/cryptography-crypto@0.1.0?download_url=file://cryptography-crypto",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+              },
+              {
+                "bom_ref": "path+file:///__w/cryptography/cryptography/tmpwheelhouse/.tmpugHncX/cryptography-48.0.1/src/rust/cryptography-keepalive#0.1.0",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "7d64848d2ebc4862dbfa72197dd2465656c6edc7b5ce1ef563dce47f868fc453",
+                "purl": "pkg:cargo/cryptography-keepalive@0.1.0?download_url=file://cryptography-keepalive",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+              },
+              {
+                "bom_ref": "path+file:///__w/cryptography/cryptography/tmpwheelhouse/.tmpugHncX/cryptography-48.0.1/src/rust/cryptography-key-parsing#0.1.0",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "7d64848d2ebc4862dbfa72197dd2465656c6edc7b5ce1ef563dce47f868fc453",
+                "purl": "pkg:cargo/cryptography-key-parsing@0.1.0?download_url=file://cryptography-key-parsing",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+              },
+              {
+                "bom_ref": "path+file:///__w/cryptography/cryptography/tmpwheelhouse/.tmpugHncX/cryptography-48.0.1/src/rust/cryptography-openssl#0.1.0",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "7d64848d2ebc4862dbfa72197dd2465656c6edc7b5ce1ef563dce47f868fc453",
+                "purl": "pkg:cargo/cryptography-openssl@0.1.0?download_url=file://cryptography-openssl",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+              },
+              {
+                "bom_ref": "path+file:///__w/cryptography/cryptography/tmpwheelhouse/.tmpugHncX/cryptography-48.0.1/src/rust/cryptography-x509#0.1.0",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "7d64848d2ebc4862dbfa72197dd2465656c6edc7b5ce1ef563dce47f868fc453",
+                "purl": "pkg:cargo/cryptography-x509@0.1.0?download_url=file://cryptography-x509",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+              },
+              {
+                "bom_ref": "path+file:///__w/cryptography/cryptography/tmpwheelhouse/.tmpugHncX/cryptography-48.0.1/src/rust/cryptography-x509-verification#0.1.0",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "7d64848d2ebc4862dbfa72197dd2465656c6edc7b5ce1ef563dce47f868fc453",
+                "purl": "pkg:cargo/cryptography-x509-verification@0.1.0?download_url=file://cryptography-x509-verification",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+              }
             ],
+            "reviewed_license": "Apache-2.0 OR BSD-3-Clause",
+            "source": "owner-sdist:python:cryptography@48.0.1#src/rust"
+          },
+          {
+            "observations": [
+              {
+                "bom_ref": "registry+https://github.com/rust-lang/crates.io-index#asn1@0.24.1",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "7d64848d2ebc4862dbfa72197dd2465656c6edc7b5ce1ef563dce47f868fc453",
+                "purl": "pkg:cargo/asn1@0.24.1",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+              }
+            ],
+            "reviewed_license": "BSD-3-Clause",
+            "source": "crates-io:asn1@0.24.1"
+          },
+          {
+            "observations": [
+              {
+                "bom_ref": "registry+https://github.com/rust-lang/crates.io-index#asn1_derive@0.24.1",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "7d64848d2ebc4862dbfa72197dd2465656c6edc7b5ce1ef563dce47f868fc453",
+                "purl": "pkg:cargo/asn1_derive@0.24.1",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+              }
+            ],
+            "reviewed_license": "BSD-3-Clause",
+            "source": "crates-io:asn1_derive@0.24.1"
+          },
+          {
+            "observations": [
+              {
+                "bom_ref": "registry+https://github.com/rust-lang/crates.io-index#base64@0.22.1",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "7d64848d2ebc4862dbfa72197dd2465656c6edc7b5ce1ef563dce47f868fc453",
+                "purl": "pkg:cargo/base64@0.22.1",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+              }
+            ],
+            "reviewed_license": "MIT OR Apache-2.0",
+            "source": "crates-io:base64@0.22.1"
+          },
+          {
+            "observations": [
+              {
+                "bom_ref": "registry+https://github.com/rust-lang/crates.io-index#bitflags@2.11.1",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "7d64848d2ebc4862dbfa72197dd2465656c6edc7b5ce1ef563dce47f868fc453",
+                "purl": "pkg:cargo/bitflags@2.11.1",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+              }
+            ],
+            "reviewed_license": "MIT OR Apache-2.0",
+            "source": "crates-io:bitflags@2.11.1"
+          },
+          {
+            "observations": [
+              {
+                "bom_ref": "registry+https://github.com/rust-lang/crates.io-index#cc@1.2.61",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "7d64848d2ebc4862dbfa72197dd2465656c6edc7b5ce1ef563dce47f868fc453",
+                "purl": "pkg:cargo/cc@1.2.61",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+              }
+            ],
+            "reviewed_license": "MIT OR Apache-2.0",
+            "source": "crates-io:cc@1.2.61"
+          },
+          {
+            "observations": [
+              {
+                "bom_ref": "registry+https://github.com/rust-lang/crates.io-index#cfg-if@1.0.4",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "7d64848d2ebc4862dbfa72197dd2465656c6edc7b5ce1ef563dce47f868fc453",
+                "purl": "pkg:cargo/cfg-if@1.0.4",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+              }
+            ],
+            "reviewed_license": "MIT OR Apache-2.0",
+            "source": "crates-io:cfg-if@1.0.4"
+          },
+          {
+            "observations": [
+              {
+                "bom_ref": "registry+https://github.com/rust-lang/crates.io-index#find-msvc-tools@0.1.9",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "7d64848d2ebc4862dbfa72197dd2465656c6edc7b5ce1ef563dce47f868fc453",
+                "purl": "pkg:cargo/find-msvc-tools@0.1.9",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+              }
+            ],
+            "reviewed_license": "MIT OR Apache-2.0",
+            "source": "crates-io:find-msvc-tools@0.1.9"
+          },
+          {
+            "observations": [
+              {
+                "bom_ref": "registry+https://github.com/rust-lang/crates.io-index#foreign-types-shared@0.1.1",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "7d64848d2ebc4862dbfa72197dd2465656c6edc7b5ce1ef563dce47f868fc453",
+                "purl": "pkg:cargo/foreign-types-shared@0.1.1",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+              }
+            ],
+            "reviewed_license": "MIT OR Apache-2.0",
+            "source": "crates-io:foreign-types-shared@0.1.1"
+          },
+          {
+            "observations": [
+              {
+                "bom_ref": "registry+https://github.com/rust-lang/crates.io-index#foreign-types@0.3.2",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "7d64848d2ebc4862dbfa72197dd2465656c6edc7b5ce1ef563dce47f868fc453",
+                "purl": "pkg:cargo/foreign-types@0.3.2",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+              }
+            ],
+            "reviewed_license": "MIT OR Apache-2.0",
+            "source": "crates-io:foreign-types@0.3.2"
+          },
+          {
+            "observations": [
+              {
+                "bom_ref": "registry+https://github.com/rust-lang/crates.io-index#heck@0.5.0",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "7d64848d2ebc4862dbfa72197dd2465656c6edc7b5ce1ef563dce47f868fc453",
+                "purl": "pkg:cargo/heck@0.5.0",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+              }
+            ],
+            "reviewed_license": "MIT OR Apache-2.0",
+            "source": "crates-io:heck@0.5.0"
+          },
+          {
+            "observations": [
+              {
+                "bom_ref": "registry+https://github.com/rust-lang/crates.io-index#itoa@1.0.18",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "7d64848d2ebc4862dbfa72197dd2465656c6edc7b5ce1ef563dce47f868fc453",
+                "purl": "pkg:cargo/itoa@1.0.18",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+              }
+            ],
+            "reviewed_license": "MIT OR Apache-2.0",
+            "source": "crates-io:itoa@1.0.18"
+          },
+          {
+            "observations": [
+              {
+                "bom_ref": "registry+https://github.com/rust-lang/crates.io-index#libc@0.2.186",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "7d64848d2ebc4862dbfa72197dd2465656c6edc7b5ce1ef563dce47f868fc453",
+                "purl": "pkg:cargo/libc@0.2.186",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+              }
+            ],
+            "reviewed_license": "MIT OR Apache-2.0",
+            "source": "crates-io:libc@0.2.186"
+          },
+          {
+            "observations": [
+              {
+                "bom_ref": "registry+https://github.com/rust-lang/crates.io-index#once_cell@1.21.4",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "7d64848d2ebc4862dbfa72197dd2465656c6edc7b5ce1ef563dce47f868fc453",
+                "purl": "pkg:cargo/once_cell@1.21.4",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+              }
+            ],
+            "reviewed_license": "MIT OR Apache-2.0",
+            "source": "crates-io:once_cell@1.21.4"
+          },
+          {
+            "observations": [
+              {
+                "bom_ref": "registry+https://github.com/rust-lang/crates.io-index#openssl-macros@0.1.1",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "7d64848d2ebc4862dbfa72197dd2465656c6edc7b5ce1ef563dce47f868fc453",
+                "purl": "pkg:cargo/openssl-macros@0.1.1",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+              }
+            ],
+            "reviewed_license": "MIT OR Apache-2.0",
+            "source": "crates-io:openssl-macros@0.1.1"
+          },
+          {
+            "observations": [
+              {
+                "bom_ref": "registry+https://github.com/rust-lang/crates.io-index#openssl-sys@0.9.115",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "7d64848d2ebc4862dbfa72197dd2465656c6edc7b5ce1ef563dce47f868fc453",
+                "purl": "pkg:cargo/openssl-sys@0.9.115",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+              }
+            ],
+            "reviewed_license": "MIT",
+            "source": "crates-io:openssl-sys@0.9.115"
+          },
+          {
+            "observations": [
+              {
+                "bom_ref": "registry+https://github.com/rust-lang/crates.io-index#openssl@0.10.79",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "7d64848d2ebc4862dbfa72197dd2465656c6edc7b5ce1ef563dce47f868fc453",
+                "purl": "pkg:cargo/openssl@0.10.79",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+              }
+            ],
+            "reviewed_license": "Apache-2.0",
+            "source": "crates-io:openssl@0.10.79"
+          },
+          {
+            "observations": [
+              {
+                "bom_ref": "registry+https://github.com/rust-lang/crates.io-index#pem@3.0.6",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "7d64848d2ebc4862dbfa72197dd2465656c6edc7b5ce1ef563dce47f868fc453",
+                "purl": "pkg:cargo/pem@3.0.6",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+              }
+            ],
+            "reviewed_license": "MIT",
+            "source": "crates-io:pem@3.0.6"
+          },
+          {
+            "observations": [
+              {
+                "bom_ref": "registry+https://github.com/rust-lang/crates.io-index#pkg-config@0.3.33",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "7d64848d2ebc4862dbfa72197dd2465656c6edc7b5ce1ef563dce47f868fc453",
+                "purl": "pkg:cargo/pkg-config@0.3.33",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+              }
+            ],
+            "reviewed_license": "MIT OR Apache-2.0",
+            "source": "crates-io:pkg-config@0.3.33"
+          },
+          {
+            "observations": [
+              {
+                "bom_ref": "registry+https://github.com/rust-lang/crates.io-index#portable-atomic@1.13.1",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "7d64848d2ebc4862dbfa72197dd2465656c6edc7b5ce1ef563dce47f868fc453",
+                "purl": "pkg:cargo/portable-atomic@1.13.1",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+              }
+            ],
+            "reviewed_license": "Apache-2.0 OR MIT",
+            "source": "crates-io:portable-atomic@1.13.1"
+          },
+          {
+            "observations": [
+              {
+                "bom_ref": "registry+https://github.com/rust-lang/crates.io-index#proc-macro2@1.0.106",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "7d64848d2ebc4862dbfa72197dd2465656c6edc7b5ce1ef563dce47f868fc453",
+                "purl": "pkg:cargo/proc-macro2@1.0.106",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+              }
+            ],
+            "reviewed_license": "MIT OR Apache-2.0",
+            "source": "crates-io:proc-macro2@1.0.106"
+          },
+          {
+            "observations": [
+              {
+                "bom_ref": "registry+https://github.com/rust-lang/crates.io-index#pyo3-build-config@0.28.3",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "7d64848d2ebc4862dbfa72197dd2465656c6edc7b5ce1ef563dce47f868fc453",
+                "purl": "pkg:cargo/pyo3-build-config@0.28.3",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+              }
+            ],
+            "reviewed_license": "MIT OR Apache-2.0",
+            "source": "crates-io:pyo3-build-config@0.28.3"
+          },
+          {
+            "observations": [
+              {
+                "bom_ref": "registry+https://github.com/rust-lang/crates.io-index#pyo3-ffi@0.28.3",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "7d64848d2ebc4862dbfa72197dd2465656c6edc7b5ce1ef563dce47f868fc453",
+                "purl": "pkg:cargo/pyo3-ffi@0.28.3",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+              }
+            ],
+            "reviewed_license": "MIT OR Apache-2.0",
+            "source": "crates-io:pyo3-ffi@0.28.3"
+          },
+          {
+            "observations": [
+              {
+                "bom_ref": "registry+https://github.com/rust-lang/crates.io-index#pyo3-macros-backend@0.28.3",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "7d64848d2ebc4862dbfa72197dd2465656c6edc7b5ce1ef563dce47f868fc453",
+                "purl": "pkg:cargo/pyo3-macros-backend@0.28.3",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+              }
+            ],
+            "reviewed_license": "MIT OR Apache-2.0",
+            "source": "crates-io:pyo3-macros-backend@0.28.3"
+          },
+          {
+            "observations": [
+              {
+                "bom_ref": "registry+https://github.com/rust-lang/crates.io-index#pyo3-macros@0.28.3",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "7d64848d2ebc4862dbfa72197dd2465656c6edc7b5ce1ef563dce47f868fc453",
+                "purl": "pkg:cargo/pyo3-macros@0.28.3",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+              }
+            ],
+            "reviewed_license": "MIT OR Apache-2.0",
+            "source": "crates-io:pyo3-macros@0.28.3"
+          },
+          {
+            "observations": [
+              {
+                "bom_ref": "registry+https://github.com/rust-lang/crates.io-index#pyo3@0.28.3",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "7d64848d2ebc4862dbfa72197dd2465656c6edc7b5ce1ef563dce47f868fc453",
+                "purl": "pkg:cargo/pyo3@0.28.3",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+              }
+            ],
+            "reviewed_license": "MIT OR Apache-2.0",
+            "source": "crates-io:pyo3@0.28.3"
+          },
+          {
+            "observations": [
+              {
+                "bom_ref": "registry+https://github.com/rust-lang/crates.io-index#quote@1.0.45",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "7d64848d2ebc4862dbfa72197dd2465656c6edc7b5ce1ef563dce47f868fc453",
+                "purl": "pkg:cargo/quote@1.0.45",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+              }
+            ],
+            "reviewed_license": "MIT OR Apache-2.0",
+            "source": "crates-io:quote@1.0.45"
+          },
+          {
+            "observations": [
+              {
+                "bom_ref": "registry+https://github.com/rust-lang/crates.io-index#self_cell@1.2.2",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "7d64848d2ebc4862dbfa72197dd2465656c6edc7b5ce1ef563dce47f868fc453",
+                "purl": "pkg:cargo/self_cell@1.2.2",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+              }
+            ],
+            "reviewed_license": "Apache-2.0 OR GPL-2.0-only",
+            "source": "crates-io:self_cell@1.2.2"
+          },
+          {
+            "observations": [
+              {
+                "bom_ref": "registry+https://github.com/rust-lang/crates.io-index#shlex@1.3.0",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "7d64848d2ebc4862dbfa72197dd2465656c6edc7b5ce1ef563dce47f868fc453",
+                "purl": "pkg:cargo/shlex@1.3.0",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+              }
+            ],
+            "reviewed_license": "MIT OR Apache-2.0",
+            "source": "crates-io:shlex@1.3.0"
+          },
+          {
+            "observations": [
+              {
+                "bom_ref": "registry+https://github.com/rust-lang/crates.io-index#syn@2.0.117",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "7d64848d2ebc4862dbfa72197dd2465656c6edc7b5ce1ef563dce47f868fc453",
+                "purl": "pkg:cargo/syn@2.0.117",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+              }
+            ],
+            "reviewed_license": "MIT OR Apache-2.0",
+            "source": "crates-io:syn@2.0.117"
+          },
+          {
+            "observations": [
+              {
+                "bom_ref": "registry+https://github.com/rust-lang/crates.io-index#target-lexicon@0.13.5",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "7d64848d2ebc4862dbfa72197dd2465656c6edc7b5ce1ef563dce47f868fc453",
+                "purl": "pkg:cargo/target-lexicon@0.13.5",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+              }
+            ],
+            "reviewed_license": "Apache-2.0 WITH LLVM-exception",
+            "source": "crates-io:target-lexicon@0.13.5"
+          },
+          {
+            "observations": [
+              {
+                "bom_ref": "registry+https://github.com/rust-lang/crates.io-index#unicode-ident@1.0.24",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "7d64848d2ebc4862dbfa72197dd2465656c6edc7b5ce1ef563dce47f868fc453",
+                "purl": "pkg:cargo/unicode-ident@1.0.24",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+              }
+            ],
+            "reviewed_license": "(MIT OR Apache-2.0) AND Unicode-3.0",
+            "source": "crates-io:unicode-ident@1.0.24"
+          },
+          {
+            "observations": [
+              {
+                "bom_ref": "registry+https://github.com/rust-lang/crates.io-index#vcpkg@0.2.15",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "7d64848d2ebc4862dbfa72197dd2465656c6edc7b5ce1ef563dce47f868fc453",
+                "purl": "pkg:cargo/vcpkg@0.2.15",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+              }
+            ],
+            "reviewed_license": "MIT OR Apache-2.0",
+            "source": "crates-io:vcpkg@0.2.15"
+          },
+          {
+            "observations": [
+              {
+                "identity_kind": "purl",
+                "observation_sha256": "9fe58d23953e0f0768fc1c451556b9f810ebac757c0458e90002a794c96e46f5",
+                "purl": "pkg:generic/openssl@4.0.1?download_url=https://github.com/openssl/openssl/releases/download/openssl-4.0.1/openssl-4.0.1.tar.gz",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/sbom.json"
+              }
+            ],
+            "reviewed_license": "Apache-2.0",
+            "source": "upstream-release:openssl@4.0.1"
+          }
+        ],
+        "known_omissions": [],
+        "native_payloads": [
+          {
+            "path": "opt/venv/lib/python3.14/site-packages/cryptography.libs/libgcc_s-0cd532bd.so.1",
+            "role": "cryptography.libs/libgcc_s.so.1",
+            "sha256": "c8f934f958f22b3b9c8e790fde6bc2d2f55ab9ae8b9f5eea65425b20271782d0",
+            "size": 181737
+          },
+          {
+            "path": "opt/venv/lib/python3.14/site-packages/cryptography/hazmat/bindings/_rust.abi3.so",
+            "role": "cryptography/hazmat/bindings/_rust.abi3.so",
+            "sha256": "1c0ce16828aaa93804050b334e260d1487abd7cf85e948696915532164c6b9fd",
+            "size": 13735257
+          }
+        ],
+        "owner": "python:cryptography@48.0.1",
+        "owner_source": {
+          "sha256": "266f4ee051abb2f725b74ef8072b521ce1feacf685a3364fa6a6b45548db791a",
+          "size": 832989,
+          "url": "https://files.pythonhosted.org/packages/12/45/870e7f4bef50e5f53b9f51d4428aee5290eedf58ba443f16b1ebb7ab8e66/cryptography-48.0.1.tar.gz"
+        },
+        "payload_dispositions": [
+          {
+            "kind": "sbom-components",
+            "observations": [
+              {
+                "bom_ref": "pkg:apk/alpine/libgcc@14.2.0-r6#933a623c9e323e83b1734e630a342f206999adc096732a3fea9896fa0181ea29",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "f7c6a8a896bc45de0e05a7463389fa930363c9d24792deeda2adcbc0d8cd1347",
+                "purl": "pkg:apk/alpine/libgcc@14.2.0-r6",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/auditwheel.cdx.json"
+              }
+            ],
+            "role": "cryptography.libs/libgcc_s.so.1"
+          },
+          {
+            "kind": "sbom-components",
             "observations": [
               {
                 "bom_ref": "path+file:///__w/cryptography/cryptography/tmpwheelhouse/.tmpugHncX/cryptography-48.0.1/src/rust#cryptography-rust@0.1.0",
@@ -4547,58 +5116,13 @@
                 "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/sbom.json"
               }
             ],
-            "payload_roles": [
-              "cryptography/hazmat/bindings/_rust.abi3.so"
-            ],
-            "reason": "The embedded Rust and OpenSSL observations are retained exactly, but their complete source, notice, and build-material closure is not yet retained."
-          }
-        ],
-        "native_payloads": [
-          {
-            "path": "opt/venv/lib/python3.14/site-packages/cryptography.libs/libgcc_s-0cd532bd.so.1",
-            "role": "cryptography.libs/libgcc_s.so.1",
-            "sha256": "c8f934f958f22b3b9c8e790fde6bc2d2f55ab9ae8b9f5eea65425b20271782d0",
-            "size": 181737
-          },
-          {
-            "path": "opt/venv/lib/python3.14/site-packages/cryptography/hazmat/bindings/_rust.abi3.so",
-            "role": "cryptography/hazmat/bindings/_rust.abi3.so",
-            "sha256": "1c0ce16828aaa93804050b334e260d1487abd7cf85e948696915532164c6b9fd",
-            "size": 13735257
-          }
-        ],
-        "owner": "python:cryptography@48.0.1",
-        "owner_source": {
-          "sha256": "266f4ee051abb2f725b74ef8072b521ce1feacf685a3364fa6a6b45548db791a",
-          "size": 832989,
-          "url": "https://files.pythonhosted.org/packages/12/45/870e7f4bef50e5f53b9f51d4428aee5290eedf58ba443f16b1ebb7ab8e66/cryptography-48.0.1.tar.gz"
-        },
-        "payload_dispositions": [
-          {
-            "kind": "sbom-components",
-            "observations": [
-              {
-                "bom_ref": "pkg:apk/alpine/libgcc@14.2.0-r6#933a623c9e323e83b1734e630a342f206999adc096732a3fea9896fa0181ea29",
-                "identity_kind": "bom-ref",
-                "observation_sha256": "f7c6a8a896bc45de0e05a7463389fa930363c9d24792deeda2adcbc0d8cd1347",
-                "purl": "pkg:apk/alpine/libgcc@14.2.0-r6",
-                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/auditwheel.cdx.json"
-              }
-            ],
-            "role": "cryptography.libs/libgcc_s.so.1"
-          },
-          {
-            "kind": "known-omission",
-            "omission": "unresolved-rust-and-openssl-sources",
             "role": "cryptography/hazmat/bindings/_rust.abi3.so"
           }
         ],
         "review": {
-          "reason": "Rust and OpenSSL source closure is incomplete.",
-          "state": "open",
-          "unresolved_items": [
-            "unresolved-rust-and-openssl-sources"
-          ]
+          "reason": "",
+          "state": "closed",
+          "unresolved_items": []
         },
         "sboms": [
           {
@@ -8695,23 +9219,582 @@
             "reference_payload_role": "greenlet.libs/libgcc_s.so.1"
           }
         ],
-        "cargo_lock": null,
-        "component_reviews": [],
-        "known_omissions": [
+        "cargo_lock": {
+          "member": "cryptography-48.0.1/Cargo.lock",
+          "non_sbom_packages": [],
+          "sha256": "585b66741011c621f66405ee9392b9fd35b62a7dbdabba6e37edc8cbad5c5a9a",
+          "size": 8521,
+          "source_ids": [
+            "crates-io:asn1@0.24.1",
+            "crates-io:asn1_derive@0.24.1",
+            "crates-io:base64@0.22.1",
+            "crates-io:bitflags@2.11.1",
+            "crates-io:cc@1.2.61",
+            "crates-io:cfg-if@1.0.4",
+            "crates-io:find-msvc-tools@0.1.9",
+            "crates-io:foreign-types-shared@0.1.1",
+            "crates-io:foreign-types@0.3.2",
+            "crates-io:heck@0.5.0",
+            "crates-io:itoa@1.0.18",
+            "crates-io:libc@0.2.186",
+            "crates-io:once_cell@1.21.4",
+            "crates-io:openssl-macros@0.1.1",
+            "crates-io:openssl-sys@0.9.115",
+            "crates-io:openssl@0.10.79",
+            "crates-io:pem@3.0.6",
+            "crates-io:pkg-config@0.3.33",
+            "crates-io:portable-atomic@1.13.1",
+            "crates-io:proc-macro2@1.0.106",
+            "crates-io:pyo3-build-config@0.28.3",
+            "crates-io:pyo3-ffi@0.28.3",
+            "crates-io:pyo3-macros-backend@0.28.3",
+            "crates-io:pyo3-macros@0.28.3",
+            "crates-io:pyo3@0.28.3",
+            "crates-io:quote@1.0.45",
+            "crates-io:self_cell@1.2.2",
+            "crates-io:shlex@1.3.0",
+            "crates-io:syn@2.0.117",
+            "crates-io:target-lexicon@0.13.5",
+            "crates-io:unicode-ident@1.0.24",
+            "crates-io:vcpkg@0.2.15"
+          ]
+        },
+        "component_reviews": [
           {
-            "component": {
-              "name": "cryptography-native-dependencies",
-              "purl": "",
-              "type": "library",
-              "version": "48.0.1"
-            },
-            "id": "unresolved-rust-and-openssl-sources",
-            "missing_evidence": [
-              "build-material-attestation",
-              "exact-source",
-              "license-evidence",
-              "notice-evidence"
+            "observations": [
+              {
+                "bom_ref": "path+file:///__w/cryptography/cryptography/tmpwheelhouse/.tmpcjLm01/cryptography-48.0.1/src/rust#cryptography-rust@0.1.0",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "5c7ab29b24ab7e797142b9c9a154fb8ad88b843826908eb3e025fad3d7178fa3",
+                "purl": "pkg:cargo/cryptography-rust@0.1.0?download_url=file://.",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+              },
+              {
+                "bom_ref": "path+file:///__w/cryptography/cryptography/tmpwheelhouse/.tmpcjLm01/cryptography-48.0.1/src/rust#cryptography-rust@0.1.0 bin-target-0",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "5c7ab29b24ab7e797142b9c9a154fb8ad88b843826908eb3e025fad3d7178fa3",
+                "purl": "pkg:cargo/cryptography-rust@0.1.0?download_url=file://.#src/lib.rs",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+              },
+              {
+                "bom_ref": "path+file:///__w/cryptography/cryptography/tmpwheelhouse/.tmpcjLm01/cryptography-48.0.1/src/rust/cryptography-cffi#0.1.0",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "5c7ab29b24ab7e797142b9c9a154fb8ad88b843826908eb3e025fad3d7178fa3",
+                "purl": "pkg:cargo/cryptography-cffi@0.1.0?download_url=file://cryptography-cffi",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+              },
+              {
+                "bom_ref": "path+file:///__w/cryptography/cryptography/tmpwheelhouse/.tmpcjLm01/cryptography-48.0.1/src/rust/cryptography-crypto#0.1.0",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "5c7ab29b24ab7e797142b9c9a154fb8ad88b843826908eb3e025fad3d7178fa3",
+                "purl": "pkg:cargo/cryptography-crypto@0.1.0?download_url=file://cryptography-crypto",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+              },
+              {
+                "bom_ref": "path+file:///__w/cryptography/cryptography/tmpwheelhouse/.tmpcjLm01/cryptography-48.0.1/src/rust/cryptography-keepalive#0.1.0",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "5c7ab29b24ab7e797142b9c9a154fb8ad88b843826908eb3e025fad3d7178fa3",
+                "purl": "pkg:cargo/cryptography-keepalive@0.1.0?download_url=file://cryptography-keepalive",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+              },
+              {
+                "bom_ref": "path+file:///__w/cryptography/cryptography/tmpwheelhouse/.tmpcjLm01/cryptography-48.0.1/src/rust/cryptography-key-parsing#0.1.0",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "5c7ab29b24ab7e797142b9c9a154fb8ad88b843826908eb3e025fad3d7178fa3",
+                "purl": "pkg:cargo/cryptography-key-parsing@0.1.0?download_url=file://cryptography-key-parsing",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+              },
+              {
+                "bom_ref": "path+file:///__w/cryptography/cryptography/tmpwheelhouse/.tmpcjLm01/cryptography-48.0.1/src/rust/cryptography-openssl#0.1.0",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "5c7ab29b24ab7e797142b9c9a154fb8ad88b843826908eb3e025fad3d7178fa3",
+                "purl": "pkg:cargo/cryptography-openssl@0.1.0?download_url=file://cryptography-openssl",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+              },
+              {
+                "bom_ref": "path+file:///__w/cryptography/cryptography/tmpwheelhouse/.tmpcjLm01/cryptography-48.0.1/src/rust/cryptography-x509#0.1.0",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "5c7ab29b24ab7e797142b9c9a154fb8ad88b843826908eb3e025fad3d7178fa3",
+                "purl": "pkg:cargo/cryptography-x509@0.1.0?download_url=file://cryptography-x509",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+              },
+              {
+                "bom_ref": "path+file:///__w/cryptography/cryptography/tmpwheelhouse/.tmpcjLm01/cryptography-48.0.1/src/rust/cryptography-x509-verification#0.1.0",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "5c7ab29b24ab7e797142b9c9a154fb8ad88b843826908eb3e025fad3d7178fa3",
+                "purl": "pkg:cargo/cryptography-x509-verification@0.1.0?download_url=file://cryptography-x509-verification",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+              }
             ],
+            "reviewed_license": "Apache-2.0 OR BSD-3-Clause",
+            "source": "owner-sdist:python:cryptography@48.0.1#src/rust"
+          },
+          {
+            "observations": [
+              {
+                "bom_ref": "registry+https://github.com/rust-lang/crates.io-index#asn1@0.24.1",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "5c7ab29b24ab7e797142b9c9a154fb8ad88b843826908eb3e025fad3d7178fa3",
+                "purl": "pkg:cargo/asn1@0.24.1",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+              }
+            ],
+            "reviewed_license": "BSD-3-Clause",
+            "source": "crates-io:asn1@0.24.1"
+          },
+          {
+            "observations": [
+              {
+                "bom_ref": "registry+https://github.com/rust-lang/crates.io-index#asn1_derive@0.24.1",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "5c7ab29b24ab7e797142b9c9a154fb8ad88b843826908eb3e025fad3d7178fa3",
+                "purl": "pkg:cargo/asn1_derive@0.24.1",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+              }
+            ],
+            "reviewed_license": "BSD-3-Clause",
+            "source": "crates-io:asn1_derive@0.24.1"
+          },
+          {
+            "observations": [
+              {
+                "bom_ref": "registry+https://github.com/rust-lang/crates.io-index#base64@0.22.1",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "5c7ab29b24ab7e797142b9c9a154fb8ad88b843826908eb3e025fad3d7178fa3",
+                "purl": "pkg:cargo/base64@0.22.1",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+              }
+            ],
+            "reviewed_license": "MIT OR Apache-2.0",
+            "source": "crates-io:base64@0.22.1"
+          },
+          {
+            "observations": [
+              {
+                "bom_ref": "registry+https://github.com/rust-lang/crates.io-index#bitflags@2.11.1",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "5c7ab29b24ab7e797142b9c9a154fb8ad88b843826908eb3e025fad3d7178fa3",
+                "purl": "pkg:cargo/bitflags@2.11.1",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+              }
+            ],
+            "reviewed_license": "MIT OR Apache-2.0",
+            "source": "crates-io:bitflags@2.11.1"
+          },
+          {
+            "observations": [
+              {
+                "bom_ref": "registry+https://github.com/rust-lang/crates.io-index#cc@1.2.61",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "5c7ab29b24ab7e797142b9c9a154fb8ad88b843826908eb3e025fad3d7178fa3",
+                "purl": "pkg:cargo/cc@1.2.61",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+              }
+            ],
+            "reviewed_license": "MIT OR Apache-2.0",
+            "source": "crates-io:cc@1.2.61"
+          },
+          {
+            "observations": [
+              {
+                "bom_ref": "registry+https://github.com/rust-lang/crates.io-index#cfg-if@1.0.4",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "5c7ab29b24ab7e797142b9c9a154fb8ad88b843826908eb3e025fad3d7178fa3",
+                "purl": "pkg:cargo/cfg-if@1.0.4",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+              }
+            ],
+            "reviewed_license": "MIT OR Apache-2.0",
+            "source": "crates-io:cfg-if@1.0.4"
+          },
+          {
+            "observations": [
+              {
+                "bom_ref": "registry+https://github.com/rust-lang/crates.io-index#find-msvc-tools@0.1.9",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "5c7ab29b24ab7e797142b9c9a154fb8ad88b843826908eb3e025fad3d7178fa3",
+                "purl": "pkg:cargo/find-msvc-tools@0.1.9",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+              }
+            ],
+            "reviewed_license": "MIT OR Apache-2.0",
+            "source": "crates-io:find-msvc-tools@0.1.9"
+          },
+          {
+            "observations": [
+              {
+                "bom_ref": "registry+https://github.com/rust-lang/crates.io-index#foreign-types-shared@0.1.1",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "5c7ab29b24ab7e797142b9c9a154fb8ad88b843826908eb3e025fad3d7178fa3",
+                "purl": "pkg:cargo/foreign-types-shared@0.1.1",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+              }
+            ],
+            "reviewed_license": "MIT OR Apache-2.0",
+            "source": "crates-io:foreign-types-shared@0.1.1"
+          },
+          {
+            "observations": [
+              {
+                "bom_ref": "registry+https://github.com/rust-lang/crates.io-index#foreign-types@0.3.2",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "5c7ab29b24ab7e797142b9c9a154fb8ad88b843826908eb3e025fad3d7178fa3",
+                "purl": "pkg:cargo/foreign-types@0.3.2",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+              }
+            ],
+            "reviewed_license": "MIT OR Apache-2.0",
+            "source": "crates-io:foreign-types@0.3.2"
+          },
+          {
+            "observations": [
+              {
+                "bom_ref": "registry+https://github.com/rust-lang/crates.io-index#heck@0.5.0",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "5c7ab29b24ab7e797142b9c9a154fb8ad88b843826908eb3e025fad3d7178fa3",
+                "purl": "pkg:cargo/heck@0.5.0",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+              }
+            ],
+            "reviewed_license": "MIT OR Apache-2.0",
+            "source": "crates-io:heck@0.5.0"
+          },
+          {
+            "observations": [
+              {
+                "bom_ref": "registry+https://github.com/rust-lang/crates.io-index#itoa@1.0.18",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "5c7ab29b24ab7e797142b9c9a154fb8ad88b843826908eb3e025fad3d7178fa3",
+                "purl": "pkg:cargo/itoa@1.0.18",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+              }
+            ],
+            "reviewed_license": "MIT OR Apache-2.0",
+            "source": "crates-io:itoa@1.0.18"
+          },
+          {
+            "observations": [
+              {
+                "bom_ref": "registry+https://github.com/rust-lang/crates.io-index#libc@0.2.186",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "5c7ab29b24ab7e797142b9c9a154fb8ad88b843826908eb3e025fad3d7178fa3",
+                "purl": "pkg:cargo/libc@0.2.186",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+              }
+            ],
+            "reviewed_license": "MIT OR Apache-2.0",
+            "source": "crates-io:libc@0.2.186"
+          },
+          {
+            "observations": [
+              {
+                "bom_ref": "registry+https://github.com/rust-lang/crates.io-index#once_cell@1.21.4",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "5c7ab29b24ab7e797142b9c9a154fb8ad88b843826908eb3e025fad3d7178fa3",
+                "purl": "pkg:cargo/once_cell@1.21.4",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+              }
+            ],
+            "reviewed_license": "MIT OR Apache-2.0",
+            "source": "crates-io:once_cell@1.21.4"
+          },
+          {
+            "observations": [
+              {
+                "bom_ref": "registry+https://github.com/rust-lang/crates.io-index#openssl-macros@0.1.1",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "5c7ab29b24ab7e797142b9c9a154fb8ad88b843826908eb3e025fad3d7178fa3",
+                "purl": "pkg:cargo/openssl-macros@0.1.1",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+              }
+            ],
+            "reviewed_license": "MIT OR Apache-2.0",
+            "source": "crates-io:openssl-macros@0.1.1"
+          },
+          {
+            "observations": [
+              {
+                "bom_ref": "registry+https://github.com/rust-lang/crates.io-index#openssl-sys@0.9.115",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "5c7ab29b24ab7e797142b9c9a154fb8ad88b843826908eb3e025fad3d7178fa3",
+                "purl": "pkg:cargo/openssl-sys@0.9.115",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+              }
+            ],
+            "reviewed_license": "MIT",
+            "source": "crates-io:openssl-sys@0.9.115"
+          },
+          {
+            "observations": [
+              {
+                "bom_ref": "registry+https://github.com/rust-lang/crates.io-index#openssl@0.10.79",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "5c7ab29b24ab7e797142b9c9a154fb8ad88b843826908eb3e025fad3d7178fa3",
+                "purl": "pkg:cargo/openssl@0.10.79",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+              }
+            ],
+            "reviewed_license": "Apache-2.0",
+            "source": "crates-io:openssl@0.10.79"
+          },
+          {
+            "observations": [
+              {
+                "bom_ref": "registry+https://github.com/rust-lang/crates.io-index#pem@3.0.6",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "5c7ab29b24ab7e797142b9c9a154fb8ad88b843826908eb3e025fad3d7178fa3",
+                "purl": "pkg:cargo/pem@3.0.6",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+              }
+            ],
+            "reviewed_license": "MIT",
+            "source": "crates-io:pem@3.0.6"
+          },
+          {
+            "observations": [
+              {
+                "bom_ref": "registry+https://github.com/rust-lang/crates.io-index#pkg-config@0.3.33",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "5c7ab29b24ab7e797142b9c9a154fb8ad88b843826908eb3e025fad3d7178fa3",
+                "purl": "pkg:cargo/pkg-config@0.3.33",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+              }
+            ],
+            "reviewed_license": "MIT OR Apache-2.0",
+            "source": "crates-io:pkg-config@0.3.33"
+          },
+          {
+            "observations": [
+              {
+                "bom_ref": "registry+https://github.com/rust-lang/crates.io-index#portable-atomic@1.13.1",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "5c7ab29b24ab7e797142b9c9a154fb8ad88b843826908eb3e025fad3d7178fa3",
+                "purl": "pkg:cargo/portable-atomic@1.13.1",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+              }
+            ],
+            "reviewed_license": "Apache-2.0 OR MIT",
+            "source": "crates-io:portable-atomic@1.13.1"
+          },
+          {
+            "observations": [
+              {
+                "bom_ref": "registry+https://github.com/rust-lang/crates.io-index#proc-macro2@1.0.106",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "5c7ab29b24ab7e797142b9c9a154fb8ad88b843826908eb3e025fad3d7178fa3",
+                "purl": "pkg:cargo/proc-macro2@1.0.106",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+              }
+            ],
+            "reviewed_license": "MIT OR Apache-2.0",
+            "source": "crates-io:proc-macro2@1.0.106"
+          },
+          {
+            "observations": [
+              {
+                "bom_ref": "registry+https://github.com/rust-lang/crates.io-index#pyo3-build-config@0.28.3",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "5c7ab29b24ab7e797142b9c9a154fb8ad88b843826908eb3e025fad3d7178fa3",
+                "purl": "pkg:cargo/pyo3-build-config@0.28.3",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+              }
+            ],
+            "reviewed_license": "MIT OR Apache-2.0",
+            "source": "crates-io:pyo3-build-config@0.28.3"
+          },
+          {
+            "observations": [
+              {
+                "bom_ref": "registry+https://github.com/rust-lang/crates.io-index#pyo3-ffi@0.28.3",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "5c7ab29b24ab7e797142b9c9a154fb8ad88b843826908eb3e025fad3d7178fa3",
+                "purl": "pkg:cargo/pyo3-ffi@0.28.3",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+              }
+            ],
+            "reviewed_license": "MIT OR Apache-2.0",
+            "source": "crates-io:pyo3-ffi@0.28.3"
+          },
+          {
+            "observations": [
+              {
+                "bom_ref": "registry+https://github.com/rust-lang/crates.io-index#pyo3-macros-backend@0.28.3",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "5c7ab29b24ab7e797142b9c9a154fb8ad88b843826908eb3e025fad3d7178fa3",
+                "purl": "pkg:cargo/pyo3-macros-backend@0.28.3",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+              }
+            ],
+            "reviewed_license": "MIT OR Apache-2.0",
+            "source": "crates-io:pyo3-macros-backend@0.28.3"
+          },
+          {
+            "observations": [
+              {
+                "bom_ref": "registry+https://github.com/rust-lang/crates.io-index#pyo3-macros@0.28.3",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "5c7ab29b24ab7e797142b9c9a154fb8ad88b843826908eb3e025fad3d7178fa3",
+                "purl": "pkg:cargo/pyo3-macros@0.28.3",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+              }
+            ],
+            "reviewed_license": "MIT OR Apache-2.0",
+            "source": "crates-io:pyo3-macros@0.28.3"
+          },
+          {
+            "observations": [
+              {
+                "bom_ref": "registry+https://github.com/rust-lang/crates.io-index#pyo3@0.28.3",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "5c7ab29b24ab7e797142b9c9a154fb8ad88b843826908eb3e025fad3d7178fa3",
+                "purl": "pkg:cargo/pyo3@0.28.3",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+              }
+            ],
+            "reviewed_license": "MIT OR Apache-2.0",
+            "source": "crates-io:pyo3@0.28.3"
+          },
+          {
+            "observations": [
+              {
+                "bom_ref": "registry+https://github.com/rust-lang/crates.io-index#quote@1.0.45",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "5c7ab29b24ab7e797142b9c9a154fb8ad88b843826908eb3e025fad3d7178fa3",
+                "purl": "pkg:cargo/quote@1.0.45",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+              }
+            ],
+            "reviewed_license": "MIT OR Apache-2.0",
+            "source": "crates-io:quote@1.0.45"
+          },
+          {
+            "observations": [
+              {
+                "bom_ref": "registry+https://github.com/rust-lang/crates.io-index#self_cell@1.2.2",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "5c7ab29b24ab7e797142b9c9a154fb8ad88b843826908eb3e025fad3d7178fa3",
+                "purl": "pkg:cargo/self_cell@1.2.2",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+              }
+            ],
+            "reviewed_license": "Apache-2.0 OR GPL-2.0-only",
+            "source": "crates-io:self_cell@1.2.2"
+          },
+          {
+            "observations": [
+              {
+                "bom_ref": "registry+https://github.com/rust-lang/crates.io-index#shlex@1.3.0",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "5c7ab29b24ab7e797142b9c9a154fb8ad88b843826908eb3e025fad3d7178fa3",
+                "purl": "pkg:cargo/shlex@1.3.0",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+              }
+            ],
+            "reviewed_license": "MIT OR Apache-2.0",
+            "source": "crates-io:shlex@1.3.0"
+          },
+          {
+            "observations": [
+              {
+                "bom_ref": "registry+https://github.com/rust-lang/crates.io-index#syn@2.0.117",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "5c7ab29b24ab7e797142b9c9a154fb8ad88b843826908eb3e025fad3d7178fa3",
+                "purl": "pkg:cargo/syn@2.0.117",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+              }
+            ],
+            "reviewed_license": "MIT OR Apache-2.0",
+            "source": "crates-io:syn@2.0.117"
+          },
+          {
+            "observations": [
+              {
+                "bom_ref": "registry+https://github.com/rust-lang/crates.io-index#target-lexicon@0.13.5",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "5c7ab29b24ab7e797142b9c9a154fb8ad88b843826908eb3e025fad3d7178fa3",
+                "purl": "pkg:cargo/target-lexicon@0.13.5",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+              }
+            ],
+            "reviewed_license": "Apache-2.0 WITH LLVM-exception",
+            "source": "crates-io:target-lexicon@0.13.5"
+          },
+          {
+            "observations": [
+              {
+                "bom_ref": "registry+https://github.com/rust-lang/crates.io-index#unicode-ident@1.0.24",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "5c7ab29b24ab7e797142b9c9a154fb8ad88b843826908eb3e025fad3d7178fa3",
+                "purl": "pkg:cargo/unicode-ident@1.0.24",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+              }
+            ],
+            "reviewed_license": "(MIT OR Apache-2.0) AND Unicode-3.0",
+            "source": "crates-io:unicode-ident@1.0.24"
+          },
+          {
+            "observations": [
+              {
+                "bom_ref": "registry+https://github.com/rust-lang/crates.io-index#vcpkg@0.2.15",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "5c7ab29b24ab7e797142b9c9a154fb8ad88b843826908eb3e025fad3d7178fa3",
+                "purl": "pkg:cargo/vcpkg@0.2.15",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+              }
+            ],
+            "reviewed_license": "MIT OR Apache-2.0",
+            "source": "crates-io:vcpkg@0.2.15"
+          },
+          {
+            "observations": [
+              {
+                "identity_kind": "purl",
+                "observation_sha256": "9fe58d23953e0f0768fc1c451556b9f810ebac757c0458e90002a794c96e46f5",
+                "purl": "pkg:generic/openssl@4.0.1?download_url=https://github.com/openssl/openssl/releases/download/openssl-4.0.1/openssl-4.0.1.tar.gz",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/sbom.json"
+              }
+            ],
+            "reviewed_license": "Apache-2.0",
+            "source": "upstream-release:openssl@4.0.1"
+          }
+        ],
+        "known_omissions": [],
+        "native_payloads": [
+          {
+            "path": "opt/venv/lib/python3.14/site-packages/cryptography.libs/libgcc_s-2d945d6c.so.1",
+            "role": "cryptography.libs/libgcc_s.so.1",
+            "sha256": "767fb99107fa5e41168413b1eed9d73191c94126c37526263e1af1f1f898788f",
+            "size": 201673
+          },
+          {
+            "path": "opt/venv/lib/python3.14/site-packages/cryptography/hazmat/bindings/_rust.abi3.so",
+            "role": "cryptography/hazmat/bindings/_rust.abi3.so",
+            "sha256": "0d5d08e576f7b94f2d80ec1867d492becf2facbfb55d6833af9900c04d23ffee",
+            "size": 13243817
+          }
+        ],
+        "owner": "python:cryptography@48.0.1",
+        "owner_source": {
+          "sha256": "266f4ee051abb2f725b74ef8072b521ce1feacf685a3364fa6a6b45548db791a",
+          "size": 832989,
+          "url": "https://files.pythonhosted.org/packages/12/45/870e7f4bef50e5f53b9f51d4428aee5290eedf58ba443f16b1ebb7ab8e66/cryptography-48.0.1.tar.gz"
+        },
+        "payload_dispositions": [
+          {
+            "kind": "sbom-components",
+            "observations": [
+              {
+                "bom_ref": "pkg:apk/NotpineForGHA/libgcc@14.2.0-r6#933a623c9e323e83b1734e630a342f206999adc096732a3fea9896fa0181ea29",
+                "identity_kind": "bom-ref",
+                "observation_sha256": "0450b506a817d41ee1aab64742a81617f50bf1664a1bb9725973c5cc4aefdc3d",
+                "purl": "pkg:apk/NotpineForGHA/libgcc@14.2.0-r6",
+                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/auditwheel.cdx.json"
+              }
+            ],
+            "role": "cryptography.libs/libgcc_s.so.1"
+          },
+          {
+            "kind": "sbom-components",
             "observations": [
               {
                 "bom_ref": "path+file:///__w/cryptography/cryptography/tmpwheelhouse/.tmpcjLm01/cryptography-48.0.1/src/rust#cryptography-rust@0.1.0",
@@ -9007,58 +10090,13 @@
                 "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/sbom.json"
               }
             ],
-            "payload_roles": [
-              "cryptography/hazmat/bindings/_rust.abi3.so"
-            ],
-            "reason": "The embedded Rust and OpenSSL observations are retained exactly, but their complete source, notice, and build-material closure is not yet retained."
-          }
-        ],
-        "native_payloads": [
-          {
-            "path": "opt/venv/lib/python3.14/site-packages/cryptography.libs/libgcc_s-2d945d6c.so.1",
-            "role": "cryptography.libs/libgcc_s.so.1",
-            "sha256": "767fb99107fa5e41168413b1eed9d73191c94126c37526263e1af1f1f898788f",
-            "size": 201673
-          },
-          {
-            "path": "opt/venv/lib/python3.14/site-packages/cryptography/hazmat/bindings/_rust.abi3.so",
-            "role": "cryptography/hazmat/bindings/_rust.abi3.so",
-            "sha256": "0d5d08e576f7b94f2d80ec1867d492becf2facbfb55d6833af9900c04d23ffee",
-            "size": 13243817
-          }
-        ],
-        "owner": "python:cryptography@48.0.1",
-        "owner_source": {
-          "sha256": "266f4ee051abb2f725b74ef8072b521ce1feacf685a3364fa6a6b45548db791a",
-          "size": 832989,
-          "url": "https://files.pythonhosted.org/packages/12/45/870e7f4bef50e5f53b9f51d4428aee5290eedf58ba443f16b1ebb7ab8e66/cryptography-48.0.1.tar.gz"
-        },
-        "payload_dispositions": [
-          {
-            "kind": "sbom-components",
-            "observations": [
-              {
-                "bom_ref": "pkg:apk/NotpineForGHA/libgcc@14.2.0-r6#933a623c9e323e83b1734e630a342f206999adc096732a3fea9896fa0181ea29",
-                "identity_kind": "bom-ref",
-                "observation_sha256": "0450b506a817d41ee1aab64742a81617f50bf1664a1bb9725973c5cc4aefdc3d",
-                "purl": "pkg:apk/NotpineForGHA/libgcc@14.2.0-r6",
-                "sbom_path": "opt/venv/lib/python3.14/site-packages/cryptography-48.0.1.dist-info/sboms/auditwheel.cdx.json"
-              }
-            ],
-            "role": "cryptography.libs/libgcc_s.so.1"
-          },
-          {
-            "kind": "known-omission",
-            "omission": "unresolved-rust-and-openssl-sources",
             "role": "cryptography/hazmat/bindings/_rust.abi3.so"
           }
         ],
         "review": {
-          "reason": "Rust and OpenSSL source closure is incomplete.",
-          "state": "open",
-          "unresolved_items": [
-            "unresolved-rust-and-openssl-sources"
-          ]
+          "reason": "",
+          "state": "closed",
+          "unresolved_items": []
         },
         "sboms": [
           {
@@ -13105,6 +14143,1061 @@
         "url": "https://gitlab.alpinelinux.org/alpine/aports/-/archive/fbf60319be3bbaf6dd32ef55cc6fb7189e05c266/aports-fbf60319be3bbaf6dd32ef55cc6fb7189e05c266.tar.gz?path=main/gcc"
       },
       "version": "14.2.0-r6"
+    },
+    "crates-io:asn1@0.24.1": {
+      "crate": {
+        "sha256": "c9795210620c0cb3f9a7ce4f882808c38e1ef7b347c90591dceae0886e031fb1",
+        "size": 50502,
+        "url": "https://static.crates.io/crates/asn1/asn1-0.24.1.crate"
+      },
+      "kind": "crates-io",
+      "manifest": {
+        "member": "asn1-0.24.1/Cargo.toml",
+        "sha256": "377783664e639c67fff76ebe2899ecf6d24d329dc7b90ed22f2377673d39aad8",
+        "size": 1524
+      },
+      "name": "asn1",
+      "normalized_license": "BSD-3-Clause",
+      "notices": [
+        {
+          "member": "asn1-0.24.1/LICENSE",
+          "sha256": "c6deb2d156619439e147f8b62e1b3928598c8e3652ec8b56cc039490696b3985",
+          "size": 1540
+        }
+      ],
+      "raw_license": "BSD-3-Clause",
+      "version": "0.24.1"
+    },
+    "crates-io:asn1_derive@0.24.1": {
+      "crate": {
+        "sha256": "909e307f1cc32bb8bccbd98f446e6d1bf03fa30f7b53a4337da7181ad30fa11a",
+        "size": 9534,
+        "url": "https://static.crates.io/crates/asn1_derive/asn1_derive-0.24.1.crate"
+      },
+      "kind": "crates-io",
+      "manifest": {
+        "member": "asn1_derive-0.24.1/Cargo.toml",
+        "sha256": "3fab32d46804e703a9dda0ac909c206b386924c60fe73ffe0dcdce07f5388f8e",
+        "size": 1039
+      },
+      "name": "asn1_derive",
+      "normalized_license": "BSD-3-Clause",
+      "notices": [
+        {
+          "member": "asn1_derive-0.24.1/LICENSE",
+          "sha256": "c6deb2d156619439e147f8b62e1b3928598c8e3652ec8b56cc039490696b3985",
+          "size": 1540
+        }
+      ],
+      "raw_license": "BSD-3-Clause",
+      "version": "0.24.1"
+    },
+    "crates-io:base64@0.22.1": {
+      "crate": {
+        "sha256": "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6",
+        "size": 81597,
+        "url": "https://static.crates.io/crates/base64/base64-0.22.1.crate"
+      },
+      "kind": "crates-io",
+      "manifest": {
+        "member": "base64-0.22.1/Cargo.toml",
+        "sha256": "52bee6a418e14918d37058fd15fccfd0f417a06fe4f9668b6f97866bf7f991e3",
+        "size": 1750
+      },
+      "name": "base64",
+      "normalized_license": "MIT OR Apache-2.0",
+      "notices": [
+        {
+          "member": "base64-0.22.1/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+          "size": 10847
+        },
+        {
+          "member": "base64-0.22.1/LICENSE-MIT",
+          "sha256": "0dd882e53de11566d50f8e8e2d5a651bcf3fabee4987d70f306233cf39094ba7",
+          "size": 1076
+        }
+      ],
+      "raw_license": "MIT OR Apache-2.0",
+      "version": "0.22.1"
+    },
+    "crates-io:bitflags@2.11.1": {
+      "crate": {
+        "sha256": "c4512299f36f043ab09a583e57bceb5a5aab7a73db1805848e8fef3c9e8c78b3",
+        "size": 49082,
+        "url": "https://static.crates.io/crates/bitflags/bitflags-2.11.1.crate"
+      },
+      "kind": "crates-io",
+      "manifest": {
+        "member": "bitflags-2.11.1/Cargo.toml",
+        "sha256": "715ed23e898c41c435c2a5dfbcb2df2e9fe03f2922e2ee0c15e0d3d867c78a6c",
+        "size": 2354
+      },
+      "name": "bitflags",
+      "normalized_license": "MIT OR Apache-2.0",
+      "notices": [
+        {
+          "member": "bitflags-2.11.1/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+          "size": 10847
+        },
+        {
+          "member": "bitflags-2.11.1/LICENSE-MIT",
+          "sha256": "6485b8ed310d3f0340bf1ad1f47645069ce4069dcc6bb46c7d5c6faf41de1fdb",
+          "size": 1071
+        }
+      ],
+      "raw_license": "MIT OR Apache-2.0",
+      "version": "2.11.1"
+    },
+    "crates-io:cc@1.2.61": {
+      "crate": {
+        "sha256": "d16d90359e986641506914ba71350897565610e87ce0ad9e6f28569db3dd5c6d",
+        "size": 97163,
+        "url": "https://static.crates.io/crates/cc/cc-1.2.61.crate"
+      },
+      "kind": "crates-io",
+      "manifest": {
+        "member": "cc-1.2.61/Cargo.toml",
+        "sha256": "6f96d3a30aa0008b0282cd7baf3c240e88bde0eb12eae41d7eca31983ada393f",
+        "size": 1805
+      },
+      "name": "cc",
+      "normalized_license": "MIT OR Apache-2.0",
+      "notices": [
+        {
+          "member": "cc-1.2.61/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+          "size": 10847
+        },
+        {
+          "member": "cc-1.2.61/LICENSE-MIT",
+          "sha256": "378f5840b258e2779c39418f3f2d7b2ba96f1c7917dd6be0713f88305dbda397",
+          "size": 1057
+        }
+      ],
+      "raw_license": "MIT OR Apache-2.0",
+      "version": "1.2.61"
+    },
+    "crates-io:cfg-if@1.0.4": {
+      "crate": {
+        "sha256": "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801",
+        "size": 9360,
+        "url": "https://static.crates.io/crates/cfg-if/cfg-if-1.0.4.crate"
+      },
+      "kind": "crates-io",
+      "manifest": {
+        "member": "cfg-if-1.0.4/Cargo.toml",
+        "sha256": "281d508beb1fe3927cf03d3f2f8c9a5117b1e4fe97ae21b9026cf318e8c35273",
+        "size": 1239
+      },
+      "name": "cfg-if",
+      "normalized_license": "MIT OR Apache-2.0",
+      "notices": [
+        {
+          "member": "cfg-if-1.0.4/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+          "size": 10847
+        },
+        {
+          "member": "cfg-if-1.0.4/LICENSE-MIT",
+          "sha256": "378f5840b258e2779c39418f3f2d7b2ba96f1c7917dd6be0713f88305dbda397",
+          "size": 1057
+        }
+      ],
+      "raw_license": "MIT OR Apache-2.0",
+      "version": "1.0.4"
+    },
+    "crates-io:find-msvc-tools@0.1.9": {
+      "crate": {
+        "sha256": "5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582",
+        "size": 31493,
+        "url": "https://static.crates.io/crates/find-msvc-tools/find-msvc-tools-0.1.9.crate"
+      },
+      "kind": "crates-io",
+      "manifest": {
+        "member": "find-msvc-tools-0.1.9/Cargo.toml",
+        "sha256": "1162710613011a622ba62b035b570cc13584516082f9cf579cfaf2f144a77a76",
+        "size": 1175
+      },
+      "name": "find-msvc-tools",
+      "normalized_license": "MIT OR Apache-2.0",
+      "notices": [
+        {
+          "member": "find-msvc-tools-0.1.9/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+          "size": 10847
+        },
+        {
+          "member": "find-msvc-tools-0.1.9/LICENSE-MIT",
+          "sha256": "378f5840b258e2779c39418f3f2d7b2ba96f1c7917dd6be0713f88305dbda397",
+          "size": 1057
+        }
+      ],
+      "raw_license": "MIT OR Apache-2.0",
+      "version": "0.1.9"
+    },
+    "crates-io:foreign-types-shared@0.1.1": {
+      "crate": {
+        "sha256": "00b0228411908ca8685dba7fc2cdd70ec9990a6e753e89b6ac91a84c40fbaf4b",
+        "size": 5672,
+        "url": "https://static.crates.io/crates/foreign-types-shared/foreign-types-shared-0.1.1.crate"
+      },
+      "kind": "crates-io",
+      "manifest": {
+        "member": "foreign-types-shared-0.1.1/Cargo.toml",
+        "sha256": "6b91ae600fe7b521537096b2269ab7bfd606f8a1fcd97749634dd03ba18daf53",
+        "size": 788
+      },
+      "name": "foreign-types-shared",
+      "normalized_license": "MIT OR Apache-2.0",
+      "notices": [
+        {
+          "member": "foreign-types-shared-0.1.1/LICENSE-APACHE",
+          "sha256": "c6596eb7be8581c18be736c846fb9173b69eccf6ef94c5135893ec56bd92ba08",
+          "size": 11358
+        },
+        {
+          "member": "foreign-types-shared-0.1.1/LICENSE-MIT",
+          "sha256": "333ea3aaa3cadb819f4acd9f9153f9feee060a995ca8710f32bc5bd9a4b91734",
+          "size": 1072
+        }
+      ],
+      "raw_license": "MIT/Apache-2.0",
+      "version": "0.1.1"
+    },
+    "crates-io:foreign-types@0.3.2": {
+      "crate": {
+        "sha256": "f6f339eb8adc052cd2ca78910fda869aefa38d22d5cb648e6485e4d3fc06f3b1",
+        "size": 7504,
+        "url": "https://static.crates.io/crates/foreign-types/foreign-types-0.3.2.crate"
+      },
+      "kind": "crates-io",
+      "manifest": {
+        "member": "foreign-types-0.3.2/Cargo.toml",
+        "sha256": "1a667c28f60115423b68fea369255c2dcb129b8dce10f30e0e1da73d05f9adab",
+        "size": 840
+      },
+      "name": "foreign-types",
+      "normalized_license": "MIT OR Apache-2.0",
+      "notices": [
+        {
+          "member": "foreign-types-0.3.2/LICENSE-APACHE",
+          "sha256": "c6596eb7be8581c18be736c846fb9173b69eccf6ef94c5135893ec56bd92ba08",
+          "size": 11358
+        },
+        {
+          "member": "foreign-types-0.3.2/LICENSE-MIT",
+          "sha256": "333ea3aaa3cadb819f4acd9f9153f9feee060a995ca8710f32bc5bd9a4b91734",
+          "size": 1072
+        }
+      ],
+      "raw_license": "MIT/Apache-2.0",
+      "version": "0.3.2"
+    },
+    "crates-io:heck@0.5.0": {
+      "crate": {
+        "sha256": "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea",
+        "size": 11517,
+        "url": "https://static.crates.io/crates/heck/heck-0.5.0.crate"
+      },
+      "kind": "crates-io",
+      "manifest": {
+        "member": "heck-0.5.0/Cargo.toml",
+        "sha256": "db0e63b72de157a2f5194458b73b6542c3f4e17e33ab34a71d0260bfc035467e",
+        "size": 892
+      },
+      "name": "heck",
+      "normalized_license": "MIT OR Apache-2.0",
+      "notices": [
+        {
+          "member": "heck-0.5.0/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+          "size": 10847
+        },
+        {
+          "member": "heck-0.5.0/LICENSE-MIT",
+          "sha256": "7b63ecd5f1902af1b63729947373683c32745c16a10e8e6292e2e2dcd7e90ae0",
+          "size": 1071
+        }
+      ],
+      "raw_license": "MIT OR Apache-2.0",
+      "version": "0.5.0"
+    },
+    "crates-io:itoa@1.0.18": {
+      "crate": {
+        "sha256": "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682",
+        "size": 15935,
+        "url": "https://static.crates.io/crates/itoa/itoa-1.0.18.crate"
+      },
+      "kind": "crates-io",
+      "manifest": {
+        "member": "itoa-1.0.18/Cargo.toml",
+        "sha256": "894c215e4e7e973b556b0e9627bf9b6a719a043fac9b5af9838660816392a09f",
+        "size": 1669
+      },
+      "name": "itoa",
+      "normalized_license": "MIT OR Apache-2.0",
+      "notices": [
+        {
+          "member": "itoa-1.0.18/LICENSE-APACHE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
+          "size": 9723
+        },
+        {
+          "member": "itoa-1.0.18/LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+          "size": 1023
+        }
+      ],
+      "raw_license": "MIT OR Apache-2.0",
+      "version": "1.0.18"
+    },
+    "crates-io:libc@0.2.186": {
+      "crate": {
+        "sha256": "68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66",
+        "size": 821883,
+        "url": "https://static.crates.io/crates/libc/libc-0.2.186.crate"
+      },
+      "kind": "crates-io",
+      "manifest": {
+        "member": "libc-0.2.186/Cargo.toml",
+        "sha256": "9a45433b9dc5f1dcd397062608a320c2ab472319e79566ea4646dfff3ca67821",
+        "size": 6221
+      },
+      "name": "libc",
+      "normalized_license": "MIT OR Apache-2.0",
+      "notices": [
+        {
+          "member": "libc-0.2.186/LICENSE-APACHE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
+          "size": 9723
+        },
+        {
+          "member": "libc-0.2.186/LICENSE-MIT",
+          "sha256": "123a331b5dbf04c30097fa43b8f858bc85df671fe776de498d01f3d6b7c1f69e",
+          "size": 1066
+        }
+      ],
+      "raw_license": "MIT OR Apache-2.0",
+      "version": "0.2.186"
+    },
+    "crates-io:once_cell@1.21.4": {
+      "crate": {
+        "sha256": "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50",
+        "size": 35010,
+        "url": "https://static.crates.io/crates/once_cell/once_cell-1.21.4.crate"
+      },
+      "kind": "crates-io",
+      "manifest": {
+        "member": "once_cell-1.21.4/Cargo.toml",
+        "sha256": "87e5b7ee438abdef12e46386e86370f54ad70cabdcf949556b9ef012a9da9587",
+        "size": 2542
+      },
+      "name": "once_cell",
+      "normalized_license": "MIT OR Apache-2.0",
+      "notices": [
+        {
+          "member": "once_cell-1.21.4/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+          "size": 10847
+        },
+        {
+          "member": "once_cell-1.21.4/LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+          "size": 1023
+        }
+      ],
+      "raw_license": "MIT OR Apache-2.0",
+      "version": "1.21.4"
+    },
+    "crates-io:openssl-macros@0.1.1": {
+      "crate": {
+        "sha256": "a948666b637a0f465e8564c73e89d4dde00d72d4d473cc972f390fc3dcee7d9c",
+        "size": 5601,
+        "url": "https://static.crates.io/crates/openssl-macros/openssl-macros-0.1.1.crate"
+      },
+      "kind": "crates-io",
+      "manifest": {
+        "member": "openssl-macros-0.1.1/Cargo.toml",
+        "sha256": "a0f4f5f613ead670c0512bf5f42c0426c8c3ab119f3737c6119190a5a34b657d",
+        "size": 779
+      },
+      "name": "openssl-macros",
+      "normalized_license": "MIT OR Apache-2.0",
+      "notices": [
+        {
+          "member": "openssl-macros-0.1.1/LICENSE-APACHE",
+          "sha256": "c6596eb7be8581c18be736c846fb9173b69eccf6ef94c5135893ec56bd92ba08",
+          "size": 11358
+        },
+        {
+          "member": "openssl-macros-0.1.1/LICENSE-MIT",
+          "sha256": "ea5ab440900ab271811d5c2dc02a9de6e03a6956ac5727e85c11d76df5883d30",
+          "size": 1058
+        }
+      ],
+      "raw_license": "MIT/Apache-2.0",
+      "version": "0.1.1"
+    },
+    "crates-io:openssl-sys@0.9.115": {
+      "crate": {
+        "sha256": "158fe5b292746440aa6e7a7e690e55aeb72d41505e2804c23c6973ad0e9c9781",
+        "size": 75821,
+        "url": "https://static.crates.io/crates/openssl-sys/openssl-sys-0.9.115.crate"
+      },
+      "kind": "crates-io",
+      "manifest": {
+        "member": "openssl-sys-0.9.115/Cargo.toml",
+        "sha256": "d750c69b5d695a5dd51448cf44b25e5710d4eb304ee5c577429d45853f9258dc",
+        "size": 1841
+      },
+      "name": "openssl-sys",
+      "normalized_license": "MIT",
+      "notices": [
+        {
+          "member": "openssl-sys-0.9.115/LICENSE-MIT",
+          "sha256": "378f5840b258e2779c39418f3f2d7b2ba96f1c7917dd6be0713f88305dbda397",
+          "size": 1057
+        }
+      ],
+      "raw_license": "MIT",
+      "version": "0.9.115"
+    },
+    "crates-io:openssl@0.10.79": {
+      "crate": {
+        "sha256": "bf0b434746ee2832f4f0baf10137e1cabb18cbe6912c69e2e33263c45250f542",
+        "size": 307119,
+        "url": "https://static.crates.io/crates/openssl/openssl-0.10.79.crate"
+      },
+      "kind": "crates-io",
+      "manifest": {
+        "member": "openssl-0.10.79/Cargo.toml",
+        "sha256": "66095b021bf89b45e7027ed8664491a458029b0c1b07b430f2e745a336262588",
+        "size": 1623
+      },
+      "name": "openssl",
+      "normalized_license": "Apache-2.0",
+      "notices": [
+        {
+          "member": "openssl-0.10.79/LICENSE",
+          "sha256": "f3d4287b4a21c5176fea2f9bd4ae800696004e2fb8e05cbc818be513f188a941",
+          "size": 618
+        },
+        {
+          "member": "openssl-0.10.79/LICENSE-APACHE",
+          "sha256": "c6596eb7be8581c18be736c846fb9173b69eccf6ef94c5135893ec56bd92ba08",
+          "size": 11358
+        }
+      ],
+      "raw_license": "Apache-2.0",
+      "version": "0.10.79"
+    },
+    "crates-io:pem@3.0.6": {
+      "crate": {
+        "sha256": "1d30c53c26bc5b31a98cd02d20f25a7c8567146caf63ed593a9d87b2775291be",
+        "size": 18362,
+        "url": "https://static.crates.io/crates/pem/pem-3.0.6.crate"
+      },
+      "kind": "crates-io",
+      "manifest": {
+        "member": "pem-3.0.6/Cargo.toml",
+        "sha256": "aa7f7309265f69f3860928308a376054207203ac076d58ae9e067401baf43811",
+        "size": 1673
+      },
+      "name": "pem",
+      "normalized_license": "MIT",
+      "notices": [
+        {
+          "member": "pem-3.0.6/LICENSE.md",
+          "sha256": "b7c76ff4466a3aeb6a7d903e81b651335e97d64ecb857e2ee9812a36c6fd1acf",
+          "size": 1085
+        }
+      ],
+      "raw_license": "MIT",
+      "version": "3.0.6"
+    },
+    "crates-io:pkg-config@0.3.33": {
+      "crate": {
+        "sha256": "19f132c84eca552bf34cab8ec81f1c1dcc229b811638f9d283dceabe58c5569e",
+        "size": 21590,
+        "url": "https://static.crates.io/crates/pkg-config/pkg-config-0.3.33.crate"
+      },
+      "kind": "crates-io",
+      "manifest": {
+        "member": "pkg-config-0.3.33/Cargo.toml",
+        "sha256": "37ce80d4e6e58a7cfd605a9f298da4dd9f43dc4412382b40a9d06fc925298da3",
+        "size": 1165
+      },
+      "name": "pkg-config",
+      "normalized_license": "MIT OR Apache-2.0",
+      "notices": [
+        {
+          "member": "pkg-config-0.3.33/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+          "size": 10847
+        },
+        {
+          "member": "pkg-config-0.3.33/LICENSE-MIT",
+          "sha256": "378f5840b258e2779c39418f3f2d7b2ba96f1c7917dd6be0713f88305dbda397",
+          "size": 1057
+        }
+      ],
+      "raw_license": "MIT OR Apache-2.0",
+      "version": "0.3.33"
+    },
+    "crates-io:portable-atomic@1.13.1": {
+      "crate": {
+        "sha256": "c33a9471896f1c69cecef8d20cbe2f7accd12527ce60845ff44c153bb2a21b49",
+        "size": 197001,
+        "url": "https://static.crates.io/crates/portable-atomic/portable-atomic-1.13.1.crate"
+      },
+      "kind": "crates-io",
+      "manifest": {
+        "member": "portable-atomic-1.13.1/Cargo.toml",
+        "sha256": "3366d6ebb1bada583bfdad414effb4776e4d090e22fd5bbd61c5b8a3560fa17b",
+        "size": 5576
+      },
+      "name": "portable-atomic",
+      "normalized_license": "Apache-2.0 OR MIT",
+      "notices": [
+        {
+          "member": "portable-atomic-1.13.1/LICENSE-APACHE",
+          "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594",
+          "size": 10174
+        },
+        {
+          "member": "portable-atomic-1.13.1/LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+          "size": 1023
+        }
+      ],
+      "raw_license": "Apache-2.0 OR MIT",
+      "version": "1.13.1"
+    },
+    "crates-io:proc-macro2@1.0.106": {
+      "crate": {
+        "sha256": "8fd00f0bb2e90d81d1044c2b32617f68fcb9fa3bb7640c23e9c748e53fb30934",
+        "size": 59765,
+        "url": "https://static.crates.io/crates/proc-macro2/proc-macro2-1.0.106.crate"
+      },
+      "kind": "crates-io",
+      "manifest": {
+        "member": "proc-macro2-1.0.106/Cargo.toml",
+        "sha256": "7408af188c9656c1c2a6012f61026df0e2dfc0275e0edf1e01f1d59b3e39c194",
+        "size": 2460
+      },
+      "name": "proc-macro2",
+      "normalized_license": "MIT OR Apache-2.0",
+      "notices": [
+        {
+          "member": "proc-macro2-1.0.106/LICENSE-APACHE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
+          "size": 9723
+        },
+        {
+          "member": "proc-macro2-1.0.106/LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+          "size": 1023
+        }
+      ],
+      "raw_license": "MIT OR Apache-2.0",
+      "version": "1.0.106"
+    },
+    "crates-io:pyo3-build-config@0.28.3": {
+      "crate": {
+        "sha256": "e368e7ddfdeb98c9bca7f8383be1648fd84ab466bf2bc015e94008db6d35611e",
+        "size": 35961,
+        "url": "https://static.crates.io/crates/pyo3-build-config/pyo3-build-config-0.28.3.crate"
+      },
+      "kind": "crates-io",
+      "manifest": {
+        "member": "pyo3-build-config-0.28.3/Cargo.toml",
+        "sha256": "a865554445c84324f2a2c902e66882f3e43404175ea38db2116c96abe67ea487",
+        "size": 1755
+      },
+      "name": "pyo3-build-config",
+      "normalized_license": "MIT OR Apache-2.0",
+      "notices": [
+        {
+          "member": "pyo3-build-config-0.28.3/LICENSE-APACHE",
+          "sha256": "32c76dbe0e73d79100d5ece77c158399f2e2541bc5c78548a4ba45c1cb53c5c9",
+          "size": 9807
+        },
+        {
+          "member": "pyo3-build-config-0.28.3/LICENSE-MIT",
+          "sha256": "afcbe3b2e6b37172b5a9ca869ee4c0b8cdc09316e5d4384864154482c33e5af6",
+          "size": 1107
+        }
+      ],
+      "raw_license": "MIT OR Apache-2.0",
+      "version": "0.28.3"
+    },
+    "crates-io:pyo3-ffi@0.28.3": {
+      "crate": {
+        "sha256": "7f29e10af80b1f7ccaf7f69eace800a03ecd13e883acfacc1e5d0988605f651e",
+        "size": 80881,
+        "url": "https://static.crates.io/crates/pyo3-ffi/pyo3-ffi-0.28.3.crate"
+      },
+      "kind": "crates-io",
+      "manifest": {
+        "member": "pyo3-ffi-0.28.3/Cargo.toml",
+        "sha256": "7053ef2cb58e92a182952fac8c4c7eaa79d3645afa09d53355ef57ceeecc6687",
+        "size": 2854
+      },
+      "name": "pyo3-ffi",
+      "normalized_license": "MIT OR Apache-2.0",
+      "notices": [
+        {
+          "member": "pyo3-ffi-0.28.3/LICENSE-APACHE",
+          "sha256": "32c76dbe0e73d79100d5ece77c158399f2e2541bc5c78548a4ba45c1cb53c5c9",
+          "size": 9807
+        },
+        {
+          "member": "pyo3-ffi-0.28.3/LICENSE-MIT",
+          "sha256": "afcbe3b2e6b37172b5a9ca869ee4c0b8cdc09316e5d4384864154482c33e5af6",
+          "size": 1107
+        }
+      ],
+      "raw_license": "MIT OR Apache-2.0",
+      "version": "0.28.3"
+    },
+    "crates-io:pyo3-macros-backend@0.28.3": {
+      "crate": {
+        "sha256": "c4cdc218d835738f81c2338f822078af45b4afdf8b2e33cbb5916f108b813acb",
+        "size": 88063,
+        "url": "https://static.crates.io/crates/pyo3-macros-backend/pyo3-macros-backend-0.28.3.crate"
+      },
+      "kind": "crates-io",
+      "manifest": {
+        "member": "pyo3-macros-backend-0.28.3/Cargo.toml",
+        "sha256": "ca56804539d29a5fc8ef2f067c916c3438c38d8441dc564afe30af417da14b09",
+        "size": 2375
+      },
+      "name": "pyo3-macros-backend",
+      "normalized_license": "MIT OR Apache-2.0",
+      "notices": [
+        {
+          "member": "pyo3-macros-backend-0.28.3/LICENSE-APACHE",
+          "sha256": "32c76dbe0e73d79100d5ece77c158399f2e2541bc5c78548a4ba45c1cb53c5c9",
+          "size": 9807
+        },
+        {
+          "member": "pyo3-macros-backend-0.28.3/LICENSE-MIT",
+          "sha256": "afcbe3b2e6b37172b5a9ca869ee4c0b8cdc09316e5d4384864154482c33e5af6",
+          "size": 1107
+        }
+      ],
+      "raw_license": "MIT OR Apache-2.0",
+      "version": "0.28.3"
+    },
+    "crates-io:pyo3-macros@0.28.3": {
+      "crate": {
+        "sha256": "df6e520eff47c45997d2fc7dd8214b25dd1310918bbb2642156ef66a67f29813",
+        "size": 8963,
+        "url": "https://static.crates.io/crates/pyo3-macros/pyo3-macros-0.28.3.crate"
+      },
+      "kind": "crates-io",
+      "manifest": {
+        "member": "pyo3-macros-0.28.3/Cargo.toml",
+        "sha256": "97ff36290f324b0efff16db0829bb9cae57e1d24770b2108b84c3b101ff036b5",
+        "size": 2208
+      },
+      "name": "pyo3-macros",
+      "normalized_license": "MIT OR Apache-2.0",
+      "notices": [
+        {
+          "member": "pyo3-macros-0.28.3/LICENSE-APACHE",
+          "sha256": "32c76dbe0e73d79100d5ece77c158399f2e2541bc5c78548a4ba45c1cb53c5c9",
+          "size": 9807
+        },
+        {
+          "member": "pyo3-macros-0.28.3/LICENSE-MIT",
+          "sha256": "afcbe3b2e6b37172b5a9ca869ee4c0b8cdc09316e5d4384864154482c33e5af6",
+          "size": 1107
+        }
+      ],
+      "raw_license": "MIT OR Apache-2.0",
+      "version": "0.28.3"
+    },
+    "crates-io:pyo3@0.28.3": {
+      "crate": {
+        "sha256": "91fd8e38a3b50ed1167fb981cd6fd60147e091784c427b8f7183a7ee32c31c12",
+        "size": 1204476,
+        "url": "https://static.crates.io/crates/pyo3/pyo3-0.28.3.crate"
+      },
+      "kind": "crates-io",
+      "manifest": {
+        "member": "pyo3-0.28.3/Cargo.toml",
+        "sha256": "e0b008929f7f0205b10743c19c7aac73c2d42c58f2ba8d60a2c4c2ca7b516f2a",
+        "size": 10399
+      },
+      "name": "pyo3",
+      "normalized_license": "MIT OR Apache-2.0",
+      "notices": [
+        {
+          "member": "pyo3-0.28.3/LICENSE-APACHE",
+          "sha256": "32c76dbe0e73d79100d5ece77c158399f2e2541bc5c78548a4ba45c1cb53c5c9",
+          "size": 9807
+        },
+        {
+          "member": "pyo3-0.28.3/LICENSE-MIT",
+          "sha256": "afcbe3b2e6b37172b5a9ca869ee4c0b8cdc09316e5d4384864154482c33e5af6",
+          "size": 1107
+        },
+        {
+          "member": "pyo3-0.28.3/pyo3-runtime/LICENSE-APACHE",
+          "sha256": "32c76dbe0e73d79100d5ece77c158399f2e2541bc5c78548a4ba45c1cb53c5c9",
+          "size": 9807
+        },
+        {
+          "member": "pyo3-0.28.3/pyo3-runtime/LICENSE-MIT",
+          "sha256": "afcbe3b2e6b37172b5a9ca869ee4c0b8cdc09316e5d4384864154482c33e5af6",
+          "size": 1107
+        }
+      ],
+      "raw_license": "MIT OR Apache-2.0",
+      "version": "0.28.3"
+    },
+    "crates-io:quote@1.0.45": {
+      "crate": {
+        "sha256": "41f2619966050689382d2b44f664f4bc593e129785a36d6ee376ddf37259b924",
+        "size": 31564,
+        "url": "https://static.crates.io/crates/quote/quote-1.0.45.crate"
+      },
+      "kind": "crates-io",
+      "manifest": {
+        "member": "quote-1.0.45/Cargo.toml",
+        "sha256": "baa198cfd5e82e453e6b8d9bd5435b7a79289edf86f276fc578ee726d39cc870",
+        "size": 1753
+      },
+      "name": "quote",
+      "normalized_license": "MIT OR Apache-2.0",
+      "notices": [
+        {
+          "member": "quote-1.0.45/LICENSE-APACHE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
+          "size": 9723
+        },
+        {
+          "member": "quote-1.0.45/LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+          "size": 1023
+        }
+      ],
+      "raw_license": "MIT OR Apache-2.0",
+      "version": "1.0.45"
+    },
+    "crates-io:self_cell@1.2.2": {
+      "crate": {
+        "sha256": "b12e76d157a900eb52e81bc6e9f3069344290341720e9178cde2407113ac8d89",
+        "size": 23264,
+        "url": "https://static.crates.io/crates/self_cell/self_cell-1.2.2.crate"
+      },
+      "kind": "crates-io",
+      "manifest": {
+        "member": "self_cell-1.2.2/Cargo.toml",
+        "sha256": "af4f495b78b68a9074e48cefd08ba7149089653c477b04b77dbe618899e0acfb",
+        "size": 1220
+      },
+      "name": "self_cell",
+      "normalized_license": "Apache-2.0 OR GPL-2.0-only",
+      "notices": [
+        {
+          "member": "self_cell-1.2.2/LICENSE-APACHE",
+          "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+          "size": 11357
+        },
+        {
+          "member": "self_cell-1.2.2/LICENSE-GPLv2",
+          "sha256": "f9c375a1be4a41f7b70301dd83c91cb89e41567478859b77eef375a52d782505",
+          "size": 18091
+        }
+      ],
+      "raw_license": "Apache-2.0 OR GPL-2.0-only",
+      "version": "1.2.2"
+    },
+    "crates-io:shlex@1.3.0": {
+      "crate": {
+        "sha256": "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64",
+        "size": 18713,
+        "url": "https://static.crates.io/crates/shlex/shlex-1.3.0.crate"
+      },
+      "kind": "crates-io",
+      "manifest": {
+        "member": "shlex-1.3.0/Cargo.toml",
+        "sha256": "d7eb8c4bce681b4dd1dfc2c98c649754390775f38f4796d491948ddbb53aa2ef",
+        "size": 1074
+      },
+      "name": "shlex",
+      "normalized_license": "MIT OR Apache-2.0",
+      "notices": [
+        {
+          "member": "shlex-1.3.0/LICENSE-APACHE",
+          "sha256": "553fffcd9b1cb158bc3e9edc35da85ca5c3b3d7d2e61c883ebcfa8a65814b583",
+          "size": 566
+        },
+        {
+          "member": "shlex-1.3.0/LICENSE-MIT",
+          "sha256": "4455bf75a91154108304cb283e0fea9948c14f13e20d60887cf2552449dea3b1",
+          "size": 1092
+        }
+      ],
+      "raw_license": "MIT OR Apache-2.0",
+      "version": "1.3.0"
+    },
+    "crates-io:syn@2.0.117": {
+      "crate": {
+        "sha256": "e665b8803e7b1d2a727f4023456bbbbe74da67099c585258af0ad9c5013b9b99",
+        "size": 306011,
+        "url": "https://static.crates.io/crates/syn/syn-2.0.117.crate"
+      },
+      "kind": "crates-io",
+      "manifest": {
+        "member": "syn-2.0.117/Cargo.toml",
+        "sha256": "43affc9aa6ba5823974fb5ffe300e0f94e29a3f39e4da3dbacaab2e5138e82b5",
+        "size": 5007
+      },
+      "name": "syn",
+      "normalized_license": "MIT OR Apache-2.0",
+      "notices": [
+        {
+          "member": "syn-2.0.117/LICENSE-APACHE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
+          "size": 9723
+        },
+        {
+          "member": "syn-2.0.117/LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+          "size": 1023
+        }
+      ],
+      "raw_license": "MIT OR Apache-2.0",
+      "version": "2.0.117"
+    },
+    "crates-io:target-lexicon@0.13.5": {
+      "crate": {
+        "sha256": "adb6935a6f5c20170eeceb1a3835a49e12e19d792f6dd344ccc76a985ca5a6ca",
+        "size": 26928,
+        "url": "https://static.crates.io/crates/target-lexicon/target-lexicon-0.13.5.crate"
+      },
+      "kind": "crates-io",
+      "manifest": {
+        "member": "target-lexicon-0.13.5/Cargo.toml",
+        "sha256": "68c92fd64e0ba0311fffd938aa03a2c58a13341c37523da1dd465c7eea9269ea",
+        "size": 1559
+      },
+      "name": "target-lexicon",
+      "normalized_license": "Apache-2.0 WITH LLVM-exception",
+      "notices": [
+        {
+          "member": "target-lexicon-0.13.5/LICENSE",
+          "sha256": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5",
+          "size": 12243
+        }
+      ],
+      "raw_license": "Apache-2.0 WITH LLVM-exception",
+      "version": "0.13.5"
+    },
+    "crates-io:unicode-ident@1.0.24": {
+      "crate": {
+        "sha256": "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75",
+        "size": 49298,
+        "url": "https://static.crates.io/crates/unicode-ident/unicode-ident-1.0.24.crate"
+      },
+      "kind": "crates-io",
+      "manifest": {
+        "member": "unicode-ident-1.0.24/Cargo.toml",
+        "sha256": "0bb9c0e006a21355cb85c7df72e78dd8ba6fffbb7dc3f1e7a4c19af53cd354da",
+        "size": 2072
+      },
+      "name": "unicode-ident",
+      "normalized_license": "(MIT OR Apache-2.0) AND Unicode-3.0",
+      "notices": [
+        {
+          "member": "unicode-ident-1.0.24/LICENSE-APACHE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
+          "size": 9723
+        },
+        {
+          "member": "unicode-ident-1.0.24/LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+          "size": 1023
+        },
+        {
+          "member": "unicode-ident-1.0.24/LICENSE-UNICODE",
+          "sha256": "f7db81051789b729fea528a63ec4c938fdcb93d9d61d97dc8cc2e9df6d47f2a1",
+          "size": 1995
+        }
+      ],
+      "raw_license": "(MIT OR Apache-2.0) AND Unicode-3.0",
+      "version": "1.0.24"
+    },
+    "crates-io:vcpkg@0.2.15": {
+      "crate": {
+        "sha256": "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426",
+        "size": 228735,
+        "url": "https://static.crates.io/crates/vcpkg/vcpkg-0.2.15.crate"
+      },
+      "kind": "crates-io",
+      "manifest": {
+        "member": "vcpkg-0.2.15/Cargo.toml",
+        "sha256": "033f71986b9ec8b8d1fcef7fa8c2c02abafb5655e10b1bbe405b9465e80108b4",
+        "size": 1100
+      },
+      "name": "vcpkg",
+      "normalized_license": "MIT OR Apache-2.0",
+      "notices": [
+        {
+          "member": "vcpkg-0.2.15/LICENSE-APACHE",
+          "sha256": "60c93a31f490375aadf64098b75f10715010379541021e00261045d7800611d3",
+          "size": 11050
+        },
+        {
+          "member": "vcpkg-0.2.15/LICENSE-MIT",
+          "sha256": "016d20f335060a70e79d9fcf8dfaa6201114d65d592211f4bdfb8ae9ca2bc1dc",
+          "size": 1082
+        }
+      ],
+      "raw_license": "MIT/Apache-2.0",
+      "version": "0.2.15"
+    },
+    "owner-sdist:python:cryptography@48.0.1#src/rust": {
+      "cargo_packages": [
+        {
+          "manifest": {
+            "member": "cryptography-48.0.1/src/rust/Cargo.toml",
+            "sha256": "255631745bb2f077f26cf7cdbfa9ee831f96ed0c013e9fa0dce3e78af43abc54",
+            "size": 1526
+          },
+          "name": "cryptography-rust",
+          "path": ".",
+          "version": "0.1.0"
+        },
+        {
+          "manifest": {
+            "member": "cryptography-48.0.1/src/rust/cryptography-cffi/Cargo.toml",
+            "sha256": "233dcd723ad23d0aea9717215eb6596272b11c5cb6796edeff93c6704be2fcbe",
+            "size": 423
+          },
+          "name": "cryptography-cffi",
+          "path": "cryptography-cffi",
+          "version": "0.1.0"
+        },
+        {
+          "manifest": {
+            "member": "cryptography-48.0.1/src/rust/cryptography-crypto/Cargo.toml",
+            "sha256": "5d3499ad8c4e564a789453bcd721782250435735e94407d8de061dc7fc57b32d",
+            "size": 235
+          },
+          "name": "cryptography-crypto",
+          "path": "cryptography-crypto",
+          "version": "0.1.0"
+        },
+        {
+          "manifest": {
+            "member": "cryptography-48.0.1/src/rust/cryptography-keepalive/Cargo.toml",
+            "sha256": "abe27146fda8c55a9ff3758bbcf34527b7fa42c677d7166d746cc9e541d37732",
+            "size": 235
+          },
+          "name": "cryptography-keepalive",
+          "path": "cryptography-keepalive",
+          "version": "0.1.0"
+        },
+        {
+          "manifest": {
+            "member": "cryptography-48.0.1/src/rust/cryptography-key-parsing/Cargo.toml",
+            "sha256": "69904d1b1a7383a415924e379c496303f15e87bcb7a45a94512a43887b71480b",
+            "size": 788
+          },
+          "name": "cryptography-key-parsing",
+          "path": "cryptography-key-parsing",
+          "version": "0.1.0"
+        },
+        {
+          "manifest": {
+            "member": "cryptography-48.0.1/src/rust/cryptography-openssl/Cargo.toml",
+            "sha256": "3109ef1f8a226c07e5728ac5a9475893a721694529d7d4dba4ef241bfb237399",
+            "size": 608
+          },
+          "name": "cryptography-openssl",
+          "path": "cryptography-openssl",
+          "version": "0.1.0"
+        },
+        {
+          "manifest": {
+            "member": "cryptography-48.0.1/src/rust/cryptography-x509/Cargo.toml",
+            "sha256": "70252c64c92650285f8f6effac3cfc0a9ecc65c4af047ff33ae828e8ed1efb87",
+            "size": 230
+          },
+          "name": "cryptography-x509",
+          "path": "cryptography-x509",
+          "version": "0.1.0"
+        },
+        {
+          "manifest": {
+            "member": "cryptography-48.0.1/src/rust/cryptography-x509-verification/Cargo.toml",
+            "sha256": "a3e20dcc02bc1ac52bdcd8f0b919b04b23d4d6dec03e1d487a16b387b511af3e",
+            "size": 338
+          },
+          "name": "cryptography-x509-verification",
+          "path": "cryptography-x509-verification",
+          "version": "0.1.0"
+        }
+      ],
+      "expanded_size": 1221863,
+      "kind": "owner-sdist-subpath",
+      "member_count": 113,
+      "notices": [
+        {
+          "member": "cryptography-48.0.1/LICENSE",
+          "sha256": "3e0c7c091a948b82533ba98fd7cbb40432d6f1a9acbf85f5922d2f99a93ae6bb",
+          "size": 197
+        },
+        {
+          "member": "cryptography-48.0.1/LICENSE.APACHE",
+          "sha256": "aac73b3148f6d1d7111dbca32099f68d26c644c6813ae1e4f05f6579aa2663fe",
+          "size": 11360
+        },
+        {
+          "member": "cryptography-48.0.1/LICENSE.BSD",
+          "sha256": "602c4c7482de6479dd2e9793cda275e5e63d773dacd1eca689232ab7008fb4fb",
+          "size": 1532
+        }
+      ],
+      "owner": "python:cryptography@48.0.1",
+      "path": "src/rust",
+      "reviewed_license": "Apache-2.0 OR BSD-3-Clause",
+      "tree_sha256": "201bc453ace982c914570aa70b70f7e65e2d3f547ba69bd1eb38304bbb39d357",
+      "workspace_manifest": {
+        "member": "cryptography-48.0.1/Cargo.toml",
+        "sha256": "1ee5c3835911f8750ff6e7fa9477766a2d1f64daaf00d29c50db2cceefa42eb7",
+        "size": 977
+      }
+    },
+    "upstream-release:openssl@4.0.1": {
+      "archive": {
+        "sha256": "2db3f3a0d6ea4b59e1f094ace2c8cd536dffb87cdc39084c5afa1e6f7f37dd09",
+        "size": 55079428,
+        "url": "https://github.com/openssl/openssl/releases/download/openssl-4.0.1/openssl-4.0.1.tar.gz"
+      },
+      "checksum_document": {
+        "sha256": "3d46819187b899851e74f5478a73bf8a645afaa1e25864cd8e87e76bb03a364e",
+        "size": 87,
+        "url": "https://github.com/openssl/openssl/releases/download/openssl-4.0.1/openssl-4.0.1.tar.gz.sha256"
+      },
+      "checksum_filename": "openssl-4.0.1.tar.gz",
+      "kind": "checksummed-upstream-release",
+      "name": "openssl",
+      "notices": [
+        {
+          "member": "openssl-4.0.1/LICENSE.txt",
+          "sha256": "7d5450cb2d142651b8afa315b5f238efc805dad827d91ba367d8516bc9d49e7a",
+          "size": 10175
+        }
+      ],
+      "reviewed_license": "Apache-2.0",
+      "version": "4.0.1"
     }
   },
   "platforms": {
