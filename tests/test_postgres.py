@@ -26,12 +26,11 @@ from extra_codeowners.database import (
     SharedHeadEpoch,
     utcnow,
 )
-from extra_codeowners.migrations import (
-    BASELINE_REVISION,
-    MIGRATION_LOCK_KEY,
-    current_revision,
-    upgrade_database,
-)
+
+BASELINE_REVISION = migrations.BASELINE_REVISION
+MIGRATION_LOCK_KEY = migrations.MIGRATION_LOCK_KEY
+current_revision = migrations.current_revision
+upgrade_database = migrations.upgrade_database
 
 pytestmark = pytest.mark.integration
 
