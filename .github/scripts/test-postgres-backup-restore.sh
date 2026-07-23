@@ -71,20 +71,27 @@ INSERT INTO evaluation_jobs (
 );
 
 INSERT INTO shared_head_epochs (
-  installation_id, repository_full_name, head_sha, generation, changed_at
+  installation_id, repository_full_name, head_sha, generation,
+  invalidated_generation, changed_at, available_at, attempts,
+  lease_owner, lease_until, last_error
 ) VALUES (
   1701, 'example/backup-contract',
   'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 11,
-  '2026-07-14 12:33:53.101112+00'
+  10, '2026-07-14 12:33:53.101112+00',
+  '2026-07-14 12:34:53.121314+00', 3, 'head-worker-backup',
+  '2026-07-14 12:44:53.151617+00', 'head reset retry'
 );
 
 INSERT INTO webhook_deliveries (
   delivery_id, event, received_at, invalidation_required,
-  invalidation_completed_at
+  invalidation_completed_at, installation_id, repository_full_name,
+  pull_number, head_sha, shared_head_generation
 ) VALUES (
   'delivery-backup-contract', 'pull_request',
   '2026-07-14 12:33:54.111222+00', TRUE,
-  '2026-07-14 12:33:55.333444+00'
+  '2026-07-14 12:33:55.333444+00', 1701,
+  'example/backup-contract', 314,
+  'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 11
 );
 
 INSERT INTO evaluation_audits (

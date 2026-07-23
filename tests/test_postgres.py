@@ -78,7 +78,11 @@ def test_concurrent_delivery_generations_are_not_lost(postgres_store: QueueStore
 
     def accept(index: int) -> bool:
         barrier.wait()
-        return postgres_store.accept_delivery(f"delivery-{index}", "pull_request", request())
+        return postgres_store.accept_delivery(
+            f"delivery-{index}",
+            "pull_request",
+            request(),
+        ).accepted
 
     with ThreadPoolExecutor(max_workers=workers) as executor:
         accepted = list(executor.map(accept, range(workers)))
@@ -103,7 +107,11 @@ def test_concurrent_same_delivery_advances_shared_head_once(
 
     def accept(_: int) -> bool:
         barrier.wait()
-        return postgres_store.accept_delivery("same-delivery", "pull_request", request())
+        return postgres_store.accept_delivery(
+            "same-delivery",
+            "pull_request",
+            request(),
+        ).accepted
 
     with ThreadPoolExecutor(max_workers=workers) as executor:
         accepted = list(executor.map(accept, range(workers)))
@@ -141,7 +149,7 @@ def test_concurrent_delivery_and_reconciliation_compose_without_phantom_epoch(
                     delivery_id,
                     "pull_request",
                     reconciliation,
-                ),
+                ).accepted,
             )
         return (
             "reconciliation",

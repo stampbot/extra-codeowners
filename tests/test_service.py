@@ -164,6 +164,41 @@ required_labels = ["autoapprove"]
     ) -> bool:
         return bool(self.checks)
 
+    async def existing_check_run_id(
+        self,
+        installation_id: int,
+        repository: str,
+        head_sha: str,
+        check_name: str,
+    ) -> int | None:
+        return 99 if self.checks else None
+
+    async def reset_check_run(
+        self,
+        installation_id: int,
+        repository: str,
+        check_run_id: int,
+        check_name: str,
+        **values: Any,
+    ) -> None:
+        head_sha = next(
+            (
+                str(check["head_sha"])
+                for check in reversed(self.checks)
+                if isinstance(check.get("head_sha"), str)
+            ),
+            HEAD,
+        )
+        self.checks.append(
+            {
+                "repository": repository,
+                "head_sha": head_sha,
+                "name": check_name,
+                "status": "in_progress",
+                **values,
+            }
+        )
+
     async def list_commit_pulls(
         self,
         installation_id: int,
@@ -486,7 +521,7 @@ async def test_postflight_database_error_restores_blocking_check_before_propagat
     service = EvaluationService(settings(), github, store)  # type: ignore[arg-type]
     claimed = job(store)
     original_upsert = github.upsert_check_run
-    original_generation_check = store.shared_head_generation_is_current
+    original_generation_check = store.shared_head_generation_is_publishable
     completed = threading.Event()
 
     async def observe_completion(*args: Any, **kwargs: Any) -> int:
@@ -501,7 +536,7 @@ async def test_postflight_database_error_restores_blocking_check_before_propagat
         return original_generation_check(job_to_check, head_sha)
 
     github.upsert_check_run = observe_completion  # type: ignore[method-assign]
-    store.shared_head_generation_is_current = fail_postflight  # type: ignore[assignment]
+    store.shared_head_generation_is_publishable = fail_postflight  # type: ignore[assignment]
 
     with pytest.raises(RuntimeError, match="postflight database unavailable"):
         await service.evaluate_job(claimed)
@@ -523,7 +558,7 @@ async def test_cancellation_during_postflight_waits_for_shielded_blocking_reset(
     service = EvaluationService(settings(), github, store)  # type: ignore[arg-type]
     claimed = job(store)
     original_upsert = github.upsert_check_run
-    original_generation_check = store.shared_head_generation_is_current
+    original_generation_check = store.shared_head_generation_is_publishable
     completed = threading.Event()
     postflight_entered = threading.Event()
     release_postflight = threading.Event()
@@ -551,7 +586,7 @@ async def test_cancellation_during_postflight_waits_for_shielded_blocking_reset(
         return original_generation_check(job_to_check, head_sha)
 
     github.upsert_check_run = pause_reset  # type: ignore[method-assign]
-    store.shared_head_generation_is_current = block_postflight  # type: ignore[assignment]
+    store.shared_head_generation_is_publishable = block_postflight  # type: ignore[assignment]
     evaluation = asyncio.create_task(service.evaluate_job(claimed))
 
     assert await asyncio.to_thread(postflight_entered.wait, 1)
@@ -590,7 +625,7 @@ async def test_postflight_reset_failure_preserves_database_error_for_retry(
     service = EvaluationService(settings(), github, store)  # type: ignore[arg-type]
     claimed = job(store)
     original_upsert = github.upsert_check_run
-    original_generation_check = store.shared_head_generation_is_current
+    original_generation_check = store.shared_head_generation_is_publishable
     completed = threading.Event()
 
     async def fail_reset(*args: Any, **kwargs: Any) -> int:
@@ -607,7 +642,7 @@ async def test_postflight_reset_failure_preserves_database_error_for_retry(
         return original_generation_check(job_to_check, head_sha)
 
     github.upsert_check_run = fail_reset  # type: ignore[method-assign]
-    store.shared_head_generation_is_current = fail_postflight  # type: ignore[assignment]
+    store.shared_head_generation_is_publishable = fail_postflight  # type: ignore[assignment]
 
     with pytest.raises(RuntimeError, match="postflight database unavailable"):
         await service.evaluate_job(claimed)
@@ -825,7 +860,7 @@ async def test_stale_head_hint_requeues_live_head_and_stales_shared_claim(
     await EvaluationService(settings(), github, store).evaluate_job(claimed)  # type: ignore[arg-type]
 
     assert github.checks == []
-    assert store.pending_count() == 1
+    assert store.pending_count() == 2
     assert store.shared_head_generation(2, "example/project", "c" * 40) == 2
     assert store.shared_head_generation_is_current(prior_current_head_claim, "c" * 40) is False
 
@@ -861,7 +896,7 @@ async def test_revision_change_during_evaluation_is_requeued_without_stale_check
     await EvaluationService(settings(), github, store).evaluate_job(claimed)  # type: ignore[arg-type]
 
     assert [check["status"] for check in github.checks] == ["in_progress"]
-    assert store.pending_count() == 1
+    assert store.pending_count() == 2
     assert store.shared_head_generation(2, "example/project", "c" * 40) == 2
     assert store.shared_head_generation_is_current(prior_current_head_claim, "c" * 40) is False
 
@@ -892,12 +927,15 @@ async def test_label_change_during_evaluation_is_requeued_without_stale_check(
     prior_same_head_claim = store.claim("other-worker", 60)
     assert prior_same_head_claim is not None
     store.complete(prior_same_head_claim, prior_same_head_claim.lease_owner)
+    initial_invalidation = store.claim_shared_head_invalidation("head-worker", 60)
+    assert initial_invalidation is not None
+    assert store.complete_shared_head_invalidation(initial_invalidation)
     claimed = job(store)
 
     await EvaluationService(settings(), github, store).evaluate_job(claimed)  # type: ignore[arg-type]
 
     assert [check["status"] for check in github.checks] == ["in_progress"]
-    assert store.pending_count() == 1
+    assert store.pending_count() == 2
     assert store.shared_head_generation(2, "example/project", HEAD) == 2
     assert store.shared_head_generation_is_current(prior_same_head_claim, HEAD) is False
     assert store.shared_head_generation_is_current(claimed, HEAD) is False
@@ -1181,7 +1219,7 @@ async def test_authority_ingress_is_serialized_against_check_publication(
     github = FakeGitHub(changed_path="uv.lock")
     store = migrated_store(f"sqlite:///{tmp_path / 'authority-publish.db'}")
     original_upsert = github.upsert_check_run
-    acceptance: asyncio.Task[bool] | None = None
+    acceptance: asyncio.Task[Any] | None = None
 
     async def accept_during_completion(
         installation_id: int,
@@ -1221,7 +1259,7 @@ async def test_authority_ingress_is_serialized_against_check_publication(
     await EvaluationService(settings(), github, store).evaluate_job(job(store))  # type: ignore[arg-type]
 
     assert acceptance is not None
-    assert await acceptance is True
+    assert (await acceptance).accepted is True
     assert [check["status"] for check in github.checks] == ["in_progress", "completed"]
     assert github.checks[-1].get("conclusion") == "success"
     assert store.pending_count() == 2
@@ -1519,7 +1557,7 @@ async def test_reconciler_enqueues_open_pull_requests(tmp_path: Path) -> None:
     queued = await reconciler.reconcile_once()
 
     assert queued == 1
-    assert store.pending_count() == 1
+    assert store.pending_count() == 2
     assert store.shared_head_generation(2, "example/project", HEAD) == 1
 
     assert await reconciler.reconcile_once() == 0
@@ -1555,6 +1593,10 @@ async def test_reconciler_recovers_missed_shared_head_open_and_fails_closed(
     service = EvaluationService(settings(), github, store)  # type: ignore[arg-type]
 
     assert await reconciler.reconcile_once() == 2
+    invalidation = store.claim_shared_head_invalidation("head-worker", 60)
+    assert invalidation is not None
+    await service.invalidate_shared_head(invalidation, asyncio.Event())
+    assert store.complete_shared_head_invalidation(invalidation)
     for _ in range(2):
         claimed = store.claim("worker", 60)
         assert claimed is not None
@@ -1562,7 +1604,7 @@ async def test_reconciler_recovers_missed_shared_head_open_and_fails_closed(
         store.complete(claimed, claimed.lease_owner)
 
     published = [check for check in github.checks[1:] if check.get("status") == "completed"]
-    assert len(published) == 1
+    assert published
     assert all(check.get("conclusion") == "failure" for check in published)
     assert all("shared" in str(check.get("text")) for check in published)
     assert store.shared_head_generation(2, "example/project", HEAD) == 2

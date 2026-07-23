@@ -23,7 +23,26 @@ def upgrade() -> None:
         sa.Column("repository_full_name", sa.String(length=512), nullable=False),
         sa.Column("head_sha", sa.String(length=64), nullable=False),
         sa.Column("generation", sa.Integer(), nullable=False),
+        sa.Column("invalidated_generation", sa.Integer(), nullable=False),
         sa.Column("changed_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("available_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("attempts", sa.Integer(), nullable=False),
+        sa.Column("lease_owner", sa.String(length=128), nullable=True),
+        sa.Column("lease_until", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("last_error", sa.String(length=2000), nullable=True),
+        sa.CheckConstraint(
+            "generation >= 1",
+            name="ck_shared_head_epochs_generation_positive",
+        ),
+        sa.CheckConstraint(
+            "invalidated_generation >= 0 "
+            "AND invalidated_generation <= generation",
+            name="ck_shared_head_epochs_invalidation_bounds",
+        ),
+        sa.CheckConstraint(
+            "attempts >= 0",
+            name="ck_shared_head_epochs_attempts_nonnegative",
+        ),
         sa.PrimaryKeyConstraint(
             "installation_id",
             "repository_full_name",
@@ -35,9 +54,36 @@ def upgrade() -> None:
         "shared_head_epochs",
         ["changed_at"],
     )
+    op.create_index(
+        "ix_shared_head_epochs_claim",
+        "shared_head_epochs",
+        ["available_at", "lease_until"],
+        postgresql_where=sa.text("invalidated_generation < generation"),
+        sqlite_where=sa.text("invalidated_generation < generation"),
+    )
 
     op.add_column(
         "evaluation_jobs",
+        sa.Column("shared_head_generation", sa.Integer(), nullable=True),
+    )
+    op.add_column(
+        "webhook_deliveries",
+        sa.Column("installation_id", sa.Integer(), nullable=True),
+    )
+    op.add_column(
+        "webhook_deliveries",
+        sa.Column("repository_full_name", sa.String(length=512), nullable=True),
+    )
+    op.add_column(
+        "webhook_deliveries",
+        sa.Column("pull_number", sa.Integer(), nullable=True),
+    )
+    op.add_column(
+        "webhook_deliveries",
+        sa.Column("head_sha", sa.String(length=64), nullable=True),
+    )
+    op.add_column(
+        "webhook_deliveries",
         sa.Column("shared_head_generation", sa.Integer(), nullable=True),
     )
     evaluation_jobs = sa.table(

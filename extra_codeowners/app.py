@@ -281,7 +281,7 @@ def create_app(
             )
         queue_store: QueueStore = request.app.state.store
         try:
-            accepted = await asyncio.to_thread(
+            acceptance = await asyncio.to_thread(
                 queue_store.accept_delivery,
                 webhook.delivery_id,
                 webhook.event,
@@ -300,6 +300,7 @@ def create_app(
                 status.HTTP_503_SERVICE_UNAVAILABLE,
                 "delivery could not be durably accepted; redeliver it after recovery",
             ) from error
+        accepted = acceptance.accepted
         queued = accepted and job is not None
         needs_invalidation = accepted
         if (
@@ -321,16 +322,13 @@ def create_app(
                 )
             try:
                 invalidated = await asyncio.wait_for(
-                    evaluator.invalidate_for_trigger(job),
+                    evaluator.invalidate_for_trigger(
+                        job,
+                        acceptance.shared_head_generation,
+                    ),
                     timeout=runtime.webhook_invalidation_timeout_seconds,
                 )
-                if invalidated:
-                    # Always create a newer generation after the PATCH. This
-                    # fences a worker that published immediately before the
-                    # revocation and prevents it from deleting the only queued
-                    # re-evaluation as it completes.
-                    await asyncio.to_thread(queue_store.enqueue, job)
-                    queued = True
+                queued = queued or invalidated
                 await asyncio.to_thread(queue_store.mark_delivery_invalidated, webhook.delivery_id)
             except Exception as error:
                 # Durable work is authoritative. GitHub terminates webhook

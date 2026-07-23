@@ -110,6 +110,7 @@ def test_mixed_case_triggers_coalesce_in_one_queue_row(tmp_path: Path) -> None:
     store.enqueue(JobRequest(17, "EXAMPLE/PROJECT", 42, "second"))
 
     assert store.pending_count() == 1
+    assert store.pending_shared_head_invalidation_count() == 0
     claimed = store.claim("worker", 60)
     assert claimed is not None
     assert claimed.repository_full_name == "example/project"
@@ -119,22 +120,123 @@ def test_mixed_case_triggers_coalesce_in_one_queue_row(tmp_path: Path) -> None:
 def test_delivery_acceptance_is_atomic_and_idempotent(tmp_path: Path) -> None:
     store = make_store(tmp_path)
 
-    assert store.accept_delivery("delivery-1", "pull_request", request()) is True
-    assert store.accept_delivery("delivery-1", "pull_request", request()) is False
-    assert store.pending_count() == 1
+    assert store.accept_delivery("delivery-1", "pull_request", request()).accepted is True
+    assert store.accept_delivery("delivery-1", "pull_request", request()).accepted is False
+    assert store.pending_count() == 2
+    assert store.pending_shared_head_invalidation_count() == 1
     assert store.shared_head_generation(17, "example/project", "a" * 40) == 1
 
 
 def test_duplicate_delivery_does_not_advance_shared_head_epoch(tmp_path: Path) -> None:
     store = make_store(tmp_path)
 
-    assert store.accept_delivery("same-delivery", "pull_request", request()) is True
-    assert store.accept_delivery("same-delivery", "pull_request", request()) is False
+    first = store.accept_delivery("same-delivery", "pull_request", request())
+    duplicate = store.accept_delivery("same-delivery", "pull_request", request())
 
+    assert first.accepted is True
+    assert duplicate.accepted is False
+    assert first.shared_head_generation == duplicate.shared_head_generation == 1
     assert store.shared_head_generation(17, "example/project", "a" * 40) == 1
     claimed = store.claim("worker", 60)
     assert claimed is not None
     assert claimed.shared_head_generation == 1
+
+
+def test_shared_head_invalidation_gates_publication_until_completion(
+    tmp_path: Path,
+) -> None:
+    store = make_store(tmp_path)
+    assert store.accept_delivery("delivery-1", "pull_request", request())
+    evaluation = store.claim("evaluation-worker", 60)
+    invalidation = store.claim_shared_head_invalidation("head-worker", 60)
+
+    assert evaluation is not None
+    assert invalidation is not None
+    assert store.shared_head_generation_is_current(evaluation, "a" * 40) is True
+    assert store.shared_head_generation_is_publishable(evaluation, "a" * 40) is False
+    assert store.complete_shared_head_invalidation(invalidation) is True
+    assert store.shared_head_generation_is_publishable(evaluation, "a" * 40) is True
+
+
+def test_expired_shared_head_lease_cannot_complete_after_replacement(
+    tmp_path: Path,
+) -> None:
+    store = make_store(tmp_path)
+    assert store.accept_delivery("delivery-1", "pull_request", request())
+    expired = store.claim_shared_head_invalidation("old-worker", 60)
+    assert expired is not None
+    with store.session() as session:
+        session.execute(
+            update(SharedHeadEpoch).values(lease_until=utcnow() - timedelta(seconds=1))
+        )
+
+    replacement = store.claim_shared_head_invalidation("new-worker", 60)
+
+    assert replacement is not None
+    assert replacement.generation == expired.generation
+    assert store.complete_shared_head_invalidation(expired) is False
+    assert store.complete_shared_head_invalidation(replacement) is True
+
+
+def test_new_shared_head_generation_fences_old_lease_and_completion(
+    tmp_path: Path,
+) -> None:
+    store = make_store(tmp_path)
+    assert store.accept_delivery("delivery-1", "pull_request", request())
+    stale = store.claim_shared_head_invalidation("old-worker", 60)
+    assert stale is not None
+
+    second = store.accept_delivery(
+        "delivery-2",
+        "pull_request_review",
+        request(reason="pull_request_review.submitted"),
+    )
+    current = store.claim_shared_head_invalidation("new-worker", 60)
+
+    assert second.shared_head_generation == 2
+    assert current is not None
+    assert current.generation == 2
+    assert store.is_current_shared_head_invalidation(stale) is False
+    assert store.complete_shared_head_invalidation(stale) is False
+    assert store.complete_shared_head_invalidation(current) is True
+    assert store.shared_head_invalidation_generation(
+        17, "example/project", "a" * 40
+    ) == 2
+
+
+def test_shared_head_fanout_preserves_a_newer_different_head(
+    tmp_path: Path,
+) -> None:
+    store = make_store(tmp_path)
+    first_head = "a" * 40
+    second_head = "b" * 40
+    first = store.accept_delivery(
+        "first-head",
+        "pull_request",
+        JobRequest(17, "example/project", 42, "pull_request.opened", first_head),
+    )
+    store.accept_delivery(
+        "second-head",
+        "pull_request",
+        JobRequest(17, "example/project", 42, "pull_request.synchronize", second_head),
+    )
+
+    assert first.shared_head_generation == 1
+    assert store.enqueue_for_shared_head_generation(
+        JobRequest(17, "example/project", 42, "shared_head_invalidation", first_head),
+        first.shared_head_generation,
+    )
+    assert store.enqueue_for_shared_head_generation(
+        JobRequest(17, "example/project", 43, "shared_head_invalidation", first_head),
+        first.shared_head_generation,
+    )
+    with store.session() as session:
+        rows = {
+            row.pull_number: row.head_sha_hint
+            for row in session.scalars(select(EvaluationJob))
+        }
+
+    assert rows == {42: second_head, 43: first_head}
 
 
 def test_returning_to_an_old_head_advances_its_epoch_without_aba(tmp_path: Path) -> None:
@@ -177,6 +279,12 @@ def test_shared_head_epoch_cleanup_waits_for_queued_or_leased_jobs(tmp_path: Pat
         epoch.changed_at = boundary - timedelta(days=1)
 
     assert store.prune_shared_head_epochs(boundary) == 0
+    invalidation = store.claim_shared_head_invalidation("head-worker", 60)
+    assert invalidation is not None
+    assert store.prune_shared_head_epochs(boundary) == 0
+    assert store.complete_shared_head_invalidation(invalidation) is True
+    assert store.prune_shared_head_epochs(boundary) == 0
+
     claimed = store.claim("worker", 60)
     assert claimed is not None
     assert store.prune_shared_head_epochs(boundary) == 0
@@ -261,8 +369,10 @@ def test_delivery_retries_a_racing_job_insert_without_dropping_trigger(
     # Assigning on the instance avoids affecting other stores in this test process.
     store._enqueue_in_session = collide_once  # type: ignore[method-assign]
 
-    assert store.accept_delivery("delivery-race", "pull_request", request()) is True
-    assert store.pending_count() == 1
+    assert store.accept_delivery(
+        "delivery-race", "pull_request", request()
+    ).accepted is True
+    assert store.pending_count() == 2
     assert store.shared_head_generation(17, "example/project", "a" * 40) == 1
 
 
@@ -452,7 +562,7 @@ def test_failed_evaluation_retries_indefinitely_with_bounded_backoff(tmp_path: P
 
 def test_failed_authority_job_retries_indefinitely(tmp_path: Path) -> None:
     store = make_store(tmp_path)
-    assert store.accept_delivery("authority-1", "push", authority_request()) is True
+    assert store.accept_delivery("authority-1", "push", authority_request()).accepted is True
     assert store.pending_count() == 1
     assert store.dead_count() == 0
 
@@ -468,7 +578,7 @@ def test_authority_jobs_coalesce_and_new_generation_survives_old_completion(
     tmp_path: Path,
 ) -> None:
     store = make_store(tmp_path)
-    assert store.accept_delivery("authority-1", "push", authority_request()) is True
+    assert store.accept_delivery("authority-1", "push", authority_request()).accepted is True
     first = store.claim_authority("worker-one", 60)
     assert first is not None
 
@@ -478,7 +588,7 @@ def test_authority_jobs_coalesce_and_new_generation_survives_old_completion(
         base_ref="main",
         reason="label.edited",
     )
-    assert store.accept_delivery("authority-2", "label", changed) is True
+    assert store.accept_delivery("authority-2", "label", changed).accepted is True
     store.complete_authority(first, "worker-one")
 
     second = store.claim_authority("worker-two", 60)

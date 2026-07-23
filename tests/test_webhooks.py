@@ -32,7 +32,11 @@ def pull_payload(action: str = "opened") -> dict[str, object]:
         "installation": {"id": 10},
         "repository": {"full_name": "example/project"},
         "number": 7,
-        "pull_request": {"number": 7, "head": {"sha": "a" * 40}},
+        "pull_request": {
+            "number": 7,
+            "state": "open",
+            "head": {"sha": "a" * 40},
+        },
     }
 
 
@@ -45,8 +49,16 @@ def test_valid_pull_request_trigger_becomes_job() -> None:
     assert job.reason == "pull_request.opened"
 
 
-def test_irrelevant_action_is_accepted_without_job() -> None:
-    assert evaluation_job(signed(pull_payload("closed"))) is None
+def test_closed_pull_request_becomes_exact_head_work() -> None:
+    payload = pull_payload("closed")
+    pull = payload["pull_request"]
+    assert isinstance(pull, dict)
+    pull["state"] = "closed"
+
+    job = evaluation_job(signed(payload))
+
+    assert isinstance(job, JobRequest)
+    assert job.reason == "pull_request.closed"
 
 
 def test_review_dismissal_triggers_re_evaluation() -> None:
@@ -56,6 +68,26 @@ def test_review_dismissal_triggers_re_evaluation() -> None:
 
     assert job is not None
     assert job.reason == "pull_request_review.dismissed"
+
+
+def test_mapped_closed_pull_request_review_is_ignored() -> None:
+    payload = pull_payload("submitted")
+    pull = payload["pull_request"]
+    assert isinstance(pull, dict)
+    pull["state"] = "closed"
+
+    assert evaluation_job(signed(payload, event="pull_request_review")) is None
+
+
+@pytest.mark.parametrize("pull_state", [None, "", "draft", 1, True])
+def test_mapped_pull_request_requires_known_state(pull_state: object) -> None:
+    payload = pull_payload()
+    pull = payload["pull_request"]
+    assert isinstance(pull, dict)
+    pull["state"] = pull_state
+
+    with pytest.raises(WebhookError, match=r"pull_request\.state"):
+        evaluation_job(signed(payload))
 
 
 @pytest.mark.parametrize(

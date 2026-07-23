@@ -139,6 +139,54 @@ def test_retry_schema_upgrades_existing_jobs_to_fail_closed_shared_head_fences(
     assert queued_generation == 0
     assert shared_generation["nullable"] is False
     assert inspector.has_table("shared_head_epochs")
+    epoch_columns = {
+        column["name"]: column for column in inspector.get_columns("shared_head_epochs")
+    }
+    assert {
+        "generation",
+        "invalidated_generation",
+        "changed_at",
+        "available_at",
+        "attempts",
+        "lease_owner",
+        "lease_until",
+        "last_error",
+    } <= epoch_columns.keys()
+    assert epoch_columns["invalidated_generation"]["nullable"] is False
+    assert epoch_columns["available_at"]["nullable"] is False
+    assert epoch_columns["attempts"]["nullable"] is False
+    assert {
+        constraint["name"]
+        for constraint in inspector.get_check_constraints("shared_head_epochs")
+    } == {
+        "ck_shared_head_epochs_attempts_nonnegative",
+        "ck_shared_head_epochs_generation_positive",
+        "ck_shared_head_epochs_invalidation_bounds",
+    }
+    assert {
+        index["name"] for index in inspector.get_indexes("shared_head_epochs")
+    } >= {
+        "ix_shared_head_epochs_changed_at",
+        "ix_shared_head_epochs_claim",
+    }
+    webhook_columns = {
+        column["name"] for column in inspector.get_columns("webhook_deliveries")
+    }
+    assert {
+        "installation_id",
+        "repository_full_name",
+        "pull_number",
+        "head_sha",
+        "shared_head_generation",
+    } <= webhook_columns
+    with migrated.connect() as connection:
+        claim_index_sql = connection.scalar(
+            text(
+                "SELECT sql FROM sqlite_master "
+                "WHERE type = 'index' AND name = 'ix_shared_head_epochs_claim'"
+            )
+        )
+    assert "WHERE invalidated_generation < generation" in str(claim_index_sql)
     migrated.dispose()
 
     store = QueueStore(url)
@@ -150,6 +198,47 @@ def test_retry_schema_upgrades_existing_jobs_to_fail_closed_shared_head_fences(
     assert bound is not None
     assert bound.shared_head_generation == 0
     assert store.shared_head_generation_is_current(bound, "a" * 40) is True
+    assert store.shared_head_generation_is_publishable(bound, "a" * 40) is True
+
+
+def test_legacy_delivery_redelivery_uses_current_head_fast_path(
+    tmp_path: Path,
+) -> None:
+    url = database_url(tmp_path)
+    upgrade_database(url, revision="0002_retry_dead_jobs")
+    engine = create_engine(url)
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                INSERT INTO webhook_deliveries (
+                    delivery_id, event, received_at, invalidation_required
+                ) VALUES (
+                    'legacy-delivery', 'pull_request', CURRENT_TIMESTAMP, TRUE
+                )
+                """
+            )
+        )
+    engine.dispose()
+    upgrade_database(url)
+    store = QueueStore(url)
+    store.initialize()
+
+    acceptance = store.accept_delivery(
+        "legacy-delivery",
+        "pull_request",
+        database.JobRequest(
+            17,
+            "example/project",
+            42,
+            "pull_request.opened",
+            "a" * 40,
+        ),
+    )
+
+    assert acceptance.accepted is False
+    assert acceptance.shared_head_generation is None
+    assert store.delivery_needs_invalidation("legacy-delivery") is True
 
 
 def test_failed_migration_releases_guard_and_can_be_retried(

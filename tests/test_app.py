@@ -64,6 +64,28 @@ class StubGitHub:
     ) -> bool:
         return bool(self.checks)
 
+    async def existing_check_run_id(
+        self,
+        installation_id: int,
+        repository: str,
+        head_sha: str,
+        check_name: str,
+    ) -> int | None:
+        return 99 if self.checks else None
+
+    async def reset_check_run(
+        self,
+        installation_id: int,
+        repository: str,
+        check_run_id: int,
+        check_name: str,
+        **values: Any,
+    ) -> None:
+        if self.fail_next_check:
+            self.fail_next_check = False
+            raise RuntimeError("temporary GitHub failure")
+        self.checks.append({"status": "in_progress", **values})
+
 
 def configured_settings() -> Settings:
     return Settings(
@@ -103,7 +125,7 @@ def test_health_and_signed_webhook_ingestion(tmp_path: Path) -> None:
         "installation": {"id": 10},
         "repository": {"full_name": "example/project"},
         "number": 7,
-        "pull_request": {"number": 7, "head": {"sha": HEAD}},
+        "pull_request": {"number": 7, "state": "open", "head": {"sha": HEAD}},
     }
     body = json.dumps(payload).encode()
 
@@ -116,7 +138,7 @@ def test_health_and_signed_webhook_ingestion(tmp_path: Path) -> None:
     assert first.status_code == 202
     assert first.json() == {"accepted": True, "queued": True}
     assert duplicate.json() == {"accepted": False, "queued": False}
-    assert store.pending_count() == 1
+    assert store.pending_count() == 2
     assert [check["status"] for check in github.checks] == ["in_progress"]
 
 
@@ -131,7 +153,7 @@ def test_new_direct_delivery_enters_fast_invalidation_without_a_second_database_
         "installation": {"id": 10},
         "repository": {"full_name": "example/project"},
         "number": 7,
-        "pull_request": {"number": 7, "head": {"sha": HEAD}},
+        "pull_request": {"number": 7, "state": "open", "head": {"sha": HEAD}},
     }
     body = json.dumps(payload).encode()
 
@@ -160,6 +182,7 @@ def test_webhook_fast_path_failure_is_durable_and_replayable(tmp_path: Path) -> 
             "repository": {"full_name": "example/project"},
             "pull_request": {
                 "number": 7,
+                "state": "open",
                 "head": {"sha": HEAD},
             },
             "review": {"state": "approved"},
@@ -177,7 +200,7 @@ def test_webhook_fast_path_failure_is_durable_and_replayable(tmp_path: Path) -> 
     assert replay.status_code == 202
     assert replay.json() == {"accepted": False, "queued": True}
     assert store.delivery_needs_invalidation("delivery-retry") is False
-    assert store.pending_count() == 1
+    assert store.pending_count() == 2
     assert [check["status"] for check in github.checks] == ["in_progress"]
 
 
@@ -235,7 +258,7 @@ def test_org_config_repository_webhook_is_acknowledged_but_not_queued(tmp_path: 
         "installation": {"id": 10},
         "repository": {"full_name": "example/.github"},
         "number": 7,
-        "pull_request": {"number": 7, "head": {"sha": HEAD}},
+        "pull_request": {"number": 7, "state": "open", "head": {"sha": HEAD}},
     }
     body = json.dumps(payload).encode()
 

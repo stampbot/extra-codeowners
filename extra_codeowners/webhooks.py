@@ -23,6 +23,7 @@ PULL_REQUEST_ACTIONS: Final = frozenset(
         "unlabeled",
         "review_requested",
         "review_request_removed",
+        "closed",
     }
 )
 REVIEW_ACTIONS: Final = frozenset({"submitted", "edited", "dismissed"})
@@ -120,11 +121,20 @@ def _head_sha(value: Any, field: str) -> str:
         ) from error
 
 
-def _pull_request_job(webhook: VerifiedWebhook) -> JobRequest:
+def _pull_request_job(
+    webhook: VerifiedWebhook,
+    *,
+    allow_closed: bool = False,
+) -> JobRequest | None:
     pull = webhook.payload.get("pull_request")
     if not isinstance(pull, dict):
         msg = "webhook omitted pull_request"
         raise WebhookError(msg)
+    pull_state = pull.get("state")
+    if pull_state not in {"open", "closed"}:
+        raise WebhookError("webhook pull_request.state must be open or closed")
+    if pull_state == "closed" and not allow_closed:
+        return None
     number = _positive_int(pull.get("number") or webhook.payload.get("number"), "pull number")
     head = pull.get("head")
     if not isinstance(head, dict):
@@ -227,7 +237,11 @@ def evaluation_job(
 ) -> JobRequest | AuthorityRequest | None:
     """Map a verified delivery to evaluation or authority fan-out work."""
     if webhook.event == "pull_request":
-        return _pull_request_job(webhook) if webhook.action in PULL_REQUEST_ACTIONS else None
+        return (
+            _pull_request_job(webhook, allow_closed=webhook.action == "closed")
+            if webhook.action in PULL_REQUEST_ACTIONS
+            else None
+        )
     if webhook.event == "pull_request_review":
         return _pull_request_job(webhook) if webhook.action in REVIEW_ACTIONS else None
     if webhook.event == "check_run" and webhook.action == "rerequested":

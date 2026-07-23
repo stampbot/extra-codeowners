@@ -135,7 +135,11 @@ def test_supported_pull_request_events_map_to_exact_job(
             "action": action,
             "installation": {"id": installation_id},
             "repository": {"full_name": "Example/Project"},
-            "pull_request": {"number": pull_number, "head": {"sha": "a" * 40}},
+            "pull_request": {
+                "number": pull_number,
+                "state": "closed" if action == "closed" else "open",
+                "head": {"sha": "a" * 40},
+            },
         },
     )
 
