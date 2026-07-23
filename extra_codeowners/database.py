@@ -29,6 +29,8 @@ from sqlalchemy import (
     text,
     update,
 )
+from sqlalchemy.dialects.postgresql import insert as postgresql_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
@@ -786,24 +788,77 @@ class QueueStore:
         raise RuntimeError("could not enqueue evaluation after concurrent inserts")
 
     def enqueue_if_absent(self, request: JobRequest) -> bool:
-        """Enqueue reconciliation work without superseding active or dead work."""
+        """Atomically fence and enqueue genuinely missing reconciliation work."""
         for _ in range(5):
             try:
                 with self.session() as session:
-                    existing = session.scalar(
-                        select(EvaluationJob.id).where(
-                            EvaluationJob.installation_id == request.installation_id,
-                            EvaluationJob.repository_full_name == request.repository_full_name,
-                            EvaluationJob.pull_number == request.pull_number,
+                    now = utcnow()
+                    authority_generation = (
+                        session.scalar(
+                            select(AuthorityEpoch.generation).where(
+                                AuthorityEpoch.installation_id == request.installation_id
+                            )
                         )
+                        or 0
                     )
-                    if existing is not None:
+                    values: dict[str, Any] = {
+                        "installation_id": request.installation_id,
+                        "repository_full_name": request.repository_full_name,
+                        "pull_number": request.pull_number,
+                        "reason": request.reason,
+                        "head_sha_hint": request.head_sha_hint,
+                        "generation": 1,
+                        "authority_generation": authority_generation,
+                        "shared_head_generation": 0,
+                        "state": "pending",
+                        "attempts": 0,
+                        "requested_at": now,
+                        "available_at": now,
+                    }
+                    index_elements = (
+                        "installation_id",
+                        "repository_full_name",
+                        "pull_number",
+                    )
+                    dialect_name = session.get_bind().dialect.name
+                    if dialect_name == "postgresql":
+                        inserted_id = session.scalar(
+                            postgresql_insert(EvaluationJob)
+                            .values(**values)
+                            .on_conflict_do_nothing(index_elements=index_elements)
+                            .returning(EvaluationJob.id)
+                        )
+                    elif dialect_name == "sqlite":
+                        inserted_id = session.scalar(
+                            sqlite_insert(EvaluationJob)
+                            .values(**values)
+                            .on_conflict_do_nothing(index_elements=index_elements)
+                            .returning(EvaluationJob.id)
+                        )
+                    else:  # pragma: no cover - QueueStore supports SQLite and PostgreSQL
+                        raise RuntimeError(
+                            f"reconciliation insert does not support {dialect_name!r}"
+                        )
+                    if inserted_id is None:
                         return False
-                    self._enqueue_in_session(session, request)
+                    shared_head_generation = 0
+                    if request.head_sha_hint is not None:
+                        shared_head_generation = self._advance_shared_head_epoch_in_session(
+                            session,
+                            request,
+                        )
+                    updated = session.execute(
+                        update(EvaluationJob)
+                        .where(EvaluationJob.id == inserted_id)
+                        .values(shared_head_generation=shared_head_generation)
+                    )
+                    if getattr(updated, "rowcount", 0) != 1:
+                        raise RuntimeError("reconciliation job disappeared before epoch binding")
                 return True
             except IntegrityError:
-                # Another receiver or reconciler inserted this PR between the
-                # read and commit. Its work is sufficient; retry to observe it.
+                # Different pull requests can race to create the same
+                # shared-head epoch. Retry the complete atomic insert so the
+                # losing epoch transaction is not mistaken for durable work.
                 continue
         raise RuntimeError("could not reconcile evaluation after concurrent inserts")
 

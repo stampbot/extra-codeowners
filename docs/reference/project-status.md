@@ -58,7 +58,7 @@ The service refuses to publish success when it can already see another open
 pull request with the same head. It cannot stop a second pull request from
 appearing after success, so that new pull request may briefly inherit the old
 result. The stale result remains until the service processes a related event or
-its periodic reconciler finds the new pull request.
+its periodic reconciler inserts work for the new pull request.
 
 Once the service accepts a direct trigger, it advances a durable generation
 shared by every pull request on that head. An older worker checks that

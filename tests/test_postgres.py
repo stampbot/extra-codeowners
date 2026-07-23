@@ -94,6 +94,74 @@ def test_concurrent_delivery_generations_are_not_lost(postgres_store: QueueStore
     assert postgres_store.pending_count() == 1
 
 
+def test_concurrent_same_delivery_advances_shared_head_once(
+    postgres_store: QueueStore,
+) -> None:
+    workers = 12
+    barrier = threading.Barrier(workers)
+
+    def accept(_: int) -> bool:
+        barrier.wait()
+        return postgres_store.accept_delivery("same-delivery", "pull_request", request())
+
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        accepted = list(executor.map(accept, range(workers)))
+
+    with postgres_store.session() as session:
+        evaluation = session.scalar(select(EvaluationJob))
+        epoch = session.scalar(select(SharedHeadEpoch))
+
+    assert accepted.count(True) == 1
+    assert accepted.count(False) == workers - 1
+    assert evaluation is not None
+    assert evaluation.generation == 1
+    assert evaluation.shared_head_generation == 1
+    assert epoch is not None
+    assert epoch.generation == 1
+
+
+def test_concurrent_delivery_and_reconciliation_compose_without_phantom_epoch(
+    postgres_store: QueueStore,
+) -> None:
+    workers = 16
+    barrier = threading.Barrier(workers)
+    reconciliation = request()
+
+    def race(index: int) -> tuple[str, bool]:
+        barrier.wait()
+        if index % 2 == 0:
+            return (
+                "delivery",
+                postgres_store.accept_delivery(
+                    "composed-delivery",
+                    "pull_request",
+                    reconciliation,
+                ),
+            )
+        return (
+            "reconciliation",
+            postgres_store.enqueue_if_absent(reconciliation),
+        )
+
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        outcomes = list(executor.map(race, range(workers)))
+
+    accepted = [result for kind, result in outcomes if kind == "delivery"]
+    reconciled = [result for kind, result in outcomes if kind == "reconciliation"]
+    with postgres_store.session() as session:
+        evaluation = session.scalar(select(EvaluationJob))
+        epoch = session.scalar(select(SharedHeadEpoch))
+
+    assert accepted.count(True) == 1
+    assert reconciled.count(True) <= 1
+    expected_generation = 1 + reconciled.count(True)
+    assert evaluation is not None
+    assert evaluation.generation == expected_generation
+    assert evaluation.shared_head_generation == expected_generation
+    assert epoch is not None
+    assert epoch.generation == expected_generation
+
+
 def test_claim_and_service_lease_election_are_atomic(postgres_store: QueueStore) -> None:
     workers = 8
     for pull_number in range(1, workers + 1):
@@ -279,6 +347,54 @@ def test_postgres_baseline_upgrade_reactivates_representative_dead_jobs() -> Non
         with engine.begin() as connection:
             connection.execute(text("DROP TABLE IF EXISTS alembic_version"))
         engine.dispose()
+
+
+def test_postgres_0002_existing_row_is_fenced_after_0003_upgrade() -> None:
+    url = postgres_url()
+    store = QueueStore(url)
+    Base.metadata.drop_all(store.engine)
+    with store.engine.begin() as connection:
+        connection.execute(text("DROP TABLE IF EXISTS alembic_version"))
+    try:
+        upgrade_database(url, revision="0002_retry_dead_jobs")
+        with store.engine.begin() as connection:
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO evaluation_jobs (
+                        installation_id, repository_full_name, pull_number, reason,
+                        head_sha_hint, generation, authority_generation, state, attempts,
+                        requested_at, available_at
+                    ) VALUES (
+                        17, 'example/project', 41, 'before-shared-head-fence',
+                        :head_sha, 1, 0, 'pending', 0,
+                        TIMESTAMPTZ '2000-01-01 00:00:00+00',
+                        TIMESTAMPTZ '2000-01-01 00:00:00+00'
+                    )
+                    """
+                ),
+                {"head_sha": "a" * 40},
+            )
+
+        upgrade_database(url)
+        store.initialize()
+        assert current_revision(url) == DATABASE_MIGRATION_HEAD
+        assert store.accept_delivery(
+            "post-upgrade-other-pull",
+            "pull_request",
+            request(pull_number=42),
+        )
+
+        migrated = store.claim("migration-test-worker", 60)
+        assert migrated is not None
+        assert migrated.pull_number == 41
+        assert migrated.shared_head_generation == 0
+        assert store.shared_head_generation_is_current(migrated, "a" * 40) is False
+    finally:
+        Base.metadata.drop_all(store.engine)
+        with store.engine.begin() as connection:
+            connection.execute(text("DROP TABLE IF EXISTS alembic_version"))
+        store.close()
 
 
 def test_interrupted_postgres_migration_rolls_back_and_retries(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -209,6 +210,17 @@ def job(store: QueueStore) -> ClaimedJob:
     return claimed
 
 
+def record_guard_releases(store: QueueStore, events: list[str]) -> None:
+    """Record publication-guard release order without changing lock behavior."""
+    original_release = store.release_check_write_guard
+
+    def release(guard: Any) -> None:
+        events.append("guard_released")
+        original_release(guard)
+
+    store.release_check_write_guard = release  # type: ignore[method-assign]
+
+
 @pytest.mark.asyncio
 async def test_allowed_application_approval_satisfies_owned_lockfile(tmp_path: Path) -> None:
     github = FakeGitHub(changed_path="uv.lock")
@@ -374,6 +386,236 @@ async def test_cross_pull_trigger_during_completion_restores_blocking_check(
         "in_progress",
     ]
     assert github.checks[-1].get("conclusion") is None
+
+
+@pytest.mark.asyncio
+async def test_applied_completed_write_error_resets_before_guard_release_and_propagates(
+    tmp_path: Path,
+) -> None:
+    github = FakeGitHub(changed_path="uv.lock")
+    store = migrated_store(f"sqlite:///{tmp_path / 'completed-write-error.db'}")
+    service = EvaluationService(settings(), github, store)  # type: ignore[arg-type]
+    claimed = job(store)
+    original_upsert = github.upsert_check_run
+    publication_error = GitHubError("response lost after completed check was applied")
+    events: list[str] = []
+    record_guard_releases(store, events)
+
+    async def apply_then_raise(*args: Any, **kwargs: Any) -> int:
+        result = await original_upsert(*args, **kwargs)
+        if kwargs.get("status") == "completed":
+            events.append("completed_applied")
+            raise publication_error
+        if "completed_applied" in events:
+            events.append("blocking_reset_applied")
+        return result
+
+    github.upsert_check_run = apply_then_raise  # type: ignore[method-assign]
+
+    with pytest.raises(GitHubError) as caught:
+        await service.evaluate_job(claimed)
+
+    assert caught.value is publication_error
+    assert [check["status"] for check in github.checks] == [
+        "in_progress",
+        "completed",
+        "in_progress",
+    ]
+    assert github.checks[-1].get("conclusion") is None
+    assert events[-4:] == [
+        "completed_applied",
+        "blocking_reset_applied",
+        "guard_released",
+        "guard_released",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_cancellation_after_completed_write_applies_resets_before_guard_release(
+    tmp_path: Path,
+) -> None:
+    github = FakeGitHub(changed_path="uv.lock")
+    store = migrated_store(f"sqlite:///{tmp_path / 'completed-write-cancel.db'}")
+    service = EvaluationService(settings(), github, store)  # type: ignore[arg-type]
+    claimed = job(store)
+    original_upsert = github.upsert_check_run
+    completed_applied = asyncio.Event()
+    never_return = asyncio.Event()
+    events: list[str] = []
+    record_guard_releases(store, events)
+
+    async def apply_then_wait(*args: Any, **kwargs: Any) -> int:
+        result = await original_upsert(*args, **kwargs)
+        if kwargs.get("status") == "completed":
+            events.append("completed_applied")
+            completed_applied.set()
+            await never_return.wait()
+        elif "completed_applied" in events:
+            events.append("blocking_reset_applied")
+        return result
+
+    github.upsert_check_run = apply_then_wait  # type: ignore[method-assign]
+    evaluation = asyncio.create_task(service.evaluate_job(claimed))
+
+    await asyncio.wait_for(completed_applied.wait(), timeout=1)
+    evaluation.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(evaluation, timeout=1)
+
+    assert evaluation.cancelled()
+    assert [check["status"] for check in github.checks] == [
+        "in_progress",
+        "completed",
+        "in_progress",
+    ]
+    assert github.checks[-1].get("conclusion") is None
+    assert events[-4:] == [
+        "completed_applied",
+        "blocking_reset_applied",
+        "guard_released",
+        "guard_released",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_postflight_database_error_restores_blocking_check_before_propagating(
+    tmp_path: Path,
+) -> None:
+    github = FakeGitHub(changed_path="uv.lock")
+    store = migrated_store(f"sqlite:///{tmp_path / 'postflight-database-error.db'}")
+    service = EvaluationService(settings(), github, store)  # type: ignore[arg-type]
+    claimed = job(store)
+    original_upsert = github.upsert_check_run
+    original_generation_check = store.shared_head_generation_is_current
+    completed = threading.Event()
+
+    async def observe_completion(*args: Any, **kwargs: Any) -> int:
+        result = await original_upsert(*args, **kwargs)
+        if kwargs.get("status") == "completed":
+            completed.set()
+        return result
+
+    def fail_postflight(job_to_check: ClaimedJob, head_sha: str) -> bool:
+        if completed.is_set():
+            raise RuntimeError("postflight database unavailable")
+        return original_generation_check(job_to_check, head_sha)
+
+    github.upsert_check_run = observe_completion  # type: ignore[method-assign]
+    store.shared_head_generation_is_current = fail_postflight  # type: ignore[assignment]
+
+    with pytest.raises(RuntimeError, match="postflight database unavailable"):
+        await service.evaluate_job(claimed)
+
+    assert [check["status"] for check in github.checks] == [
+        "in_progress",
+        "completed",
+        "in_progress",
+    ]
+    assert github.checks[-1].get("conclusion") is None
+
+
+@pytest.mark.asyncio
+async def test_cancellation_during_postflight_waits_for_shielded_blocking_reset(
+    tmp_path: Path,
+) -> None:
+    github = FakeGitHub(changed_path="uv.lock")
+    store = migrated_store(f"sqlite:///{tmp_path / 'postflight-cancellation.db'}")
+    service = EvaluationService(settings(), github, store)  # type: ignore[arg-type]
+    claimed = job(store)
+    original_upsert = github.upsert_check_run
+    original_generation_check = store.shared_head_generation_is_current
+    completed = threading.Event()
+    postflight_entered = threading.Event()
+    release_postflight = threading.Event()
+    reset_started = asyncio.Event()
+    release_reset = asyncio.Event()
+    events: list[str] = []
+    record_guard_releases(store, events)
+
+    async def pause_reset(*args: Any, **kwargs: Any) -> int:
+        if kwargs.get("status") == "in_progress" and completed.is_set():
+            reset_started.set()
+            await release_reset.wait()
+        result = await original_upsert(*args, **kwargs)
+        if kwargs.get("status") == "completed":
+            completed.set()
+            events.append("completed_applied")
+        elif completed.is_set():
+            events.append("blocking_reset_applied")
+        return result
+
+    def block_postflight(job_to_check: ClaimedJob, head_sha: str) -> bool:
+        if completed.is_set():
+            postflight_entered.set()
+            assert release_postflight.wait(timeout=2)
+        return original_generation_check(job_to_check, head_sha)
+
+    github.upsert_check_run = pause_reset  # type: ignore[method-assign]
+    store.shared_head_generation_is_current = block_postflight  # type: ignore[assignment]
+    evaluation = asyncio.create_task(service.evaluate_job(claimed))
+
+    assert await asyncio.to_thread(postflight_entered.wait, 1)
+    evaluation.cancel()
+    await asyncio.wait_for(reset_started.wait(), timeout=1)
+    evaluation.cancel()
+    await asyncio.sleep(0)
+    assert evaluation.done() is False
+
+    release_reset.set()
+    release_postflight.set()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(evaluation, timeout=1)
+
+    assert evaluation.cancelled()
+    assert [check["status"] for check in github.checks] == [
+        "in_progress",
+        "completed",
+        "in_progress",
+    ]
+    assert github.checks[-1].get("conclusion") is None
+    assert events[-4:] == [
+        "completed_applied",
+        "blocking_reset_applied",
+        "guard_released",
+        "guard_released",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_postflight_reset_failure_preserves_database_error_for_retry(
+    tmp_path: Path,
+) -> None:
+    github = FakeGitHub(changed_path="uv.lock")
+    store = migrated_store(f"sqlite:///{tmp_path / 'postflight-reset-failure.db'}")
+    service = EvaluationService(settings(), github, store)  # type: ignore[arg-type]
+    claimed = job(store)
+    original_upsert = github.upsert_check_run
+    original_generation_check = store.shared_head_generation_is_current
+    completed = threading.Event()
+
+    async def fail_reset(*args: Any, **kwargs: Any) -> int:
+        if kwargs.get("status") == "in_progress" and completed.is_set():
+            raise GitHubError("blocking reset unavailable")
+        result = await original_upsert(*args, **kwargs)
+        if kwargs.get("status") == "completed":
+            completed.set()
+        return result
+
+    def fail_postflight(job_to_check: ClaimedJob, head_sha: str) -> bool:
+        if completed.is_set():
+            raise RuntimeError("postflight database unavailable")
+        return original_generation_check(job_to_check, head_sha)
+
+    github.upsert_check_run = fail_reset  # type: ignore[method-assign]
+    store.shared_head_generation_is_current = fail_postflight  # type: ignore[assignment]
+
+    with pytest.raises(RuntimeError, match="postflight database unavailable"):
+        await service.evaluate_job(claimed)
+
+    assert [check["status"] for check in github.checks] == [
+        "in_progress",
+        "completed",
+    ]
 
 
 @pytest.mark.asyncio
@@ -1223,8 +1465,10 @@ async def test_reconciler_enqueues_open_pull_requests(tmp_path: Path) -> None:
 
     assert queued == 1
     assert store.pending_count() == 1
+    assert store.shared_head_generation(2, "example/project", HEAD) == 1
 
     assert await reconciler.reconcile_once() == 0
+    assert store.shared_head_generation(2, "example/project", HEAD) == 1
 
 
 @pytest.mark.asyncio
@@ -1263,9 +1507,10 @@ async def test_reconciler_recovers_missed_shared_head_open_and_fails_closed(
         store.complete(claimed, claimed.lease_owner)
 
     published = [check for check in github.checks[1:] if check.get("status") == "completed"]
-    assert len(published) == 2
+    assert len(published) == 1
     assert all(check.get("conclusion") == "failure" for check in published)
     assert all("shared" in str(check.get("text")) for check in published)
+    assert store.shared_head_generation(2, "example/project", HEAD) == 2
     assert store.pending_count() == 0
 
 

@@ -120,6 +120,34 @@ def test_health_and_signed_webhook_ingestion(tmp_path: Path) -> None:
     assert [check["status"] for check in github.checks] == ["in_progress"]
 
 
+def test_new_direct_delivery_enters_fast_invalidation_without_a_second_database_read(
+    tmp_path: Path,
+) -> None:
+    store = migrated_store(f"sqlite:///{tmp_path / 'accepted-fast-path.db'}")
+    github = StubGitHub()
+    app = app_module.create_app(configured_settings(), github=github, store=store)  # type: ignore[arg-type]
+    payload: dict[str, Any] = {
+        "action": "opened",
+        "installation": {"id": 10},
+        "repository": {"full_name": "example/project"},
+        "number": 7,
+        "pull_request": {"number": 7, "head": {"sha": HEAD}},
+    }
+    body = json.dumps(payload).encode()
+
+    def unexpected_delivery_read(delivery_id: str) -> bool:
+        raise AssertionError(f"accepted delivery {delivery_id} was read again")
+
+    store.delivery_needs_invalidation = unexpected_delivery_read  # type: ignore[method-assign]
+
+    with TestClient(app) as client:
+        response = client.post("/webhooks/github", content=body, headers=webhook_headers(body))
+
+    assert response.status_code == 202
+    assert response.json() == {"accepted": True, "queued": True}
+    assert [check["status"] for check in github.checks] == ["in_progress"]
+
+
 def test_webhook_fast_path_failure_is_durable_and_replayable(tmp_path: Path) -> None:
     store = migrated_store(f"sqlite:///{tmp_path / 'app.db'}")
     github = StubGitHub()

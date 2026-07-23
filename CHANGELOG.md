@@ -29,6 +29,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Rel
 - Installation authority epochs that permanently fence older queued work.
 - Repository-and-commit epochs that fence Check Run publication across pull
   requests sharing a head commit.
+- Shielded blocking resets when a completed Check Run write has an uncertain
+  outcome, post-publication database verification fails, or the evaluation
+  task is cancelled.
+- Atomic shared-head fencing when reconciliation inserts genuinely missing
+  work for a known head.
 - Installation-wide fencing when the organization-policy repository is removed, or when repository-removal evidence is missing or malformed.
 - A documented handoff for ordinary repository removal after the App loses access.
 - Broad authority work scheduled ahead of base-specific work.

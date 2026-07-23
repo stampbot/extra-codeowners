@@ -146,9 +146,17 @@ then applies several publication fences:
 - the publication guard permits this write.
 
 The worker checks the shared generation while it holds the same head-level
-guard used for Check Run writes. It checks again after GitHub returns. If a
-direct trigger committed during that request, the worker restores
-`in_progress` before releasing the guard. The newer generation evaluates next.
+guard used for Check Run writes. A completed write can have an uncertain
+outcome when the client raises or is cancelled: GitHub may have applied the
+result before the response was lost. The worker also checks the generation
+again after a completed write returns. An uncertain write, changed generation,
+database error, or task cancellation triggers a shielded reset to
+`in_progress` before the guard is released. The original error remains
+retryable.
+
+That reset is still a GitHub API request. A hard process stop can interrupt it,
+and GitHub can reject or time it out. In either case, a completed result may
+remain visible until fast invalidation or durable retry reaches GitHub.
 
 Pull-request and authority failures stay pending. They retry indefinitely with
 exponential backoff capped by
@@ -163,11 +171,14 @@ Webhooks are a change signal, not a complete recovery system. The endpoint may
 be unavailable, GitHub may not redeliver, and access loss can make an old check
 unreachable. The reconciler covers the recoverable middle ground.
 
-At each interval, one elected reconciler scans accessible open pull requests
-and creates work only when a pull request has no evaluation job. It leaves
-active and backoff-delayed jobs alone so a slow scan cannot reset retry state or
-starve long-running work. An idle pull request is reconsidered each interval,
-which temporarily moves its check to `in_progress`.
+At each interval, one elected reconciler scans accessible open pull requests.
+When a pull request has no evaluation job and GitHub supplies a canonical head,
+one transaction advances that head's shared generation and inserts the work.
+If a row already exists, the scan changes neither the row nor the generation.
+This fences an in-flight evaluation when reconciliation recovers genuinely
+missing head work without resetting active or backoff-delayed jobs. An idle
+pull request is reconsidered each interval, which temporarily moves its check
+to `in_progress`.
 
 The same singleton lease controls pruning of delivery IDs and unreferenced
 shared-head generations older than the configured retention period. A queued

@@ -1,7 +1,7 @@
 from datetime import timedelta
 from pathlib import Path
 from time import monotonic
-from typing import cast
+from typing import Any, cast
 
 import pytest
 from sqlalchemy import Table, inspect, select, update
@@ -339,6 +339,47 @@ def test_reconciliation_does_not_supersede_active_or_retrying_work(tmp_path: Pat
     assert store.dead_count() == 0
     assert store.enqueue_if_absent(request(reason="periodic_reconciliation")) is False
     assert store.pending_count() == 1
+
+
+def test_reconciliation_advances_epoch_only_when_it_inserts_missing_head_work(
+    tmp_path: Path,
+) -> None:
+    store = make_store(tmp_path)
+    reconciliation = request(reason="periodic_reconciliation")
+
+    assert store.enqueue_if_absent(reconciliation) is True
+    assert store.shared_head_generation(17, "example/project", "a" * 40) == 1
+    claimed = store.claim("worker", 60)
+    assert claimed is not None
+    assert claimed.shared_head_generation == 1
+
+    assert store.enqueue_if_absent(reconciliation) is False
+    assert store.shared_head_generation(17, "example/project", "a" * 40) == 1
+
+
+def test_hintless_reconciliation_does_not_create_a_shared_head_epoch(tmp_path: Path) -> None:
+    store = make_store(tmp_path)
+
+    assert store.enqueue_if_absent(JobRequest(17, "example/project", 42, "periodic_reconciliation"))
+
+    with store.session() as session:
+        assert session.scalar(select(SharedHeadEpoch)) is None
+
+
+def test_reconciliation_epoch_and_missing_job_roll_back_together(tmp_path: Path) -> None:
+    store = make_store(tmp_path)
+    original_advance = store._advance_shared_head_epoch_in_session
+
+    def fail_after_epoch(session: Any, request_to_enqueue: JobRequest) -> int:
+        original_advance(session, request_to_enqueue)
+        raise RuntimeError("simulated reconciliation enqueue failure")
+
+    store._advance_shared_head_epoch_in_session = fail_after_epoch  # type: ignore[assignment]
+    with pytest.raises(RuntimeError, match="simulated reconciliation enqueue failure"):
+        store.enqueue_if_absent(request(reason="periodic_reconciliation"))
+
+    assert store.pending_count() == 0
+    assert store.shared_head_generation(17, "example/project", "a" * 40) == 0
 
 
 def test_failed_evaluation_retries_indefinitely_with_bounded_backoff(tmp_path: Path) -> None:

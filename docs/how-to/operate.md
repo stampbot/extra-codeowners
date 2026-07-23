@@ -37,10 +37,12 @@ healthy. Every node also needs an accurate UTC clock. Clock skew can break
 GitHub authentication, setup-state expiry, and database leases.
 
 Reconciliation requests work only for open pull requests that do not already
-have a queue row. A reconciled check briefly returns to `in_progress` while
-the worker fetches current evidence. Choose an interval that balances that
-short merge interruption against stale-evidence exposure, GitHub API use, and
-your recovery objective.
+have a queue row. When the response includes a canonical head, the database
+advances that head's shared generation in the same transaction that inserts
+the row. A reconciled check briefly returns to `in_progress` while the worker
+fetches current evidence. Choose an interval that balances that short merge
+interruption against stale-evidence exposure, GitHub API use, and your recovery
+objective.
 
 The service does not expose remaining GitHub rate-limit quota. Watch API
 failures instead, and keep the service limited to disposable repositories
@@ -189,6 +191,19 @@ fan-out therefore remains blocking. Evaluation and authority failures retry
 forever. Ordinary exponential delay stops growing at
 `EXTRA_CODEOWNERS_WORKER_RETRY_MAX_SECONDS`; GitHub rate limits use their
 own bounded delay.
+
+An error or cancellation during the completed write is a special case because
+GitHub may have applied the result before the client lost its response. The
+same uncertainty applies to a database error or cancellation during the
+post-publication check. The worker attempts a shielded reset to `in_progress`
+while it still holds the head writer guard and then preserves the original
+failure for retry. The
+`completed_check_blocking_reset_failed` and
+`completed_check_blocking_reset_cancelled` events mean the reset request itself
+failed or ended cancelled. An ordinary evaluation cancellation that completes
+the shielded reset emits neither event. A hard process stop or failed reset can
+leave the completed result visible, so keep native enforcement in place and
+verify that durable retry or a later trigger restores the blocking check.
 
 A long-lived `in_progress` check with repeated failures needs a database,
 network, credential, permission, or GitHub recovery. It does not need a

@@ -43,10 +43,13 @@ For an open pull request in an enrolled repository, Extra CODEOWNERS:
     the row was enqueued. It also refuses to finish while relevant authority
     fan-out is pending, including during retry backoff.
 13. Before publishing success, confirms that the head belongs to exactly this one open pull request. A shared head produces failure because GitHub Check Runs belong to commits, not individual pull requests.
-14. Checks the shared-head generation again after GitHub accepts the completed
-    Check Run and before releasing the head writer guard. If a trigger raced
-    with publication, the service immediately returns the check to
-    `in_progress` for the next evaluation.
+14. Treats an exception or cancellation during the completed Check Run write
+    as an uncertain outcome because GitHub may already have applied it. The
+    service attempts a shielded reset to `in_progress` before releasing the
+    head writer guard, then preserves the original failure.
+15. Checks the shared-head generation again after a completed write returns.
+    A changed generation, database error, or task cancellation also triggers
+    the shielded reset. Database errors remain pending for retry.
 
 GitHub documents the 3,000-file ceiling in [List pull request files](https://docs.github.com/en/rest/pulls/pulls#list-pull-requests-files). Extra CODEOWNERS fails at exactly 3,000 because it cannot tell whether GitHub truncated that response.
 
@@ -63,7 +66,16 @@ The service applies these limits before it can authorize a pull request:
 | Current human approvals multiplied by relevant same-organization CODEOWNER teams | At most 250 | A larger membership-query set produces a diagnostic failure instead of skipping teams. |
 | Conservative changed-path and policy-pattern estimate | At most 2,000,000 matches | A larger estimate produces a diagnostic failure before expensive matching. The estimate reserves two paths for every changed file to cover renames. |
 
-Changed-file, review, membership, and match-operation limits produce failure without truncating or skipping authorization evidence. Oversized policy and `CODEOWNERS` fetches follow the blocking retry behavior in the table. Other GitHub API, rate-limit, transport, and database exceptions also keep an existing check blocking and leave the job pending. Large pull requests must be split, or redundant policy and `CODEOWNERS` patterns reduced. Ownership must not be weakened to fit the budget.
+Changed-file, review, membership, and match-operation limits produce failure
+without truncating or skipping authorization evidence. Oversized policy and
+`CODEOWNERS` fetches follow the blocking retry behavior in the table.
+Exceptions before completed publication keep an existing check blocking and
+leave the job pending. An uncertain completed write or post-publication
+database exception triggers the shielded reset described above. If that GitHub
+request fails, the completed result can remain visible while the job retries.
+
+Large pull requests must be split, or redundant policy and `CODEOWNERS`
+patterns reduced. Ownership must not be weakened to fit the budget.
 
 ## Authority fan-out order and bounds
 
@@ -175,11 +187,29 @@ The GitHub adapter caps the output title at 255 characters. Summary and detail t
 
 ## Eventual consistency
 
-Webhook processing and Check Run display are eventually consistent. For a mapped pull-request or review trigger, ingress first records the delivery and then makes a bounded attempt to set the managed check to `in_progress`. A repository with no policy and no previous managed check is skipped.
+Webhook processing and Check Run display are eventually consistent. For a
+mapped pull-request or review trigger, ingress first records the delivery. It
+then makes a bounded attempt to set the managed check to `in_progress`. A
+repository with no policy and no previous managed check is skipped.
 
-A fast-path timeout or GitHub API error is logged and acknowledged after durable acceptance. GitHub does not automatically redeliver failed webhooks, so the durable worker remains authoritative. It puts the check into a blocking state before collecting mutable evidence and restores that state if publication races with a newer trigger.
+A fast-path timeout or GitHub API error is logged and acknowledged after
+durable acceptance. GitHub does not automatically redeliver failed webhooks,
+so the durable worker remains authoritative. It puts the check into a blocking
+state before collecting mutable evidence and attempts to restore that state
+when either the completed write or post-publication verification is uncertain.
 
-GitHub [creates a Check Run for a commit](https://docs.github.com/en/rest/checks/runs#create-a-check-run), while changed paths, labels, base revision, and reviews belong to a pull request. The publication-time uniqueness check prevents success when another open pull request already uses the head. It cannot stop a pull request opened or retargeted later from temporarily inheriting that commit's earlier success. The next webhook or scheduled reconciliation invalidates it, but neither mechanism removes the window.
+The reset remains a best-effort GitHub API request. A hard process stop or a
+failed reset can leave the completed result visible until fast invalidation or
+durable retry reaches GitHub.
+
+GitHub [creates a Check Run for a commit](https://docs.github.com/en/rest/checks/runs#create-a-check-run),
+while changed paths, labels, base revision, and reviews belong to a pull
+request. The publication-time uniqueness check prevents success when another
+open pull request already uses the head. It cannot stop a pull request opened
+or retargeted later from temporarily inheriting that commit's earlier success.
+The next webhook can invalidate it. Scheduled reconciliation instead inserts
+work, and the worker processing that work invalidates it when it reaches
+GitHub. Neither mechanism removes the window.
 
 This commit-to-pull-request inheritance window blocks production use. Extra CODEOWNERS does not provide native-equivalent enforcement until the window is removed or live GitHub contract testing proves a safe control.
 

@@ -301,9 +301,17 @@ def create_app(
                 "delivery could not be durably accepted; redeliver it after recovery",
             ) from error
         queued = accepted and job is not None
-        if isinstance(job, JobRequest) and await asyncio.to_thread(
-            queue_store.delivery_needs_invalidation, webhook.delivery_id
+        needs_invalidation = accepted
+        if (
+            isinstance(job, JobRequest)
+            and not needs_invalidation
+            and await asyncio.to_thread(
+                queue_store.delivery_needs_invalidation,
+                webhook.delivery_id,
+            )
         ):
+            needs_invalidation = True
+        if isinstance(job, JobRequest) and needs_invalidation:
             evaluator: EvaluationService | None = request.app.state.evaluator
             if evaluator is None:
                 WEBHOOK_FAILURES.labels("invalidation_unavailable").inc()

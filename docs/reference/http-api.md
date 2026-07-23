@@ -118,6 +118,10 @@ when policy exists. If policy is absent, it updates only an existing managed
 check. A repository with neither policy nor an existing managed check is
 skipped.
 
+Every newly accepted direct delivery attempts fast invalidation. A retained
+duplicate retries that path only when an earlier invalidation remains pending;
+it never advances the shared generation again.
+
 Full evaluation happens asynchronously. A `202` response for a mapped trigger means the service stored durable work, not that the pull request passed or that the fast-path Check Run update reached GitHub.
 
 | `202` response field | Meaning |

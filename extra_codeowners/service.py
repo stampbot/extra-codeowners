@@ -185,6 +185,71 @@ class EvaluationService:
         except Exception:
             log.exception("abandoned_check_writer_cleanup_failed")
 
+    async def _restore_blocking_after_uncertain_completion(
+        self,
+        job: ClaimedJob,
+        head_sha: str,
+        details_url: str | None,
+        external_id: str,
+    ) -> bool:
+        """Best-effort reset a completed check without releasing its writer guard.
+
+        The caller holds the head writer guard. Shielding keeps cancellation
+        from interrupting the GitHub request and exposing a completed result
+        before that guard is released.
+        """
+        reset = asyncio.create_task(
+            self.github.upsert_check_run(
+                job.installation_id,
+                job.repository_full_name,
+                head_sha,
+                self.settings.check_name,
+                status="in_progress",
+                title="Re-evaluating CODEOWNER approvals",
+                summary=(
+                    "Completed check publication could not be verified; approval is blocked "
+                    "pending re-evaluation."
+                ),
+                details_url=details_url,
+                external_id=external_id,
+            ),
+            name=f"restore-blocking-check-{job.id}",
+        )
+        cancellation: asyncio.CancelledError | None = None
+        while not reset.done():
+            try:
+                await asyncio.shield(reset)
+            except asyncio.CancelledError as error:
+                # Preserve shutdown, but finish this bounded GitHub request
+                # while the advisory guard still orders every check writer.
+                cancellation = error
+            except Exception:
+                # Read and log the task exception below.
+                break
+        succeeded = True
+        try:
+            reset.result()
+        except asyncio.CancelledError:
+            succeeded = False
+            log.warning(
+                "completed_check_blocking_reset_cancelled",
+                repository=job.repository_full_name,
+                pull_number=job.pull_number,
+                head_sha=head_sha,
+            )
+        except Exception as error:
+            succeeded = False
+            log.exception(
+                "completed_check_blocking_reset_failed",
+                repository=job.repository_full_name,
+                pull_number=job.pull_number,
+                head_sha=head_sha,
+                error_type=type(error).__name__,
+            )
+        if cancellation is not None:
+            raise cancellation
+        return succeeded
+
     async def _find_codeowners(
         self, installation_id: int, repository: str, base_sha: str
     ) -> tuple[str, str] | None:
@@ -873,41 +938,68 @@ class EvaluationService:
                         head_sha,
                     ):
                         return
-                    await self.github.upsert_check_run(
-                        job.installation_id,
-                        job.repository_full_name,
-                        head_sha,
-                        self.settings.check_name,
-                        status="completed",
-                        conclusion=result.conclusion.value,
-                        title=title,
-                        summary=result.summary + warning,
-                        text=result.check_output(),
-                        details_url=details_url,
-                        external_id=external_id,
-                    )
-                    if not await asyncio.to_thread(
-                        self.store.shared_head_generation_is_current,
-                        job,
-                        head_sha,
-                    ):
-                        # A different pull request can accept a direct trigger
-                        # for this commit while the GitHub request is in
-                        # flight. Restore a blocking result before releasing
-                        # the shared head writer.
+                    try:
                         await self.github.upsert_check_run(
                             job.installation_id,
                             job.repository_full_name,
                             head_sha,
                             self.settings.check_name,
-                            status="in_progress",
-                            title="Re-evaluating CODEOWNER approvals",
-                            summary=(
-                                "New review or pull-request evidence arrived; approval is "
-                                "blocked pending re-evaluation."
-                            ),
+                            status="completed",
+                            conclusion=result.conclusion.value,
+                            title=title,
+                            summary=result.summary + warning,
+                            text=result.check_output(),
                             details_url=details_url,
                             external_id=external_id,
+                        )
+                    except asyncio.CancelledError:
+                        await self._restore_blocking_after_uncertain_completion(
+                            job,
+                            head_sha,
+                            details_url,
+                            external_id,
+                        )
+                        raise
+                    except Exception:
+                        await self._restore_blocking_after_uncertain_completion(
+                            job,
+                            head_sha,
+                            details_url,
+                            external_id,
+                        )
+                        raise
+                    try:
+                        shared_head_current = await asyncio.to_thread(
+                            self.store.shared_head_generation_is_current,
+                            job,
+                            head_sha,
+                        )
+                    except asyncio.CancelledError:
+                        await self._restore_blocking_after_uncertain_completion(
+                            job,
+                            head_sha,
+                            details_url,
+                            external_id,
+                        )
+                        raise
+                    except Exception:
+                        await self._restore_blocking_after_uncertain_completion(
+                            job,
+                            head_sha,
+                            details_url,
+                            external_id,
+                        )
+                        raise
+                    if not shared_head_current:
+                        # A different pull request can accept a direct trigger
+                        # for this commit while the GitHub request is in
+                        # flight. Restore a blocking result before releasing
+                        # the shared head writer.
+                        await self._restore_blocking_after_uncertain_completion(
+                            job,
+                            head_sha,
+                            details_url,
+                            external_id,
                         )
                         return
 
