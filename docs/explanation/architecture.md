@@ -43,10 +43,14 @@ trigger also gets a short opportunity to move the managed check back to
 `in_progress`. Changes with wider authority impact—such as team membership,
 policy, repository identity, or installation scope—enter a fan-out queue.
 
-The pull-request worker fetches the current base, head, changed files, reviews,
-team state, CODEOWNERS, and both policy scopes. The pure evaluator returns a
-decision and explanation. The worker publishes only after proving that the
-revisions, queue generation, and authority state are still current.
+The durable worker drains exact-head invalidation first. That phase resets an
+existing managed check on the affected commit and queues every returned
+candidate that is still open on that commit. Authority fan-out runs next.
+Ordinary pull-request work then fetches the current base, head, changed files,
+reviews, team state, CODEOWNERS, and both policy scopes. The pure evaluator
+returns a decision and explanation. The worker publishes only after proving
+that the revisions, queue generation, completed invalidation, and authority
+state are still current.
 
 The scheduled reconciler supplies work for accessible open pull requests that
 have gone idle. It is recovery for a missed event, not a source of stronger

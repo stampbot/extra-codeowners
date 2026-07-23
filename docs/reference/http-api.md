@@ -124,16 +124,25 @@ the live head.
 
 Every newly accepted direct delivery attempts fast invalidation. A retained
 duplicate retries that path only when an earlier invalidation remains pending;
-it never advances the shared generation again.
+the accepted head and its stored shared-generation token do not change. If the
+retry discovers that the pull request now points to a different head, it
+separately advances the live head's shared and evaluation generations and
+queues that head for invalidation.
 
 Full evaluation happens asynchronously. A `202` response for a mapped trigger means the service stored durable work, not that the pull request passed or that the fast-path Check Run update reached GitHub.
 
 | `202` response field | Meaning |
 | --- | --- |
 | `accepted` | `true` if this request recorded the mapped delivery. An already retained delivery returns `false`. Unmapped deliveries return `true` because they are acknowledged but not retained. |
-| `queued` | `true` when this request accepted new mapped work or its duplicate fast-path attempt reset a check. A duplicate never advances either generation. This field is not a live queue-depth check. |
+| `queued` | `true` when this request accepted new mapped work, its duplicate fast-path attempt reset a check, or that attempt separately queued a newly observed live head. This field is not a live queue-depth check. |
 
-For example, a duplicate direct pull-request delivery may return `{"accepted":false,"queued":true}`. Other duplicate mapped deliveries leave existing work unchanged. Once retention pruning removes a delivery ID, redelivery can create or coalesce new work, but workers still fetch current GitHub evidence.
+For example, a duplicate direct pull-request delivery may return
+`{"accepted":false,"queued":true}` after resetting its accepted head or
+discovering and queuing a newer live head. The retained delivery still refers
+to its original head and generation. Other duplicate mapped deliveries leave
+existing work unchanged. Once retention pruning removes a delivery ID,
+redelivery can create or coalesce new work, but workers still fetch current
+GitHub evidence.
 
 An authenticated event or action with no mapping returns `{"accepted":true,"queued":false}`. It is neither retained nor deduplicated. Pull-request work for the configured organization-policy repository is handled this way because that repository stays under native human enforcement.
 

@@ -240,6 +240,11 @@ def job(store: QueueStore) -> ClaimedJob:
             head_sha_hint=HEAD,
         )
     )
+    invalidations = 0
+    while invalidation := store.claim_shared_head_invalidation("test-head-worker", 60):
+        assert store.complete_shared_head_invalidation(invalidation)
+        invalidations += 1
+    assert invalidations >= 1
     claimed = store.claim("test-worker", 60)
     assert claimed is not None
     return claimed
@@ -452,7 +457,7 @@ async def test_cross_pull_trigger_fences_stale_shared_head_success(tmp_path: Pat
         "in_progress",
     ]
     assert all(check.get("conclusion") is None for check in github.checks)
-    assert store.shared_head_generation(2, "example/project", HEAD) == 1
+    assert store.shared_head_generation(2, "example/project", HEAD) == 2
 
 
 @pytest.mark.asyncio
@@ -1078,7 +1083,7 @@ async def test_label_change_during_evaluation_is_requeued_without_stale_check(
 
     assert [check["status"] for check in github.checks] == ["in_progress"]
     assert store.pending_count() == 2
-    assert store.shared_head_generation(2, "example/project", HEAD) == 2
+    assert store.shared_head_generation(2, "example/project", HEAD) == 3
     assert store.shared_head_generation_is_current(prior_same_head_claim, HEAD) is False
     assert store.shared_head_generation_is_current(claimed, HEAD) is False
 
@@ -1179,16 +1184,15 @@ async def test_revocation_is_ordered_after_inflight_stale_completion(tmp_path: P
     allow_completion.set()
     await asyncio.wait_for(evaluation, timeout=1)
     assert await revocation is True
-    # The webhook path adds one post-PATCH generation to fence any worker
-    # that completed immediately before revocation.
-    store.enqueue(trigger)
+    # The known-head enqueue already created a durable invalidation generation
+    # before the fast reset waited for the in-flight check write.
     store.complete(claimed, claimed.lease_owner)
 
     statuses = [check["status"] for check in github.checks]
     assert statuses[:2] == ["in_progress", "completed"]
     assert statuses[-1] == "in_progress"
     assert set(statuses[2:]) == {"in_progress"}
-    assert store.pending_count() == 1
+    assert store.pending_count() == 2
 
 
 @pytest.mark.asyncio
@@ -1318,6 +1322,13 @@ async def test_authority_work_preempts_evaluations_and_fans_out_open_pulls(
     second = store.claim("observer", 60)
     assert first is not None and second is not None
     assert {first.pull_number, second.pull_number} == {3, 4}
+    fanout = first if first.pull_number == 4 else second
+    assert fanout.head_sha_hint == "c" * 40
+    assert fanout.shared_head_generation == 1
+    assert store.shared_head_generation(2, "example/project", "c" * 40) == 1
+    assert store.pending_shared_head_invalidation_count() == 1
+    assert store.shared_head_generation_is_current(fanout, "c" * 40) is True
+    assert store.shared_head_generation_is_publishable(fanout, "c" * 40) is False
 
 
 @pytest.mark.asyncio
@@ -1480,7 +1491,9 @@ async def test_authority_rate_limit_defers_after_bounded_batch_and_keeps_fanout(
 
     await worker._process_authority(claimed)
 
-    assert store.pending_count() == 3
+    assert store.pending_count() == 5
+    assert store.shared_head_generation(2, "example/project", "c" * 40) == 1
+    assert store.shared_head_generation(2, "example/project", "d" * 40) == 1
     assert store.dead_count() == 0
     assert store.claim("observer", 60) is None
     assert store.claim_authority("observer", 60) is None

@@ -756,7 +756,7 @@ class EvaluationService:
         job: JobRequest,
         shared_head_generation: int | None = None,
     ) -> bool:
-        """Best-effort synchronous reset without weakening durable recovery."""
+        """Report whether the fast path reset a check or queued a newer live head."""
         if self.settings.is_organization_config_repository(job.repository_full_name):
             return False
         pull = await self.github.get_pull(
@@ -772,6 +772,7 @@ class EvaluationService:
         if pull_state not in {"open", "closed"}:
             raise GitHubError(f"GitHub returned unknown pull request state {pull_state!r}")
 
+        live_head_queued = False
         if pull_state == "open" and job.head_sha_hint is not None and job.head_sha_hint != head_sha:
             # The exact webhook head remains durable in its own invalidation
             # row. Independently fence the live head instead of replacing that
@@ -786,6 +787,7 @@ class EvaluationService:
                     head_sha_hint=head_sha,
                 ),
             )
+            live_head_queued = True
 
         if shared_head_generation is not None:
             accepted_head = validate_head_sha(job.head_sha_hint or "")
@@ -797,7 +799,7 @@ class EvaluationService:
                     accepted_head,
                     shared_head_generation,
                 ):
-                    return False
+                    return live_head_queued
                 check_run_id = await self.github.existing_check_run_id(
                     job.installation_id,
                     job.repository_full_name,
@@ -806,14 +808,14 @@ class EvaluationService:
                 )
                 if check_run_id is None:
                     if pull_state != "open" or head_sha != accepted_head:
-                        return False
+                        return live_head_queued
                     repository_text = await self._repository_policy_text(
                         job.installation_id,
                         job.repository_full_name,
                         base_sha,
                     )
                     if repository_text is None:
-                        return False
+                        return live_head_queued
                 # The GitHub lookup can outlive this delivery generation. Do
                 # not let an old handler reset a newer completed result.
                 if not await asyncio.to_thread(
@@ -823,7 +825,7 @@ class EvaluationService:
                     accepted_head,
                     shared_head_generation,
                 ):
-                    return False
+                    return live_head_queued
                 details_url = (
                     pull.get("html_url") if isinstance(pull.get("html_url"), str) else None
                 )
@@ -1623,9 +1625,7 @@ class Worker:
         async def revoke(request: JobRequest) -> None:
             async with semaphore:
                 try:
-                    invalidated = await self.evaluator.invalidate_for_trigger(request)
-                    if invalidated:
-                        await asyncio.to_thread(self.store.enqueue, request)
+                    await self.evaluator.invalidate_for_trigger(request)
                 except GitHubRateLimitError:
                     raise
                 except Exception:

@@ -65,7 +65,7 @@ def test_startup_does_not_mutate_pre_release_dead_jobs(tmp_path: Path) -> None:
     upgrade_database(database_url)
     store = QueueStore(database_url)
     store.initialize()
-    store.enqueue(request())
+    store.enqueue(JobRequest(17, "example/project", 42, "pre-release-retry"))
     with store.session() as session:
         session.execute(update(EvaluationJob).values(state="dead"))
     store.close()
@@ -115,6 +115,20 @@ def test_mixed_case_triggers_coalesce_in_one_queue_row(tmp_path: Path) -> None:
     assert claimed is not None
     assert claimed.repository_full_name == "example/project"
     assert claimed.generation == 2
+
+
+def test_known_head_enqueue_creates_a_durable_invalidation_fence(tmp_path: Path) -> None:
+    store = make_store(tmp_path)
+
+    store.enqueue(request())
+
+    assert store.shared_head_generation(17, "example/project", "a" * 40) == 1
+    assert store.pending_shared_head_invalidation_count() == 1
+    claimed = store.claim("worker", 60)
+    assert claimed is not None
+    assert claimed.shared_head_generation == 1
+    assert store.shared_head_generation_is_current(claimed, "a" * 40) is True
+    assert store.shared_head_generation_is_publishable(claimed, "a" * 40) is False
 
 
 def test_delivery_acceptance_is_atomic_and_idempotent(tmp_path: Path) -> None:
@@ -487,6 +501,9 @@ def test_jobs_coalesce_and_new_generation_survives_old_completion(tmp_path: Path
 def test_reconciliation_does_not_supersede_active_or_retrying_work(tmp_path: Path) -> None:
     store = make_store(tmp_path)
     store.enqueue(request())
+    invalidation = store.claim_shared_head_invalidation("head-worker", 60)
+    assert invalidation is not None
+    assert store.complete_shared_head_invalidation(invalidation)
     active = store.claim("worker", 60)
     assert active is not None
 
@@ -521,9 +538,9 @@ def test_existing_job_reconciliation_rolls_back_tentative_epoch(tmp_path: Path) 
     reconciliation = request(reason="periodic_reconciliation")
     store.enqueue(reconciliation)
 
-    assert store.shared_head_generation(17, "example/project", "a" * 40) == 0
+    assert store.shared_head_generation(17, "example/project", "a" * 40) == 1
     assert store.enqueue_if_absent(reconciliation) is False
-    assert store.shared_head_generation(17, "example/project", "a" * 40) == 0
+    assert store.shared_head_generation(17, "example/project", "a" * 40) == 1
 
 
 def test_hintless_reconciliation_does_not_create_a_shared_head_epoch(tmp_path: Path) -> None:
@@ -554,6 +571,9 @@ def test_reconciliation_epoch_and_missing_job_roll_back_together(tmp_path: Path)
 def test_failed_evaluation_retries_indefinitely_with_bounded_backoff(tmp_path: Path) -> None:
     store = make_store(tmp_path)
     store.enqueue(request())
+    invalidation = store.claim_shared_head_invalidation("head-worker", 60)
+    assert invalidation is not None
+    assert store.complete_shared_head_invalidation(invalidation)
     job = store.claim("worker", 60)
     assert job is not None
 

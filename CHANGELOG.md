@@ -83,6 +83,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Rel
 
 ### Changed
 
+- Known-head evaluation and authority fan-out writes now create their
+  exact-head invalidation fence in the same transaction, so pruning cannot
+  orphan a queued generation.
+- A duplicate webhook reports `queued: true` when its pending fast-path retry
+  discovers and queues a newer live head.
 - GitHub API error messages are capped at 1,000 characters, and non-finite rate-limit hints use the bounded default delay.
 - Shell lint CI verifies the pinned official ShellCheck release archive instead of depending on an anonymous Docker Hub pull.
 

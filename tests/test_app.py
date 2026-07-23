@@ -20,6 +20,7 @@ class StubGitHub:
     def __init__(self) -> None:
         self.checks: list[dict[str, Any]] = []
         self.fail_next_check = False
+        self.head_sha = HEAD
 
     async def close(self) -> None:
         pass
@@ -32,7 +33,7 @@ class StubGitHub:
             "number": number,
             "state": "open",
             "html_url": f"https://github.com/{repository}/pull/{number}",
-            "head": {"sha": HEAD},
+            "head": {"sha": self.head_sha},
             "base": {"sha": "base123", "ref": "main"},
             "labels": [],
         }
@@ -202,6 +203,45 @@ def test_webhook_fast_path_failure_is_durable_and_replayable(tmp_path: Path) -> 
     assert store.delivery_needs_invalidation("delivery-retry") is False
     assert store.pending_count() == 2
     assert [check["status"] for check in github.checks] == ["in_progress"]
+
+
+def test_stale_duplicate_reports_separately_queued_live_head(tmp_path: Path) -> None:
+    store = migrated_store(f"sqlite:///{tmp_path / 'stale-duplicate.db'}")
+    github = StubGitHub()
+    github.fail_next_check = True
+    app = app_module.create_app(configured_settings(), github=github, store=store)  # type: ignore[arg-type]
+    body = json.dumps(
+        {
+            "action": "synchronize",
+            "installation": {"id": 10},
+            "repository": {"full_name": "example/project"},
+            "pull_request": {
+                "number": 7,
+                "state": "open",
+                "head": {"sha": HEAD},
+            },
+        }
+    ).encode()
+    headers = webhook_headers(body, "stale-duplicate")
+
+    with TestClient(app) as client:
+        failed = client.post("/webhooks/github", content=body, headers=headers)
+        accepted_head = store.claim_shared_head_invalidation("head-worker", 60)
+        assert accepted_head is not None
+        assert store.complete_shared_head_invalidation(accepted_head)
+        assert store.delivery_needs_invalidation("stale-duplicate") is True
+        github.head_sha = "b" * 40
+        replay = client.post("/webhooks/github", content=body, headers=headers)
+
+    assert failed.json() == {"accepted": True, "queued": True}
+    assert replay.json() == {"accepted": False, "queued": True}
+    assert store.shared_head_generation(10, "example/project", HEAD) == 1
+    assert store.shared_head_generation(10, "example/project", "b" * 40) == 1
+    claimed = store.claim("observer", 60)
+    assert claimed is not None
+    assert claimed.head_sha_hint == "b" * 40
+    assert claimed.shared_head_generation == 1
+    assert store.pending_shared_head_invalidation_count() == 1
 
 
 def test_liveness_fails_when_enabled_worker_task_has_died(tmp_path: Path) -> None:

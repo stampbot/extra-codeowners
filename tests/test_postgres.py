@@ -307,6 +307,98 @@ def test_postgres_prune_cannot_orphan_hintless_binding(
     assert evaluation.shared_head_generation == epoch.generation
 
 
+def test_postgres_prune_cannot_orphan_known_head_enqueue(
+    postgres_store: QueueStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    head_sha = "e" * 40
+    assert postgres_store.accept_delivery(
+        "prune-enqueue-seed",
+        "pull_request",
+        JobRequest(17, "example/project", 72, "seed", head_sha),
+    )
+    seed_invalidation = postgres_store.claim_shared_head_invalidation("seed-worker", 60)
+    assert seed_invalidation is not None
+    assert postgres_store.complete_shared_head_invalidation(seed_invalidation)
+    with postgres_store.engine.begin() as connection:
+        connection.execute(delete(EvaluationJob).where(EvaluationJob.pull_number == 72))
+        connection.execute(
+            update(SharedHeadEpoch)
+            .where(SharedHeadEpoch.head_sha == head_sha)
+            .values(changed_at=utcnow() - timedelta(days=90))
+        )
+
+    advanced = threading.Event()
+    allow_enqueue = threading.Event()
+    original_advance = postgres_store._advance_shared_head_epoch_in_session
+
+    def pause_after_epoch_lock(session: object, enqueue_request: JobRequest) -> int:
+        generation = original_advance(session, enqueue_request)  # type: ignore[arg-type]
+        advanced.set()
+        assert allow_enqueue.wait(timeout=5)
+        return generation
+
+    monkeypatch.setattr(
+        postgres_store,
+        "_advance_shared_head_epoch_in_session",
+        pause_after_epoch_lock,
+    )
+    boundary = utcnow() - timedelta(days=30)
+    enqueue_request = JobRequest(
+        17,
+        "example/project",
+        73,
+        "authority-fanout",
+        head_sha,
+    )
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        enqueue_future = executor.submit(postgres_store.enqueue, enqueue_request)
+        assert advanced.wait(timeout=5)
+        prune_future = executor.submit(postgres_store.prune_shared_head_epochs, boundary)
+        deadline = monotonic() + 5
+        prune_waiting = False
+        while monotonic() < deadline:
+            with postgres_store.engine.connect() as observer:
+                prune_waiting = bool(
+                    observer.scalar(
+                        text(
+                            """
+                            SELECT count(*)
+                            FROM pg_stat_activity
+                            WHERE datname = current_database()
+                              AND pid <> pg_backend_pid()
+                              AND state = 'active'
+                              AND wait_event_type = 'Lock'
+                              AND lower(query) LIKE
+                                  '%delete from shared_head_epochs%'
+                            """
+                        )
+                    )
+                )
+            if prune_waiting:
+                break
+            threading.Event().wait(0.01)
+        assert prune_waiting, "prune DELETE did not reach the epoch row lock"
+        assert prune_future.done() is False
+        allow_enqueue.set()
+        enqueue_future.result(timeout=5)
+        pruned = prune_future.result(timeout=5)
+
+    assert pruned == 0
+    with postgres_store.session() as session:
+        epoch = session.scalar(select(SharedHeadEpoch).where(SharedHeadEpoch.head_sha == head_sha))
+        evaluation = session.scalar(select(EvaluationJob).where(EvaluationJob.pull_number == 73))
+    assert epoch is not None
+    assert evaluation is not None
+    assert epoch.generation == 2
+    assert epoch.invalidated_generation == 1
+    assert evaluation.shared_head_generation == epoch.generation
+    assert postgres_store.pending_shared_head_invalidation_count() == 1
+    claimed_view = cast(ClaimedJob, evaluation)
+    assert postgres_store.shared_head_generation_is_current(claimed_view, head_sha) is True
+    assert postgres_store.shared_head_generation_is_publishable(claimed_view, head_sha) is False
+
+
 def test_concurrent_delivery_and_reconciliation_compose_without_phantom_epoch(
     postgres_store: QueueStore,
 ) -> None:
@@ -380,9 +472,9 @@ def test_existing_job_reconciliation_rolls_back_tentative_postgres_epoch(
     reconciliation = request()
     postgres_store.enqueue(reconciliation)
 
-    assert postgres_store.shared_head_generation(17, "example/project", "a" * 40) == 0
+    assert postgres_store.shared_head_generation(17, "example/project", "a" * 40) == 1
     assert postgres_store.enqueue_if_absent(reconciliation) is False
-    assert postgres_store.shared_head_generation(17, "example/project", "a" * 40) == 0
+    assert postgres_store.shared_head_generation(17, "example/project", "a" * 40) == 1
 
 
 def test_internal_head_trigger_stales_prior_postgres_shared_head_claim(

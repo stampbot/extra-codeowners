@@ -852,7 +852,15 @@ class QueueStore:
         )
 
     def enqueue(self, request: JobRequest) -> None:
-        """Enqueue an evaluation, coalescing repeated triggers."""
+        """Enqueue an evaluation, fencing a known head in the same transaction.
+
+        Known-head callers must not be able to create an evaluation that
+        references an epoch concurrently removed by pruning. Hintless work has
+        no exact head to fence and retains the ordinary coalescing path.
+        """
+        if request.head_sha_hint is not None:
+            self.enqueue_shared_head_trigger(request)
+            return
         for _ in range(5):
             try:
                 with self.session() as session:
@@ -865,7 +873,7 @@ class QueueStore:
         raise RuntimeError("could not enqueue evaluation after concurrent inserts")
 
     def enqueue_shared_head_trigger(self, request: JobRequest) -> None:
-        """Atomically advance a live-head fence and enqueue an internal trigger."""
+        """Atomically advance a live-head fence and enqueue its evaluation."""
         for _ in range(5):
             try:
                 with self.session() as session:
