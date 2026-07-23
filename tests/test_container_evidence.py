@@ -296,6 +296,16 @@ def cyclonedx_sbom(
     return json.dumps(document, sort_keys=True).encode()
 
 
+def identified_cyclonedx_component(identity: str) -> dict[str, Any]:
+    return {
+        "type": "library",
+        "name": identity,
+        "version": "1.0",
+        "purl": f"pkg:generic/{identity}@1.0",
+        "bom-ref": identity,
+    }
+
+
 def elf64_payload(architecture: str = "amd64") -> bytes:
     machine = {"amd64": 62, "arm64": 183}[architecture]
     ident = b"\x7fELF" + bytes((2, 1, 1, 0, 0)) + b"\0" * 7
@@ -7018,6 +7028,46 @@ def test_cyclonedx_projection_uses_bom_ref_for_repeated_purl_occurrences() -> No
     with pytest.raises(evidence.EvidenceError, match="mixed or repeated fallback purl"):
         evidence.parse_cyclonedx_sbom(
             cyclonedx_sbom(components=[component, missing_ref]), "mixed-identity.cdx.json"
+        )
+
+
+def test_cyclonedx_parser_accepts_nested_components_beyond_observation_array_limit() -> None:
+    root = identified_cyclonedx_component("root")
+    child_count = evidence.MAX_CYCLONEDX_OBSERVATION_VALUES + 1
+    root["components"] = [
+        identified_cyclonedx_component(f"child-{index}") for index in range(child_count)
+    ]
+
+    parsed = evidence.parse_cyclonedx_sbom(
+        cyclonedx_sbom(components=[root]),
+        "nested-components.cdx.json",
+    )
+
+    assert len(parsed["components"]) == child_count + 1
+
+
+def test_cyclonedx_parser_enforces_nested_component_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(evidence, "MAX_CYCLONEDX_COMPONENTS", 4)
+    root = identified_cyclonedx_component("root")
+    root["components"] = [identified_cyclonedx_component(f"child-{index}") for index in range(5)]
+
+    with pytest.raises(evidence.EvidenceError, match="too many nested components"):
+        evidence.parse_cyclonedx_sbom(
+            cyclonedx_sbom(components=[root]),
+            "too-many-nested-components.cdx.json",
+        )
+
+
+def test_cyclonedx_parser_keeps_general_nested_arrays_observation_bounded() -> None:
+    root = identified_cyclonedx_component("root")
+    root["extension"] = {"components": [None] * (evidence.MAX_CYCLONEDX_OBSERVATION_VALUES + 1)}
+
+    with pytest.raises(evidence.EvidenceError, match="too many values"):
+        evidence.parse_cyclonedx_sbom(
+            cyclonedx_sbom(components=[root]),
+            "oversized-extension-array.cdx.json",
         )
 
 
