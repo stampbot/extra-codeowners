@@ -312,6 +312,10 @@ class CheckWriteGuard:
     shared: bool = False
 
 
+class _EvaluationJobAlreadyPresentError(Exception):
+    """Abort reconciliation so a tentative shared-head epoch bump rolls back."""
+
+
 class QueueStore:
     """Database-backed latest-wins work queue.
 
@@ -700,15 +704,18 @@ class QueueStore:
             if generation is None:  # pragma: no cover - protected by this transaction
                 raise RuntimeError("shared-head epoch disappeared during advancement")
             return int(generation)
-        session.add(
-            SharedHeadEpoch(
-                installation_id=request.installation_id,
-                repository_full_name=request.repository_full_name,
-                head_sha=head_sha,
-                generation=1,
-                changed_at=now,
-            )
+        epoch = SharedHeadEpoch(
+            installation_id=request.installation_id,
+            repository_full_name=request.repository_full_name,
+            head_sha=head_sha,
+            generation=1,
+            changed_at=now,
         )
+        session.add(epoch)
+        # Preserve the shared-head -> evaluation-job lock order even when this
+        # transaction creates the epoch. Without an explicit flush, SQLAlchemy
+        # may defer the INSERT until a later evaluation-job statement.
+        session.flush((epoch,))
         return 1
 
     @staticmethod
@@ -787,11 +794,38 @@ class QueueStore:
                 continue
         raise RuntimeError("could not enqueue evaluation after concurrent inserts")
 
+    def enqueue_shared_head_trigger(self, request: JobRequest) -> None:
+        """Atomically advance a live-head fence and enqueue an internal trigger."""
+        for _ in range(5):
+            try:
+                with self.session() as session:
+                    shared_head_generation = self._advance_shared_head_epoch_in_session(
+                        session,
+                        request,
+                    )
+                    self._enqueue_in_session(
+                        session,
+                        request,
+                        shared_head_generation=shared_head_generation,
+                    )
+                return
+            except IntegrityError:
+                # Roll back the tentative epoch when another transaction wins
+                # either first insert, then retry in the common lock order.
+                continue
+        raise RuntimeError("could not enqueue shared-head trigger after concurrent inserts")
+
     def enqueue_if_absent(self, request: JobRequest) -> bool:
         """Atomically fence and enqueue genuinely missing reconciliation work."""
         for _ in range(5):
             try:
                 with self.session() as session:
+                    shared_head_generation = 0
+                    if request.head_sha_hint is not None:
+                        shared_head_generation = self._advance_shared_head_epoch_in_session(
+                            session,
+                            request,
+                        )
                     now = utcnow()
                     authority_generation = (
                         session.scalar(
@@ -809,7 +843,7 @@ class QueueStore:
                         "head_sha_hint": request.head_sha_hint,
                         "generation": 1,
                         "authority_generation": authority_generation,
-                        "shared_head_generation": 0,
+                        "shared_head_generation": shared_head_generation,
                         "state": "pending",
                         "attempts": 0,
                         "requested_at": now,
@@ -840,21 +874,12 @@ class QueueStore:
                             f"reconciliation insert does not support {dialect_name!r}"
                         )
                     if inserted_id is None:
-                        return False
-                    shared_head_generation = 0
-                    if request.head_sha_hint is not None:
-                        shared_head_generation = self._advance_shared_head_epoch_in_session(
-                            session,
-                            request,
-                        )
-                    updated = session.execute(
-                        update(EvaluationJob)
-                        .where(EvaluationJob.id == inserted_id)
-                        .values(shared_head_generation=shared_head_generation)
-                    )
-                    if getattr(updated, "rowcount", 0) != 1:
-                        raise RuntimeError("reconciliation job disappeared before epoch binding")
+                        # Raising inside the context rolls back the epoch
+                        # increment that preceded this conflicting insert.
+                        raise _EvaluationJobAlreadyPresentError
                 return True
+            except _EvaluationJobAlreadyPresentError:
+                return False
             except IntegrityError:
                 # Different pull requests can race to create the same
                 # shared-head epoch. Retry the complete atomic insert so the

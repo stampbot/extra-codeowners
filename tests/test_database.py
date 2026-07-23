@@ -288,6 +288,42 @@ def test_delivery_epoch_and_enqueue_roll_back_together(tmp_path: Path) -> None:
     assert store.delivery_needs_invalidation("rolled-back") is False
 
 
+def test_internal_head_trigger_stales_prior_shared_head_claims(tmp_path: Path) -> None:
+    store = make_store(tmp_path)
+    head = "a" * 40
+    assert store.accept_delivery(
+        "other-pull",
+        "pull_request",
+        JobRequest(17, "example/project", 41, "pull_request.opened", head),
+    )
+    prior = store.claim("worker", 60)
+    assert prior is not None
+
+    store.enqueue_shared_head_trigger(
+        JobRequest(17, "example/project", 42, "head_changed_before_evaluation", head)
+    )
+
+    assert store.shared_head_generation(17, "example/project", head) == 2
+    assert store.shared_head_generation_is_current(prior, head) is False
+
+
+def test_internal_head_trigger_epoch_and_enqueue_roll_back_together(tmp_path: Path) -> None:
+    store = make_store(tmp_path)
+    original = store._enqueue_in_session
+
+    def fail_enqueue(*args: object, **kwargs: object) -> None:
+        del args, kwargs
+        raise RuntimeError("simulated internal enqueue failure")
+
+    store._enqueue_in_session = fail_enqueue  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError, match="simulated internal enqueue failure"):
+        store.enqueue_shared_head_trigger(request(reason="pull_request_changed_during_evaluation"))
+    store._enqueue_in_session = original  # type: ignore[method-assign]
+
+    assert store.shared_head_generation(17, "example/project", "a" * 40) == 0
+    assert store.pending_count() == 0
+
+
 def test_hintless_internal_claim_captures_current_shared_head_epoch(tmp_path: Path) -> None:
     store = make_store(tmp_path)
     store.enqueue(JobRequest(17, "example/project", 41, "periodic_reconciliation"))
@@ -355,6 +391,16 @@ def test_reconciliation_advances_epoch_only_when_it_inserts_missing_head_work(
 
     assert store.enqueue_if_absent(reconciliation) is False
     assert store.shared_head_generation(17, "example/project", "a" * 40) == 1
+
+
+def test_existing_job_reconciliation_rolls_back_tentative_epoch(tmp_path: Path) -> None:
+    store = make_store(tmp_path)
+    reconciliation = request(reason="periodic_reconciliation")
+    store.enqueue(reconciliation)
+
+    assert store.shared_head_generation(17, "example/project", "a" * 40) == 0
+    assert store.enqueue_if_absent(reconciliation) is False
+    assert store.shared_head_generation(17, "example/project", "a" * 40) == 0
 
 
 def test_hintless_reconciliation_does_not_create_a_shared_head_epoch(tmp_path: Path) -> None:

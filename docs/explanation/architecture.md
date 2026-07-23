@@ -154,6 +154,12 @@ database error, or task cancellation triggers a shielded reset to
 `in_progress` before the guard is released. The original error remains
 retryable.
 
+The queued head can be stale, and the final pull-request read can uncover a
+missed head, base, or label change. In either case, the worker advances the
+live head's shared generation and queues replacement work in one transaction.
+That makes every older claim for the commit stale, including claims held by
+workers evaluating another pull request.
+
 That reset is still a GitHub API request. A hard process stop can interrupt it,
 and GitHub can reject or time it out. In either case, a completed result may
 remain visible until fast invalidation or durable retry reaches GitHub.

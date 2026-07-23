@@ -799,6 +799,38 @@ async def test_app_metadata_mismatch_does_not_authorize_bot(tmp_path: Path) -> N
 
 
 @pytest.mark.asyncio
+async def test_stale_head_hint_requeues_live_head_and_stales_shared_claim(
+    tmp_path: Path,
+) -> None:
+    github = FakeGitHub(changed_path="uv.lock")
+    original = github.get_pull
+
+    async def current_pull(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        pull = await original(*args, **kwargs)
+        pull["head"] = {"sha": "c" * 40}
+        return pull
+
+    github.get_pull = current_pull  # type: ignore[method-assign]
+    store = migrated_store(f"sqlite:///{tmp_path / 'stale-head.db'}")
+    assert store.accept_delivery(
+        "other-current-head",
+        "pull_request",
+        JobRequest(2, "example/project", 4, "pull_request.opened", "c" * 40),
+    )
+    prior_current_head_claim = store.claim("other-worker", 60)
+    assert prior_current_head_claim is not None
+    store.complete(prior_current_head_claim, prior_current_head_claim.lease_owner)
+    claimed = job(store)
+
+    await EvaluationService(settings(), github, store).evaluate_job(claimed)  # type: ignore[arg-type]
+
+    assert github.checks == []
+    assert store.pending_count() == 1
+    assert store.shared_head_generation(2, "example/project", "c" * 40) == 2
+    assert store.shared_head_generation_is_current(prior_current_head_claim, "c" * 40) is False
+
+
+@pytest.mark.asyncio
 async def test_revision_change_during_evaluation_is_requeued_without_stale_check(
     tmp_path: Path,
 ) -> None:
@@ -816,11 +848,22 @@ async def test_revision_change_during_evaluation_is_requeued_without_stale_check
 
     github.get_pull = changing_pull  # type: ignore[method-assign]
     store = migrated_store(f"sqlite:///{tmp_path / 'audit.db'}")
+    assert store.accept_delivery(
+        "other-current-head",
+        "pull_request",
+        JobRequest(2, "example/project", 4, "pull_request.opened", "c" * 40),
+    )
+    prior_current_head_claim = store.claim("other-worker", 60)
+    assert prior_current_head_claim is not None
+    store.complete(prior_current_head_claim, prior_current_head_claim.lease_owner)
+    claimed = job(store)
 
-    await EvaluationService(settings(), github, store).evaluate_job(job(store))  # type: ignore[arg-type]
+    await EvaluationService(settings(), github, store).evaluate_job(claimed)  # type: ignore[arg-type]
 
     assert [check["status"] for check in github.checks] == ["in_progress"]
     assert store.pending_count() == 1
+    assert store.shared_head_generation(2, "example/project", "c" * 40) == 2
+    assert store.shared_head_generation_is_current(prior_current_head_claim, "c" * 40) is False
 
 
 @pytest.mark.asyncio
@@ -841,11 +884,23 @@ async def test_label_change_during_evaluation_is_requeued_without_stale_check(
 
     github.get_pull = changing_pull  # type: ignore[method-assign]
     store = migrated_store(f"sqlite:///{tmp_path / 'audit.db'}")
+    assert store.accept_delivery(
+        "other-same-head",
+        "pull_request",
+        JobRequest(2, "example/project", 4, "pull_request.opened", HEAD),
+    )
+    prior_same_head_claim = store.claim("other-worker", 60)
+    assert prior_same_head_claim is not None
+    store.complete(prior_same_head_claim, prior_same_head_claim.lease_owner)
+    claimed = job(store)
 
-    await EvaluationService(settings(), github, store).evaluate_job(job(store))  # type: ignore[arg-type]
+    await EvaluationService(settings(), github, store).evaluate_job(claimed)  # type: ignore[arg-type]
 
     assert [check["status"] for check in github.checks] == ["in_progress"]
     assert store.pending_count() == 1
+    assert store.shared_head_generation(2, "example/project", HEAD) == 2
+    assert store.shared_head_generation_is_current(prior_same_head_claim, HEAD) is False
+    assert store.shared_head_generation_is_current(claimed, HEAD) is False
 
 
 @pytest.mark.asyncio

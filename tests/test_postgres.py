@@ -4,6 +4,7 @@ import os
 import threading
 from collections.abc import Generator
 from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 from time import monotonic
 from typing import cast
 
@@ -124,16 +125,20 @@ def test_concurrent_delivery_and_reconciliation_compose_without_phantom_epoch(
     postgres_store: QueueStore,
 ) -> None:
     workers = 16
-    barrier = threading.Barrier(workers)
-    reconciliation = request()
 
-    def race(index: int) -> tuple[str, bool]:
+    def race(
+        index: int,
+        *,
+        barrier: threading.Barrier,
+        delivery_id: str,
+        reconciliation: JobRequest,
+    ) -> tuple[str, bool]:
         barrier.wait()
         if index % 2 == 0:
             return (
                 "delivery",
                 postgres_store.accept_delivery(
-                    "composed-delivery",
+                    delivery_id,
                     "pull_request",
                     reconciliation,
                 ),
@@ -143,23 +148,75 @@ def test_concurrent_delivery_and_reconciliation_compose_without_phantom_epoch(
             postgres_store.enqueue_if_absent(reconciliation),
         )
 
-    with ThreadPoolExecutor(max_workers=workers) as executor:
-        outcomes = list(executor.map(race, range(workers)))
+    for round_number in range(10):
+        barrier = threading.Barrier(workers)
+        head_sha = f"{round_number + 1:040x}"
+        reconciliation = JobRequest(
+            installation_id=17,
+            repository_full_name="example/project",
+            pull_number=100 + round_number,
+            reason="integration-test",
+            head_sha_hint=head_sha,
+        )
+        race_round = partial(
+            race,
+            barrier=barrier,
+            delivery_id=f"composed-delivery-{round_number}",
+            reconciliation=reconciliation,
+        )
 
-    accepted = [result for kind, result in outcomes if kind == "delivery"]
-    reconciled = [result for kind, result in outcomes if kind == "reconciliation"]
-    with postgres_store.session() as session:
-        evaluation = session.scalar(select(EvaluationJob))
-        epoch = session.scalar(select(SharedHeadEpoch))
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            outcomes = list(executor.map(race_round, range(workers)))
 
-    assert accepted.count(True) == 1
-    assert reconciled.count(True) <= 1
-    expected_generation = 1 + reconciled.count(True)
-    assert evaluation is not None
-    assert evaluation.generation == expected_generation
-    assert evaluation.shared_head_generation == expected_generation
-    assert epoch is not None
-    assert epoch.generation == expected_generation
+        accepted = [result for kind, result in outcomes if kind == "delivery"]
+        reconciled = [result for kind, result in outcomes if kind == "reconciliation"]
+        with postgres_store.session() as session:
+            evaluation = session.scalar(
+                select(EvaluationJob).where(EvaluationJob.pull_number == 100 + round_number)
+            )
+            epoch = session.scalar(
+                select(SharedHeadEpoch).where(SharedHeadEpoch.head_sha == head_sha)
+            )
+
+        assert accepted.count(True) == 1
+        assert reconciled.count(True) <= 1
+        expected_generation = 1 + reconciled.count(True)
+        assert evaluation is not None
+        assert evaluation.generation == expected_generation
+        assert evaluation.shared_head_generation == expected_generation
+        assert epoch is not None
+        assert epoch.generation == expected_generation
+
+
+def test_existing_job_reconciliation_rolls_back_tentative_postgres_epoch(
+    postgres_store: QueueStore,
+) -> None:
+    reconciliation = request()
+    postgres_store.enqueue(reconciliation)
+
+    assert postgres_store.shared_head_generation(17, "example/project", "a" * 40) == 0
+    assert postgres_store.enqueue_if_absent(reconciliation) is False
+    assert postgres_store.shared_head_generation(17, "example/project", "a" * 40) == 0
+
+
+def test_internal_head_trigger_stales_prior_postgres_shared_head_claim(
+    postgres_store: QueueStore,
+) -> None:
+    head = "a" * 40
+    assert postgres_store.accept_delivery(
+        "other-pull",
+        "pull_request",
+        JobRequest(17, "example/project", 41, "pull_request.opened", head),
+    )
+    prior = postgres_store.claim("worker", 60)
+    assert prior is not None
+
+    postgres_store.enqueue_shared_head_trigger(
+        JobRequest(17, "example/project", 42, "head_changed_before_evaluation", head)
+    )
+
+    assert postgres_store.shared_head_generation(17, "example/project", head) == 2
+    assert postgres_store.shared_head_generation_is_current(prior, head) is False
 
 
 def test_claim_and_service_lease_election_are_atomic(postgres_store: QueueStore) -> None:

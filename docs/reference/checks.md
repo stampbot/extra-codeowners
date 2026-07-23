@@ -37,7 +37,11 @@ For an open pull request in an enrolled repository, Extra CODEOWNERS:
 8. Accepts a qualifying human's latest effective approval only when that review targets the exact current head.
 9. Otherwise, considers application approvals for the current head. The review actor and independently fetched App metadata must match organization enrollment. The delegation must match the path and owner set, and its label restrictions must all pass.
 10. Rejects application substitution for every effective non-delegable path.
-11. Fetches the pull request again before publication. A changed state, base ref, base commit, head commit, changed-file count, or label set discards the result and queues another evaluation.
+11. Fetches the pull request again before publication. A closed pull request
+    stops here. If the pull request remains open but its base ref, base commit,
+    head commit, changed-file count, or label set changed, the worker discards
+    the result. It advances the current head's shared generation and queues
+    another evaluation in the same transaction.
 12. Under the publication guards, rechecks the pull-request generation, the
     shared-head generation, and the installation authority epoch stored when
     the row was enqueued. It also refuses to finish while relevant authority

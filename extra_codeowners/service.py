@@ -753,7 +753,7 @@ class EvaluationService:
 
             if job.head_sha_hint is not None and job.head_sha_hint != head_sha:
                 await asyncio.to_thread(
-                    self.store.enqueue,
+                    self.store.enqueue_shared_head_trigger,
                     JobRequest(
                         installation_id=job.installation_id,
                         repository_full_name=job.repository_full_name,
@@ -877,7 +877,7 @@ class EvaluationService:
                 or _label_names(current) != labels
             ):
                 await asyncio.to_thread(
-                    self.store.enqueue,
+                    self.store.enqueue_shared_head_trigger,
                     JobRequest(
                         installation_id=job.installation_id,
                         repository_full_name=job.repository_full_name,
