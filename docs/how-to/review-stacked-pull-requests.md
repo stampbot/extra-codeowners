@@ -176,15 +176,26 @@ Repeat from the bottom upward until the stack is empty.
 ## Why the workflow boundary matters
 
 The security workflows use `pull_request`, not `pull_request_target`. They
-receive no repository secrets, OIDC token, write permission, or privileged
-cache. CodeQL gets `actions: read` where needed; source access is read-only.
+receive no repository secrets or OIDC token. They cannot write repository
+contents or pull requests, and the workflows do not use an Actions cache. Both
+CodeQL jobs request `security-events: write` at job scope so the pinned analysis
+action can upload results. Their only other token scopes are `actions: read` and
+`contents: read`.
 
-Checked-in steps do not execute application code from the pull request. DCO
-reads commit metadata, while pinned actions inspect source, dependencies, and
-workflow data. A pull request can still change the workflow being reviewed, so
-the token boundary remains necessary. A separate trusted CodeQL job receives
-`security-events: write` only for `main` pushes, schedules, and explicit
-dispatches.
+GitHub can still downgrade a fork pull request's requested write scope to read
+only. Dependabot pull requests receive the same treatment. Code scanning
+accepts uploads from runs triggered by `pull_request`, so this exception does
+not turn an untrusted pull request into a generally writable workflow. See
+GitHub's documentation for
+[fork token permissions](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#changing-the-permissions-in-a-forked-repository)
+and
+[CodeQL uploads from Dependabot pull requests](https://docs.github.com/en/code-security/reference/code-scanning/troubleshoot-analysis-errors/resource-not-accessible).
+
+The pinned Python CodeQL actions run in no-build mode. They inspect the checked
+out source but do not import, test, or otherwise execute application code from
+the pull request. DCO reads commit metadata, while the other pinned actions
+inspect dependencies and workflow data. A pull request can still change the
+workflow being reviewed, so these token limits remain necessary.
 
 Feature branches created before the current triggers reached `main` may still
 contain older workflow definitions. Rebase them before relying on automatic
