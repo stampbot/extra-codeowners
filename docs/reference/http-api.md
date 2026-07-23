@@ -98,8 +98,10 @@ Prometheus also publishes generated counter and histogram series, plus Python ru
 
 `success` means the elected process completed the scan of every visible,
 unsuspended installation and validated every repository and open pull request
-returned by GitHub. `partial` means at least one installation's API request or
-response failed, or the process lost its lease. Work queued before that failure
+returned by GitHub. `partial` means the process lost its lease or could not
+safely scan at least one installation or queue its pull requests.
+Per-installation failures include GitHub request errors, malformed payloads,
+and database errors while adding queue jobs. Work queued before that failure
 remains durable, and the scan continues with later installations while it
 still owns the lease. `failure` means the attempt stopped before it could
 return a scan result. This includes a malformed top-level installation list;
@@ -110,8 +112,11 @@ positive JSON integers. It rejects booleans, strings, nulls, zero, and negative
 values. `suspended_at` must be null or a timezone-aware ISO 8601 timestamp, and
 `archived` must be a JSON boolean. Every open pull request must contain an
 object-valued `head` with a full 40- or 64-character lowercase hexadecimal
-commit ID. The validation log contains a fixed reason code, not the rejected
-value.
+commit ID. Field-level validation failures log a fixed reason code and omit the
+rejected value. If GitHub returns something other than the expected list or
+includes a non-object item, the client rejects it before field validation. The
+service then logs a fixed reconciliation event and error template; it still
+omits the rejected value.
 
 The last-success gauge belongs to one service process. For a deployment with
 several replicas, alert on the newest value across all replicas.

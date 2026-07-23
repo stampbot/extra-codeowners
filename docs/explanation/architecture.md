@@ -263,10 +263,11 @@ The elected process runs both retention tasks before it asks GitHub for the
 installation list, so a discovery failure does not postpone cleanup. A
 background heartbeat renews the lease while a scan runs.
 
-If the heartbeat loses the lease or one installation cannot be scanned safely,
-the service records a partial attempt without discarding work found elsewhere.
-Only a complete scan advances the last-success timestamp. The
-organization-policy repository is never included in reconciliation.
+If the heartbeat loses the lease, the service records a partial attempt. It
+does the same when it cannot safely scan an installation or queue its pull
+requests. Work already queued remains durable. Only a complete scan advances
+the last-success timestamp. The organization-policy repository is never
+included in reconciliation.
 
 Because the installation list defines the scope of the whole scan, the
 reconciler validates every record before processing any installation. One

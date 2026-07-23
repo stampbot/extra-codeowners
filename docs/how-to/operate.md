@@ -33,16 +33,22 @@ API `403` or `429` responses, and every unexplained long-lived
 `in_progress` check.
 
 A replica that observes another process holding the reconciler lease does not
-record an attempt. An election error is a failure. A partial attempt may still
-queue work from healthy installations, but it does not refresh the
-last-success gauge.
+record an attempt. An election error is a failure. A partial attempt means the
+process lost its lease or could not safely scan an installation or queue its
+pull requests. This includes GitHub request failures, invalid GitHub responses,
+and database errors while adding queue jobs. Work from healthy installations
+may still be queued, but a partial attempt does not refresh the last-success
+gauge.
 
 A malformed top-level installation response fails the whole attempt before the
 service processes any installation. Once that list passes validation, a
 malformed repository or open pull request list fails only the affected
 installation. Work already queued stays queued, and the reconciler continues
-with later installations. The validation log contains a fixed reason code, not
-the rejected value.
+with later installations. Field-level validation logs use fixed reason codes.
+If GitHub returns something other than the expected list or includes a
+non-object item, the client rejects it before field validation. The service
+then logs a fixed reconciliation event and error template instead. Neither path
+logs the rejected value.
 
 In a deployment with several replicas, compare the newest gauge value across
 them. One practical alert expression is
