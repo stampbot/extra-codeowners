@@ -17,8 +17,11 @@ five-file application proof without archive parsing. The reusable workflow
 verifies and materializes that pair in a read-only job. The tagged workflow
 also defines a privileged consumer that would retain the three selection
 records and attest and sign the distributions, but the publication blocker
-keeps it unreachable. The GitHub release job does not consume the retained
-records.
+keeps it unreachable. A separate blocked candidate assembler would revalidate
+the raw pair and inventory those three records, but its
+[candidate record](release-asset-candidate-format.md) states that source
+completeness and publication are false. The GitHub release job does not consume
+either output.
 
 !!! danger "No current release satisfies this contract"
     Extra CODEOWNERS does not publish a supported container release today. Do

@@ -15,6 +15,7 @@
 !.github/scripts/release_spine.py
 !.github/scripts/release_readiness.py
 !.github/scripts/python_distribution_spine.py
+!.github/scripts/release_asset_assembler.py
 !.github/workflows/
 .github/workflows/*
 !.github/workflows/*

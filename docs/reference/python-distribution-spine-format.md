@@ -20,6 +20,12 @@ files. That job still depends directly on the failing `publication-block` job
 tracked in [issue #28](https://github.com/stampbot/extra-codeowners/issues/28).
 This code therefore defines and tests the handoff without enabling publication.
 
+Another blocked job would consume the raw pair independently, revalidate the
+five materialized files, and place all three original JSON records in a
+[15-file candidate inventory](release-asset-candidate-format.md). That
+inventory says `publication_allowed: false` and is not a release-controller
+manifest.
+
 The existing selected-distribution ZIP remains in place for the read-only
 container scan. Removing that older path is separate work.
 
@@ -31,10 +37,14 @@ native amd64 and arm64 builds
                |
                v
    raw spine and canonical record
-          |                  |
-          v                  v
- read-only verifier      attest and sign wheel and sdist
-  and materializer       (blocked by publication-block)
+          |
+          +--> read-only verifier and materializer
+          |
+          +--> attest and sign wheel and sdist
+          |    (blocked by publication-block)
+          |
+          +--> build non-publishable candidate inventory
+               (blocked by publication-block)
 ```
 
 ## Transport artifacts
@@ -320,10 +330,19 @@ identity and selection evidence. It does not prove that:
 - the caller has release authority.
 
 The blocked Python job is configured to attest and sign only the materialized
-wheel and source distribution. It uploads the three JSON records to a separate,
-run-scoped selection-evidence artifact for future release-assembler work. The
-GitHub release job does not consume that evidence artifact, so this handoff does
-not choose a future public release asset set.
+wheel and source distribution. It also uploads the three JSON records to a
+separate run-scoped artifact. The blocked candidate assembler does not trust
+that ZIP: it consumes the raw spine by immutable ID, revalidates the five-file
+set, and retains each original record directly.
+
+Local integration tests show that the candidate keeps all three records from a
+complete five-file proof and rejects an arm64 record with the wrong machine.
+The candidate has not run in the hosted workflow, and a seven-day Actions
+artifact would not be durable evidence. Issue #32 therefore remains open.
+
+The candidate does not choose a future public release asset set. Its record is
+structurally incompatible with the release controller, and the GitHub release
+job does not consume it.
 
 The raw producer retains its direct artifacts for five days. The blocked
 privileged job is configured for seven-day run artifacts if it is eventually

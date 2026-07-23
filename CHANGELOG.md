@@ -60,6 +60,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Rel
   plus atomic five-file materialization for the manually runnable proof and the
   still-blocked privileged release job. Materialization retains and rechecks a
   no-follow ancestry chain and publishes with Linux no-replace rename semantics.
+- A dormant release-candidate assembler with repository-read permission. It
+  revalidates the raw Python proof, retains its three original records in an
+  exact 15-file review inventory, and writes a record that the release
+  controller cannot accept. The hosted job remains behind the unconditional
+  publication block.
 - A bounded raw OCI release-spine builder and standalone verifier, with a
   real two-platform BuildKit directory export, a rerun-safe two-file
   `archive: false` CI transport proof, immutable pre-exposure object
@@ -74,17 +79,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Rel
 - A non-root container, Helm chart source, and supply-chain workflows.
 - Schema-v7 container evidence with a lossless review ledger that separates
   observed artifact facts, reviewed source mappings, and closure. It preserves
-  repeated SBOM occurrence identity, binds CPython runtime and source
-  identities, and retains every exact locked native wheel and raw embedded
-  SBOM. Earlier schema revisions are rejected instead of migrated lossily.
-  Greenlet is closed with an exact wheel, owner sdist, five-file native set,
-  and embedded SBOM component, source, and license set. The evidence proves
-  exact co-membership in the wheel; the SBOM provides no component-to-file map,
-  so the policy makes no individual payload attribution. Roles are
-  deterministic platform-neutral projections of the installed paths, so they
-  cannot be reassigned while comparing the native set across platforms. Global
-  package-URL semantics reject conflicting nested identity, source, or license
-  records.
+  document-local and repeated SBOM occurrence identity, component hashes and
+  licenses, metadata-root decisions, payload dispositions, and explicit
+  omissions. It also binds CPython runtime and source identities and retains
+  every exact locked native wheel and raw embedded SBOM. Earlier schema
+  revisions are rejected instead of migrated lossily. Greenlet is closed with
+  an exact wheel, owner sdist, five-file native set, and embedded SBOM
+  component, source, and license set. The evidence proves exact co-membership
+  in the wheel; the SBOM provides no component-to-file map, so the policy makes
+  no individual payload attribution. Roles are deterministic platform-neutral
+  projections of the installed paths, so they cannot be reassigned while
+  comparing the native set across platforms. Global package-URL semantics
+  reject conflicting nested identity, source, or license records.
 - Closed-world native-owner records for MarkupSafe and SQLAlchemy. MarkupSafe
   binds its exact wheels, 80,313-byte sdist, single native role, and explicit
   empty SBOM and component sets. SQLAlchemy binds its exact wheels,
