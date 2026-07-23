@@ -100,6 +100,8 @@ COPY .github/dependabot.yml ./.github/dependabot.yml
 COPY .github/scripts/build_python_distribution_spine.py \
      .github/scripts/build_release_spine.py \
      .github/scripts/container_evidence.py \
+     .github/scripts/container_source_plan.py \
+     .github/scripts/fetch_verified_sources.py \
      .github/scripts/github_release_api.py \
      .github/scripts/immutable_release_preflight.py \
      .github/scripts/python_distribution_spine.py \
@@ -107,6 +109,8 @@ COPY .github/scripts/build_python_distribution_spine.py \
      .github/scripts/release_controller.py \
      .github/scripts/release_readiness.py \
      .github/scripts/release_spine.py \
+     .github/scripts/run_evidence_parser.py \
+     .github/scripts/verified_source_store.py \
      ./.github/scripts/
 COPY .github/workflows/ ./.github/workflows/
 COPY .compliance/container-policy.json ./.compliance/container-policy.json

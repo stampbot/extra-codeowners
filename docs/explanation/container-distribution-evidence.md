@@ -124,9 +124,10 @@ every layer against the bytes it received. It then:
 9. validates every schema-7 owner observation, disposition, review, omission,
    and cross-owner relationship; writes the derived coverage ledger; and binds
    each closed owner to its exact locked source
-10. retrieves the hash-pinned source and license material, including the
-    Greenlet/GCC component source and notices, and produces a deterministic
-    review archive whose manifest derives the current incomplete state.
+10. reads the hash-pinned source and license material from verified source
+    stores, including the Greenlet/GCC component source and notices, and
+    produces a deterministic review archive whose manifest derives the current
+    incomplete state.
 
 ### Historical Python installation replay
 
@@ -191,11 +192,13 @@ base-layer sequence. It also ties the readable base tag to one commit-pinned
 Docker Official Python recipe. That recipe's one literal version and source
 hash must select the configured CPython archive.
 
-Bundle generation downloads that exact archive and checks its size and
-SHA-256. It requires one regular source-carried `LICENSE` member and one regular
+The direct source plan names that exact archive, size, and SHA-256. A separate
+fetch step verifies the bytes and puts them in the shared direct source store
+before bundle generation starts. The offline bundle parser then requires one
+regular source-carried `LICENSE` member and one regular
 `Include/patchlevel.h` member with their reviewed digests. The source
 `patchlevel.h` digest must equal the version-header digest in both platform
-runtime baselines. The bounded macro parser then confirms the version and final
+runtime baselines. The bounded macro parser confirms the version and final
 release state over those source-identical bytes. The bundle retains the archive
 and license bytes alongside the recipe. The reviewed license expression remains
 a policy judgment, not a legal-compliance determination.
@@ -414,15 +417,21 @@ Neither replaces a per-platform SPDX software bill of materials (SBOM).
 
 ## Source selection
 
-The collector obtains source without executing an `APKBUILD`, `setup.py`, or
-downloaded build script:
+CI separates source acquisition from archive parsing. It first creates a
+canonical direct-source plan from the trusted policy, lock file, and source
+revision. The fetcher verifies each planned object and writes it once to a
+content-addressed direct source store. Neither fetch step runs an `APKBUILD`,
+`setup.py`, or downloaded build script.
+
+The source rules are:
 
 1. Alpine's installed database supplies each package origin and exact
    40-character aports commit. The policy pins the recipe-subtree archive hash.
    By default, one literal `source` block must correspond exactly, in order, to
-   one literal `sha512sums` block. Local regular files are verified directly;
-   other filenames are downloaded from the pinned Alpine distfiles release and
-   verified with SHA-512.
+   one literal `sha512sums` block. Local regular files are verified directly.
+   The offline recipe parser puts other filenames and their SHA-512 values in
+   the Alpine distfile plan; a separate fetch step retrieves them from the
+   pinned Alpine distfiles release.
 2. Four reviewed Alpine recipes use source construction or a safe link that
    cannot be represented by the default parser. Each exception is bound to the
    exact origin and commit, requires a rationale, and grants only dynamic-source
@@ -451,12 +460,25 @@ downloaded build script:
    the Greenlet wheel's Alpine 3.22 build provenance remains separate from the
    Alpine 3.24 runtime image.
 
-Every fetched URL and redirect must be credential-free HTTPS. Redirects are
-bounded, and `MANIFEST.json` records the complete ordered URL chain as `urls`
-while retaining the requested URL as `url`. Downloads, layers, and archive
-members have cumulative and per-item limits. Duplicate JSON keys, non-finite
-numbers, path controls, traversal, unsafe or unexpected links, digest
-mismatches, and ambiguous source metadata fail closed.
+Every requested URL and redirect uses HTTPS, and redirects are bounded. The
+trusted `SOURCE-PLAN.json` retains the exact requested URL. The persisted source
+store keeps that request's canonical origin and the canonical HTTPS origin of
+each redirect, but it does not keep redirected paths or queries. This avoids
+persisting signed query parameters or credentials carried in a redirect URL.
+`MANIFEST.json` uses the same safe projection: `url` is the exact requested URL,
+and `urls` contains that URL followed by the origin of each redirect
+destination.
+
+Both source stores are uploaded together as one GitHub Actions artifact. The
+two architecture jobs download that artifact by its immutable artifact ID, so
+they consume the same fetched objects. The bundle reader binds each store to
+the trusted plan digest and size, verifies every object while reading it, and
+checks the retained store again before publishing the bundle outputs.
+
+Source requests, transferred bytes, layers, and archive members have cumulative
+and per-item limits. Duplicate JSON keys, non-finite numbers, path controls,
+traversal, unsafe or unexpected links, digest mismatches, and ambiguous source
+metadata fail closed.
 
 ## License evidence
 
@@ -497,29 +519,35 @@ files retained under `artifacts/application/`.
 
 ## Why release collection needs a different boundary
 
-The CI collector parses hostile images and archives in a job that can also use
-the network. That job has no publication authority. A release job with
-package-write, OpenID Connect, signing, or attestation authority must never run
-the combined operation. Issue #28 requires this bounded sequence:
+CI now separates source fetches from the parsers that inspect source archives.
+It uses this sequence:
 
 ```text
-unprivileged pinned fetch
-  -> rootless parse with no network
-  -> unprivileged fetch of exact checksum-addressed distfiles
-  -> rootless final bundle with no network
-  -> digest and policy validation
-  -> short-lived isolated publication and signing authority
+trusted direct-source plan
+  -> unprivileged direct-source fetch
+  -> rootless, offline Alpine distfile plan
+  -> unprivileged Alpine distfile fetch
+  -> one verified-source artifact reused by both architectures
+  -> rootless, offline final parse and deterministic bundle
 ```
 
-Before those phases may publish, the remaining three native-wheel owners must
+The final parser runs as UID and GID `65532` with `--network=none` and
+`--ipc=none`. It receives no Linux capabilities, privilege escalation,
+credential environment variables, or Docker socket. Its image and inputs are
+read-only. Scratch, work, and output live on bounded `tmpfs` mounts, and the
+wrapper also limits memory, CPU, processes, file descriptors, bytes, and inode
+counts. Only the exact set of three evidence files leaves that sandbox.
+
+This implements the source-store and final-bundle part of issue
+[#28](https://github.com/stampbot/extra-codeowners/issues/28). The image and
+layer inventory phase still runs outside this rootless, offline parser
+boundary. A recipient verifier and the isolated signing and publication path
+also remain outstanding. The current collector has no publication authority,
+and the release workflow still blocks every supported publication.
+
+Before any release may publish, the remaining three native-wheel owners must
 move from `open` to `closed`, or those wheels must be replaced with builds
 linked against separately inventoried packages.
-
-The parsing phases must run rootless with `--network none`, immutable inputs,
-read-only mounts where practical, and explicit size limits. The first parse
-emits a bounded request for checksum-addressed distfiles. A separate fetch step
-retrieves only that request. The final offline parse must reproduce and validate
-the complete archive before a privileged job signs or publishes anything.
 
 The future recipient contract also requires a platform digest, archive digest,
 signed predicate, and OCI attestation to agree. Identical attestations produced

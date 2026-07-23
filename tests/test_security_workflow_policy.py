@@ -534,8 +534,17 @@ def test_ci_raw_spine_transport_is_a_fail_closed_merge_gate() -> None:
             "    name: Raw OCI release-spine transport changed\n",
         ),
         (
-            "\n    if: ${{ always() }}\n    permissions:\n",
-            "\n    permissions:\n",
+            "    name: Raw OCI release-spine transport\n"
+            "    needs:\n"
+            "      - python-distribution\n"
+            "      - release-spine-transport-producer\n"
+            "    if: ${{ always() }}\n"
+            "    permissions:\n",
+            "    name: Raw OCI release-spine transport\n"
+            "    needs:\n"
+            "      - python-distribution\n"
+            "      - release-spine-transport-producer\n"
+            "    permissions:\n",
         ),
         (
             "      - release-spine-transport-producer\n    if: ${{ always() }}\n",
