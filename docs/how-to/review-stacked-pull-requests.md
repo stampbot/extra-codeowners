@@ -26,12 +26,13 @@ Record every pull-request number and exact head SHA before merging anything.
 The child's rebase needs the parent head SHA that reviewers saw, not the commit
 or commits that the merge later places on `main`.
 
-```mermaid
-flowchart LR
-  Main[main] --> A[PR A]
-  A --> B[PR B]
-  A -. "1. merge" .-> Main
-  B -. "2. restack, retarget, and recheck" .-> Main
+```text
+before:  main ------> PR A ------> PR B
+
+1. merge PR A
+2. replay only PR B's commits:
+
+after:   new main --> restacked PR B
 ```
 
 In words: merge PR A, replay only PR B's commits onto the new `main`, publish a
@@ -196,7 +197,6 @@ out source but do not import, test, or otherwise execute application code from
 the pull request. DCO reads commit metadata, while the other pinned actions
 inspect dependencies and workflow data. A pull request can still change the
 workflow being reviewed, so these token limits remain necessary.
-
 Feature branches created before the current triggers reached `main` may still
 contain older workflow definitions. Rebase them before relying on automatic
 stack checks. A first-time fork workflow can also wait for explicit maintainer

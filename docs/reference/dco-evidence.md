@@ -17,22 +17,18 @@ contradictory, stale, or ambiguous evidence must leave the check blocking.
 The caller must use a verified GitHub event and current GitHub API responses.
 It must not check out or execute code from the pull request.
 
-```mermaid
-sequenceDiagram
-  participant GitHub
-  participant Caller as Independent caller
-  participant Evaluator as Pure evaluator
-
-  GitHub->>Caller: Verified pull-request event
-  Caller->>GitHub: Fetch pull request (before)
-  Caller->>GitHub: List snapshot-bound PR commit nodes
-  loop Every selected PR commit node
-    Caller->>GitHub: Fetch selected commit evidence
-  end
-  Caller->>GitHub: Fetch pull request (after)
-  Caller->>Evaluator: Event, snapshots, comparison, commit details
-  Evaluator-->>Caller: Decision bound to repo, PR, base, and head
-  Caller->>GitHub: Revalidate and publish (not implemented)
+```text
+GitHub                 independent caller                  pure evaluator
+  |                            |                                  |
+  |-- verified PR event ------>|                                  |
+  |<-- fetch PR (before) ------|                                  |
+  |<-- list PR commit nodes ---|                                  |
+  |<-- fetch each commit ------|                                  |
+  |<-- fetch PR (after) -------|                                  |
+  |                            |-- event + snapshots + commits --->|
+  |                            |<-- repo/PR/base/head decision ----|
+  |<-- revalidate + publish ---|                                  |
+       not implemented
 ```
 
 In order, the caller must:

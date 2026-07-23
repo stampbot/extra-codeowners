@@ -275,13 +275,13 @@ The setup flow creates a private App with these permissions:
 | Permission | Access |
 | --- | --- |
 | Checks | Write |
-| Statuses | Write |
+| Commit statuses (`statuses`) | Write |
 | Contents | Read |
 | Metadata | Read |
 | Members | Read |
 | Pull requests | Read |
 
-Statuses makes the App selectable as an expected source in organization-level rulesets. Runtime installation tokens omit it. The [GitHub permissions reference](github-permissions.md#webhook-subscriptions) lists the explicit subscriptions and the automatically delivered installation events.
+Commit statuses makes the App selectable as an expected source in organization-level rulesets. Runtime installation tokens omit `statuses`. The [GitHub permissions reference](github-permissions.md#webhook-subscriptions) lists the explicit subscriptions and the automatically delivered installation events.
 
 Keep setup mode disabled when operators do not register Apps through this service.
 

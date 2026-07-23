@@ -11,10 +11,10 @@ The App registration requests these repository permissions:
 | Checks | Read and write | Find, create, and update this App's `Extra CODEOWNERS / approval` Check Run. |
 | Contents | Read | Read policy and `CODEOWNERS` at an exact commit. The service does not check out or write repository content. |
 | Pull requests | Read | Fetch the current pull request, changed files, labels, and reviews; receive pull-request and review webhooks. |
-| Statuses | Read and write on the installation only | Make the App available as an expected source for organization-level required-check rulesets. Runtime installation tokens omit this permission. |
+| Commit statuses (`statuses`) | Read and write | Make the App available as an expected source for organization-level required-check rulesets. Runtime installation tokens omit this permission. |
 | Metadata | Read | Read repository metadata and direct-collaborator permissions; receive label, collaborator, and repository-lifecycle webhooks. GitHub grants this baseline permission with repository access. |
 
-Statuses is a registration-time discovery permission. Extra CODEOWNERS never calls the commit-status API. GitHub documents the organization-ruleset requirement under [Require status checks to pass before merging](https://docs.github.com/en/enterprise-cloud@latest/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/available-rules-for-rulesets#require-status-checks-to-pass-before-merging).
+The **Commit statuses** permission is required at App registration so GitHub can list the App as an expected source in organization rulesets. `statuses` is the App Manifest key. Extra CODEOWNERS never calls the commit-status API. GitHub documents the organization-ruleset requirement under [Require status checks to pass before merging](https://docs.github.com/en/enterprise-cloud@latest/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/available-rules-for-rulesets#require-status-checks-to-pass-before-merging).
 
 The service does not request:
 
@@ -120,7 +120,7 @@ members: read
 pull_requests: read
 ```
 
-Statuses is deliberately absent. If a runtime token is compromised, it cannot write commit statuses even though the installation has Statuses write for expected-source selection.
+The runtime token deliberately omits `statuses`. If that token is compromised, it cannot write commit statuses even though the App registration includes Commit statuses write for expected-source selection.
 
 Runtime tokens are also:
 

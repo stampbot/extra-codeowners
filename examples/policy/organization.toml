@@ -1,0 +1,11 @@
+schema_version = 1
+
+[apps.example-automation]
+slug = "example-automation"
+app_id = 123456
+bot_user_id = 234567
+
+[guardrails]
+non_delegable_paths = [
+  "/infrastructure/production/**",
+]

@@ -94,29 +94,26 @@ live repository ID to match, and resolves the existing tag to the expected
 commit. It then lists a bounded number of releases and follows one of these
 paths:
 
-```mermaid
-flowchart TD
-    Start[Bind trusted identity; verify repository, tag, and local assets]
-    Find{Release with this tag?}
-    Create[Create exact controller-owned draft]
-    Draft{Exact matching draft?}
-    Upload[Upload only missing assets]
-    Check[Require exact remote names, sizes, states, and SHA-256 values]
-    Publish[Publish once by release ID]
-    Immutable{Exact release is immutable?}
-    Success[Accept idempotent success]
-    Fail[Fail without deleting or replacing state]
+```text
+bind identity; verify repository, tag, and local assets
+  |
+  +-- release absent --> create controller draft
+  |
+  `-- release present --> keep existing release
 
-    Start --> Find
-    Find -->|none| Create
-    Create --> Draft
-    Find -->|yes| Draft
-    Draft -->|yes| Upload
-    Draft -->|public and exact| Immutable
-    Draft -->|foreign or mutable public state| Fail
-    Upload --> Check --> Publish --> Immutable
-    Immutable -->|yes| Success
-    Immutable -->|no| Fail
+both paths --> inspect exact state
+  |
+  +-- matching draft --> upload only missing assets
+  |                       --> verify remote state
+  |                       --> publish once by release ID
+  |                       --> require exact immutable release
+  |
+  +-- matching public release --> require exact immutable release
+  |
+  `-- foreign or mutable public state --> fail without deletion
+
+exact immutable release --> success
+anything else -----------> fail
 ```
 
 An upload URL is accepted only when it uses HTTPS on `uploads.github.com`, has

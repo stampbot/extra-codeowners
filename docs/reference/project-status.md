@@ -101,6 +101,7 @@ that must finish before the first supported release:
 
 - [#18: complete notices and corresponding-source evidence](https://github.com/stampbot/extra-codeowners/issues/18)
 - [#28: separate archive parsing from publication authority](https://github.com/stampbot/extra-codeowners/issues/28)
+- [#30: decide the disposition of the unsupported GHCR preview](https://github.com/stampbot/extra-codeowners/issues/30)
 - [#32: retain and bind the selected Python build proof](https://github.com/stampbot/extra-codeowners/issues/32)
 - [#25: publish the first release as an immutable GitHub release](https://github.com/stampbot/extra-codeowners/issues/25).
 

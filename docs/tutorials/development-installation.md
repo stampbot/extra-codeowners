@@ -1,217 +1,375 @@
-# Run a development installation
+# Run your first check
 
-This tutorial takes you from a clean checkout to a working Extra CODEOWNERS
-check on a disposable pull request. You will run the service locally, connect a
-development GitHub App, delegate one low-risk path, and verify both the success
-and failure cases.
+In this tutorial, we will run Extra CODEOWNERS locally and watch it evaluate a
+real pull request. A human CODEOWNER will approve the change. We won't delegate
+anything to an App yet.
 
-Do not use the result to protect production merges. The
-[commit-scoped check limitation](../reference/project-status.md#production-enforcement-blocker)
-still blocks production enforcement.
+The result is for learning, not production. Extra CODEOWNERS still has a
+[commit-scoped check limitation](../reference/project-status.md#production-enforcement-blocker).
 
 ## What you need
 
-- Bash and Git on a POSIX-compatible system
-- [mise](https://mise.jdx.dev/)
-- permission to create and install a GitHub App
-- a disposable organization or repository
-- an HTTPS forwarding service that can send public traffic to local port
-  `8000`
-- a standard `CODEOWNERS` file in the test repository.
+Use a POSIX-compatible shell and a disposable GitHub organization. You also
+need:
 
-The forwarding service must preserve the request body and GitHub signature
-headers. Expose only the webhook and setup routes you need; keep `/metrics`
-private.
+- Git with an author name and email, `curl`, and
+  [mise](https://mise.jdx.dev/) 2026.7.12 or newer
+- GitHub CLI authenticated as an organization administrator
+- permission to create and install a private GitHub App
+- two human GitHub accounts: one pull-request author and one CODEOWNER
+- write access for the CODEOWNER on the test repository
+- an operator-controlled browser and terminal.
 
-## 1. Prepare the checkout
+This tutorial uses a
+[Cloudflare Quick Tunnel](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/do-more-with-tunnels/trycloudflare/)
+to send webhooks to your local service. Cloudflare is a third party and can see
+the proxied payload. Use public, disposable repositories with no private code
+or real secrets. Don't reuse the App, webhook secret, or tunnel after the
+tutorial. Quick Tunnels are a development service with no availability
+guarantee.
 
-Review `mise.toml` before allowing it to install or run tools. From the
-repository root:
+## 1. Prepare a clean checkout
+
+Clone the repository. Before trusting the checkout, review the revision you
+received and read `mise.toml` and `mise.tutorial.toml`. `mise trust` permits
+repository configuration and tasks to execute on your workstation.
 
 ```bash
-mise trust
+git clone https://github.com/stampbot/extra-codeowners.git
+cd extra-codeowners
+git status --short
+git log -1 --oneline --show-signature
+less mise.toml mise.tutorial.toml
+```
+
+When the checkout and tool configuration match the revision you intended to
+run, install the pinned toolchain:
+
+```bash
+export EXTRA_CODEOWNERS_ROOT="$PWD"
+mise trust mise.toml
+mise trust mise.tutorial.toml
 mise install
 mise run bootstrap
 ```
 
-Mise installs the pinned toolchain, and the bootstrap task creates `.venv` from
-the committed lockfile. Stop here if dependency installation changes
-`uv.lock` or cannot complete with the locked versions.
+`mise run bootstrap` should exit with status `0` and create `.venv/` without
+changing `uv.lock`.
 
-## 2. Give GitHub a temporary HTTPS endpoint
+## 2. Create the disposable repositories
 
-Start your forwarding service and point its public HTTPS origin at
-`http://127.0.0.1:8000`. Keep the forwarding process open in another terminal.
-
-Record only the origin, with no trailing path. This tutorial uses a reserved
-example:
-
-```text
-https://extra-codeowners-tutorial.example.com
-```
-
-The webhook URL will be that origin plus `/webhooks/github`.
-
-## 3. Create the development App
-
-Create a private GitHub App with a name that clearly marks it as disposable.
-You can use the [App setup URL](../how-to/register-app.md), which fills in the
-permissions and webhook subscriptions, or enter the same settings manually in
-GitHub's **Developer settings**.
-
-For a manual registration, use:
-
-- **Webhook URL:** `https://YOUR_ORIGIN/webhooks/github`
-- **Webhook secret:** a new random value used only by this App
-- **Repository permissions:** Checks read and write; Contents read; Pull
-  requests read; Statuses read and write
-- **Organization permissions:** Members read
-- **Events:** Check run, Installation target, Label, Member, Membership,
-  Organization, Pull request, Pull request review, Push, Repository, Team, and
-  Team add.
-
-GitHub supplies Metadata read automatically. It also delivers Installation and
-Installation repositories events to every App, so those events do not appear
-in the subscription picker.
-
-Do not grant Issues, Actions, Workflows, Administration, or Pull requests write
-access. Statuses write is present so an organization ruleset can identify this
-App as an expected check source; Extra CODEOWNERS deliberately omits that
-permission from the installation tokens it requests at runtime.
-
-Generate a private key, save it outside the checkout, and install the App only
-on:
-
-1. the disposable target repository, and
-2. the organization's policy repository, which is `.github` by default.
-
-The [permissions reference](../reference/github-permissions.md) explains why
-each permission and event is needed.
-
-## 4. Configure the local service
-
-Copy the development defaults:
+Set your organization name, then create its policy repository and one target
+repository:
 
 ```bash
+export TUTORIAL_ORG='REPLACE_WITH_DISPOSABLE_ORGANIZATION'
+export CODEOWNER_LOGIN='REPLACE_WITH_SECOND_HUMAN_LOGIN'
+gh repo create "${TUTORIAL_ORG}/.github" --public --add-readme
+gh repo create "${TUTORIAL_ORG}/extra-codeowners-tutorial" --public --add-readme
+```
+
+Replace both placeholders before running the commands. Set
+`CODEOWNER_LOGIN` to a login without the leading `@`. Give that person write
+access to the target repository:
+
+```bash
+gh api --method PUT \
+  "repos/${TUTORIAL_ORG}/extra-codeowners-tutorial/collaborators/${CODEOWNER_LOGIN}" \
+  -f permission=push
+```
+
+If GitHub creates an invitation, ask that person to accept it now.
+
+Clone both repositories into a temporary directory:
+
+```bash
+export TUTORIAL_ROOT
+TUTORIAL_ROOT="$(mktemp -d)"
+: >"${TUTORIAL_ROOT}/.extra-codeowners-tutorial"
+gh repo clone "${TUTORIAL_ORG}/.github" \
+  "${TUTORIAL_ROOT}/organization-policy"
+gh repo clone "${TUTORIAL_ORG}/extra-codeowners-tutorial" \
+  "${TUTORIAL_ROOT}/target"
+```
+
+Create organization policy:
+
+```bash
+install -d "${TUTORIAL_ROOT}/organization-policy/.github"
+cat >"${TUTORIAL_ROOT}/organization-policy/.github/extra-codeowners.toml" <<'EOF'
+schema_version = 1
+EOF
+git -C "${TUTORIAL_ROOT}/organization-policy" add \
+  .github/extra-codeowners.toml
+git -C "${TUTORIAL_ROOT}/organization-policy" commit --signoff \
+  -m 'Add tutorial organization policy'
+git -C "${TUTORIAL_ROOT}/organization-policy" push
+```
+
+Create repository policy and the human ownership rule:
+
+```bash
+install -d "${TUTORIAL_ROOT}/target/.github"
+cat >"${TUTORIAL_ROOT}/target/.github/extra-codeowners.toml" <<'EOF'
+schema_version = 1
+enabled = true
+EOF
+printf '/docs/tutorial-check.txt @%s\n' "$CODEOWNER_LOGIN" \
+  >"${TUTORIAL_ROOT}/target/.github/CODEOWNERS"
+git -C "${TUTORIAL_ROOT}/target" add .github
+git -C "${TUTORIAL_ROOT}/target" commit --signoff \
+  -m 'Add tutorial approval policy'
+git -C "${TUTORIAL_ROOT}/target" push
+```
+
+The repository policy opts in but delegates no ownership to an App.
+
+Check the file before you continue:
+
+```bash
+gh api \
+  "repos/${TUTORIAL_ORG}/extra-codeowners-tutorial/codeowners/errors" \
+  --jq '.errors'
+```
+
+The command should print `[]`.
+
+## 3. Start the HTTPS tunnel
+
+Keep the first terminal for the remaining commands. In a second terminal,
+change to the same Extra CODEOWNERS checkout and start a temporary tunnel with
+the checksum-pinned `cloudflared` release:
+
+```bash
+cd /absolute/path/to/extra-codeowners
+install -d -m 700 "$HOME/.config/extra-codeowners"
+printf '{}\n' \
+  >"$HOME/.config/extra-codeowners/tutorial-cloudflared.yml"
+mise exec -E tutorial -- \
+  cloudflared tunnel \
+  --config "$HOME/.config/extra-codeowners/tutorial-cloudflared.yml" \
+  --no-autoupdate \
+  --url http://127.0.0.1:8000
+```
+
+The isolated empty config prevents an existing `cloudflared` configuration
+from changing Quick Tunnel behavior.
+
+`mise.tutorial.toml` pins release `2026.7.2` and the exact asset digest for
+x86-64 and arm64 Linux and macOS. The
+[relay update procedure](../maintainers/update-tutorial-relay.md) keeps the
+version, four checksums, and signed-delivery evidence together.
+
+The command prints a random HTTPS URL ending in `trycloudflare.com`. Leave that
+terminal running. Back in the first terminal, record the URL as `TUNNEL_URL`
+and treat it as temporary sensitive data:
+
+```bash
+export TUNNEL_URL='REPLACE_WITH_PRINTED_TRYCLOUDFLARE_URL'
+```
+
+Leave the tunnel running. Requests will fail until the service starts. That is
+expected. A restarted Quick Tunnel gets a new URL; update the App's webhook URL
+before redelivering an event.
+
+Extra CODEOWNERS verifies GitHub's signature over the exact request bytes, as
+required by
+[GitHub's signature-validation contract](https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries).
+Do not substitute a webhook relay that parses and reserializes JSON.
+The pin covers the open-source local client, not Cloudflare's proprietary edge.
+If signature verification changes, stop the tutorial instead of weakening the
+webhook check.
+
+## 4. Register the checker App
+
+First, create a random webhook secret of at least 32 bytes in a file outside
+the checkout:
+
+```bash
+install -d -m 700 "$HOME/.config/extra-codeowners"
+(
+  umask 077
+  mise exec -- python -c \
+    'import secrets; print(secrets.token_urlsafe(32))' \
+    >"$HOME/.config/extra-codeowners/tutorial-webhook-secret"
+)
+```
+
+In the disposable organization's GitHub settings, open **Developer settings**,
+then **GitHub Apps**, then **New GitHub App**. Complete the form in this order:
+
+1. Enter a globally unique **GitHub App name** no longer than 34 characters.
+   A name such as `eco-tutorial-UNIQUE_SUFFIX` makes its purpose clear.
+2. Set **Homepage URL** to
+   `https://github.com/stampbot/extra-codeowners`.
+3. Leave **Callback URL** and **Setup URL** empty. Do not request user
+   authorization during installation.
+4. Enable **Active** under **Webhook**.
+5. Set **Webhook URL** to the exact `TUNNEL_URL` followed by
+   `/webhooks/github`.
+6. Paste the single line from
+   `~/.config/extra-codeowners/tutorial-webhook-secret` into **Webhook
+   secret**.
+7. Set repository permissions to Checks read and write; Contents read; Pull
+   requests read; and Commit statuses read and write.
+8. Set the Members organization permission to read. Leave every other
+   repository, organization, and account permission at **No access**.
+9. Subscribe to Check run, Installation target, Label, Member, Membership,
+   Organization, Pull request, Pull request review, Push, Repository, Team, and
+   Team add.
+10. Under **Where can this GitHub App be installed?**, select **Only on this
+    account**.
+11. Review the form, then select **Create GitHub App**.
+
+GitHub supplies Metadata read automatically. It also sends Installation and
+Installation repositories events to every App, so they do not appear in the
+event picker.
+
+Do not grant Actions, Administration, Issues, Workflows, or Pull requests write.
+Extra CODEOWNERS reads reviews; it never submits one. Commit statuses
+(`statuses`) write is a registration permission for organization ruleset
+source selection. Runtime tokens omit it, and the service publishes Check Runs
+instead.
+
+On the new App's settings page, record the numeric App ID. Select **Generate a
+private key**, then move the downloaded PEM and restrict its permissions:
+
+```bash
+mv /absolute/path/to/downloaded-private-key.pem \
+  "$HOME/.config/extra-codeowners/tutorial-app.private-key.pem"
+chmod 0600 \
+  "$HOME/.config/extra-codeowners/tutorial-app.private-key.pem"
+```
+
+Replace the source path before running the command.
+
+The [App setup guide](../how-to/register-app.md) describes the automatic
+manifest flow. It is a separate bootstrap path because its callback routes must
+already be reachable over HTTPS.
+
+## 5. Configure and start Extra CODEOWNERS
+
+Return to the Extra CODEOWNERS checkout. Copy the local defaults:
+
+```bash
+cd "$EXTRA_CODEOWNERS_ROOT"
 cp .env.example .env
 ```
 
-Git ignores `.env`. Edit it so these settings point to the development App:
+Edit `.env` and uncomment these settings:
 
 ```dotenv
-EXTRA_CODEOWNERS_ENVIRONMENT=development
 EXTRA_CODEOWNERS_GITHUB_APP_ID=123456
-EXTRA_CODEOWNERS_GITHUB_PRIVATE_KEY_FILE=/absolute/path/to/development-app.private-key.pem
-EXTRA_CODEOWNERS_GITHUB_WEBHOOK_SECRET=replace-with-the-development-webhook-secret
-EXTRA_CODEOWNERS_DATABASE_URL=sqlite:///./extra-codeowners.db
+EXTRA_CODEOWNERS_GITHUB_PRIVATE_KEY_FILE=/absolute/path/to/tutorial-app.private-key.pem
+EXTRA_CODEOWNERS_GITHUB_WEBHOOK_SECRET_FILE=/absolute/path/to/tutorial-webhook-secret
 ```
 
-Replace the App ID, key path, and webhook secret. The example values are not
-usable credentials. An inline webhook secret is reasonable for this local
-exercise; deployed installations should use the file-backed setting or a
-secret manager.
+Replace the App ID and both absolute paths. Keep the SQLite development
+database and leave `EXTRA_CODEOWNERS_SETUP_ENABLED=false`.
 
-`EXTRA_CODEOWNERS_PUBLIC_URL` is required only while the optional App setup
-flow is enabled. Normal webhook handling uses the URL stored in GitHub's App
-settings.
-
-## 5. Start the service
-
-Database migration is an explicit operator step. Run it before starting the
-server:
+Migrate the database, then start the service in the background. Its process ID
+stays in the first terminal for cleanup:
 
 ```bash
 mise exec -- uv run python -m extra_codeowners database migrate
-mise exec -- uv run python -m extra_codeowners serve
+mise exec -- uv run python -m extra_codeowners serve \
+  >"${TUTORIAL_ROOT}/service.log" 2>&1 &
+export SERVICE_PID=$!
 ```
 
-Startup never creates or upgrades tables. Fix any migration error before
-continuing.
-
-The server listens on `127.0.0.1:8000`. Leave it running, then open another
-terminal and check both probes:
+Check both probes from the same terminal:
 
 ```bash
 curl --fail-with-body http://127.0.0.1:8000/health/live
 curl --fail-with-body http://127.0.0.1:8000/health/ready
 ```
 
-Both commands should exit with status `0`. The liveness response reports an
-alive worker and reconciler:
+Both commands should exit with status `0`. The liveness response looks like:
 
 ```json
 {"status":"alive","worker":true,"reconciler":true}
 ```
 
-The readiness probe also checks the database and required GitHub credentials. If
-it fails, inspect the local log, but do not copy keys, secrets, or complete
-database URLs into an issue.
+If either probe fails, read `"${TUTORIAL_ROOT}/service.log"` before continuing.
 
-## 6. Delegate one path
+## 6. Install the App
 
-Use the [configuration guide](../how-to/configure.md) to enroll the App that
-will submit approvals. That may be Stampbot or another development App; it is
-not normally the Extra CODEOWNERS checker itself.
+From the App's settings page:
 
-Start with one harmless file and one human owner group. Keep native code-owner
-enforcement enabled while you test the policy. The repository-rules guide comes
-later, after the negative cases pass.
+1. Select **Install App**.
+2. Select **Install** beside the disposable organization.
+3. Choose **Only select repositories**.
+4. Select `.github` and `extra-codeowners-tutorial`.
+5. Review the requested access, then select **Install**.
 
-Open a pull request that changes the delegated file. Add any required label and
-have the enrolled App approve the current head. A working installation has all
-of these signals:
+Return to the App's **Advanced** settings and open **Recent deliveries**. Find
+the `installation.created` delivery. GitHub should report HTTP `202`. If the
+service was not ready when GitHub sent it, select **Redeliver** and check again.
 
-- GitHub records a successful delivery to `/webhooks/github`.
-- `/health/ready` continues to return HTTP 200.
-- `Extra CODEOWNERS / approval` appears on the current pull-request head.
-- The check succeeds only after the configured owner obligation is satisfied.
+## 7. Open and approve the pull request
 
-Now remove a required label or push another commit. The existing approval must
-stop satisfying the check. Finish the remaining negative tests in the
-[configuration guide](../how-to/configure.md#5-test-the-boundary).
-
-## 7. Run the local quality gate
-
-Stop the development server with `Ctrl-C`, then run:
+Continue with the GitHub CLI account that created the repositories. It must not
+be `CODEOWNER_LOGIN`. Create the owned file and open a pull request:
 
 ```bash
-mise run check
+cd "${TUTORIAL_ROOT}/target"
+git switch -c tutorial-human-approval
+install -d docs
+printf 'first revision\n' >docs/tutorial-check.txt
+git add docs/tutorial-check.txt
+git commit --signoff -m 'Add the tutorial check file'
+git push --set-upstream origin HEAD
+gh pr create \
+  --title 'Exercise human CODEOWNER approval' \
+  --body 'Disposable Extra CODEOWNERS tutorial.'
 ```
 
-This task runs the pull-request test, lint, documentation, workflow, and Helm
-checks available on the workstation. It does not enforce coverage and skips
-PostgreSQL-only tests when `TEST_POSTGRES_URL` is absent.
+The `Extra CODEOWNERS / approval` check should appear and fail because the
+owned path has no approval. Open its details and confirm that it names
+`docs/tutorial-check.txt` and the configured owner without exposing a secret.
 
-To exercise the complete database suite, create a disposable PostgreSQL
-database whose name ends in `_test`, then enter its URL at a hidden prompt:
+Now sign in as the CODEOWNER and approve the current pull-request head. The
+same check should run again and finish successfully.
+
+Push one more commit as the author:
 
 ```bash
-read -rsp 'Disposable PostgreSQL test URL: ' TEST_POSTGRES_URL
-printf '\n'
-export TEST_POSTGRES_URL
-mise run test:coverage
-unset TEST_POSTGRES_URL
+printf 'second revision\n' >>docs/tutorial-check.txt
+git add docs/tutorial-check.txt
+git commit --signoff -m 'Update the tutorial check file'
+git push
 ```
 
-Use a URL such as:
+The earlier approval must stop satisfying the check because it belongs to the
+old head. After the CODEOWNER approves the new head, the check should return
+to success.
 
-```text
-postgresql+psycopg://TEST_USER:TEST_PASSWORD@127.0.0.1:5432/extra_codeowners_test
-```
-
-Percent-encode reserved characters in the credentials. The test suite refuses
-database names without the `_test` suffix, then drops and recreates Extra
-CODEOWNERS tables. Never point it at a shared or production database.
+You now have a checker App that evaluated `CODEOWNERS` and a current human
+review. App delegation is the next layer, not a prerequisite for proving that
+the checker works.
 
 ## Clean up
 
-You now have a local service that evaluated a real pull request. Remove the
-temporary authority before moving on:
+Stop the tunnel with `Ctrl-C` in the second terminal. Stop the service and
+remove the temporary local files from the first terminal:
 
-1. If you changed repository rules, restore GitHub's native code-owner rule and
-   wait for it to apply. Only then remove the Extra CODEOWNERS required check.
-2. Disable or remove the test repository policy.
-3. Uninstall or suspend the development GitHub App, then delete its private key
-   in GitHub.
-4. Stop the HTTPS forwarding process.
-5. Delete `.env` and `extra-codeowners.db` from the checkout.
+```bash
+if test -n "${SERVICE_PID:-}" && kill -0 "$SERVICE_PID" 2>/dev/null; then
+  kill "$SERVICE_PID"
+  wait "$SERVICE_PID" || true
+fi
+rm -f "$EXTRA_CODEOWNERS_ROOT/.env"
+rm -f "$EXTRA_CODEOWNERS_ROOT/extra-codeowners.db"
+rm -f "$HOME/.config/extra-codeowners/tutorial-cloudflared.yml"
+rm -f "$HOME/.config/extra-codeowners/tutorial-app.private-key.pem"
+rm -f "$HOME/.config/extra-codeowners/tutorial-webhook-secret"
+test -n "${TUTORIAL_ROOT:-}" &&
+  test -f "${TUTORIAL_ROOT}/.extra-codeowners-tutorial" &&
+  rm -rf -- "$TUTORIAL_ROOT"
+unset CODEOWNER_LOGIN EXTRA_CODEOWNERS_ROOT SERVICE_PID TUNNEL_URL TUTORIAL_ORG
+unset TUTORIAL_ROOT
+```
+
+Uninstall and delete the disposable GitHub App. Delete the tutorial
+repositories and organization when nothing else uses them. The Quick Tunnel
+stops accepting requests when `cloudflared` exits.

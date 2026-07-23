@@ -2100,6 +2100,7 @@ async def test_reconciler_task_exits_within_grace_after_stop_during_repository_s
     tmp_path: Path,
 ) -> None:
     shutdown = asyncio.Event()
+    stop_signalled = asyncio.Event()
     github = FakeGitHub(changed_path="uv.lock")
     github.list_installations = AsyncMock(  # type: ignore[attr-defined]
         return_value=[{"id": 2, "suspended_at": None}]
@@ -2113,6 +2114,7 @@ async def test_reconciler_task_exits_within_grace_after_stop_during_repository_s
         del installation_id
         assert stop is not None
         shutdown.set()
+        stop_signalled.set()
         return [{"full_name": "example/project", "archived": False}]
 
     github.list_installation_repositories = (  # type: ignore[attr-defined]
@@ -2122,7 +2124,16 @@ async def test_reconciler_task_exits_within_grace_after_stop_during_repository_s
     store = migrated_store(f"sqlite:///{tmp_path / 'reconcile-stop-repositories.db'}")
     reconciler = Reconciler(settings(), github, store, "reconciler")  # type: ignore[arg-type]
 
-    await asyncio.wait_for(reconciler.run(shutdown), timeout=1)
+    task = asyncio.create_task(reconciler.run(shutdown))
+    try:
+        # Startup includes a synchronous lease operation in a worker thread.
+        # Measure the shutdown grace period only after the scan signals stop.
+        await asyncio.wait_for(stop_signalled.wait(), timeout=10)
+        await asyncio.wait_for(task, timeout=1)
+    finally:
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
 
     github.list_open_pulls.assert_not_awaited()  # type: ignore[attr-defined]
     assert store.pending_count() == 0

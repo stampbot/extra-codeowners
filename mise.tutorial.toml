@@ -1,0 +1,23 @@
+[tool_alias]
+tutorial-cloudflared = "github:cloudflare/cloudflared"
+
+[tools.tutorial-cloudflared]
+version = "2026.7.2"
+
+[tools.tutorial-cloudflared.platforms]
+
+[tools.tutorial-cloudflared.platforms.linux-x64]
+asset_pattern = "cloudflared-linux-amd64"
+checksum = "sha256:ec905ea7b7e327ff8abdde8cb64697a2152de74dbcdbf6aec9db8364eb3886cd"
+
+[tools.tutorial-cloudflared.platforms.linux-arm64]
+asset_pattern = "cloudflared-linux-arm64"
+checksum = "sha256:405df476437e027fc6d18729a5a77155c0a33a6082aeee60a799a688f3052e66"
+
+[tools.tutorial-cloudflared.platforms.macos-x64]
+asset_pattern = "cloudflared-darwin-amd64.tgz"
+checksum = "sha256:4ee0d3b48a990a2f9b5faec5838f73ec1f400aa8e0a4864be576adfafec406cb"
+
+[tools.tutorial-cloudflared.platforms.macos-arm64]
+asset_pattern = "cloudflared-darwin-arm64.tgz"
+checksum = "sha256:2086e51c61d6565781d84117a5007d0c826d03ffdc74acb91c08c167f9f8cd7c"

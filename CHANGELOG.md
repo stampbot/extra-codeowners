@@ -72,15 +72,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Rel
 - A read-only immutable-release preflight contract that binds GitHub's setting
   to one repository and workflow run without sharing publication authority.
 - A non-root container, Helm chart source, and supply-chain workflows.
-- Schema-v6 container evidence that binds CPython runtime/source identities,
-  retains every exact locked native wheel and raw embedded SBOM, and closes
-  Greenlet with an exact wheel, owner sdist, five-file native set, and embedded
-  SBOM component/source/license set. The evidence proves exact co-membership in
-  the wheel; the SBOM provides no component-to-file map, so the policy makes no
-  individual payload attribution. Roles are deterministic platform-neutral
-  projections of the installed paths, so they cannot be reassigned while
-  comparing the native set across platforms. Global package-URL semantics
-  reject conflicting nested identity, source, or license records.
+- Schema-v7 container evidence with a lossless review ledger that separates
+  observed artifact facts, reviewed source mappings, and closure. It preserves
+  repeated SBOM occurrence identity, binds CPython runtime and source
+  identities, and retains every exact locked native wheel and raw embedded
+  SBOM. Earlier schema revisions are rejected instead of migrated lossily.
+  Greenlet is closed with an exact wheel, owner sdist, five-file native set,
+  and embedded SBOM component, source, and license set. The evidence proves
+  exact co-membership in the wheel; the SBOM provides no component-to-file map,
+  so the policy makes no individual payload attribution. Roles are
+  deterministic platform-neutral projections of the installed paths, so they
+  cannot be reassigned while comparing the native set across platforms. Global
+  package-URL semantics reject conflicting nested identity, source, or license
+  records.
 - Closed-world native-owner records for MarkupSafe and SQLAlchemy. MarkupSafe
   binds its exact wheels, 80,313-byte sdist, single native role, and explicit
   empty SBOM and component sets. SQLAlchemy binds its exact wheels,
@@ -90,9 +94,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Rel
   completeness remain explicitly unresolved.
 - Diátaxis documentation, a threat model, operating guides, and Read the Docs configuration.
 - Bounded pull-request and scheduled property tests for untrusted parsing and policy inputs.
+- A first-check tutorial that proves human CODEOWNER evaluation before App delegation.
+- A pull-request check troubleshooting guide and CI-validated policy examples.
+- A byte-for-byte HMAC probe for reviewing tutorial webhook-relay updates.
 
 ### Changed
 
+- Public documentation now starts with repository setup and check results; release
+  engineering has a separate maintainer section.
+- Native CODEOWNERS guidance no longer claims undocumented GitHub App bot
+  behavior, and diagrams render without browser-side JavaScript.
+- The first-check tutorial now uses a checksum-pinned webhook relay on supported
+  Linux and macOS platforms, with an explicit maintainer update procedure.
 - Known-head evaluation and authority fan-out writes now create their
   exact-head invalidation fence in the same transaction, so pruning cannot
   orphan a queued generation.

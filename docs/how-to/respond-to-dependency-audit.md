@@ -63,7 +63,9 @@ pause publication when needed, and carry remediation through normal review.
 
 ## Reproduce locally
 
-Review `mise.toml`, install its pinned tools, and run all three resolutions:
+Review the checked-out revision and `mise.toml` before trusting it. `mise
+trust` permits repository configuration and tasks to execute locally. Then
+install the pinned tools and run all three resolutions:
 
 ```bash
 mise trust

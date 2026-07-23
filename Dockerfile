@@ -109,8 +109,9 @@ COPY .github/scripts/build_python_distribution_spine.py \
      ./.github/scripts/
 COPY .github/workflows/ ./.github/workflows/
 COPY .compliance/container-policy.json ./.compliance/container-policy.json
-COPY docs/reference/upgrade-notes.md ./docs/reference/upgrade-notes.md
-COPY .dockerignore Dockerfile mise.toml renovate.json ./
+COPY docs/ ./docs/
+COPY examples/ ./examples/
+COPY .dockerignore Dockerfile mise.toml mise.tutorial.toml renovate.json ./
 
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --group dev --no-install-project --inexact --no-build

@@ -33,17 +33,26 @@ attempt's raw artifacts. Neither file is a supported GitHub release asset.
 
 The builder and verifier serve different trust boundaries:
 
-```mermaid
-flowchart LR
-    A[Selected Python artifact<br>immutable ID] --> B[Verify selected proof]
-    B --> C[Pinned BuildKit<br>OCI directory export]
-    C --> D[Unprivileged spine builder]
-    E[Build action<br>root digest] --> D
-    D --> F[Raw spine artifact]
-    D --> G[Raw record artifact]
-    F --> H[Read-only verifier]
-    G --> H
-    H --> I[STOP<br>publication remains blocked]
+```text
+selected Python artifact (immutable ID)
+                  |
+                  v
+        verify selected proof
+                  |
+                  v
+   pinned BuildKit OCI directory ---- build action root digest
+                  |                                |
+                  +--------------+-----------------+
+                                 v
+                     unprivileged spine builder
+                          |              |
+                          v              v
+                raw spine artifact   raw record artifact
+                          |              |
+                          +------> read-only verifier
+                                         |
+                                         v
+                              STOP: publication blocked
 ```
 
 The producer downloads the selected Python proof by immutable artifact ID and
