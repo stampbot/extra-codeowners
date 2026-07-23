@@ -59,7 +59,7 @@ The organization's GitHub plan must support rulesets on private repositories.
 
 The checker App needs:
 
-- Checks and Statuses write
+- Checks and Commit statuses write
 - Contents and Pull requests read
 - an active webhook
 - the normal
@@ -165,7 +165,9 @@ Without them, the report records the App-review assertions as `null`.
 
 ## 2. Run the fixture
 
-Install the pinned toolchain and locked dependencies, then start the test:
+Review the checked-out revision and `mise.toml` first. `mise trust` permits
+repository configuration and tasks to execute locally. Then install the pinned
+toolchain and locked dependencies and start the test:
 
 ```bash
 mise trust

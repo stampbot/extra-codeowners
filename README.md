@@ -6,186 +6,172 @@
 [![CodeQL](https://github.com/stampbot/extra-codeowners/actions/workflows/codeql.yml/badge.svg)](https://github.com/stampbot/extra-codeowners/actions/workflows/codeql.yml)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/stampbot/extra-codeowners/badge)](https://scorecard.dev/viewer/?uri=github.com/stampbot/extra-codeowners)
 [![Documentation](https://readthedocs.org/projects/extra-codeowners/badge/?version=latest)](https://extra-codeowners.readthedocs.io/)
-[![Python 3.12–3.14](https://img.shields.io/badge/python-3.12%E2%80%933.14-blue.svg)](https://www.python.org/)
-[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![Python 3.12–3.14](https://img.shields.io/badge/python-3.12%E2%80%933.14-blue.svg)](https://www.python.org/) [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-Extra CODEOWNERS is a self-hosted GitHub App for repositories that want trusted
-automation to satisfy a narrow code-owner obligation. People and teams stay in
-the standard `CODEOWNERS` file. Applications and the paths they may approve
-live in separate policy.
+Extra CODEOWNERS is a self-hosted GitHub App that uses an existing trusted
+GitHub App's pull-request approval to satisfy `CODEOWNERS` for a small,
+explicit set of paths. People and teams stay in the standard `CODEOWNERS`
+file. App identity, paths, owners, and label restrictions live in separate
+policy.
 
-[Stampbot](https://github.com/dannysauer/stampbot) is the first use case. A
-repository could let Stampbot approve a routine `uv.lock` update while a human
-still owns changes to application code, workflows, and Stampbot's own policy.
+[Stampbot](https://github.com/dannysauer/stampbot) is the first planned
+integration: let it approve `uv.lock`, while people keep the approval policy.
 
 > [!CAUTION]
-> Extra CODEOWNERS is alpha software. Do not replace GitHub's native **Require
-> review from Code Owners** rule on a production repository yet. GitHub attaches
-> a Check Run to a commit rather than to one pull request. Extra CODEOWNERS now
-> records and retries an exact-commit revocation when a pull request reuses that
-> commit, but the control still needs live GitHub proof.
-> [Issue #1](https://github.com/stampbot/extra-codeowners/issues/1) tracks that
-> proof. Neither releases nor public images are supported, and there is no
-> hosted service or Marketplace Action. An older public GHCR preview remains
-> discoverable; do not deploy it. See the
-> [current project status](docs/reference/project-status.md) before testing it.
+> Extra CODEOWNERS is alpha software. Don't replace GitHub's native **Require
+> review from Code Owners** rule in production yet. The live contract still has
+> open work in
+> [issue #1](https://github.com/stampbot/extra-codeowners/issues/1).
+> There is no supported release or image, hosted service, or Marketplace
+> Action. An older public image may still be discoverable; do not deploy it.
 
-## Why a separate check?
+## What the check does
 
-GitHub's code-owner rule understands people and teams. An App's bot account is
-not a valid owner, and adding one can make GitHub reject the affected
-`CODEOWNERS` line. Extra CODEOWNERS leaves that file alone.
-
-Instead, it combines three sources of evidence:
-
-1. `CODEOWNERS` says which people and teams own each changed path.
-2. Organization policy enrolls a GitHub App by its numeric App ID, bot user ID,
-   and public slug.
-3. Repository policy delegates selected paths and owner groups to that App. A
-   delegation may also require or forbid labels.
-
-The App then checks reviews for the pull request's current head and publishes
-`Extra CODEOWNERS / approval`.
-
-```mermaid
-flowchart LR
-    changed[Changed paths] --> owners[Human owners from CODEOWNERS]
-    human[Human approval] --> decision{Every owner set satisfied?}
-    app[Enrolled App approval] --> policy[Path, owner, and label policy]
-    policy --> decision
-    owners --> decision
-    decision --> check[Extra CODEOWNERS / approval]
-```
-
-The checker does not submit reviews, grant an App write access, or change the
-repository's ordinary approval count. It evaluates reviews that already exist.
-The intended repository rule is therefore:
+GitHub documents `CODEOWNERS` for users and teams with write access. It does
+not document GitHub App bot accounts as a supported owner type. Extra
+CODEOWNERS keeps App authority out of that file instead of depending on
+undocumented behavior.
 
 ```text
-ordinary required approvals
-AND Extra CODEOWNERS / approval
-AND every other required check
+CODEOWNERS + human approval -----------------+
+                                              +--> Extra CODEOWNERS / approval
+App enrollment + delegation + App approval --+
 ```
 
-Only GitHub's native code-owner-review requirement is replaced. For now, test
-that composition in a disposable repository and keep native enforcement in
-production.
+The checker reads the current paths, labels, and reviews. Every effective
+`CODEOWNERS` owner set needs an eligible human approval or an enrolled App
+approval whose delegation covers the path, owner, and labels.
 
-## Policy in two places
+It does not submit reviews, grant an App repository access, or replace the
+repository's ordinary approval count. It publishes one check:
+`Extra CODEOWNERS / approval`.
 
-The organization decides which applications are eligible. In the
-organization's `.github` repository, `.github/extra-codeowners.toml` enrolls
-the App:
+## What policy looks like
 
-```toml
-schema_version = 1
-
-[apps.stampbot]
-slug = "stampbot"
-app_id = 123456
-bot_user_id = 234567
-```
-
-Replace both example IDs with values reported by GitHub. Enrollment alone does
-nothing to member repositories.
-
-A repository opts in with its own `.github/extra-codeowners.toml`:
+The organization enrolls an App by numeric App ID, bot user ID, and slug. A
+member repository opts in separately and grants a smaller scope:
 
 ```toml
 schema_version = 1
 enabled = true
 
 [[delegations]]
-app = "stampbot"
+app = "example-automation"
 paths = ["/uv.lock"]
 for_owners = ["@example-org/platform"]
 required_labels = ["dependencies"]
 ```
 
-This delegation applies only when Stampbot approves the current head, the
-change is `/uv.lock`, the standard `CODEOWNERS` result includes
-`@example-org/platform`, and the pull request has the `dependencies` label.
-The [configuration guide](docs/how-to/configure.md) shows how to obtain the
-IDs, add organization guardrails, validate both files, and run negative tests.
+This rule is useful only when organization policy also enrolls
+`example-automation`. The complete, validated pair lives under
+[`examples/policy/`](examples/policy/).
 
-## Security defaults
-
-Applications cannot stand in for a human on files that define or execute the
-approval boundary. The built-in list covers every supported `CODEOWNERS`
-location, the repository policy, `/stampbot.toml`, GitHub Actions workflows,
-and repository-local actions. Organization policy can add more paths.
-
-`EXTRA_CODEOWNERS_ALLOW_INSECURE_CHANGES=true` removes the built-in list for
-every installation served by that process. Organization guardrails remain,
-but this still changes the trust model for all served repositories. Read the
+Approval policy, workflows, and local actions reject App substitution by
+default. The
 [threat model](docs/explanation/threat-model.md#what-the-insecure-changes-escape-hatch-changes)
-before enabling it.
+explains additional guardrails and the process-wide insecure override.
 
-## Run the service locally
+## Run locally
 
-You need Git, [mise](https://mise.jdx.dev/), and a POSIX-compatible shell.
-Review `mise.toml` before trusting it, then run these commands from the
-repository root:
-
-```bash
-mise trust
-mise install
-mise run bootstrap
-mise exec -- uv run python -m extra_codeowners database migrate
-mise exec -- uv run python -m extra_codeowners serve
-```
-
-The development server listens on `127.0.0.1:8000`. In another terminal, check
-its liveness:
+From the repository root, with Bash, `curl`, and `mise` installed, review
+`mise.toml` before allowing it to execute with `mise trust`. This smoke test
+uses a temporary SQLite database and stops the server on exit. It still records
+the `mise` trust decision, installs the pinned tools, and creates or updates
+`.venv/`.
 
 ```bash
-curl --fail-with-body http://127.0.0.1:8000/health/live
+(
+  set -euo pipefail
+
+  if [[ -e .env ]]; then
+    echo 'Move .env out of the repository before running this smoke test.' >&2
+    exit 1
+  fi
+  if env | grep '^EXTRA_CODEOWNERS_' >/dev/null; then
+    echo 'Unset existing EXTRA_CODEOWNERS_* variables first.' >&2
+    exit 1
+  fi
+
+  smoke_root="$(mktemp -d)"
+  server_pid=""
+  # shellcheck disable=SC2329  # Invoked by the EXIT trap.
+  cleanup() {
+    exit_status=$?
+    trap - EXIT INT TERM
+    set +e
+    if [[ -n "$server_pid" ]]; then
+      kill "$server_pid" 2>/dev/null
+      wait "$server_pid" 2>/dev/null
+    fi
+    find "$smoke_root" -mindepth 1 -delete
+    rmdir "$smoke_root"
+    exit "$exit_status"
+  }
+  trap cleanup EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+
+  export EXTRA_CODEOWNERS_DATABASE_URL="sqlite:///${smoke_root}/smoke.db"
+  export EXTRA_CODEOWNERS_WORKER_ENABLED=false
+  export EXTRA_CODEOWNERS_RECONCILE_ENABLED=false
+  mise trust
+  mise install
+  mise run bootstrap
+  mise exec -- uv run python -m extra_codeowners database migrate
+  mise exec -- uv run python -m extra_codeowners serve &
+  server_pid=$!
+  response="$(
+    curl --silent --show-error --fail-with-body \
+      --connect-timeout 2 --max-time 5 --retry-max-time 20 \
+      --retry 10 --retry-connrefused --retry-delay 1 \
+      http://127.0.0.1:8000/health/live
+  )"
+  if ! kill -0 "$server_pid" 2>/dev/null ||
+    ! jobs -pr | grep -Fx "$server_pid" >/dev/null; then
+    wait "$server_pid" || true
+    echo 'Extra CODEOWNERS exited before the liveness check completed.' >&2
+    exit 1
+  fi
+  expected='{"status":"alive","worker":true,"reconciler":true}'
+  if [[ "$response" != "$expected" ]]; then
+    printf 'Unexpected liveness response: %s\n' "$response" >&2
+    exit 1
+  fi
+  printf '%s\n' "$response"
+)
 ```
 
-A process without GitHub credentials can be alive but not ready. The liveness
-request should return HTTP 200 and output like this:
+In that response, `true` means healthy. A disabled component counts as
+healthy, and this smoke test disables both the worker and reconciler. The
+response proves process liveness, not GitHub readiness or production safety.
 
-```json
-{"status":"alive","worker":true,"reconciler":true}
-```
+## Try it safely
 
-To process a real test pull request, the service needs a development GitHub
-App, policy files, and a public HTTPS webhook URL. The
-[development installation tutorial](docs/tutorials/development-installation.md)
-walks through that path in a disposable repository.
+The [first-check tutorial](docs/tutorials/development-installation.md) ends
+with a real check on a disposable pull request. Keep native enforcement on in
+production; the
+[project status](docs/reference/project-status.md) explains why.
 
-Run the local pull-request checks with:
+## Documentation
 
-```bash
-mise run check
-```
-
-The command should finish without a failed task. PostgreSQL-backed coverage
-tests need a separate disposable database; the tutorial explains that setup.
-
-## Find the right documentation
-
-| If you want to... | Start here |
+| Task | Start here |
 | --- | --- |
 | Decide whether the trust model fits | [Native CODEOWNERS comparison](docs/explanation/native-codeowners.md) and [threat model](docs/explanation/threat-model.md) |
-| Build a development installation | [Development installation tutorial](docs/tutorials/development-installation.md) |
-| Enroll an App and delegate paths | [Configuration guide](docs/how-to/configure.md) |
-| Test repository rules safely | [Repository-rules guide](docs/how-to/prepare-repository-rules.md) |
-| Plan an evaluation or inspect the future operations contract | [Future-deployment guide](docs/how-to/deploy.md) and [operations guide](docs/how-to/operate.md) |
-| Look up exact behavior | [Configuration](docs/reference/configuration.md), [checks](docs/reference/checks.md), [CLI](docs/reference/cli.md), and [HTTP API](docs/reference/http-api.md) references |
-| Understand the implementation | [Architecture](docs/explanation/architecture.md) |
+| Run the first check | [Development installation tutorial](docs/tutorials/development-installation.md) |
+| Register the App through its setup URL | [App registration guide](docs/how-to/register-app.md) |
+| Delegate paths to an App | [Configuration guide](docs/how-to/configure.md) |
+| Understand a failed or pending check | [Check troubleshooting guide](docs/how-to/troubleshoot-check.md) |
+| Understand the service design | [Architecture](docs/explanation/architecture.md) |
+| Plan a deployment | [Deployment guide](docs/how-to/deploy.md) |
+| Operate an installation | [Operations guide](docs/how-to/operate.md) |
+| Look up exact behavior | [Configuration](docs/reference/configuration.md), [checks](docs/reference/checks.md), [CLI](docs/reference/cli.md), and [HTTP API](docs/reference/http-api.md) |
 
-The complete documentation is published on
+The full documentation is published on
 [Read the Docs](https://extra-codeowners.readthedocs.io/).
 
-## Project and community
+## Community
 
-This repository contains the GitHub App, policy evaluator, database migrations,
-and Helm chart source. Python imports are not a stable public API before 1.0.
-The planned `extra-codeowners-action` distribution does not exist yet.
-
-- Ask for help through the [support policy](SUPPORT.md).
+- Ask for help under the [support policy](SUPPORT.md).
 - Report vulnerabilities privately under the [security policy](SECURITY.md).
-- Read [CONTRIBUTING.md](CONTRIBUTING.md) before sending a change.
-- See the [changelog](CHANGELOG.md), [governance](GOVERNANCE.md), and
-  [Apache-2.0 license](LICENSE) for project details.
+- Read the [contributor guide](CONTRIBUTING.md), [changelog](CHANGELOG.md),
+  [governance](GOVERNANCE.md), and [maintainer documentation](docs/maintainers/index.md).

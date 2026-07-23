@@ -57,19 +57,22 @@ mise run check
 It does not enforce coverage. PostgreSQL tests are skipped unless
 `TEST_POSTGRES_URL` points to a disposable test database.
 
-Set that variable and run `mise run test:coverage` for the complete suite and
-coverage gate. The database name must end in `_test`; the test runner rejects
-other names before it changes the schema.
+> [!WARNING]
+> Never point `TEST_POSTGRES_URL` at a production or shared database. The test
+> suite drops and recreates project tables.
+
+Use the pinned PostgreSQL service, local-only credentials, and `_test` URL in
+[CI's Python test job](.github/workflows/ci.yml) as the tested template. Create
+an equivalent disposable service under your control, set `TEST_POSTGRES_URL`,
+and run `mise run test:coverage` for the complete suite and coverage gate. The
+database name must end in `_test`; the test runner rejects other names before
+it changes the schema.
 
 The normal suite runs the bounded development property-test profile. Run
 `mise run test:property` to match the larger pull-request profile. See the
 [property-testing design](docs/explanation/property-testing.md) before adding a
 generator or regression seed; generated inputs and CI reports must remain free
 of real payloads and credentials.
-
-> [!WARNING]
-> Never point `TEST_POSTGRES_URL` at a production or shared database. The test
-> suite drops and recreates project tables.
 
 The Dockerfile intentionally rejects an ad hoc `docker build .`. It installs
 only the exact application wheel selected by the cross-architecture Python

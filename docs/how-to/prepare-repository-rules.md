@@ -49,14 +49,15 @@ In the applicable ruleset or branch-protection rule:
    its expected source.
 6. Preserve every unrelated check, bypass restriction, and merge rule.
 
-An approving GitHub App review has counted toward the ordinary numeric approval
-rule in tested integrations. GitHub's public documentation does not make that
-third-party behavior an explicit contract, so verify it in this disposable
-repository. Extra CODEOWNERS does not require the numeric count to be removed.
+GitHub's public documentation does not promise that a third-party App review
+counts toward the ordinary numeric approval rule. Verify that behavior in this
+disposable repository. Extra CODEOWNERS neither requires nor recommends
+removing the numeric count.
 
-Organization-level rulesets require Statuses write on the App registration
-before GitHub offers the App in the expected-source selector. Runtime
-installation tokens omit that permission and cannot write commit statuses.
+Organization-level rulesets require Commit statuses (`statuses`) write on the
+App registration before GitHub offers the App in the expected-source selector.
+Runtime installation tokens omit that permission and cannot write commit
+statuses.
 
 The resulting merge policy is:
 

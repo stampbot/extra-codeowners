@@ -23,12 +23,18 @@ This code therefore defines and tests the handoff without enabling publication.
 The existing selected-distribution ZIP remains in place for the read-only
 container scan. Removing that older path is separate work.
 
-```mermaid
-flowchart LR
-    A[Native amd64 and arm64 builds] --> B[Unprivileged selection]
-    B --> C[Raw spine and canonical record]
-    C --> D[Read-only verifier and materializer]
-    C -. blocked by publication-block .-> E[Attest and sign wheel and sdist]
+```text
+native amd64 and arm64 builds
+               |
+               v
+      unprivileged selection
+               |
+               v
+   raw spine and canonical record
+          |                  |
+          v                  v
+ read-only verifier      attest and sign wheel and sdist
+  and materializer       (blocked by publication-block)
 ```
 
 ## Transport artifacts

@@ -5,7 +5,7 @@ Apps may be trusted at all. Repository policy opts one repository in and gives
 an enrolled App a smaller, explicit scope.
 
 This guide enrolls one App and delegates a few low-risk paths. Complete the
-[development installation tutorial](../tutorials/development-installation.md)
+[first-check tutorial](../tutorials/development-installation.md)
 first if you do not already have a test service.
 
 ## Before you begin
@@ -21,11 +21,12 @@ You need:
 Enroll the App that submits approving reviews, such as Stampbot. The Extra
 CODEOWNERS checker belongs here only if it independently submits reviews too.
 
-Do not put an App bot login in `CODEOWNERS`. GitHub reports it as an invalid
-owner and skips the affected line; human owners written beside it do not remain
-as a fallback. The
-[native CODEOWNERS comparison](../explanation/native-codeowners.md#the-gap)
-shows how to check the file for errors.
+Keep App bot logins out of `CODEOWNERS`. GitHub documents that file for users
+and teams with write access, not for GitHub App bot accounts. Extra CODEOWNERS
+uses separate policy so its authority doesn't depend on undocumented native
+behavior. The
+[native CODEOWNERS comparison](../explanation/native-codeowners.md#keep-people-in-codeowners)
+explains the distinction and shows how to check the standard file for errors.
 
 The examples use the default policy location,
 `.github/extra-codeowners.toml`. If the deployment changes
@@ -73,6 +74,10 @@ non_delegable_paths = [
 
 Replace the example identity. Keep this change under native human CODEOWNERS
 and normal repository rules.
+
+A complete organization and repository pair lives in the repository's
+[`examples/policy/`](https://github.com/stampbot/extra-codeowners/tree/main/examples/policy)
+directory. CI compiles those files together.
 
 Organization policy does not opt any member repository in. In schema version
 1, the policy repository also cannot use this same file as its own repository
@@ -129,9 +134,10 @@ The successful result is:
 Policy files are valid.
 ```
 
-This command validates TOML and field constraints. Live evaluation also checks
-the cross-file alias, App identity, repository access, CODEOWNERS result, and
-current pull-request evidence.
+This command parses both files, validates field and path constraints, and
+compiles repository policy against organization enrollment. Live evaluation
+also checks App identity and repository access against GitHub, resolves
+`CODEOWNERS`, and evaluates current pull-request evidence.
 
 ## 4. Protect the approval boundary
 

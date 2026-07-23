@@ -922,6 +922,9 @@ may have an isolated Docker daemon; the artifact-parsing VM remains offline and
 has no Docker socket. Start from a separate exact synthetic-merge checkout and
 require it to be clean, including untracked files:
 
+Review that exact revision and `mise.toml` before continuing. `mise trust`
+permits repository configuration and tasks to execute on the staging VM.
+
 ```bash
 export TEST_SOURCE='/path/to/disposable-clean-merge-checkout'
 export GIT_NO_REPLACE_OBJECTS=1

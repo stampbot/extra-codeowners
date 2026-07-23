@@ -98,12 +98,13 @@ The manifest must request:
 | Members | Read-only |
 | Metadata | Read-only |
 | Pull requests | Read-only |
-| Statuses | Read and write |
+| Commit statuses | Read and write |
 
-Statuses write is a registration permission needed before GitHub offers the
-App as an expected source in organization rulesets. Extra CODEOWNERS
-downscopes runtime installation tokens and omits Statuses, so the service
-cannot write commit statuses. It publishes Check Runs.
+The App installation needs **Commit statuses: Read and write** so GitHub can
+list it as an expected source in organization rulesets. `statuses` is the App
+Manifest key. Extra CODEOWNERS omits that permission when it mints runtime
+installation tokens, so the running service cannot write commit statuses. It
+publishes Check Runs instead.
 
 ### Verify event subscriptions
 
