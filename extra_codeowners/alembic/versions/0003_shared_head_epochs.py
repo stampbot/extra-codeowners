@@ -35,8 +35,7 @@ def upgrade() -> None:
             name="ck_shared_head_epochs_generation_positive",
         ),
         sa.CheckConstraint(
-            "invalidated_generation >= 0 "
-            "AND invalidated_generation <= generation",
+            "invalidated_generation >= 0 AND invalidated_generation <= generation",
             name="ck_shared_head_epochs_invalidation_bounds",
         ),
         sa.CheckConstraint(
@@ -88,11 +87,59 @@ def upgrade() -> None:
     )
     evaluation_jobs = sa.table(
         "evaluation_jobs",
+        sa.column("installation_id", sa.Integer()),
+        sa.column("repository_full_name", sa.String(length=512)),
+        sa.column("head_sha_hint", sa.String(length=64)),
         sa.column("shared_head_generation", sa.Integer()),
+    )
+    shared_head_epochs = sa.table(
+        "shared_head_epochs",
+        sa.column("installation_id", sa.Integer()),
+        sa.column("repository_full_name", sa.String(length=512)),
+        sa.column("head_sha", sa.String(length=64)),
+        sa.column("generation", sa.Integer()),
+        sa.column("invalidated_generation", sa.Integer()),
+        sa.column("changed_at", sa.DateTime(timezone=True)),
+        sa.column("available_at", sa.DateTime(timezone=True)),
+        sa.column("attempts", sa.Integer()),
+    )
+    # A carried direct job may represent a webhook whose synchronous reset
+    # failed before the migration. Give each known head durable high-priority
+    # invalidation work before the new application can evaluate it.
+    op.execute(
+        shared_head_epochs.insert().from_select(
+            (
+                "installation_id",
+                "repository_full_name",
+                "head_sha",
+                "generation",
+                "invalidated_generation",
+                "changed_at",
+                "available_at",
+                "attempts",
+            ),
+            sa.select(
+                evaluation_jobs.c.installation_id,
+                evaluation_jobs.c.repository_full_name,
+                evaluation_jobs.c.head_sha_hint,
+                sa.literal(1),
+                sa.literal(0),
+                sa.func.current_timestamp(),
+                sa.func.current_timestamp(),
+                sa.literal(0),
+            )
+            .where(evaluation_jobs.c.head_sha_hint.is_not(None))
+            .distinct(),
+        )
     )
     op.execute(
         evaluation_jobs.update()
-        .where(evaluation_jobs.c.shared_head_generation.is_(None))
+        .where(evaluation_jobs.c.head_sha_hint.is_not(None))
+        .values(shared_head_generation=1)
+    )
+    op.execute(
+        evaluation_jobs.update()
+        .where(evaluation_jobs.c.head_sha_hint.is_(None))
         .values(shared_head_generation=0)
     )
     with op.batch_alter_table("evaluation_jobs") as batch:

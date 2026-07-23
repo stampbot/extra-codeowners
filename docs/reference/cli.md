@@ -143,7 +143,11 @@ Sample output:
 pending=3 dead=0
 ```
 
-`pending` includes pending and currently leased pull-request evaluation and authority fan-out rows. `dead` counts legacy or manually introduced terminal rows. The command reads `EXTRA_CODEOWNERS_DATABASE_URL` and does not show repository names, pull-request numbers, errors, or delivery IDs.
+`pending` includes pending and currently leased exact-head invalidation,
+pull-request evaluation, and authority fan-out rows. `dead` counts legacy or
+manually introduced terminal evaluation and authority rows. The command reads
+`EXTRA_CODEOWNERS_DATABASE_URL` and does not show repository names,
+pull-request numbers, errors, or delivery IDs.
 
 The command is read-only and requires the exact database revision used by the installed application.
 

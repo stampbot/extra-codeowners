@@ -4,13 +4,14 @@ import os
 import threading
 from collections.abc import Generator
 from concurrent.futures import ThreadPoolExecutor
+from datetime import timedelta
 from functools import partial
 from time import monotonic
 from typing import cast
 
 import pytest
 from alembic.config import Config
-from sqlalchemy import Connection, create_engine, inspect, select, text
+from sqlalchemy import Connection, create_engine, delete, inspect, select, text, update
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DBAPIError
 
@@ -23,6 +24,7 @@ from extra_codeowners.database import (
     JobRequest,
     QueueStore,
     SharedHeadEpoch,
+    utcnow,
 )
 from extra_codeowners.migrations import (
     BASELINE_REVISION,
@@ -96,7 +98,7 @@ def test_concurrent_delivery_generations_are_not_lost(postgres_store: QueueStore
     assert generation == workers
     assert shared_generation == workers
     assert epoch == workers
-    assert postgres_store.pending_count() == 1
+    assert postgres_store.pending_count() == 2
 
 
 def test_concurrent_same_delivery_advances_shared_head_once(
@@ -127,6 +129,182 @@ def test_concurrent_same_delivery_advances_shared_head_once(
     assert evaluation.shared_head_generation == 1
     assert epoch is not None
     assert epoch.generation == 1
+    assert epoch.invalidated_generation == 0
+    assert postgres_store.pending_count() == 2
+
+
+def test_new_generation_fences_prior_postgres_invalidation_lease(
+    postgres_store: QueueStore,
+) -> None:
+    first_acceptance = postgres_store.accept_delivery(
+        "first-generation",
+        "pull_request",
+        request(),
+    )
+    assert first_acceptance.shared_head_generation == 1
+    first = postgres_store.claim_shared_head_invalidation("old-worker", 60)
+    assert first is not None
+
+    second_acceptance = postgres_store.accept_delivery(
+        "second-generation",
+        "pull_request",
+        request(),
+    )
+
+    assert second_acceptance.shared_head_generation == 2
+    assert postgres_store.complete_shared_head_invalidation(first) is False
+    second = postgres_store.claim_shared_head_invalidation("new-worker", 60)
+    assert second is not None
+    assert second.generation == 2
+    assert postgres_store.complete_shared_head_invalidation(second) is True
+
+
+def test_reclaimed_postgres_invalidation_lease_rejects_old_owner(
+    postgres_store: QueueStore,
+) -> None:
+    assert postgres_store.accept_delivery("lease-reclaim", "pull_request", request())
+    first = postgres_store.claim_shared_head_invalidation("old-worker", 60)
+    assert first is not None
+    with postgres_store.engine.begin() as connection:
+        connection.execute(
+            update(SharedHeadEpoch).values(
+                lease_until=utcnow() - timedelta(seconds=1),
+            )
+        )
+
+    replacement = postgres_store.claim_shared_head_invalidation("new-worker", 60)
+
+    assert replacement is not None
+    assert replacement.generation == first.generation
+    assert postgres_store.complete_shared_head_invalidation(first) is False
+    assert postgres_store.complete_shared_head_invalidation(replacement) is True
+
+
+def test_postgres_shared_head_fanout_preserves_concurrent_new_head(
+    postgres_store: QueueStore,
+) -> None:
+    accepted = postgres_store.accept_delivery(
+        "fanout-source",
+        "pull_request",
+        request(pull_number=41),
+    )
+    assert accepted.shared_head_generation == 1
+    old_head = "a" * 40
+
+    for round_number in range(12):
+        pull_number = 100 + round_number
+        new_head = f"{round_number + 2:040x}"
+        barrier = threading.Barrier(2)
+
+        def fan_out(
+            sync: threading.Barrier = barrier,
+            number: int = pull_number,
+        ) -> bool:
+            sync.wait()
+            return postgres_store.enqueue_for_shared_head_generation(
+                JobRequest(
+                    17,
+                    "example/project",
+                    number,
+                    "shared_head_invalidation",
+                    old_head,
+                ),
+                1,
+            )
+
+        def accept_new_head(
+            sync: threading.Barrier = barrier,
+            delivery_number: int = round_number,
+            number: int = pull_number,
+            head: str = new_head,
+        ) -> bool:
+            sync.wait()
+            return postgres_store.accept_delivery(
+                f"new-head-{delivery_number}",
+                "pull_request",
+                JobRequest(
+                    17,
+                    "example/project",
+                    number,
+                    "pull_request.synchronize",
+                    head,
+                ),
+            ).accepted
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            fanout_future = executor.submit(fan_out)
+            delivery_future = executor.submit(accept_new_head)
+            assert fanout_future.result(timeout=5) is True
+            assert delivery_future.result(timeout=5) is True
+
+        with postgres_store.session() as session:
+            evaluation = session.scalar(
+                select(EvaluationJob).where(EvaluationJob.pull_number == pull_number)
+            )
+        assert evaluation is not None
+        assert evaluation.head_sha_hint == new_head
+        assert evaluation.shared_head_generation == 1
+
+
+def test_postgres_prune_cannot_orphan_hintless_binding(
+    postgres_store: QueueStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    head_sha = "d" * 40
+    assert postgres_store.accept_delivery(
+        "prune-bind-seed",
+        "pull_request",
+        JobRequest(17, "example/project", 70, "seed", head_sha),
+    )
+    seed_invalidation = postgres_store.claim_shared_head_invalidation("seed-worker", 60)
+    assert seed_invalidation is not None
+    assert postgres_store.complete_shared_head_invalidation(seed_invalidation)
+    with postgres_store.engine.begin() as connection:
+        connection.execute(delete(EvaluationJob).where(EvaluationJob.pull_number == 70))
+        connection.execute(
+            update(SharedHeadEpoch)
+            .where(SharedHeadEpoch.head_sha == head_sha)
+            .values(changed_at=utcnow() - timedelta(days=90))
+        )
+
+    postgres_store.enqueue(JobRequest(17, "example/project", 71, "hintless-reconciliation"))
+    claimed = postgres_store.claim("binding-worker", 60)
+    assert claimed is not None
+    advanced = threading.Event()
+    allow_binding = threading.Event()
+    original_advance = postgres_store._advance_shared_head_epoch_in_session
+
+    def pause_after_epoch_lock(session: object, bind_request: JobRequest) -> int:
+        generation = original_advance(session, bind_request)  # type: ignore[arg-type]
+        advanced.set()
+        assert allow_binding.wait(timeout=5)
+        return generation
+
+    monkeypatch.setattr(
+        postgres_store,
+        "_advance_shared_head_epoch_in_session",
+        pause_after_epoch_lock,
+    )
+    boundary = utcnow() - timedelta(days=30)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        bound_future = executor.submit(postgres_store.bind_claim_to_head, claimed, head_sha)
+        assert advanced.wait(timeout=5)
+        prune_future = executor.submit(postgres_store.prune_shared_head_epochs, boundary)
+        assert prune_future.done() is False
+        allow_binding.set()
+        bound = bound_future.result(timeout=5)
+        pruned = prune_future.result(timeout=5)
+
+    assert bound is not None
+    assert pruned == 0
+    with postgres_store.session() as session:
+        epoch = session.scalar(select(SharedHeadEpoch).where(SharedHeadEpoch.head_sha == head_sha))
+        evaluation = session.scalar(select(EvaluationJob).where(EvaluationJob.pull_number == 71))
+    assert epoch is not None
+    assert evaluation is not None
+    assert epoch.generation == bound.shared_head_generation
+    assert epoch.invalidated_generation < epoch.generation
+    assert evaluation.shared_head_generation == epoch.generation
 
 
 def test_concurrent_delivery_and_reconciliation_compose_without_phantom_epoch(
@@ -444,16 +622,28 @@ def test_postgres_0002_existing_row_is_fenced_after_0003_upgrade() -> None:
         upgrade_database(url)
         store.initialize()
         assert current_revision(url) == DATABASE_MIGRATION_HEAD
+        with store.session() as session:
+            backfilled = session.scalar(
+                select(EvaluationJob).where(EvaluationJob.pull_number == 41)
+            )
+            backfilled_epoch = session.scalar(select(SharedHeadEpoch))
+        assert backfilled is not None
+        assert backfilled.shared_head_generation == 1
+        assert backfilled_epoch is not None
+        assert backfilled_epoch.generation == 1
+        assert backfilled_epoch.invalidated_generation == 0
         assert store.accept_delivery(
             "post-upgrade-other-pull",
             "pull_request",
             request(pull_number=42),
         )
+        assert store.shared_head_generation(17, "example/project", "a" * 40) == 2
+        assert store.shared_head_invalidation_generation(17, "example/project", "a" * 40) == 0
 
         migrated = store.claim("migration-test-worker", 60)
         assert migrated is not None
         assert migrated.pull_number == 41
-        assert migrated.shared_head_generation == 0
+        assert migrated.shared_head_generation == 1
         assert store.shared_head_generation_is_current(migrated, "a" * 40) is False
     finally:
         Base.metadata.drop_all(store.engine)

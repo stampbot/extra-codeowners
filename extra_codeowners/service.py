@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime, timedelta
 from typing import Any, Final
@@ -135,16 +135,10 @@ def _label_names(pull: dict[str, Any]) -> frozenset[str]:
 def _associated_pull_identity(value: Any) -> tuple[int, str, str]:
     """Return a strictly validated commit-associated pull snapshot."""
     associated_pull = _required_object(value, "associated pull_request")
-    state_value = _required_string(
-        associated_pull.get("state"), "associated pull_request.state"
-    )
+    state_value = _required_string(associated_pull.get("state"), "associated pull_request.state")
     if state_value not in {"open", "closed"}:
-        raise GitHubError(
-            f"GitHub returned unknown associated pull request state {state_value!r}"
-        )
-    associated_head = _required_object(
-        associated_pull.get("head"), "associated pull_request.head"
-    )
+        raise GitHubError(f"GitHub returned unknown associated pull request state {state_value!r}")
+    associated_head = _required_object(associated_pull.get("head"), "associated pull_request.head")
     raw_sha = _required_string(
         associated_head.get("sha"),
         "associated pull_request.head.sha",
@@ -168,6 +162,74 @@ class EvaluationService:
         self.github = github
         self.store = store
         self._cleanup_tasks: set[asyncio.Task[None]] = set()
+
+    async def _current_associated_pulls(
+        self,
+        installation_id: int,
+        repository_full_name: str,
+        head_sha: str,
+        *,
+        before_github_read: Callable[[], Awaitable[None]] | None = None,
+    ) -> dict[int, tuple[str, str]]:
+        """Return authoritative current state for every commit-associated PR."""
+        if before_github_read is not None:
+            await before_github_read()
+        associated = await self.github.list_commit_pulls(
+            installation_id,
+            repository_full_name,
+            head_sha,
+        )
+        observed: dict[int, tuple[str, str]] = {}
+        for associated_pull in associated:
+            number_value, state_value, associated_sha = _associated_pull_identity(associated_pull)
+            identity = (state_value, associated_sha)
+            previous = observed.setdefault(number_value, identity)
+            if previous != identity:
+                raise GitHubError("GitHub returned conflicting associated pull-request snapshots")
+
+        current: dict[int, tuple[str, str]] = {}
+        for number_value in sorted(observed):
+            if before_github_read is not None:
+                await before_github_read()
+            current_pull = await self.github.get_pull(
+                installation_id,
+                repository_full_name,
+                number_value,
+            )
+            current_number = _required_positive_int(
+                current_pull.get("number"),
+                "pull_request.number",
+            )
+            current_state = _required_string(current_pull.get("state"), "pull_request.state")
+            if current_state not in {"open", "closed"}:
+                raise GitHubError(f"GitHub returned unknown pull request state {current_state!r}")
+            current_head = _required_object(current_pull.get("head"), "pull_request.head")
+            try:
+                current_sha = validate_head_sha(
+                    _required_string(current_head.get("sha"), "pull_request.head.sha")
+                )
+            except ValueError as error:
+                raise GitHubError("GitHub returned malformed pull request head SHA") from error
+            current_base = _required_object(current_pull.get("base"), "pull_request.base")
+            current_repository = _required_object(
+                current_base.get("repo"),
+                "pull_request.base.repo",
+            )
+            try:
+                canonical_repository = normalize_repository_full_name(
+                    _required_string(
+                        current_repository.get("full_name"),
+                        "pull_request.base.repo.full_name",
+                    )
+                )
+            except ValueError as error:
+                raise GitHubError("GitHub returned malformed base repository identity") from error
+            if current_number != number_value:
+                raise GitHubError("GitHub changed the associated pull request number")
+            if canonical_repository != repository_full_name:
+                raise GitHubError("GitHub changed the associated pull request repository")
+            current[number_value] = (current_state, current_sha)
+        return current
 
     @asynccontextmanager
     async def _check_write_guard(self, installation_id: int, head_sha: str) -> AsyncIterator[None]:
@@ -710,11 +772,7 @@ class EvaluationService:
         if pull_state not in {"open", "closed"}:
             raise GitHubError(f"GitHub returned unknown pull request state {pull_state!r}")
 
-        if (
-            pull_state == "open"
-            and job.head_sha_hint is not None
-            and job.head_sha_hint != head_sha
-        ):
+        if pull_state == "open" and job.head_sha_hint is not None and job.head_sha_hint != head_sha:
             # The exact webhook head remains durable in its own invalidation
             # row. Independently fence the live head instead of replacing that
             # recovery with a latest-PR-only queue row.
@@ -872,73 +930,19 @@ class EvaluationService:
                     self.settings.check_name,
                     title="Re-evaluating CODEOWNER approvals",
                     summary=(
-                        "Accepted evidence for this commit is awaiting durable "
-                        "re-evaluation."
+                        "Accepted evidence for this commit is awaiting durable re-evaluation."
                     ),
                     external_id=f"{job.repository_full_name}@{job.head_sha}",
                 )
 
-        associated = await self.github.list_commit_pulls(
+        current_associated = await self._current_associated_pulls(
             job.installation_id,
             job.repository_full_name,
             job.head_sha,
+            before_github_read=require_current_claim,
         )
-        observed: dict[int, tuple[str, str]] = {}
-        for associated_pull in associated:
-            number_value, state_value, associated_sha = _associated_pull_identity(
-                associated_pull
-            )
-            identity = (state_value, associated_sha)
-            previous = observed.setdefault(number_value, identity)
-            if previous != identity:
-                raise GitHubError(
-                    "GitHub returned conflicting associated pull-request snapshots"
-                )
-
-        for number_value, (state_value, associated_sha) in sorted(observed.items()):
+        for number_value, (state_value, associated_sha) in current_associated.items():
             if state_value != "open" or associated_sha != job.head_sha:
-                continue
-            await require_current_claim()
-            current_pull = await self.github.get_pull(
-                job.installation_id,
-                job.repository_full_name,
-                number_value,
-            )
-            current_number = _required_positive_int(
-                current_pull.get("number"),
-                "pull_request.number",
-            )
-            current_state = _required_string(current_pull.get("state"), "pull_request.state")
-            if current_state not in {"open", "closed"}:
-                raise GitHubError(
-                    f"GitHub returned unknown pull request state {current_state!r}"
-                )
-            current_head = _required_object(current_pull.get("head"), "pull_request.head")
-            try:
-                current_sha = validate_head_sha(
-                    _required_string(current_head.get("sha"), "pull_request.head.sha")
-                )
-            except ValueError as error:
-                raise GitHubError("GitHub returned malformed pull request head SHA") from error
-            current_base = _required_object(current_pull.get("base"), "pull_request.base")
-            current_repository = _required_object(
-                current_base.get("repo"),
-                "pull_request.base.repo",
-            )
-            try:
-                canonical_repository = normalize_repository_full_name(
-                    _required_string(
-                        current_repository.get("full_name"),
-                        "pull_request.base.repo.full_name",
-                    )
-                )
-            except ValueError as error:
-                raise GitHubError("GitHub returned malformed base repository identity") from error
-            if current_number != number_value:
-                raise GitHubError("GitHub changed the associated pull request number")
-            if canonical_repository != job.repository_full_name:
-                raise GitHubError("GitHub changed the associated pull request repository")
-            if current_state != "open" or current_sha != job.head_sha:
                 continue
             await require_current_claim()
             current = await asyncio.to_thread(
@@ -959,18 +963,16 @@ class EvaluationService:
         await require_current_claim()
 
     async def _head_is_unique_to_pull(self, job: ClaimedJob, head_sha: str) -> bool:
-        associated = await self.github.list_commit_pulls(
+        current_associated = await self._current_associated_pulls(
             job.installation_id,
             job.repository_full_name,
             head_sha,
         )
-        open_head_pulls: set[int] = set()
-        for associated_pull in associated:
-            number_value, state_value, associated_sha = _associated_pull_identity(
-                associated_pull
-            )
-            if state_value == "open" and associated_sha == head_sha:
-                open_head_pulls.add(number_value)
+        open_head_pulls = {
+            number_value
+            for number_value, (state_value, associated_sha) in current_associated.items()
+            if state_value == "open" and associated_sha == head_sha
+        }
         return open_head_pulls == {job.pull_number}
 
     async def evaluate_job(self, job: ClaimedJob) -> None:
@@ -1201,6 +1203,11 @@ class EvaluationService:
                         head_sha,
                     ):
                         return
+                    # Authoritative shared-head discovery may require many
+                    # GitHub reads. Fence a lease owner that expired or was
+                    # replaced while those reads were in flight.
+                    if not await asyncio.to_thread(self.store.is_current_claim, job):
+                        return
                     try:
                         await self.github.upsert_check_run(
                             job.installation_id,
@@ -1232,6 +1239,10 @@ class EvaluationService:
                         )
                         raise
                     try:
+                        claim_current = await asyncio.to_thread(
+                            self.store.is_current_claim,
+                            job,
+                        )
                         shared_head_current = await asyncio.to_thread(
                             self.store.shared_head_generation_is_publishable,
                             job,
@@ -1253,11 +1264,12 @@ class EvaluationService:
                             external_id,
                         )
                         raise
-                    if not shared_head_current:
+                    if not claim_current or not shared_head_current:
                         # A different pull request can accept a direct trigger
-                        # for this commit while the GitHub request is in
-                        # flight. Restore a blocking result before releasing
-                        # the shared head writer.
+                        # for this commit, or this evaluation's lease can be
+                        # replaced, while the GitHub request is in flight.
+                        # Restore a blocking result before releasing the shared
+                        # head writer.
                         await self._restore_blocking_after_uncertain_completion(
                             job,
                             head_sha,
@@ -1379,10 +1391,7 @@ class Worker:
         lost = asyncio.Event()
         heartbeat = asyncio.create_task(
             self._renew_shared_head_lease(job, done, lost),
-            name=(
-                f"shared-head-lease-{job.installation_id}-"
-                f"{job.head_sha[:12]}-{job.generation}"
-            ),
+            name=(f"shared-head-lease-{job.installation_id}-{job.head_sha[:12]}-{job.generation}"),
         )
         try:
             await self.evaluator.invalidate_shared_head(job, lost)
@@ -1401,9 +1410,7 @@ class Worker:
                 str(error),
                 error.retry_after_seconds,
             )
-            SHARED_HEAD_INVALIDATIONS.labels(
-                "rate_limited" if updated else "superseded"
-            ).inc()
+            SHARED_HEAD_INVALIDATIONS.labels("rate_limited" if updated else "superseded").inc()
         except asyncio.CancelledError:
             raise
         except Exception as error:
@@ -1428,9 +1435,7 @@ class Worker:
                     self.store.complete_shared_head_invalidation,
                     job,
                 )
-            SHARED_HEAD_INVALIDATIONS.labels(
-                "completed" if completed else "superseded"
-            ).inc()
+            SHARED_HEAD_INVALIDATIONS.labels("completed" if completed else "superseded").inc()
             if completed:
                 log.info(
                     "shared_head_invalidation_completed",
@@ -1690,9 +1695,7 @@ class Worker:
                 QUEUE_DEPTH.set(await asyncio.to_thread(self.store.pending_count))
                 DEAD_JOBS.set(await asyncio.to_thread(self.store.dead_count))
                 SHARED_HEAD_INVALIDATION_DEPTH.set(
-                    await asyncio.to_thread(
-                        self.store.pending_shared_head_invalidation_count
-                    )
+                    await asyncio.to_thread(self.store.pending_shared_head_invalidation_count)
                 )
                 shared_head_job = await asyncio.to_thread(
                     self.store.claim_shared_head_invalidation,

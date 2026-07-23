@@ -32,10 +32,23 @@ row immediately available. Before any reactivated work can publish a check,
 the worker fetches current GitHub and policy evidence.
 
 Revision `0003_shared_head_epochs` adds a durable generation for each
-installation, repository, and head commit. It also records the generation on
-each evaluation job. Existing jobs receive generation `0`; that value can
-publish only while no newer direct trigger has advanced the matching head.
-The revision changes the application compatibility marker from `1` to `2`.
+installation, repository, and head commit. The same row records the newest
+generation whose exact-head invalidation finished, plus retry and lease state.
+An evaluation may publish only when its captured generation is current and
+invalidated.
+
+The revision also records the generation on each evaluation job and stores the
+pull-request identity and exact generation token with each direct webhook
+delivery. Carried jobs with a known head are grouped by installation,
+repository, and head. Each group receives generation `1` with invalidation
+pending, and its jobs receive token `1`.
+
+Carried jobs without a head receive token `0`. Their first authoritative
+pull-request read advances or creates a pending exact-head generation and binds
+the job to it in the same transaction. A superseded or lost claim rolls back
+the tentative generation. Existing delivery rows have no token and keep their
+pre-migration deduplication semantics. The revision changes the application
+compatibility marker from `1` to `2`.
 
 An already-running process does not revalidate the Alembic head before every
 claim. Stop every older ingress, worker, and reconciler before this revision

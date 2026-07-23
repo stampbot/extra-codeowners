@@ -230,8 +230,7 @@ class SharedHeadEpoch(Base):
             name="ck_shared_head_epochs_generation_positive",
         ),
         CheckConstraint(
-            "invalidated_generation >= 0 "
-            "AND invalidated_generation <= generation",
+            "invalidated_generation >= 0 AND invalidated_generation <= generation",
             name="ck_shared_head_epochs_invalidation_bounds",
         ),
         CheckConstraint(
@@ -374,6 +373,10 @@ class CheckWriteGuard:
 
 class _EvaluationJobAlreadyPresentError(Exception):
     """Abort reconciliation so a tentative shared-head epoch bump rolls back."""
+
+
+class _EvaluationJobBindingLostError(Exception):
+    """Abort a hintless bind so its tentative exact-head bump rolls back."""
 
 
 class QueueStore:
@@ -904,8 +907,7 @@ class QueueStore:
                         select(SharedHeadEpoch.generation)
                         .where(
                             SharedHeadEpoch.installation_id == request.installation_id,
-                            SharedHeadEpoch.repository_full_name
-                            == request.repository_full_name,
+                            SharedHeadEpoch.repository_full_name == request.repository_full_name,
                             SharedHeadEpoch.head_sha == head_sha,
                         )
                         .with_for_update()
@@ -916,8 +918,7 @@ class QueueStore:
                         select(EvaluationJob.head_sha_hint)
                         .where(
                             EvaluationJob.installation_id == request.installation_id,
-                            EvaluationJob.repository_full_name
-                            == request.repository_full_name,
+                            EvaluationJob.repository_full_name == request.repository_full_name,
                             EvaluationJob.pull_number == request.pull_number,
                         )
                         .with_for_update()
@@ -1268,35 +1269,43 @@ class QueueStore:
         """Bind a hintless internal claim to the head observed from GitHub.
 
         Direct webhook work is already bound transactionally at acceptance.
-        Reconciliation and internal fan-out can lack a trustworthy webhook
-        head, so they capture the durable epoch after fetching current state.
+        Internal fan-out can lack a trustworthy head until it fetches current
+        state, so binding advances that head and creates durable invalidation
+        work in the same transaction.
         """
         head_sha = validate_head_sha(head_sha)
         if job.head_sha_hint is not None:
             return job if job.head_sha_hint == head_sha else None
-        with self.session() as session:
-            shared_head_generation = self._shared_head_generation_in_session(
-                session,
-                job.installation_id,
-                job.repository_full_name,
-                head_sha,
-            )
-            bound = session.execute(
-                update(EvaluationJob)
-                .where(
-                    EvaluationJob.id == job.id,
-                    EvaluationJob.generation == job.generation,
-                    EvaluationJob.lease_owner == job.lease_owner,
-                    EvaluationJob.state == "pending",
-                    EvaluationJob.head_sha_hint.is_(None),
+        try:
+            with self.session() as session:
+                shared_head_generation = self._advance_shared_head_epoch_in_session(
+                    session,
+                    JobRequest(
+                        installation_id=job.installation_id,
+                        repository_full_name=job.repository_full_name,
+                        pull_number=job.pull_number,
+                        reason=job.reason,
+                        head_sha_hint=head_sha,
+                    ),
                 )
-                .values(
-                    head_sha_hint=head_sha,
-                    shared_head_generation=shared_head_generation,
+                bound = session.execute(
+                    update(EvaluationJob)
+                    .where(
+                        EvaluationJob.id == job.id,
+                        EvaluationJob.generation == job.generation,
+                        EvaluationJob.lease_owner == job.lease_owner,
+                        EvaluationJob.state == "pending",
+                        EvaluationJob.head_sha_hint.is_(None),
+                    )
+                    .values(
+                        head_sha_hint=head_sha,
+                        shared_head_generation=shared_head_generation,
+                    )
                 )
-            )
-            if getattr(bound, "rowcount", 0) != 1:
-                return None
+                if getattr(bound, "rowcount", 0) != 1:
+                    raise _EvaluationJobBindingLostError
+        except _EvaluationJobBindingLostError:
+            return None
         return replace(
             job,
             head_sha_hint=head_sha,
@@ -1524,12 +1533,10 @@ class QueueStore:
                     update(SharedHeadEpoch)
                     .where(
                         SharedHeadEpoch.installation_id == candidate.installation_id,
-                        SharedHeadEpoch.repository_full_name
-                        == candidate.repository_full_name,
+                        SharedHeadEpoch.repository_full_name == candidate.repository_full_name,
                         SharedHeadEpoch.head_sha == candidate.head_sha,
                         SharedHeadEpoch.generation == candidate.generation,
-                        SharedHeadEpoch.invalidated_generation
-                        < SharedHeadEpoch.generation,
+                        SharedHeadEpoch.invalidated_generation < SharedHeadEpoch.generation,
                         or_(
                             SharedHeadEpoch.lease_until.is_(None),
                             SharedHeadEpoch.lease_until < now,
@@ -2069,9 +2076,7 @@ class QueueStore:
                 session.scalar(
                     select(func.count())
                     .select_from(SharedHeadEpoch)
-                    .where(
-                        SharedHeadEpoch.invalidated_generation < SharedHeadEpoch.generation
-                    )
+                    .where(SharedHeadEpoch.invalidated_generation < SharedHeadEpoch.generation)
                 )
                 or 0
             )
@@ -2084,9 +2089,7 @@ class QueueStore:
                 session.scalar(
                     select(func.count())
                     .select_from(SharedHeadEpoch)
-                    .where(
-                        SharedHeadEpoch.invalidated_generation < SharedHeadEpoch.generation
-                    )
+                    .where(SharedHeadEpoch.invalidated_generation < SharedHeadEpoch.generation)
                 )
                 or 0
             )

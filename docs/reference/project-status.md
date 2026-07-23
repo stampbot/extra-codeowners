@@ -60,13 +60,20 @@ appearing after success, so that new pull request may briefly inherit the old
 result. The stale result remains until the service processes a related event or
 its periodic reconciler inserts work for the new pull request.
 
-Once the service accepts a direct trigger, it advances a durable generation
-shared by every pull request on that head. An older worker checks that
-generation under the head writer guard and cannot publish stale evidence. If
-the fast path moved the check to `in_progress`, the older worker cannot replace
-that result with a stale completion. This closes the cross-worker publication
-race after acceptance; it cannot protect the period before GitHub delivers the
-event.
+Once the service accepts a direct trigger, it records a durable revocation for
+the payload's exact head. That work survives the original pull request closing
+or moving to another head. Its worker resets an existing managed check, then
+revalidates and queues every current open pull request on that commit.
+
+Evaluation cannot publish until the captured generation is current and its
+exact-head revocation has finished. The same generation guard prevents an
+older fast-path handler or expired lease owner from resetting a newer result.
+This closes the cross-worker race after acceptance; it cannot protect the
+period before GitHub delivers the event.
+
+The worker fetches current state for every pull request returned by GitHub's
+commit-to-pulls endpoint. That endpoint has no completeness marker. If GitHub
+omits a pull request, Extra CODEOWNERS cannot discover it from that response.
 
 [Issue #1](https://github.com/stampbot/extra-codeowners/issues/1) tracks the
 live contract tests and design work. Until it closes, keep GitHub's native

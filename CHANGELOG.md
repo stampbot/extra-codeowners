@@ -29,6 +29,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Rel
 - Installation authority epochs that permanently fence older queued work.
 - Repository-and-commit epochs that fence Check Run publication across pull
   requests sharing a head commit.
+- Durable exact-head invalidation with leased retries, strict associated
+  pull-request revalidation, and publication blocked until the accepted
+  generation's reset finishes.
 - Shielded blocking resets when a completed Check Run write has an uncertain
   outcome, post-publication database verification fails, or the evaluation
   task is cancelled.

@@ -86,7 +86,9 @@ The endpoint returns Prometheus text format. Extra CODEOWNERS defines these appl
 | `extra_codeowners_webhook_failures_total` | counter | Rejected or failed deliveries, labeled by reason. |
 | `extra_codeowners_evaluations_total` | counter | Completed evaluations, labeled by conclusion. |
 | `extra_codeowners_evaluation_seconds` | histogram | Evaluation latency. |
-| `extra_codeowners_queue_depth` | gauge | Pending and leased evaluation and authority fan-out rows. |
+| `extra_codeowners_queue_depth` | gauge | Pending and leased exact-head invalidation, evaluation, and authority fan-out rows. |
+| `extra_codeowners_shared_head_invalidation_depth` | gauge | Exact commit generations whose durable Check Run invalidation has not finished. |
+| `extra_codeowners_shared_head_invalidations_total` | counter | Durable exact-head invalidation attempts, labeled by `completed`, `failed`, `rate_limited`, or `superseded`. |
 | `extra_codeowners_dead_jobs` | gauge | Legacy or manually introduced terminal rows. Runtime failures remain pending, so this should remain `0`. |
 | `extra_codeowners_insecure_changes_enabled` | gauge | `1` while built-in non-delegable paths are disabled; otherwise `0`. |
 | `extra_codeowners_reconciliations_total` | counter | Reconciliation attempts, labeled with `result="success"` or `result="failure"`. |
@@ -108,15 +110,17 @@ The service verifies the signature before parsing JSON. The JSON root must be an
 
 For a direct pull-request, review, or rerequest trigger, the signed payload must
 identify the head as exactly 40 or 64 lowercase ASCII hexadecimal characters.
-Ingress advances that head's shared generation in the same transaction as the
-delivery and pull-request job. A malformed identifier returns `400`; the
-service does not create a partial fence.
+Ingress advances that head's shared generation and makes its exact-head
+invalidation pending in the same transaction as the delivery and pull-request
+job. The delivery stores that exact generation token. A malformed identifier
+returns `400`; the service does not create a partial fence.
 
-Ingress then makes one bounded attempt to fetch the current pull request and
-policy. It creates or updates the managed current-head check as `in_progress`
-when policy exists. If policy is absent, it updates only an existing managed
-check. A repository with neither policy nor an existing managed check is
-skipped.
+Ingress then makes one bounded attempt to fetch the current pull request. It
+updates an existing managed check on the accepted head as `in_progress`. It
+creates one only when that head is still current on an open pull request and
+repository policy exists. A historical head with no managed check is skipped.
+If the pull request already moved, ingress records separate durable work for
+the live head.
 
 Every newly accepted direct delivery attempts fast invalidation. A retained
 duplicate retries that path only when an earlier invalidation remains pending;
@@ -127,7 +131,7 @@ Full evaluation happens asynchronously. A `202` response for a mapped trigger me
 | `202` response field | Meaning |
 | --- | --- |
 | `accepted` | `true` if this request recorded the mapped delivery. An already retained delivery returns `false`. Unmapped deliveries return `true` because they are acknowledged but not retained. |
-| `queued` | `true` when this request accepted new mapped work. A duplicate direct trigger can also return `true` when it resumes pending invalidation and requests a newer evaluation generation. This field is not a live queue-depth check. |
+| `queued` | `true` when this request accepted new mapped work or its duplicate fast-path attempt reset a check. A duplicate never advances either generation. This field is not a live queue-depth check. |
 
 For example, a duplicate direct pull-request delivery may return `{"accepted":false,"queued":true}`. Other duplicate mapped deliveries leave existing work unchanged. Once retention pruning removes a delivery ID, redelivery can create or coalesce new work, but workers still fetch current GitHub evidence.
 
@@ -157,7 +161,11 @@ Webhook failures use these status codes:
 | Database failure while accepting mapped work | `503` | Do not acknowledge successful ingestion. |
 | Timeout or database failure while ordering an authority event against an in-flight Check Run | `503` | Do not record the delivery. Restore the service, then use GitHub's **Redeliver** control. GitHub does not retry automatically. |
 
-After durable acceptance of a direct trigger, a GitHub API error or expiry of `EXTRA_CODEOWNERS_WEBHOOK_INVALIDATION_TIMEOUT_SECONDS` leaves the invalidation marker pending and still returns `202`. The durable worker performs the authoritative blocking evaluation. Manual redelivery can retry the fast path.
+After durable acceptance of a direct trigger, a GitHub API error or expiry of
+`EXTRA_CODEOWNERS_WEBHOOK_INVALIDATION_TIMEOUT_SECONDS` leaves exact-head
+invalidation pending and still returns `202`. The durable invalidation worker
+resets an existing managed check and fans out evaluation to current open pull
+requests on that commit. Manual redelivery can retry the fast path.
 
 Authority acceptance uses the same timeout to wait for an in-flight final Check Run under the installation publication guard. Its transaction advances a persistent installation authority epoch and records fan-out. Every evaluation row records the epoch current when it was enqueued, so work from before the authority change cannot publish even after fan-out finishes.
 
@@ -170,7 +178,14 @@ The authority worker then:
 
 Installation-wide and repository-wide work is claimed before base-specific push work. Repository-wide work removes older base-specific rows. A 101st distinct base ref for one installation and repository collapses those rows into one repository-wide job.
 
-Evaluation and authority failures remain pending and retry indefinitely with bounded ordinary backoff. GitHub rate limits use a separately bounded provider delay. GitHub [requires webhook responses within 10 seconds and does not automatically redeliver failed deliveries](https://docs.github.com/en/webhooks/using-webhooks/handling-failed-webhook-deliveries), so synchronous work is bounded. A direct-trigger fast-path failure does not undo durable acceptance; an authority-guard timeout prevents acceptance and requires redelivery.
+Exact-head invalidation, evaluation, and authority failures remain pending and
+retry indefinitely with bounded ordinary backoff. GitHub rate limits use a
+separately bounded provider delay. GitHub [requires webhook responses within 10
+seconds and does not automatically redeliver failed
+deliveries](https://docs.github.com/en/webhooks/using-webhooks/handling-failed-webhook-deliveries),
+so synchronous work is bounded. A direct-trigger fast-path failure does not
+undo durable acceptance; an authority-guard timeout prevents acceptance and
+requires redelivery.
 
 GitHub describes its signature contract in [Validating webhook deliveries](https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries).
 

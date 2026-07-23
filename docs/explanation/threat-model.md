@@ -87,8 +87,8 @@ of the security contract.
 | A webhook is missed | Subscribe to authority changes, reconcile accessible open pull requests periodically, and support operator-requested GitHub redelivery. When reconciliation inserts missing work for a canonical head, it advances the shared generation in the same transaction. | A stale result can remain until the scan inserts work and a worker reaches GitHub. Reconciliation leaves an existing active or delayed row unchanged. |
 | A head or base-branch commit arrives during evaluation | Require reviews for the exact head, fetch base and head again before publishing, and enqueue direct or base-ref fan-out work. | GitHub's check display remains eventually consistent during rapid changes. |
 | Contributor-controlled branch names create an unbounded base-push queue | Coalesce the same base ref, retain at most 100 distinct base-ref rows per installation and repository, collapse overflow into one conservative repository-wide job, and claim broader authority work first. | A repository-wide job uses more GitHub API calls than a base-specific job and can temporarily increase merge latency. |
-| Several pull requests share one head commit but need different decisions | Refuse success when another open pull request already uses the head. Invalidate on pull-request open and retarget events. Every accepted direct trigger advances a durable generation shared by the installation, repository, and head. A writer checks its captured generation while holding the head publication guard. | A pull request opened or retargeted after success can inherit that commit-scoped result until its webhook is accepted. This blocks production use of the check. |
-| A mapped review, label, pull-request, or rerequest trigger races with evaluation | Record the trigger, its pull-request generation, and its shared-head generation in one transaction. Attempt bounded immediate invalidation. Before and after completion, verify both generations while holding the head publication guard. Treat an error or cancellation during the completed write, or during post-publication verification, as uncertainty and attempt a shielded reset to `in_progress` before releasing the guard. | GitHub may apply a write before its response is lost. A hard process stop or failed reset can leave that completed result visible until fast invalidation or durable retry reaches GitHub. |
+| Several pull requests share one head commit but need different decisions | Refuse success when another open pull request already uses the head. Every accepted direct trigger advances a shared generation and durably queues revocation for that exact commit. The invalidation worker resets an existing check by ID, fetches current state for every commit-to-pulls candidate, and fans out their evaluations. Publication requires the captured, current, and invalidated generations to match. | A pull request opened or retargeted after success can inherit that commit-scoped result until GitHub delivers its webhook and the service accepts it. The commit-to-pulls response has no completeness marker, so an omitted candidate is also undetectable. These provider assumptions block production use until the live contract proves the control. |
+| A mapped review, label, pull-request, or rerequest trigger races with evaluation | Record the trigger, its pull-request generation, its shared-head generation, and pending exact-head invalidation in one transaction. Bind the fast path to that generation. Lease durable invalidation ahead of evaluation, and recheck lease ownership immediately before the reset. Before completion, verify the captured generation is current and invalidated. Recheck the evaluation lease immediately before and after the completed write while holding the head publication guard. Treat an error or cancellation during the write or post-publication verification as uncertainty and attempt a shielded reset to `in_progress` before releasing the guard. | GitHub may apply a write before its response is lost. A hard process stop or failed reset can leave that completed result visible until fast invalidation or durable retry reaches GitHub. |
 | A policy label is renamed or deleted | Subscribe to label-definition events, fan out repository evaluation, and fetch current pull-request label names. | Success may remain visible while processing and fan-out finish, or until reconciliation recovers a missed delivery. |
 | A rename moves content across ownership boundaries | Evaluate both the old and new path. | GitHub must provide the previous path. Incomplete rename evidence fails closed. |
 | GitHub truncates a very large pull request | Paginate and reject evaluation at GitHub's 3,000-file API maximum because completeness can no longer be proved. | Such a pull request must be split before it can use Extra CODEOWNERS. |
@@ -121,15 +121,17 @@ Implementation details may change. These properties may not:
    cancellation so durable work remains retryable.
 9. Relevant pending or retrying authority fan-out prevents publication of a
    completed result.
-10. Credentials and raw private payloads never appear in logs, metrics, checks,
+10. A shared-head generation cannot publish until durable invalidation for that
+    exact generation has finished.
+11. Credentials and raw private payloads never appear in logs, metrics, checks,
     or audit details.
-11. An independent DCO result identifies the repository, pull request, base
+12. An independent DCO result identifies the repository, pull request, base
     SHA, and head SHA whose snapshot-bound commit connection produced it.
 
 Invariant 7 has an important limit. GitHub does not offer a pull-request-scoped
 required Check Run, so two pull requests can inherit the check attached to one
-commit. Shared-head detection, the durable shared generation, and fast webhook
-invalidation reduce that window; they cannot eliminate it before GitHub
+commit. Shared-head detection and durable exact-head invalidation close the
+worker race after acceptance. They cannot eliminate the period before GitHub
 delivers and Extra CODEOWNERS accepts the relevant event.
 
 The opt-in [live GitHub contract fixture](../how-to/run-live-github-contract.md)

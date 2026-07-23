@@ -166,9 +166,7 @@ def test_expired_shared_head_lease_cannot_complete_after_replacement(
     expired = store.claim_shared_head_invalidation("old-worker", 60)
     assert expired is not None
     with store.session() as session:
-        session.execute(
-            update(SharedHeadEpoch).values(lease_until=utcnow() - timedelta(seconds=1))
-        )
+        session.execute(update(SharedHeadEpoch).values(lease_until=utcnow() - timedelta(seconds=1)))
 
     replacement = store.claim_shared_head_invalidation("new-worker", 60)
 
@@ -199,9 +197,7 @@ def test_new_shared_head_generation_fences_old_lease_and_completion(
     assert store.is_current_shared_head_invalidation(stale) is False
     assert store.complete_shared_head_invalidation(stale) is False
     assert store.complete_shared_head_invalidation(current) is True
-    assert store.shared_head_invalidation_generation(
-        17, "example/project", "a" * 40
-    ) == 2
+    assert store.shared_head_invalidation_generation(17, "example/project", "a" * 40) == 2
 
 
 def test_shared_head_fanout_preserves_a_newer_different_head(
@@ -232,8 +228,7 @@ def test_shared_head_fanout_preserves_a_newer_different_head(
     )
     with store.session() as session:
         rows = {
-            row.pull_number: row.head_sha_hint
-            for row in session.scalars(select(EvaluationJob))
+            row.pull_number: row.head_sha_hint for row in session.scalars(select(EvaluationJob))
         }
 
     assert rows == {42: second_head, 43: first_head}
@@ -369,9 +364,7 @@ def test_delivery_retries_a_racing_job_insert_without_dropping_trigger(
     # Assigning on the instance avoids affecting other stores in this test process.
     store._enqueue_in_session = collide_once  # type: ignore[method-assign]
 
-    assert store.accept_delivery(
-        "delivery-race", "pull_request", request()
-    ).accepted is True
+    assert store.accept_delivery("delivery-race", "pull_request", request()).accepted is True
     assert store.pending_count() == 2
     assert store.shared_head_generation(17, "example/project", "a" * 40) == 1
 
@@ -434,7 +427,7 @@ def test_internal_head_trigger_epoch_and_enqueue_roll_back_together(tmp_path: Pa
     assert store.pending_count() == 0
 
 
-def test_hintless_internal_claim_captures_current_shared_head_epoch(tmp_path: Path) -> None:
+def test_hintless_internal_claim_advances_shared_head_invalidation(tmp_path: Path) -> None:
     store = make_store(tmp_path)
     store.enqueue(JobRequest(17, "example/project", 41, "periodic_reconciliation"))
     assert store.accept_delivery(
@@ -451,8 +444,28 @@ def test_hintless_internal_claim_captures_current_shared_head_epoch(tmp_path: Pa
 
     assert bound is not None
     assert bound.head_sha_hint == "a" * 40
-    assert bound.shared_head_generation == 1
+    assert bound.shared_head_generation == 2
     assert store.shared_head_generation_is_current(bound, "a" * 40) is True
+    assert store.shared_head_generation_is_publishable(bound, "a" * 40) is False
+    assert store.pending_shared_head_invalidation_count() == 1
+
+
+def test_lost_hintless_bind_rolls_back_tentative_shared_head_invalidation(
+    tmp_path: Path,
+) -> None:
+    store = make_store(tmp_path)
+    request_value = JobRequest(17, "example/project", 41, "periodic_reconciliation")
+    store.enqueue(request_value)
+    claimed = store.claim("old-worker", 60)
+    assert claimed is not None
+    store.enqueue(request_value)
+
+    bound = store.bind_claim_to_head(claimed, "a" * 40)
+
+    assert bound is None
+    assert store.shared_head_generation(17, "example/project", "a" * 40) == 0
+    assert store.pending_shared_head_invalidation_count() == 0
+    assert store.pending_count() == 1
 
 
 def test_jobs_coalesce_and_new_generation_survives_old_completion(tmp_path: Path) -> None:

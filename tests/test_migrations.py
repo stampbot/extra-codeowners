@@ -108,11 +108,17 @@ def test_retry_schema_upgrades_existing_jobs_to_fail_closed_shared_head_fences(
                 """
                 INSERT INTO evaluation_jobs (
                     installation_id, repository_full_name, pull_number, reason,
-                    generation, authority_generation, state, attempts,
-                    requested_at, available_at
+                    head_sha_hint, generation, authority_generation, state,
+                    attempts, requested_at, available_at
                 ) VALUES (
                     17, 'example/project', 42, 'before-shared-head-fence',
-                    1, 0, 'pending', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+                    NULL, 1, 0, 'pending', 0,
+                    CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+                ), (
+                    17, 'example/project', 43, 'before-shared-head-fence',
+                    'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+                    1, 0, 'pending', 0,
+                    CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
                 )
                 """
             )
@@ -132,11 +138,25 @@ def test_retry_schema_upgrades_existing_jobs_to_fail_closed_shared_head_fences(
         marker = connection.scalar(
             text("SELECT version FROM schema_metadata WHERE singleton_id = 1")
         )
-        queued_generation = connection.scalar(
-            text("SELECT shared_head_generation FROM evaluation_jobs WHERE pull_number = 42")
-        )
+        queued_generations = {
+            int(row.pull_number): int(row.shared_head_generation)
+            for row in connection.execute(
+                text(
+                    "SELECT pull_number, shared_head_generation "
+                    "FROM evaluation_jobs ORDER BY pull_number"
+                )
+            )
+        }
+        migrated_epoch = connection.execute(
+            text(
+                "SELECT generation, invalidated_generation "
+                "FROM shared_head_epochs WHERE head_sha = :head_sha"
+            ),
+            {"head_sha": "b" * 40},
+        ).one()
     assert marker == 2
-    assert queued_generation == 0
+    assert queued_generations == {42: 0, 43: 1}
+    assert tuple(migrated_epoch) == (1, 0)
     assert shared_generation["nullable"] is False
     assert inspector.has_table("shared_head_epochs")
     epoch_columns = {
@@ -156,22 +176,17 @@ def test_retry_schema_upgrades_existing_jobs_to_fail_closed_shared_head_fences(
     assert epoch_columns["available_at"]["nullable"] is False
     assert epoch_columns["attempts"]["nullable"] is False
     assert {
-        constraint["name"]
-        for constraint in inspector.get_check_constraints("shared_head_epochs")
+        constraint["name"] for constraint in inspector.get_check_constraints("shared_head_epochs")
     } == {
         "ck_shared_head_epochs_attempts_nonnegative",
         "ck_shared_head_epochs_generation_positive",
         "ck_shared_head_epochs_invalidation_bounds",
     }
-    assert {
-        index["name"] for index in inspector.get_indexes("shared_head_epochs")
-    } >= {
+    assert {index["name"] for index in inspector.get_indexes("shared_head_epochs")} >= {
         "ix_shared_head_epochs_changed_at",
         "ix_shared_head_epochs_claim",
     }
-    webhook_columns = {
-        column["name"] for column in inspector.get_columns("webhook_deliveries")
-    }
+    webhook_columns = {column["name"] for column in inspector.get_columns("webhook_deliveries")}
     assert {
         "installation_id",
         "repository_full_name",
@@ -196,9 +211,10 @@ def test_retry_schema_upgrades_existing_jobs_to_fail_closed_shared_head_fences(
     assert claimed.shared_head_generation == 0
     bound = store.bind_claim_to_head(claimed, "a" * 40)
     assert bound is not None
-    assert bound.shared_head_generation == 0
+    assert bound.shared_head_generation == 1
     assert store.shared_head_generation_is_current(bound, "a" * 40) is True
-    assert store.shared_head_generation_is_publishable(bound, "a" * 40) is True
+    assert store.shared_head_generation_is_publishable(bound, "a" * 40) is False
+    assert store.shared_head_invalidation_generation(17, "example/project", "a" * 40) == 0
 
 
 def test_legacy_delivery_redelivery_uses_current_head_fast_path(
