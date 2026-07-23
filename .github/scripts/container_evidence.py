@@ -6092,7 +6092,7 @@ def verify_native_component_lock_bindings(
     locked_wheels: Sequence[Mapping[str, Any]],
     lock_sources: Mapping[tuple[str, str], Mapping[str, Any]],
 ) -> dict[str, Any]:
-    """Bind resolved-owner wheel and source pins to the exact committed lock entries."""
+    """Bind every native owner to the selected wheel and reviewed source pins."""
 
     ledger = native_component_coverage_ledger(inventory, policy)
     selected: dict[str, Mapping[str, Any]] = {}
@@ -6116,9 +6116,15 @@ def verify_native_component_lock_bindings(
         ):
             raise EvidenceError(f"native-component coverage wheel differs from lock for {owner}")
         name, version = owner.removeprefix("python:").rsplit("@", maxsplit=1)
-        if lock_sources.get((name, version)) != owner_record["owner_source"]:
+        expected_source = lock_sources.get((name, version))
+        source_origin = "lock"
+        if expected_source is None:
+            fallback_source = source_policy_entry(policy, name, version)
+            expected_source = {field: fallback_source[field] for field in ("url", "sha256", "size")}
+            source_origin = "reviewed source fallback"
+        if expected_source != owner_record["owner_source"]:
             raise EvidenceError(
-                f"native-component coverage owner source differs from lock for {owner}"
+                f"native-component coverage owner source differs from {source_origin} for {owner}"
             )
     return ledger
 

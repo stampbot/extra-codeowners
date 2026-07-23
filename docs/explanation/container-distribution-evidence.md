@@ -425,8 +425,9 @@ downloaded build script:
 3. `uv.lock` supplies immutable URLs, sizes, and SHA-256 values for installed
    top-level Python source distributions. Reviewed policy entries cover
    wheel-only and lower-layer top-level components not represented by a locked
-   source distribution. For a resolved native owner, the lock's wheel and sdist
-   records must also equal the owner's coverage policy exactly.
+   source distribution. Every native owner's wheel must equal the selected lock
+   entry. Its owner source must equal the locked sdist when one exists, or the
+   exact reviewed fallback otherwise.
 4. The Docker Official Python recipe is pinned by commit and file hash. Its one
    literal `PYTHON_VERSION` and `PYTHON_SHA256` declaration must select the same
    CPython URL and hash recorded by policy. The source archive's exact size and

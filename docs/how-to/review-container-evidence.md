@@ -807,8 +807,9 @@ Review source policy with these precise boundaries:
   owner root, or covered by a narrowly validated relationship. For a
   relationship, confirm that both named payload dispositions cite the
   corresponding source and target observations. Open reviews must retain
-  exact omissions and cannot appear in `resolved_owners`. The wheel and owner
-  sdist still bind to `uv.lock`
+  exact omissions and cannot appear in `resolved_owners`. The wheel still binds
+  to `uv.lock`. The owner source must bind to the locked sdist when one exists,
+  or to the exact reviewed `python_sources` fallback for a wheel-only owner
 - native-component sources are a tagged union. Review commit-pinned Alpine
   recipe and distfile records, canonical crates.io archives and manifests,
   canonical owner-sdist subtrees, and upstream archives bound by strict

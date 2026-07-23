@@ -276,7 +276,7 @@ Each owner record has exactly these fields:
 | --- | --- |
 | `owner` | Canonical `python:NAME@VERSION`, unique on the platform. |
 | `wheel` | Exact HTTPS URL, SHA-256, and positive size for the platform wheel. The filename must match the owner and the supported CPython 3.14 musllinux platform. |
-| `owner_source` | Exact HTTPS URL, SHA-256, and size for the owner sdist; it must equal the `uv.lock` source record. |
+| `owner_source` | Exact HTTPS URL, SHA-256, and size for the owner source. It must equal the `uv.lock` sdist record when one exists, or the exact reviewed `python_sources` fallback for a wheel-only owner. |
 | `cargo_lock` | `null` unless the owner directly reviews a crates.io source; otherwise, the exact retained owner-sdist lockfile context described below. |
 | `native_payloads` | Sorted records with derived `role`, installed `path`, SHA-256, and positive `size`. |
 | `sboms` | Sorted, hash-pinned CycloneDX observations and a disposition for each metadata root. |

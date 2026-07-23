@@ -4354,6 +4354,37 @@ def test_native_component_lock_binding_rejects_wheel_and_owner_source_drift(fiel
         )
 
 
+def test_native_component_lock_binding_accepts_exact_reviewed_source_fallback() -> None:
+    inventories, locked, policy, lock_sources = native_component_coverage_case()
+    inventory = inventories["linux/amd64"]
+    fallback = lock_sources.pop(("demo", "1.0"))
+    policy["python_sources"] = [
+        {
+            "name": "demo",
+            "version": "1.0",
+            **fallback,
+        }
+    ]
+
+    ledger = evidence.verify_native_component_lock_bindings(
+        inventory,
+        policy,
+        [locked["linux/amd64"]],
+        lock_sources,
+    )
+    assert ledger["complete"] is True
+
+    wrong_fallback = copy.deepcopy(policy)
+    wrong_fallback["python_sources"][0]["sha256"] = "0" * 64
+    with pytest.raises(evidence.EvidenceError, match="reviewed source fallback"):
+        evidence.verify_native_component_lock_bindings(
+            inventory,
+            wrong_fallback,
+            [locked["linux/amd64"]],
+            lock_sources,
+        )
+
+
 def test_committed_native_owner_policy_is_exact_and_incomplete() -> None:
     policy = cast(dict[str, Any], json.loads(Path(".compliance/container-policy.json").read_text()))
     evidence.validate_policy_schema(policy)
