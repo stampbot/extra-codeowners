@@ -41,10 +41,10 @@ INSECURE_MODE = Gauge(
 )
 RECONCILIATIONS = Counter(
     "extra_codeowners_reconciliations_total",
-    "Completed open pull request reconciliation attempts",
+    "Open pull request reconciliation outcomes",
     ("result",),
 )
 RECONCILIATION_LAST_SUCCESS = Gauge(
     "extra_codeowners_reconciliation_last_success_timestamp_seconds",
-    "Unix timestamp of the latest successful open pull request reconciliation",
+    "Unix timestamp of the latest complete open pull request reconciliation",
 )

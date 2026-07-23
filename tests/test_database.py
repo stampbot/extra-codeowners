@@ -877,7 +877,11 @@ def test_service_lease_can_be_renewed_only_by_owner_until_expiry(tmp_path: Path)
 
     assert store.acquire_service_lease("reconciler", "one", 60) is True
     assert store.acquire_service_lease("reconciler", "two", 60) is False
+    assert store.release_service_lease("reconciler", "two") is False
     assert store.acquire_service_lease("reconciler", "one", 60) is True
+    assert store.release_service_lease("reconciler", "one") is True
+    assert store.acquire_service_lease("reconciler", "two", 60) is True
+    assert store.release_service_lease("reconciler", "one") is False
 
     with store.session() as session:
         session.execute(
@@ -885,7 +889,7 @@ def test_service_lease_can_be_renewed_only_by_owner_until_expiry(tmp_path: Path)
             .where(ServiceLease.name == "reconciler")
             .values(lease_until=utcnow() - timedelta(seconds=1))
         )
-    assert store.acquire_service_lease("reconciler", "two", 60) is True
+    assert store.acquire_service_lease("reconciler", "one", 60) is True
 
 
 def test_check_write_guard_is_exclusive_and_releasable(tmp_path: Path) -> None:

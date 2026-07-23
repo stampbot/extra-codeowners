@@ -5,8 +5,9 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
-from typing import Any, Final
+from typing import Any, Final, Literal
 
 import structlog
 from pydantic import ValidationError
@@ -29,6 +30,7 @@ from extra_codeowners.github import (
     MAX_PULL_FILES,
     GitHubClient,
     GitHubError,
+    GitHubOperationStoppedError,
     GitHubRateLimitError,
     PullRequestTooLargeError,
 )
@@ -85,6 +87,213 @@ class SharedHeadLeaseLostError(RuntimeError):
 
 class SharedHeadInvalidationPendingError(RuntimeError):
     """A current evaluation must wait for its exact-head reset and fan-out."""
+
+
+@dataclass(frozen=True, slots=True)
+class ReconciliationOutcome:
+    """Result of one elected open-pull-request reconciliation."""
+
+    queued: int
+    failed_installations: int = 0
+    lease_lost: bool = False
+    stopped: bool = False
+
+    @property
+    def complete(self) -> bool:
+        """Whether the reconciler inspected every visible, unsuspended installation."""
+        return self.failed_installations == 0 and not self.lease_lost and not self.stopped
+
+
+class _CombinedEvent(asyncio.Event):
+    """An event whose state follows any of its source events."""
+
+    def __init__(self, *sources: asyncio.Event) -> None:
+        super().__init__()
+        self._sources = sources
+
+    def is_set(self) -> bool:
+        """Return immediately when this event or any source event is set."""
+        return super().is_set() or any(source.is_set() for source in self._sources)
+
+
+@asynccontextmanager
+async def _combine_events(*sources: asyncio.Event) -> AsyncIterator[asyncio.Event]:
+    """Yield one event that wakes and reads as set when any source is set."""
+    combined = _CombinedEvent(*sources)
+
+    async def relay(source: asyncio.Event) -> None:
+        await source.wait()
+        combined.set()
+
+    relays = [
+        asyncio.create_task(relay(source), name=f"combined-event-{index}")
+        for index, source in enumerate(sources)
+    ]
+    try:
+        yield combined
+    finally:
+        for task in relays:
+            task.cancel()
+        await asyncio.gather(*relays, return_exceptions=True)
+
+
+class _ReconciliationPayloadError(ValueError):
+    """A GitHub reconciliation record failed local structural validation."""
+
+    def __init__(
+        self,
+        reason: Literal[
+            "invalid_installation_batch",
+            "invalid_installation_record",
+            "invalid_installation_id",
+            "duplicate_installation_id",
+            "invalid_installation_suspended_at",
+            "invalid_repository_batch",
+            "invalid_repository_record",
+            "invalid_repository_full_name",
+            "duplicate_repository_full_name",
+            "invalid_repository_archived",
+            "invalid_pull_batch",
+            "invalid_pull_record",
+            "invalid_pull_number",
+            "duplicate_pull_number",
+            "invalid_pull_head",
+        ],
+    ) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
+def _reconciliation_installation_id(value: Any) -> int:
+    """Return a valid GitHub installation ID without coercing untrusted data."""
+    if type(value) is not int or value <= 0:
+        raise _ReconciliationPayloadError("invalid_installation_id")
+    return value
+
+
+def _reconciliation_repository_full_name(value: Any) -> str:
+    """Return a canonical GitHub repository identity for reconciliation."""
+    if not isinstance(value, str):
+        raise _ReconciliationPayloadError("invalid_repository_full_name")
+    try:
+        full_name = normalize_repository_full_name(value)
+    except ValueError:
+        raise _ReconciliationPayloadError("invalid_repository_full_name") from None
+    if not full_name.isascii() or any(
+        not (character.isalnum() or character in "._-/") for character in full_name
+    ):
+        raise _ReconciliationPayloadError("invalid_repository_full_name")
+    return full_name
+
+
+def _reconciliation_suspended(value: Any) -> bool:
+    """Return whether a well-formed installation record is suspended."""
+    if value is None:
+        return False
+    if (
+        not isinstance(value, str)
+        or not value
+        or value != value.strip()
+        or len(value) > 64
+        or "T" not in value
+    ):
+        raise _ReconciliationPayloadError("invalid_installation_suspended_at")
+    normalized = f"{value[:-1]}+00:00" if value.endswith("Z") else value
+    try:
+        timestamp = datetime.fromisoformat(normalized)
+    except ValueError:
+        raise _ReconciliationPayloadError("invalid_installation_suspended_at") from None
+    if timestamp.tzinfo is None or timestamp.utcoffset() is None:
+        raise _ReconciliationPayloadError("invalid_installation_suspended_at")
+    return True
+
+
+def _reconciliation_installations(value: Any) -> tuple[tuple[int, bool], ...]:
+    """Validate the complete top-level installation response before using it."""
+    if not isinstance(value, list):
+        raise _ReconciliationPayloadError("invalid_installation_batch")
+    installations: list[tuple[int, bool]] = []
+    seen_ids: set[int] = set()
+    for record in value:
+        if not isinstance(record, dict):
+            raise _ReconciliationPayloadError("invalid_installation_record")
+        if "suspended_at" not in record:
+            raise _ReconciliationPayloadError("invalid_installation_suspended_at")
+        installation_id = _reconciliation_installation_id(record.get("id"))
+        if installation_id in seen_ids:
+            raise _ReconciliationPayloadError("duplicate_installation_id")
+        seen_ids.add(installation_id)
+        installations.append(
+            (
+                installation_id,
+                _reconciliation_suspended(record["suspended_at"]),
+            )
+        )
+    return tuple(installations)
+
+
+def _reconciliation_repository(value: Any) -> tuple[str, bool]:
+    """Validate one repository record without coercing provider data."""
+    if not isinstance(value, dict):
+        raise _ReconciliationPayloadError("invalid_repository_record")
+    archived = value.get("archived")
+    if type(archived) is not bool:
+        raise _ReconciliationPayloadError("invalid_repository_archived")
+    return _reconciliation_repository_full_name(value.get("full_name")), archived
+
+
+def _reconciliation_repositories(value: Any) -> tuple[tuple[str, bool], ...]:
+    """Validate an installation's complete repository batch."""
+    if not isinstance(value, list):
+        raise _ReconciliationPayloadError("invalid_repository_batch")
+    repositories: list[tuple[str, bool]] = []
+    seen_names: set[str] = set()
+    for record in value:
+        repository = _reconciliation_repository(record)
+        if repository[0] in seen_names:
+            raise _ReconciliationPayloadError("duplicate_repository_full_name")
+        seen_names.add(repository[0])
+        repositories.append(repository)
+    return tuple(repositories)
+
+
+def _reconciliation_head_sha(value: Any) -> str:
+    """Return a canonical full Git object ID from an open-pull record."""
+    if (
+        not isinstance(value, str)
+        or len(value) not in {40, 64}
+        or any(character not in "0123456789abcdef" for character in value)
+    ):
+        raise _ReconciliationPayloadError("invalid_pull_head")
+    return value
+
+
+def _reconciliation_pull(value: Any) -> tuple[int, str]:
+    """Validate one open-pull record without accepting Python bools as integers."""
+    if not isinstance(value, dict):
+        raise _ReconciliationPayloadError("invalid_pull_record")
+    number = value.get("number")
+    if type(number) is not int or number <= 0:
+        raise _ReconciliationPayloadError("invalid_pull_number")
+    head = value.get("head")
+    if not isinstance(head, dict):
+        raise _ReconciliationPayloadError("invalid_pull_head")
+    return number, _reconciliation_head_sha(head.get("sha"))
+
+
+def _reconciliation_pulls(value: Any) -> tuple[tuple[int, str], ...]:
+    """Validate one repository's complete open-pull batch."""
+    if not isinstance(value, list):
+        raise _ReconciliationPayloadError("invalid_pull_batch")
+    pulls: list[tuple[int, str]] = []
+    seen_numbers: set[int] = set()
+    for record in value:
+        pull = _reconciliation_pull(record)
+        if pull[0] in seen_numbers:
+            raise _ReconciliationPayloadError("duplicate_pull_number")
+        seen_numbers.add(pull[0])
+        pulls.append(pull)
+    return tuple(pulls)
 
 
 def _failure(code: str, message: str) -> EvaluationResult:
@@ -1771,14 +1980,27 @@ class Reconciler:
                 lost.set()
                 return
 
-    async def reconcile_once(self) -> int:
-        """Discover and enqueue open pull requests across installations."""
+    async def reconcile_once(
+        self,
+        stop: asyncio.Event | None = None,
+    ) -> ReconciliationOutcome | None:
+        """Discover open pull requests, or return ``None`` when another process is elected."""
+        stop_event = stop or asyncio.Event()
+        if stop_event.is_set():
+            return None
         lease_seconds = max(300, self.settings.reconcile_interval_seconds * 2)
         acquired = await asyncio.to_thread(
             self.store.acquire_service_lease, "open-pr-reconciler", self.owner, lease_seconds
         )
         if not acquired:
-            return 0
+            return None
+        if stop_event.is_set():
+            await asyncio.to_thread(
+                self.store.release_service_lease,
+                "open-pr-reconciler",
+                self.owner,
+            )
+            return None
         done = asyncio.Event()
         lost = asyncio.Event()
         heartbeat = asyncio.create_task(
@@ -1786,47 +2008,103 @@ class Reconciler:
             name="reconciler-lease",
         )
         try:
-            return await self._reconcile_owned(lost)
+            outcome = await self._reconcile_owned(lost, stop_event)
         finally:
             done.set()
             await asyncio.gather(heartbeat)
+        if lost.is_set() and not outcome.lease_lost:
+            outcome = replace(outcome, lease_lost=True)
+        if stop_event.is_set() and not outcome.stopped:
+            outcome = replace(outcome, stopped=True)
+        return outcome
 
-    async def _reconcile_owned(self, lost: asyncio.Event) -> int:
+    async def _reconcile_owned(
+        self,
+        lost: asyncio.Event,
+        stop: asyncio.Event | None = None,
+    ) -> ReconciliationOutcome:
         """Perform one reconciliation while the heartbeat owns the lease."""
+        stop_event = stop or asyncio.Event()
+        async with _combine_events(lost, stop_event) as request_stop:
+            return await self._reconcile_owned_scan(lost, stop_event, request_stop)
+
+    async def _reconcile_owned_scan(
+        self,
+        lost: asyncio.Event,
+        stop_event: asyncio.Event,
+        request_stop: asyncio.Event,
+    ) -> ReconciliationOutcome:
+        """Perform the elected scan with one request-level interruption signal."""
+        queued = 0
+        failed_installations = 0
+
+        def interrupted() -> bool:
+            return lost.is_set() or stop_event.is_set()
+
+        def interruption_outcome(*, operation_stopped: bool = False) -> ReconciliationOutcome:
+            return ReconciliationOutcome(
+                queued=queued,
+                failed_installations=failed_installations,
+                lease_lost=lost.is_set(),
+                stopped=stop_event.is_set() or operation_stopped,
+            )
+
+        if interrupted():
+            return interruption_outcome()
         retention_boundary = datetime.now(UTC) - timedelta(
             days=self.settings.webhook_delivery_retention_days
         )
         pruned = await asyncio.to_thread(self.store.prune_deliveries, retention_boundary)
         if pruned:
             log.info("webhook_deliveries_pruned", deliveries=pruned)
+        if interrupted():
+            return interruption_outcome()
         pruned_epochs = await asyncio.to_thread(
             self.store.prune_shared_head_epochs,
             retention_boundary,
         )
         if pruned_epochs:
             log.info("shared_head_epochs_pruned", epochs=pruned_epochs)
-        queued = 0
-        for installation in await self.github.list_installations():
-            if lost.is_set():
-                return queued
-            installation_id = installation.get("id")
-            if not isinstance(installation_id, int) or installation.get("suspended_at") is not None:
+        if interrupted():
+            return interruption_outcome()
+        try:
+            installation_records = await self.github.list_installations(stop=request_stop)
+        except GitHubOperationStoppedError:
+            return interruption_outcome(operation_stopped=not interrupted())
+        if interrupted():
+            return interruption_outcome()
+        installations = _reconciliation_installations(installation_records)
+        for installation_id, suspended in installations:
+            if interrupted():
+                return interruption_outcome()
+            if suspended:
                 continue
             try:
-                repositories = await self.github.list_installation_repositories(installation_id)
-                for repository in repositories:
-                    if lost.is_set():
-                        return queued
-                    full_name = repository.get("full_name")
-                    if not isinstance(full_name, str) or repository.get("archived") is True:
+                repository_records = await self.github.list_installation_repositories(
+                    installation_id,
+                    stop=request_stop,
+                )
+                if interrupted():
+                    return interruption_outcome()
+                repositories = _reconciliation_repositories(repository_records)
+                for full_name, archived in repositories:
+                    if interrupted():
+                        return interruption_outcome()
+                    if archived:
                         continue
                     if self.settings.is_organization_config_repository(full_name):
                         continue
-                    for pull in await self.github.list_open_pulls(installation_id, full_name):
-                        number = pull.get("number")
-                        head = pull.get("head")
-                        if not isinstance(number, int):
-                            continue
+                    pull_records = await self.github.list_open_pulls(
+                        installation_id,
+                        full_name,
+                        stop=request_stop,
+                    )
+                    if interrupted():
+                        return interruption_outcome()
+                    pulls = _reconciliation_pulls(pull_records)
+                    for number, head_sha in pulls:
+                        if interrupted():
+                            return interruption_outcome()
                         added = await asyncio.to_thread(
                             self.store.enqueue_if_absent,
                             JobRequest(
@@ -1834,28 +2112,56 @@ class Reconciler:
                                 repository_full_name=full_name,
                                 pull_number=number,
                                 reason="periodic_reconciliation",
-                                head_sha_hint=(
-                                    head.get("sha")
-                                    if isinstance(head, dict) and isinstance(head.get("sha"), str)
-                                    else None
-                                ),
+                                head_sha_hint=head_sha,
                             ),
                         )
                         queued += int(added)
+            except GitHubOperationStoppedError:
+                return interruption_outcome(operation_stopped=not interrupted())
+            except _ReconciliationPayloadError as error:
+                failed_installations += 1
+                log.warning(
+                    "installation_reconciliation_payload_invalid",
+                    installation_id=installation_id,
+                    reason=error.reason,
+                )
             except Exception:
+                failed_installations += 1
                 log.exception("installation_reconciliation_failed", installation_id=installation_id)
-        return queued
+        return ReconciliationOutcome(
+            queued=queued,
+            failed_installations=failed_installations,
+            lease_lost=lost.is_set(),
+            stopped=stop_event.is_set(),
+        )
+
+    async def run_iteration(self, stop: asyncio.Event | None = None) -> None:
+        """Run and report one scheduled reconciliation attempt."""
+        try:
+            outcome = await self.reconcile_once(stop)
+        except Exception:
+            RECONCILIATIONS.labels("failure").inc()
+            log.exception("reconciliation_failed")
+            return
+        if outcome is None:
+            return
+        if not outcome.complete:
+            RECONCILIATIONS.labels("partial").inc()
+            log.warning(
+                "reconciliation_partial",
+                pull_requests_queued=outcome.queued,
+                failed_installations=outcome.failed_installations,
+                lease_lost=outcome.lease_lost,
+                stopped=outcome.stopped,
+            )
+            return
+        RECONCILIATIONS.labels("success").inc()
+        RECONCILIATION_LAST_SUCCESS.set_to_current_time()
+        log.info("reconciliation_complete", pull_requests_queued=outcome.queued)
 
     async def run(self, stop: asyncio.Event) -> None:
         """Reconcile immediately and then at the configured interval."""
         while not stop.is_set():
-            try:
-                count = await self.reconcile_once()
-                RECONCILIATIONS.labels("success").inc()
-                RECONCILIATION_LAST_SUCCESS.set_to_current_time()
-                log.info("reconciliation_complete", pull_requests_queued=count)
-            except Exception:
-                RECONCILIATIONS.labels("failure").inc()
-                log.exception("reconciliation_failed")
+            await self.run_iteration(stop)
             with suppress(TimeoutError):
                 await asyncio.wait_for(stop.wait(), self.settings.reconcile_interval_seconds)

@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import hmac
 import json
@@ -5,6 +6,7 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock
 
+import pytest
 from fastapi.testclient import TestClient
 
 import extra_codeowners.app as app_module
@@ -25,7 +27,12 @@ class StubGitHub:
     async def close(self) -> None:
         pass
 
-    async def list_installations(self) -> list[dict[str, Any]]:
+    async def list_installations(
+        self,
+        *,
+        stop: asyncio.Event | None = None,
+    ) -> list[dict[str, Any]]:
+        del stop
         return []
 
     async def get_pull(self, installation_id: int, repository: str, number: int) -> dict[str, Any]:
@@ -288,6 +295,51 @@ def test_liveness_fails_when_enabled_reconciler_task_has_died(tmp_path: Path) ->
         "worker": True,
         "reconciler": False,
     }
+
+
+@pytest.mark.asyncio
+async def test_lifespan_shutdown_stops_reconciliation_before_the_next_api_call(
+    tmp_path: Path,
+) -> None:
+    class StoppingGitHub(StubGitHub):
+        def __init__(self) -> None:
+            super().__init__()
+            self.installation_scan_started = asyncio.Event()
+            self.repository_calls = 0
+
+        async def list_installations(
+            self,
+            *,
+            stop: asyncio.Event | None = None,
+        ) -> list[dict[str, Any]]:
+            assert stop is not None
+            self.installation_scan_started.set()
+            await stop.wait()
+            return [{"id": 2, "suspended_at": None}]
+
+        async def list_installation_repositories(
+            self,
+            installation_id: int,
+            *,
+            stop: asyncio.Event | None = None,
+        ) -> list[dict[str, Any]]:
+            del installation_id, stop
+            self.repository_calls += 1
+            return []
+
+    store = migrated_store(f"sqlite:///{tmp_path / 'reconciliation-shutdown.db'}")
+    github = StoppingGitHub()
+    runtime = configured_settings().model_copy(update={"reconcile_enabled": True})
+    app = app_module.create_app(runtime, github=github, store=store)  # type: ignore[arg-type]
+
+    async def exercise_lifespan() -> None:
+        async with app.router.lifespan_context(app):
+            await asyncio.wait_for(github.installation_scan_started.wait(), timeout=0.5)
+
+    await asyncio.wait_for(exercise_lifespan(), timeout=1)
+
+    assert github.repository_calls == 0
+    assert store.pending_count() == 0
 
 
 def test_org_config_repository_webhook_is_acknowledged_but_not_queued(tmp_path: Path) -> None:

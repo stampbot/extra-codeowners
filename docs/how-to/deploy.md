@@ -252,10 +252,12 @@ an intentionally disabled task as healthy.
 Confirm the metrics scraper can read `/metrics` and that
 `extra_codeowners_insecure_changes_enabled` is `0`.
 
-After reconciliation runs, verify that
-`extra_codeowners_reconciliations_total{result="success"}` increased and
-`extra_codeowners_reconciliation_last_success_timestamp_seconds` contains a
-recent Unix timestamp.
+After reconciliation runs, verify that at least one scraped replica reports an
+increase in `extra_codeowners_reconciliations_total{result="success"}`. At
+least one replica's
+`extra_codeowners_reconciliation_last_success_timestamp_seconds` must contain a
+recent timestamp. Investigate any `partial` or `failure` result before treating
+reconciliation as healthy.
 
 Then use a disposable repository with test policy:
 
