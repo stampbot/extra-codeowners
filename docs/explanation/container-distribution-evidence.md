@@ -26,25 +26,30 @@ Issue [#28](https://github.com/stampbot/extra-codeowners/issues/28) tracks the
 privilege-separated release implementation.
 
 CI also exercises a
-[raw OCI release-spine transport](../reference/release-spine-format.md). An
-unprivileged producer turns a generated two-platform OCI fixture into one
-canonical record and one opaque byte-range file. GitHub stores them as separate
-raw artifacts. A read-only job downloads each by immutable artifact ID and
-verifies the provider digest, trusted root digest, record graph, and every byte
-range without invoking an archive parser. The root digest is synthetic, no
-real candidate is built, and this internal transport test does not weaken the
-publication blocker.
+[raw OCI release-spine transport](../reference/release-spine-format.md). Its
+unprivileged producer first downloads and verifies the selected Python proof.
+Pinned Buildx and BuildKit versions then export a real two-platform candidate
+to a local OCI directory without pushing it. The producer gets the trusted root
+digest from the pinned build action and packs the reachable objects into a
+canonical record plus an opaque byte-range file. GitHub stores those files as
+separate raw artifacts. Their names bind the Python artifact ID, workflow run,
+and producer run attempt.
 
-The spine deliberately stops before filesystem meaning. It does not check tar
-members, gzip structure, OCI diff IDs, installed application files, notices,
-source completeness, signatures, or attestations. Those remain the work of the
-evidence collector and the future isolated release path. When that path is
-implemented, its trust anchor must be the root index digest returned by the
-pinned build action, not a digest copied from the spine record. It must also
-consume only object chunks that the spine verifier has copied from its retained
-descriptor and fully authenticated before exposure. It must not reopen a
-verified path, and it must wait for the verification context's final
-unchanged-file check before it publishes a manifest, tag, release, or other
+A separate read-only job downloads each artifact by immutable ID. It checks the
+provider digests, the out-of-band root digest, the record graph, and every byte
+range without calling an archive parser. It does not rebuild the graph from the
+opaque OCI bodies. This is still an internal transport test; it does not weaken
+the publication blocker.
+
+The spine stops at the OCI object boundary. It does not check tar members, gzip
+structure, OCI diff IDs, installed files, notices, source completeness,
+signatures, or attestations. The evidence collector and future isolated release
+path own those checks. That release path must keep the current trust boundary:
+take the root digest from the pinned build action, not from the spine record.
+It must also consume only object chunks that the verifier copied from its
+retained file descriptor and authenticated before returning them. It must not
+reopen a verified path, and it must wait for the verifier's final
+unchanged-file check before publishing a manifest, tag, release, or other
 reference.
 
 The application build has its own reproducibility proof. CI builds the package
