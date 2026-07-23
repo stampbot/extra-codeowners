@@ -3884,6 +3884,47 @@ def validate_native_source_notices(value: object, source_id: str) -> list[Mappin
     return notices
 
 
+def validate_native_source_reviewed_license(value: object, source_id: str) -> str:
+    """Validate one exact reviewed expression carried by a component source."""
+
+    if (
+        not isinstance(value, str)
+        or checked_scalar(
+            value,
+            f"native-component source {source_id} reviewed license",
+            max_length=MAX_LICENSE_FIELD_LENGTH,
+        )
+        != value
+        or "LicenseRef-" in value
+    ):
+        raise EvidenceError(f"native-component source {source_id} has an invalid reviewed license")
+    return value
+
+
+def validate_native_source_manifest(
+    value: object,
+    source: str,
+) -> Mapping[str, Any]:
+    """Validate one digest-pinned Cargo manifest retained from a source archive."""
+
+    record = require_exact_fields(value, {"member", "sha256", "size"}, source)
+    member = record["member"]
+    digest = record["sha256"]
+    size = record["size"]
+    if (
+        not isinstance(member, str)
+        or str(checked_canonical_path(member, f"{source} member")) != member
+        or PurePosixPath(member).name != "Cargo.toml"
+        or not isinstance(digest, str)
+        or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+        or not isinstance(size, int)
+        or isinstance(size, bool)
+        or not 0 < size <= MAX_CARGO_LOCK_BYTES
+    ):
+        raise EvidenceError(f"{source} is invalid")
+    return record
+
+
 def validate_alpine_component_source(source_id: str, raw_record: object) -> Mapping[str, Any]:
     record = require_exact_fields(
         raw_record,
@@ -4115,6 +4156,9 @@ def validate_owner_subpath_component_source(
             "tree_sha256",
             "member_count",
             "expanded_size",
+            "reviewed_license",
+            "workspace_manifest",
+            "cargo_packages",
             "notices",
         },
         f"native-component source {source_id}",
@@ -4144,6 +4188,86 @@ def validate_owner_subpath_component_source(
         or not 0 < expanded <= MAX_OWNER_SUBTREE_BYTES
     ):
         raise EvidenceError(f"native-component source {source_id} has invalid subtree bounds")
+    validate_native_source_reviewed_license(record["reviewed_license"], source_id)
+    workspace_manifest = validate_native_source_manifest(
+        record["workspace_manifest"],
+        f"native-component source {source_id} workspace manifest",
+    )
+    workspace_member = PurePosixPath(str(workspace_manifest["member"]))
+    if len(workspace_member.parts) < 2:
+        raise EvidenceError(
+            f"native-component source {source_id} has an invalid workspace manifest member"
+        )
+    archive_root = PurePosixPath(workspace_member.parts[0])
+    raw_packages = record["cargo_packages"]
+    if (
+        not isinstance(raw_packages, list)
+        or not raw_packages
+        or len(raw_packages) > MAX_OBSERVATIONS_PER_OWNER
+    ):
+        raise EvidenceError(f"native-component source {source_id} has invalid Cargo packages")
+    package_paths: set[str] = set()
+    package_names: set[str] = set()
+    packages: list[Mapping[str, Any]] = []
+    for index, raw_package in enumerate(raw_packages):
+        package = require_exact_fields(
+            raw_package,
+            {"path", "name", "version", "manifest"},
+            f"native-component source {source_id} Cargo package {index}",
+        )
+        package_path = package["path"]
+        name = package["name"]
+        version = package["version"]
+        if (
+            not isinstance(package_path, str)
+            or (
+                package_path != "."
+                and str(
+                    checked_canonical_path(
+                        package_path,
+                        f"native-component source {source_id} Cargo package path",
+                    )
+                )
+                != package_path
+            )
+            or package_path in package_paths
+            or not isinstance(name, str)
+            or checked_scalar(
+                name,
+                f"native-component source {source_id} Cargo package name",
+            )
+            != name
+            or CARGO_PACKAGE_NAME.fullmatch(name) is None
+            or name in package_names
+            or not isinstance(version, str)
+            or checked_scalar(
+                version,
+                f"native-component source {source_id} Cargo package version",
+            )
+            != version
+        ):
+            raise EvidenceError(f"native-component source {source_id} has an invalid Cargo package")
+        manifest = validate_native_source_manifest(
+            package["manifest"],
+            f"native-component source {source_id} Cargo package {package_path}",
+        )
+        relative_manifest = (
+            PurePosixPath(path_value) / "Cargo.toml"
+            if package_path == "."
+            else PurePosixPath(path_value) / package_path / "Cargo.toml"
+        )
+        expected_member = archive_root / relative_manifest
+        if manifest["member"] != str(expected_member) or (
+            manifest["member"] == workspace_manifest["member"] and manifest != workspace_manifest
+        ):
+            raise EvidenceError(
+                f"native-component source {source_id} Cargo package manifest differs"
+            )
+        package_paths.add(package_path)
+        package_names.add(name)
+        packages.append(package)
+    if [str(package["path"]) for package in packages] != sorted(package_paths):
+        raise EvidenceError(f"native-component source {source_id} Cargo packages are not canonical")
     validate_native_source_notices(record["notices"], source_id)
     return record
 
@@ -4160,6 +4284,7 @@ def validate_upstream_release_component_source(
             "archive",
             "checksum_document",
             "checksum_filename",
+            "reviewed_license",
             "notices",
         },
         f"native-component source {source_id}",
@@ -4192,6 +4317,7 @@ def validate_upstream_release_component_source(
         or safe_filename(str(archive["url"])) != filename
     ):
         raise EvidenceError(f"native-component source {source_id} has an invalid checksum filename")
+    validate_native_source_reviewed_license(record["reviewed_license"], source_id)
     validate_native_source_notices(record["notices"], source_id)
     return record
 
@@ -4621,6 +4747,8 @@ def verify_crates_io_archive(
         str(source["manifest"]["member"]): source["manifest"],
         **{str(record["member"]): record for record in source["notices"]},
     }
+    expected_notice_members = {str(record["member"]) for record in source["notices"]}
+    observed_notice_members: set[str] = set()
     found: dict[str, bytes] = {}
     seen_paths: set[str] = set()
     total = 0
@@ -4651,6 +4779,8 @@ def verify_crates_io_archive(
                     raise EvidenceError(
                         f"crate archive has an unsupported entry: {source_id}/{path_string}"
                     )
+                if LICENSE_NAME.search(path_string) is not None:
+                    observed_notice_members.add(path_string)
                 total += member.size
                 if total > MAX_ARCHIVE_TOTAL_BYTES:
                     raise EvidenceError(f"crate archive exceeds the size limit: {source_id}")
@@ -4668,6 +4798,8 @@ def verify_crates_io_archive(
         raise
     except (tarfile.TarError, RuntimeError, OverflowError, ValueError) as exc:
         raise EvidenceError(f"invalid crate archive for {source_id}: {exc}") from exc
+    if observed_notice_members != expected_notice_members:
+        raise EvidenceError(f"crate archive notice inventory differs: {source_id}")
     if set(found) != set(expected_files):
         raise EvidenceError(f"crate archive omits reviewed files: {source_id}")
     manifest_path = str(source["manifest"]["member"])
@@ -4859,6 +4991,152 @@ def verify_owner_sdist_subtree(
     return records
 
 
+def verify_owner_sdist_cargo_packages(
+    archive: bytes,
+    *,
+    source_id: str,
+    source: Mapping[str, Any],
+    archive_name: str,
+    subtree: Sequence[Mapping[str, Any]],
+    bindings: set[OwnerSdistObservationBinding],
+) -> None:
+    """Bind local Cargo observations to exact manifests and files in an owner sdist."""
+
+    workspace_manifest = source["workspace_manifest"]
+    packages = {str(package["path"]): package for package in source["cargo_packages"]}
+    expected_manifests = {
+        str(workspace_manifest["member"]): workspace_manifest,
+        **{
+            str(package["manifest"]["member"]): package["manifest"] for package in packages.values()
+        },
+    }
+    found = reviewed_files_from_source_archive(
+        archive,
+        archive_name=archive_name,
+        source_id=f"{source_id} Cargo manifests",
+        expected=expected_manifests,
+        max_member_bytes=MAX_CARGO_LOCK_BYTES,
+    )
+    if set(found) != set(expected_manifests):
+        raise EvidenceError(f"owner-sdist omits reviewed Cargo manifests: {source_id}")
+
+    def parse_manifest(member: str, purpose: str) -> Mapping[str, Any]:
+        try:
+            document = tomllib.loads(found[member].decode("utf-8"))
+        except (UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
+            raise EvidenceError(f"owner-sdist has an invalid {purpose}: {source_id}") from exc
+        if not isinstance(document, dict):
+            raise EvidenceError(f"owner-sdist has an invalid {purpose}: {source_id}")
+        return document
+
+    workspace_document = parse_manifest(
+        str(workspace_manifest["member"]),
+        "Cargo workspace manifest",
+    )
+    workspace = workspace_document.get("workspace")
+    if not isinstance(workspace, dict):
+        raise EvidenceError(f"owner-sdist has no exact Cargo workspace: {source_id}")
+    workspace_package = workspace.get("package")
+    raw_members = workspace.get("members")
+    if (
+        not isinstance(workspace_package, dict)
+        or not isinstance(raw_members, list)
+        or not raw_members
+        or len(raw_members) > MAX_OBSERVATIONS_PER_OWNER
+        or not all(isinstance(member, str) for member in raw_members)
+    ):
+        raise EvidenceError(f"owner-sdist has an invalid Cargo workspace: {source_id}")
+
+    source_path = PurePosixPath(str(source["path"]))
+    workspace_member = PurePosixPath(str(workspace_manifest["member"]))
+    workspace_relative_root = PurePosixPath(*workspace_member.parts[1:-1])
+    workspace_package_paths: list[str] = []
+    for raw_member in raw_members:
+        assert isinstance(raw_member, str)
+        try:
+            member_path = workspace_relative_root / checked_path(raw_member)
+            relative = member_path.relative_to(source_path)
+        except (EvidenceError, ValueError) as exc:
+            raise EvidenceError(
+                f"owner-sdist Cargo workspace member escapes the reviewed subtree: {source_id}"
+            ) from exc
+        workspace_package_paths.append("." if not relative.parts else str(relative))
+    if len(workspace_package_paths) != len(set(workspace_package_paths)) or set(
+        workspace_package_paths
+    ) != set(packages):
+        raise EvidenceError(f"owner-sdist Cargo workspace members differ: {source_id}")
+
+    def resolved_package_field(
+        package_document: Mapping[str, Any],
+        package_path: str,
+        field: str,
+    ) -> str:
+        value = package_document.get(field)
+        if isinstance(value, dict) and value == {"workspace": True}:
+            value = workspace_package.get(field)
+        if (
+            not isinstance(value, str)
+            or checked_scalar(
+                value,
+                f"owner-sdist Cargo package {field}",
+                max_length=MAX_LICENSE_FIELD_LENGTH,
+            )
+            != value
+        ):
+            raise EvidenceError(
+                f"owner-sdist Cargo package has an invalid {field}: {source_id}/{package_path}"
+            )
+        return value
+
+    subtree_records = {str(record["path"]): record for record in subtree}
+    for package_path, package in packages.items():
+        relative_manifest = "Cargo.toml" if package_path == "." else f"{package_path}/Cargo.toml"
+        manifest_record = package["manifest"]
+        subtree_record = subtree_records.get(relative_manifest)
+        if (
+            subtree_record is None
+            or subtree_record["type"] != "file"
+            or subtree_record["sha256"] != manifest_record["sha256"]
+            or subtree_record["size"] != manifest_record["size"]
+        ):
+            raise EvidenceError(
+                f"owner-sdist Cargo package manifest is outside the reviewed subtree: "
+                f"{source_id}/{package_path}"
+            )
+        document = parse_manifest(
+            str(manifest_record["member"]),
+            f"Cargo package manifest for {package_path}",
+        )
+        package_document = document.get("package")
+        if not isinstance(package_document, dict):
+            raise EvidenceError(
+                f"owner-sdist Cargo package has no exact identity: {source_id}/{package_path}"
+            )
+
+        if (
+            package_document.get("name") != package["name"]
+            or resolved_package_field(package_document, package_path, "version")
+            != package["version"]
+            or resolved_package_field(package_document, package_path, "license")
+            != source["reviewed_license"]
+        ):
+            raise EvidenceError(
+                f"owner-sdist Cargo package identity or license differs: {source_id}/{package_path}"
+            )
+
+    for package_path, fragment_member in bindings:
+        if package_path not in packages:
+            raise EvidenceError(f"owner-sdist Cargo observation has no package: {source_id}")
+        if fragment_member is None:
+            continue
+        fragment_record = subtree_records.get(fragment_member)
+        if fragment_record is None or fragment_record["type"] != "file":
+            raise EvidenceError(
+                f"owner-sdist Cargo observation source path is absent: "
+                f"{source_id}/{fragment_member}"
+            )
+
+
 def parse_native_owner(value: object, source: str) -> tuple[str, str, str]:
     """Validate and split one canonical ``python:name@version`` owner identity."""
 
@@ -4975,6 +5253,164 @@ def validate_observation_references(
     return references
 
 
+OwnerSdistObservationBinding = tuple[str, str | None]
+
+
+def owner_sdist_observation_path(
+    observation: Mapping[str, Any],
+    *,
+    owner: str,
+    source_id: str,
+    source_record: Mapping[str, Any],
+) -> OwnerSdistObservationBinding:
+    """Bind one local Cargo PURL and bom-ref to a reviewed owner-sdist path."""
+
+    purl = str(observation["purl"])
+    cargo_identity = cargo_purl_identity(
+        purl,
+        f"native-component coverage {owner} owner-sdist review {source_id}",
+    )
+    if cargo_identity is None:
+        raise EvidenceError(
+            f"native-component coverage {owner} owner-sdist review differs from {source_id}"
+        )
+    cargo_name, cargo_version = cargo_identity
+    expected_base = (
+        f"pkg:cargo/{urllib.parse.quote(cargo_name, safe='-._~')}@"
+        f"{urllib.parse.quote(cargo_version, safe='-._~+')}"
+    )
+    purl_without_fragment, separator, fragment = purl.partition("#")
+    expected_download_prefix = f"{expected_base}?download_url=file://"
+    if not purl_without_fragment.startswith(expected_download_prefix):
+        raise EvidenceError(
+            f"native-component coverage {owner} owner-sdist review differs from {source_id}"
+        )
+    relative_value = purl_without_fragment.removeprefix(expected_download_prefix)
+    if (
+        not relative_value
+        or "&" in relative_value
+        or "?" in relative_value
+        or (separator and not fragment)
+    ):
+        raise EvidenceError(
+            f"native-component coverage {owner} owner-sdist review differs from {source_id}"
+        )
+    fragment_path: PurePosixPath | None = None
+    try:
+        if relative_value == ".":
+            relative_path: PurePosixPath | None = None
+        else:
+            relative_path = checked_canonical_path(
+                urllib.parse.unquote(relative_value, errors="strict"),
+                f"native-component coverage {owner} owner-sdist PURL path",
+            )
+        if fragment:
+            fragment_path = checked_canonical_path(
+                urllib.parse.unquote(fragment, errors="strict"),
+                f"native-component coverage {owner} owner-sdist PURL fragment",
+            )
+    except UnicodeDecodeError as exc:
+        raise EvidenceError(
+            f"native-component coverage {owner} owner-sdist review differs from {source_id}"
+        ) from exc
+
+    package_path = "." if relative_path is None else str(relative_path)
+    packages = {str(package["path"]): package for package in source_record["cargo_packages"]}
+    package = packages.get(package_path)
+    expected_relative_value = (
+        "." if relative_path is None else urllib.parse.quote(str(relative_path), safe="/-._~")
+    )
+    expected_fragment = (
+        "" if fragment_path is None else urllib.parse.quote(str(fragment_path), safe="/-._~")
+    )
+    if (
+        package is None
+        or cargo_name != package["name"]
+        or cargo_version != package["version"]
+        or relative_value != expected_relative_value
+        or fragment != expected_fragment
+    ):
+        raise EvidenceError(
+            f"native-component coverage {owner} owner-sdist review differs from {source_id}"
+        )
+
+    bom_ref = str(observation["bom_ref"])
+    try:
+        encoded_bom_ref = bom_ref.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise EvidenceError(
+            f"native-component coverage {owner} owner-sdist review differs from {source_id}"
+        ) from exc
+    if (
+        len(encoded_bom_ref) > MAX_LICENSE_FIELD_LENGTH
+        or "\\" in bom_ref
+        or any(ord(character) < 32 or 0x7F <= ord(character) <= 0x9F for character in bom_ref)
+    ):
+        raise EvidenceError(
+            f"native-component coverage {owner} owner-sdist review differs from {source_id}"
+        )
+    try:
+        parsed_bom_ref = urllib.parse.urlsplit(bom_ref)
+    except ValueError as exc:
+        raise EvidenceError(
+            f"native-component coverage {owner} owner-sdist review differs from {source_id}"
+        ) from exc
+    if (
+        parsed_bom_ref.scheme != "path+file"
+        or parsed_bom_ref.netloc
+        or not parsed_bom_ref.path.startswith("/")
+        or not parsed_bom_ref.fragment
+        or parsed_bom_ref.query
+    ):
+        raise EvidenceError(
+            f"native-component coverage {owner} owner-sdist review differs from {source_id}"
+        )
+    try:
+        decoded_bom_ref_path = urllib.parse.unquote(parsed_bom_ref.path, errors="strict")
+        encoded_bom_ref_path = decoded_bom_ref_path.encode("utf-8")
+    except (UnicodeDecodeError, UnicodeEncodeError) as exc:
+        raise EvidenceError(
+            f"native-component coverage {owner} owner-sdist review differs from {source_id}"
+        ) from exc
+    observed_path = PurePosixPath(decoded_bom_ref_path)
+    if (
+        len(encoded_bom_ref_path) > MAX_PATH_BYTES
+        or "\\" in decoded_bom_ref_path
+        or any(
+            ord(character) < 32 or 0x7F <= ord(character) <= 0x9F
+            for character in decoded_bom_ref_path
+        )
+        or any(part in {".", ".."} for part in observed_path.parts)
+        or observed_path.as_posix() != decoded_bom_ref_path
+    ):
+        raise EvidenceError(
+            f"native-component coverage {owner} owner-sdist review differs from {source_id}"
+        )
+    reviewed_path = PurePosixPath(str(source_record["path"]))
+    expected_suffix = reviewed_path if relative_path is None else reviewed_path / relative_path
+    if len(observed_path.parts) < len(expected_suffix.parts) or (
+        observed_path.parts[-len(expected_suffix.parts) :] != expected_suffix.parts
+    ):
+        raise EvidenceError(
+            f"native-component coverage {owner} owner-sdist review differs from {source_id}"
+        )
+    if (
+        observation["type"] != "library"
+        or normalize_package_name(str(observation["name"])) != normalize_package_name(cargo_name)
+        or observation["version"] != cargo_version
+        or observation["hashes"]
+    ):
+        raise EvidenceError(
+            f"native-component coverage {owner} owner-sdist review differs from {source_id}"
+        )
+    fragment_member = (
+        None
+        if fragment_path is None
+        else str(fragment_path if relative_path is None else relative_path / fragment_path)
+    )
+    return package_path, fragment_member
+
+
 def validate_component_review_source_binding(
     *,
     owner: str,
@@ -4983,18 +5419,81 @@ def validate_component_review_source_binding(
     reviewed_license: str,
     references: Sequence[ObservationReferenceKey],
     observations: Mapping[ObservationReferenceKey, Mapping[str, Any]],
-) -> None:
+) -> set[OwnerSdistObservationBinding]:
     """Bind source kinds with machine-verifiable identity fields to each observation."""
 
     kind = source_record["kind"]
     if kind == "owner-sdist-subpath":
-        if source_record["owner"] != owner:
+        if source_record["owner"] != owner or reviewed_license != source_record["reviewed_license"]:
             raise EvidenceError(
-                f"native-component coverage {owner} uses another owner's sdist subtree"
+                f"native-component coverage {owner} owner-sdist review differs from {source_id}"
             )
-        return
+        bindings: set[OwnerSdistObservationBinding] = set()
+        for reference in references:
+            observation = observations[reference]
+            bindings.add(
+                owner_sdist_observation_path(
+                    observation,
+                    owner=owner,
+                    source_id=source_id,
+                    source_record=source_record,
+                )
+            )
+            if observation["licenses"]:
+                observed_license = cyclonedx_reviewed_license(
+                    observation["licenses"],
+                    f"native-component coverage {owner} owner-sdist review {source_id}",
+                )
+                if observed_license != reviewed_license:
+                    raise EvidenceError(
+                        f"native-component coverage {owner} owner-sdist review "
+                        f"differs from {source_id}"
+                    )
+        return bindings
+    if kind == "checksummed-upstream-release":
+        name = str(source_record["name"])
+        version = str(source_record["version"])
+        archive = source_record["archive"]
+        expected_purl = (
+            f"pkg:generic/{urllib.parse.quote(name, safe='-._~')}@"
+            f"{urllib.parse.quote(version, safe='-._~+')}?download_url={archive['url']}"
+        )
+        expected_hashes = [
+            {
+                "alg": "SHA-256",
+                "content": str(archive["sha256"]),
+            }
+        ]
+        if reviewed_license != source_record["reviewed_license"]:
+            raise EvidenceError(
+                f"native-component coverage {owner} upstream review differs from {source_id}"
+            )
+        for reference in references:
+            observation = observations[reference]
+            if (
+                observation["type"] != "library"
+                or observation["name"] != name
+                or observation["version"] != version
+                or observation["purl"] != expected_purl
+                or observation["bom_ref"] not in {"", expected_purl}
+                or observation["hashes"] != expected_hashes
+            ):
+                raise EvidenceError(
+                    f"native-component coverage {owner} upstream review differs from {source_id}"
+                )
+            if observation["licenses"]:
+                observed_license = cyclonedx_reviewed_license(
+                    observation["licenses"],
+                    f"native-component coverage {owner} upstream review {source_id}",
+                )
+                if observed_license != reviewed_license:
+                    raise EvidenceError(
+                        f"native-component coverage {owner} upstream review "
+                        f"differs from {source_id}"
+                    )
+        return set()
     if kind != "crates-io":
-        return
+        return set()
     name = str(source_record["name"])
     version = str(source_record["version"])
     quoted_name = urllib.parse.quote(name, safe="-._~")
@@ -5022,6 +5521,25 @@ def validate_component_review_source_binding(
             raise EvidenceError(
                 f"native-component coverage {owner} crate review differs from {source_id}"
             )
+    return set()
+
+
+def validate_bundle_source_reviewed_license_binding(
+    source_id: str,
+    source_record: Mapping[str, Any],
+    reviewed_licenses: set[str] | None,
+) -> None:
+    """Reconnect source-level reviewed licenses to bundle source consumers."""
+
+    if source_record["kind"] not in {
+        "owner-sdist-subpath",
+        "checksummed-upstream-release",
+    }:
+        return
+    if reviewed_licenses != {str(source_record["reviewed_license"])}:
+        raise EvidenceError(
+            f"native-component bundle review license differs from source {source_id}"
+        )
 
 
 def validate_native_owner_review(
@@ -5233,6 +5751,7 @@ def validate_native_owner_review(
         raise EvidenceError(f"native-component coverage {owner} has invalid component reviews")
     reviewed_observations: set[ObservationReferenceKey] = set()
     crate_source_ids: set[str] = set()
+    owner_sdist_bindings: dict[str, set[OwnerSdistObservationBinding]] = {}
     review_order: list[tuple[ObservationReferenceKey, ...]] = []
     for review_index, raw_review in enumerate(raw_reviews):
         review = require_exact_fields(
@@ -5273,7 +5792,7 @@ def validate_native_owner_review(
             raise EvidenceError(
                 f"native-component coverage {owner} has an invalid reviewed license"
             )
-        validate_component_review_source_binding(
+        source_bindings = validate_component_review_source_binding(
             owner=owner,
             source_id=source_id,
             source_record=sources[source_id],
@@ -5281,11 +5800,21 @@ def validate_native_owner_review(
             references=references,
             observations=observations,
         )
+        if source_bindings:
+            owner_sdist_bindings.setdefault(source_id, set()).update(source_bindings)
         review_order.append(tuple(references))
     if review_order != sorted(review_order):
         raise EvidenceError(
             f"native-component coverage {owner} component reviews are not canonical"
         )
+    for source_id, bindings in owner_sdist_bindings.items():
+        expected_package_paths = {
+            str(package["path"]) for package in sources[source_id]["cargo_packages"]
+        }
+        if {package_path for package_path, _fragment in bindings} != expected_package_paths:
+            raise EvidenceError(
+                f"native-component coverage {owner} owner-sdist packages differ from {source_id}"
+            )
     cargo_lock = validate_cargo_lock_context(
         owner_record["cargo_lock"],
         owner=owner,
@@ -5634,6 +6163,7 @@ def validate_native_owner_review(
         "observations": observations,
         "owner_root_observations": owner_root_observations,
         "reviewed_observations": reviewed_observations,
+        "owner_sdist_bindings": owner_sdist_bindings,
         "relationship_observations": relationship_observations,
         "payloads": {str(payload["role"]): payload for payload in payloads},
         "payload_observations": payload_observations,
@@ -9171,15 +9701,18 @@ def retain_reviewed_native_notices(
     root: Path,
     budget: BundleBudget,
 ) -> list[str]:
-    """Write exact reviewed native-source notices under deterministic paths."""
+    """Retain one copy of each reviewed native notice name and payload."""
 
     written: list[str] = []
+    retained: set[tuple[str, str]] = set()
     for notice_member, content in sorted(found.items()):
         digest = sha256_bytes(content)
-        relative = (
-            f"licenses/from-source/{component_directory}/"
-            f"{digest[:12]}-{PurePosixPath(notice_member).name}"
-        )
+        basename = PurePosixPath(notice_member).name
+        identity = (digest, basename)
+        if identity in retained:
+            continue
+        retained.add(identity)
+        relative = f"licenses/from-source/{component_directory}/{digest[:12]}-{basename}"
         write_file(root, relative, content, budget=budget)
         written.append(relative)
     return written
@@ -9266,17 +9799,12 @@ def retain_native_component_notices(
             f"native-component source omits reviewed notices: {source_id}: {missing}"
         )
 
-    component_directory = f"native-{source['origin']}-{source['version']}"
-    written: list[str] = []
-    for notice_member, content in sorted(found.items()):
-        digest = sha256_bytes(content)
-        relative = (
-            f"licenses/from-source/{component_directory}/"
-            f"{digest[:12]}-{PurePosixPath(notice_member).name}"
-        )
-        write_file(root, relative, content, budget=budget)
-        written.append(relative)
-    return written
+    return retain_reviewed_native_notices(
+        found,
+        component_directory=f"native-{source['origin']}-{source['version']}",
+        root=root,
+        budget=budget,
+    )
 
 
 def source_policy_entry(policy: Mapping[str, Any], name: str, version: str) -> dict[str, Any]:
@@ -10860,6 +11388,8 @@ def build_bundle(
 
         source_policies = native_component_sources(policy)
         native_components_by_source: dict[str, set[str]] = {}
+        native_reviewed_licenses_by_source: dict[str, set[str]] = {}
+        native_owner_sdist_bindings_by_source: dict[str, set[OwnerSdistObservationBinding]] = {}
         raw_coverage = policy["native_component_coverage"][inventory["platform"]]
         for owner_record in raw_coverage:
             context = validate_native_owner_review(
@@ -10868,6 +11398,8 @@ def build_bundle(
                 sources=source_policies,
                 used_sources=set(),
             )
+            for source_id, bindings in context["owner_sdist_bindings"].items():
+                native_owner_sdist_bindings_by_source.setdefault(source_id, set()).update(bindings)
             if context["cargo_lock"] is not None:
                 _owner, owner_name, owner_version = parse_native_owner(
                     owner_record["owner"],
@@ -10900,6 +11432,9 @@ def build_bundle(
                 )
             for component_review in owner_record["component_reviews"]:
                 source_id = str(component_review["source"])
+                native_reviewed_licenses_by_source.setdefault(source_id, set()).add(
+                    str(component_review["reviewed_license"])
+                )
                 for raw_reference in component_review["observations"]:
                     reference = validate_observation_reference(
                         raw_reference,
@@ -10917,6 +11452,11 @@ def build_bundle(
         for source_id in sorted(native_components_by_source):
             native_source = source_policies[source_id]
             kind = str(native_source["kind"])
+            validate_bundle_source_reviewed_license_binding(
+                source_id,
+                native_source,
+                native_reviewed_licenses_by_source.get(source_id),
+            )
             source_directory = sha256_bytes(source_id.encode())[:20]
             expected_notices = {
                 str(record["member"]): record for record in native_source["notices"]
@@ -11060,6 +11600,14 @@ def build_bundle(
                     source_id=source_id,
                     source=native_source,
                     archive_name=owner_relative,
+                )
+                verify_owner_sdist_cargo_packages(
+                    owner_archive,
+                    source_id=source_id,
+                    source=native_source,
+                    archive_name=owner_relative,
+                    subtree=subtree,
+                    bindings=native_owner_sdist_bindings_by_source.get(source_id, set()),
                 )
                 manifest_relative = (
                     f"sources/native-components/{source_directory}/subtree-manifest.json"

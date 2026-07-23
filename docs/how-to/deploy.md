@@ -80,9 +80,12 @@ recipe, source archive, source-carried license, and historical ineffective
 Python `RECORD` ownership. Greenlet also has closed-world wheel, source,
 component, and notice coverage on both platforms. MarkupSafe and SQLAlchemy
 bind their exact wheels and sdists to complete native-payload sets, with
-no embedded SBOM and owner payload dispositions. Four other native-wheel
-owners retain structured open omissions, so an SBOM and provenance alone do
-not satisfy the release contract.
+no embedded SBOM and owner payload dispositions. Cryptography binds its exact
+Rust and OpenSSL sources to their retained observations. The arm64 `libgcc`
+observation keeps its literal `NotpineForGHA` PURL. Its payload bytes match
+Greenlet's, so the policy links that occurrence to Greenlet's closed Alpine GCC
+evidence. Three other native-wheel owners retain structured open omissions, so
+an SBOM and provenance alone do not satisfy the release contract.
 
 A future deployment procedure must name all of these values before the steps
 below become runnable:
