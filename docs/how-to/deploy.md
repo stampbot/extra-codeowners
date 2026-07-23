@@ -51,10 +51,15 @@ build one.
 
 The reusable workflow also emits a [raw spine and canonical
 record](../reference/python-distribution-spine-format.md). A read-only job
-verifies that pair without opening the wheel or source-distribution archive.
-No downstream release-evidence or publication job consumes it. Issue
+verifies that pair and atomically materializes its five files without opening
+the wheel or source-distribution archives.
+
+The tagged workflow defines a privileged consumer for the same pair, but the
+unconditional publication blocker keeps it unreachable. That job would retain
+the three selection records separately from the signed distributions. The
+GitHub release job does not consume those records, so
 [#32](https://github.com/stampbot/extra-codeowners/issues/32) still tracks the
-release handoff.
+rest of the release handoff.
 
 Do not replace this proof with a generic ZIP extraction, an unverified wheel,
 empty Docker build arguments, or a project build that relies on ambient

@@ -296,13 +296,23 @@ def test_release_scan_consumes_only_the_same_run_selected_distribution() -> None
         "needs.python-distribution-proof.outputs.selection-record-sha256 }}" in scan
     )
 
-    privileged = workflow.split("  publication-block:\n", 1)[1]
+    privileged = workflow.split("  python:\n", 1)[1].split("  image:\n", 1)[0]
+    assert "      - publication-block" in privileged
+    assert "      - python-distribution-proof" in privileged
     assert (
-        "artifact-ids: ${{ needs.python-distribution-proof.outputs.artifact-id }}" not in privileged
+        "artifact-ids: ${{ needs.python-distribution-proof.outputs.spine-artifact-id }}"
+        in privileged
     )
+    assert (
+        "artifact-ids: ${{ needs.python-distribution-proof.outputs.record-artifact-id }}"
+        in privileged
+    )
+    assert privileged.count("skip-decompress: true") == 2
+    assert "python_distribution_spine.py materialize" in privileged
     assert (
         "verified-python=${{ steps.python-distribution.outputs.download-path }}" not in privileged
     )
+    assert "uv build" not in privileged
 
 
 def test_dockerfile_can_only_install_the_selected_application_wheel() -> None:

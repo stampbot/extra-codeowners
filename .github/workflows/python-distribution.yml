@@ -339,9 +339,13 @@ jobs:
           set -euo pipefail
           basename="extra-codeowners-python-${GITHUB_SHA}-artifact-${SELECTED_ARTIFACT_ID}"
           basename="${basename}-attempt-${PRODUCER_RUN_ATTEMPT}"
-          python .github/scripts/python_distribution_spine.py verify \
+          materialization_parent="${RUNNER_TEMP}/python-spine-materialization"
+          (umask 077 && mkdir "$materialization_parent")
+          materialized="${materialization_parent}/files"
+          python .github/scripts/python_distribution_spine.py materialize \
             --record "${RUNNER_TEMP}/downloaded-python-record/${basename}.spine.json" \
             --spine "${RUNNER_TEMP}/downloaded-python-spine/${basename}.bin" \
+            --output "$materialized" \
             --record-artifact-sha256 "$RECORD_ARTIFACT_DIGEST" \
             --spine-artifact-sha256 "$SPINE_ARTIFACT_DIGEST" \
             --repository-id "$REPOSITORY_ID" \
@@ -356,6 +360,22 @@ jobs:
             --selected-artifact-sha256 "$SELECTED_ARTIFACT_DIGEST" \
             --wheel-sha256 "$WHEEL_SHA256" \
             --selection-record-sha256 "$SELECTION_RECORD_SHA256"
+          shopt -s nullglob
+          materialized_files=("$materialized"/*)
+          if (( ${#materialized_files[@]} != 5 )); then
+            echo "Materialized distribution did not contain exactly five files." >&2
+            exit 1
+          fi
+          if [[ "$(stat --format=%a "$materialized")" != 700 ]]; then
+            echo "Materialized distribution directory is not private." >&2
+            exit 1
+          fi
+          for path in "${materialized_files[@]}"; do
+            if [[ ! -f "$path" || -L "$path" || "$(stat --format=%a "$path")" != 600 ]]; then
+              echo "Materialized distribution contains an unsafe file." >&2
+              exit 1
+            fi
+          done
           for artifact_id in \
             "$SELECTED_ARTIFACT_ID" "$RECORD_ARTIFACT_ID" "$SPINE_ARTIFACT_ID"; do
             if ! [[ "$artifact_id" =~ ^[1-9][0-9]*$ ]]; then
