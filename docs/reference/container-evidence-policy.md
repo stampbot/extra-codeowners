@@ -310,6 +310,13 @@ Each occurrence may contain at most one digest for a hash algorithm. Duplicate
 algorithm names, including case-only aliases, fail validation because they make
 source binding ambiguous.
 
+One CycloneDX document may contain at most 10,000 component occurrences across
+its metadata root and its top-level and nested component arrays. A component
+may contain at most 16 hash records and 16 license observations. Each component
+JSON object, and every object nested inside it, may contain at most 16 fields.
+Arrays inside the object may contain at most 16 values, except a direct child
+`components` array, which uses the 10,000-component document limit.
+
 Occurrence references contain `sbom_path`, `observation_sha256`,
 `identity_kind`, and `purl`; a `bom-ref` identity also contains `bom_ref`.
 A nonempty `bom-ref` is the document-local identity. The PURL is the fallback
@@ -496,11 +503,17 @@ one of:
 
 - `allow_dynamic_sources: true`
 - `allowed_links`, an array of exact `{path, target, type}` objects, where
-  `type` is `symlink` or `hardlink` and the relative target is safe.
+  `type` is `symlink` or `hardlink`. Both paths are canonical and relative to
+  the archive root. `target` names the resolved sibling in the archive, not the
+  symlink's literal target text. For example, a link at
+  `aports/main/demo/post-upgrade` whose literal target is `post-install` uses
+  `aports/main/demo/post-install` as its policy target.
 
 Unknown exception fields, duplicate links, unobserved allowed links, observed
 unallowed links, and a link replacing `APKBUILD` or a checksummed source fail
-during bundle generation.
+during bundle generation. The resolved target must be a distinct regular file
+in the same directory as the link. Absolute paths, traversal, and link chains
+fail.
 
 Directly reviewed nested components use the `native_component_sources` tagged
 union described above. Each source ID is SHA-256 hashed and shortened to its
