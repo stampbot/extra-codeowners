@@ -681,8 +681,14 @@ class GitHubClient:
         try:
             next_url = urlsplit(target)
             request_url = urlsplit(str(response.request.url))
+            next_scheme = next_url.scheme.casefold()
+            request_scheme = request_url.scheme.casefold()
             next_port = next_url.port
             request_port = request_url.port
+            if next_port is None:
+                next_port = {"http": 80, "https": 443}.get(next_scheme)
+            if request_port is None:
+                request_port = {"http": 80, "https": 443}.get(request_scheme)
         except ValueError as error:
             raise GitHubError("GitHub pagination next link is invalid") from error
         if (
@@ -691,7 +697,7 @@ class GitHubClient:
             or next_url.username is not None
             or next_url.password is not None
             or next_url.fragment
-            or next_url.scheme.casefold() != request_url.scheme.casefold()
+            or next_scheme != request_scheme
             or next_url.hostname is None
             or request_url.hostname is None
             or next_url.hostname.casefold() != request_url.hostname.casefold()

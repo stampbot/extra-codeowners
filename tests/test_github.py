@@ -917,6 +917,31 @@ def test_terminal_pagination_link_overrides_the_full_page_fallback() -> None:
 
 
 @pytest.mark.parametrize(
+    ("request_url", "target"),
+    [
+        (
+            "https://api.github.com/app/installations?per_page=100&page=1",
+            "https://api.github.com:443/app/installations?per_page=100&page=2",
+        ),
+        (
+            "http://api.github.com/app/installations?per_page=100&page=1",
+            "http://api.github.com:80/app/installations?per_page=100&page=2",
+        ),
+    ],
+)
+def test_pagination_next_link_accepts_an_explicit_default_port(
+    request_url: str,
+    target: str,
+) -> None:
+    response = pagination_response(
+        f'<{target}>; rel="next"',
+        request_url=request_url,
+    )
+
+    assert GitHubClient._response_has_next_page(response, 1, 1) is True
+
+
+@pytest.mark.parametrize(
     ("target", "message"),
     [
         (

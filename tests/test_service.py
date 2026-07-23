@@ -23,14 +23,13 @@ from extra_codeowners.database import (
 from extra_codeowners.github import GitHubError, GitHubOperationStoppedError, GitHubRateLimitError
 from extra_codeowners.migrations import upgrade_database
 from extra_codeowners.models import OrganizationPolicy
-from extra_codeowners.service import (
-    AuthorityChangePendingError,
-    EvaluationService,
-    Reconciler,
-    ReconciliationOutcome,
-    Worker,
-)
 from extra_codeowners.settings import Settings
+
+AuthorityChangePendingError = service_module.AuthorityChangePendingError
+EvaluationService = service_module.EvaluationService
+Reconciler = service_module.Reconciler
+ReconciliationOutcome = service_module.ReconciliationOutcome
+Worker = service_module.Worker
 
 HEAD = "a" * 40
 BASE = "b" * 40
