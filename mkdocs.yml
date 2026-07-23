@@ -55,6 +55,7 @@ nav:
   - Maintainer and release engineering:
       - Overview: maintainers/index.md
       - Run the live GitHub contract: how-to/run-live-github-contract.md
+      - Live GitHub evidence reports: reference/live-github-evidence-reports.md
       - Respond to dependency audit: how-to/respond-to-dependency-audit.md
       - Review stacked pull requests: how-to/review-stacked-pull-requests.md
       - Update the tutorial webhook relay: maintainers/update-tutorial-relay.md

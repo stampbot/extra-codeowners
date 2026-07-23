@@ -100,6 +100,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Rel
   completeness remain explicitly unresolved.
 - Diátaxis documentation, a threat model, operating guides, and Read the Docs configuration.
 - Bounded pull-request and scheduled property tests for untrusted parsing and policy inputs.
+- Machine-readable live GitHub evidence completeness that distinguishes false,
+  not-run, missing, and invalid observations, plus a bounded lifecycle-delivery
+  collector that uses GitHub's cursor links and retains payload shape without
+  payload values.
 - A first-check tutorial that proves human CODEOWNER evaluation before App delegation.
 - A pull-request check troubleshooting guide and CI-validated policy examples.
 - A byte-for-byte HMAC probe for reviewing tutorial webhook-relay updates.

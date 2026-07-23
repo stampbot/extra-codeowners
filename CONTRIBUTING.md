@@ -88,6 +88,10 @@ The live GitHub contract fixture is destructive and opt-in. It is not part of
 [live-contract guide](docs/how-to/run-live-github-contract.md); ordinary tests
 must never need GitHub credentials.
 
+The same guide covers the bounded lifecycle-delivery collector. Its report is
+sanitized, but it can still reveal event names, timestamps, and payload field
+names. Inspect it before sharing it outside the test environment.
+
 Do not paste real GitHub payloads, credentials, organization identifiers, or
 private repository content into tests. Use clearly fictional fixtures.
 
