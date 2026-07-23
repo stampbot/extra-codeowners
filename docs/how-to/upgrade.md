@@ -100,11 +100,14 @@ you alter the workload. Record its previous state. The controller must not
 recreate the HPA, change the Deployment replica count, or sync an old image
 until the target is ready.
 
-The chart's 30-second termination grace leaves 10 seconds beyond one
-20-second GitHub request deadline for database work and local cleanup. That
-margin is not a universal shutdown bound. Increase
-`terminationGracePeriodSeconds` when database latency, proxies, or cleanup
-cannot reliably fit within the default.
+The chart's 30-second termination grace is a pod-wide starting point, not a
+reserved margin or shutdown guarantee. The server may finish active HTTP work
+before application shutdown begins. The worker finishes its active job before
+observing the stop signal, and some worker response streams have inactivity
+limits rather than one wall-clock deadline. After the reconciler observes the
+signal, its current GitHub request can still use its 20-second deadline, and
+database work or local cleanup can add time. Measure worst-case drain in your
+environment and set `terminationGracePeriodSeconds` above it.
 
 From a trusted POSIX shell with the intended `kubectl` context, set these
 values. Replace `DEPLOYMENT` if the chart uses a name override. Set the two

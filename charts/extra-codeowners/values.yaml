@@ -194,7 +194,9 @@ networkPolicy:
   # networkPolicy.egress contains complete Kubernetes NetworkPolicy egress rules.
   egress: []
 
-# The 30-second default leaves cleanup time after one 20-second GitHub request.
+# terminationGracePeriodSeconds is the whole pod's drain budget for HTTP work,
+# worker jobs, reconciliation, and cleanup. Set it above the measured worst-case
+# drain time.
 terminationGracePeriodSeconds: 30
 
 # priorityClassName assigns a pre-existing Kubernetes PriorityClass.

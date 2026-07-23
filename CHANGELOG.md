@@ -88,9 +88,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Rel
   orphan a queued generation.
 - A duplicate webhook reports `queued: true` when its pending fast-path retry
   discovers and queues a newer live head.
-- Reconciliation now follows validated GitHub pagination metadata, rejects
-  incomplete or duplicate discovery results, and stops cooperatively during
-  graceful shutdown without reporting a complete scan.
+- Reconciliation now validates GitHub pagination links, repository result
+  counts, and duplicate discovery identities. An interrupted graceful shutdown
+  no longer reports a complete scan.
 - GitHub API error messages are capped at 1,000 characters, and non-finite rate-limit hints use the bounded default delay.
 - Shell lint CI verifies the pinned official ShellCheck release archive instead of depending on an anonymous Docker Hub pull.
 

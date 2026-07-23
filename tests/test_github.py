@@ -39,6 +39,18 @@ def unexpected_request(request: httpx.Request) -> httpx.Response:
     raise AssertionError(f"unexpected request: {request.method} {request.url}")
 
 
+def pagination_response(
+    *links: str,
+    request_url: str = "https://api.github.com/app/installations?per_page=100&page=1",
+) -> httpx.Response:
+    """Build a response with an exact request URL and one or more Link fields."""
+    return httpx.Response(
+        200,
+        request=httpx.Request("GET", request_url),
+        headers=[("Link", link) for link in links],
+    )
+
+
 class TrackingStream(httpx.AsyncByteStream):
     def __init__(self, *chunks: bytes) -> None:
         self.chunks = chunks
@@ -750,11 +762,7 @@ async def test_reconciliation_list_endpoints_honor_short_pages_with_next_links(
         return httpx.Response(
             200,
             json=payload,
-            headers={
-                "Link": (
-                    f'<https://api.github.com{request.url.path}?per_page=100&page=2>; rel="next"'
-                )
-            },
+            headers={"Link": f'<{request.url.copy_set_param("page", "2")}>; rel="next"'},
         )
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -808,6 +816,57 @@ async def test_reconciliation_list_endpoints_honor_short_pages_with_next_links(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "tampered_query",
+    [
+        "state=open&sort=updated&direction=desc&per_page=50&page=2",
+        "state=closed&sort=updated&direction=desc&per_page=100&page=2",
+    ],
+    ids=["per-page-partition", "filter-partition"],
+)
+async def test_open_pull_listing_rejects_partition_changing_next_link_before_second_request(
+    private_key: str,
+    tampered_query: str,
+) -> None:
+    pull_requests: list[httpx.URL] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/access_tokens"):
+            return httpx.Response(201, json=token_response())
+        if request.url.path != "/repos/example/project/pulls":
+            return unexpected_request(request)
+        if pull_requests:
+            raise AssertionError("a second pull-list request crossed a changed query partition")
+        pull_requests.append(request.url)
+        return httpx.Response(
+            200,
+            json=[{"number": index + 1} for index in range(50)],
+            headers={
+                "Link": (
+                    f"<https://api.github.com/repos/example/project/pulls?{tampered_query}>; "
+                    'rel="next"'
+                )
+            },
+        )
+
+    client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
+    try:
+        with pytest.raises(GitHubError, match="next link changes the request query"):
+            await client.list_open_pulls(2, "example/project")
+    finally:
+        await client.close()
+
+    assert len(pull_requests) == 1
+    assert dict(pull_requests[0].params) == {
+        "state": "open",
+        "sort": "updated",
+        "direction": "desc",
+        "per_page": "100",
+        "page": "1",
+    }
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("endpoint", ["installations", "repositories", "pulls"])
 async def test_reconciliation_list_endpoints_reject_malformed_link_headers(
     private_key: str,
@@ -832,6 +891,190 @@ async def test_reconciliation_list_endpoints_reject_malformed_link_headers(
         else:
             await client.list_open_pulls(2, "example/project")
     await client.close()
+
+
+def test_pagination_link_accepts_multiple_fields_and_quoted_commas() -> None:
+    response = pagination_response(
+        (
+            "<https://api.github.com/app/installations?per_page=100&page=1>; "
+            'rel="prev"; title="previous, page"'
+        ),
+        (
+            "<https://api.github.com/app/installations?page=2&per_page=100>; "
+            'title="next \\"page\\""; rel="NEXT"'
+        ),
+    )
+
+    assert GitHubClient._response_has_next_page(response, 1, 1) is True
+
+
+def test_terminal_pagination_link_overrides_the_full_page_fallback() -> None:
+    response = pagination_response(
+        '<https://api.github.com/app/installations?per_page=100&page=1>; rel="prev first last"'
+    )
+
+    assert GitHubClient._response_has_next_page(response, 1, 100) is False
+
+
+@pytest.mark.parametrize(
+    ("target", "message"),
+    [
+        (
+            "http://api.github.com/app/installations?per_page=100&page=2",
+            "does not match the request endpoint",
+        ),
+        (
+            "https://example.com/app/installations?per_page=100&page=2",
+            "does not match the request endpoint",
+        ),
+        (
+            "https://user@api.github.com/app/installations?per_page=100&page=2",
+            "does not match the request endpoint",
+        ),
+        (
+            "https://api.github.com:444/app/installations?per_page=100&page=2",
+            "does not match the request endpoint",
+        ),
+        (
+            "https://api.github.com/other?per_page=100&page=2",
+            "does not match the request endpoint",
+        ),
+        (
+            "https://api.github.com/app/installations?per_page=100&page=2#fragment",
+            "does not match the request endpoint",
+        ),
+        (
+            "https://api.github.com:not-a-port/app/installations?per_page=100&page=2",
+            "next link is invalid",
+        ),
+    ],
+)
+def test_pagination_next_link_rejects_a_different_endpoint(
+    target: str,
+    message: str,
+) -> None:
+    response = pagination_response(f'<{target}>; rel="next"')
+
+    with pytest.raises(GitHubError, match=message):
+        GitHubClient._response_has_next_page(response, 1, 1)
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "per_page=100",
+        "per_page=100&page=3",
+        "per_page=100&page=2&page=2",
+        "per_page=100&page=two",
+        "per_page=100&page=%D9%A2",
+    ],
+)
+def test_pagination_next_link_requires_exactly_the_next_ascii_page(query: str) -> None:
+    response = pagination_response(
+        f'<https://api.github.com/app/installations?{query}>; rel="next"'
+    )
+
+    with pytest.raises(GitHubError, match="next link has an invalid page number"):
+        GitHubClient._response_has_next_page(response, 1, 1)
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "per_page=50&page=2",
+        "page=2",
+        "per_page=100&per_page=100&page=2",
+        "per_page=100&page=2&state=open",
+    ],
+)
+def test_pagination_next_link_preserves_the_request_query(query: str) -> None:
+    response = pagination_response(
+        f'<https://api.github.com/app/installations?{query}>; rel="next"'
+    )
+
+    with pytest.raises(GitHubError, match="changes the request query"):
+        GitHubClient._response_has_next_page(response, 1, 1)
+
+
+def test_pagination_next_link_preserves_pull_filters() -> None:
+    response = pagination_response(
+        (
+            "<https://api.github.com/repos/example/project/pulls?"
+            'per_page=100&page=2&state=open&sort=created&direction=desc>; rel="next"'
+        ),
+        request_url=(
+            "https://api.github.com/repos/example/project/pulls?"
+            "state=open&sort=updated&direction=desc&per_page=100&page=1"
+        ),
+    )
+
+    with pytest.raises(GitHubError, match="changes the request query"):
+        GitHubClient._response_has_next_page(response, 1, 1)
+
+
+@pytest.mark.parametrize(
+    "request_url",
+    [
+        "https://api.github.com/app/installations?per_page=100",
+        "https://api.github.com/app/installations?per_page=100&page=1&page=1",
+        "https://api.github.com/app/installations?per_page=100&page=0",
+    ],
+)
+def test_pagination_validates_the_page_that_was_requested(request_url: str) -> None:
+    response = pagination_response(
+        ('<https://api.github.com/app/installations?per_page=100&page=2>; rel="next"'),
+        request_url=request_url,
+    )
+
+    with pytest.raises(GitHubError, match="request has an invalid page number"):
+        GitHubClient._response_has_next_page(response, 1, 1)
+
+
+@pytest.mark.parametrize(
+    ("link", "message"),
+    [
+        (
+            (
+                "<https://api.github.com/app/installations?per_page=100&page=2>; "
+                'rel="next"; rel="last"'
+            ),
+            "repeats a parameter",
+        ),
+        (
+            (
+                "<https://api.github.com/app/installations?per_page=100&page=2>; "
+                'rel="next", '
+                "<https://api.github.com/app/installations?per_page=100&page=2>; "
+                'rel="next"'
+            ),
+            "multiple next links",
+        ),
+    ],
+)
+def test_pagination_rejects_ambiguous_next_relations(link: str, message: str) -> None:
+    response = pagination_response(link)
+
+    with pytest.raises(GitHubError, match=message):
+        GitHubClient._response_has_next_page(response, 1, 1)
+
+
+@pytest.mark.parametrize(
+    "link",
+    [
+        "<https://api.github.com/app/installations?per_page=100&page=2",
+        '<<https://api.github.com/app/installations?per_page=100&page=2>; rel="next"',
+        ('<https://api.github.com/app/installations?per_page=100&page=2>; title="unterminated'),
+        "<https://api.github.com/app/installations?per_page=100&page=2>; rel",
+        ('<https://api.github.com/app/installations?per_page=100&page=2>>; rel="next"'),
+        (', <https://api.github.com/app/installations?per_page=100&page=2>; rel="next"'),
+        ('<https://api.github.com/app/installations?per_page=100&page=2>; rel="next",'),
+    ],
+)
+def test_pagination_rejects_structurally_malformed_link_fields(link: str) -> None:
+    response = pagination_response(link)
+
+    with pytest.raises(GitHubError, match="Link header is malformed"):
+        GitHubClient._response_has_next_page(response, 1, 1)
 
 
 @pytest.mark.asyncio

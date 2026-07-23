@@ -712,7 +712,7 @@ the constraints below during `helm lint`, `helm template`,
 | `networkPolicy.ingressFrom` | array | `[]` | Empty permits all peers to the named HTTP port. |
 | `networkPolicy.egressEnabled` | boolean | `false` | Adds egress isolation when true. |
 | `networkPolicy.egress` | array | `[]` | Complete egress rules; empty with isolation enabled denies all egress. |
-| `terminationGracePeriodSeconds` | integer | `30` | At least 1 second. The default leaves 10 seconds beyond one 20-second GitHub request deadline; increase it for slower database work or cleanup. |
+| `terminationGracePeriodSeconds` | integer | `30` | At least 1 second. This is the whole pod's budget for active HTTP work, worker jobs, reconciliation, and cleanup. Set it above the measured worst-case drain time. |
 | `priorityClassName` | string | empty | Existing PriorityClass name. |
 | `nodeSelector` | string map | `{}` | Node label constraints. |
 | `tolerations` | array | `[]` | Kubernetes toleration objects. |

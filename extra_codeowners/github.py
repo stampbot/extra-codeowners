@@ -699,11 +699,10 @@ class GitHubClient:
             or next_url.path != request_url.path
         ):
             raise GitHubError("GitHub pagination next link does not match the request endpoint")
-        page_values = [
-            value
-            for name, value in parse_qsl(next_url.query, keep_blank_values=True)
-            if name == "page"
-        ]
+        next_query = parse_qsl(next_url.query, keep_blank_values=True)
+        request_query = parse_qsl(request_url.query, keep_blank_values=True)
+        page_values = [value for name, value in next_query if name == "page"]
+        request_page_values = [value for name, value in request_query if name == "page"]
         expected_page = current_page + 1
         if (
             len(page_values) != 1
@@ -712,6 +711,17 @@ class GitHubClient:
             or int(page_values[0]) != expected_page
         ):
             raise GitHubError("GitHub pagination next link has an invalid page number")
+        if (
+            len(request_page_values) != 1
+            or not request_page_values[0].isascii()
+            or not request_page_values[0].isdecimal()
+            or int(request_page_values[0]) != current_page
+        ):
+            raise GitHubError("GitHub pagination request has an invalid page number")
+        next_non_page = sorted((name, value) for name, value in next_query if name != "page")
+        request_non_page = sorted((name, value) for name, value in request_query if name != "page")
+        if next_non_page != request_non_page:
+            raise GitHubError("GitHub pagination next link changes the request query")
         return True
 
     async def _bounded_json_request(
