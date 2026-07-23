@@ -444,9 +444,10 @@ license. It also replays historical Python installs from each layer's `RECORD`.
 Greenlet now has closed-world coverage on both architectures: exact wheel and
 sdist identity, complete native-file ownership, embedded-component identity,
 Alpine GCC source, and reviewed notices. MarkupSafe and SQLAlchemy also bind
-their exact wheels and sdists to complete native-payload sets. Both have
-explicit empty SBOM and component sets. Four other native-wheel owners still
-need complete records for the surfaces they expose.
+their exact wheels and sdists to complete native-payload sets. Both have no
+embedded SBOM and explicitly treat their payloads as owner code. Four other
+native-wheel owners retain structured open omissions for the surfaces that
+still lack complete evidence.
 
 The tagged workflow contains intended image, chart, Python, SBOM, provenance,
 signature, and GitHub-release jobs. An unconditional blocker keeps every
