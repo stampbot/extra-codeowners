@@ -27,6 +27,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Rel
 - Generation guards before and after check publication.
 - Configurable webhook-delivery retention.
 - Installation authority epochs that permanently fence older queued work.
+- Repository-and-commit epochs that fence Check Run publication across pull
+  requests sharing a head commit.
+- Durable exact-head invalidation with leased retries, strict associated
+  pull-request revalidation, and publication blocked until the accepted
+  generation's reset finishes.
+- Shielded blocking resets when a completed Check Run write has an uncertain
+  outcome, post-publication database verification fails, or the evaluation
+  task is cancelled.
+- Atomic shared-head fencing when reconciliation inserts genuinely missing
+  work for a known head.
 - Installation-wide fencing when the organization-policy repository is removed, or when repository-removal evidence is missing or malformed.
 - A documented handoff for ordinary repository removal after the App loses access.
 - Broad authority work scheduled ahead of base-specific work.
@@ -73,6 +83,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Rel
 
 ### Changed
 
+- Known-head evaluation and authority fan-out writes now create their
+  exact-head invalidation fence in the same transaction, so pruning cannot
+  orphan a queued generation.
+- A duplicate webhook reports `queued: true` when its pending fast-path retry
+  discovers and queues a newer live head.
 - GitHub API error messages are capped at 1,000 characters, and non-finite rate-limit hints use the bounded default delay.
 - Shell lint CI verifies the pinned official ShellCheck release archive instead of depending on an anonymous Docker Hub pull.
 

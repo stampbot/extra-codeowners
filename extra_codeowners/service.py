@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime, timedelta
 from typing import Any, Final
@@ -17,9 +17,11 @@ from extra_codeowners.database import (
     CheckWriteGuard,
     ClaimedAuthorityJob,
     ClaimedJob,
+    ClaimedSharedHeadInvalidation,
     JobRequest,
     QueueStore,
     normalize_repository_full_name,
+    validate_head_sha,
 )
 from extra_codeowners.evaluator import evaluate
 from extra_codeowners.github import (
@@ -37,6 +39,8 @@ from extra_codeowners.metrics import (
     QUEUE_DEPTH,
     RECONCILIATION_LAST_SUCCESS,
     RECONCILIATIONS,
+    SHARED_HEAD_INVALIDATION_DEPTH,
+    SHARED_HEAD_INVALIDATIONS,
 )
 from extra_codeowners.models import (
     ActorKind,
@@ -75,6 +79,14 @@ class AuthorityChangePendingError(RuntimeError):
     """An accepted authority change must fan out before evaluation can finish."""
 
 
+class SharedHeadLeaseLostError(RuntimeError):
+    """An exact-head reset lost its generation or lease before completion."""
+
+
+class SharedHeadInvalidationPendingError(RuntimeError):
+    """A current evaluation must wait for its exact-head reset and fan-out."""
+
+
 def _failure(code: str, message: str) -> EvaluationResult:
     return EvaluationResult(
         conclusion=EvaluationConclusion.FAILURE,
@@ -104,6 +116,13 @@ def _required_nonnegative_int(value: Any, field: str) -> int:
     return int(value)
 
 
+def _required_positive_int(value: Any, field: str) -> int:
+    result = _required_nonnegative_int(value, field)
+    if result == 0:
+        raise GitHubError(f"GitHub response omitted {field}")
+    return result
+
+
 def _label_names(pull: dict[str, Any]) -> frozenset[str]:
     labels = pull.get("labels")
     if not isinstance(labels, list) or any(
@@ -111,6 +130,28 @@ def _label_names(pull: dict[str, Any]) -> frozenset[str]:
     ):
         raise GitHubError("GitHub pull response omitted a valid labels list")
     return frozenset(str(item["name"]).lower() for item in labels)
+
+
+def _associated_pull_identity(value: Any) -> tuple[int, str, str]:
+    """Return a strictly validated commit-associated pull snapshot."""
+    associated_pull = _required_object(value, "associated pull_request")
+    state_value = _required_string(associated_pull.get("state"), "associated pull_request.state")
+    if state_value not in {"open", "closed"}:
+        raise GitHubError(f"GitHub returned unknown associated pull request state {state_value!r}")
+    associated_head = _required_object(associated_pull.get("head"), "associated pull_request.head")
+    raw_sha = _required_string(
+        associated_head.get("sha"),
+        "associated pull_request.head.sha",
+    )
+    try:
+        associated_sha = validate_head_sha(raw_sha)
+    except ValueError as error:
+        raise GitHubError("GitHub returned malformed associated pull request head SHA") from error
+    number_value = _required_positive_int(
+        associated_pull.get("number"),
+        "associated pull_request.number",
+    )
+    return number_value, state_value, associated_sha
 
 
 class EvaluationService:
@@ -121,6 +162,74 @@ class EvaluationService:
         self.github = github
         self.store = store
         self._cleanup_tasks: set[asyncio.Task[None]] = set()
+
+    async def _current_associated_pulls(
+        self,
+        installation_id: int,
+        repository_full_name: str,
+        head_sha: str,
+        *,
+        before_github_read: Callable[[], Awaitable[None]] | None = None,
+    ) -> dict[int, tuple[str, str]]:
+        """Return authoritative current state for every commit-associated PR."""
+        if before_github_read is not None:
+            await before_github_read()
+        associated = await self.github.list_commit_pulls(
+            installation_id,
+            repository_full_name,
+            head_sha,
+        )
+        observed: dict[int, tuple[str, str]] = {}
+        for associated_pull in associated:
+            number_value, state_value, associated_sha = _associated_pull_identity(associated_pull)
+            identity = (state_value, associated_sha)
+            previous = observed.setdefault(number_value, identity)
+            if previous != identity:
+                raise GitHubError("GitHub returned conflicting associated pull-request snapshots")
+
+        current: dict[int, tuple[str, str]] = {}
+        for number_value in sorted(observed):
+            if before_github_read is not None:
+                await before_github_read()
+            current_pull = await self.github.get_pull(
+                installation_id,
+                repository_full_name,
+                number_value,
+            )
+            current_number = _required_positive_int(
+                current_pull.get("number"),
+                "pull_request.number",
+            )
+            current_state = _required_string(current_pull.get("state"), "pull_request.state")
+            if current_state not in {"open", "closed"}:
+                raise GitHubError(f"GitHub returned unknown pull request state {current_state!r}")
+            current_head = _required_object(current_pull.get("head"), "pull_request.head")
+            try:
+                current_sha = validate_head_sha(
+                    _required_string(current_head.get("sha"), "pull_request.head.sha")
+                )
+            except ValueError as error:
+                raise GitHubError("GitHub returned malformed pull request head SHA") from error
+            current_base = _required_object(current_pull.get("base"), "pull_request.base")
+            current_repository = _required_object(
+                current_base.get("repo"),
+                "pull_request.base.repo",
+            )
+            try:
+                canonical_repository = normalize_repository_full_name(
+                    _required_string(
+                        current_repository.get("full_name"),
+                        "pull_request.base.repo.full_name",
+                    )
+                )
+            except ValueError as error:
+                raise GitHubError("GitHub returned malformed base repository identity") from error
+            if current_number != number_value:
+                raise GitHubError("GitHub changed the associated pull request number")
+            if canonical_repository != repository_full_name:
+                raise GitHubError("GitHub changed the associated pull request repository")
+            current[number_value] = (current_state, current_sha)
+        return current
 
     @asynccontextmanager
     async def _check_write_guard(self, installation_id: int, head_sha: str) -> AsyncIterator[None]:
@@ -184,6 +293,71 @@ class EvaluationService:
                 await asyncio.to_thread(self.store.release_check_write_guard, guard)
         except Exception:
             log.exception("abandoned_check_writer_cleanup_failed")
+
+    async def _restore_blocking_after_uncertain_completion(
+        self,
+        job: ClaimedJob,
+        head_sha: str,
+        details_url: str | None,
+        external_id: str,
+    ) -> bool:
+        """Best-effort reset a completed check without releasing its writer guard.
+
+        The caller holds the head writer guard. Shielding keeps cancellation
+        from interrupting the GitHub request and exposing a completed result
+        before that guard is released.
+        """
+        reset = asyncio.create_task(
+            self.github.upsert_check_run(
+                job.installation_id,
+                job.repository_full_name,
+                head_sha,
+                self.settings.check_name,
+                status="in_progress",
+                title="Re-evaluating CODEOWNER approvals",
+                summary=(
+                    "Completed check publication could not be verified; approval is blocked "
+                    "pending re-evaluation."
+                ),
+                details_url=details_url,
+                external_id=external_id,
+            ),
+            name=f"restore-blocking-check-{job.id}",
+        )
+        cancellation: asyncio.CancelledError | None = None
+        while not reset.done():
+            try:
+                await asyncio.shield(reset)
+            except asyncio.CancelledError as error:
+                # Preserve shutdown, but finish this bounded GitHub request
+                # while the advisory guard still orders every check writer.
+                cancellation = error
+            except Exception:
+                # Read and log the task exception below.
+                break
+        succeeded = True
+        try:
+            reset.result()
+        except asyncio.CancelledError:
+            succeeded = False
+            log.warning(
+                "completed_check_blocking_reset_cancelled",
+                repository=job.repository_full_name,
+                pull_number=job.pull_number,
+                head_sha=head_sha,
+            )
+        except Exception as error:
+            succeeded = False
+            log.exception(
+                "completed_check_blocking_reset_failed",
+                repository=job.repository_full_name,
+                pull_number=job.pull_number,
+                head_sha=head_sha,
+                error_type=type(error).__name__,
+            )
+        if cancellation is not None:
+            raise cancellation
+        return succeeded
 
     async def _find_codeowners(
         self, installation_id: int, repository: str, base_sha: str
@@ -577,8 +751,12 @@ class EvaluationService:
             )
         )
 
-    async def invalidate_for_trigger(self, job: JobRequest) -> bool:
-        """Synchronously revoke a managed check before acknowledging a trigger."""
+    async def invalidate_for_trigger(
+        self,
+        job: JobRequest,
+        shared_head_generation: int | None = None,
+    ) -> bool:
+        """Report whether the fast path reset a check or queued a newer live head."""
         if self.settings.is_organization_config_repository(job.repository_full_name):
             return False
         pull = await self.github.get_pull(
@@ -593,6 +771,95 @@ class EvaluationService:
         pull_state = _required_string(pull.get("state"), "pull_request.state")
         if pull_state not in {"open", "closed"}:
             raise GitHubError(f"GitHub returned unknown pull request state {pull_state!r}")
+
+        live_head_queued = False
+        if pull_state == "open" and job.head_sha_hint is not None and job.head_sha_hint != head_sha:
+            # The exact webhook head remains durable in its own invalidation
+            # row. Independently fence the live head instead of replacing that
+            # recovery with a latest-PR-only queue row.
+            await asyncio.to_thread(
+                self.store.enqueue_shared_head_trigger,
+                JobRequest(
+                    installation_id=job.installation_id,
+                    repository_full_name=job.repository_full_name,
+                    pull_number=job.pull_number,
+                    reason="head_changed_before_fast_invalidation",
+                    head_sha_hint=head_sha,
+                ),
+            )
+            live_head_queued = True
+
+        if shared_head_generation is not None:
+            accepted_head = validate_head_sha(job.head_sha_hint or "")
+            async with self._check_write_guard(job.installation_id, accepted_head):
+                if not await asyncio.to_thread(
+                    self.store.shared_head_invalidation_is_pending,
+                    job.installation_id,
+                    job.repository_full_name,
+                    accepted_head,
+                    shared_head_generation,
+                ):
+                    return live_head_queued
+                check_run_id = await self.github.existing_check_run_id(
+                    job.installation_id,
+                    job.repository_full_name,
+                    accepted_head,
+                    self.settings.check_name,
+                )
+                if check_run_id is None:
+                    if pull_state != "open" or head_sha != accepted_head:
+                        return live_head_queued
+                    repository_text = await self._repository_policy_text(
+                        job.installation_id,
+                        job.repository_full_name,
+                        base_sha,
+                    )
+                    if repository_text is None:
+                        return live_head_queued
+                # The GitHub lookup can outlive this delivery generation. Do
+                # not let an old handler reset a newer completed result.
+                if not await asyncio.to_thread(
+                    self.store.shared_head_invalidation_is_pending,
+                    job.installation_id,
+                    job.repository_full_name,
+                    accepted_head,
+                    shared_head_generation,
+                ):
+                    return live_head_queued
+                details_url = (
+                    pull.get("html_url") if isinstance(pull.get("html_url"), str) else None
+                )
+                if check_run_id is None:
+                    await self.github.upsert_check_run(
+                        job.installation_id,
+                        job.repository_full_name,
+                        accepted_head,
+                        self.settings.check_name,
+                        status="in_progress",
+                        title="Re-evaluating CODEOWNER approvals",
+                        summary=(
+                            "New review or pull-request evidence arrived; approval is "
+                            "blocked pending re-evaluation."
+                        ),
+                        details_url=details_url,
+                        external_id=f"{job.repository_full_name}@{accepted_head}",
+                    )
+                else:
+                    await self.github.reset_check_run(
+                        job.installation_id,
+                        job.repository_full_name,
+                        check_run_id,
+                        self.settings.check_name,
+                        title="Re-evaluating CODEOWNER approvals",
+                        summary=(
+                            "New review or pull-request evidence arrived; approval is "
+                            "blocked pending re-evaluation."
+                        ),
+                        details_url=details_url,
+                        external_id=f"{job.repository_full_name}@{accepted_head}",
+                    )
+            return True
+
         if pull_state == "closed":
             return False
 
@@ -629,28 +896,85 @@ class EvaluationService:
             )
         return True
 
+    async def invalidate_shared_head(
+        self,
+        job: ClaimedSharedHeadInvalidation,
+        lease_lost: asyncio.Event,
+    ) -> None:
+        """Reset and fan out one exact durable commit generation."""
+
+        async def require_current_claim() -> None:
+            if lease_lost.is_set() or not await asyncio.to_thread(
+                self.store.is_current_shared_head_invalidation,
+                job,
+            ):
+                raise SharedHeadLeaseLostError(
+                    "shared-head invalidation lease or generation is no longer current"
+                )
+
+        async with self._check_write_guard(job.installation_id, job.head_sha):
+            await require_current_claim()
+            check_run_id = await self.github.existing_check_run_id(
+                job.installation_id,
+                job.repository_full_name,
+                job.head_sha,
+                self.settings.check_name,
+            )
+            # Recheck after the GitHub read and immediately before the only
+            # mutating request. An expired lease must never reset a result
+            # published by its replacement.
+            await require_current_claim()
+            if check_run_id is not None:
+                await self.github.reset_check_run(
+                    job.installation_id,
+                    job.repository_full_name,
+                    check_run_id,
+                    self.settings.check_name,
+                    title="Re-evaluating CODEOWNER approvals",
+                    summary=(
+                        "Accepted evidence for this commit is awaiting durable re-evaluation."
+                    ),
+                    external_id=f"{job.repository_full_name}@{job.head_sha}",
+                )
+
+        current_associated = await self._current_associated_pulls(
+            job.installation_id,
+            job.repository_full_name,
+            job.head_sha,
+            before_github_read=require_current_claim,
+        )
+        for number_value, (state_value, associated_sha) in current_associated.items():
+            if state_value != "open" or associated_sha != job.head_sha:
+                continue
+            await require_current_claim()
+            current = await asyncio.to_thread(
+                self.store.enqueue_for_shared_head_generation,
+                JobRequest(
+                    installation_id=job.installation_id,
+                    repository_full_name=job.repository_full_name,
+                    pull_number=number_value,
+                    reason="shared_head_invalidation",
+                    head_sha_hint=job.head_sha,
+                ),
+                job.generation,
+            )
+            if not current:
+                raise SharedHeadLeaseLostError(
+                    "shared-head generation changed during pull-request fan-out"
+                )
+        await require_current_claim()
+
     async def _head_is_unique_to_pull(self, job: ClaimedJob, head_sha: str) -> bool:
-        associated = await self.github.list_commit_pulls(
+        current_associated = await self._current_associated_pulls(
             job.installation_id,
             job.repository_full_name,
             head_sha,
         )
-        open_head_pulls: set[int] = set()
-        for associated_pull in associated:
-            state_value = _required_string(
-                associated_pull.get("state"), "associated pull_request.state"
-            )
-            associated_head = _required_object(
-                associated_pull.get("head"), "associated pull_request.head"
-            )
-            associated_sha = _required_string(
-                associated_head.get("sha"), "associated pull_request.head.sha"
-            )
-            number_value = _required_nonnegative_int(
-                associated_pull.get("number"), "associated pull_request.number"
-            )
-            if state_value == "open" and associated_sha == head_sha:
-                open_head_pulls.add(number_value)
+        open_head_pulls = {
+            number_value
+            for number_value, (state_value, associated_sha) in current_associated.items()
+            if state_value == "open" and associated_sha == head_sha
+        }
         return open_head_pulls == {job.pull_number}
 
     async def evaluate_job(self, job: ClaimedJob) -> None:
@@ -686,6 +1010,23 @@ class EvaluationService:
             if pull_state == "closed":
                 return
 
+            if job.head_sha_hint is not None and job.head_sha_hint != head_sha:
+                await asyncio.to_thread(
+                    self.store.enqueue_shared_head_trigger,
+                    JobRequest(
+                        installation_id=job.installation_id,
+                        repository_full_name=job.repository_full_name,
+                        pull_number=job.pull_number,
+                        reason="head_changed_before_evaluation",
+                        head_sha_hint=head_sha,
+                    ),
+                )
+                return
+            bound_job = await asyncio.to_thread(self.store.bind_claim_to_head, job, head_sha)
+            if bound_job is None:
+                return
+            job = bound_job
+
             managed_check = await self.github.has_check_run(
                 job.installation_id,
                 job.repository_full_name,
@@ -710,6 +1051,12 @@ class EvaluationService:
             async with self._check_write_guard(job.installation_id, head_sha):
                 if not await asyncio.to_thread(self.store.is_current_claim, job):
                     return
+                if not await asyncio.to_thread(
+                    self.store.shared_head_generation_is_current,
+                    job,
+                    head_sha,
+                ):
+                    return
                 await self.github.upsert_check_run(
                     job.installation_id,
                     job.repository_full_name,
@@ -726,6 +1073,14 @@ class EvaluationService:
                 )
             if job.last_delivery_id is not None:
                 await asyncio.to_thread(self.store.mark_delivery_invalidated, job.last_delivery_id)
+            if not await asyncio.to_thread(
+                self.store.shared_head_generation_is_publishable,
+                job,
+                head_sha,
+            ):
+                raise SharedHeadInvalidationPendingError(
+                    "exact-head invalidation must complete before evaluation"
+                )
             if await asyncio.to_thread(self.store.has_blocking_authority, job, base_ref):
                 raise AuthorityChangePendingError(
                     "accepted authority change is still awaiting durable fan-out"
@@ -789,7 +1144,7 @@ class EvaluationService:
                 or _label_names(current) != labels
             ):
                 await asyncio.to_thread(
-                    self.store.enqueue,
+                    self.store.enqueue_shared_head_trigger,
                     JobRequest(
                         installation_id=job.installation_id,
                         repository_full_name=job.repository_full_name,
@@ -824,6 +1179,12 @@ class EvaluationService:
                     # ordered after this completion, even if this process dies.
                     if not await asyncio.to_thread(self.store.is_current_claim, job):
                         return
+                    if not await asyncio.to_thread(
+                        self.store.shared_head_generation_is_publishable,
+                        job,
+                        head_sha,
+                    ):
+                        return
                     if await asyncio.to_thread(self.store.has_blocking_authority, job, base_ref):
                         raise AuthorityChangePendingError(
                             "accepted authority change arrived during evaluation"
@@ -838,19 +1199,86 @@ class EvaluationService:
                             "distinct commit before approval",
                         )
                         title = "CODEOWNER approval required"
-                    await self.github.upsert_check_run(
-                        job.installation_id,
-                        job.repository_full_name,
+                    if not await asyncio.to_thread(
+                        self.store.shared_head_generation_is_publishable,
+                        job,
                         head_sha,
-                        self.settings.check_name,
-                        status="completed",
-                        conclusion=result.conclusion.value,
-                        title=title,
-                        summary=result.summary + warning,
-                        text=result.check_output(),
-                        details_url=details_url,
-                        external_id=external_id,
-                    )
+                    ):
+                        return
+                    # Authoritative shared-head discovery may require many
+                    # GitHub reads. Fence a lease owner that expired or was
+                    # replaced while those reads were in flight.
+                    if not await asyncio.to_thread(self.store.is_current_claim, job):
+                        return
+                    try:
+                        await self.github.upsert_check_run(
+                            job.installation_id,
+                            job.repository_full_name,
+                            head_sha,
+                            self.settings.check_name,
+                            status="completed",
+                            conclusion=result.conclusion.value,
+                            title=title,
+                            summary=result.summary + warning,
+                            text=result.check_output(),
+                            details_url=details_url,
+                            external_id=external_id,
+                        )
+                    except asyncio.CancelledError:
+                        await self._restore_blocking_after_uncertain_completion(
+                            job,
+                            head_sha,
+                            details_url,
+                            external_id,
+                        )
+                        raise
+                    except Exception:
+                        await self._restore_blocking_after_uncertain_completion(
+                            job,
+                            head_sha,
+                            details_url,
+                            external_id,
+                        )
+                        raise
+                    try:
+                        claim_current = await asyncio.to_thread(
+                            self.store.is_current_claim,
+                            job,
+                        )
+                        shared_head_current = await asyncio.to_thread(
+                            self.store.shared_head_generation_is_publishable,
+                            job,
+                            head_sha,
+                        )
+                    except asyncio.CancelledError:
+                        await self._restore_blocking_after_uncertain_completion(
+                            job,
+                            head_sha,
+                            details_url,
+                            external_id,
+                        )
+                        raise
+                    except Exception:
+                        await self._restore_blocking_after_uncertain_completion(
+                            job,
+                            head_sha,
+                            details_url,
+                            external_id,
+                        )
+                        raise
+                    if not claim_current or not shared_head_current:
+                        # A different pull request can accept a direct trigger
+                        # for this commit, or this evaluation's lease can be
+                        # replaced, while the GitHub request is in flight.
+                        # Restore a blocking result before releasing the shared
+                        # head writer.
+                        await self._restore_blocking_after_uncertain_completion(
+                            job,
+                            head_sha,
+                            details_url,
+                            external_id,
+                        )
+                        return
 
                 # If a trigger committed while the completion request was in
                 # flight, restore a blocking state ourselves. The shared writer
@@ -919,6 +1347,108 @@ class Worker:
         self.evaluator = evaluator
         self.owner = owner
 
+    async def _renew_shared_head_lease(
+        self,
+        job: ClaimedSharedHeadInvalidation,
+        done: asyncio.Event,
+        lost: asyncio.Event,
+    ) -> None:
+        """Keep exact-head work owned without reviving an expired lease."""
+        interval = max(1.0, self.settings.worker_lease_seconds / 3)
+        while not done.is_set():
+            try:
+                await asyncio.wait_for(done.wait(), interval)
+                return
+            except TimeoutError:
+                pass
+            try:
+                renewed = await asyncio.to_thread(
+                    self.store.renew_shared_head_invalidation,
+                    job,
+                    self.settings.worker_lease_seconds,
+                )
+            except Exception:
+                log.exception(
+                    "shared_head_invalidation_lease_renewal_failed",
+                    installation_id=job.installation_id,
+                    repository=job.repository_full_name,
+                )
+                lost.set()
+                return
+            if not renewed:
+                log.warning(
+                    "shared_head_invalidation_lease_lost",
+                    installation_id=job.installation_id,
+                    repository=job.repository_full_name,
+                    generation=job.generation,
+                )
+                lost.set()
+                return
+
+    async def _process_shared_head(
+        self,
+        job: ClaimedSharedHeadInvalidation,
+    ) -> None:
+        done = asyncio.Event()
+        lost = asyncio.Event()
+        heartbeat = asyncio.create_task(
+            self._renew_shared_head_lease(job, done, lost),
+            name=(f"shared-head-lease-{job.installation_id}-{job.head_sha[:12]}-{job.generation}"),
+        )
+        try:
+            await self.evaluator.invalidate_shared_head(job, lost)
+        except SharedHeadLeaseLostError:
+            SHARED_HEAD_INVALIDATIONS.labels("superseded").inc()
+            log.info(
+                "shared_head_invalidation_superseded",
+                installation_id=job.installation_id,
+                repository=job.repository_full_name,
+                generation=job.generation,
+            )
+        except GitHubRateLimitError as error:
+            updated = await asyncio.to_thread(
+                self.store.defer_shared_head_invalidation,
+                job,
+                str(error),
+                error.retry_after_seconds,
+            )
+            SHARED_HEAD_INVALIDATIONS.labels("rate_limited" if updated else "superseded").inc()
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            log.exception(
+                "shared_head_invalidation_failed",
+                installation_id=job.installation_id,
+                repository=job.repository_full_name,
+                generation=job.generation,
+                attempt=job.attempts,
+            )
+            updated = await asyncio.to_thread(
+                self.store.fail_shared_head_invalidation,
+                job,
+                str(error),
+                self.settings.worker_retry_max_seconds,
+            )
+            SHARED_HEAD_INVALIDATIONS.labels("failed" if updated else "superseded").inc()
+        else:
+            completed = False
+            if not lost.is_set():
+                completed = await asyncio.to_thread(
+                    self.store.complete_shared_head_invalidation,
+                    job,
+                )
+            SHARED_HEAD_INVALIDATIONS.labels("completed" if completed else "superseded").inc()
+            if completed:
+                log.info(
+                    "shared_head_invalidation_completed",
+                    installation_id=job.installation_id,
+                    repository=job.repository_full_name,
+                    generation=job.generation,
+                )
+        finally:
+            done.set()
+            await asyncio.gather(heartbeat)
+
     async def _renew_lease(self, job: ClaimedJob, done: asyncio.Event) -> None:
         """Keep a live evaluation fenced to this worker until it finishes."""
         interval = max(1.0, self.settings.worker_lease_seconds / 3)
@@ -981,6 +1511,19 @@ class Worker:
                 self.owner,
                 str(error),
                 max(5, int(self.settings.worker_poll_seconds * 10)),
+            )
+        except SharedHeadInvalidationPendingError as error:
+            log.info(
+                "evaluation_deferred_for_shared_head_invalidation",
+                repository=job.repository_full_name,
+                pull_number=job.pull_number,
+            )
+            await asyncio.to_thread(
+                self.store.defer,
+                job,
+                self.owner,
+                str(error),
+                max(1, int(self.settings.worker_poll_seconds * 2)),
             )
         except asyncio.CancelledError:
             raise
@@ -1082,9 +1625,7 @@ class Worker:
         async def revoke(request: JobRequest) -> None:
             async with semaphore:
                 try:
-                    invalidated = await self.evaluator.invalidate_for_trigger(request)
-                    if invalidated:
-                        await asyncio.to_thread(self.store.enqueue, request)
+                    await self.evaluator.invalidate_for_trigger(request)
                 except GitHubRateLimitError:
                     raise
                 except Exception:
@@ -1153,6 +1694,17 @@ class Worker:
             try:
                 QUEUE_DEPTH.set(await asyncio.to_thread(self.store.pending_count))
                 DEAD_JOBS.set(await asyncio.to_thread(self.store.dead_count))
+                SHARED_HEAD_INVALIDATION_DEPTH.set(
+                    await asyncio.to_thread(self.store.pending_shared_head_invalidation_count)
+                )
+                shared_head_job = await asyncio.to_thread(
+                    self.store.claim_shared_head_invalidation,
+                    self.owner,
+                    self.settings.worker_lease_seconds,
+                )
+                if shared_head_job is not None:
+                    await self._process_shared_head(shared_head_job)
+                    continue
                 authority_job = await asyncio.to_thread(
                     self.store.claim_authority,
                     self.owner,
@@ -1247,6 +1799,12 @@ class Reconciler:
         pruned = await asyncio.to_thread(self.store.prune_deliveries, retention_boundary)
         if pruned:
             log.info("webhook_deliveries_pruned", deliveries=pruned)
+        pruned_epochs = await asyncio.to_thread(
+            self.store.prune_shared_head_epochs,
+            retention_boundary,
+        )
+        if pruned_epochs:
+            log.info("shared_head_epochs_pruned", epochs=pruned_epochs)
         queued = 0
         for installation in await self.github.list_installations():
             if lost.is_set():

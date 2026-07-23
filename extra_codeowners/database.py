@@ -6,13 +6,14 @@ import hashlib
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import (
     JSON,
     Boolean,
+    CheckConstraint,
     DateTime,
     Index,
     Integer,
@@ -29,13 +30,15 @@ from sqlalchemy import (
     text,
     update,
 )
+from sqlalchemy.dialects.postgresql import insert as postgresql_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 from sqlalchemy.pool import NullPool
 
-SCHEMA_VERSION = 1
-DATABASE_MIGRATION_HEAD = "0002_retry_dead_jobs"
+SCHEMA_VERSION = 2
+DATABASE_MIGRATION_HEAD = "0003_shared_head_epochs"
 DATABASE_CONNECT_TIMEOUT_SECONDS = 3
 DATABASE_POOL_TIMEOUT_SECONDS = 2
 DATABASE_STATEMENT_TIMEOUT_MILLISECONDS = 3_000
@@ -53,6 +56,15 @@ def normalize_repository_full_name(value: str) -> str:
     ):
         raise ValueError("repository_full_name must be a valid owner/repository name")
     return value.lower()
+
+
+def validate_head_sha(value: str) -> str:
+    """Return a canonical Git object ID suitable for a durable key."""
+    if len(value) not in {40, 64} or any(
+        character not in "0123456789abcdef" for character in value
+    ):
+        raise ValueError("head_sha must be exactly 40 or 64 lowercase ASCII hexadecimal characters")
+    return value
 
 
 def utcnow() -> datetime:
@@ -101,6 +113,7 @@ class EvaluationJob(Base):
     reason: Mapped[str] = mapped_column(String(255), nullable=False)
     generation: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     authority_generation: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    shared_head_generation: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     state: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     requested_at: Mapped[datetime] = mapped_column(
@@ -126,6 +139,11 @@ class WebhookDelivery(Base):
     )
     invalidation_required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     invalidation_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    installation_id: Mapped[int | None] = mapped_column(Integer)
+    repository_full_name: Mapped[str | None] = mapped_column(String(512))
+    pull_number: Mapped[int | None] = mapped_column(Integer)
+    head_sha: Mapped[str | None] = mapped_column(String(64))
+    shared_head_generation: Mapped[int | None] = mapped_column(Integer)
 
 
 class EvaluationAudit(Base):
@@ -202,6 +220,50 @@ class AuthorityEpoch(Base):
     )
 
 
+class SharedHeadEpoch(Base):
+    """Monotonic fence shared by every pull request on one head commit."""
+
+    __tablename__ = "shared_head_epochs"
+    __table_args__ = (
+        CheckConstraint(
+            "generation >= 1",
+            name="ck_shared_head_epochs_generation_positive",
+        ),
+        CheckConstraint(
+            "invalidated_generation >= 0 AND invalidated_generation <= generation",
+            name="ck_shared_head_epochs_invalidation_bounds",
+        ),
+        CheckConstraint(
+            "attempts >= 0",
+            name="ck_shared_head_epochs_attempts_nonnegative",
+        ),
+        Index("ix_shared_head_epochs_changed_at", "changed_at"),
+        Index(
+            "ix_shared_head_epochs_claim",
+            "available_at",
+            "lease_until",
+            postgresql_where=text("invalidated_generation < generation"),
+            sqlite_where=text("invalidated_generation < generation"),
+        ),
+    )
+
+    installation_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    repository_full_name: Mapped[str] = mapped_column(String(512), primary_key=True)
+    head_sha: Mapped[str] = mapped_column(String(64), primary_key=True)
+    generation: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    invalidated_generation: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    changed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
+    available_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    lease_owner: Mapped[str | None] = mapped_column(String(128))
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[str | None] = mapped_column(String(2000))
+
+
 @dataclass(frozen=True, slots=True)
 class JobRequest:
     """Input used to enqueue or coalesce an evaluation."""
@@ -256,6 +318,7 @@ class ClaimedJob:
     last_delivery_id: str | None
     generation: int
     authority_generation: int
+    shared_head_generation: int
     attempts: int
     lease_owner: str
 
@@ -275,6 +338,30 @@ class ClaimedAuthorityJob:
 
 
 @dataclass(frozen=True, slots=True)
+class ClaimedSharedHeadInvalidation:
+    """Leased immutable work item for one exact commit-scoped check."""
+
+    installation_id: int
+    repository_full_name: str
+    head_sha: str
+    generation: int
+    attempts: int
+    lease_owner: str
+
+
+@dataclass(frozen=True, slots=True)
+class DeliveryAcceptance:
+    """Durable acceptance result and exact shared-head generation token."""
+
+    accepted: bool
+    shared_head_generation: int | None = None
+
+    def __bool__(self) -> bool:
+        """Preserve boolean acceptance checks at internal call sites."""
+        return self.accepted
+
+
+@dataclass(frozen=True, slots=True)
 class CheckWriteGuard:
     """Held per-pull-request GitHub check writer guard."""
 
@@ -282,6 +369,14 @@ class CheckWriteGuard:
     connection: Connection | None = None
     local_lock: threading.Lock | None = None
     shared: bool = False
+
+
+class _EvaluationJobAlreadyPresentError(Exception):
+    """Abort reconciliation so a tentative shared-head epoch bump rolls back."""
+
+
+class _EvaluationJobBindingLostError(Exception):
+    """Abort a hintless bind so its tentative exact-head bump rolls back."""
 
 
 class QueueStore:
@@ -628,10 +723,77 @@ class QueueStore:
             yield session
 
     @staticmethod
+    def _shared_head_generation_in_session(
+        session: Session,
+        installation_id: int,
+        repository_full_name: str,
+        head_sha: str | None,
+    ) -> int:
+        if head_sha is None:
+            return 0
+        return int(
+            session.scalar(
+                select(SharedHeadEpoch.generation).where(
+                    SharedHeadEpoch.installation_id == installation_id,
+                    SharedHeadEpoch.repository_full_name == repository_full_name,
+                    SharedHeadEpoch.head_sha == head_sha,
+                )
+            )
+            or 0
+        )
+
+    @staticmethod
+    def _advance_shared_head_epoch_in_session(
+        session: Session,
+        request: JobRequest,
+    ) -> int:
+        head_sha = validate_head_sha(request.head_sha_hint or "")
+        now = utcnow()
+        key = (
+            SharedHeadEpoch.installation_id == request.installation_id,
+            SharedHeadEpoch.repository_full_name == request.repository_full_name,
+            SharedHeadEpoch.head_sha == head_sha,
+        )
+        updated = session.execute(
+            update(SharedHeadEpoch)
+            .where(*key)
+            .values(
+                generation=SharedHeadEpoch.generation + 1,
+                changed_at=now,
+                available_at=now,
+                attempts=0,
+                lease_owner=None,
+                lease_until=None,
+                last_error=None,
+            )
+        )
+        if getattr(updated, "rowcount", 0) == 1:
+            generation = session.scalar(select(SharedHeadEpoch.generation).where(*key))
+            if generation is None:  # pragma: no cover - protected by this transaction
+                raise RuntimeError("shared-head epoch disappeared during advancement")
+            return int(generation)
+        epoch = SharedHeadEpoch(
+            installation_id=request.installation_id,
+            repository_full_name=request.repository_full_name,
+            head_sha=head_sha,
+            generation=1,
+            invalidated_generation=0,
+            changed_at=now,
+            available_at=now,
+        )
+        session.add(epoch)
+        # Preserve the shared-head -> evaluation-job lock order even when this
+        # transaction creates the epoch. Without an explicit flush, SQLAlchemy
+        # may defer the INSERT until a later evaluation-job statement.
+        session.flush((epoch,))
+        return 1
+
+    @staticmethod
     def _enqueue_in_session(
         session: Session,
         request: JobRequest,
         delivery_id: str | None = None,
+        shared_head_generation: int | None = None,
     ) -> None:
         now = utcnow()
         authority_generation = (
@@ -642,9 +804,17 @@ class QueueStore:
             )
             or 0
         )
+        if shared_head_generation is None:
+            shared_head_generation = QueueStore._shared_head_generation_in_session(
+                session,
+                request.installation_id,
+                request.repository_full_name,
+                request.head_sha_hint,
+            )
         values: dict[str, Any] = {
             "generation": EvaluationJob.generation + 1,
             "authority_generation": authority_generation,
+            "shared_head_generation": shared_head_generation,
             "reason": request.reason,
             "head_sha_hint": request.head_sha_hint,
             "requested_at": now,
@@ -675,13 +845,22 @@ class QueueStore:
                 head_sha_hint=request.head_sha_hint,
                 last_delivery_id=delivery_id,
                 authority_generation=authority_generation,
+                shared_head_generation=shared_head_generation,
                 requested_at=now,
                 available_at=now,
             )
         )
 
     def enqueue(self, request: JobRequest) -> None:
-        """Enqueue an evaluation, coalescing repeated triggers."""
+        """Enqueue an evaluation, fencing a known head in the same transaction.
+
+        Known-head callers must not be able to create an evaluation that
+        references an epoch concurrently removed by pruning. Hintless work has
+        no exact head to fence and retains the ordinary coalescing path.
+        """
+        if request.head_sha_hint is not None:
+            self.enqueue_shared_head_trigger(request)
+            return
         for _ in range(5):
             try:
                 with self.session() as session:
@@ -693,25 +872,148 @@ class QueueStore:
                 continue
         raise RuntimeError("could not enqueue evaluation after concurrent inserts")
 
-    def enqueue_if_absent(self, request: JobRequest) -> bool:
-        """Enqueue reconciliation work without superseding active or dead work."""
+    def enqueue_shared_head_trigger(self, request: JobRequest) -> None:
+        """Atomically advance a live-head fence and enqueue its evaluation."""
         for _ in range(5):
             try:
                 with self.session() as session:
-                    existing = session.scalar(
-                        select(EvaluationJob.id).where(
+                    shared_head_generation = self._advance_shared_head_epoch_in_session(
+                        session,
+                        request,
+                    )
+                    self._enqueue_in_session(
+                        session,
+                        request,
+                        shared_head_generation=shared_head_generation,
+                    )
+                return
+            except IntegrityError:
+                # Roll back the tentative epoch when another transaction wins
+                # either first insert, then retry in the common lock order.
+                continue
+        raise RuntimeError("could not enqueue shared-head trigger after concurrent inserts")
+
+    def enqueue_for_shared_head_generation(
+        self,
+        request: JobRequest,
+        shared_head_generation: int,
+    ) -> bool:
+        """Bind fan-out work to one still-current head generation.
+
+        A different-head row for the same pull request is preserved. GitHub's
+        commit-to-pulls response is eventually consistent, while a directly
+        accepted newer head is durable evidence that must not be overwritten
+        by stale fan-out.
+        """
+        head_sha = validate_head_sha(request.head_sha_hint or "")
+        if shared_head_generation <= 0:
+            raise ValueError("shared_head_generation must be positive")
+        for _ in range(5):
+            try:
+                with self.session() as session:
+                    current_generation = session.scalar(
+                        select(SharedHeadEpoch.generation)
+                        .where(
+                            SharedHeadEpoch.installation_id == request.installation_id,
+                            SharedHeadEpoch.repository_full_name == request.repository_full_name,
+                            SharedHeadEpoch.head_sha == head_sha,
+                        )
+                        .with_for_update()
+                    )
+                    if current_generation != shared_head_generation:
+                        return False
+                    existing_head = session.scalar(
+                        select(EvaluationJob.head_sha_hint)
+                        .where(
                             EvaluationJob.installation_id == request.installation_id,
                             EvaluationJob.repository_full_name == request.repository_full_name,
                             EvaluationJob.pull_number == request.pull_number,
                         )
+                        .with_for_update()
                     )
-                    if existing is not None:
-                        return False
-                    self._enqueue_in_session(session, request)
+                    if existing_head is not None and existing_head != head_sha:
+                        return True
+                    self._enqueue_in_session(
+                        session,
+                        request,
+                        shared_head_generation=shared_head_generation,
+                    )
                 return True
             except IntegrityError:
-                # Another receiver or reconciler inserted this PR between the
-                # read and commit. Its work is sufficient; retry to observe it.
+                # A direct trigger can insert the pull row between the two
+                # reads. Retry so a different current head remains preserved.
+                continue
+        raise RuntimeError("could not enqueue shared-head fan-out after concurrent inserts")
+
+    def enqueue_if_absent(self, request: JobRequest) -> bool:
+        """Atomically fence and enqueue genuinely missing reconciliation work."""
+        for _ in range(5):
+            try:
+                with self.session() as session:
+                    shared_head_generation = 0
+                    if request.head_sha_hint is not None:
+                        shared_head_generation = self._advance_shared_head_epoch_in_session(
+                            session,
+                            request,
+                        )
+                    now = utcnow()
+                    authority_generation = (
+                        session.scalar(
+                            select(AuthorityEpoch.generation).where(
+                                AuthorityEpoch.installation_id == request.installation_id
+                            )
+                        )
+                        or 0
+                    )
+                    values: dict[str, Any] = {
+                        "installation_id": request.installation_id,
+                        "repository_full_name": request.repository_full_name,
+                        "pull_number": request.pull_number,
+                        "reason": request.reason,
+                        "head_sha_hint": request.head_sha_hint,
+                        "generation": 1,
+                        "authority_generation": authority_generation,
+                        "shared_head_generation": shared_head_generation,
+                        "state": "pending",
+                        "attempts": 0,
+                        "requested_at": now,
+                        "available_at": now,
+                    }
+                    index_elements = (
+                        "installation_id",
+                        "repository_full_name",
+                        "pull_number",
+                    )
+                    dialect_name = session.get_bind().dialect.name
+                    if dialect_name == "postgresql":
+                        inserted_id = session.scalar(
+                            postgresql_insert(EvaluationJob)
+                            .values(**values)
+                            .on_conflict_do_nothing(index_elements=index_elements)
+                            .returning(EvaluationJob.id)
+                        )
+                    elif dialect_name == "sqlite":
+                        inserted_id = session.scalar(
+                            sqlite_insert(EvaluationJob)
+                            .values(**values)
+                            .on_conflict_do_nothing(index_elements=index_elements)
+                            .returning(EvaluationJob.id)
+                        )
+                    else:  # pragma: no cover - QueueStore supports SQLite and PostgreSQL
+                        raise RuntimeError(
+                            f"reconciliation insert does not support {dialect_name!r}"
+                        )
+                    if inserted_id is None:
+                        # Raising inside the context rolls back the epoch
+                        # increment that preceded this conflicting insert.
+                        raise _EvaluationJobAlreadyPresentError
+                return True
+            except _EvaluationJobAlreadyPresentError:
+                return False
+            except IntegrityError:
+                # Different pull requests can race to create the same
+                # shared-head epoch. Retry the complete atomic insert so the
+                # losing epoch transaction is not mistaken for durable work.
                 continue
         raise RuntimeError("could not reconcile evaluation after concurrent inserts")
 
@@ -833,10 +1135,12 @@ class QueueStore:
         event: str,
         request: JobRequest | AuthorityRequest | None,
         authority_guard_timeout_seconds: float = 5.0,
-    ) -> bool:
+    ) -> DeliveryAcceptance:
         """Record and enqueue one webhook atomically.
 
-        Returns ``False`` for a previously accepted GitHub delivery.
+        The returned generation binds synchronous invalidation to the exact
+        head fence accepted in this transaction. A duplicate delivery returns
+        its original token instead of borrowing a newer head generation.
         """
         authority_guard: CheckWriteGuard | None = None
         if isinstance(request, AuthorityRequest):
@@ -851,24 +1155,71 @@ class QueueStore:
             for _ in range(5):
                 try:
                     with self.session() as session:
-                        if session.get(WebhookDelivery, delivery_id) is not None:
-                            return False
-                        session.add(
-                            WebhookDelivery(
-                                delivery_id=delivery_id,
-                                event=event,
-                                invalidation_required=isinstance(request, JobRequest),
+                        existing_delivery = session.get(WebhookDelivery, delivery_id)
+                        if existing_delivery is not None:
+                            if existing_delivery.event != event:
+                                raise RuntimeError(
+                                    "accepted delivery ID was replayed with a different event"
+                                )
+                            if isinstance(request, JobRequest):
+                                expected_identity = (
+                                    request.installation_id,
+                                    request.repository_full_name,
+                                    request.pull_number,
+                                    request.head_sha_hint,
+                                )
+                                stored_identity = (
+                                    existing_delivery.installation_id,
+                                    existing_delivery.repository_full_name,
+                                    existing_delivery.pull_number,
+                                    existing_delivery.head_sha,
+                                )
+                                legacy_identity = (
+                                    existing_delivery.invalidation_required
+                                    and all(value is None for value in stored_identity)
+                                    and existing_delivery.shared_head_generation is None
+                                )
+                                if not legacy_identity and stored_identity != expected_identity:
+                                    raise RuntimeError(
+                                        "accepted delivery ID was replayed with different "
+                                        "pull-request identity"
+                                    )
+                            return DeliveryAcceptance(
+                                accepted=False,
+                                shared_head_generation=existing_delivery.shared_head_generation,
                             )
+                        delivery = WebhookDelivery(
+                            delivery_id=delivery_id,
+                            event=event,
+                            invalidation_required=isinstance(request, JobRequest),
                         )
+                        session.add(delivery)
+                        shared_head_generation: int | None = None
                         if isinstance(request, JobRequest):
-                            self._enqueue_in_session(session, request, delivery_id)
+                            shared_head_generation = self._advance_shared_head_epoch_in_session(
+                                session, request
+                            )
+                            delivery.installation_id = request.installation_id
+                            delivery.repository_full_name = request.repository_full_name
+                            delivery.pull_number = request.pull_number
+                            delivery.head_sha = request.head_sha_hint
+                            delivery.shared_head_generation = shared_head_generation
+                            self._enqueue_in_session(
+                                session,
+                                request,
+                                delivery_id,
+                                shared_head_generation,
+                            )
                         elif isinstance(request, AuthorityRequest):
                             if request.repository_full_name is None:
                                 self._bump_authority_epoch_in_session(
                                     session, request.installation_id
                                 )
                             self._enqueue_authority_in_session(session, request)
-                    return True
+                    return DeliveryAcceptance(
+                        accepted=True,
+                        shared_head_generation=shared_head_generation,
+                    )
                 except IntegrityError:
                     # This may be either the same delivery racing or a different
                     # delivery racing to create the unique PR job. Retry so the
@@ -921,6 +1272,155 @@ class QueueStore:
                 select(EvaluationJob.generation).where(EvaluationJob.id == job.id)
             )
             return generation == job.generation
+
+    def bind_claim_to_head(self, job: ClaimedJob, head_sha: str) -> ClaimedJob | None:
+        """Bind a hintless internal claim to the head observed from GitHub.
+
+        Direct webhook work is already bound transactionally at acceptance.
+        Internal fan-out can lack a trustworthy head until it fetches current
+        state, so binding advances that head and creates durable invalidation
+        work in the same transaction.
+        """
+        head_sha = validate_head_sha(head_sha)
+        if job.head_sha_hint is not None:
+            return job if job.head_sha_hint == head_sha else None
+        try:
+            with self.session() as session:
+                shared_head_generation = self._advance_shared_head_epoch_in_session(
+                    session,
+                    JobRequest(
+                        installation_id=job.installation_id,
+                        repository_full_name=job.repository_full_name,
+                        pull_number=job.pull_number,
+                        reason=job.reason,
+                        head_sha_hint=head_sha,
+                    ),
+                )
+                bound = session.execute(
+                    update(EvaluationJob)
+                    .where(
+                        EvaluationJob.id == job.id,
+                        EvaluationJob.generation == job.generation,
+                        EvaluationJob.lease_owner == job.lease_owner,
+                        EvaluationJob.state == "pending",
+                        EvaluationJob.head_sha_hint.is_(None),
+                    )
+                    .values(
+                        head_sha_hint=head_sha,
+                        shared_head_generation=shared_head_generation,
+                    )
+                )
+                if getattr(bound, "rowcount", 0) != 1:
+                    raise _EvaluationJobBindingLostError
+        except _EvaluationJobBindingLostError:
+            return None
+        return replace(
+            job,
+            head_sha_hint=head_sha,
+            shared_head_generation=shared_head_generation,
+        )
+
+    def shared_head_generation_is_current(self, job: ClaimedJob, head_sha: str) -> bool:
+        """Return whether no accepted trigger superseded this head evidence."""
+        head_sha = validate_head_sha(head_sha)
+        if job.head_sha_hint != head_sha:
+            return False
+        with self._sessions() as session:
+            current = self._shared_head_generation_in_session(
+                session,
+                job.installation_id,
+                job.repository_full_name,
+                head_sha,
+            )
+        return current == job.shared_head_generation
+
+    def shared_head_generation_is_publishable(self, job: ClaimedJob, head_sha: str) -> bool:
+        """Return whether this exact head generation was durably invalidated."""
+        head_sha = validate_head_sha(head_sha)
+        if job.head_sha_hint != head_sha:
+            return False
+        with self._sessions() as session:
+            row = session.execute(
+                select(
+                    SharedHeadEpoch.generation,
+                    SharedHeadEpoch.invalidated_generation,
+                ).where(
+                    SharedHeadEpoch.installation_id == job.installation_id,
+                    SharedHeadEpoch.repository_full_name == job.repository_full_name,
+                    SharedHeadEpoch.head_sha == head_sha,
+                )
+            ).one_or_none()
+        if row is None:
+            return job.shared_head_generation == 0
+        return bool(
+            row.generation == job.shared_head_generation
+            and row.invalidated_generation == job.shared_head_generation
+        )
+
+    def shared_head_invalidation_is_pending(
+        self,
+        installation_id: int,
+        repository_full_name: str,
+        head_sha: str,
+        generation: int,
+    ) -> bool:
+        """Bind a synchronous reset to one exact still-pending generation."""
+        repository_full_name = normalize_repository_full_name(repository_full_name)
+        head_sha = validate_head_sha(head_sha)
+        with self._sessions() as session:
+            row = session.execute(
+                select(
+                    SharedHeadEpoch.generation,
+                    SharedHeadEpoch.invalidated_generation,
+                ).where(
+                    SharedHeadEpoch.installation_id == installation_id,
+                    SharedHeadEpoch.repository_full_name == repository_full_name,
+                    SharedHeadEpoch.head_sha == head_sha,
+                )
+            ).one_or_none()
+        return bool(
+            row is not None
+            and row.generation == generation
+            and row.invalidated_generation < generation
+        )
+
+    def shared_head_generation(
+        self,
+        installation_id: int,
+        repository_full_name: str,
+        head_sha: str,
+    ) -> int:
+        """Return the current durable generation for one commit-scoped check."""
+        repository_full_name = normalize_repository_full_name(repository_full_name)
+        head_sha = validate_head_sha(head_sha)
+        with self._sessions() as session:
+            return self._shared_head_generation_in_session(
+                session,
+                installation_id,
+                repository_full_name,
+                head_sha,
+            )
+
+    def shared_head_invalidation_generation(
+        self,
+        installation_id: int,
+        repository_full_name: str,
+        head_sha: str,
+    ) -> int:
+        """Return the latest generation whose exact-head reset completed."""
+        repository_full_name = normalize_repository_full_name(repository_full_name)
+        head_sha = validate_head_sha(head_sha)
+        with self._sessions() as session:
+            return int(
+                session.scalar(
+                    select(SharedHeadEpoch.invalidated_generation).where(
+                        SharedHeadEpoch.installation_id == installation_id,
+                        SharedHeadEpoch.repository_full_name == repository_full_name,
+                        SharedHeadEpoch.head_sha == head_sha,
+                    )
+                )
+                or 0
+            )
 
     def has_superseding_job(self, job: ClaimedJob) -> bool:
         """Return whether a newer generation still needs evaluation."""
@@ -1004,6 +1504,216 @@ class QueueStore:
             )
             return getattr(renewed, "rowcount", 0) == 1
 
+    def claim_shared_head_invalidation(
+        self,
+        owner: str,
+        lease_seconds: int,
+    ) -> ClaimedSharedHeadInvalidation | None:
+        """Lease the oldest exact-head reset that has not completed."""
+        now = utcnow()
+        lease_until = now + timedelta(seconds=lease_seconds)
+        for _ in range(3):
+            with self.session() as session:
+                candidate = session.scalar(
+                    select(SharedHeadEpoch)
+                    .where(
+                        SharedHeadEpoch.invalidated_generation < SharedHeadEpoch.generation,
+                        SharedHeadEpoch.available_at <= now,
+                        or_(
+                            SharedHeadEpoch.lease_until.is_(None),
+                            SharedHeadEpoch.lease_until < now,
+                        ),
+                    )
+                    .order_by(
+                        SharedHeadEpoch.available_at,
+                        SharedHeadEpoch.changed_at,
+                        SharedHeadEpoch.installation_id,
+                        SharedHeadEpoch.repository_full_name,
+                        SharedHeadEpoch.head_sha,
+                    )
+                    .limit(1)
+                    .with_for_update(skip_locked=True)
+                )
+                if candidate is None:
+                    return None
+                claimed_attempts = int(candidate.attempts) + 1
+                claimed = session.execute(
+                    update(SharedHeadEpoch)
+                    .where(
+                        SharedHeadEpoch.installation_id == candidate.installation_id,
+                        SharedHeadEpoch.repository_full_name == candidate.repository_full_name,
+                        SharedHeadEpoch.head_sha == candidate.head_sha,
+                        SharedHeadEpoch.generation == candidate.generation,
+                        SharedHeadEpoch.invalidated_generation < SharedHeadEpoch.generation,
+                        or_(
+                            SharedHeadEpoch.lease_until.is_(None),
+                            SharedHeadEpoch.lease_until < now,
+                        ),
+                    )
+                    .values(
+                        lease_owner=owner,
+                        lease_until=lease_until,
+                        attempts=SharedHeadEpoch.attempts + 1,
+                    )
+                    .execution_options(synchronize_session=False)
+                )
+                if getattr(claimed, "rowcount", 0) != 1:
+                    continue
+                return ClaimedSharedHeadInvalidation(
+                    installation_id=candidate.installation_id,
+                    repository_full_name=candidate.repository_full_name,
+                    head_sha=candidate.head_sha,
+                    generation=candidate.generation,
+                    attempts=claimed_attempts,
+                    lease_owner=owner,
+                )
+        return None
+
+    def is_current_shared_head_invalidation(
+        self,
+        job: ClaimedSharedHeadInvalidation,
+    ) -> bool:
+        """Return whether an unexpired lease still owns this pending generation."""
+        now = utcnow()
+        with self._sessions() as session:
+            row = session.execute(
+                select(
+                    SharedHeadEpoch.generation,
+                    SharedHeadEpoch.invalidated_generation,
+                    SharedHeadEpoch.lease_owner,
+                    SharedHeadEpoch.lease_until,
+                ).where(
+                    SharedHeadEpoch.installation_id == job.installation_id,
+                    SharedHeadEpoch.repository_full_name == job.repository_full_name,
+                    SharedHeadEpoch.head_sha == job.head_sha,
+                )
+            ).one_or_none()
+        if row is None or row.lease_until is None:
+            return False
+        lease_until = row.lease_until
+        if lease_until.tzinfo is None:
+            lease_until = lease_until.replace(tzinfo=UTC)
+        return bool(
+            row.generation == job.generation
+            and row.invalidated_generation < job.generation
+            and row.lease_owner == job.lease_owner
+            and lease_until >= now
+        )
+
+    def renew_shared_head_invalidation(
+        self,
+        job: ClaimedSharedHeadInvalidation,
+        lease_seconds: int,
+    ) -> bool:
+        """Renew only an unexpired lease for the same pending generation."""
+        now = utcnow()
+        with self.session() as session:
+            result = session.execute(
+                update(SharedHeadEpoch)
+                .where(
+                    SharedHeadEpoch.installation_id == job.installation_id,
+                    SharedHeadEpoch.repository_full_name == job.repository_full_name,
+                    SharedHeadEpoch.head_sha == job.head_sha,
+                    SharedHeadEpoch.generation == job.generation,
+                    SharedHeadEpoch.invalidated_generation < job.generation,
+                    SharedHeadEpoch.lease_owner == job.lease_owner,
+                    SharedHeadEpoch.lease_until >= now,
+                )
+                .values(lease_until=now + timedelta(seconds=lease_seconds))
+            )
+            return getattr(result, "rowcount", 0) == 1
+
+    def complete_shared_head_invalidation(
+        self,
+        job: ClaimedSharedHeadInvalidation,
+    ) -> bool:
+        """Mark the claimed generation reset only while its lease is valid."""
+        now = utcnow()
+        with self.session() as session:
+            result = session.execute(
+                update(SharedHeadEpoch)
+                .where(
+                    SharedHeadEpoch.installation_id == job.installation_id,
+                    SharedHeadEpoch.repository_full_name == job.repository_full_name,
+                    SharedHeadEpoch.head_sha == job.head_sha,
+                    SharedHeadEpoch.generation == job.generation,
+                    SharedHeadEpoch.invalidated_generation < job.generation,
+                    SharedHeadEpoch.lease_owner == job.lease_owner,
+                    SharedHeadEpoch.lease_until >= now,
+                )
+                .values(
+                    invalidated_generation=job.generation,
+                    lease_owner=None,
+                    lease_until=None,
+                    last_error=None,
+                )
+            )
+            return getattr(result, "rowcount", 0) == 1
+
+    def fail_shared_head_invalidation(
+        self,
+        job: ClaimedSharedHeadInvalidation,
+        error: str,
+        max_delay_seconds: int,
+    ) -> bool:
+        """Retry an exact-head reset indefinitely with bounded backoff."""
+        delay_seconds = max(1, min(max_delay_seconds, 2 ** min(job.attempts, 30)))
+        now = utcnow()
+        with self.session() as session:
+            result = session.execute(
+                update(SharedHeadEpoch)
+                .where(
+                    SharedHeadEpoch.installation_id == job.installation_id,
+                    SharedHeadEpoch.repository_full_name == job.repository_full_name,
+                    SharedHeadEpoch.head_sha == job.head_sha,
+                    SharedHeadEpoch.generation == job.generation,
+                    SharedHeadEpoch.invalidated_generation < job.generation,
+                    SharedHeadEpoch.lease_owner == job.lease_owner,
+                    SharedHeadEpoch.lease_until >= now,
+                )
+                .values(
+                    available_at=now + timedelta(seconds=delay_seconds),
+                    lease_owner=None,
+                    lease_until=None,
+                    last_error=error[:2000],
+                )
+            )
+            return getattr(result, "rowcount", 0) == 1
+
+    def defer_shared_head_invalidation(
+        self,
+        job: ClaimedSharedHeadInvalidation,
+        error: str,
+        delay_seconds: int,
+    ) -> bool:
+        """Release a rate-limited reset without consuming its retry budget."""
+        delay_seconds = max(1, min(delay_seconds, 86_400))
+        now = utcnow()
+        with self.session() as session:
+            result = session.execute(
+                update(SharedHeadEpoch)
+                .where(
+                    SharedHeadEpoch.installation_id == job.installation_id,
+                    SharedHeadEpoch.repository_full_name == job.repository_full_name,
+                    SharedHeadEpoch.head_sha == job.head_sha,
+                    SharedHeadEpoch.generation == job.generation,
+                    SharedHeadEpoch.invalidated_generation < job.generation,
+                    SharedHeadEpoch.lease_owner == job.lease_owner,
+                    SharedHeadEpoch.lease_until >= now,
+                )
+                .values(
+                    attempts=case(
+                        (SharedHeadEpoch.attempts > 0, SharedHeadEpoch.attempts - 1),
+                        else_=0,
+                    ),
+                    available_at=now + timedelta(seconds=delay_seconds),
+                    lease_owner=None,
+                    lease_until=None,
+                    last_error=error[:2000],
+                )
+            )
+            return getattr(result, "rowcount", 0) == 1
+
     def claim(self, owner: str, lease_seconds: int) -> ClaimedJob | None:
         """Atomically lease the oldest available job."""
         now = utcnow()
@@ -1069,6 +1779,7 @@ class QueueStore:
                     last_delivery_id=row.last_delivery_id,
                     generation=row.generation,
                     authority_generation=row.authority_generation,
+                    shared_head_generation=row.shared_head_generation,
                     attempts=row.attempts,
                     lease_owner=owner,
                 )
@@ -1369,7 +2080,27 @@ class QueueStore:
                 )
                 or 0
             )
-            return evaluations + authorities
+            shared_heads = int(
+                session.scalar(
+                    select(func.count())
+                    .select_from(SharedHeadEpoch)
+                    .where(SharedHeadEpoch.invalidated_generation < SharedHeadEpoch.generation)
+                )
+                or 0
+            )
+            return evaluations + authorities + shared_heads
+
+    def pending_shared_head_invalidation_count(self) -> int:
+        """Return exact-head generations still awaiting a durable reset."""
+        with self._sessions() as session:
+            return int(
+                session.scalar(
+                    select(func.count())
+                    .select_from(SharedHeadEpoch)
+                    .where(SharedHeadEpoch.invalidated_generation < SharedHeadEpoch.generation)
+                )
+                or 0
+            )
 
     def dead_count(self) -> int:
         """Return legacy terminal rows, which startup normally reactivates."""
@@ -1452,6 +2183,27 @@ class QueueStore:
             )
             return int(getattr(result, "rowcount", 0) or 0)
 
+    def prune_shared_head_epochs(self, older_than: datetime) -> int:
+        """Remove old head fences after every referencing job has finished."""
+        with self.session() as session:
+            referenced = exists(
+                select(EvaluationJob.id).where(
+                    EvaluationJob.installation_id == SharedHeadEpoch.installation_id,
+                    EvaluationJob.repository_full_name == SharedHeadEpoch.repository_full_name,
+                    EvaluationJob.head_sha_hint == SharedHeadEpoch.head_sha,
+                )
+            )
+            result = session.execute(
+                delete(SharedHeadEpoch).where(
+                    SharedHeadEpoch.changed_at < older_than,
+                    SharedHeadEpoch.invalidated_generation == SharedHeadEpoch.generation,
+                    SharedHeadEpoch.lease_owner.is_(None),
+                    SharedHeadEpoch.lease_until.is_(None),
+                    ~referenced,
+                )
+            )
+            return int(getattr(result, "rowcount", 0) or 0)
+
     def record_audit(
         self,
         repository_full_name: str,
@@ -1500,10 +2252,16 @@ class QueueStore:
                     select(
                         EvaluationJob.id,
                         EvaluationJob.generation,
+                        EvaluationJob.shared_head_generation,
                         EvaluationJob.lease_owner,
                         AuthorityJob.generation,
+                        SharedHeadEpoch.generation,
+                        SharedHeadEpoch.invalidated_generation,
+                        SharedHeadEpoch.lease_owner,
+                        SharedHeadEpoch.lease_until,
                         WebhookDelivery.invalidation_required,
                         WebhookDelivery.invalidation_completed_at,
+                        WebhookDelivery.shared_head_generation,
                     )
                     .select_from(EvaluationJob)
                     .join(
@@ -1512,6 +2270,16 @@ class QueueStore:
                         isouter=True,
                     )
                     .join(AuthorityJob, AuthorityJob.id == EvaluationJob.id, isouter=True)
+                    .join(
+                        SharedHeadEpoch,
+                        (SharedHeadEpoch.installation_id == EvaluationJob.installation_id)
+                        & (
+                            SharedHeadEpoch.repository_full_name
+                            == EvaluationJob.repository_full_name
+                        )
+                        & (SharedHeadEpoch.head_sha == EvaluationJob.head_sha_hint),
+                        isouter=True,
+                    )
                     .limit(1)
                 )
             return True

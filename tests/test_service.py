@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -163,6 +164,41 @@ required_labels = ["autoapprove"]
     ) -> bool:
         return bool(self.checks)
 
+    async def existing_check_run_id(
+        self,
+        installation_id: int,
+        repository: str,
+        head_sha: str,
+        check_name: str,
+    ) -> int | None:
+        return 99 if self.checks else None
+
+    async def reset_check_run(
+        self,
+        installation_id: int,
+        repository: str,
+        check_run_id: int,
+        check_name: str,
+        **values: Any,
+    ) -> None:
+        head_sha = next(
+            (
+                str(check["head_sha"])
+                for check in reversed(self.checks)
+                if isinstance(check.get("head_sha"), str)
+            ),
+            HEAD,
+        )
+        self.checks.append(
+            {
+                "repository": repository,
+                "head_sha": head_sha,
+                "name": check_name,
+                "status": "in_progress",
+                **values,
+            }
+        )
+
     async def list_commit_pulls(
         self,
         installation_id: int,
@@ -204,9 +240,25 @@ def job(store: QueueStore) -> ClaimedJob:
             head_sha_hint=HEAD,
         )
     )
+    invalidations = 0
+    while invalidation := store.claim_shared_head_invalidation("test-head-worker", 60):
+        assert store.complete_shared_head_invalidation(invalidation)
+        invalidations += 1
+    assert invalidations >= 1
     claimed = store.claim("test-worker", 60)
     assert claimed is not None
     return claimed
+
+
+def record_guard_releases(store: QueueStore, events: list[str]) -> None:
+    """Record publication-guard release order without changing lock behavior."""
+    original_release = store.release_check_write_guard
+
+    def release(guard: Any) -> None:
+        events.append("guard_released")
+        original_release(guard)
+
+    store.release_check_write_guard = release  # type: ignore[method-assign]
 
 
 @pytest.mark.asyncio
@@ -280,6 +332,472 @@ async def test_shared_head_commit_fails_closed_across_pull_requests(tmp_path: Pa
 
     assert github.checks[-1]["conclusion"] == "failure"
     assert "shared" in github.checks[-1]["text"]
+
+
+@pytest.mark.parametrize(
+    "stale_summary",
+    [
+        {"number": 4, "state": "closed", "head": {"sha": HEAD}},
+        {"number": 4, "state": "open", "head": {"sha": "c" * 40}},
+    ],
+    ids=("stale-closed", "stale-other-head"),
+)
+@pytest.mark.asyncio
+async def test_shared_head_uniqueness_fetches_current_state_for_stale_summaries(
+    tmp_path: Path,
+    stale_summary: dict[str, Any],
+) -> None:
+    github = FakeGitHub(changed_path="uv.lock")
+    github.list_commit_pulls = AsyncMock(  # type: ignore[method-assign]
+        return_value=[
+            {"number": 3, "state": "open", "head": {"sha": HEAD}},
+            stale_summary,
+        ]
+    )
+    store = migrated_store(f"sqlite:///{tmp_path / 'stale-shared-head-summary.db'}")
+
+    await EvaluationService(settings(), github, store).evaluate_job(job(store))  # type: ignore[arg-type]
+
+    assert github.checks[-1]["conclusion"] == "failure"
+    assert "shared" in github.checks[-1]["text"]
+
+
+@pytest.mark.parametrize(
+    "stale_summary",
+    [
+        {"number": 4, "state": "closed", "head": {"sha": HEAD}},
+        {"number": 4, "state": "open", "head": {"sha": "c" * 40}},
+    ],
+    ids=("stale-closed", "stale-other-head"),
+)
+@pytest.mark.asyncio
+async def test_durable_invalidation_fans_out_current_pull_despite_stale_summary(
+    tmp_path: Path,
+    stale_summary: dict[str, Any],
+) -> None:
+    github = FakeGitHub(changed_path="uv.lock")
+    github.checks.append({"status": "completed", "conclusion": "success", "head_sha": HEAD})
+    github.list_commit_pulls = AsyncMock(  # type: ignore[method-assign]
+        return_value=[
+            {"number": 3, "state": "open", "head": {"sha": HEAD}},
+            stale_summary,
+        ]
+    )
+    store = migrated_store(f"sqlite:///{tmp_path / 'stale-invalidation-summary.db'}")
+    acceptance = store.accept_delivery(
+        "stale-associated-summary",
+        "pull_request",
+        JobRequest(2, "example/project", 3, "pull_request.opened", HEAD),
+    )
+    assert acceptance.accepted is True
+    invalidation = store.claim_shared_head_invalidation("head-worker", 60)
+    assert invalidation is not None
+
+    await EvaluationService(settings(), github, store).invalidate_shared_head(  # type: ignore[arg-type]
+        invalidation,
+        asyncio.Event(),
+    )
+
+    first = store.claim("evaluation-1", 60)
+    second = store.claim("evaluation-2", 60)
+    assert first is not None and second is not None
+    assert {first.pull_number, second.pull_number} == {3, 4}
+    assert {first.shared_head_generation, second.shared_head_generation} == {
+        invalidation.generation
+    }
+
+
+@pytest.mark.asyncio
+async def test_cross_pull_trigger_fences_stale_shared_head_success(tmp_path: Path) -> None:
+    github = FakeGitHub(changed_path="uv.lock")
+    store = migrated_store(f"sqlite:///{tmp_path / 'cross-pull-fence.db'}")
+    service = EvaluationService(settings(), github, store)  # type: ignore[arg-type]
+    claimed = job(store)
+    final_read_entered = asyncio.Event()
+    allow_final_read = asyncio.Event()
+    original_get_pull = github.get_pull
+    first_pull_reads = 0
+
+    async def pause_first_pull_final_read(
+        installation_id: int,
+        repository: str,
+        number: int,
+    ) -> dict[str, Any]:
+        nonlocal first_pull_reads
+        if number == 3:
+            first_pull_reads += 1
+            if first_pull_reads == 2:
+                final_read_entered.set()
+                await allow_final_read.wait()
+        return await original_get_pull(installation_id, repository, number)
+
+    github.get_pull = pause_first_pull_final_read  # type: ignore[method-assign]
+    stale_evaluation = asyncio.create_task(service.evaluate_job(claimed))
+    await final_read_entered.wait()
+
+    second_pull_trigger = JobRequest(
+        installation_id=2,
+        repository_full_name="example/project",
+        pull_number=4,
+        reason="pull_request_review.submitted",
+        head_sha_hint=HEAD,
+    )
+    assert store.accept_delivery(
+        "second-pull-review",
+        "pull_request_review",
+        second_pull_trigger,
+    )
+    assert await service.invalidate_for_trigger(second_pull_trigger) is True
+
+    allow_final_read.set()
+    await asyncio.wait_for(stale_evaluation, timeout=1)
+
+    assert [check["status"] for check in github.checks] == [
+        "in_progress",
+        "in_progress",
+    ]
+    assert all(check.get("conclusion") is None for check in github.checks)
+    assert store.shared_head_generation(2, "example/project", HEAD) == 2
+
+
+@pytest.mark.asyncio
+async def test_cross_pull_trigger_during_completion_restores_blocking_check(
+    tmp_path: Path,
+) -> None:
+    github = FakeGitHub(changed_path="uv.lock")
+    store = migrated_store(f"sqlite:///{tmp_path / 'cross-pull-postflight.db'}")
+    service = EvaluationService(settings(), github, store)  # type: ignore[arg-type]
+    claimed = job(store)
+    original_upsert = github.upsert_check_run
+    accepted = False
+
+    async def accept_other_pull_during_completion(*args: Any, **kwargs: Any) -> int:
+        nonlocal accepted
+        result = await original_upsert(*args, **kwargs)
+        if kwargs.get("status") == "completed" and not accepted:
+            accepted = True
+            assert store.accept_delivery(
+                "other-pull-during-completion",
+                "pull_request",
+                JobRequest(
+                    installation_id=2,
+                    repository_full_name="example/project",
+                    pull_number=4,
+                    reason="pull_request.labeled",
+                    head_sha_hint=HEAD,
+                ),
+            )
+        return result
+
+    github.upsert_check_run = accept_other_pull_during_completion  # type: ignore[method-assign]
+
+    await service.evaluate_job(claimed)
+
+    assert [check["status"] for check in github.checks] == [
+        "in_progress",
+        "completed",
+        "in_progress",
+    ]
+    assert github.checks[-1].get("conclusion") is None
+
+
+@pytest.mark.asyncio
+async def test_evaluation_lease_loss_during_associated_pull_reads_blocks_completion(
+    tmp_path: Path,
+) -> None:
+    github = FakeGitHub(changed_path="uv.lock")
+    store = migrated_store(f"sqlite:///{tmp_path / 'lease-loss-associated-reads.db'}")
+    service = EvaluationService(settings(), github, store)  # type: ignore[arg-type]
+    claimed = job(store)
+    original_get_pull = github.get_pull
+    pull_reads = 0
+    replacement: ClaimedJob | None = None
+
+    async def replace_expired_claim(
+        installation_id: int,
+        repository: str,
+        number: int,
+    ) -> dict[str, Any]:
+        nonlocal pull_reads, replacement
+        pull_reads += 1
+        pull = await original_get_pull(installation_id, repository, number)
+        if pull_reads == 3:
+            assert store.renew_claim(claimed, -1)
+            replacement = store.claim("replacement-worker", 60)
+            assert replacement is not None
+        return pull
+
+    github.get_pull = replace_expired_claim  # type: ignore[method-assign]
+
+    await service.evaluate_job(claimed)
+
+    assert replacement is not None
+    assert replacement.generation == claimed.generation + 1
+    assert [check["status"] for check in github.checks] == ["in_progress"]
+    assert store.is_current_claim(claimed) is False
+
+
+@pytest.mark.asyncio
+async def test_evaluation_lease_loss_during_completion_restores_blocking_check(
+    tmp_path: Path,
+) -> None:
+    github = FakeGitHub(changed_path="uv.lock")
+    store = migrated_store(f"sqlite:///{tmp_path / 'lease-loss-postflight.db'}")
+    service = EvaluationService(settings(), github, store)  # type: ignore[arg-type]
+    claimed = job(store)
+    original_upsert = github.upsert_check_run
+    replacement: ClaimedJob | None = None
+
+    async def replace_claim_after_completion(*args: Any, **kwargs: Any) -> int:
+        nonlocal replacement
+        result = await original_upsert(*args, **kwargs)
+        if kwargs.get("status") == "completed":
+            assert store.renew_claim(claimed, -1)
+            replacement = store.claim("replacement-worker", 60)
+            assert replacement is not None
+        return result
+
+    github.upsert_check_run = replace_claim_after_completion  # type: ignore[method-assign]
+
+    await service.evaluate_job(claimed)
+
+    assert replacement is not None
+    assert [check["status"] for check in github.checks] == [
+        "in_progress",
+        "completed",
+        "in_progress",
+    ]
+    assert github.checks[-1].get("conclusion") is None
+
+
+@pytest.mark.asyncio
+async def test_applied_completed_write_error_resets_before_guard_release_and_propagates(
+    tmp_path: Path,
+) -> None:
+    github = FakeGitHub(changed_path="uv.lock")
+    store = migrated_store(f"sqlite:///{tmp_path / 'completed-write-error.db'}")
+    service = EvaluationService(settings(), github, store)  # type: ignore[arg-type]
+    claimed = job(store)
+    original_upsert = github.upsert_check_run
+    publication_error = GitHubError("response lost after completed check was applied")
+    events: list[str] = []
+    record_guard_releases(store, events)
+
+    async def apply_then_raise(*args: Any, **kwargs: Any) -> int:
+        result = await original_upsert(*args, **kwargs)
+        if kwargs.get("status") == "completed":
+            events.append("completed_applied")
+            raise publication_error
+        if "completed_applied" in events:
+            events.append("blocking_reset_applied")
+        return result
+
+    github.upsert_check_run = apply_then_raise  # type: ignore[method-assign]
+
+    with pytest.raises(GitHubError) as caught:
+        await service.evaluate_job(claimed)
+
+    assert caught.value is publication_error
+    assert [check["status"] for check in github.checks] == [
+        "in_progress",
+        "completed",
+        "in_progress",
+    ]
+    assert github.checks[-1].get("conclusion") is None
+    assert events[-4:] == [
+        "completed_applied",
+        "blocking_reset_applied",
+        "guard_released",
+        "guard_released",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_cancellation_after_completed_write_applies_resets_before_guard_release(
+    tmp_path: Path,
+) -> None:
+    github = FakeGitHub(changed_path="uv.lock")
+    store = migrated_store(f"sqlite:///{tmp_path / 'completed-write-cancel.db'}")
+    service = EvaluationService(settings(), github, store)  # type: ignore[arg-type]
+    claimed = job(store)
+    original_upsert = github.upsert_check_run
+    completed_applied = asyncio.Event()
+    never_return = asyncio.Event()
+    events: list[str] = []
+    record_guard_releases(store, events)
+
+    async def apply_then_wait(*args: Any, **kwargs: Any) -> int:
+        result = await original_upsert(*args, **kwargs)
+        if kwargs.get("status") == "completed":
+            events.append("completed_applied")
+            completed_applied.set()
+            await never_return.wait()
+        elif "completed_applied" in events:
+            events.append("blocking_reset_applied")
+        return result
+
+    github.upsert_check_run = apply_then_wait  # type: ignore[method-assign]
+    evaluation = asyncio.create_task(service.evaluate_job(claimed))
+
+    await asyncio.wait_for(completed_applied.wait(), timeout=1)
+    evaluation.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(evaluation, timeout=1)
+
+    assert evaluation.cancelled()
+    assert [check["status"] for check in github.checks] == [
+        "in_progress",
+        "completed",
+        "in_progress",
+    ]
+    assert github.checks[-1].get("conclusion") is None
+    assert events[-4:] == [
+        "completed_applied",
+        "blocking_reset_applied",
+        "guard_released",
+        "guard_released",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_postflight_database_error_restores_blocking_check_before_propagating(
+    tmp_path: Path,
+) -> None:
+    github = FakeGitHub(changed_path="uv.lock")
+    store = migrated_store(f"sqlite:///{tmp_path / 'postflight-database-error.db'}")
+    service = EvaluationService(settings(), github, store)  # type: ignore[arg-type]
+    claimed = job(store)
+    original_upsert = github.upsert_check_run
+    original_generation_check = store.shared_head_generation_is_publishable
+    completed = threading.Event()
+
+    async def observe_completion(*args: Any, **kwargs: Any) -> int:
+        result = await original_upsert(*args, **kwargs)
+        if kwargs.get("status") == "completed":
+            completed.set()
+        return result
+
+    def fail_postflight(job_to_check: ClaimedJob, head_sha: str) -> bool:
+        if completed.is_set():
+            raise RuntimeError("postflight database unavailable")
+        return original_generation_check(job_to_check, head_sha)
+
+    github.upsert_check_run = observe_completion  # type: ignore[method-assign]
+    store.shared_head_generation_is_publishable = fail_postflight  # type: ignore[assignment]
+
+    with pytest.raises(RuntimeError, match="postflight database unavailable"):
+        await service.evaluate_job(claimed)
+
+    assert [check["status"] for check in github.checks] == [
+        "in_progress",
+        "completed",
+        "in_progress",
+    ]
+    assert github.checks[-1].get("conclusion") is None
+
+
+@pytest.mark.asyncio
+async def test_cancellation_during_postflight_waits_for_shielded_blocking_reset(
+    tmp_path: Path,
+) -> None:
+    github = FakeGitHub(changed_path="uv.lock")
+    store = migrated_store(f"sqlite:///{tmp_path / 'postflight-cancellation.db'}")
+    service = EvaluationService(settings(), github, store)  # type: ignore[arg-type]
+    claimed = job(store)
+    original_upsert = github.upsert_check_run
+    original_generation_check = store.shared_head_generation_is_publishable
+    completed = threading.Event()
+    postflight_entered = threading.Event()
+    release_postflight = threading.Event()
+    reset_started = asyncio.Event()
+    release_reset = asyncio.Event()
+    events: list[str] = []
+    record_guard_releases(store, events)
+
+    async def pause_reset(*args: Any, **kwargs: Any) -> int:
+        if kwargs.get("status") == "in_progress" and completed.is_set():
+            reset_started.set()
+            await release_reset.wait()
+        result = await original_upsert(*args, **kwargs)
+        if kwargs.get("status") == "completed":
+            completed.set()
+            events.append("completed_applied")
+        elif completed.is_set():
+            events.append("blocking_reset_applied")
+        return result
+
+    def block_postflight(job_to_check: ClaimedJob, head_sha: str) -> bool:
+        if completed.is_set():
+            postflight_entered.set()
+            assert release_postflight.wait(timeout=2)
+        return original_generation_check(job_to_check, head_sha)
+
+    github.upsert_check_run = pause_reset  # type: ignore[method-assign]
+    store.shared_head_generation_is_publishable = block_postflight  # type: ignore[assignment]
+    evaluation = asyncio.create_task(service.evaluate_job(claimed))
+
+    assert await asyncio.to_thread(postflight_entered.wait, 1)
+    evaluation.cancel()
+    await asyncio.wait_for(reset_started.wait(), timeout=1)
+    evaluation.cancel()
+    await asyncio.sleep(0)
+    assert evaluation.done() is False
+
+    release_reset.set()
+    release_postflight.set()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(evaluation, timeout=1)
+
+    assert evaluation.cancelled()
+    assert [check["status"] for check in github.checks] == [
+        "in_progress",
+        "completed",
+        "in_progress",
+    ]
+    assert github.checks[-1].get("conclusion") is None
+    assert events[-4:] == [
+        "completed_applied",
+        "blocking_reset_applied",
+        "guard_released",
+        "guard_released",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_postflight_reset_failure_preserves_database_error_for_retry(
+    tmp_path: Path,
+) -> None:
+    github = FakeGitHub(changed_path="uv.lock")
+    store = migrated_store(f"sqlite:///{tmp_path / 'postflight-reset-failure.db'}")
+    service = EvaluationService(settings(), github, store)  # type: ignore[arg-type]
+    claimed = job(store)
+    original_upsert = github.upsert_check_run
+    original_generation_check = store.shared_head_generation_is_publishable
+    completed = threading.Event()
+
+    async def fail_reset(*args: Any, **kwargs: Any) -> int:
+        if kwargs.get("status") == "in_progress" and completed.is_set():
+            raise GitHubError("blocking reset unavailable")
+        result = await original_upsert(*args, **kwargs)
+        if kwargs.get("status") == "completed":
+            completed.set()
+        return result
+
+    def fail_postflight(job_to_check: ClaimedJob, head_sha: str) -> bool:
+        if completed.is_set():
+            raise RuntimeError("postflight database unavailable")
+        return original_generation_check(job_to_check, head_sha)
+
+    github.upsert_check_run = fail_reset  # type: ignore[method-assign]
+    store.shared_head_generation_is_publishable = fail_postflight  # type: ignore[assignment]
+
+    with pytest.raises(RuntimeError, match="postflight database unavailable"):
+        await service.evaluate_job(claimed)
+
+    assert [check["status"] for check in github.checks] == [
+        "in_progress",
+        "completed",
+    ]
 
 
 @pytest.mark.asyncio
@@ -463,6 +981,38 @@ async def test_app_metadata_mismatch_does_not_authorize_bot(tmp_path: Path) -> N
 
 
 @pytest.mark.asyncio
+async def test_stale_head_hint_requeues_live_head_and_stales_shared_claim(
+    tmp_path: Path,
+) -> None:
+    github = FakeGitHub(changed_path="uv.lock")
+    original = github.get_pull
+
+    async def current_pull(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        pull = await original(*args, **kwargs)
+        pull["head"] = {"sha": "c" * 40}
+        return pull
+
+    github.get_pull = current_pull  # type: ignore[method-assign]
+    store = migrated_store(f"sqlite:///{tmp_path / 'stale-head.db'}")
+    assert store.accept_delivery(
+        "other-current-head",
+        "pull_request",
+        JobRequest(2, "example/project", 4, "pull_request.opened", "c" * 40),
+    )
+    prior_current_head_claim = store.claim("other-worker", 60)
+    assert prior_current_head_claim is not None
+    store.complete(prior_current_head_claim, prior_current_head_claim.lease_owner)
+    claimed = job(store)
+
+    await EvaluationService(settings(), github, store).evaluate_job(claimed)  # type: ignore[arg-type]
+
+    assert github.checks == []
+    assert store.pending_count() == 2
+    assert store.shared_head_generation(2, "example/project", "c" * 40) == 2
+    assert store.shared_head_generation_is_current(prior_current_head_claim, "c" * 40) is False
+
+
+@pytest.mark.asyncio
 async def test_revision_change_during_evaluation_is_requeued_without_stale_check(
     tmp_path: Path,
 ) -> None:
@@ -480,11 +1030,22 @@ async def test_revision_change_during_evaluation_is_requeued_without_stale_check
 
     github.get_pull = changing_pull  # type: ignore[method-assign]
     store = migrated_store(f"sqlite:///{tmp_path / 'audit.db'}")
+    assert store.accept_delivery(
+        "other-current-head",
+        "pull_request",
+        JobRequest(2, "example/project", 4, "pull_request.opened", "c" * 40),
+    )
+    prior_current_head_claim = store.claim("other-worker", 60)
+    assert prior_current_head_claim is not None
+    store.complete(prior_current_head_claim, prior_current_head_claim.lease_owner)
+    claimed = job(store)
 
-    await EvaluationService(settings(), github, store).evaluate_job(job(store))  # type: ignore[arg-type]
+    await EvaluationService(settings(), github, store).evaluate_job(claimed)  # type: ignore[arg-type]
 
     assert [check["status"] for check in github.checks] == ["in_progress"]
-    assert store.pending_count() == 1
+    assert store.pending_count() == 2
+    assert store.shared_head_generation(2, "example/project", "c" * 40) == 2
+    assert store.shared_head_generation_is_current(prior_current_head_claim, "c" * 40) is False
 
 
 @pytest.mark.asyncio
@@ -505,11 +1066,26 @@ async def test_label_change_during_evaluation_is_requeued_without_stale_check(
 
     github.get_pull = changing_pull  # type: ignore[method-assign]
     store = migrated_store(f"sqlite:///{tmp_path / 'audit.db'}")
+    assert store.accept_delivery(
+        "other-same-head",
+        "pull_request",
+        JobRequest(2, "example/project", 4, "pull_request.opened", HEAD),
+    )
+    prior_same_head_claim = store.claim("other-worker", 60)
+    assert prior_same_head_claim is not None
+    store.complete(prior_same_head_claim, prior_same_head_claim.lease_owner)
+    initial_invalidation = store.claim_shared_head_invalidation("head-worker", 60)
+    assert initial_invalidation is not None
+    assert store.complete_shared_head_invalidation(initial_invalidation)
+    claimed = job(store)
 
-    await EvaluationService(settings(), github, store).evaluate_job(job(store))  # type: ignore[arg-type]
+    await EvaluationService(settings(), github, store).evaluate_job(claimed)  # type: ignore[arg-type]
 
     assert [check["status"] for check in github.checks] == ["in_progress"]
-    assert store.pending_count() == 1
+    assert store.pending_count() == 2
+    assert store.shared_head_generation(2, "example/project", HEAD) == 3
+    assert store.shared_head_generation_is_current(prior_same_head_claim, HEAD) is False
+    assert store.shared_head_generation_is_current(claimed, HEAD) is False
 
 
 @pytest.mark.asyncio
@@ -608,16 +1184,15 @@ async def test_revocation_is_ordered_after_inflight_stale_completion(tmp_path: P
     allow_completion.set()
     await asyncio.wait_for(evaluation, timeout=1)
     assert await revocation is True
-    # The webhook path adds one post-PATCH generation to fence any worker
-    # that completed immediately before revocation.
-    store.enqueue(trigger)
+    # The known-head enqueue already created a durable invalidation generation
+    # before the fast reset waited for the in-flight check write.
     store.complete(claimed, claimed.lease_owner)
 
     statuses = [check["status"] for check in github.checks]
     assert statuses[:2] == ["in_progress", "completed"]
     assert statuses[-1] == "in_progress"
     assert set(statuses[2:]) == {"in_progress"}
-    assert store.pending_count() == 1
+    assert store.pending_count() == 2
 
 
 @pytest.mark.asyncio
@@ -747,6 +1322,13 @@ async def test_authority_work_preempts_evaluations_and_fans_out_open_pulls(
     second = store.claim("observer", 60)
     assert first is not None and second is not None
     assert {first.pull_number, second.pull_number} == {3, 4}
+    fanout = first if first.pull_number == 4 else second
+    assert fanout.head_sha_hint == "c" * 40
+    assert fanout.shared_head_generation == 1
+    assert store.shared_head_generation(2, "example/project", "c" * 40) == 1
+    assert store.pending_shared_head_invalidation_count() == 1
+    assert store.shared_head_generation_is_current(fanout, "c" * 40) is True
+    assert store.shared_head_generation_is_publishable(fanout, "c" * 40) is False
 
 
 @pytest.mark.asyncio
@@ -790,7 +1372,7 @@ async def test_authority_ingress_is_serialized_against_check_publication(
     github = FakeGitHub(changed_path="uv.lock")
     store = migrated_store(f"sqlite:///{tmp_path / 'authority-publish.db'}")
     original_upsert = github.upsert_check_run
-    acceptance: asyncio.Task[bool] | None = None
+    acceptance: asyncio.Task[Any] | None = None
 
     async def accept_during_completion(
         installation_id: int,
@@ -830,7 +1412,7 @@ async def test_authority_ingress_is_serialized_against_check_publication(
     await EvaluationService(settings(), github, store).evaluate_job(job(store))  # type: ignore[arg-type]
 
     assert acceptance is not None
-    assert await acceptance is True
+    assert (await acceptance).accepted is True
     assert [check["status"] for check in github.checks] == ["in_progress", "completed"]
     assert github.checks[-1].get("conclusion") == "success"
     assert store.pending_count() == 2
@@ -909,7 +1491,9 @@ async def test_authority_rate_limit_defers_after_bounded_batch_and_keeps_fanout(
 
     await worker._process_authority(claimed)
 
-    assert store.pending_count() == 3
+    assert store.pending_count() == 5
+    assert store.shared_head_generation(2, "example/project", "c" * 40) == 1
+    assert store.shared_head_generation(2, "example/project", "d" * 40) == 1
     assert store.dead_count() == 0
     assert store.claim("observer", 60) is None
     assert store.claim_authority("observer", 60) is None
@@ -1128,9 +1712,11 @@ async def test_reconciler_enqueues_open_pull_requests(tmp_path: Path) -> None:
     queued = await reconciler.reconcile_once()
 
     assert queued == 1
-    assert store.pending_count() == 1
+    assert store.pending_count() == 2
+    assert store.shared_head_generation(2, "example/project", HEAD) == 1
 
     assert await reconciler.reconcile_once() == 0
+    assert store.shared_head_generation(2, "example/project", HEAD) == 1
 
 
 @pytest.mark.asyncio
@@ -1162,6 +1748,10 @@ async def test_reconciler_recovers_missed_shared_head_open_and_fails_closed(
     service = EvaluationService(settings(), github, store)  # type: ignore[arg-type]
 
     assert await reconciler.reconcile_once() == 2
+    invalidation = store.claim_shared_head_invalidation("head-worker", 60)
+    assert invalidation is not None
+    await service.invalidate_shared_head(invalidation, asyncio.Event())
+    assert store.complete_shared_head_invalidation(invalidation)
     for _ in range(2):
         claimed = store.claim("worker", 60)
         assert claimed is not None
@@ -1169,9 +1759,10 @@ async def test_reconciler_recovers_missed_shared_head_open_and_fails_closed(
         store.complete(claimed, claimed.lease_owner)
 
     published = [check for check in github.checks[1:] if check.get("status") == "completed"]
-    assert len(published) == 2
+    assert published
     assert all(check.get("conclusion") == "failure" for check in published)
     assert all("shared" in str(check.get("text")) for check in published)
+    assert store.shared_head_generation(2, "example/project", HEAD) == 2
     assert store.pending_count() == 0
 
 

@@ -53,8 +53,9 @@ The Extra CODEOWNERS result is a Check Run on the head commit. Its input,
 however, belongs to one pull request: base commit, paths, labels, and reviews.
 That scope mismatch is the project's main unresolved platform constraint. A
 new pull request can briefly inherit a success already attached to the same
-commit. Current shared-head detection and event-driven invalidation reduce the
-window but do not remove it.
+commit. Shared-head detection, a durable generation across pull requests, and
+event-driven invalidation reduce the window but do not remove it before the
+service accepts the relevant event.
 
 ## How repository rules compose
 

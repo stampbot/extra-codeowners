@@ -135,7 +135,11 @@ def test_supported_pull_request_events_map_to_exact_job(
             "action": action,
             "installation": {"id": installation_id},
             "repository": {"full_name": "Example/Project"},
-            "pull_request": {"number": pull_number, "head": {"sha": "synthetic-head"}},
+            "pull_request": {
+                "number": pull_number,
+                "state": "closed" if action == "closed" else "open",
+                "head": {"sha": "a" * 40},
+            },
         },
     )
 
@@ -146,7 +150,7 @@ def test_supported_pull_request_events_map_to_exact_job(
     assert job.repository_full_name == "example/project"
     assert job.pull_number == pull_number
     assert job.reason == f"pull_request.{action}"
-    assert job.head_sha_hint == "synthetic-head"
+    assert job.head_sha_hint == "a" * 40
 
 
 @pytest.mark.property

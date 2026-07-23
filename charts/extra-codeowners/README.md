@@ -416,6 +416,66 @@ Complete the
 `migrations.enabled: true` unless a separate controlled process has
 already applied the exact target head.
 
+> **Warning**
+>
+> The pre-upgrade hook runs before Helm applies the `Recreate` Deployment
+> change. It does not stop the old pods. Before an upgrade from
+> `0002_retry_dead_jobs` to `0003_shared_head_epochs`, stop public webhook
+> routing and suspend any GitOps controller for this release. Delete the
+> HorizontalPodAutoscaler before you scale the existing Deployment to zero;
+> either controller could otherwise recreate an old worker. Prove that no
+> application pod remains, wait both the configured worker lease period and
+> `max(300, 2 * EXTRA_CODEOWNERS_RECONCILE_INTERVAL_SECONDS)`, and only then
+> run `helm upgrade`. Follow the
+> [controller-safe drain procedure][upgrade]. Start only the target image after
+> the migration. After readiness, independently inventory accessible open pull
+> requests before restoring ingress. Reconciliation output is advisory, so
+> retain native enforcement for any current check you did not verify.
+
+Keep GitOps suspended and save the complete reviewed target settings, including
+the final autoscaling configuration, in `target-values.yaml`. The first target
+upgrade must force autoscaling off:
+
+```bash
+helm upgrade extra-codeowners \
+  "$CHART_SOURCE/charts/extra-codeowners" \
+  --namespace extra-codeowners \
+  --reset-values \
+  --values target-values.yaml \
+  --set-string image.repository="$IMAGE_REPOSITORY" \
+  --set-string image.digest="$IMAGE_DIGEST" \
+  --set autoscaling.enabled=false \
+  --set replicaCount=1 \
+  --wait \
+  --timeout=5m
+```
+
+After the migration Job logs
+`Database is at migration 0003_shared_head_epochs.`, the target Deployment
+completes its rollout, and its single pod passes health checks, apply the
+reviewed final autoscaling settings in a separate update. Preserve the first
+migration Job log before you continue: the second hook's
+`before-hook-creation` policy deletes that Job and its cluster logs. The
+[upgrade runbook][upgrade] gives the evidence-capture commands.
+
+```bash
+helm upgrade extra-codeowners \
+  "$CHART_SOURCE/charts/extra-codeowners" \
+  --namespace extra-codeowners \
+  --reset-values \
+  --values target-values.yaml \
+  --set-string image.repository="$IMAGE_REPOSITORY" \
+  --set-string image.digest="$IMAGE_DIGEST" \
+  --wait \
+  --timeout=5m
+```
+
+The second update runs the migration hook again. The target migrator takes the
+advisory lock, observes the exact current head, and exits without changing the
+schema. Verify that the HPA exists when the reviewed values enable autoscaling
+and is absent when they disable it. Resume GitOps or webhook ingress only after
+the final Deployment and autoscaling state match those values.
+
 Migration defaults are:
 
 - a 60-second PostgreSQL advisory-lock wait
@@ -427,14 +487,18 @@ The target migration Job stops Helm before the Deployment changes if it fails.
 Use migration-only Secret, environment, volume, and mount values for database
 authentication or CA material. Never attach runtime App credentials.
 
-The default `Recreate` strategy avoids overlap between old and new
-application pods, but webhook processing pauses briefly. GitHub does not
-automatically redeliver failed deliveries. Inspect and redeliver them after
-readiness returns, then confirm reconciliation converges every open pull
-request.
+The default `Recreate` strategy avoids overlap between old and new application
+pods after the migration hook. It does not satisfy a migration ledger that
+requires old workers to stop before migration. Neither `Recreate` nor a
+Deployment replica count overrides an active HPA or GitOps controller. Webhook
+processing pauses briefly. GitHub does not automatically redeliver failed
+deliveries. Inspect and redeliver them after readiness returns. Independently
+verify accessible open pull requests before restoring ingress; the current
+reconciliation completion output is not coverage proof.
 
-Before a future upgrade, obtain and verify the next supported image, record its
-platform digest, and use the chart from the matching reviewed release:
+For an upgrade without a ledger-specific drain, obtain and verify the next
+supported image, record its platform digest, and use the chart from the
+matching reviewed release:
 
 ```bash
 helm upgrade extra-codeowners \
