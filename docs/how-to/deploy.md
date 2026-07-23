@@ -21,8 +21,11 @@ The main-branch publication job has been removed. Tagged publication is also
 stopped before any job with package, signing, attestation, or release
 authority can run.
 
-Four open issues define the remaining release work:
+Six open issues in the **First supported release** milestone define the
+remaining boundary:
 
+- [#1](https://github.com/stampbot/extra-codeowners/issues/1) proves the live
+  Check Run invalidation and GitHub App review contracts.
 - [#18](https://github.com/stampbot/extra-codeowners/issues/18) expands native
   wheel and embedded software bill of materials (SBOM) components into the
   notice, license, and corresponding-source evidence delivered to recipients.
@@ -35,6 +38,8 @@ Four open issues define the remaining release work:
 - [#25](https://github.com/stampbot/extra-codeowners/issues/25) makes the first
   GitHub release draft-first and immutable after its complete artifact set is
   verified.
+- [#30](https://github.com/stampbot/extra-codeowners/issues/30) decides the
+  disposition of the old pre-compliance public preview images.
 
 Current continuous integration (CI) builds the Python distribution twice on
 each native architecture. It selects one byte-identical five-file proof across
@@ -56,10 +61,14 @@ the wheel or source-distribution archives.
 
 The tagged workflow defines a privileged consumer for the same pair, but the
 unconditional publication blocker keeps it unreachable. That job would retain
-the three selection records separately from the signed distributions. The
-GitHub release job does not consume those records, so
-[#32](https://github.com/stampbot/extra-codeowners/issues/32) still tracks the
-rest of the release handoff.
+the three selection records separately from the signed distributions.
+
+A second blocked, read-only job would revalidate the raw pair and build a
+[15-file candidate inventory](../reference/release-asset-candidate-format.md)
+that includes each record directly. Its candidate record says source
+completeness and publication are false. The GitHub release job does not consume
+it, so [#32](https://github.com/stampbot/extra-codeowners/issues/32) still
+tracks the durable publication handoff.
 
 Do not replace this proof with a generic ZIP extraction, an unverified wheel,
 empty Docker build arguments, or a project build that relies on ambient
@@ -345,8 +354,8 @@ don't jump to a mutable default-branch copy.
 
 ## Planned release artifacts
 
-After issues #18, #25, #28, and #32 close and the evidence path passes review,
-the intended semantic-version release contains:
+After the **First supported release** milestone has no open issues and the
+evidence path passes review, the intended semantic-version release contains:
 
 - a signed multi-architecture image at
   `ghcr.io/stampbot/extra-codeowners:VERSION`
