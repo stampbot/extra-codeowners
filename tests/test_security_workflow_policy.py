@@ -77,6 +77,23 @@ def _workflow_jobs(source: str) -> dict[str, str]:
     }
 
 
+def _job_permissions(job: str) -> dict[str, str]:
+    """Return one job's exact GITHUB_TOKEN permission mapping."""
+    marker = "    permissions:\n"
+    _, separator, tail = job.partition(marker)
+    assert separator, "job has no permissions mapping"
+    permissions: dict[str, str] = {}
+    for line in tail.splitlines():
+        match = re.fullmatch(r"      (?P<scope>[a-z-]+): (?P<access>read|write|none)", line)
+        if match is None:
+            break
+        scope = match.group("scope")
+        assert scope not in permissions, f"duplicate permission scope: {scope}"
+        permissions[scope] = match.group("access")
+    assert permissions, "job has an empty permissions mapping"
+    return permissions
+
+
 def _named_step(job: str, name: str) -> str:
     """Return one named step body from a top-level job body."""
     marker = f"      - name: {name}\n"
@@ -112,16 +129,29 @@ def test_security_workflows_do_not_expose_secrets_or_broad_write_permissions(
     assert "environment:" not in source
     assert "permissions:\n  contents: read" in source
 
-    if workflow_name == "codeql.yml":
-        assert source.count("security-events: write") == 1
-        pull_request_job = _job_block(source, "analyze", "analyze-trusted")
-        trusted_job = _job_block(source, "analyze-trusted")
-        assert "if: github.event_name == 'pull_request'" in pull_request_job
-        assert "security-events: write" not in pull_request_job
-        assert "if: github.event_name != 'pull_request'" in trusted_job
-        assert "security-events: write" in trusted_job
-    else:
+    if workflow_name != "codeql.yml":
         assert "security-events: write" not in source
+
+
+def test_codeql_jobs_request_only_source_reads_and_result_upload() -> None:
+    source = (WORKFLOWS / "codeql.yml").read_text(encoding="utf-8")
+    jobs = _workflow_jobs(source)
+    expected_permissions = {
+        "actions": "read",
+        "contents": "read",
+        "security-events": "write",
+    }
+
+    assert set(jobs) == {"analyze", "analyze-trusted"}
+    assert "if: github.event_name == 'pull_request'" in jobs["analyze"]
+    assert "if: github.event_name != 'pull_request'" in jobs["analyze-trusted"]
+    assert _job_permissions(jobs["analyze"]) == expected_permissions
+    assert _job_permissions(jobs["analyze-trusted"]) == expected_permissions
+    assert source.count("security-events: write") == 2
+    assert re.findall(r"(?m)^      ([a-z-]+): write$", source) == [
+        "security-events",
+        "security-events",
+    ]
 
 
 @pytest.mark.parametrize("workflow_name", SECURITY_WORKFLOWS)
