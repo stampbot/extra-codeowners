@@ -5,16 +5,37 @@ on:
     outputs:
       artifact-id:
         description: Immutable GitHub Actions ID of the selected five-file proof
-        value: ${{ jobs.select.outputs.artifact-id }}
+        value: ${{ jobs.raw-consumer.outputs.artifact-id }}
       artifact-digest:
         description: Provider SHA-256 digest of the selected proof artifact
-        value: ${{ jobs.select.outputs.artifact-digest }}
+        value: ${{ jobs.raw-consumer.outputs.artifact-digest }}
+      spine-artifact-id:
+        description: Immutable ID of the raw five-file distribution spine
+        value: ${{ jobs.raw-consumer.outputs.spine-artifact-id }}
+      spine-artifact-digest:
+        description: Provider SHA-256 of the raw five-file distribution spine
+        value: ${{ jobs.raw-consumer.outputs.spine-artifact-digest }}
+      record-artifact-id:
+        description: Immutable ID of the canonical distribution-spine record
+        value: ${{ jobs.raw-consumer.outputs.record-artifact-id }}
+      record-artifact-digest:
+        description: Provider SHA-256 of the canonical distribution-spine record
+        value: ${{ jobs.raw-consumer.outputs.record-artifact-digest }}
+      producer-run-attempt:
+        description: Run attempt that created the raw artifacts
+        value: ${{ jobs.raw-consumer.outputs.producer-run-attempt }}
+      workflow-ref:
+        description: Reusable workflow ref bound into the raw record
+        value: ${{ jobs.raw-consumer.outputs.workflow-ref }}
+      workflow-sha:
+        description: Reusable workflow commit bound into the raw record
+        value: ${{ jobs.raw-consumer.outputs.workflow-sha }}
       wheel-sha256:
         description: SHA-256 of the selected application wheel
-        value: ${{ jobs.select.outputs.wheel-sha256 }}
+        value: ${{ jobs.raw-consumer.outputs.wheel-sha256 }}
       selection-record-sha256:
         description: SHA-256 of the cross-architecture selection record
-        value: ${{ jobs.select.outputs.selection-record-sha256 }}
+        value: ${{ jobs.raw-consumer.outputs.selection-record-sha256 }}
   workflow_dispatch:
 
 concurrency:
@@ -157,3 +178,213 @@ jobs:
           compression-level: 0
           if-no-files-found: error
           retention-days: 5
+
+  raw-producer:
+    name: Build raw Python distribution spine
+    needs: select
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      record-artifact-id: ${{ steps.upload-record.outputs.artifact-id }}
+      record-artifact-digest: ${{ steps.upload-record.outputs.artifact-digest }}
+      run-attempt: ${{ steps.build.outputs.run-attempt }}
+      spine-artifact-id: ${{ steps.upload-spine.outputs.artifact-id }}
+      spine-artifact-digest: ${{ steps.upload-spine.outputs.artifact-digest }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Set up transport Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.14.6"
+
+      - name: Download selected distribution by immutable ID
+        id: selected
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.select.outputs.artifact-id }}
+          path: ${{ runner.temp }}/selected-python-download
+          digest-mismatch: error
+
+      - name: Build bounded raw distribution artifacts
+        id: build
+        env:
+          JOB_WORKFLOW_REF: >-
+            ${{ fromJSON(toJSON(job)).workflow_ref || github.workflow_ref }}
+          JOB_WORKFLOW_SHA: >-
+            ${{ fromJSON(toJSON(job)).workflow_sha || github.workflow_sha }}
+          REPOSITORY_ID: ${{ github.repository_id }}
+          REPOSITORY_NAME: ${{ github.repository }}
+          SELECTED_ARTIFACT_DIGEST: ${{ needs.select.outputs.artifact-digest }}
+          SELECTED_ARTIFACT_ID: ${{ needs.select.outputs.artifact-id }}
+          SELECTED_DIRECTORY: ${{ steps.selected.outputs.download-path }}
+          SELECTION_RECORD_SHA256: ${{ needs.select.outputs.selection-record-sha256 }}
+          WHEEL_SHA256: ${{ needs.select.outputs.wheel-sha256 }}
+        run: |
+          set -euo pipefail
+          output="${RUNNER_TEMP}/python-distribution-spine"
+          install --directory --mode=0700 "$output"
+          basename="extra-codeowners-python-${GITHUB_SHA}-artifact-${SELECTED_ARTIFACT_ID}"
+          basename="${basename}-attempt-${GITHUB_RUN_ATTEMPT}"
+          spine_path="${output}/${basename}.bin"
+          record_path="${output}/${basename}.spine.json"
+          python .github/scripts/build_python_distribution_spine.py \
+            --directory "$SELECTED_DIRECTORY" \
+            --spine-output "$spine_path" \
+            --record-output "$record_path" \
+            --repository-id "$REPOSITORY_ID" \
+            --repository-name "$REPOSITORY_NAME" \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --source-revision "$GITHUB_SHA" \
+            --workflow-path .github/workflows/python-distribution.yml \
+            --workflow-ref "$JOB_WORKFLOW_REF" \
+            --workflow-sha "$JOB_WORKFLOW_SHA" \
+            --selected-artifact-id "$SELECTED_ARTIFACT_ID" \
+            --selected-artifact-sha256 "$SELECTED_ARTIFACT_DIGEST" \
+            --wheel-sha256 "$WHEEL_SHA256" \
+            --selection-record-sha256 "$SELECTION_RECORD_SHA256"
+          {
+            printf 'spine-path=%s\n' "$spine_path"
+            printf 'record-path=%s\n' "$record_path"
+            printf 'run-attempt=%s\n' "$GITHUB_RUN_ATTEMPT"
+          } >>"$GITHUB_OUTPUT"
+
+      - name: Upload raw distribution spine
+        id: upload-spine
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          path: ${{ steps.build.outputs.spine-path }}
+          archive: false
+          if-no-files-found: error
+          retention-days: 5
+
+      - name: Upload raw distribution record
+        id: upload-record
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          path: ${{ steps.build.outputs.record-path }}
+          archive: false
+          if-no-files-found: error
+          retention-days: 5
+
+  raw-consumer:
+    name: Verify raw Python distribution transport
+    needs:
+      - select
+      - raw-producer
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      artifact-id: ${{ steps.verify.outputs.artifact-id }}
+      artifact-digest: ${{ steps.verify.outputs.artifact-digest }}
+      record-artifact-id: ${{ steps.verify.outputs.record-artifact-id }}
+      record-artifact-digest: ${{ steps.verify.outputs.record-artifact-digest }}
+      producer-run-attempt: ${{ steps.verify.outputs.producer-run-attempt }}
+      spine-artifact-id: ${{ steps.verify.outputs.spine-artifact-id }}
+      spine-artifact-digest: ${{ steps.verify.outputs.spine-artifact-digest }}
+      wheel-sha256: ${{ steps.verify.outputs.wheel-sha256 }}
+      selection-record-sha256: ${{ steps.verify.outputs.selection-record-sha256 }}
+      workflow-ref: ${{ steps.verify.outputs.workflow-ref }}
+      workflow-sha: ${{ steps.verify.outputs.workflow-sha }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Set up transport Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.14.6"
+
+      - name: Download raw distribution spine by immutable ID
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.raw-producer.outputs.spine-artifact-id }}
+          path: ${{ runner.temp }}/downloaded-python-spine
+          skip-decompress: true
+          digest-mismatch: error
+
+      - name: Download raw distribution record by immutable ID
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.raw-producer.outputs.record-artifact-id }}
+          path: ${{ runner.temp }}/downloaded-python-record
+          skip-decompress: true
+          digest-mismatch: error
+
+      - name: Verify bounded raw distribution transport
+        id: verify
+        env:
+          JOB_WORKFLOW_REF: >-
+            ${{ fromJSON(toJSON(job)).workflow_ref || github.workflow_ref }}
+          JOB_WORKFLOW_SHA: >-
+            ${{ fromJSON(toJSON(job)).workflow_sha || github.workflow_sha }}
+          PRODUCER_RUN_ATTEMPT: ${{ needs.raw-producer.outputs.run-attempt }}
+          RECORD_ARTIFACT_DIGEST: ${{ needs.raw-producer.outputs.record-artifact-digest }}
+          RECORD_ARTIFACT_ID: ${{ needs.raw-producer.outputs.record-artifact-id }}
+          REPOSITORY_ID: ${{ github.repository_id }}
+          REPOSITORY_NAME: ${{ github.repository }}
+          SELECTED_ARTIFACT_DIGEST: ${{ needs.select.outputs.artifact-digest }}
+          SELECTED_ARTIFACT_ID: ${{ needs.select.outputs.artifact-id }}
+          SELECTION_RECORD_SHA256: ${{ needs.select.outputs.selection-record-sha256 }}
+          SPINE_ARTIFACT_DIGEST: ${{ needs.raw-producer.outputs.spine-artifact-digest }}
+          SPINE_ARTIFACT_ID: ${{ needs.raw-producer.outputs.spine-artifact-id }}
+          WHEEL_SHA256: ${{ needs.select.outputs.wheel-sha256 }}
+        run: |
+          set -euo pipefail
+          basename="extra-codeowners-python-${GITHUB_SHA}-artifact-${SELECTED_ARTIFACT_ID}"
+          basename="${basename}-attempt-${PRODUCER_RUN_ATTEMPT}"
+          python .github/scripts/python_distribution_spine.py verify \
+            --record "${RUNNER_TEMP}/downloaded-python-record/${basename}.spine.json" \
+            --spine "${RUNNER_TEMP}/downloaded-python-spine/${basename}.bin" \
+            --record-artifact-sha256 "$RECORD_ARTIFACT_DIGEST" \
+            --spine-artifact-sha256 "$SPINE_ARTIFACT_DIGEST" \
+            --repository-id "$REPOSITORY_ID" \
+            --repository-name "$REPOSITORY_NAME" \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$PRODUCER_RUN_ATTEMPT" \
+            --source-revision "$GITHUB_SHA" \
+            --workflow-path .github/workflows/python-distribution.yml \
+            --workflow-ref "$JOB_WORKFLOW_REF" \
+            --workflow-sha "$JOB_WORKFLOW_SHA" \
+            --selected-artifact-id "$SELECTED_ARTIFACT_ID" \
+            --selected-artifact-sha256 "$SELECTED_ARTIFACT_DIGEST" \
+            --wheel-sha256 "$WHEEL_SHA256" \
+            --selection-record-sha256 "$SELECTION_RECORD_SHA256"
+          for artifact_id in \
+            "$SELECTED_ARTIFACT_ID" "$RECORD_ARTIFACT_ID" "$SPINE_ARTIFACT_ID"; do
+            if ! [[ "$artifact_id" =~ ^[1-9][0-9]*$ ]]; then
+              echo "Raw distribution transport returned an invalid artifact ID." >&2
+              exit 1
+            fi
+          done
+          if ! [[ "$PRODUCER_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]; then
+            echo "Raw distribution transport returned an invalid run attempt." >&2
+            exit 1
+          fi
+          for digest in \
+            "$SELECTED_ARTIFACT_DIGEST" "$RECORD_ARTIFACT_DIGEST" \
+            "$SPINE_ARTIFACT_DIGEST" "$WHEEL_SHA256" "$SELECTION_RECORD_SHA256"; do
+            if ! [[ "$digest" =~ ^[0-9a-f]{64}$ ]]; then
+              echo "Raw distribution transport returned an invalid digest." >&2
+              exit 1
+            fi
+          done
+          {
+            printf 'artifact-id=%s\n' "$SELECTED_ARTIFACT_ID"
+            printf 'artifact-digest=%s\n' "$SELECTED_ARTIFACT_DIGEST"
+            printf 'record-artifact-id=%s\n' "$RECORD_ARTIFACT_ID"
+            printf 'record-artifact-digest=%s\n' "$RECORD_ARTIFACT_DIGEST"
+            printf 'producer-run-attempt=%s\n' "$PRODUCER_RUN_ATTEMPT"
+            printf 'spine-artifact-id=%s\n' "$SPINE_ARTIFACT_ID"
+            printf 'spine-artifact-digest=%s\n' "$SPINE_ARTIFACT_DIGEST"
+            printf 'wheel-sha256=%s\n' "$WHEEL_SHA256"
+            printf 'selection-record-sha256=%s\n' "$SELECTION_RECORD_SHA256"
+            printf 'workflow-ref=%s\n' "$JOB_WORKFLOW_REF"
+            printf 'workflow-sha=%s\n' "$JOB_WORKFLOW_SHA"
+          } >>"$GITHUB_OUTPUT"
