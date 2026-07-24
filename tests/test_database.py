@@ -7,7 +7,6 @@ import pytest
 from sqlalchemy import Table, create_engine, inspect, select, text, update
 from sqlalchemy.exc import IntegrityError
 
-import extra_codeowners.database as database_module
 from extra_codeowners.database import (
     AuthorityJob,
     AuthorityRequest,
@@ -17,6 +16,7 @@ from extra_codeowners.database import (
     SchemaMetadata,
     ServiceLease,
     SharedHeadEpoch,
+    _normalize_schema_expression,
     isolated_postgresql_connect_args,
     utcnow,
     validate_database_schema,
@@ -78,18 +78,18 @@ def test_schema_contract_rejects_same_named_index_with_wrong_definition(
 
 
 def test_schema_expression_contract_handles_only_equivalent_parentheses() -> None:
-    expected = database_module._normalize_schema_expression(
+    expected = _normalize_schema_expression(
         "invalidated_generation >= 0 AND invalidated_generation <= generation"
     )
 
-    assert expected == database_module._normalize_schema_expression(
+    assert expected == _normalize_schema_expression(
         "((invalidated_generation >= 0) AND (invalidated_generation <= generation))"
     )
-    assert expected != database_module._normalize_schema_expression(
+    assert expected != _normalize_schema_expression(
         "invalidated_generation >= 0 AND invalidated_generation < generation"
     )
     with pytest.raises(RuntimeError, match="unsupported SQL"):
-        database_module._normalize_schema_expression(
+        _normalize_schema_expression(
             "invalidated_generation >= 0 OR invalidated_generation <= generation"
         )
 

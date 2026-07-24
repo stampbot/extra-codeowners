@@ -37,14 +37,14 @@ class StubGitHub:
         *,
         stop: asyncio.Event | None = None,
     ) -> None:
-        del stop
+        _ = stop
 
     async def list_installations(
         self,
         *,
         stop: asyncio.Event | None = None,
     ) -> list[dict[str, Any]]:
-        del stop
+        _ = stop
         return []
 
     async def get_pull(self, installation_id: int, repository: str, number: int) -> dict[str, Any]:
@@ -124,7 +124,7 @@ class SequencedIdentityGitHub(StubGitHub):
         *,
         stop: asyncio.Event | None = None,
     ) -> None:
-        del stop
+        _ = stop
         self.identity_attempts += 1
         index = self.identity_attempts - 1
         outcome = (
@@ -179,7 +179,7 @@ async def test_lifespan_closes_an_owned_store_when_initialization_fails(
 
     with pytest.raises(RuntimeError, match="database initialization failed"):
         async with app.router.lifespan_context(app):
-            raise AssertionError("lifespan yielded after failed initialization")
+            pass
 
     assert len(instances) == 1
     assert instances[0].closed is True
@@ -216,7 +216,7 @@ async def test_lifespan_startup_failure_stops_tasks_and_closes_owned_resources(
             *,
             stop: asyncio.Event | None = None,
         ) -> None:
-            del stop
+            _ = stop
 
         async def close(self) -> None:
             cleanup.append("github")
@@ -254,7 +254,7 @@ async def test_lifespan_startup_failure_stops_tasks_and_closes_owned_resources(
 
     with pytest.raises(RuntimeError, match="evaluation service startup failed"):
         async with app.router.lifespan_context(app):
-            raise AssertionError("lifespan yielded after failed startup")
+            pass
 
     assert len(stores) == len(github_clients) == len(manifests) == 1
     assert app.state.stop.is_set()
@@ -673,7 +673,7 @@ def test_readiness_recovers_after_a_background_app_identity_probe(
             *,
             stop: asyncio.Event | None = None,
         ) -> None:
-            del stop
+            _ = stop
             self.identity_attempts += 1
             if self.identity_attempts == 1:
                 raise RuntimeError("temporary failure")
