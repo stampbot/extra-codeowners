@@ -195,6 +195,69 @@ def graphql_commit_detail(
 
 
 @pytest.mark.asyncio
+async def test_app_identity_probe_requires_the_exact_numeric_app_id(
+    private_key: str,
+) -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"id": 1})
+
+    client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
+
+    await client.verify_app_identity()
+    await client.close()
+
+    assert len(requests) == 1
+    assert requests[0].method == "GET"
+    assert requests[0].url.path == "/app"
+    assert requests[0].headers["authorization"].startswith("Bearer ")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "payload",
+    [{"id": 2}, {"id": "1"}, {"id": True}, {}],
+    ids=["wrong-id", "string-id", "boolean-id", "missing-id"],
+)
+async def test_app_identity_probe_fails_closed_for_an_unexpected_identity(
+    private_key: str,
+    payload: dict[str, object],
+) -> None:
+    client = GitHubClient(
+        1,
+        private_key,
+        transport=httpx.MockTransport(lambda _: httpx.Response(200, json=payload)),
+    )
+
+    with pytest.raises(GitHubError, match="does not match"):
+        await client.verify_app_identity()
+    await client.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status_code", [401, 403, 503])
+async def test_app_identity_probe_propagates_revoked_or_unavailable_credentials(
+    private_key: str,
+    status_code: int,
+) -> None:
+    client = GitHubClient(
+        1,
+        private_key,
+        transport=httpx.MockTransport(
+            lambda _: httpx.Response(status_code, json={"message": "unavailable"})
+        ),
+    )
+
+    with pytest.raises(GitHubAPIError) as captured:
+        await client.verify_app_identity()
+    await client.close()
+
+    assert captured.value.status_code == status_code
+
+
+@pytest.mark.asyncio
 async def test_reads_raw_content_at_exact_ref(private_key: str) -> None:
     requests: list[httpx.Request] = []
 

@@ -45,19 +45,34 @@ spec:
             - {{ .Values.migrations.lockTimeoutSeconds | quote }}
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
-          {{- if or .Values.migrations.existingSecret .Values.migrations.extraEnvFrom }}
+          {{- if .Values.migrations.existingSecret }}
           envFrom:
-            {{- if .Values.migrations.existingSecret }}
             - secretRef:
                 name: {{ .Values.migrations.existingSecret }}
-            {{- end }}
-            {{- with .Values.migrations.extraEnvFrom }}
-            {{- toYaml . | nindent 12 }}
-            {{- end }}
           {{- end }}
           env:
             - name: EXTRA_CODEOWNERS_ENVIRONMENT
               value: production
+            - name: PATH
+              value: /opt/venv/bin:/usr/local/bin:/usr/bin:/bin
+            - name: LD_LIBRARY_PATH
+              value: /opt/venv/lib:/usr/local/lib:/usr/lib:/lib
+            - name: LD_PRELOAD
+              value: ""
+            - name: LD_AUDIT
+              value: ""
+            - name: GCONV_PATH
+              value: /usr/lib/gconv
+            - name: LOCPATH
+              value: /usr/lib/locale
+            - name: OPENSSL_CONF
+              value: /dev/null
+            - name: OPENSSL_MODULES
+              value: /usr/lib/ossl-modules
+            - name: OPENSSL_ENGINES
+              value: /usr/lib/engines-3
+            - name: SSLKEYLOGFILE
+              value: /dev/null
             {{- with .Values.migrations.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

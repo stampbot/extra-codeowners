@@ -2,7 +2,8 @@
 
 Use this procedure for every package, container, or Helm upgrade. Extra
 CODEOWNERS never changes schema during service startup. It starts only when the
-database already matches the exact Alembic head bundled with that artifact.
+database already matches the Alembic head and `required-release-contract`
+bundled with that artifact.
 
 !!! warning
     A changed migration head is a restore boundary. The previous artifact will
@@ -32,9 +33,39 @@ The upgrade notes must name the target revision and say whether the migration
 head changes. Stop if they do not.
 
 Run application commands from the current or target artifact named by each
-step. Supply database credentials through a secret manager, protected
-environment injection, or an operator-controlled `.pgpass`. Never paste a
-database URL into shell history or a change record.
+step. Supply one `EXTRA_CODEOWNERS_DATABASE_URL` through a secret manager or
+protected environment injection. The URL must explicitly contain one host,
+database, username, and nonempty password. Percent-encode reserved characters
+in the username and password. It must use the exact `postgresql+psycopg`
+driver.
+
+Extra CODEOWNERS does not use connection services, `.pgpass`, or ambient libpq
+connection variables. Never paste the database URL into shell history or a
+change record.
+
+Run this procedure in Bash. Define a helper that removes every `PG*` variable
+from application commands, including variables that external PostgreSQL tools
+use later in this procedure:
+
+```bash
+run_without_libpq_environment() {
+  local -a libpq_variables=()
+  local variable
+  while IFS= read -r variable; do
+    if [[ "$variable" == PG* ]]; then
+      libpq_variables+=("$variable")
+    fi
+  done < <(compgen -e)
+  (
+    unset "${libpq_variables[@]}"
+    "$@"
+  )
+}
+```
+
+Use this helper for every `extra-codeowners` command below. Production
+validation fails when a recognized libpq variable is present, even when its
+value is empty.
 
 ## 1. Record the current database state
 
@@ -42,7 +73,7 @@ Run this command from the currently deployed artifact with its normal database
 secret:
 
 ```bash
-extra-codeowners database check
+run_without_libpq_environment extra-codeowners database check
 ```
 
 For version 0.1.0, a compatible database prints:
@@ -53,7 +84,8 @@ Database migration 0003_shared_head_epochs is compatible.
 
 Record the reported revision, current image digest, chart revision, PostgreSQL
 major version, and UTC time in the change record. The check reads migration
-metadata and table structure. It does not migrate or print the database URL.
+metadata and validates the artifact's `required-release-contract`. It does not
+migrate or print the database URL.
 
 Stop if it fails. Don't use an application rollout to repair an unknown
 schema.
@@ -169,12 +201,31 @@ controller that restored the resource, suspend it, and repeat the drain.
 
 ## 3. Create the backup
 
-In a trusted POSIX shell, set libpq connection variables through your approved
-secret mechanism. `PGDATABASE` must identify the production Extra
-CODEOWNERS database. Then run:
+In the trusted Bash shell, set these variables through your approved secret
+mechanism:
+
+```bash
+: "${PGPASSWORD:?set PGPASSWORD through the approved secret mechanism}"
+export PGHOST="db.example.com"
+export PGPORT="5432"
+export PGUSER="extra_codeowners_backup"
+export PGPASSWORD
+export PGDATABASE="extra_codeowners"
+```
+
+`PGPASSWORD` must already contain the backup role's password without printing
+it. The other values must explicitly identify the production Extra CODEOWNERS
+database. These variables are for `pg_dump` and `pg_restore` only; the helper
+removes them before any application command.
+
+Don't set `PGSERVICE`, `PGSERVICEFILE`, or `PGPASSFILE`, and don't rely on
+`.pgpass`. Run:
 
 ```bash
 pg_dump \
+  --host="$PGHOST" \
+  --port="$PGPORT" \
+  --username="$PGUSER" \
   --format=custom \
   --no-owner \
   --no-acl \
@@ -191,14 +242,19 @@ A successful `pg_dump` is not restore evidence.
 ## 4. Restore and verify the backup
 
 Create an empty, access-restricted PostgreSQL database outside the production
-service path. Point the libpq environment at that database and restore:
+service path. Set `RESTORE_DATABASE` to its name, then restore through the same
+explicit host, port, and role:
 
 ```bash
+RESTORE_DATABASE="extra_codeowners_restore"
 pg_restore \
+  --host="$PGHOST" \
+  --port="$PGPORT" \
+  --username="$PGUSER" \
   --exit-on-error \
   --no-owner \
   --no-acl \
-  --dbname="$PGDATABASE" \
+  --dbname="$RESTORE_DATABASE" \
   extra-codeowners-before-upgrade.dump
 ```
 
@@ -206,8 +262,8 @@ Inject `EXTRA_CODEOWNERS_DATABASE_URL` for the isolated database, then run
 the current artifact's checks:
 
 ```bash
-extra-codeowners database check
-extra-codeowners queue-status
+run_without_libpq_environment extra-codeowners database check
+run_without_libpq_environment extra-codeowners queue-status
 ```
 
 The database check must report the same compatible revision recorded during
@@ -218,13 +274,26 @@ secrets into the change record.
 Keep the isolated restore until the change window closes. Then destroy it
 under the approved retention policy.
 
+After the PostgreSQL client work is complete, remove its credentials from the
+shell:
+
+```bash
+unset PGHOST PGPORT PGUSER PGPASSWORD PGDATABASE RESTORE_DATABASE
+```
+
+Before step 5, replace `EXTRA_CODEOWNERS_DATABASE_URL` with the production URL
+through the approved secret mechanism. Verify its target in the deployment
+platform without printing it. Stop if the application command would still
+reach the isolated restore.
+
 ## 5. Apply the target migration
 
 For a package or container deployment, run exactly one migrator from the
 target artifact:
 
 ```bash
-extra-codeowners database migrate --lock-timeout-seconds 60
+run_without_libpq_environment \
+  extra-codeowners database migrate --lock-timeout-seconds 60
 ```
 
 For version 0.1.0, success prints:
@@ -239,6 +308,9 @@ The migrator:
   configured lock timeout
 - runs each Alembic revision in its own transaction
 - limits each PostgreSQL migration statement to 60 seconds
+- pins `search_path=public`
+- validates the target artifact's `required-release-contract` after Alembic,
+  including when the database was already at the target head
 - releases the lock after success, failure, or connection loss
 - exits nonzero when the migration does not finish.
 
@@ -277,8 +349,13 @@ helm upgrade "$RELEASE" "$TARGET_CHART" \
   --set autoscaling.enabled=false \
   --set replicaCount=1 \
   --wait \
-  --timeout=5m
+  --timeout=10m
 ```
+
+The ten-minute Helm wait is longer than the default five-minute startup budget
+and the three-minute migration Job deadline. If you increase either chart
+budget, increase the Helm timeout too. Leave enough margin for scheduling and
+image startup.
 
 Do not remove the temporary autoscaling override during this first update.
 Verify the database head and target pod in step 6 before you restore the final
@@ -301,8 +378,9 @@ compatibility between application versions at different migration heads.
 
 ## 6. Deploy and verify
 
-For a package or container deployment, run `database check` from the target
-artifact before you start the service. Start only the target artifact.
+For a package or container deployment, run
+`run_without_libpq_environment extra-codeowners database check` from the
+target artifact before you start the service. Start only the target artifact.
 
 For Helm, the first `helm upgrade --wait` in step 5 has already started one
 target pod. Verify the hook's exact success message and that pod's rollout
@@ -328,7 +406,7 @@ grep --fixed-strings --line-regexp \
   'Database is at migration 0003_shared_head_epochs.' \
   "$FIRST_MIGRATION_LOG"
 kubectl --namespace "$NAMESPACE" rollout status \
-  "deployment/$DEPLOYMENT" --timeout=5m
+  "deployment/$DEPLOYMENT" --timeout=10m
 test "$(
   kubectl --namespace "$NAMESPACE" get deployment "$DEPLOYMENT" \
     --output=jsonpath='{.status.readyReplicas}'
@@ -336,8 +414,9 @@ test "$(
 ```
 
 Every command must succeed. The exact migration line proves that the hook
-observed the target head; rollout status proves that the target pod passed its
-readiness probe.
+reached the target head and passed the target artifact's
+`required-release-contract`. Rollout status proves that the target pod passed
+its startup and readiness probes.
 
 The first target pod should acquire the reconciler lease immediately because
 the drain waited out the old lease. At INFO level, its
@@ -371,7 +450,7 @@ helm upgrade "$RELEASE" "$TARGET_CHART" \
   --reset-values \
   --values "$TARGET_VALUES" \
   --wait \
-  --timeout=5m
+  --timeout=10m
 ```
 
 The `before-hook-creation` policy deletes the first migration Job and its
@@ -391,9 +470,10 @@ grep --fixed-strings --line-regexp \
   "$SECOND_MIGRATION_LOG"
 ```
 
-The second migrator takes the same advisory lock, confirms that the database
-is already at `0003_shared_head_epochs`, and exits without changing the
-schema.
+The second migrator takes the same advisory lock and confirms that the database
+is already at `0003_shared_head_epochs`. Alembic makes no schema change, but
+the migrator still validates the `required-release-contract` before it prints
+success.
 
 Verify the target Deployment and final autoscaling state. The HPA must exist
 when the reviewed values enable autoscaling and must be absent when they
@@ -411,8 +491,9 @@ request whose current check you did not verify independently.
 First compare the database head from step 1 with the target head.
 
 If the head did not change and the versioned upgrade notes allow it, run the
-previous artifact's `database check` against the current database. Restore
-the previous image only when that check succeeds.
+previous artifact's `database check` through
+`run_without_libpq_environment`. Restore the previous image only when that
+check succeeds.
 
 If the head changed, restore the verified pre-migration backup:
 
@@ -421,7 +502,8 @@ If the head changed, restore the verified pre-migration backup:
 2. Stop webhook ingress and every Extra CODEOWNERS process.
 3. Preserve the failed database and sanitized logs.
 4. Restore the verified backup into a new empty database.
-5. Run `database check` from the previous application artifact.
+5. Run `database check` through `run_without_libpq_environment` from the
+   previous application artifact.
 6. Point the previous deployment at the restored database.
 7. Verify current GitHub state. Redeliver every event after the recovery point
    and independently verify every accessible open pull request before removing
@@ -444,7 +526,8 @@ database came from; matching structure alone cannot prove provenance.
 If it is the exact documented baseline, run once from the 0.1.0 artifact:
 
 ```bash
-extra-codeowners database migrate --adopt-pre-alembic-schema
+run_without_libpq_environment \
+  extra-codeowners database migrate --adopt-pre-alembic-schema
 ```
 
 Adoption checks every expected table, column type, length, nullability,

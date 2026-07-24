@@ -65,9 +65,18 @@ app.kubernetes.io/component: application
 {{- if or (hasKey .Values.podLabels "app.kubernetes.io/name") (hasKey .Values.podLabels "app.kubernetes.io/instance") (hasKey .Values.podLabels "app.kubernetes.io/component") -}}
 {{- fail "podLabels must not override app.kubernetes.io/name, app.kubernetes.io/instance, or app.kubernetes.io/component" -}}
 {{- end -}}
+{{- if .Values.extraEnvFrom -}}
+{{- fail "extraEnvFrom is unsupported because EnvFromSource keys cannot be validated; use extraEnv with explicit names and valueFrom references" -}}
+{{- end -}}
 {{- range .Values.extraEnv -}}
 {{- if or (eq .name "EXTRA_CODEOWNERS_ENVIRONMENT") (eq .name "EXTRA_CODEOWNERS_ALLOW_INSECURE_CHANGES") -}}
 {{- fail (printf "extraEnv must not override chart-managed variable %s" .name) -}}
+{{- end -}}
+{{- if hasPrefix "PG" .name -}}
+{{- fail (printf "extraEnv must not set ambient libpq variable %s; use EXTRA_CODEOWNERS_DATABASE_URL" .name) -}}
+{{- end -}}
+{{- if or (eq .name "PATH") (hasPrefix "PYTHON" .name) (hasPrefix "LD_" .name) (hasPrefix "DYLD_" .name) (eq .name "GCONV_PATH") (eq .name "LOCPATH") (hasPrefix "OPENSSL_" .name) (eq .name "SSLKEYLOGFILE") -}}
+{{- fail (printf "extraEnv must not set interpreter or loader variable %s" .name) -}}
 {{- end -}}
 {{- end -}}
 {{- range .Values.extraVolumes -}}
@@ -76,13 +85,26 @@ app.kubernetes.io/component: application
 {{- end -}}
 {{- end -}}
 {{- range .Values.extraVolumeMounts -}}
-{{- if or (eq .name "tmp") (eq .mountPath "/tmp") -}}
-{{- fail "extraVolumeMounts must not override the chart-managed /tmp mount" -}}
+{{- $mountPath := clean .mountPath -}}
+{{- if not (or (eq $mountPath "/run/secrets/extra-codeowners") (hasPrefix "/run/secrets/extra-codeowners/" $mountPath)) -}}
+{{- fail "extraVolumeMounts are limited to /run/secrets/extra-codeowners" -}}
 {{- end -}}
+{{- if not (default false .readOnly) -}}
+{{- fail "extraVolumeMounts must be read-only" -}}
+{{- end -}}
+{{- end -}}
+{{- if .Values.migrations.extraEnvFrom -}}
+{{- fail "migrations.extraEnvFrom is unsupported because EnvFromSource keys cannot be validated; use migrations.extraEnv with explicit names and valueFrom references" -}}
 {{- end -}}
 {{- range .Values.migrations.extraEnv -}}
 {{- if eq .name "EXTRA_CODEOWNERS_ENVIRONMENT" -}}
 {{- fail "migrations.extraEnv must not override chart-managed variable EXTRA_CODEOWNERS_ENVIRONMENT" -}}
+{{- end -}}
+{{- if hasPrefix "PG" .name -}}
+{{- fail (printf "migrations.extraEnv must not set ambient libpq variable %s; use EXTRA_CODEOWNERS_DATABASE_URL" .name) -}}
+{{- end -}}
+{{- if or (eq .name "PATH") (hasPrefix "PYTHON" .name) (hasPrefix "LD_" .name) (hasPrefix "DYLD_" .name) (eq .name "GCONV_PATH") (eq .name "LOCPATH") (hasPrefix "OPENSSL_" .name) (eq .name "SSLKEYLOGFILE") -}}
+{{- fail (printf "migrations.extraEnv must not set interpreter or loader variable %s" .name) -}}
 {{- end -}}
 {{- end -}}
 {{- range .Values.migrations.extraVolumes -}}
@@ -91,8 +113,12 @@ app.kubernetes.io/component: application
 {{- end -}}
 {{- end -}}
 {{- range .Values.migrations.extraVolumeMounts -}}
-{{- if or (eq .name "tmp") (eq .mountPath "/tmp") -}}
-{{- fail "migrations.extraVolumeMounts must not override the chart-managed /tmp mount" -}}
+{{- $mountPath := clean .mountPath -}}
+{{- if not (or (eq $mountPath "/run/secrets/extra-codeowners") (hasPrefix "/run/secrets/extra-codeowners/" $mountPath) (eq $mountPath "/run/secrets/database-ca") (hasPrefix "/run/secrets/database-ca/" $mountPath)) -}}
+{{- fail "migrations.extraVolumeMounts are limited to /run/secrets/extra-codeowners or /run/secrets/database-ca" -}}
+{{- end -}}
+{{- if not (default false .readOnly) -}}
+{{- fail "migrations.extraVolumeMounts must be read-only" -}}
 {{- end -}}
 {{- end -}}
 {{- range $name, $_ := .Values.migrations.annotations -}}

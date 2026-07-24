@@ -133,29 +133,39 @@ Create one database and one role for Extra CODEOWNERS. Let that role own only
 the application database; don't grant PostgreSQL cluster administration or
 access to unrelated databases.
 
-Use a SQLAlchemy URL through the psycopg driver:
+Use a SQLAlchemy URL through the exact `postgresql+psycopg` driver:
 
 ```text
 postgresql+psycopg://DB_USER:DB_PASSWORD@DB_HOST:5432/DB_NAME?sslmode=verify-full
 ```
 
-Replace every uppercase placeholder and percent-encode reserved characters in
-URL components. Treat the complete URL as a secret.
+Replace every uppercase placeholder. The host, database, username, and
+nonempty password must all appear in the URL. Percent-encode reserved
+characters in the username and password, then treat the complete URL as a
+secret.
 
 Keep `sslmode=verify-full` for a remote database. Add provider CA options
-such as `sslrootcert` when needed. Extra CODEOWNERS rejects
-`sslmode=require` and `sslmode=verify-ca` because neither verifies the
-database hostname.
+such as `sslrootcert=/run/secrets/extra-codeowners/database-ca.pem` when
+needed. The CA path must be nonempty and absolute. Extra CODEOWNERS rejects
+`sslmode=require` and `sslmode=verify-ca` because neither verifies the database
+hostname.
 
-The effective libpq route decides whether a connection is local. A query-string
-`host` overrides the URL authority. Any `hostaddr` or `service`
-override requires `verify-full`, even if the authority looks local. Only
-`localhost`, `127.0.0.1`, `::1`, a Unix-socket path, or an
-omitted host may use an operator-controlled local transport without TLS. You
-must authenticate and secure that proxy's upstream connection.
+Use one route. A query-string `host` may supply the host only when the URL
+authority omits it. An explicit `hostaddr` also requires that host and
+`sslmode=verify-full`, even when the host looks local. Only `localhost`,
+`127.0.0.1`, `::1`, or a Unix-socket path may use an operator-controlled local
+transport without TLS. Hostless and comma-separated routes are rejected. You
+must authenticate and secure a local proxy's upstream connection.
 
-Normal service startup checks the exact Alembic head and table structure. It
-never creates or changes schema. Follow
+Only `host`, `hostaddr`, `sslmode`, and `sslrootcert` query parameters are
+supported. Connection-service URLs, `PGSERVICE`, `PGSERVICEFILE`, `.pgpass`,
+and `PGPASSFILE` are not. Keep every ambient libpq connection variable out of
+the application and migrator environments; production validation fails even
+when one is present with an empty value. Both processes pin
+`search_path=public`.
+
+Normal service startup checks the Alembic head and the
+`required-release-contract`. It never creates or changes schema. Follow
 [Upgrade, back up, and restore](upgrade.md) before the first startup and every
 upgrade.
 
@@ -171,8 +181,9 @@ Database operations have fixed fail-fast limits:
 
 The Helm migration Job has separate Secret, environment, volume, mount, and
 ServiceAccount settings. Give it the database URL and only the authority
-needed to change this schema. Never mount the GitHub private key or webhook
-secret into the migration Job.
+needed to change this schema. Its Secret must not contain ambient libpq
+variables. Never mount the GitHub private key or webhook secret into the
+migration Job.
 
 Test the complete application-to-database path, including any proxy, under the
 expected peak latency and concurrency. If normal operations approach these
@@ -192,7 +203,8 @@ EXTRA_CODEOWNERS_GITHUB_PRIVATE_KEY_FILE=/run/secrets/github-private-key
 EXTRA_CODEOWNERS_GITHUB_WEBHOOK_SECRET_FILE=/run/secrets/github-webhook-secret
 ```
 
-Inject the database URL through the platform's secret mechanism.
+Inject the database URL through the platform's secret mechanism. Don't add
+libpq `PG*` connection variables to the same process environment.
 
 ## Configure the process
 
@@ -217,8 +229,11 @@ HTTPS origin.
 
 Production startup rejects:
 
-- SQLite and every non-PostgreSQL database URL
+- SQLite and every URL that does not use the exact `postgresql+psycopg` driver
+- a URL without one explicit host, database, username, and nonempty password
 - remote PostgreSQL without `sslmode=verify-full`
+- connection-service URLs, unknown query parameters, and ambient libpq
+  connection variables
 - a webhook secret shorter than 32 UTF-8 bytes
 - a non-HTTPS GitHub API origin
 - missing App ID, private key, or webhook secret.
@@ -239,6 +254,26 @@ requeue as routine recovery.
 See the [runtime settings reference](../reference/configuration.md#runtime-settings)
 for every setting, default, and bound.
 
+## Size the Kubernetes startup probe
+
+The Helm chart enables a startup probe on `/health/live`. It runs every five
+seconds, waits up to three seconds for each response, and allows 60 failures.
+That gives initialization a five-minute budget before Kubernetes restarts the
+container.
+
+Keep the startup probe separate from the other two probes. Kubernetes doesn't
+run liveness or readiness probes until startup succeeds. After that point,
+liveness detects a stuck process or failed local task, while readiness removes
+an instance from webhook traffic when its database, App identity, worker, or
+reconciler is unavailable.
+
+Measure initialization with the production database path and secret mounts.
+Set `periodSeconds * failureThreshold` above the slowest expected startup plus
+operational margin, and set `timeoutSeconds` above the normal `/health/live`
+response time. Keep Helm and rollout wait timeouts above that startup budget.
+Increasing the startup allowance does not weaken ongoing liveness or readiness
+checks.
+
 ## Expose only the webhook
 
 Route unauthenticated GitHub traffic only to `POST /webhooks/github`. The
@@ -258,9 +293,12 @@ Manifest conversion code is sensitive. With setup disabled, `/setup` and
 `/setup/complete` return `404`. A callback request that includes
 its required `code` and `state` parameters also returns `404`.
 
-Keep `/metrics`, `/health/live`, `/health/ready`, and
-`/setup` behind operator-controlled routing. If the proxy cannot route by
-path, require network or proxy authentication everywhere except the webhook.
+Use path-level access control even when every route shares one HTTPS origin.
+Keep `/`, `/api/runtime-identity`, `/api/docs`, `/api/openapi.json`,
+`/docs/oauth2-redirect`, `/metrics`, both `/health` routes, and every `/setup`
+route behind operator-controlled routing. If the proxy cannot enforce that
+split, require network or proxy authentication everywhere except the exact
+webhook path.
 
 ## Verify the deployment
 
@@ -270,13 +308,21 @@ with an operator-only endpoint:
 ```bash
 curl --fail-with-body https://operator-endpoint.example.com/health/live
 curl --fail-with-body https://operator-endpoint.example.com/health/ready
+curl --fail-with-body \
+  https://operator-endpoint.example.com/api/runtime-identity
 ```
 
-Both requests must return HTTP 200. If the instance runs background work,
-confirm `worker` and `reconciler` are `true` in both responses.
-Also confirm that `EXTRA_CODEOWNERS_WORKER_ENABLED` and
-`EXTRA_CODEOWNERS_RECONCILE_ENABLED` are true; the health payload treats
-an intentionally disabled task as healthy.
+All three requests must return HTTP 200. Compare every runtime-identity field
+with the reviewed deployment settings. An official image must report its full
+verified source commit in `build_revision`; a source installation reports
+`null`. The endpoint is a deployment self-report, not independent provenance
+evidence.
+
+If the instance runs background work, confirm that `worker_enabled`,
+`reconciler_enabled`, `worker`, and `reconciler` are `true` in both health
+responses. The first two fields confirm that the process is configured to run
+those tasks. The other two report task health.
+
 Confirm the metrics scraper can read `/metrics` and that
 `extra_codeowners_insecure_changes_enabled` is `0`.
 

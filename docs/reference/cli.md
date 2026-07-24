@@ -43,16 +43,39 @@ In production mode, startup rejects:
 - missing GitHub App credentials
 - a webhook secret shorter than 32 bytes
 - a GitHub API URL that does not use HTTPS
-- a database other than PostgreSQL
-- a remote PostgreSQL URL that does not use `sslmode=verify-full`.
+- a database URL that does not use the exact `postgresql+psycopg` driver
+- a PostgreSQL URL without one explicit host, database, username, and nonempty
+  password
+- a remote PostgreSQL URL that does not use `sslmode=verify-full`
+- any ambient libpq connection variable.
 
-The weaker `require` and `verify-ca` modes are rejected because they do not verify the database hostname. TLS may be omitted when the effective database host is `localhost`, `127.0.0.1`, `::1`, no host, or a Unix-socket or local-proxy path. A query-string `host` overrides the URL authority for this check. Any `hostaddr` or `service` routing override requires `sslmode=verify-full`.
+The weaker `require` and `verify-ca` modes are rejected because they do not
+verify the database hostname. Every production URL must name exactly one
+nonempty host or Unix-socket path; hostless and comma-separated multi-host URLs
+are rejected. TLS may be omitted only for `localhost`, `127.0.0.1`, `::1`, a
+Unix-socket path, or a local-proxy path. A query-string `host` overrides the
+URL authority only when the authority omits its host. A `hostaddr` is allowed
+only with that explicit host and `sslmode=verify-full`.
+
+Connection-service URLs, `PGSERVICE`, `PGSERVICEFILE`, `.pgpass`, and
+`PGPASSFILE` are unsupported. The URL accepts only `host`, `hostaddr`,
+`sslmode`, and `sslrootcert` query parameters. `sslrootcert` must be a nonempty
+absolute path. Percent-encode reserved characters in the required username and
+password. The process pins `search_path=public`; caller-supplied `options` are
+rejected.
+
+See the [runtime settings reference](configuration.md#service-settings) for
+the complete ambient-variable denylist. The same production database rules
+apply to `database migrate`, `database check`, `queue-status`, and
+`requeue-dead`.
 
 Setup mode also requires a setup-state secret containing at least 32 bytes and an HTTPS public URL that contains only an origin—no credentials, path, query, or fragment.
 
 ## `database migrate`
 
-`database migrate` upgrades the configured database to the one Alembic head bundled with the installed application.
+`database migrate` upgrades the configured database to the one Alembic head
+bundled with the installed application. It then validates the required release
+contract, even when the database was already at that head.
 
 ```bash
 uv run python -m extra_codeowners database migrate \
@@ -73,7 +96,16 @@ On success, the final line names the bundled revision:
 Database is at migration 0003_shared_head_epochs.
 ```
 
-Production mode applies the same PostgreSQL and transport checks as `serve`. A PostgreSQL migration takes a session advisory lock, waits no longer than the selected lock timeout, and limits each SQL statement to 60 seconds. PostgreSQL releases the lock if the migrator's connection closes after a failure or interruption.
+Production mode applies the same PostgreSQL and transport checks as `serve`. A
+PostgreSQL migration takes a session advisory lock, waits no longer than the
+selected lock timeout, limits each SQL statement to 60 seconds, and pins
+`search_path=public`. PostgreSQL releases the lock if the migrator's connection
+closes after a failure or interruption.
+
+The success line appears only after Alembic reaches the expected head and the
+required release contract passes. A database already at the expected head
+still receives that validation. A mismatch exits nonzero; the migrator does
+not repair an unexpected schema that happens to carry the right revision.
 
 Normal application startup never runs migrations. Read the [upgrade and restore procedure](../how-to/upgrade.md) before using the adoption flag. Every change to the Alembic head requires a database restore before an older artifact can start again; additive SQL is not an exception.
 
@@ -91,7 +123,28 @@ On success, the final line names the compatible revision:
 Database migration 0003_shared_head_epochs is compatible.
 ```
 
-The command exits nonzero when it cannot connect or when any required compatibility evidence is missing or wrong. It checks the single Alembic revision, the application compatibility marker, required tables and columns, column types and lengths, nullability, PostgreSQL timestamp time-zone mode, generated-value behavior, primary keys, and the presence of required named indexes and unique constraints. It does not print the database URL or stored repository metadata.
+The command exits nonzero when it cannot connect or when the required release
+contract is missing or wrong. It checks:
+
+- the single Alembic revision and application compatibility marker
+- every required table and its exact column set
+- column types, lengths, nullability, PostgreSQL time-zone mode, defaults,
+  identities, computed values, autoincrement behavior, and canonical owned
+  integer-sequence type, start, increment, bounds, cache, and cycle settings
+- ordered, exact-named primary keys and exact named unique constraints
+- exact named index columns, uniqueness, predicates, and supported options
+- exact named check-constraint expressions
+- the absence of foreign keys on required application tables
+- safe PostgreSQL constraint and index catalog states.
+
+For PostgreSQL, expected primary-key, unique, and check constraints must be
+validated and nondeferrable. The primary-key and unique backing indexes, along
+with the other expected indexes, must have their canonical immediate, valid,
+ready, live `btree` state, uniqueness, and predicate.
+
+This is the application's `required-release-contract`, not a universal proof
+of every object or policy in the database. It does not print the database URL
+or stored repository metadata.
 
 ## `validate-policy`
 

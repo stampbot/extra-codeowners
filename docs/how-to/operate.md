@@ -17,8 +17,10 @@ pull-request activity.
 
 | Signal | Healthy condition |
 | --- | --- |
+| Kubernetes startup probe | `/health/live` succeeds before the configured startup budget expires |
+| `/api/runtime-identity` | Every field matches the reviewed deployment record |
 | `/health/live` | HTTP 200 on every serving instance |
-| `/health/ready` | HTTP 200, with database and configured background tasks ready |
+| `/health/ready` | HTTP 200, with recent exact-App authentication, database access, and configured background tasks ready |
 | `extra_codeowners_queue_depth` | Returns to the local baseline after webhook bursts |
 | `extra_codeowners_shared_head_invalidation_depth` | Returns to `0`; a sustained value means exact-commit revocations are waiting |
 | `extra_codeowners_shared_head_invalidations_total{result="failed"}` | No unexplained increase |
@@ -31,6 +33,12 @@ pull-request activity.
 Also watch evaluation latency and failures, PostgreSQL latency, repeated GitHub
 API `403` or `429` responses, and every unexplained long-lived
 `in_progress` check.
+
+Read runtime identity through an operator-only route after every rollout.
+Official images report their verified source commit in `build_revision`;
+source installations report `null`. Treat the response as a consistency
+check. It is an unauthenticated self-report, not proof of source or image
+provenance.
 
 A replica that observes another process holding the reconciler lease does not
 record an attempt. Shutdown before a scan begins does not record one either.
@@ -73,11 +81,33 @@ them. One practical alert expression is
 `time() - max(extra_codeowners_reconciliation_last_success_timestamp_seconds)`,
 with a threshold equal to your reconciliation objective.
 
-If an instance is meant to run background work, enable both the worker and
-reconciler and confirm that both health-response fields are `true`. Keep
-the deployment settings in the same check because a disabled task reports as
-healthy. Every node also needs an accurate UTC clock. Clock skew can break
-GitHub authentication, setup-state expiry, and database leases.
+If an instance is meant to run background work, enable both tasks and confirm
+that `worker_enabled`, `reconciler_enabled`, `worker`, and `reconciler` are
+`true` in its health responses. The enabled fields report process
+configuration; the other two report task health. Every node also needs an
+accurate UTC clock. Clock skew can break GitHub authentication, setup-state
+expiry, and database leases.
+
+Readiness also requires a recent authenticated `GET /app` response whose
+numeric ID matches the configured checker App. The service probes on a
+30-second default interval and retains a successful proof for 90 seconds by
+default. A transient failure leaves a still-fresh proof in place; readiness
+drops after the freshness window and recovers after a successful probe.
+Liveness remains independent so an App authentication outage does not create
+a restart loop.
+
+The Helm startup probe protects initialization from that ongoing liveness
+policy. By default, Kubernetes calls `/health/live` every five seconds with a
+three-second timeout and restarts the container after 60 failures. Liveness and
+readiness don't begin until startup succeeds, so the defaults provide a
+five-minute initialization budget.
+
+Alert on repeated `Startup probe failed` events or restarts before the first
+live response. Measure startup through the real database and secret mounts,
+then keep `periodSeconds * failureThreshold` above the observed worst case plus
+margin. Keep Helm and rollout wait timeouts higher still. Don't use a larger
+startup budget to hide a persistent schema, credential, mount, or network
+failure.
 
 Reconciliation requests work only for open pull requests that do not already
 have a queue row. When the response includes a canonical head, the database
@@ -353,7 +383,9 @@ Use overlapping credentials when the provider supports them:
 1. Create a replacement with the same narrow database privileges. Preserve
    `sslmode=verify-full` for a remote route, or the reviewed local proxy
    path.
-2. Store the URL as a new secret version without printing it.
+2. Store the explicit `postgresql+psycopg` URL as a new secret version without
+   printing it. Keep every ambient libpq connection variable out of the
+   process environment.
 3. Roll one instance. Verify readiness, queue access, and a disposable
    evaluation.
 4. Roll the remaining instances and confirm none uses the old version.

@@ -46,7 +46,8 @@ Start with these pages, in order:
 1. [Compare native CODEOWNERS with the extra check](explanation/native-codeowners.md).
 2. [Check what is implemented and what is still blocked](reference/project-status.md).
 3. [Run the first check in a disposable organization](tutorials/development-installation.md).
-4. [Exercise the replacement repository rule and its rollback](how-to/prepare-repository-rules.md).
+4. [Preflight the non-required evaluation beta](how-to/preflight-evaluation-beta.md).
+5. [Exercise the replacement repository rule and its rollback](how-to/prepare-repository-rules.md).
 
 The live GitHub contracts are not all proven. Keep GitHub's native **Require
 review from Code Owners** rule on production repositories.

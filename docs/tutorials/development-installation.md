@@ -287,7 +287,7 @@ curl --fail-with-body http://127.0.0.1:8000/health/ready
 Both commands should exit with status `0`. The liveness response looks like:
 
 ```json
-{"status":"alive","worker":true,"reconciler":true}
+{"status":"alive","worker_enabled":true,"reconciler_enabled":true,"worker":true,"reconciler":true}
 ```
 
 If either probe fails, read `"${TUTORIAL_ROOT}/service.log"` before continuing.

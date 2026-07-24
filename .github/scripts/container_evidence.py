@@ -7601,7 +7601,7 @@ def retain_selected_application_artifacts(
     selection_record_sha256: str,
     budget: BundleBudget,
     pass_fds: Sequence[int] = (),
-) -> tuple[dict[str, Any], object]:
+) -> tuple[dict[str, Any], object, bytes]:
     """Use the Python verifier to retain and describe the exact five-file proof."""
 
     helper = SCRIPT_DIRECTORY / "build_python_artifacts.py"
@@ -7735,7 +7735,25 @@ def retain_selected_application_artifacts(
         "selection_record_sha256": selection_record_sha256,
         "files": manifest_files,
     }
-    return binding, result["installation"]
+    build_identity = (
+        compact_canonical_json(
+            {
+                field: result[field]
+                for field in (
+                    "schema_version",
+                    "source_revision",
+                    "selection_record_sha256",
+                    "wheel_filename",
+                    "wheel_sha256",
+                    "sdist_filename",
+                    "sdist_sha256",
+                )
+            },
+            max_bytes=MAX_SELECTED_HELPER_OUTPUT_BYTES - 1,
+        )
+        + b"\n"
+    )
+    return binding, result["installation"], build_identity
 
 
 def verify_base_layer_binding(files: Mapping[str, Any], policy: Mapping[str, Any]) -> None:
@@ -8066,6 +8084,7 @@ def verify_post_base_provenance(
     repo: Path,
     *,
     source_revision: str = "HEAD",
+    expected_build_identity: bytes | None = None,
 ) -> None:
     """Reject every unclassified file-system change above the reviewed base."""
 
@@ -8091,6 +8110,7 @@ def verify_post_base_provenance(
         "size": len(license_content),
     }
     license_occurrences = 0
+    build_identity_occurrences = 0
     for record in files["regular_files"]:
         if record["layer"] < base_layer_count:
             continue
@@ -8131,9 +8151,23 @@ def verify_post_base_provenance(
                 )
             require_root_header(record, 0o644, "post-base application LICENSE")
             continue
+        if path == "app/build-identity.json" and expected_build_identity is not None:
+            build_identity_occurrences += 1
+            if (
+                record["effective"] is not True
+                or record["sha256"] != sha256_bytes(expected_build_identity)
+                or record["size"] != len(expected_build_identity)
+            ):
+                raise EvidenceError(
+                    "post-base build identity differs from verified Python selection"
+                )
+            require_root_header(record, 0o444, "post-base build identity")
+            continue
         raise EvidenceError(f"unclassified post-base regular file: {path}")
     if license_occurrences != 1:
         raise EvidenceError("image must contain one Git-bound post-base application LICENSE")
+    if expected_build_identity is not None and build_identity_occurrences != 1:
+        raise EvidenceError("image must contain one verified post-base build identity")
 
     post_base_non_regular = [
         record for record in files["non_regular_files"] if record["layer"] >= base_layer_count
@@ -12061,13 +12095,6 @@ def _build_bundle_with_boundary(
     if require_image_revision:
         verify_image_revision(inventory, version=version, source_revision=head)
     verify_base_layer_binding(files, policy)
-    verify_post_base_provenance(
-        inventory,
-        files,
-        policy,
-        repo,
-        source_revision=application_source_revision,
-    )
     application_name, _application_version = validate_application_source_binding(
         inventory,
         files,
@@ -12111,7 +12138,11 @@ def _build_bundle_with_boundary(
             lock_sha256=hashlib.sha256(lock_bytes).hexdigest(),
             source_revision=application_source_revision,
         )
-        application_artifacts, installation_contract = retain_selected_application_artifacts(
+        (
+            application_artifacts,
+            installation_contract,
+            expected_build_identity,
+        ) = retain_selected_application_artifacts(
             directory=selected_python_directory,
             output=root / "artifacts" / "application",
             source_revision=application_source_revision,
@@ -12119,6 +12150,14 @@ def _build_bundle_with_boundary(
             selection_record_sha256=application_selection_record_sha256,
             budget=budget,
             pass_fds=(path_boundary.work_descriptor,),
+        )
+        verify_post_base_provenance(
+            inventory,
+            files,
+            policy,
+            repo,
+            source_revision=application_source_revision,
+            expected_build_identity=expected_build_identity,
         )
         launcher_interpreter = verify_selected_application_installation(
             inventory, installation_contract

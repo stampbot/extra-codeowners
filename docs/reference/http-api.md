@@ -11,11 +11,12 @@ The service registers these routes:
 | Method | Path | Audience | Authentication and exposure |
 | --- | --- | --- | --- |
 | `GET` | `/` | Operator or discovery client | No application authentication. Returns the product name, version, and documentation URL. |
+| `GET` | `/api/runtime-identity` | Operator or deployment verifier | No application authentication. Returns non-secret effective settings and build identity. Restrict at the network or proxy layer. |
 | `GET` | `/health/live` | Container orchestrator | No application authentication. Expose only on an operator-controlled health path. |
 | `GET` | `/health/ready` | Container orchestrator | No application authentication. Expose only on an operator-controlled health path. |
 | `GET` | `/metrics` | Prometheus-compatible scraper | No application authentication. Restrict at the network or proxy layer. |
 | `GET` | `/api/docs` | Developer or operator | Swagger UI for routes included in the OpenAPI schema. Restrict outside development environments. |
-| `GET` | `/api/openapi.json` | Documentation tooling | OpenAPI for the two health routes and the GitHub webhook route. Restrict outside development environments. |
+| `GET` | `/api/openapi.json` | Documentation tooling | OpenAPI for runtime identity, the two health routes, and the GitHub webhook route. Restrict outside development environments. |
 | `GET` | `/docs/oauth2-redirect` | Swagger UI | FastAPI's OAuth redirect helper. Extra CODEOWNERS does not use end-user OAuth, but Swagger UI registers this route. |
 | `POST` | `/webhooks/github` | GitHub webhook delivery | Verifies GitHub's HMAC-SHA256 signature over the raw request body. This is the only route that requires public HTTPS ingress. |
 | `GET` | `/setup` | GitHub App administrator | Disabled by default. Returns the development App Manifest setup form when setup mode is configured. |
@@ -23,6 +24,10 @@ The service registers these routes:
 | `GET` | `/setup/complete` | GitHub App administrator | Disabled by default. Receives GitHub's post-installation or permission-update redirect. |
 
 Public webhook ingress is not a reason to expose health, metrics, documentation, or setup routes. Route them separately or protect them with an authenticating reverse proxy. The application itself does not enforce a request-rate limit, so public ingress must provide suitable abuse controls.
+
+`/`, `/api/runtime-identity`, `/health/live`, `/health/ready`, and `/metrics`
+return `Cache-Control: no-store, max-age=0` and related defensive headers.
+Access control still belongs at the network or proxy layer.
 
 ## `GET /`
 
@@ -38,6 +43,41 @@ Success returns `200 application/json`:
 
 `version` comes from the installed package and may differ from this example.
 
+## `GET /api/runtime-identity`
+
+Runtime identity reports the effective non-secret settings that matter to
+check publication. It is useful for catching a deployment pointed at the wrong
+App, database backend, policy path, or check name.
+
+Success returns `200 application/json`:
+
+```json
+{
+  "schema_version": 1,
+  "environment": "production",
+  "github_api_url": "https://api.github.com/",
+  "github_app_id": 123456,
+  "database_backend": "postgresql",
+  "check_name": "Extra CODEOWNERS / approval",
+  "policy_path": ".github/extra-codeowners.toml",
+  "organization_policy_repository_name": ".github",
+  "application_version": "0.1.0",
+  "build_revision": null
+}
+```
+
+`application_version` comes from the installed package. An official image
+reports the full verified Git source commit baked into that image as
+`build_revision`. A source installation reports `null`.
+
+The response has no application authentication. It contains no key, webhook
+secret, database URL, or token, but its App ID and effective configuration are
+still operational metadata. Keep it on the operator route.
+
+This endpoint is a self-report. It can show that fields agree with a deployment
+record, but it cannot independently prove which source a running process
+loaded or whether an image has trusted provenance.
+
 ## `GET /health/live`
 
 Liveness reports whether the process can serve requests and whether the worker and reconciler tasks expected in this process are still running. An orchestrator may restart the container after repeated `503` responses.
@@ -47,18 +87,31 @@ Success returns `200 application/json`:
 ```json
 {
   "status": "alive",
+  "worker_enabled": true,
+  "reconciler_enabled": true,
   "worker": true,
   "reconciler": true
 }
 ```
 
-If an expected task has stopped, the response is `503`, `status` is `not_alive`, and the corresponding boolean is `false`. A disabled task reports `true`. A task also reports `true` when it is not expected because this process has no GitHub client.
+`worker_enabled` reflects `EXTRA_CODEOWNERS_WORKER_ENABLED`, and
+`reconciler_enabled` reflects `EXTRA_CODEOWNERS_RECONCILE_ENABLED`. The
+existing `worker` and `reconciler` fields report task liveness. If an expected
+task has stopped, the response is `503`, `status` is `not_alive`, and its
+liveness field is `false`.
+
+A disabled task reports `false` in its `*_enabled` field and `true` in its
+liveness field. A liveness field also reports `true` when the task is not
+expected because this process has no GitHub client.
 
 Liveness does not test GitHub credentials, database access, queue progress, or successful reconciliation. It cannot observe a worker or reconciler running in another process. Use readiness and metrics for those conditions.
 
 ## `GET /health/ready`
 
-Readiness reports whether this instance has GitHub credentials, a compatible database, and every locally enabled background task. A `503` response should remove the instance from webhook traffic without forcing a restart loop.
+Readiness reports whether this instance recently authenticated as the exact
+configured GitHub App, can query a compatible database, and has every locally
+enabled background task. A `503` response should remove the instance from
+webhook traffic without forcing a restart loop.
 
 The response is `200` when ready and `503` otherwise:
 
@@ -67,14 +120,32 @@ The response is `200` when ready and `503` otherwise:
   "status": "ready",
   "github_credentials": true,
   "database": true,
+  "worker_enabled": true,
+  "reconciler_enabled": true,
   "worker": true,
   "reconciler": true
 }
 ```
 
-`status` becomes `not_ready` if credentials or the database are unavailable, or if an enabled local worker or reconciler task has stopped. A disabled worker or reconciler reports `true`. This endpoint cannot prove that a corresponding task in another process is healthy.
+`worker_enabled` reflects `EXTRA_CODEOWNERS_WORKER_ENABLED`, and
+`reconciler_enabled` reflects `EXTRA_CODEOWNERS_RECONCILE_ENABLED`. The
+existing `worker` and `reconciler` fields report whether each task is ready. A
+disabled task reports `false` in its `*_enabled` field and `true` in its
+readiness field.
 
-Readiness does not validate every installation or repository policy. Those conditions are evaluated per pull request.
+`status` becomes `not_ready` if credentials or the database are unavailable,
+or if an enabled local worker or reconciler task has stopped. This endpoint
+cannot prove that a corresponding task in another process is healthy.
+
+At startup and on a bounded interval, the service signs an App JWT and calls
+GitHub's `GET /app`. `github_credentials` remains `true` only while the last
+successful response is inside the configured freshness window and its numeric
+App ID matches `EXTRA_CODEOWNERS_GITHUB_APP_ID`. The default probe interval is
+30 seconds, and the default freshness window is 90 seconds. One failed refresh
+does not discard a still-fresh success.
+
+Readiness does not validate every installation or repository policy. Those
+conditions are evaluated per pull request.
 
 ## `GET /metrics`
 

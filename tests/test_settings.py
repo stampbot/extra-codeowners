@@ -1,9 +1,18 @@
+import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
+from psycopg.pq import Conninfo
 from pydantic import ValidationError
 
-from extra_codeowners.settings import Settings
+from extra_codeowners.settings import (
+    MAX_SECRET_FILE_BYTES,
+    MAX_SECRET_SYMLINKS,
+    POSTGRESQL_CONNECTION_ENVIRONMENT,
+    Settings,
+    validate_production_database_transport,
+)
 
 
 def test_defaults_keep_insecure_escape_hatch_disabled() -> None:
@@ -13,8 +22,29 @@ def test_defaults_keep_insecure_escape_hatch_disabled() -> None:
     assert settings.github_ready is False
     assert settings.check_name == "Extra CODEOWNERS / approval"
     assert settings.worker_retry_max_seconds == 60
+    assert settings.github_identity_probe_interval_seconds == 30
+    assert settings.github_identity_freshness_seconds == 90
     assert settings.is_organization_config_repository("example/.github") is True
     assert settings.is_organization_config_repository("example/project") is False
+
+
+def test_github_identity_freshness_covers_at_least_two_probe_intervals() -> None:
+    with pytest.raises(ValidationError, match="at least twice"):
+        Settings(
+            _env_file=None,
+            github_identity_probe_interval_seconds=60,
+            github_identity_freshness_seconds=90,
+        )
+
+
+def test_validation_errors_never_echo_secret_input() -> None:
+    sentinel = "DO-NOT-ECHO-THIS-SENTINEL"
+
+    with pytest.raises(ValidationError) as captured:
+        Settings(_env_file=None, policy_path=f"../{sentinel}")
+
+    assert sentinel not in str(captured.value)
+    assert sentinel not in repr(captured.value)
 
 
 def test_org_config_repository_is_normalized_case_insensitively() -> None:
@@ -22,6 +52,28 @@ def test_org_config_repository_is_normalized_case_insensitively() -> None:
 
     assert settings.org_config_repository == "policies"
     assert settings.is_organization_config_repository("Example/POLICIES") is True
+
+
+@pytest.mark.parametrize(
+    "github_api_url",
+    [
+        "https://user:password@api.github.com",
+        "https://api.github.com?token=secret",
+        "https://api.github.com#secret",
+    ],
+)
+def test_github_api_url_rejects_secret_bearing_components(github_api_url: str) -> None:
+    with pytest.raises(ValidationError, match="must not contain credentials"):
+        Settings(_env_file=None, github_api_url=github_api_url)
+
+
+def test_github_api_url_allows_a_github_enterprise_api_path() -> None:
+    settings = Settings(
+        _env_file=None,
+        github_api_url="https://github.example.test/api/v3",
+    )
+
+    assert str(settings.github_api_url) == "https://github.example.test/api/v3"
 
 
 def test_secret_files_are_loaded_without_model_exposure(tmp_path: Path) -> None:
@@ -42,6 +94,90 @@ def test_secret_files_are_loaded_without_model_exposure(tmp_path: Path) -> None:
     assert settings.github_ready is True
     assert "private-key-value" not in str(settings)
     assert "webhook-secret-value" not in str(settings)
+
+
+def test_projected_kubernetes_secret_symlink_chain_is_supported(tmp_path: Path) -> None:
+    version = tmp_path / "..2026_07_24"
+    version.mkdir()
+    (version / "private-key.pem").write_text("projected-private-key\n", encoding="utf-8")
+    (tmp_path / "..data").symlink_to(version.name, target_is_directory=True)
+    projected = tmp_path / "private-key.pem"
+    projected.symlink_to("..data/private-key.pem")
+
+    settings = Settings(_env_file=None, github_private_key_file=projected)
+
+    assert settings.private_key_value == "projected-private-key"
+
+
+def test_secret_file_reader_rejects_a_fifo_without_blocking(tmp_path: Path) -> None:
+    fifo = tmp_path / "private-key.pem"
+    os.mkfifo(fifo)
+    settings = Settings(_env_file=None, github_private_key_file=fifo)
+
+    with pytest.raises(ValueError, match="regular file"):
+        _ = settings.private_key_value
+
+
+def test_secret_file_reader_rejects_a_device() -> None:
+    settings = Settings(_env_file=None, github_private_key_file=Path("/dev/null"))
+
+    with pytest.raises(ValueError, match="regular file"):
+        _ = settings.private_key_value
+
+
+def test_secret_file_reader_rejects_oversized_content(tmp_path: Path) -> None:
+    secret = tmp_path / "private-key.pem"
+    secret.write_bytes(b"x" * (MAX_SECRET_FILE_BYTES + 1))
+    settings = Settings(_env_file=None, github_private_key_file=secret)
+
+    with pytest.raises(ValueError, match="size limit"):
+        _ = settings.private_key_value
+
+
+def test_secret_file_reader_rejects_an_unbounded_symlink_chain(tmp_path: Path) -> None:
+    target = tmp_path / "target"
+    target.write_text("secret", encoding="utf-8")
+    for index in reversed(range(MAX_SECRET_SYMLINKS + 1)):
+        destination = target.name if index == MAX_SECRET_SYMLINKS else f"link-{index + 1}"
+        (tmp_path / f"link-{index}").symlink_to(destination)
+    settings = Settings(_env_file=None, github_private_key_file=tmp_path / "link-0")
+
+    with pytest.raises(ValueError, match="symlink limit"):
+        _ = settings.private_key_value
+
+
+def test_secret_file_reader_rejects_metadata_change_during_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secret = tmp_path / "private-key.pem"
+    secret.write_text("secret", encoding="utf-8")
+    settings = Settings(_env_file=None, github_private_key_file=secret)
+    real_fstat = os.fstat
+    calls = 0
+
+    def changing_fstat(descriptor: int) -> os.stat_result | SimpleNamespace:
+        nonlocal calls
+        calls += 1
+        metadata = real_fstat(descriptor)
+        if calls == 1:
+            return metadata
+        return SimpleNamespace(
+            st_dev=metadata.st_dev,
+            st_ino=metadata.st_ino,
+            st_mode=metadata.st_mode,
+            st_nlink=metadata.st_nlink,
+            st_uid=metadata.st_uid,
+            st_gid=metadata.st_gid,
+            st_size=metadata.st_size,
+            st_mtime_ns=metadata.st_mtime_ns + 1,
+            st_ctime_ns=metadata.st_ctime_ns,
+        )
+
+    monkeypatch.setattr("extra_codeowners.settings.os.fstat", changing_fstat)
+
+    with pytest.raises(ValueError, match="changed while it was read"):
+        _ = settings.private_key_value
 
 
 def test_ambiguous_secret_sources_are_rejected(tmp_path: Path) -> None:
@@ -74,6 +210,66 @@ def test_production_requires_postgresql() -> None:
 
     with pytest.raises(ValueError, match="PostgreSQL"):
         settings.validate_for_service()
+
+
+@pytest.mark.parametrize(
+    "database_url",
+    [
+        "postgresql+psycopg://user:password@db.example.test/database?sslmode=verify-full",
+        "postgresql+psycopg://user:password@localhost/database",
+        "postgresql+psycopg://user:password@127.0.0.1/database",
+        "postgresql+psycopg://user:password@[::1]/database",
+        "postgresql+psycopg://user:password@/database?host=%2Frun%2Fpostgresql",
+        (
+            "postgresql+psycopg://user:password@db.example.test/database?"
+            "hostaddr=203.0.113.1&sslmode=verify-full"
+        ),
+        (
+            "postgresql+psycopg://user:password@db.example.test/database?"
+            "sslmode=verify-full&sslrootcert=%2Frun%2Fsecrets%2Fdatabase-ca%2Froot.pem"
+        ),
+    ],
+)
+def test_production_database_transport_validator_accepts_safe_routes(
+    database_url: str,
+) -> None:
+    validate_production_database_transport(database_url)
+
+
+@pytest.mark.parametrize(
+    "database_url",
+    [
+        "sqlite:///extra-codeowners.db",
+        "postgresql://user:password@localhost/database",
+        "postgresql+psycopg2://user:password@localhost/database",
+        "postgresql+psycopg://user:password@db.example.test/database",
+        "postgresql+psycopg://user:password@/database",
+        "postgresql+psycopg://user:@localhost/database",
+        "postgresql+psycopg://user:password@localhost/database?hostaddr=203.0.113.1",
+        "postgresql+psycopg://user:password@/database?service=remote-database",
+        (
+            "postgresql+psycopg://user:password@db.example.test/database?"
+            "sslmode=verify-full&options=-csearch_path%3Dunsafe"
+        ),
+        (
+            "postgresql+psycopg://user:password@db.example.test/database?"
+            "sslmode=verify-full&sslrootcert=relative.pem"
+        ),
+        (
+            "postgresql+psycopg://user:password@db-1.example.test,"
+            "db-2.example.test/database?sslmode=verify-full"
+        ),
+        (
+            "postgresql+psycopg://user:password@/database?"
+            "host=%2Frun%2Fpostgresql%2Cdb.example.test&sslmode=verify-full"
+        ),
+    ],
+)
+def test_production_database_transport_validator_rejects_unsafe_routes(
+    database_url: str,
+) -> None:
+    with pytest.raises(ValueError, match=r"PostgreSQL|sslmode=verify-full"):
+        validate_production_database_transport(database_url)
 
 
 @pytest.mark.parametrize("ssl_mode", [None, "require", "verify-ca"])
@@ -152,8 +348,30 @@ def test_production_postgresql_does_not_misclassify_routed_remote_hosts(
         database_url=database_url,
     )
 
-    with pytest.raises(ValueError, match="sslmode=verify-full"):
+    with pytest.raises(
+        ValueError,
+        match=r"one explicit host|one unambiguous explicit route|sslmode=verify-full",
+    ):
         settings.validate_for_service()
+
+
+def test_production_postgresql_rejects_every_ambient_libpq_connection_setting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PGHOSTADDR", "203.0.113.1")
+
+    with pytest.raises(ValueError, match=r"ambient libpq.*PGHOSTADDR"):
+        validate_production_database_transport(
+            "postgresql+psycopg://user:password@localhost/database"
+        )
+
+
+def test_ambient_libpq_denylist_covers_the_bundled_client() -> None:
+    libpq_environment = {
+        item.envvar.decode() for item in Conninfo.get_defaults() if item.envvar is not None
+    }
+
+    assert libpq_environment <= POSTGRESQL_CONNECTION_ENVIRONMENT
 
 
 def test_setup_requires_state_secret() -> None:

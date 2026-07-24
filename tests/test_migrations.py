@@ -33,6 +33,18 @@ def test_fresh_database_upgrades_to_packaged_head(tmp_path: Path) -> None:
     assert store.database_available() is True
 
 
+def test_current_head_schema_drift_blocks_migration_success(tmp_path: Path) -> None:
+    url = database_url(tmp_path, "drift-at-head.db")
+    upgrade_database(url)
+    engine = create_engine(url)
+    with engine.begin() as connection:
+        connection.execute(text("DROP INDEX ix_evaluation_jobs_claim"))
+    engine.dispose()
+
+    with pytest.raises(RuntimeError, match="incompatible indexes"):
+        upgrade_database(url)
+
+
 def test_runtime_startup_rejects_and_does_not_create_an_empty_schema(tmp_path: Path) -> None:
     url = database_url(tmp_path)
     store = QueueStore(url)
