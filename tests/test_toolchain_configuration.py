@@ -14,6 +14,8 @@ from typing import Any, cast
 
 import yaml  # type: ignore[import-untyped]
 
+import extra_codeowners
+
 ROOT = Path(__file__).resolve().parents[1]
 SETUP_UV = re.compile(r"^(?P<indent>\s*)uses: astral-sh/setup-uv@(?P<sha>[0-9a-f]{40})(?:\s+#.*)?$")
 
@@ -160,7 +162,7 @@ def test_evaluation_beta_bootstrap_rejects_ignored_imports_before_execution(
     checkout = tmp_path / "source"
     ignored_bytecode = shutil.ignore_patterns("__pycache__", "*.pyc")
     shutil.copytree(
-        ROOT / "extra_codeowners",
+        Path(extra_codeowners.__file__).resolve().parent,
         checkout / "extra_codeowners",
         ignore=ignored_bytecode,
     )
