@@ -34,13 +34,20 @@ member order, `MANIFEST.json` and source-record schemas, Sigstore issuer and
 transparency-log requirements, and the SBOM and provenance predicate
 contracts.
 
+CI now fetches direct and Alpine sources once into verified stores, reuses
+those stores for both architectures, and builds the final evidence bundle in a
+rootless parser with no network. That is one part of #28, not completion. Image
+and layer inventory parsing still sits outside that sandbox. A supported
+recipient verifier and an enabled, isolated path for signing and publication do
+not exist yet.
+
 Three open security gates separate today's CI evidence from this release
 contract:
 
 | Issue | Work still required |
 | --- | --- |
 | [#18](https://github.com/stampbot/extra-codeowners/issues/18) | Complete notice and corresponding-source records for CFFI, Psycopg, and Pydantic Core. |
-| [#28](https://github.com/stampbot/extra-codeowners/issues/28) | Separate unprivileged collection from publication authority, freeze the wire format, and ship an adversarially tested recipient verifier and how-to. |
+| [#28](https://github.com/stampbot/extra-codeowners/issues/28) | Move image and layer inventory parsing behind the rootless offline boundary, freeze the wire format, and ship an adversarially tested recipient verifier, signing and publication path, and how-to. |
 | [#32](https://github.com/stampbot/extra-codeowners/issues/32) | Bind the retained Python selection records and exact wheel digest into the complete release evidence, then bind the installed runtime to that same wheel. |
 
 The raw spine includes an adversarially tested transport verifier. It does not
@@ -186,7 +193,7 @@ The archive must contain at least these entry points:
 | `inventory/native-component-coverage.json` | Derived per-owner ledger containing full closed and open review records, reviewed SBOM anomalies, and the exact remaining owner count and names. |
 | `policy/container-policy.json` | The exact reviewed policy used to accept the candidate. |
 | `artifacts/application/` | The exact selected wheel, sdist, both native build records, and cross-architecture selection record; every file is hash-bound by `MANIFEST.json`. |
-| `artifacts/native-wheels/` | One exact locked platform wheel for every owner in the union of `native_payloads` and `embedded_sboms`, plus separately retained raw embedded-SBOM bytes. `MANIFEST.json` binds each owner, platform, requested URL and redirect chain, path, size, and SHA-256. |
+| `artifacts/native-wheels/` | One exact locked platform wheel for every owner in the union of `native_payloads` and `embedded_sboms`, plus separately retained raw embedded-SBOM bytes. `MANIFEST.json` binds each owner, platform, exact requested URL, credential-safe redirect origins, path, size, and SHA-256. |
 | `licenses/standard/` | Hash-pinned standard license texts required by reviewed expressions. |
 | `licenses/from-source/` | Hash-pinned notices retained from exact source archives. |
 | `sources/application/` | Exact tracked Extra CODEOWNERS source blobs and Git modes at the image revision. |
@@ -210,7 +217,7 @@ Each wheel record has exactly these fields:
 | `owner` | Canonical `python:NAME@VERSION` owner derived from the inventory. |
 | `platform` | Exact inventory platform. |
 | `url` | Requested lock-file URL. |
-| `urls` | Ordered requested URL and redirect chain; every URL is credential-free HTTPS. |
+| `urls` | The exact requested URL followed by the canonical HTTPS origin of each redirect destination. Redirected paths and queries are not persisted. |
 | `filename` | Basename selected from the lock-file URL. |
 | `path` | `artifacts/native-wheels/NAME/VERSION/FILENAME`. |
 | `size`, `sha256` | Size and lowercase SHA-256 of the retained wheel bytes. |
@@ -306,22 +313,35 @@ replay must also remain intact. Editing a boolean cannot satisfy these gates.
 ## Collection and publication boundary
 
 No job that parses a contributor-controlled image or archive may hold package
-write, signing, attestation, GitHub release, or OpenID Connect authority. The
-required sequence is:
+write, signing, attestation, GitHub release, or OpenID Connect authority.
+
+CI currently implements this source and bundle path:
 
 ```text
-unprivileged pinned fetch
-  -> rootless offline discovery parse
-  -> unprivileged checksum-addressed distfile fetch
+trusted direct-source plan
+  -> unprivileged direct-source fetch
+  -> rootless offline Alpine distfile plan
+  -> unprivileged Alpine distfile fetch
+  -> verified stores reused by both architecture jobs
   -> rootless offline final parse and deterministic bundle
-  -> digest and policy validation
-  -> short-lived isolated signing and publication
 ```
 
-Rootless parse phases must have no network, no secrets, no Docker socket, an
-immutable input, read-only mounts where practical, and explicit memory, CPU,
-process, file-count, and disk quotas. The privileged phase accepts only
-bounded, schema-validated, digest-addressed outputs from that boundary.
+The two stores are uploaded once and downloaded by immutable artifact ID. Each
+bundle consumer binds them to trusted plan digests and sizes; there is no
+network fallback. Each source plan retains its exact requested URL. Persisted
+redirect destinations are reduced to canonical HTTPS origins, so a redirected
+path, signed query, or credential does not enter the store or evidence
+manifest.
+
+The rootless parser runs without network access, secrets, a Docker socket,
+Linux capabilities, or privilege escalation. It uses a read-only image and
+inputs, bounded `tmpfs` scratch, work, and output mounts, and explicit memory,
+CPU, process, file-descriptor, byte, and inode limits.
+
+Issue #28 still needs to put image and layer inventory parsing behind that
+boundary. It must also add the recipient verifier and a short-lived isolated
+signing and publication path. That privileged phase may accept only bounded,
+schema-validated, digest-addressed outputs from the parser.
 
 The raw spine can carry OCI objects across the unprivileged-to-privileged
 boundary, but it does not complete the boundary by itself. The root OCI index

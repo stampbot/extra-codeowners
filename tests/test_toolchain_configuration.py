@@ -236,7 +236,7 @@ def test_ci_calls_the_reusable_proof_and_preserves_the_required_check() -> None:
         assert f"{output}: ${{{{ steps.accept.outputs.{output} }}}}" in required_check
         assert f"printf '{output}=%s\\n'" in required_check
 
-    assert "needs: python-distribution" in container
+    assert "      - python-distribution" in container
     assert "if: ${{ always() }}" in container
     assert 'if [ "$DISTRIBUTION_RESULT" != success ]; then' in container
     assert "artifact-ids: ${{ needs.python-distribution.outputs.artifact-id }}" in container
@@ -262,6 +262,131 @@ def test_ci_calls_the_reusable_proof_and_preserves_the_required_check() -> None:
     assert "--python-distribution-artifact-digest" in container
     assert "--application-selection-record-sha256" in container
     assert "--selected-python-directory" in container
+
+
+def test_ci_fetches_one_shared_verified_source_boundary_for_both_architectures() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    producer = workflow.split("  verified-container-sources:\n", 1)[1].split("  container:\n", 1)[0]
+    container = workflow.split("  container:\n", 1)[1]
+
+    assert "needs: python-distribution" in producer
+    assert "permissions:\n      contents: read" in producer
+    assert "timeout-minutes: 120" in producer
+    for forbidden_permission in ("packages: write", "id-token: write", "attestations: write"):
+        assert forbidden_permission not in producer
+    assert producer.count(".github/scripts/container_source_plan.py direct-plan") == 1
+    assert producer.count(".github/scripts/fetch_verified_sources.py") == 2
+    assert producer.count("timeout --signal=TERM --kill-after=30s") == 3
+    assert "--output /output/alpine-plan.json" in producer
+    assert "materialize-source-plan" in producer
+    assert 'sha256sum "$alpine_plan"' not in producer
+    assert "stat --format='%s' \"$alpine_plan\"" not in producer
+    assert "size=64m,nr_inodes=8192,nosuid,nodev,noexec" in producer
+    assert "--parser source-plan" in producer
+    assert '--container-name "$parser_container_name"' in producer
+    assert "--execute" in producer
+    assert producer.count("-exec chmod 0755") == 1
+    assert producer.count("-exec chmod 0644") == 1
+    assert "chown -R" not in producer
+    assert "--pull=never" not in producer  # The fixed wrapper, not the workflow, owns Docker argv.
+    assert "parser_image_id" in producer
+    assert "^sha256:[0-9a-f]{64}$" in producer
+    assert "docker/setup-buildx-action@bb05f3f" in producer
+    assert "moby/buildkit:v0.30.0@sha256:0168606b" in producer
+    assert producer.count("actions/upload-artifact@043fb46d") == 2
+    assert "artifact-id: ${{ steps.accept-artifact.outputs.artifact-id }}" in producer
+    assert "artifact-digest: ${{ steps.accept-artifact.outputs.artifact-digest }}" in producer
+    assert '[[ "$ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]]' in producer
+    assert '[[ "$ARTIFACT_DIGEST" =~ ^[0-9a-f]{64}$ ]]' in producer
+    assert "verified-source-stores-${{ github.sha }}-attempt-" in producer
+    assert "${{ github.run_attempt }}" in producer
+    assert "if: ${{ always() && !cancelled() }}" in producer
+    assert "direct-fetch-journal.json" in producer
+    assert "alpine-fetch-journal.json" in producer
+    assert "retention-days: 2" in producer
+    for output in (
+        "direct-plan-sha256",
+        "direct-plan-size",
+        "alpine-plan-sha256",
+        "alpine-plan-size",
+    ):
+        assert f"{output}: ${{{{ steps.bindings.outputs.{output} }}}}" in producer
+        assert f"printf '{output}=%s\\n'" in producer
+    source_cleanup = producer.split("          cleanup_plan_output() {\n", 1)[1].split(
+        "          }\n", 1
+    )[0]
+    assert '/usr/bin/docker rm --force "$parser_container_name"' in source_cleanup
+    assert source_cleanup.index("/usr/bin/docker rm --force") < source_cleanup.index(
+        "mountpoint --quiet"
+    )
+
+    assert "      - verified-container-sources" in container
+    source_download = container.split(
+        "      - name: Download both verified source stores by immutable ID\n", 1
+    )[1].split("      - name:", 1)[0]
+    assert (
+        "artifact-ids: ${{ needs.verified-container-sources.outputs.artifact-id }}"
+        in source_download
+    )
+    assert "digest-mismatch: error" in source_download
+    for mutable_input in ("name:", "pattern:", "run-id:", "repository:", "github-token:"):
+        assert mutable_input not in source_download
+    assert container.count("verified-source-stores") == 1
+    assert "Prepare fixed rootless parser read-only inputs" in container
+    assert container.count("-exec chmod 0755") == 1
+    assert container.count("-exec chmod 0644") == 1
+
+
+def test_ci_runs_bundle_only_in_the_raw_id_offline_evidence_sandbox() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    container = workflow.split("  container:\n", 1)[1]
+    sandbox_step = container.split(
+        "      - name: Build source evidence in the offline parser sandbox\n", 1
+    )[1].split("      - name: Upload container distribution evidence\n", 1)[0]
+
+    assert "python .github/scripts/container_evidence.py bundle" not in workflow
+    assert 'parser_image="extra-codeowners:test-${ARCHITECTURE}"' in sandbox_step
+    assert "docker image inspect --format '{{.Id}}'" in sandbox_step
+    assert "^sha256:[0-9a-f]{64}$" in sandbox_step
+    assert '--image "$parser_image_id"' in sandbox_step
+    assert '--container-name "$parser_container_name"' in sandbox_step
+    assert "--parser evidence" in sandbox_step
+    assert "--execute" in sandbox_step
+    assert "timeout --signal=TERM --kill-after=30s 60m" in sandbox_step
+    assert (
+        "size=1152m,nr_inodes=8192,nosuid,nodev,noexec,"
+        "mode=0700,uid=65532,gid=65532" in sandbox_step
+    )
+    for name in ("repo", "inventory", "files", "python", "direct-store", "alpine-store"):
+        assert f'--input "{name}=' in sandbox_step
+    for argument in (
+        "--policy /inputs/repo/.compliance/container-policy.json",
+        "--uv-lock /inputs/repo/uv.lock",
+        "--repo /inputs/repo",
+        "--bundle-work-root /work",
+        "--direct-source-store-root /inputs/direct-store",
+        "--direct-source-plan-sha256",
+        "--direct-source-plan-size",
+        "--alpine-source-store-root /inputs/alpine-store",
+        "--alpine-source-plan-sha256",
+        "--alpine-source-plan-size",
+        "--selected-python-directory /inputs/python",
+        '--output "/output/${bundle}"',
+        '--predicate-output "/output/${predicate}"',
+    ):
+        assert argument in sandbox_step
+    assert 'sudo chown "$(id -u):$(id -g)" "$output"' in sandbox_step
+    assert "chown -R" not in sandbox_step
+    assert "run_evidence_parser.py materialize-evidence" in sandbox_step
+    assert "cp " not in sandbox_step
+    assert "docker.sock" not in sandbox_step
+    evidence_cleanup = sandbox_step.split("          cleanup_evidence_output() {\n", 1)[1].split(
+        "          }\n", 1
+    )[0]
+    assert '/usr/bin/docker rm --force "$parser_container_name"' in evidence_cleanup
+    assert evidence_cleanup.index("/usr/bin/docker rm --force") < evidence_cleanup.index(
+        "mountpoint --quiet"
+    )
 
 
 def test_release_scan_consumes_only_the_same_run_selected_distribution() -> None:
@@ -368,3 +493,26 @@ def test_release_spine_scripts_are_in_every_python_type_check_entrypoint() -> No
     for source_name, source in sources.items():
         for path in required:
             assert path in source, f"{source_name} does not type-check {path}"
+
+
+def test_source_store_scripts_are_type_checked_and_available_to_container_tests() -> None:
+    required = {
+        ".github/scripts/container_source_plan.py",
+        ".github/scripts/fetch_verified_sources.py",
+        ".github/scripts/run_evidence_parser.py",
+        ".github/scripts/verified_source_store.py",
+    }
+    type_checks = {
+        "mise": (ROOT / "mise.toml").read_text(encoding="utf-8"),
+        "CI": (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8"),
+        "release": (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8"),
+    }
+    dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+    dockerignore = (ROOT / ".dockerignore").read_text(encoding="utf-8")
+    test_stage = dockerfile.split("FROM builder AS test\n", 1)[1].split("\nFROM ", 1)[0]
+
+    for path in required:
+        for source_name, source in type_checks.items():
+            assert path in source, f"{source_name} does not type-check {path}"
+        assert path in test_stage, f"container test stage does not copy {path}"
+        assert f"!{path}" in dockerignore, f"Docker build context excludes {path}"

@@ -1194,7 +1194,7 @@ def test_ci_proves_two_separate_raw_artifact_transports() -> None:
         "  release-spine-transport-consumer:\n", 1
     )[0]
     consumer = source.split("  release-spine-transport-consumer:\n", 1)[1].split(
-        "  container:\n", 1
+        "  verified-container-sources:\n", 1
     )[0]
 
     assert "permissions:\n      contents: read" in producer

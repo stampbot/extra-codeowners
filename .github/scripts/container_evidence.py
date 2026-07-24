@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """Build deterministic, digest-bound container distribution evidence.
 
-The collector treats image layers and downloaded archives as hostile input. It
-does not execute image content, APKBUILD recipes, setup.py files, or source build
-scripts. Network content must be selected by immutable policy or by a checksum
-recorded in an immutable lock/recipe.
+The collector treats image layers and retained source archives as hostile input.
+It does not execute image content, APKBUILD recipes, setup.py files, or source
+build scripts. Source bytes come only from independently bound, verified stores.
 """
 
 from __future__ import annotations
@@ -13,6 +12,7 @@ import argparse
 import base64
 import binascii
 import configparser
+import contextlib
 import csv
 import dataclasses
 import datetime
@@ -32,9 +32,7 @@ import sys
 import tarfile
 import tempfile
 import tomllib
-import urllib.error
 import urllib.parse
-import urllib.request
 import zipfile
 import zlib
 from collections.abc import Mapping, Sequence
@@ -50,6 +48,12 @@ from packaging.utils import (
     parse_wheel_filename,
 )
 from packaging.version import InvalidVersion, Version
+
+SCRIPT_DIRECTORY = Path(__file__).resolve().parent
+if str(SCRIPT_DIRECTORY) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIRECTORY))
+
+import verified_source_store  # noqa: E402
 
 SCHEMA_VERSION = 7
 EVIDENCE_MEDIA_TYPE = f"application/vnd.stampbot.container-evidence.v{SCHEMA_VERSION}+tar+gzip"
@@ -76,8 +80,14 @@ CPYTHON_IDENTITY_PATHS = {
 EXPECTED_UV_VERSION = "0.11.28"
 APPLICATION_WHEEL_LABEL = "org.stampbot.extra-codeowners.application-wheel.sha256"
 APPLICATION_SELECTION_LABEL = "org.stampbot.extra-codeowners.python-selection-record.sha256"
+BASE_SOURCE_REQUEST_IDS = {
+    "docker-python-recipe": "docker-python:recipe",
+    "cpython": "cpython:source",
+}
+DOCKER_PYTHON_LICENSE_REQUEST_ID = "docker-python:license"
 MAX_DOWNLOAD_BYTES = 64 * 1024 * 1024
 MAX_NATIVE_COMPONENT_SOURCE_BYTES = 128 * 1024 * 1024
+MAX_ALPINE_DISTFILE_BYTES = MAX_NATIVE_COMPONENT_SOURCE_BYTES
 MAX_ARCHIVE_MEMBER_BYTES = 64 * 1024 * 1024
 MAX_ARCHIVE_MEMBERS = 250_000
 MAX_ARCHIVE_TOTAL_BYTES = 1024 * 1024 * 1024
@@ -120,8 +130,8 @@ MAX_OWNER_SUBTREE_MEMBERS = 100_000
 MAX_OWNER_SUBTREE_BYTES = 256 * 1024 * 1024
 MAX_CARGO_LOCK_BYTES = 8 * 1024 * 1024
 MAX_CARGO_LOCK_PACKAGES = 100_000
-MAX_BUNDLE_DOWNLOADS = 10_000
-MAX_BUNDLE_DOWNLOAD_BYTES = 1024 * 1024 * 1024
+MAX_BUNDLE_SOURCE_READS = 10_000
+MAX_BUNDLE_SOURCE_BYTES = 1024 * 1024 * 1024
 MAX_BUNDLE_FILES = 100_000
 MAX_BUNDLE_RETAINED_BYTES = 1024 * 1024 * 1024
 MAX_BUNDLE_OUTPUT_BYTES = 1024 * 1024 * 1024
@@ -295,7 +305,7 @@ class BoundedTarInfo(tarfile.TarInfo):
 
 
 @dataclass(frozen=True)
-class Download:
+class VerifiedSource:
     content: bytes
     urls: tuple[str, ...]
 
@@ -333,20 +343,20 @@ class ValidatedSourceZipEntry:
 
 @dataclass
 class BundleBudget:
-    """Bound cumulative network and retained evidence resources."""
+    """Bound cumulative verified-source and retained evidence resources."""
 
-    download_count: int = 0
-    download_bytes: int = 0
+    source_read_count: int = 0
+    source_bytes: int = 0
     retained_file_count: int = 0
     retained_bytes: int = 0
 
-    def record_download(self, content: bytes) -> None:
-        self.download_count += 1
-        self.download_bytes += len(content)
-        if self.download_count > MAX_BUNDLE_DOWNLOADS:
-            raise EvidenceError("evidence bundle exceeded the cumulative download-count limit")
-        if self.download_bytes > MAX_BUNDLE_DOWNLOAD_BYTES:
-            raise EvidenceError("evidence bundle exceeded the cumulative download-size limit")
+    def record_source(self, content: bytes) -> None:
+        self.source_read_count += 1
+        self.source_bytes += len(content)
+        if self.source_read_count > MAX_BUNDLE_SOURCE_READS:
+            raise EvidenceError("evidence bundle exceeded the cumulative source-read limit")
+        if self.source_bytes > MAX_BUNDLE_SOURCE_BYTES:
+            raise EvidenceError("evidence bundle exceeded the cumulative source-size limit")
 
     def record_retained(self, content: bytes) -> None:
         self.retained_file_count += 1
@@ -372,28 +382,6 @@ class BoundedBytesBuilder:
 
     def finish(self) -> bytes:
         return bytes(self.content)
-
-
-class AuditedRedirectHandler(urllib.request.HTTPRedirectHandler):
-    def __init__(self, initial_url: str) -> None:
-        super().__init__()
-        self.urls = [initial_url]
-
-    def redirect_request(
-        self,
-        request: urllib.request.Request,
-        file_pointer: Any,
-        code: int,
-        message: str,
-        headers: Any,
-        new_url: str,
-    ) -> urllib.request.Request | None:
-        if len(self.urls) > MAX_REDIRECTS:
-            raise EvidenceError(f"source exceeded {MAX_REDIRECTS} redirects")
-        resolved = urllib.parse.urljoin(request.full_url, new_url)
-        require_https_source_url(resolved)
-        self.urls.append(resolved)
-        return super().redirect_request(request, file_pointer, code, message, headers, resolved)
 
 
 def canonical_json(value: object) -> bytes:
@@ -535,6 +523,61 @@ def read_local_bytes(path: Path, *, max_bytes: int) -> bytes:
         raise EvidenceError(f"cannot read local file {path}: {exc}") from exc
     if len(content) > max_bytes:
         raise EvidenceError(f"local file exceeds the size limit: {path}")
+    return content
+
+
+def read_stable_local_bytes(path: Path, *, max_bytes: int, source: str) -> bytes:
+    """Read one bounded file snapshot and fail if its name or bytes change."""
+
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    if not nofollow or not hasattr(os, "pread"):
+        raise EvidenceError("stable local input requires no-follow descriptor support")
+    absolute = path.absolute()
+    descriptor = -1
+
+    def identity(metadata: os.stat_result) -> tuple[int, ...]:
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_nlink != 1
+            or not 0 <= metadata.st_size <= max_bytes
+        ):
+            raise EvidenceError(f"{source} must be one bounded, single-link regular file")
+        return (
+            metadata.st_dev,
+            metadata.st_ino,
+            metadata.st_mode,
+            metadata.st_nlink,
+            metadata.st_uid,
+            metadata.st_gid,
+            metadata.st_size,
+            metadata.st_mtime_ns,
+            metadata.st_ctime_ns,
+        )
+
+    try:
+        before = identity(os.stat(absolute, follow_symlinks=False))
+        descriptor = os.open(
+            absolute,
+            os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0) | nofollow,
+        )
+        opened = identity(os.fstat(descriptor))
+        if opened != before:
+            raise EvidenceError(f"{source} changed while it was opened")
+        content = os.pread(descriptor, before[6] + 1, 0)
+        after_open = identity(os.fstat(descriptor))
+        after_path = identity(os.stat(absolute, follow_symlinks=False))
+    except EvidenceError:
+        raise
+    except OSError as exc:
+        raise EvidenceError(f"cannot read {source} safely") from exc
+    finally:
+        if descriptor >= 0:
+            with contextlib.suppress(OSError):
+                os.close(descriptor)
+    if len(content) != before[6] or len(content) > max_bytes:
+        raise EvidenceError(f"{source} changed size while it was read")
+    if opened != after_open or opened != after_path:
+        raise EvidenceError(f"{source} changed while it was read")
     return content
 
 
@@ -1759,14 +1802,31 @@ def validate_effective_python_installations(
     return {path: installation.name for path, installation in active_claims.items()}
 
 
-def run(command: Sequence[str], *, max_output_bytes: int, cwd: Path | None = None) -> bytes:
+def run(
+    command: Sequence[str],
+    *,
+    max_output_bytes: int,
+    cwd: Path | None = None,
+    pass_fds: Sequence[int] = (),
+) -> bytes:
     """Run a fixed command with bounded stdout and stderr capture."""
 
     if max_output_bytes < 0:
         raise EvidenceError("command output limit must not be negative")
+    inherited_descriptors = tuple(pass_fds)
+    if (
+        len(inherited_descriptors) > 16
+        or len(set(inherited_descriptors)) != len(inherited_descriptors)
+        or any(
+            type(descriptor) is not int or descriptor < 0 for descriptor in inherited_descriptors
+        )
+    ):
+        raise EvidenceError("inherited command descriptors are invalid")
     process = subprocess.Popen(  # noqa: S603 - every caller supplies a fixed executable
         command,
+        close_fds=True,
         cwd=cwd,
+        pass_fds=inherited_descriptors,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
@@ -1860,16 +1920,20 @@ def save_docker_image_bounded(image_id: str, destination: Path) -> None:
         raise EvidenceError(f"docker image save failed: {detail}")
 
 
-def load_json(path: Path) -> dict[str, Any]:
-    try:
-        with path.open("rb") as source:
-            content = source.read(MAX_JSON_BYTES + 1)
-        value = strict_json_loads(content, str(path))
-    except OSError as exc:
-        raise EvidenceError(f"cannot read JSON {path}: {exc}") from exc
+def load_json_bytes(content: bytes, source: str) -> dict[str, Any]:
+    """Parse one already-retained JSON snapshot."""
+
+    value = strict_json_loads(content, source)
     if not isinstance(value, dict):
-        raise EvidenceError(f"expected a JSON object in {path}")
+        raise EvidenceError(f"expected a JSON object in {source}")
     return value
+
+
+def load_json(path: Path) -> dict[str, Any]:
+    return load_json_bytes(
+        read_stable_local_bytes(path, max_bytes=MAX_JSON_BYTES, source=f"JSON input {path}"),
+        str(path),
+    )
 
 
 def require_schema(value: Mapping[str, Any], source: str) -> None:
@@ -7532,15 +7596,15 @@ def retain_selected_application_artifacts(
     *,
     directory: Path,
     output: Path,
-    repo: Path,
     source_revision: str,
     wheel_sha256: str,
     selection_record_sha256: str,
     budget: BundleBudget,
+    pass_fds: Sequence[int] = (),
 ) -> tuple[dict[str, Any], object]:
     """Use the Python verifier to retain and describe the exact five-file proof."""
 
-    helper = repo / ".github" / "scripts" / "build_python_artifacts.py"
+    helper = SCRIPT_DIRECTORY / "build_python_artifacts.py"
     raw_result = run(
         [
             sys.executable,
@@ -7557,8 +7621,9 @@ def retain_selected_application_artifacts(
             "--selection-record-sha256",
             selection_record_sha256,
         ],
-        cwd=repo,
+        cwd=SCRIPT_DIRECTORY,
         max_output_bytes=MAX_SELECTED_HELPER_OUTPUT_BYTES,
+        pass_fds=pass_fds,
     )
     parsed = strict_json_loads(raw_result, "selected Python retention helper")
     if (
@@ -7999,6 +8064,8 @@ def verify_post_base_provenance(
     files: Mapping[str, Any],
     policy: Mapping[str, Any],
     repo: Path,
+    *,
+    source_revision: str = "HEAD",
 ) -> None:
     """Reject every unclassified file-system change above the reviewed base."""
 
@@ -8014,7 +8081,7 @@ def verify_post_base_provenance(
         raise EvidenceError("component inventory has no Python RECORD ownership")
     owned = {record["path"]: record for record in ownership if isinstance(record, dict)}
     license_content = run(
-        ["git", "show", "HEAD:LICENSE"],
+        ["git", "show", f"{source_revision}:LICENSE"],
         cwd=repo,
         max_output_bytes=MAX_LICENSE_BYTES,
     )
@@ -8059,7 +8126,9 @@ def verify_post_base_provenance(
                 or record["sha256"] != expected_license["sha256"]
                 or record["size"] != expected_license["size"]
             ):
-                raise EvidenceError("post-base application LICENSE differs from Git HEAD")
+                raise EvidenceError(
+                    "post-base application LICENSE differs from the selected Git revision"
+                )
             require_root_header(record, 0o644, "post-base application LICENSE")
             continue
         raise EvidenceError(f"unclassified post-base regular file: {path}")
@@ -8693,7 +8762,11 @@ def validate_all_layer_inventory(files: Mapping[str, Any], inventory: Mapping[st
             )
 
 
-def verify_dockerfile_base(dockerfile: Path, policy: Mapping[str, Any]) -> None:
+def verify_dockerfile_base_bytes(
+    dockerfile_content: bytes,
+    source: str,
+    policy: Mapping[str, Any],
+) -> None:
     """Require builder and runtime stages to use the reviewed base index digest."""
 
     base_image = policy.get("base_image")
@@ -8708,9 +8781,9 @@ def verify_dockerfile_base(dockerfile: Path, policy: Mapping[str, Any]) -> None:
     if not isinstance(base_digest, str) or not SHA256.fullmatch(base_digest):
         raise EvidenceError("policy base image index digest is invalid")
     try:
-        content = read_local_bytes(dockerfile, max_bytes=1024 * 1024).decode("utf-8")
-    except (OSError, UnicodeDecodeError) as exc:
-        raise EvidenceError(f"cannot read {dockerfile}: {exc}") from exc
+        content = dockerfile_content.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise EvidenceError(f"cannot decode {source}") from exc
     stages: dict[str, str] = {}
     from_entries: list[tuple[str, str | None]] = []
     for line in content.splitlines():
@@ -8732,6 +8805,18 @@ def verify_dockerfile_base(dockerfile: Path, policy: Mapping[str, Any]) -> None:
             )
     if not from_entries or from_entries[-1] != (expected, "runtime"):
         raise EvidenceError("Dockerfile final build stage must be the reviewed runtime base stage")
+
+
+def verify_dockerfile_base(dockerfile: Path, policy: Mapping[str, Any]) -> None:
+    verify_dockerfile_base_bytes(
+        read_stable_local_bytes(
+            dockerfile,
+            max_bytes=1024 * 1024,
+            source=f"Dockerfile {dockerfile}",
+        ),
+        str(dockerfile),
+        policy,
+    )
 
 
 def require_https_source_url(url: str) -> None:
@@ -8979,7 +9064,7 @@ def verify_cpython_source_archive(content: bytes, cpython_source: Mapping[str, A
 
 
 def detached_license_source(entry: Mapping[str, Any], component: str) -> tuple[str, str] | None:
-    """Return a separately fetched license without conflating archive-member hashes."""
+    """Return a separately retained license without conflating archive-member hashes."""
 
     license_url = entry.get("license_url")
     if license_url is None:
@@ -8990,56 +9075,713 @@ def detached_license_source(entry: Mapping[str, Any], component: str) -> tuple[s
     return license_url, license_hash
 
 
-def fetch(
-    url: str,
+def _open_verified_source_store(
+    store_root: Path,
+    *,
+    expected_plan_sha256: str,
+    expected_plan_size: int,
+) -> verified_source_store.VerifiedSourceStoreReader:
+    """Open one source store while keeping reader failures in the evidence API."""
+
+    try:
+        return verified_source_store.VerifiedSourceStoreReader(
+            store_root,
+            expected_plan_sha256=expected_plan_sha256,
+            expected_plan_size=expected_plan_size,
+        )
+    except verified_source_store.SourceStoreError as exc:
+        raise EvidenceError(f"verified source store cannot be opened: {exc}") from exc
+
+
+def _read_verified_source(
+    reader: verified_source_store.VerifiedSourceStoreReader,
+    request_id: str,
+    expected_url: str,
     expected_hash: str,
     algorithm: str = "sha256",
     *,
     max_bytes: int = MAX_DOWNLOAD_BYTES,
-) -> Download:
+) -> VerifiedSource:
+    """Read one exact planned object and recheck its consumer-side binding."""
+
     hash_lengths = {"sha256": 64, "sha512": 128}
     expected_length = hash_lengths.get(algorithm)
     if expected_length is None or not re.fullmatch(
         rf"[0-9a-f]{{{expected_length}}}", expected_hash
     ):
-        raise EvidenceError(f"invalid expected {algorithm} digest for {url}")
-    require_https_source_url(url)
-    # Alpine's GitLab rejects unknown user-agent families with HTTP 418. Keep
-    # project identification while using its explicitly accepted curl family.
-    request = urllib.request.Request(  # noqa: S310 - scheme and authority checked above
-        url, headers={"User-Agent": "curl/8.0 extra-codeowners-evidence/1"}
-    )
-    redirects = AuditedRedirectHandler(url)
-    opener = urllib.request.build_opener(redirects)
+        raise EvidenceError(f"invalid expected {algorithm} digest for {request_id}")
+    require_https_source_url(expected_url)
     try:
-        with opener.open(request, timeout=60) as response:
-            final_url = response.geturl()
-            require_https_source_url(final_url)
-            if final_url != redirects.urls[-1]:
-                if len(redirects.urls) > MAX_REDIRECTS:
-                    raise EvidenceError(f"source exceeded {MAX_REDIRECTS} redirects")
-                redirects.urls.append(final_url)
-            length = response.headers.get("Content-Length")
-            if length is not None and int(length) > max_bytes:
-                raise EvidenceError(f"source exceeds download limit: {url}")
-            content = bytes(response.read(max_bytes + 1))
-    except (OSError, urllib.error.URLError, ValueError) as exc:
-        raise EvidenceError(f"cannot fetch {url}: {exc}") from exc
+        source = reader.read_request(request_id)
+    except verified_source_store.SourceStoreError as exc:
+        raise EvidenceError(f"verified source request {request_id!r} failed: {exc}") from exc
+    content = source.content
+    urls = source.redirect_chain
+    if not urls or urls[0] != expected_url:
+        raise EvidenceError(f"verified source request {request_id!r} has the wrong initial URL")
+    if len(urls) > MAX_REDIRECTS + 1:
+        raise EvidenceError(f"verified source request {request_id!r} has too many redirects")
+    for url in urls:
+        require_https_source_url(url)
     if len(content) > max_bytes:
-        raise EvidenceError(f"source exceeds download limit: {url}")
+        raise EvidenceError(f"verified source request {request_id!r} exceeds its consumer limit")
     actual = hashlib.new(algorithm, content).hexdigest()
     if actual != expected_hash:
         raise EvidenceError(
-            f"{algorithm} mismatch for {url}: expected {expected_hash}, got {actual}"
+            f"{algorithm} mismatch for {request_id}: expected {expected_hash}, got {actual}"
         )
-    return Download(content=content, urls=tuple(redirects.urls))
+    return VerifiedSource(content=content, urls=urls)
 
 
-def parse_lock_sources(lock_path: Path) -> dict[tuple[str, str], dict[str, Any]]:
+def _read_bounded_verified_source(
+    reader: verified_source_store.VerifiedSourceStoreReader,
+    request_id: str,
+    expected_url: str,
+    expected_hash: str,
+    budget: BundleBudget,
+    algorithm: str = "sha256",
+    *,
+    max_bytes: int = MAX_DOWNLOAD_BYTES,
+) -> VerifiedSource:
+    source = _read_verified_source(
+        reader,
+        request_id,
+        expected_url,
+        expected_hash,
+        algorithm,
+        max_bytes=max_bytes,
+    )
+    budget.record_source(source.content)
+    return source
+
+
+def _read_bounded_alpine_distfile(
+    reader: verified_source_store.VerifiedSourceStoreReader,
+    request_id: str,
+    expected_url: str,
+    expected_sha512: str,
+    budget: BundleBudget,
+) -> VerifiedSource:
+    """Read one Alpine distfile using the planner's source-size contract."""
+
+    return _read_bounded_verified_source(
+        reader,
+        request_id,
+        expected_url,
+        expected_sha512,
+        budget,
+        "sha512",
+        max_bytes=MAX_ALPINE_DISTFILE_BYTES,
+    )
+
+
+def _alpine_distfile_request_id(release: str, filename: str) -> str:
+    """Return the planner's collision-resistant request ID for one distfile."""
+
     try:
-        lock = tomllib.loads(read_local_bytes(lock_path, max_bytes=MAX_JSON_BYTES).decode("utf-8"))
-    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
-        raise EvidenceError(f"cannot parse {lock_path}: {exc}") from exc
+        encoded_filename = filename.encode("ascii")
+    except UnicodeEncodeError as exc:
+        raise EvidenceError(f"Alpine distfile name is not ASCII: {filename!r}") from exc
+    return f"alpine-distfile:{release}:{hashlib.sha256(encoded_filename).hexdigest()}"
+
+
+def _python_wheel_request_id(platform: str, owner: object) -> str:
+    _owner_kind, owner_name, owner_version = parse_native_owner(owner, "locked native wheel owner")
+    return f"python-wheel:{platform}:{owner_name}@{owner_version}"
+
+
+def _python_sdist_request_id(name: str, version: str) -> str:
+    return f"python-sdist:{normalize_package_name(name)}@{version}"
+
+
+def _native_source_request_ids(source_id: str, kind: str) -> dict[str, str]:
+    """Return every direct-store artifact request for one native source kind."""
+
+    artifacts_by_kind = {
+        "alpine-aports": (("recipe", "recipe"),),
+        "crates-io": (("crate", "crate"),),
+        "owner-sdist-subpath": (),
+        "checksummed-upstream-release": (
+            ("checksum_document", "checksum-document"),
+            ("archive", "archive"),
+        ),
+    }
+    artifacts = artifacts_by_kind.get(kind)
+    if artifacts is None:
+        raise EvidenceError(f"unsupported native-component bundle source kind: {kind}")
+    return {
+        artifact: f"native-source:{source_id}:{request_suffix}"
+        for artifact, request_suffix in artifacts
+    }
+
+
+def _alpine_recipe_request_id(origin: str, commit: str) -> str:
+    return f"alpine-recipe:{origin}@{commit}"
+
+
+def _license_text_request_id(identifier: str) -> str:
+    return f"license-text:{identifier}"
+
+
+def _reuse_owner_sdist_source(
+    source: Mapping[str, Any],
+    source_id: str,
+    python_source_archives: Mapping[
+        tuple[str, str],
+        tuple[bytes, Sequence[str], str],
+    ],
+) -> tuple[bytes, Sequence[str], str]:
+    """Return the already-read owner sdist; this source kind has no extra request."""
+
+    _owner, owner_name, owner_version = parse_native_owner(
+        source["owner"], f"native source {source_id}"
+    )
+    cached = python_source_archives.get((owner_name, owner_version))
+    if cached is None:
+        raise EvidenceError(f"owner-sdist source has no retained owner archive: {source_id}")
+    return cached
+
+
+def _validate_verified_source_stores(
+    direct_reader: verified_source_store.VerifiedSourceStoreReader,
+    alpine_reader: verified_source_store.VerifiedSourceStoreReader,
+    *,
+    policy_sha256: str,
+    lock_sha256: str,
+    source_revision: str,
+) -> None:
+    """Bind both stores to this checkout and to each other through public APIs."""
+
+    try:
+        direct_plan = direct_reader.plan
+        alpine_plan = alpine_reader.plan
+        direct_verification = direct_reader.verification
+        direct_request_ids = direct_reader.request_ids
+        alpine_request_ids = alpine_reader.request_ids
+    except verified_source_store.SourceStoreError as exc:
+        raise EvidenceError(f"verified source-store metadata changed: {exc}") from exc
+
+    if direct_plan["kind"] != "direct":
+        raise EvidenceError("direct source store has the wrong plan kind")
+    if alpine_plan["kind"] != "alpine-distfiles":
+        raise EvidenceError("Alpine source store has the wrong plan kind")
+    if direct_plan["evidence_schema_version"] != SCHEMA_VERSION:
+        raise EvidenceError("direct source plan targets the wrong evidence schema")
+    if alpine_plan["evidence_schema_version"] != SCHEMA_VERSION:
+        raise EvidenceError("Alpine source plan targets the wrong evidence schema")
+
+    expected_bindings = (
+        (direct_plan["source_revision"], alpine_plan["source_revision"], source_revision),
+        (direct_plan["policy_sha256"], alpine_plan["policy_sha256"], policy_sha256),
+        (direct_plan["uv_lock_sha256"], alpine_plan["uv_lock_sha256"], lock_sha256),
+    )
+    for direct_value, alpine_value, expected in expected_bindings:
+        if direct_value != expected:
+            raise EvidenceError("direct source plan has the wrong checkout binding")
+        if alpine_value != expected:
+            raise EvidenceError("Alpine source plan has the wrong checkout binding")
+
+    if (
+        alpine_plan.get("parent_plan") != direct_verification["plan"]
+        or alpine_plan.get("parent_manifest") != direct_verification["manifest"]
+    ):
+        raise EvidenceError("Alpine source plan does not bind the direct source-store snapshot")
+
+    planned_direct_ids = tuple(request["id"] for request in direct_plan["requests"])
+    planned_alpine_ids = tuple(request["id"] for request in alpine_plan["requests"])
+    if direct_request_ids != planned_direct_ids or alpine_request_ids != planned_alpine_ids:
+        raise EvidenceError("verified source reader request IDs differ from their plans")
+
+    expected_recipe_ids = {
+        request_id
+        for request_id in planned_direct_ids
+        if request_id.startswith("alpine-recipe:")
+        or (request_id.startswith("native-source:") and request_id.endswith(":recipe"))
+    }
+    recipe_records = alpine_plan.get("recipes")
+    if (
+        recipe_records is None
+        or {recipe["request_id"] for recipe in recipe_records} != expected_recipe_ids
+    ):
+        raise EvidenceError("Alpine source plan does not exactly cover direct recipe requests")
+    # Reader construction has already verified the store-wide request, object,
+    # and byte ceilings. Recipe cross-binding reads are transient (never retained)
+    # and remain governed by those aggregate limits; later bundle consumption is
+    # charged separately to BundleBudget.
+    for recipe in recipe_records:
+        request_id = recipe["request_id"]
+        direct_request = next(
+            request for request in direct_plan["requests"] if request["id"] == request_id
+        )
+        source = _read_verified_source(
+            direct_reader,
+            request_id,
+            direct_request["url"],
+            direct_request["digest"],
+            direct_request["algorithm"],
+            max_bytes=direct_request["max_bytes"],
+        )
+        if (
+            len(source.content) != recipe["size"]
+            or hashlib.sha256(source.content).hexdigest() != recipe["object_sha256"]
+        ):
+            raise EvidenceError(f"Alpine source plan has a stale recipe binding: {request_id}")
+
+
+def _close_verified_source_readers(
+    *readers: verified_source_store.VerifiedSourceStoreReader,
+) -> None:
+    """Recheck every retained source snapshot before publishing the bundle."""
+
+    failures: list[str] = []
+    for reader in readers:
+        try:
+            reader.close()
+        except verified_source_store.SourceStoreError as exc:
+            failures.append(str(exc))
+    if failures:
+        raise EvidenceError(
+            "verified source store changed before bundle publication: " + "; ".join(failures)
+        )
+
+
+@dataclass(frozen=True)
+class _NodeIdentity:
+    device: int
+    inode: int
+    mode: int
+    links: int
+    uid: int
+    gid: int
+    size: int
+    modified_ns: int
+    changed_ns: int
+
+
+@dataclass(frozen=True)
+class _RetainedInputPath:
+    argument: Path
+    resolved: Path
+    identity: _NodeIdentity
+
+
+@dataclass
+class _ExclusiveOutputTarget:
+    argument: Path
+    parent_argument: Path
+    parent_resolved: Path
+    name: str
+    parent_descriptor: int
+    parent_identity: _NodeIdentity
+    created: bool = False
+    published_identity: _NodeIdentity | None = None
+
+
+def _node_identity(metadata: os.stat_result, source: str) -> _NodeIdentity:
+    if not (stat.S_ISREG(metadata.st_mode) or stat.S_ISDIR(metadata.st_mode)):
+        raise EvidenceError(f"{source} must be a regular file or directory")
+    return _NodeIdentity(
+        device=metadata.st_dev,
+        inode=metadata.st_ino,
+        mode=metadata.st_mode,
+        links=metadata.st_nlink,
+        uid=metadata.st_uid,
+        gid=metadata.st_gid,
+        size=metadata.st_size,
+        modified_ns=metadata.st_mtime_ns,
+        changed_ns=metadata.st_ctime_ns,
+    )
+
+
+def _same_node_binding(first: _NodeIdentity, second: _NodeIdentity) -> bool:
+    return (
+        first.device,
+        first.inode,
+        first.mode,
+        first.uid,
+        first.gid,
+    ) == (
+        second.device,
+        second.inode,
+        second.mode,
+        second.uid,
+        second.gid,
+    )
+
+
+def _paths_overlap(first: Path, second: Path) -> bool:
+    return first == second or first in second.parents or second in first.parents
+
+
+def _open_bound_directory(path: Path, source: str) -> tuple[int, _NodeIdentity]:
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    directory = getattr(os, "O_DIRECTORY", 0)
+    if not nofollow or not directory:
+        raise EvidenceError("bundle path isolation requires no-follow directory support")
+    try:
+        before = _node_identity(os.stat(path, follow_symlinks=False), source)
+        if not stat.S_ISDIR(before.mode):
+            raise EvidenceError(f"{source} must be a real directory")
+        descriptor = os.open(
+            path,
+            os.O_RDONLY | directory | nofollow | getattr(os, "O_CLOEXEC", 0),
+        )
+        opened = _node_identity(os.fstat(descriptor), source)
+        current = _node_identity(os.stat(path, follow_symlinks=False), source)
+    except EvidenceError:
+        raise
+    except OSError as exc:
+        raise EvidenceError(f"cannot open {source} safely") from exc
+    if opened != before or current != before:
+        with contextlib.suppress(OSError):
+            os.close(descriptor)
+        raise EvidenceError(f"{source} changed while it was opened")
+    return descriptor, opened
+
+
+class BundlePathBoundary:
+    """Hold filesystem identities while publishing without following links."""
+
+    def __init__(
+        self,
+        *,
+        work_root: Path,
+        inputs: Sequence[Path],
+        output: Path,
+        predicate_output: Path,
+    ) -> None:
+        self._closed = True
+        self._published = False
+        self._work_argument = work_root.absolute()
+        try:
+            work_metadata = self._work_argument.lstat()
+            self._work_resolved = self._work_argument.resolve(strict=True)
+        except OSError as exc:
+            raise EvidenceError("cannot inspect bundle work root safely") from exc
+        if not stat.S_ISDIR(work_metadata.st_mode) or self._work_argument.is_symlink():
+            raise EvidenceError("bundle work root must be an existing directory, not a link")
+        self._work_descriptor, self._work_identity = _open_bound_directory(
+            self._work_resolved,
+            "bundle work root",
+        )
+        output_descriptors: list[int] = []
+        try:
+            if os.listdir(self._work_descriptor):
+                raise EvidenceError("bundle work root must be an empty dedicated directory")
+
+            retained_inputs: list[_RetainedInputPath] = []
+            for raw_path in inputs:
+                argument = raw_path.absolute()
+                try:
+                    resolved = argument.resolve(strict=True)
+                    identity = _node_identity(
+                        os.stat(resolved, follow_symlinks=False),
+                        f"bundle input {argument}",
+                    )
+                except EvidenceError:
+                    raise
+                except OSError as exc:
+                    raise EvidenceError(f"cannot inspect bundle input {argument}") from exc
+                if _paths_overlap(self._work_resolved, resolved):
+                    raise EvidenceError("bundle work root overlaps a retained input")
+                retained_inputs.append(_RetainedInputPath(argument, resolved, identity))
+            self._inputs = tuple(retained_inputs)
+
+            output_arguments = (
+                output.absolute(),
+                output.with_suffix(output.suffix + ".sha256").absolute(),
+                predicate_output.absolute(),
+            )
+            targets: list[_ExclusiveOutputTarget] = []
+            physical_targets: list[Path] = []
+            for argument in output_arguments:
+                if not argument.name:
+                    raise EvidenceError("bundle output has no filename")
+                parent_argument = argument.parent
+                try:
+                    parent_resolved = parent_argument.resolve(strict=True)
+                except OSError as exc:
+                    raise EvidenceError("bundle output parent does not exist") from exc
+                parent_descriptor, parent_identity = _open_bound_directory(
+                    parent_resolved,
+                    "bundle output parent",
+                )
+                output_descriptors.append(parent_descriptor)
+                physical = parent_resolved / argument.name
+                if _paths_overlap(self._work_resolved, physical):
+                    raise EvidenceError("bundle output overlaps the dedicated work root")
+                if any(_paths_overlap(physical, item.resolved) for item in self._inputs):
+                    raise EvidenceError("bundle output overlaps a retained input")
+                if physical in physical_targets:
+                    raise EvidenceError("bundle output paths must be distinct")
+                physical_targets.append(physical)
+                targets.append(
+                    _ExclusiveOutputTarget(
+                        argument=argument,
+                        parent_argument=parent_argument,
+                        parent_resolved=parent_resolved,
+                        name=argument.name,
+                        parent_descriptor=parent_descriptor,
+                        parent_identity=parent_identity,
+                    )
+                )
+            self._targets = tuple(targets)
+
+            # A previous invocation may have left output behind. Remove only
+            # these three names, relative to retained directory descriptors,
+            # before any evidence work begins.
+            self._remove_outputs()
+            self._require_boundaries_unchanged(require_outputs_absent=True)
+        except BaseException:
+            for descriptor in output_descriptors:
+                with contextlib.suppress(OSError):
+                    os.close(descriptor)
+            with contextlib.suppress(OSError):
+                os.close(self._work_descriptor)
+            raise
+        self._closed = False
+
+    def __enter__(self) -> BundlePathBoundary:
+        if self._closed:
+            raise EvidenceError("bundle path boundary is closed")
+        return self
+
+    def __exit__(
+        self,
+        exception_type: object,
+        exception: object,
+        traceback: object,
+    ) -> None:
+        del exception, traceback
+        try:
+            if exception_type is not None:
+                self._remove_outputs()
+        finally:
+            self.close()
+
+    @property
+    def work_directory(self) -> Path:
+        if self._closed:
+            raise EvidenceError("bundle path boundary is closed")
+        return Path(f"/proc/self/fd/{self._work_descriptor}")
+
+    @property
+    def work_descriptor(self) -> int:
+        if self._closed:
+            raise EvidenceError("bundle path boundary is closed")
+        return self._work_descriptor
+
+    def _remove_outputs(self) -> None:
+        for target in getattr(self, "_targets", ()):
+            try:
+                os.unlink(target.name, dir_fd=target.parent_descriptor)
+            except FileNotFoundError:
+                # An absent output is already clean; reset its bookkeeping below.
+                pass
+            except IsADirectoryError as exc:
+                raise EvidenceError("bundle output path is a directory") from exc
+            except OSError as exc:
+                raise EvidenceError("cannot clear bundle output safely") from exc
+            target.created = False
+            target.published_identity = None
+        self._published = False
+
+    def _require_boundaries_unchanged(self, *, require_outputs_absent: bool) -> None:
+        try:
+            if self._work_argument.resolve(strict=True) != self._work_resolved:
+                raise EvidenceError("bundle work root changed physical location")
+            if not _same_node_binding(
+                _node_identity(os.fstat(self._work_descriptor), "bundle work root"),
+                self._work_identity,
+            ) or not _same_node_binding(
+                _node_identity(
+                    os.stat(self._work_resolved, follow_symlinks=False),
+                    "bundle work root",
+                ),
+                self._work_identity,
+            ):
+                raise EvidenceError("bundle work root changed while retained")
+            for item in self._inputs:
+                if (
+                    item.argument.resolve(strict=True) != item.resolved
+                    or _node_identity(
+                        os.stat(item.resolved, follow_symlinks=False),
+                        f"bundle input {item.argument}",
+                    )
+                    != item.identity
+                ):
+                    raise EvidenceError("bundle input changed physical identity")
+            for target in self._targets:
+                if target.parent_argument.resolve(strict=True) != target.parent_resolved:
+                    raise EvidenceError("bundle output parent changed physical location")
+                if not _same_node_binding(
+                    _node_identity(
+                        os.fstat(target.parent_descriptor),
+                        "bundle output parent",
+                    ),
+                    target.parent_identity,
+                ) or not _same_node_binding(
+                    _node_identity(
+                        os.stat(target.parent_resolved, follow_symlinks=False),
+                        "bundle output parent",
+                    ),
+                    target.parent_identity,
+                ):
+                    raise EvidenceError("bundle output parent changed while retained")
+                if require_outputs_absent:
+                    try:
+                        os.stat(
+                            target.name,
+                            dir_fd=target.parent_descriptor,
+                            follow_symlinks=False,
+                        )
+                    except FileNotFoundError:
+                        pass
+                    else:
+                        raise EvidenceError("bundle output appeared before publication")
+                elif target.created:
+                    current = _node_identity(
+                        os.stat(
+                            target.name,
+                            dir_fd=target.parent_descriptor,
+                            follow_symlinks=False,
+                        ),
+                        "published bundle output",
+                    )
+                    if current != target.published_identity:
+                        raise EvidenceError("published bundle output changed during publication")
+        except EvidenceError:
+            raise
+        except OSError as exc:
+            raise EvidenceError("bundle path boundary changed while retained") from exc
+
+    def _publish_one(self, source_path: Path, target: _ExclusiveOutputTarget) -> None:
+        source_descriptor = -1
+        output_descriptor = -1
+        nofollow = getattr(os, "O_NOFOLLOW", 0)
+        try:
+            source_descriptor = os.open(
+                source_path,
+                os.O_RDONLY | os.O_NONBLOCK | nofollow | getattr(os, "O_CLOEXEC", 0),
+            )
+            metadata = os.fstat(source_descriptor)
+            if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+                raise EvidenceError("staged bundle output is not one regular file")
+            output_descriptor = os.open(
+                target.name,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | nofollow | getattr(os, "O_CLOEXEC", 0),
+                0o600,
+                dir_fd=target.parent_descriptor,
+            )
+            remaining = metadata.st_size
+            offset = 0
+            while remaining:
+                chunk = os.pread(source_descriptor, min(1024 * 1024, remaining), offset)
+                if not chunk:
+                    raise EvidenceError("staged bundle output was truncated")
+                position = 0
+                while position < len(chunk):
+                    written = os.write(output_descriptor, chunk[position:])
+                    if written <= 0:
+                        raise EvidenceError("cannot make progress publishing bundle output")
+                    position += written
+                offset += len(chunk)
+                remaining -= len(chunk)
+            if os.pread(source_descriptor, 1, offset):
+                raise EvidenceError("staged bundle output grew during publication")
+            final_source_metadata = os.fstat(source_descriptor)
+            if (
+                _node_identity(final_source_metadata, "staged bundle output")
+                != _node_identity(metadata, "staged bundle output")
+                or final_source_metadata.st_size != metadata.st_size
+                or final_source_metadata.st_mtime_ns != metadata.st_mtime_ns
+                or final_source_metadata.st_ctime_ns != metadata.st_ctime_ns
+            ):
+                raise EvidenceError("staged bundle output changed during publication")
+            os.fchmod(output_descriptor, 0o644)
+            os.fsync(output_descriptor)
+            published = _node_identity(
+                os.fstat(output_descriptor),
+                "published bundle output",
+            )
+            current = _node_identity(
+                os.stat(
+                    target.name,
+                    dir_fd=target.parent_descriptor,
+                    follow_symlinks=False,
+                ),
+                "published bundle output",
+            )
+            if current != published:
+                raise EvidenceError("published bundle output was replaced during publication")
+            target.created = True
+            target.published_identity = published
+        except EvidenceError:
+            raise
+        except OSError as exc:
+            raise EvidenceError("cannot publish bundle output safely") from exc
+        finally:
+            if output_descriptor >= 0:
+                with contextlib.suppress(OSError):
+                    os.close(output_descriptor)
+            if source_descriptor >= 0:
+                with contextlib.suppress(OSError):
+                    os.close(source_descriptor)
+
+    def publish(
+        self,
+        *,
+        bundle: Path,
+        checksum: Path,
+        predicate: Path,
+    ) -> None:
+        if self._closed or self._published:
+            raise EvidenceError("bundle path boundary cannot publish")
+        self._require_boundaries_unchanged(require_outputs_absent=True)
+        try:
+            for source_path, target in zip(
+                (bundle, checksum, predicate),
+                self._targets,
+                strict=True,
+            ):
+                self._publish_one(source_path, target)
+            self._require_boundaries_unchanged(require_outputs_absent=False)
+        except BaseException:
+            self._remove_outputs()
+            raise
+        self._published = True
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        for target in self._targets:
+            with contextlib.suppress(OSError):
+                os.close(target.parent_descriptor)
+        with contextlib.suppress(OSError):
+            os.close(self._work_descriptor)
+
+    def abort(self) -> None:
+        """Remove every final output and close a boundary not yet entered."""
+
+        if self._closed:
+            return
+        try:
+            self._remove_outputs()
+        finally:
+            self.close()
+
+
+def parse_lock_sources_bytes(
+    content: bytes,
+    source: str,
+) -> dict[tuple[str, str], dict[str, Any]]:
+    """Parse Python source records from lock-file bytes that were read once."""
+
+    try:
+        lock = tomllib.loads(content.decode("utf-8"))
+    except (UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
+        raise EvidenceError(f"cannot parse {source}: {exc}") from exc
     packages = lock.get("package")
     if not isinstance(packages, list) or len(packages) > MAX_COMPONENTS:
         raise EvidenceError("lock file has an invalid package list")
@@ -9091,6 +9833,17 @@ def parse_lock_sources(lock_path: Path) -> dict[tuple[str, str], dict[str, Any]]
             "size": size,
         }
     return sources
+
+
+def parse_lock_sources(lock_path: Path) -> dict[tuple[str, str], dict[str, Any]]:
+    return parse_lock_sources_bytes(
+        read_stable_local_bytes(
+            lock_path,
+            max_bytes=MAX_JSON_BYTES,
+            source=f"lock file {lock_path}",
+        ),
+        str(lock_path),
+    )
 
 
 def native_wheel_contexts(inventory: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
@@ -9190,18 +9943,20 @@ def raw_wheel_build_tag(filename: str, parsed_build: tuple[()] | tuple[int, str]
     return build
 
 
-def select_locked_native_wheels(
-    lock_path: Path, inventory: Mapping[str, Any]
+def select_locked_native_wheels_bytes(
+    content: bytes,
+    source: str,
+    inventory: Mapping[str, Any],
 ) -> list[dict[str, Any]]:
-    """Select one exact locked wheel for every native/SBOM RECORD owner."""
+    """Select native wheels from lock-file bytes that were read once."""
 
     contexts = native_wheel_contexts(inventory)
     if not contexts:
         return []
     try:
-        lock = tomllib.loads(read_local_bytes(lock_path, max_bytes=MAX_JSON_BYTES).decode("utf-8"))
-    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
-        raise EvidenceError(f"cannot parse {lock_path}: {exc}") from exc
+        lock = tomllib.loads(content.decode("utf-8"))
+    except (UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
+        raise EvidenceError(f"cannot parse {source}: {exc}") from exc
     packages = lock.get("package")
     if not isinstance(packages, list) or len(packages) > MAX_COMPONENTS:
         raise EvidenceError("lock file has an invalid package list")
@@ -9315,6 +10070,20 @@ def select_locked_native_wheels(
     if {record["owner"] for record in selected} != set(contexts):
         raise EvidenceError("locked native wheels do not exactly cover structured payload owners")
     return selected
+
+
+def select_locked_native_wheels(
+    lock_path: Path, inventory: Mapping[str, Any]
+) -> list[dict[str, Any]]:
+    return select_locked_native_wheels_bytes(
+        read_stable_local_bytes(
+            lock_path,
+            max_bytes=MAX_JSON_BYTES,
+            source=f"lock file {lock_path}",
+        ),
+        str(lock_path),
+        inventory,
+    )
 
 
 def source_filename_pattern(source: str, origin: str) -> re.Pattern[str]:
@@ -9587,9 +10356,14 @@ def reviewed_files_from_source_archive(
     source_id: str,
     expected: Mapping[str, Mapping[str, Any]],
     max_member_bytes: int = MAX_LICENSE_BYTES,
+    max_archive_bytes: int = MAX_DOWNLOAD_BYTES,
 ) -> dict[str, bytes]:
     """Validate a hostile archive and return the reviewed regular files it contains."""
 
+    if not 0 < max_archive_bytes <= MAX_ALPINE_DISTFILE_BYTES:
+        raise EvidenceError("reviewed source archive has an invalid input-size limit")
+    if len(archive) > max_archive_bytes:
+        raise EvidenceError(f"reviewed source archive exceeds its input-size limit: {source_id}")
     found: dict[str, bytes] = {}
     try:
         zip_candidate = (
@@ -9598,7 +10372,10 @@ def reviewed_files_from_source_archive(
             or has_source_zip_eocd(archive)
         )
         if zip_candidate:
-            central_offset, central_size, entry_count = preflight_source_zip(archive)
+            central_offset, central_size, entry_count = preflight_source_zip(
+                archive,
+                max_archive_bytes=max_archive_bytes,
+            )
             central_entries = read_source_zip_central_directory(
                 archive,
                 central_offset,
@@ -9961,11 +10738,44 @@ def write_file(
     return destination
 
 
-def preflight_source_zip(content: bytes) -> tuple[int, int, int]:
+def bundle_member_size_limit(relative: str) -> int:
+    """Return the path-scoped retained and final-archive member limit."""
+
+    parts = PurePosixPath(relative).parts
+    if parts[:2] == ("sources", "native-components"):
+        return MAX_NATIVE_COMPONENT_SOURCE_BYTES
+    if len(parts) == 6 and parts[:2] == ("sources", "alpine") and parts[4] == "distfiles":
+        return MAX_ALPINE_DISTFILE_BYTES
+    return MAX_ARCHIVE_MEMBER_BYTES
+
+
+def retain_alpine_distfile(
+    root: Path,
+    relative: str,
+    content: bytes,
+    *,
+    budget: BundleBudget,
+) -> Path:
+    """Retain one Alpine distfile using the planner's source-size contract."""
+
+    return write_file(
+        root,
+        relative,
+        content,
+        budget=budget,
+        max_bytes=bundle_member_size_limit(relative),
+    )
+
+
+def preflight_source_zip(
+    content: bytes,
+    *,
+    max_archive_bytes: int = MAX_DOWNLOAD_BYTES,
+) -> tuple[int, int, int]:
     """Bound a source ZIP central directory before parsing its entry list."""
 
     size = len(content)
-    if not ZIP_EOCD.size <= size <= MAX_DOWNLOAD_BYTES:
+    if not ZIP_EOCD.size <= size <= max_archive_bytes:
         raise EvidenceError("source ZIP has an invalid size")
     tail_size = min(size, ZIP_EOCD.size + 65_535)
     tail = content[-tail_size:]
@@ -10832,9 +11642,14 @@ def extract_license_files(
     *,
     archive_name: str | None = None,
     budget: BundleBudget | None = None,
+    max_archive_bytes: int = MAX_DOWNLOAD_BYTES,
 ) -> list[str]:
     """Extract only bounded regular files with license/notice names."""
 
+    if not 0 < max_archive_bytes <= MAX_ALPINE_DISTFILE_BYTES:
+        raise EvidenceError("source archive has an invalid input-size limit")
+    if len(archive) > max_archive_bytes:
+        raise EvidenceError(f"source archive exceeds its input-size limit: {component}")
     try:
         expected_zip = archive_name is not None and urllib.parse.urlparse(
             archive_name
@@ -10877,7 +11692,10 @@ def extract_license_files(
 
     try:
         if zip_candidate:
-            central_offset, central_size, expected_entries = preflight_source_zip(archive)
+            central_offset, central_size, expected_entries = preflight_source_zip(
+                archive,
+                max_archive_bytes=max_archive_bytes,
+            )
             central_entries = read_source_zip_central_directory(
                 archive,
                 central_offset,
@@ -10956,19 +11774,19 @@ def extract_license_files(
     return sorted(written)
 
 
-def deterministic_source_archive(repo: Path) -> bytes:
-    """Archive exact Git blobs without honoring export-ignore or export-subst."""
+def deterministic_source_archive(repo: Path, *, source_revision: str = "HEAD") -> bytes:
+    """Archive exact blobs from one Git revision without applying export attributes."""
 
-    entries = git_regular_tree_at_head(repo)
+    entries = git_regular_tree_at_head(repo, source_revision=source_revision)
     paths = {path for _mode, path in entries}
     if "LICENSE" not in paths or not any(path.startswith("extra_codeowners/") for path in paths):
-        raise EvidenceError("Git HEAD lacks the application source or LICENSE")
+        raise EvidenceError("selected Git revision lacks the application source or LICENSE")
     result = io.BytesIO()
     aggregate = 0
     with tarfile.open(fileobj=result, mode="w", format=tarfile.PAX_FORMAT) as archive:
         for mode, path in entries:
             content = run(
-                ["git", "show", f"HEAD:{path}"],
+                ["git", "show", f"{source_revision}:{path}"],
                 cwd=repo,
                 max_output_bytes=MAX_ARCHIVE_MEMBER_BYTES,
             )
@@ -10990,10 +11808,15 @@ def deterministic_source_archive(repo: Path) -> bytes:
     return content
 
 
-def git_regular_tree_at_head(repo: Path, pathspec: str | None = None) -> list[tuple[str, str]]:
-    """Return portable, exact regular-blob modes and paths from Git HEAD."""
+def git_regular_tree_at_head(
+    repo: Path,
+    pathspec: str | None = None,
+    *,
+    source_revision: str = "HEAD",
+) -> list[tuple[str, str]]:
+    """Return regular-blob modes and paths from one Git revision."""
 
-    command = ["git", "ls-tree", "-rz", "HEAD"]
+    command = ["git", "ls-tree", "-rz", source_revision]
     if pathspec is not None:
         command.extend(["--", pathspec])
     listing = run(command, cwd=repo, max_output_bytes=MAX_JSON_BYTES)
@@ -11007,13 +11830,13 @@ def git_regular_tree_at_head(repo: Path, pathspec: str | None = None) -> list[tu
             mode, object_type, object_id = header.decode("ascii").split(" ")
             path = raw_path.decode("utf-8")
         except (UnicodeDecodeError, ValueError) as exc:
-            raise EvidenceError("cannot parse application source listing at Git HEAD") from exc
+            raise EvidenceError("cannot parse the selected Git source listing") from exc
         if (
             not separator
             or object_type != "blob"
             or re.fullmatch(r"[0-9a-f]{40,64}", object_id) is None
         ):
-            raise EvidenceError("Git HEAD source listing has an invalid object record")
+            raise EvidenceError("selected Git source listing has an invalid object record")
         normalized_path = str(checked_path(path))
         if mode not in {"100644", "100755"}:
             raise EvidenceError(f"application source is not a regular Git blob: {normalized_path}")
@@ -11026,35 +11849,41 @@ def git_regular_tree_at_head(repo: Path, pathspec: str | None = None) -> list[tu
     return entries
 
 
-def project_identity_at_head(repo: Path) -> tuple[str, str]:
-    """Read the authoritative application identity from the archived Git HEAD."""
+def project_identity_at_head(repo: Path, *, source_revision: str = "HEAD") -> tuple[str, str]:
+    """Read the application identity from one Git revision."""
 
     try:
         project_file = tomllib.loads(
             run(
-                ["git", "show", "HEAD:pyproject.toml"],
+                ["git", "show", f"{source_revision}:pyproject.toml"],
                 cwd=repo,
                 max_output_bytes=1024 * 1024,
             ).decode("utf-8")
         )
     except (UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
-        raise EvidenceError("cannot parse pyproject.toml from Git HEAD") from exc
+        raise EvidenceError("cannot parse pyproject.toml from the selected Git revision") from exc
     project = project_file.get("project")
     if not isinstance(project, dict):
-        raise EvidenceError("pyproject.toml at Git HEAD has no project table")
+        raise EvidenceError("pyproject.toml at the selected Git revision has no project table")
     raw_name = project.get("name")
     raw_version = project.get("version")
     if not isinstance(raw_name, str) or not isinstance(raw_version, str):
-        raise EvidenceError("pyproject.toml at Git HEAD has no static name and version")
+        raise EvidenceError(
+            "pyproject.toml at the selected Git revision has no static name and version"
+        )
     checked_name = checked_scalar(raw_name, "application project name")
     checked_version = checked_scalar(raw_version, "application project version")
     if checked_name != raw_name or checked_version != raw_version:
-        raise EvidenceError("pyproject.toml at Git HEAD has non-canonical project identity")
+        raise EvidenceError(
+            "pyproject.toml at the selected Git revision has non-canonical project identity"
+        )
     try:
         name = str(canonicalize_name(checked_name, validate=True))
         version = str(Version(checked_version))
     except (InvalidName, InvalidVersion, ValueError) as exc:
-        raise EvidenceError("pyproject.toml at Git HEAD has invalid project identity") from exc
+        raise EvidenceError(
+            "pyproject.toml at the selected Git revision has invalid project identity"
+        ) from exc
     if name != APPLICATION_NAME:
         raise EvidenceError(
             f"application project name must remain {APPLICATION_NAME!r}, got {name!r}"
@@ -11062,16 +11891,24 @@ def project_identity_at_head(repo: Path) -> tuple[str, str]:
     return name, version
 
 
-def application_sources_at_head(repo: Path) -> dict[str, bytes]:
-    """Read the exact regular first-party package files from Git HEAD."""
+def application_sources_at_head(
+    repo: Path,
+    *,
+    source_revision: str = "HEAD",
+) -> dict[str, bytes]:
+    """Read the regular first-party package files from one Git revision."""
 
     sources: dict[str, bytes] = {}
     aggregate_size = 0
-    for _mode, path in git_regular_tree_at_head(repo, "extra_codeowners"):
+    for _mode, path in git_regular_tree_at_head(
+        repo,
+        "extra_codeowners",
+        source_revision=source_revision,
+    ):
         if not path.startswith("extra_codeowners/"):
             raise EvidenceError(f"application source escaped its package directory: {path}")
         content = run(
-            ["git", "show", f"HEAD:{path}"],
+            ["git", "show", f"{source_revision}:{path}"],
             cwd=repo,
             max_output_bytes=MAX_ARCHIVE_MEMBER_BYTES,
         )
@@ -11080,16 +11917,23 @@ def application_sources_at_head(repo: Path) -> dict[str, bytes]:
             raise EvidenceError("application sources exceed the cumulative size limit")
         sources[path] = content
     if not sources:
-        raise EvidenceError("Git HEAD has no tracked application package files")
+        raise EvidenceError("selected Git revision has no tracked application package files")
     return sources
 
 
 def validate_application_source_binding(
-    inventory: Mapping[str, Any], files: Mapping[str, Any], repo: Path
+    inventory: Mapping[str, Any],
+    files: Mapping[str, Any],
+    repo: Path,
+    *,
+    source_revision: str = "HEAD",
 ) -> tuple[str, str]:
-    """Bind exactly one effective application installation to source at HEAD."""
+    """Bind one effective application installation to the selected Git revision."""
 
-    expected_name, expected_version = project_identity_at_head(repo)
+    expected_name, expected_version = project_identity_at_head(
+        repo,
+        source_revision=source_revision,
+    )
     components = inventory["components"]
     application_components = [
         component
@@ -11103,7 +11947,8 @@ def validate_application_source_binding(
     application = application_components[0]
     if application["version"] != expected_version or application["effective"] is not True:
         raise EvidenceError(
-            "effective application component does not match pyproject.toml at Git HEAD"
+            "effective application component does not match pyproject.toml at the selected "
+            "Git revision"
         )
     metadata_hash = application["metadata_sha256"]
     metadata_records = [
@@ -11127,22 +11972,36 @@ def validate_application_source_binding(
         if relative in installed_sources:
             raise EvidenceError(f"image repeats effective application source: {relative}")
         installed_sources[relative] = record
-    expected_sources = application_sources_at_head(repo)
+    expected_sources = application_sources_at_head(
+        repo,
+        source_revision=source_revision,
+    )
     if set(installed_sources) != set(expected_sources):
-        raise EvidenceError("effective application package files do not exactly match Git HEAD")
+        raise EvidenceError(
+            "effective application package files do not match the selected Git revision"
+        )
     for path, content in expected_sources.items():
         installed = installed_sources[path]
         if installed["sha256"] != sha256_bytes(content) or installed["size"] != len(content):
-            raise EvidenceError(f"effective application source differs from Git HEAD: {path}")
+            raise EvidenceError(
+                f"effective application source differs from the selected Git revision: {path}"
+            )
     return expected_name, expected_version
 
 
-def build_bundle(
+def _build_bundle_with_boundary(
     *,
+    path_boundary: BundlePathBoundary,
     inventory_path: Path,
     files_path: Path,
     policy_path: Path,
     lock_path: Path,
+    direct_source_store_root: Path,
+    direct_source_plan_sha256: str,
+    direct_source_plan_size: int,
+    alpine_source_store_root: Path,
+    alpine_source_plan_sha256: str,
+    alpine_source_plan_size: int,
     repo: Path,
     output: Path,
     predicate_output: Path,
@@ -11157,15 +12016,42 @@ def build_bundle(
 ) -> None:
     inventory = load_json(inventory_path)
     files = load_json(files_path)
-    policy = load_json(policy_path)
+    policy_bytes = read_stable_local_bytes(
+        policy_path,
+        max_bytes=MAX_JSON_BYTES,
+        source=f"container policy {policy_path}",
+    )
+    policy = load_json_bytes(policy_bytes, str(policy_path))
+    lock_bytes = read_stable_local_bytes(
+        lock_path,
+        max_bytes=MAX_JSON_BYTES,
+        source=f"lock file {lock_path}",
+    )
     validate_all_layer_inventory(files, inventory)
     verify_inventory(inventory, policy, require_approval=require_approval)
-    verify_dockerfile_base(repo / "Dockerfile", policy)
-    head = run(["git", "rev-parse", "HEAD"], cwd=repo, max_output_bytes=128).decode().strip()
+    head = (
+        run(
+            ["git", "rev-parse", "--verify", "HEAD^{commit}"],
+            cwd=repo,
+            max_output_bytes=128,
+        )
+        .decode()
+        .strip()
+    )
     if application_source_revision != head:
         raise EvidenceError(
             "selected application source revision does not match the evidence checkout"
         )
+    dockerfile_content = run(
+        ["git", "show", f"{application_source_revision}:Dockerfile"],
+        cwd=repo,
+        max_output_bytes=1024 * 1024,
+    )
+    verify_dockerfile_base_bytes(
+        dockerfile_content,
+        f"Git object {application_source_revision}:Dockerfile",
+        policy,
+    )
     verify_application_artifact_labels(
         inventory,
         source_revision=application_source_revision,
@@ -11175,49 +12061,95 @@ def build_bundle(
     if require_image_revision:
         verify_image_revision(inventory, version=version, source_revision=head)
     verify_base_layer_binding(files, policy)
-    verify_post_base_provenance(inventory, files, policy, repo)
-    application_name, _application_version = validate_application_source_binding(
-        inventory, files, repo
+    verify_post_base_provenance(
+        inventory,
+        files,
+        policy,
+        repo,
+        source_revision=application_source_revision,
     )
-    lock_sources = parse_lock_sources(lock_path)
+    application_name, _application_version = validate_application_source_binding(
+        inventory,
+        files,
+        repo,
+        source_revision=application_source_revision,
+    )
+    lock_sources = parse_lock_sources_bytes(lock_bytes, str(lock_path))
     validate_source_policy_coverage(inventory, policy, lock_sources)
-    locked_native_wheels = select_locked_native_wheels(lock_path, inventory)
+    locked_native_wheels = select_locked_native_wheels_bytes(
+        lock_bytes,
+        str(lock_path),
+        inventory,
+    )
     native_coverage = verify_native_component_lock_bindings(
         inventory, policy, locked_native_wheels, lock_sources
     )
-
-    with tempfile.TemporaryDirectory(prefix="extra-codeowners-evidence-") as temporary:
+    with (
+        path_boundary,
+        tempfile.TemporaryDirectory(
+            prefix="extra-codeowners-evidence-",
+            dir=path_boundary.work_directory,
+        ) as temporary,
+        _open_verified_source_store(
+            direct_source_store_root,
+            expected_plan_sha256=direct_source_plan_sha256,
+            expected_plan_size=direct_source_plan_size,
+        ) as direct_source_reader,
+        _open_verified_source_store(
+            alpine_source_store_root,
+            expected_plan_sha256=alpine_source_plan_sha256,
+            expected_plan_size=alpine_source_plan_size,
+        ) as alpine_source_reader,
+    ):
         root = Path(temporary) / "evidence"
         root.mkdir()
         budget = BundleBudget()
+        _validate_verified_source_stores(
+            direct_source_reader,
+            alpine_source_reader,
+            policy_sha256=hashlib.sha256(policy_bytes).hexdigest(),
+            lock_sha256=hashlib.sha256(lock_bytes).hexdigest(),
+            source_revision=application_source_revision,
+        )
         application_artifacts, installation_contract = retain_selected_application_artifacts(
             directory=selected_python_directory,
             output=root / "artifacts" / "application",
-            repo=repo,
             source_revision=application_source_revision,
             wheel_sha256=application_wheel_sha256,
             selection_record_sha256=application_selection_record_sha256,
             budget=budget,
+            pass_fds=(path_boundary.work_descriptor,),
         )
         launcher_interpreter = verify_selected_application_installation(
             inventory, installation_contract
         )
         application_artifacts["launcher_interpreter"] = launcher_interpreter
 
-        def bounded_fetch(
+        def direct_source(
+            request_id: str,
             url: str,
             expected_hash: str,
             algorithm: str = "sha256",
             *,
             max_bytes: int = MAX_DOWNLOAD_BYTES,
-        ) -> Download:
-            download = fetch(url, expected_hash, algorithm, max_bytes=max_bytes)
-            budget.record_download(download.content)
-            return download
+        ) -> VerifiedSource:
+            return _read_bounded_verified_source(
+                direct_source_reader,
+                request_id,
+                url,
+                expected_hash,
+                budget,
+                algorithm,
+                max_bytes=max_bytes,
+            )
 
         native_wheel_artifacts: list[dict[str, Any]] = []
         for locked_wheel in locked_native_wheels:
-            wheel_download = bounded_fetch(
+            wheel_download = direct_source(
+                _python_wheel_request_id(
+                    str(locked_wheel["platform"]),
+                    locked_wheel["owner"],
+                ),
                 str(locked_wheel["url"]),
                 str(locked_wheel["sha256"]),
             )
@@ -11256,12 +12188,13 @@ def build_bundle(
 
         source_records: list[dict[str, Any]] = []
         license_records: list[dict[str, Any]] = []
-        application_tar = deterministic_source_archive(repo)
+        application_tar = deterministic_source_archive(
+            repo,
+            source_revision=application_source_revision,
+        )
         application_path = "sources/application/extra-codeowners.tar"
         write_file(root, application_path, application_tar, budget=budget)
-        application_revision = (
-            run(["git", "rev-parse", "HEAD"], cwd=repo, max_output_bytes=128).decode().strip()
-        )
+        application_revision = application_source_revision
         source_records.append(
             source_record(
                 application_name,
@@ -11288,7 +12221,11 @@ def build_bundle(
         for component, entry in (("docker-python-recipe", docker_recipe), ("cpython", cpython)):
             if not isinstance(entry, dict):
                 raise EvidenceError(f"policy is missing {component}")
-            download = bounded_fetch(str(entry.get("url", "")), str(entry.get("sha256", "")))
+            download = direct_source(
+                BASE_SOURCE_REQUEST_IDS[component],
+                str(entry.get("url", "")),
+                str(entry.get("sha256", "")),
+            )
             content = download.content
             base_source_content[component] = content
             filename = safe_filename(str(entry["url"]))
@@ -11321,9 +12258,16 @@ def build_bundle(
             )
             detached_license = detached_license_source(entry, component)
             if detached_license is not None:
+                if component != "docker-python-recipe":
+                    raise EvidenceError(
+                        f"source plan has no detached license request for {component}"
+                    )
                 license_url, license_hash = detached_license
-                license_download = bounded_fetch(
-                    license_url, license_hash, max_bytes=MAX_LICENSE_BYTES
+                license_download = direct_source(
+                    DOCKER_PYTHON_LICENSE_REQUEST_ID,
+                    license_url,
+                    license_hash,
+                    max_bytes=MAX_LICENSE_BYTES,
                 )
                 license_content = license_download.content
                 license_relative = f"licenses/from-source/{component}/LICENSE"
@@ -11363,7 +12307,11 @@ def build_bundle(
             expected = source.get("sha256")
             if not isinstance(url, str) or not isinstance(expected, str):
                 raise EvidenceError(f"invalid Python source record: {key[0]} {key[1]}")
-            download = bounded_fetch(url, expected)
+            download = direct_source(
+                _python_sdist_request_id(key[0], key[1]),
+                url,
+                expected,
+            )
             content = download.content
             expected_size = source.get("size")
             if expected_size is not None and len(content) != expected_size:
@@ -11452,6 +12400,7 @@ def build_bundle(
         for source_id in sorted(native_components_by_source):
             native_source = source_policies[source_id]
             kind = str(native_source["kind"])
+            native_request_ids = _native_source_request_ids(source_id, kind)
             validate_bundle_source_reviewed_license_binding(
                 source_id,
                 native_source,
@@ -11467,6 +12416,7 @@ def build_bundle(
                 content: bytes,
                 archive_name: str,
                 *,
+                max_archive_bytes: int,
                 selected_source_id: str = source_id,
                 selected_expected_notices: Mapping[str, Mapping[str, Any]] = expected_notices,
                 selected_found_notices: dict[str, bytes] = found_notices,
@@ -11476,6 +12426,7 @@ def build_bundle(
                     archive_name=archive_name,
                     source_id=selected_source_id,
                     expected=selected_expected_notices,
+                    max_archive_bytes=max_archive_bytes,
                 ).items():
                     if member in selected_found_notices:
                         raise EvidenceError(
@@ -11486,7 +12437,8 @@ def build_bundle(
 
             if kind == "alpine-aports":
                 recipe = native_source["recipe"]
-                recipe_download = bounded_fetch(
+                recipe_download = direct_source(
+                    native_request_ids["recipe"],
                     str(recipe["url"]),
                     str(recipe["sha256"]),
                 )
@@ -11508,29 +12460,35 @@ def build_bundle(
                         recipe_relative,
                     )
                 )
-                collect_notices(recipe_download.content, "recipe.tar.gz")
+                collect_notices(
+                    recipe_download.content,
+                    "recipe.tar.gz",
+                    max_archive_bytes=MAX_DOWNLOAD_BYTES,
+                )
                 for distfile in native_source["distfiles"]:
-                    distfile_download = bounded_fetch(
+                    filename = str(distfile["filename"])
+                    distfile_download = _read_bounded_alpine_distfile(
+                        alpine_source_reader,
+                        _alpine_distfile_request_id(
+                            str(native_source["distfiles_release"]),
+                            filename,
+                        ),
                         str(distfile["url"]),
                         str(distfile["sha512"]),
-                        "sha512",
-                        max_bytes=MAX_NATIVE_COMPONENT_SOURCE_BYTES,
+                        budget,
                     )
                     if len(distfile_download.content) != distfile["size"]:
                         raise EvidenceError(
-                            f"size mismatch for native-component distfile {source_id}/"
-                            f"{distfile['filename']}"
+                            f"size mismatch for native-component distfile {source_id}/{filename}"
                         )
                     distfile_relative = (
-                        f"sources/native-components/{source_directory}/distfiles/"
-                        f"{distfile['filename']}"
+                        f"sources/native-components/{source_directory}/distfiles/{filename}"
                     )
-                    write_file(
+                    retain_alpine_distfile(
                         root,
                         distfile_relative,
                         distfile_download.content,
                         budget=budget,
-                        max_bytes=MAX_NATIVE_COMPONENT_SOURCE_BYTES,
                     )
                     source_records.append(
                         source_record(
@@ -11543,11 +12501,13 @@ def build_bundle(
                     )
                     collect_notices(
                         distfile_download.content,
-                        str(distfile["filename"]),
+                        filename,
+                        max_archive_bytes=MAX_ALPINE_DISTFILE_BYTES,
                     )
             elif kind == "crates-io":
                 crate = native_source["crate"]
-                crate_download = bounded_fetch(
+                crate_download = direct_source(
+                    native_request_ids["crate"],
                     str(crate["url"]),
                     str(crate["sha256"]),
                     max_bytes=MAX_NATIVE_COMPONENT_SOURCE_BYTES,
@@ -11586,15 +12546,11 @@ def build_bundle(
                     }
                 )
             elif kind == "owner-sdist-subpath":
-                _owner, owner_name, owner_version = parse_native_owner(
-                    native_source["owner"], f"native source {source_id}"
+                owner_archive, owner_urls, owner_relative = _reuse_owner_sdist_source(
+                    native_source,
+                    source_id,
+                    python_source_archives,
                 )
-                cached = python_source_archives.get((owner_name, owner_version))
-                if cached is None:
-                    raise EvidenceError(
-                        f"owner-sdist source has no retained owner archive: {source_id}"
-                    )
-                owner_archive, owner_urls, owner_relative = cached
                 subtree = verify_owner_sdist_subtree(
                     owner_archive,
                     source_id=source_id,
@@ -11622,17 +12578,23 @@ def build_bundle(
                         owner_relative,
                     )
                 )
-                collect_notices(owner_archive, owner_relative)
+                collect_notices(
+                    owner_archive,
+                    owner_relative,
+                    max_archive_bytes=MAX_DOWNLOAD_BYTES,
+                )
             elif kind == "checksummed-upstream-release":
                 checksum = native_source["checksum_document"]
-                checksum_download = bounded_fetch(
+                checksum_download = direct_source(
+                    native_request_ids["checksum_document"],
                     str(checksum["url"]),
                     str(checksum["sha256"]),
                 )
                 if len(checksum_download.content) != checksum["size"]:
                     raise EvidenceError(f"size mismatch for checksum document {source_id}")
                 archive_policy = native_source["archive"]
-                archive_download = bounded_fetch(
+                archive_download = direct_source(
+                    native_request_ids["archive"],
                     str(archive_policy["url"]),
                     str(archive_policy["sha256"]),
                     max_bytes=MAX_NATIVE_COMPONENT_SOURCE_BYTES,
@@ -11670,6 +12632,7 @@ def build_bundle(
                 collect_notices(
                     archive_download.content,
                     str(native_source["checksum_filename"]),
+                    max_archive_bytes=MAX_NATIVE_COMPONENT_SOURCE_BYTES,
                 )
             else:
                 raise EvidenceError(f"unsupported native-component bundle source kind: {kind}")
@@ -11717,7 +12680,11 @@ def build_bundle(
             expected_recipe_hash = expected_recipes.get(recipe_key)
             if not isinstance(expected_recipe_hash, str):
                 raise EvidenceError(f"no reviewed recipe archive hash for {origin}@{commit}")
-            recipe_download = bounded_fetch(recipe_url, expected_recipe_hash)
+            recipe_download = direct_source(
+                _alpine_recipe_request_id(origin, commit),
+                recipe_url,
+                expected_recipe_hash,
+            )
             recipe = recipe_download.content
             recipe_relative = f"sources/alpine/{origin}/{commit}/recipe.tar.gz"
             write_file(root, recipe_relative, recipe, budget=budget)
@@ -11745,10 +12712,16 @@ def build_bundle(
                     f"https://distfiles.alpinelinux.org/distfiles/{alpine_release}/"
                     f"{urllib.parse.quote(filename, safe='')}"
                 )
-                download = bounded_fetch(url, expected_sha512, "sha512")
+                download = _read_bounded_alpine_distfile(
+                    alpine_source_reader,
+                    _alpine_distfile_request_id(alpine_release, filename),
+                    url,
+                    expected_sha512,
+                    budget,
+                )
                 content = download.content
                 relative = f"sources/alpine/{origin}/{commit}/distfiles/{filename}"
-                write_file(root, relative, content, budget=budget)
+                retain_alpine_distfile(root, relative, content, budget=budget)
                 source_records.append(
                     source_record(
                         f"alpine-{origin}",
@@ -11764,6 +12737,7 @@ def build_bundle(
                     root,
                     archive_name=filename,
                     budget=budget,
+                    max_archive_bytes=MAX_ALPINE_DISTFILE_BYTES,
                 )
                 license_records.extend(
                     {"component": f"alpine-{origin}", "path": item} for item in found
@@ -11789,7 +12763,8 @@ def build_bundle(
             identifier = entry.get("id")
             if not isinstance(identifier, str) or not re.fullmatch(r"[A-Za-z0-9.+-]+", identifier):
                 raise EvidenceError("invalid license identifier")
-            download = bounded_fetch(
+            download = direct_source(
+                _license_text_request_id(identifier),
                 str(entry.get("url", "")),
                 str(entry.get("sha256", "")),
                 max_bytes=MAX_LICENSE_BYTES,
@@ -11973,21 +12948,103 @@ def build_bundle(
             checksum_lines.finish(),
             budget=budget,
         )
-        create_deterministic_tar(root, output, source_date_epoch)
+        _close_verified_source_readers(direct_source_reader, alpine_source_reader)
+        publication = Path(temporary) / "publication"
+        publication.mkdir(mode=0o700)
+        staged_bundle = publication / "bundle"
+        staged_checksum = publication / "checksum"
+        staged_predicate = publication / "predicate"
+        create_deterministic_tar(root, staged_bundle, source_date_epoch)
+        if staged_bundle.stat().st_size > MAX_BUNDLE_OUTPUT_BYTES:
+            raise EvidenceError("compressed evidence bundle exceeds the output-size limit")
+        bundle_hash = sha256_file(staged_bundle, max_bytes=MAX_BUNDLE_OUTPUT_BYTES)
+        staged_checksum.write_bytes(f"{bundle_hash}  {output.name}\n".encode())
+        predicate = {
+            "schema_version": SCHEMA_VERSION,
+            "media_type": EVIDENCE_MEDIA_TYPE,
+            "platform": inventory["platform"],
+            "subject_digest": inventory["subject_digest"],
+            "artifact": {"filename": output.name, "sha256": bundle_hash},
+            "release_url": f"https://github.com/stampbot/extra-codeowners/releases/tag/v{version}",
+        }
+        staged_predicate.write_bytes(canonical_json(predicate))
+        path_boundary.publish(
+            bundle=staged_bundle,
+            checksum=staged_checksum,
+            predicate=staged_predicate,
+        )
 
-    if output.stat().st_size > MAX_BUNDLE_OUTPUT_BYTES:
-        raise EvidenceError("compressed evidence bundle exceeds the output-size limit")
-    bundle_hash = sha256_file(output, max_bytes=MAX_BUNDLE_OUTPUT_BYTES)
-    output.with_suffix(output.suffix + ".sha256").write_text(f"{bundle_hash}  {output.name}\n")
-    predicate = {
-        "schema_version": SCHEMA_VERSION,
-        "media_type": EVIDENCE_MEDIA_TYPE,
-        "platform": inventory["platform"],
-        "subject_digest": inventory["subject_digest"],
-        "artifact": {"filename": output.name, "sha256": bundle_hash},
-        "release_url": f"https://github.com/stampbot/extra-codeowners/releases/tag/v{version}",
-    }
-    predicate_output.write_bytes(canonical_json(predicate))
+
+def build_bundle(
+    *,
+    inventory_path: Path,
+    files_path: Path,
+    policy_path: Path,
+    lock_path: Path,
+    direct_source_store_root: Path,
+    direct_source_plan_sha256: str,
+    direct_source_plan_size: int,
+    alpine_source_store_root: Path,
+    alpine_source_plan_sha256: str,
+    alpine_source_plan_size: int,
+    bundle_work_root: Path,
+    repo: Path,
+    output: Path,
+    predicate_output: Path,
+    version: str,
+    source_date_epoch: int,
+    selected_python_directory: Path,
+    application_source_revision: str,
+    application_wheel_sha256: str,
+    application_selection_record_sha256: str,
+    require_approval: bool,
+    require_image_revision: bool,
+) -> None:
+    """Build one evidence trio and leave no final files when the build fails."""
+
+    path_boundary = BundlePathBoundary(
+        work_root=bundle_work_root,
+        inputs=(
+            inventory_path,
+            files_path,
+            policy_path,
+            lock_path,
+            direct_source_store_root,
+            alpine_source_store_root,
+            repo,
+            selected_python_directory,
+        ),
+        output=output,
+        predicate_output=predicate_output,
+    )
+    try:
+        _build_bundle_with_boundary(
+            path_boundary=path_boundary,
+            inventory_path=inventory_path,
+            files_path=files_path,
+            policy_path=policy_path,
+            lock_path=lock_path,
+            direct_source_store_root=direct_source_store_root,
+            direct_source_plan_sha256=direct_source_plan_sha256,
+            direct_source_plan_size=direct_source_plan_size,
+            alpine_source_store_root=alpine_source_store_root,
+            alpine_source_plan_sha256=alpine_source_plan_sha256,
+            alpine_source_plan_size=alpine_source_plan_size,
+            repo=repo,
+            output=output,
+            predicate_output=predicate_output,
+            version=version,
+            source_date_epoch=source_date_epoch,
+            selected_python_directory=selected_python_directory,
+            application_source_revision=application_source_revision,
+            application_wheel_sha256=application_wheel_sha256,
+            application_selection_record_sha256=application_selection_record_sha256,
+            require_approval=require_approval,
+            require_image_revision=require_image_revision,
+        )
+    except BaseException:
+        path_boundary.abort()
+        raise
 
 
 def source_record(
@@ -12027,11 +13084,7 @@ def create_deterministic_tar(root: Path, output: Path, source_date_epoch: int) -
             relative = path.relative_to(root).as_posix()
             info = tarfile.TarInfo(relative)
             size = path.stat().st_size
-            limit = (
-                MAX_NATIVE_COMPONENT_SOURCE_BYTES
-                if relative.startswith("sources/native-components/")
-                else MAX_ARCHIVE_MEMBER_BYTES
-            )
+            limit = bundle_member_size_limit(relative)
             if size > limit:
                 raise EvidenceError(f"bundle member exceeds the size limit: {relative}")
             info.size = size
@@ -12636,6 +13689,13 @@ def command_bundle(args: argparse.Namespace) -> None:
         files_path=Path(args.files_inventory),
         policy_path=Path(args.policy),
         lock_path=Path(args.uv_lock),
+        direct_source_store_root=Path(args.direct_source_store_root),
+        direct_source_plan_sha256=args.direct_source_plan_sha256,
+        direct_source_plan_size=args.direct_source_plan_size,
+        alpine_source_store_root=Path(args.alpine_source_store_root),
+        alpine_source_plan_sha256=args.alpine_source_plan_sha256,
+        alpine_source_plan_size=args.alpine_source_plan_size,
+        bundle_work_root=Path(args.bundle_work_root),
         repo=Path(args.repo).resolve(),
         output=Path(args.output),
         predicate_output=Path(args.predicate_output),
@@ -12863,6 +13923,13 @@ def parser() -> argparse.ArgumentParser:
     bundle.add_argument("--files-inventory", required=True)
     bundle.add_argument("--policy", default=".compliance/container-policy.json")
     bundle.add_argument("--uv-lock", default="uv.lock")
+    bundle.add_argument("--direct-source-store-root", required=True)
+    bundle.add_argument("--direct-source-plan-sha256", required=True)
+    bundle.add_argument("--direct-source-plan-size", required=True, type=int)
+    bundle.add_argument("--alpine-source-store-root", required=True)
+    bundle.add_argument("--alpine-source-plan-sha256", required=True)
+    bundle.add_argument("--alpine-source-plan-size", required=True, type=int)
+    bundle.add_argument("--bundle-work-root", required=True)
     bundle.add_argument("--repo", default=".")
     bundle.add_argument("--output", required=True)
     bundle.add_argument("--predicate-output", required=True)

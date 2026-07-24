@@ -38,7 +38,7 @@ field says otherwise, every object has exactly the listed keys.
 | `git_sha` | 40 lowercase hexadecimal characters. |
 | `path` | Canonical relative POSIX path, at most 4,096 UTF-8 bytes; no empty, `.`, `..`, backslash, absolute, repeated-separator, or control-character component. |
 | `role` | Deterministic platform-neutral projection of a native payload's exact `site-packages` path; it has the same canonical-path syntax and limit as `path`. |
-| `https_url` | Credential-free HTTPS URL with a valid hostname and port and no control characters; redirects are separately limited to five. |
+| `https_url` | Credential-free HTTPS request URL with a valid hostname and port and no control characters; redirects are separately limited to five and persisted as canonical HTTPS origins. |
 | `mode` | Integer from `0` through `07777`; booleans are invalid. |
 | `uid`, `gid` | Integer from `0` through `2^31 - 1`; booleans are invalid. |
 | component list | At most 10,000 exact component records. |
@@ -61,17 +61,17 @@ The policy has exactly these fields:
 | `platforms` | platform object | Exact normalized component list for each platform. | `verify` and `bundle`. |
 | `distribution_approval` | object | Separate human decision about recipient distribution. | Required only when `--require-distribution-approval` is set. |
 | `license_resolutions` | object | Reviewed expression and rationale for every exact component identity. | Inventory verification, notices, and bundle generation. |
-| `license_texts` | array | Hash-pinned standard license texts required by reviewed expressions. | Inventory coverage and bundle fetch. |
+| `license_texts` | array | Hash-pinned standard license texts required by reviewed expressions. | Inventory coverage, direct-source planning, and verified-store consumption. |
 | `custom_license_evidence` | object | Exact source-carried notice pins for every top-level `LicenseRef-*`. | Inventory coverage and retained-license verification. |
 | `unexpanded_python_payloads` | platform object | Exact raw wheel SBOM, native, and identity-file occurrences. Some owners may also have closed-world coverage. | `verify`; any drift fails. |
 | `native_component_sources` | object | Tagged, immutable source records for reviewed components nested inside wheels. | Schema, source-retention, and notice gates. |
 | `native_component_coverage` | platform object | Exact wheel observations, review decisions, payload dispositions, omissions, and owner review state. | `verify`, lock binding, coverage ledger, notices, and bundle generation. |
 | `filesystem_baselines` | platform object | Exact APK database history plus canonical post-base directory effects and removals. | Deep `bundle` provenance verification and offline CI policy review. |
-| `docker_python_recipe` | object | Pinned Docker Official Python recipe and license. | Bundle fetch and CPython binding. |
-| `cpython_source` | object | Pinned CPython source archive and source-carried identity evidence. | Bundle fetch, recipe binding, and runtime/source identity binding. |
+| `docker_python_recipe` | object | Pinned Docker Official Python recipe and license. | Direct-source planning, verified-store consumption, and CPython binding. |
+| `cpython_source` | object | Pinned CPython source archive and source-carried identity evidence. | Direct-source planning, verified-store consumption, recipe binding, and runtime/source identity binding. |
 | `python_sources` | array | Pinned fallback sources for components absent from `uv.lock`. | Exact source-coverage and bundle gates. |
-| `alpine_distfiles_release` | string | Alpine distfiles release in `vMAJOR.MINOR` form. | Alpine source fetch. |
-| `alpine_recipe_archives` | object | Exact `ORIGIN@APORTS_COMMIT` to recipe-subtree SHA-256 mapping. | Exact source-coverage and bundle gates. |
+| `alpine_distfiles_release` | string | Alpine distfiles release in `vMAJOR.MINOR` form. | Alpine distfile planning and fetch. |
+| `alpine_recipe_archives` | object | Exact `ORIGIN@APORTS_COMMIT` to recipe-subtree SHA-256 mapping. | Direct-source planning, Alpine distfile planning, and bundle gates. |
 | `alpine_recipe_exceptions` | object | Narrow parser exceptions for a subset of pinned recipes. | Schema validation and recipe parse. |
 
 There is no policy field for a base manifest digest, base configuration digest,
@@ -537,6 +537,27 @@ notice bytes go under
 subtree manifest. This separation matters when a wheel was built against a
 different Alpine release than the final runtime image, as Greenlet was.
 
+## Verified source plans and stores
+
+Source acquisition uses two canonical plans. The direct plan binds the source
+revision, policy digest, lock-file digest, exact request URLs, allowed hosts,
+expected digests, byte limits, and consumers. A rootless parser reads the
+verified recipe objects from that store and produces the Alpine distfile plan.
+The Alpine plan binds its parent plan and parent store manifest, so it cannot be
+combined with recipes from another fetch.
+
+Each fetch writes a versioned `SOURCE-STORE.json` and content-addressed objects.
+The store retains canonical HTTPS origins for the request and redirect trail.
+It does not persist redirected paths or queries, because those can contain
+signed parameters or credentials. The exact initial request URL remains in the
+trusted `SOURCE-PLAN.json`.
+
+CI fetches both stores once and uploads them together. Both architecture jobs
+download that artifact by immutable artifact ID. The `bundle` command requires
+each plan's trusted SHA-256 and byte size, rechecks every object as it reads it,
+and verifies the retained store again before it commits its three outputs. It
+has no network fallback.
+
 ## Review and validation
 
 The commands answer different questions. A narrower command passing does not
@@ -545,7 +566,7 @@ imply that a wider gate passed.
 | Command | Scope |
 | --- | --- |
 | `verify` | One standalone component inventory, the policy schema, exact components, payload baselines, native-component coverage, APK database history, license coverage, and optional distribution approval. |
-| `bundle` | The `verify` scope plus the all-layer inventory, Dockerfile and base binding, post-base provenance, Git source binding, lock-to-wheel and lock-to-sdist binding, recipe and distfile verification, retained notices, network hash checks, and deterministic archive limits. |
+| `bundle` | The `verify` scope plus the all-layer inventory, Dockerfile and base binding, post-base provenance, Git source binding, lock-to-wheel and lock-to-sdist binding, verified direct and Alpine source stores, recipe and distfile verification, retained notices, and deterministic archive limits. It requires trusted plan digests and sizes and has no network fallback. |
 | `native-component-coverage-view` | The canonical per-owner coverage ledger after full standalone inventory verification. |
 | `filesystem-policy-view` | A human-readable projection of raw layer records into the canonical directory-effect and removal policy. |
 | `verify-ci-policy` | The offline policy checks possible from an extracted pull-request artifact, materialized policy blob, and materialized Dockerfile blob. |
