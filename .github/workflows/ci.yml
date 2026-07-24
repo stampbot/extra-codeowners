@@ -180,10 +180,16 @@ jobs:
         if: ${{ !matrix.coverage }}
         run: uv run pytest --no-cov
 
-      - name: Verify native PostgreSQL backup and restore
+      - name: Migrate native PostgreSQL backup source
         if: matrix.postgres
         env:
           EXTRA_CODEOWNERS_DATABASE_URL: ${{ matrix.test-postgres-url }}
+          EXTRA_CODEOWNERS_ENVIRONMENT: production
+        run: uv run python -m extra_codeowners database migrate
+
+      - name: Verify native PostgreSQL backup and restore
+        if: matrix.postgres
+        env:
           PGHOST: 127.0.0.1
           PGPASSWORD: extra_codeowners
           PGPORT: "5432"
@@ -191,7 +197,6 @@ jobs:
           RESTORE_DATABASE: extra_codeowners_restore_test
           SOURCE_DATABASE: extra_codeowners_test
         run: |
-          uv run python -m extra_codeowners database migrate
           .github/scripts/test-postgres-backup-restore.sh \
             'postgres:17.7-alpine@sha256:bb377b7239d2774ac8cc76f481596ce96c5a6b5e9d141f6d0a0ee371a6e7c0f2'
 
@@ -400,6 +405,9 @@ jobs:
           reject_values "runtime-environment override" \
             --set-string extraEnv[0].name=EXTRA_CODEOWNERS_ENVIRONMENT \
             --set-string extraEnv[0].value=development
+          reject_values "runtime ambient libpq environment" \
+            --set-string extraEnv[0].name=PGHOST \
+            --set-string extraEnv[0].value=database.example.com
           reject_values "runtime interpreter environment injection" \
             --set-string extraEnv[0].name=PYTHONPATH \
             --set-string extraEnv[0].value=/run/secrets/extra-codeowners
@@ -413,6 +421,9 @@ jobs:
           reject_values "migration environment override" \
             --set-string migrations.extraEnv[0].name=EXTRA_CODEOWNERS_ENVIRONMENT \
             --set-string migrations.extraEnv[0].value=development
+          reject_values "migration ambient libpq environment" \
+            --set-string migrations.extraEnv[0].name=PGSERVICE \
+            --set-string migrations.extraEnv[0].value=database
           reject_values "migration loader environment injection" \
             --set-string migrations.extraEnv[0].name=LD_LIBRARY_PATH \
             --set-string migrations.extraEnv[0].value=/run/secrets/database-ca

@@ -39,7 +39,7 @@ secret inputs:
 | `EXTRA_CODEOWNERS_BETA_CHECKER_PRIVATE_KEY_FILE` | Path to the checker App's PEM private key | Signs a GitHub App JSON Web Token (JWT). |
 | `EXTRA_CODEOWNERS_BETA_APPROVER_PRIVATE_KEY_FILE` | Path to a different App's PEM private key | Signs the approver App's JWT. |
 | `EXTRA_CODEOWNERS_BETA_OPERATOR_TOKEN_FILE` | Path to a dedicated fine-grained personal access token (PAT) beginning with `github_pat_` | Reads Actions permissions and classic branch protection for the target repository. |
-| `EXTRA_CODEOWNERS_BETA_DATABASE_URL` | A `postgresql+psycopg` URL | Opens a bounded, read-only database probe. |
+| `EXTRA_CODEOWNERS_BETA_DATABASE_URL` | A `postgresql+psycopg` URL with one explicit host, database, username, and nonempty password | Opens a bounded, read-only database probe. |
 
 The preflight never reads `GH_TOKEN` or `GITHUB_TOKEN`. It rejects an operator
 PAT that is also present in either variable.
@@ -157,7 +157,7 @@ the other independent checks.
 | `codeowners` | GitHub reports no errors for `.github/CODEOWNERS` at the pinned target commit. The bounded UTF-8 file parses locally, contains a rule, and owns the test path. |
 | `policy` | The pinned repository and organization policy files parse and compile with built-in non-delegable paths enabled. Organization policy enrolls exactly the configured approver and no other App. Repository policy contains one delegation and no other delegation; it names the exact test path, exact CODEOWNER set, exact App, and exact required-label set. Each configured label must be present for eligibility. |
 | `service_health` | `/`, `/api/runtime-identity`, `/health/live`, and `/health/ready` match a production source deployment of the configured checker. The service reports PostgreSQL, the exact policy and check settings, enabled and healthy worker and reconciler tasks, and a recent successful GitHub authentication as the configured App ID. A source deployment must report `build_revision: null`. |
-| `postgresql` | The URL uses the exact `postgresql+psycopg` driver and one explicit host, database, user, and password. The connection enforces read-only transactions, `search_path=public`, and five-second statement, lock, and idle-transaction timeouts. The server version, Alembic head, schema compatibility marker, required tables, columns, generated values, primary keys, indexes, and unique constraints match the running code. |
+| `postgresql` | The URL uses the exact `postgresql+psycopg` driver and one explicit host, database, username, and nonempty password. The connection enforces read-only transactions, `search_path=public`, and five-second statement, lock, and idle-transaction timeouts. The server version, Alembic head, and `required-release-contract` match the running code. Evidence reports `schema_contract: required-release-contract`. |
 | `insecure_changes_metric` | `/metrics` contains exactly one unlabelled `extra_codeowners_insecure_changes_enabled` sample with value `0`. |
 | `final_branch_refs` | Both repository identities, availability states, default branches, and branch commits still match after the other checks finish. |
 
@@ -182,10 +182,12 @@ Git configuration.
 
 Remote PostgreSQL connections require `sslmode=verify-full`. A direct
 loopback address or operator-controlled Unix-socket proxy may omit TLS.
-Routing overrides such as `hostaddr` and `service` require both an explicit
-host and `verify-full`. Hostless and comma-separated routes, an authority host
-combined with a query-string `host`, and caller-supplied libpq `options` are
-rejected.
+An optional `hostaddr` requires an explicit host and `verify-full`.
+`sslrootcert`, when present, must name a nonempty absolute path. Service-file
+routing, unknown query parameters, ambient libpq connection variables,
+hostless and comma-separated routes, an authority host combined with a
+query-string `host`, and caller-supplied libpq `options` are rejected. The URL
+must carry its own password, so `.pgpass` and `PGPASSFILE` are not used.
 
 GitHub and service requests time out after 10 seconds, do not follow redirects,
 and ignore ambient proxy and certificate environment variables. Responses,

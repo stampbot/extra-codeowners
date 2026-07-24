@@ -52,7 +52,11 @@ from sqlalchemy.pool import NullPool
 
 from extra_codeowners import __version__
 from extra_codeowners.codeowners import MAX_CODEOWNERS_BYTES, parse_codeowners
-from extra_codeowners.database import DATABASE_MIGRATION_HEAD, validate_database_schema
+from extra_codeowners.database import (
+    DATABASE_MIGRATION_HEAD,
+    isolated_postgresql_connect_args,
+    validate_database_schema,
+)
 from extra_codeowners.models import (
     EvaluationOptions,
     OrganizationPolicy,
@@ -2216,15 +2220,10 @@ class LocalSystemProbe:
                 pool_reset_on_return="rollback",
                 hide_parameters=True,
                 connect_args={
+                    **isolated_postgresql_connect_args(database_url),
                     "application_name": "extra-codeowners-evaluation-beta",
                     "connect_timeout": 5,
-                    "dbname": parsed.database,
-                    "host": effective_host,
                     "options": connection_options,
-                    "password": parsed.password,
-                    "port": parsed.port or 5432,
-                    "sslmode": ssl_mode or "disable",
-                    "user": parsed.username,
                 },
             )
         except Exception as error:
@@ -2267,7 +2266,7 @@ class LocalSystemProbe:
             "backend": "postgresql",
             "server_version_num": server_version_num,
             "database_revision": DATABASE_MIGRATION_HEAD,
-            "schema_contract": "complete",
+            "schema_contract": "required-release-contract",
             "transaction_mode": "read-only",
             "search_path": "public",
             "statement_timeout_ms": 5000,

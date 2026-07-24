@@ -4,9 +4,10 @@ from time import monotonic
 from typing import Any, cast
 
 import pytest
-from sqlalchemy import Table, create_engine, inspect, select, update
+from sqlalchemy import Table, create_engine, inspect, select, text, update
 from sqlalchemy.exc import IntegrityError
 
+import extra_codeowners.database as database_module
 from extra_codeowners.database import (
     AuthorityJob,
     AuthorityRequest,
@@ -16,6 +17,7 @@ from extra_codeowners.database import (
     SchemaMetadata,
     ServiceLease,
     SharedHeadEpoch,
+    isolated_postgresql_connect_args,
     utcnow,
     validate_database_schema,
 )
@@ -55,6 +57,93 @@ def test_complete_schema_contract_accepts_a_supplied_read_only_engine(tmp_path: 
         validate_database_schema(engine)
     finally:
         engine.dispose()
+
+
+def test_schema_contract_rejects_same_named_index_with_wrong_definition(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "wrong-index.db"
+    database_url = f"sqlite:///{database_path}"
+    upgrade_database(database_url)
+    engine = create_engine(database_url)
+    with engine.begin() as connection:
+        connection.execute(text("DROP INDEX ix_evaluation_jobs_claim"))
+        connection.execute(text("CREATE INDEX ix_evaluation_jobs_claim ON evaluation_jobs (state)"))
+
+    try:
+        with pytest.raises(RuntimeError, match="incompatible indexes"):
+            validate_database_schema(engine)
+    finally:
+        engine.dispose()
+
+
+def test_schema_expression_contract_handles_only_equivalent_parentheses() -> None:
+    expected = database_module._normalize_schema_expression(
+        "invalidated_generation >= 0 AND invalidated_generation <= generation"
+    )
+
+    assert expected == database_module._normalize_schema_expression(
+        "((invalidated_generation >= 0) AND (invalidated_generation <= generation))"
+    )
+    assert expected != database_module._normalize_schema_expression(
+        "invalidated_generation >= 0 AND invalidated_generation < generation"
+    )
+    with pytest.raises(RuntimeError, match="unsupported SQL"):
+        database_module._normalize_schema_expression(
+            "invalidated_generation >= 0 OR invalidated_generation <= generation"
+        )
+
+
+def test_isolated_postgresql_connect_args_neutralize_ambient_hostaddr(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PGHOSTADDR", "203.0.113.1")
+
+    arguments = isolated_postgresql_connect_args(
+        "postgresql+psycopg://user:password@localhost/database"
+    )
+
+    assert arguments["host"] == "localhost"
+    assert arguments["hostaddr"] == ""
+    assert arguments["port"] == 5432
+    assert arguments["sslmode"] == "disable"
+
+
+def test_isolated_postgresql_connect_args_preserve_an_explicit_absolute_ca() -> None:
+    arguments = isolated_postgresql_connect_args(
+        "postgresql+psycopg://user:password@db.example.test/database?"
+        "sslmode=verify-full&sslrootcert=%2Frun%2Fsecrets%2Fdatabase-ca%2Froot.pem"
+    )
+
+    assert arguments["sslrootcert"] == "/run/secrets/database-ca/root.pem"
+
+
+def test_isolated_postgresql_connect_args_reject_an_empty_password() -> None:
+    with pytest.raises(ValueError, match="password"):
+        isolated_postgresql_connect_args("postgresql+psycopg://user:@localhost/database")
+
+
+@pytest.mark.parametrize(
+    "database_url",
+    (
+        "postgresql://user:password@localhost/database",
+        "postgresql+psycopg2://user:password@localhost/database",
+    ),
+)
+def test_isolated_postgresql_connect_args_requires_the_psycopg_driver(
+    database_url: str,
+) -> None:
+    with pytest.raises(ValueError, match="unsupported route"):
+        isolated_postgresql_connect_args(database_url)
+
+
+def test_isolated_postgresql_connect_args_reject_even_empty_ambient_service(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PGSERVICE", "")
+
+    with pytest.raises(ValueError, match="PGSERVICE"):
+        isolated_postgresql_connect_args("postgresql+psycopg://user:password@localhost/database")
 
 
 def test_legacy_schema_is_rejected_without_mutating_it(tmp_path: Path) -> None:

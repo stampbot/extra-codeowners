@@ -270,16 +270,34 @@ export EXTRA_CODEOWNERS_BETA_DATABASE_URL
 ```
 
 Use the exact `postgresql+psycopg` driver and include one host, database,
-username, and password. A remote connection must use
+username, and nonempty password. Percent-encode reserved characters in the
+username and password. A remote connection must use
 `sslmode=verify-full`. A direct loopback address or an operator-controlled
 Unix-socket proxy may omit TLS.
+
+The URL may use only `host`, `hostaddr`, `sslmode`, and `sslrootcert` query
+parameters. A query-string `host` requires an empty authority host. An explicit
+`hostaddr` requires that host and `sslmode=verify-full`; `sslrootcert` must be a
+nonempty absolute path. Connection services, unknown query parameters,
+`.pgpass`, and `PGPASSFILE` are unsupported.
+
+Run the preflight from a shell without ambient libpq connection variables.
+This command must print nothing:
+
+```bash
+env | sed -n '/^PG[A-Z_]*=/p'
+```
+
+The validator rejects every recognized libpq connection variable, even when
+its value is empty. It also rejects caller-supplied `options` and pins
+`search_path=public`.
 
 Prefer a separate probe role with connect access, `USAGE` on the `public`
 schema, and read access to the schema metadata used by the check. The
 preflight forces read-only transactions, `search_path=public`, and
 five-second statement, lock, idle-transaction, and connection bounds. It
-validates the server version, migration head, and the complete required schema
-contract.
+validates the server version, migration head, and
+`required-release-contract`.
 
 The URL must reach the service's disposable database, but the preflight cannot
 establish that relationship. Verify it in the deployment platform.
@@ -337,7 +355,9 @@ jq -e '
   ] and
   ([.checks[].outcome] | all(. == "passed")) and
   ([.checks[] | select(.id == "service_health") |
-    .evidence.self_reported_build_revision] == [null])
+    .evidence.self_reported_build_revision] == [null]) and
+  ([.checks[] | select(.id == "postgresql") |
+    .evidence.schema_contract] == ["required-release-contract"])
 ' "$BETA_REPORT"
 ```
 
@@ -374,7 +394,8 @@ several failures. Start with each failed check ID:
   Confirm production mode, PostgreSQL, recent checker-App authentication, and
   healthy worker and reconciler tasks.
 - `postgresql`: check the route, TLS mode, credentials, read-only session
-  settings, server version, migration head, and schema.
+  settings, server version, migration head, and
+  `required-release-contract`.
 - `insecure_changes_metric`: disable
   `EXTRA_CODEOWNERS_ALLOW_INSECURE_CHANGES` and confirm the unlabelled metric
   is exactly `0`.

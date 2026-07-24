@@ -72,6 +72,9 @@ app.kubernetes.io/component: application
 {{- if or (eq .name "EXTRA_CODEOWNERS_ENVIRONMENT") (eq .name "EXTRA_CODEOWNERS_ALLOW_INSECURE_CHANGES") -}}
 {{- fail (printf "extraEnv must not override chart-managed variable %s" .name) -}}
 {{- end -}}
+{{- if hasPrefix "PG" .name -}}
+{{- fail (printf "extraEnv must not set ambient libpq variable %s; use EXTRA_CODEOWNERS_DATABASE_URL" .name) -}}
+{{- end -}}
 {{- if or (eq .name "PATH") (hasPrefix "PYTHON" .name) (hasPrefix "LD_" .name) (hasPrefix "DYLD_" .name) (eq .name "GCONV_PATH") (eq .name "LOCPATH") (hasPrefix "OPENSSL_" .name) (eq .name "SSLKEYLOGFILE") -}}
 {{- fail (printf "extraEnv must not set interpreter or loader variable %s" .name) -}}
 {{- end -}}
@@ -96,6 +99,9 @@ app.kubernetes.io/component: application
 {{- range .Values.migrations.extraEnv -}}
 {{- if eq .name "EXTRA_CODEOWNERS_ENVIRONMENT" -}}
 {{- fail "migrations.extraEnv must not override chart-managed variable EXTRA_CODEOWNERS_ENVIRONMENT" -}}
+{{- end -}}
+{{- if hasPrefix "PG" .name -}}
+{{- fail (printf "migrations.extraEnv must not set ambient libpq variable %s; use EXTRA_CODEOWNERS_DATABASE_URL" .name) -}}
 {{- end -}}
 {{- if or (eq .name "PATH") (hasPrefix "PYTHON" .name) (hasPrefix "LD_" .name) (hasPrefix "DYLD_" .name) (eq .name "GCONV_PATH") (eq .name "LOCPATH") (hasPrefix "OPENSSL_" .name) (eq .name "SSLKEYLOGFILE") -}}
 {{- fail (printf "migrations.extraEnv must not set interpreter or loader variable %s" .name) -}}

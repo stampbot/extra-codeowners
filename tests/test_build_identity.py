@@ -5,9 +5,9 @@ from types import SimpleNamespace
 
 import pytest
 
-import extra_codeowners.build_identity as build_identity_module
 from extra_codeowners.build_identity import (
     MAX_BUILD_IDENTITY_BYTES,
+    BuildIdentity,
     BuildIdentityError,
     load_build_identity,
     parse_build_identity,
@@ -40,7 +40,7 @@ def identity_bytes(**overrides: object) -> bytes:
     )
 
 
-def load_test_identity(path: Path):
+def load_test_identity(path: Path) -> BuildIdentity | None:
     return load_build_identity(path, expected_owner_uid=os.getuid())
 
 
@@ -171,7 +171,7 @@ def test_load_build_identity_rejects_metadata_change_during_read(
     real_fstat = os.fstat
     calls = 0
 
-    def changing_fstat(descriptor: int):
+    def changing_fstat(descriptor: int) -> os.stat_result | SimpleNamespace:
         nonlocal calls
         calls += 1
         metadata = real_fstat(descriptor)
@@ -189,7 +189,7 @@ def test_load_build_identity_rejects_metadata_change_during_read(
             st_ctime_ns=metadata.st_ctime_ns,
         )
 
-    monkeypatch.setattr(build_identity_module.os, "fstat", changing_fstat)
+    monkeypatch.setattr("extra_codeowners.build_identity.os.fstat", changing_fstat)
 
     with pytest.raises(BuildIdentityError, match="changed while it was read"):
         load_test_identity(path)

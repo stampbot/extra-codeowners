@@ -327,7 +327,7 @@ class FakeSystem:
             "backend": "postgresql",
             "server_version_num": loaded.postgres_server_version_num,
             "database_revision": DATABASE_MIGRATION_HEAD,
-            "schema_contract": "complete",
+            "schema_contract": "required-release-contract",
             "transaction_mode": "read-only",
             "search_path": "public",
             "statement_timeout_ms": 5000,
@@ -1910,10 +1910,6 @@ def test_database_probe_is_postgres_read_only_and_at_exact_migration(
         "EXTRA_CODEOWNERS_BETA_DATABASE_URL",
         ("postgresql+psycopg://operator:secret@db.example.test/beta?sslmode=verify-full"),
     )
-    monkeypatch.setenv("PGHOST", "ambient.example.test")
-    monkeypatch.setenv("PGPORT", "6543")
-    monkeypatch.setenv("PGOPTIONS", "-c search_path=unsafe")
-    monkeypatch.setenv("PGSSLMODE", "disable")
     monkeypatch.setattr(beta, "create_engine", fake_create_engine)
     monkeypatch.setattr(
         beta,
@@ -1927,7 +1923,7 @@ def test_database_probe_is_postgres_read_only_and_at_exact_migration(
         "backend": "postgresql",
         "server_version_num": 170006,
         "database_revision": DATABASE_MIGRATION_HEAD,
-        "schema_contract": "complete",
+        "schema_contract": "required-release-contract",
         "transaction_mode": "read-only",
         "search_path": "public",
         "statement_timeout_ms": 5000,
@@ -1937,6 +1933,7 @@ def test_database_probe_is_postgres_read_only_and_at_exact_migration(
     assert "default_transaction_read_only=on" in captured["connect_args"]["options"]
     assert "search_path=public" in captured["connect_args"]["options"]
     assert captured["connect_args"]["host"] == "db.example.test"
+    assert captured["connect_args"]["hostaddr"] == ""
     assert captured["connect_args"]["port"] == 5432
     assert captured["connect_args"]["dbname"] == "beta"
     assert captured["connect_args"]["user"] == "operator"
@@ -1947,6 +1944,25 @@ def test_database_probe_is_postgres_read_only_and_at_exact_migration(
     assert captured["hide_parameters"] is True
     assert schema_engines == [engine]
     assert engine.disposed is True
+
+
+def test_database_probe_rejects_ambient_libpq_connection_settings(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "EXTRA_CODEOWNERS_BETA_DATABASE_URL",
+        "postgresql+psycopg://operator:secret@db.example.test/beta?sslmode=verify-full",
+    )
+    monkeypatch.setenv("PGHOSTADDR", "203.0.113.1")
+    monkeypatch.setattr(
+        beta,
+        "create_engine",
+        lambda *args, **kwargs: pytest.fail("ambient transport must not open an engine"),
+    )
+
+    with pytest.raises(beta.PreflightError, match="database URL is invalid"):
+        beta.LocalSystemProbe().database(config(tmp_path))
 
 
 @pytest.mark.parametrize(
@@ -1978,7 +1994,7 @@ def test_database_probe_rejects_unsafe_or_ambient_connection_inputs(
         beta.LocalSystemProbe().database(config(tmp_path))
 
 
-def test_database_probe_disposes_engine_when_full_schema_contract_fails(
+def test_database_probe_disposes_engine_when_required_release_contract_fails(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

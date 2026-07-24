@@ -34,7 +34,7 @@ and [upgrade procedure][upgrade] before evaluating the chart.
 | Kubernetes | 1.27 or later, enforced by `Chart.yaml` |
 | Helm | 3.19.0, the version pinned and tested by this repository |
 | Application image | A future supported image pinned by platform digest |
-| Database | PostgreSQL configured under the application's production transport rules |
+| Database | PostgreSQL through the exact `postgresql+psycopg` driver, configured under the application's production transport rules |
 | GitHub | An installed Extra CODEOWNERS App |
 | Ingress | Public HTTPS access to only the webhook endpoint |
 
@@ -75,16 +75,20 @@ automounting disabled. The migration Job also disables token automounting; set
 needs a particular pre-existing ServiceAccount.
 
 The chart sets `EXTRA_CODEOWNERS_ENVIRONMENT=production`. The runtime
-Secret must replace the image's development-only SQLite default with a
-production PostgreSQL URL.
+Secret must replace the image's development-only SQLite default with an exact
+`postgresql+psycopg` URL.
 
 The chart fixes the executable search path and dynamic-loader environment. It
-rejects interpreter and loader names in `extraEnv` and
-`migrations.extraEnv`, and it rejects nonempty `extraEnvFrom` values because
-their keys cannot be inspected at render time. Extension mounts are read-only
-and limited to the chart's reserved secret-path prefixes. Treat
-`existingSecret` and `migrations.existingSecret` as trusted inputs: Helm cannot
-inspect the keys in an existing Secret.
+rejects interpreter and loader names—and every name beginning with `PG`—in
+`extraEnv` and `migrations.extraEnv`. It rejects nonempty `extraEnvFrom`
+values because their keys cannot be inspected at render time. Extension
+mounts are read-only and limited to the chart's reserved secret-path prefixes.
+
+Treat `existingSecret` and `migrations.existingSecret` as opaque, trusted
+inputs: Helm cannot inspect an existing Secret at render time. Neither Secret
+may contain a recognized libpq `PG*` connection variable. The application and
+migrator enforce that rule at startup and fail closed if one is present, even
+with an empty value.
 
 Security-sensitive defaults also run as UID and GID 65532, drop every Linux
 capability, disable privilege escalation, use a read-only root filesystem, and
@@ -180,15 +184,24 @@ The database file contains:
 EXTRA_CODEOWNERS_DATABASE_URL=postgresql+psycopg://DB_USER:DB_PASSWORD@DB_HOST:5432/DB_NAME?sslmode=verify-full
 ```
 
-Replace the App ID and every database placeholder. Percent-encode reserved URL
-characters. For remote PostgreSQL, keep `sslmode=verify-full` and add the
-provider's CA settings when needed. Treat the complete URL as a secret.
+Replace the App ID and every database placeholder. The URL must use the exact
+`postgresql+psycopg` driver and contain one explicit host, database, username,
+and nonempty password. Percent-encode reserved characters in the username and
+password. For remote PostgreSQL, keep `sslmode=verify-full`. Treat the complete
+URL as a secret.
+
+Only `host`, `hostaddr`, `sslmode`, and `sslrootcert` query parameters are
+supported. `hostaddr` requires one explicit hostname, supplied either by the
+URL authority or by the `host` query parameter, plus `sslmode=verify-full`.
+Connection-service URLs, `.pgpass`, ambient libpq connection variables, and
+unknown query parameters are unsupported. The runtime and migrator pin
+`search_path=public`.
 
 If the provider uses a private CA, mount its certificate read-only below
 `/run/secrets/extra-codeowners/` in both the runtime and migration containers.
-Set libpq's `sslrootcert` parameter to that exact file. Migration-only CA
-mounts may instead use `/run/secrets/database-ca/`; the runtime does not allow
-that prefix.
+Set the URL's `sslrootcert` parameter to that exact nonempty absolute path.
+Migration-only CA mounts may instead use `/run/secrets/database-ca/`; the
+runtime does not allow that prefix.
 
 Export only file paths:
 
@@ -263,7 +276,9 @@ kubectl --namespace extra-codeowners create secret generic \
 The migration Job receives only `extra-codeowners-database`. It never inherits
 runtime `existingSecret`, `extraEnv`, `extraVolumes`, or
 `extraVolumeMounts`. Both `extraEnvFrom` settings are unsupported and must
-remain empty.
+remain empty. Keep recognized libpq `PG*` variables out of both existing
+Secrets; the chart cannot inspect those keys, and the runtime and migrator
+reject them.
 
 ## Configure and preflight the release
 
@@ -339,18 +354,33 @@ helm install extra-codeowners \
   --namespace extra-codeowners \
   --values deployment-values.yaml \
   --set-string image.repository="$IMAGE_REPOSITORY" \
-  --set-string image.digest="$IMAGE_DIGEST"
+  --set-string image.digest="$IMAGE_DIGEST" \
+  --wait \
+  --timeout=10m
 ```
 
 The migration hook must complete before Helm creates the Deployment. The
 application then remains unready until its GitHub and database settings are
 valid and a fresh authenticated App identity probe succeeds.
 
+The default startup probe calls `/health/live` every five seconds, gives each
+request three seconds, and allows 60 failures. That gives initialization five
+minutes before Kubernetes restarts the container. Kubernetes begins liveness
+and readiness probes only after startup succeeds: liveness detects a failed
+process or local task, while readiness removes an instance from webhook
+traffic when a required dependency is unavailable.
+
+Measure initialization through the production database path and secret
+mounts. Set `periodSeconds * failureThreshold` above the slowest expected
+startup plus operational margin, and keep Helm and rollout timeouts above that
+budget. The examples use ten minutes to leave another five minutes for
+scheduling and image startup.
+
 Wait for rollout and run the live-endpoint test:
 
 ```bash
 kubectl --namespace extra-codeowners rollout status \
-  deployment/extra-codeowners --timeout=5m
+  deployment/extra-codeowners --timeout=10m
 helm test extra-codeowners --namespace extra-codeowners
 kubectl --namespace extra-codeowners get \
   jobs,pods,service,serviceaccount,networkpolicy
@@ -465,7 +495,7 @@ helm upgrade extra-codeowners \
   --set autoscaling.enabled=false \
   --set replicaCount=1 \
   --wait \
-  --timeout=5m
+  --timeout=10m
 ```
 
 After the migration Job logs
@@ -485,14 +515,16 @@ helm upgrade extra-codeowners \
   --set-string image.repository="$IMAGE_REPOSITORY" \
   --set-string image.digest="$IMAGE_DIGEST" \
   --wait \
-  --timeout=5m
+  --timeout=10m
 ```
 
 The second update runs the migration hook again. The target migrator takes the
-advisory lock, observes the exact current head, and exits without changing the
-schema. Verify that the HPA exists when the reviewed values enable autoscaling
-and is absent when they disable it. Resume GitOps or webhook ingress only after
-the final Deployment and autoscaling state match those values.
+advisory lock, observes the exact current head, validates the target
+artifact's `required-release-contract`, and exits without changing the schema.
+It performs that validation even when Alembic has nothing to change. Verify
+that the HPA exists when the reviewed values enable autoscaling and is absent
+when they disable it. Resume GitOps or webhook ingress only after the final
+Deployment and autoscaling state match those values.
 
 Migration defaults are:
 
@@ -526,7 +558,7 @@ helm upgrade extra-codeowners \
   --set-string image.repository="$IMAGE_REPOSITORY" \
   --set-string image.digest="$IMAGE_DIGEST"
 kubectl --namespace extra-codeowners rollout status \
-  deployment/extra-codeowners --timeout=5m
+  deployment/extra-codeowners --timeout=10m
 ```
 
 `--reset-then-reuse-values` starts with the new chart defaults and then
@@ -541,7 +573,7 @@ notes permit application rollback:
 ```bash
 helm history extra-codeowners --namespace extra-codeowners
 helm rollback extra-codeowners REVISION \
-  --namespace extra-codeowners --wait
+  --namespace extra-codeowners --wait --timeout=10m
 ```
 
 Replace `REVISION` with the known-good revision from `helm history`.
@@ -631,7 +663,8 @@ For every repository that depends on Extra CODEOWNERS:
 Only then uninstall:
 
 ```bash
-helm uninstall extra-codeowners --namespace extra-codeowners
+helm uninstall extra-codeowners \
+  --namespace extra-codeowners --wait --timeout=10m
 kubectl --namespace extra-codeowners delete secret \
   extra-codeowners-registry --ignore-not-found
 ```
@@ -680,10 +713,10 @@ descriptions.
 | `podLabels` | string map | `{}` | Adds labels; cannot override chart name, instance, or component labels. |
 | `podSecurityContext` | object | nonroot, GID 65532 volumes, `RuntimeDefault` seccomp | Applies at pod level. |
 | `securityContext` | object | UID/GID 65532, read-only root, no capabilities | Applies to application and migration containers. |
-| `existingSecret` | string | empty | Trusted runtime Secret exposed with `envFrom`; never created or key-validated by the chart. |
+| `existingSecret` | string | empty | Opaque, trusted runtime Secret exposed with `envFrom`; never created or key-validated by the chart. It must not contain a recognized libpq `PG*` variable; runtime validation fails closed if it does. |
 | `allowInsecureChanges` | boolean | `false` | Disables only built-in non-delegable paths for every served installation. |
 | `extraEnvFrom` | array | `[]` | Reserved. Any nonempty value is rejected because the chart cannot validate imported names. Use `extraEnv` with explicit `valueFrom` entries. |
-| `extraEnv` | array | `[]` | `EnvVar` objects with `name` and exactly one of `value` or `valueFrom`. Cannot override chart-managed variables or set `PATH`, `PYTHON*`, `LD_*`, `DYLD_*`, `GCONV_PATH`, `LOCPATH`, `OPENSSL_*`, or `SSLKEYLOGFILE`. |
+| `extraEnv` | array | `[]` | `EnvVar` objects with `name` and exactly one of `value` or `valueFrom`. Cannot override chart-managed variables or set a name beginning with `PG`, `PATH`, `PYTHON*`, `LD_*`, `DYLD_*`, `GCONV_PATH`, `LOCPATH`, `OPENSSL_*`, or `SSLKEYLOGFILE`. |
 | `extraVolumes` | array | `[]` | Volume objects with `name`; `tmp` is reserved. |
 | `extraVolumeMounts` | array | `[]` | Read-only mounts at or below `/run/secrets/extra-codeowners`; other paths are rejected. |
 | `extraArgs` | string array | `[]` | Replaces image arguments without replacing its entrypoint. |
@@ -694,9 +727,9 @@ descriptions.
 | `migrations.ttlSecondsAfterFinished` | integer | `3600` | 60 through 604800 seconds. |
 | `migrations.annotations` | string map | `{}` | Additional annotations; hook, weight, and delete-policy annotations are reserved. |
 | `migrations.serviceAccountName` | string | empty | Existing migration identity; empty uses the namespace's default account. |
-| `migrations.existingSecret` | string | empty | Trusted migration-only Secret exposed with `envFrom`; its keys are not validated by the chart. |
+| `migrations.existingSecret` | string | empty | Opaque, trusted migration-only Secret exposed with `envFrom`; its keys are not validated by the chart. It must not contain a recognized libpq `PG*` variable; migrator validation fails closed if it does. |
 | `migrations.extraEnvFrom` | array | `[]` | Reserved. Any nonempty value is rejected; use explicit `migrations.extraEnv` entries. |
-| `migrations.extraEnv` | array | `[]` | Migration-only `EnvVar` objects with `name` and exactly one of `value` or `valueFrom`. Cannot override the production environment or set the interpreter and loader names rejected by runtime `extraEnv`. |
+| `migrations.extraEnv` | array | `[]` | Migration-only `EnvVar` objects with `name` and exactly one of `value` or `valueFrom`. Cannot override the production environment or set any `PG*`, interpreter, or loader name rejected by runtime `extraEnv`. |
 | `migrations.extraVolumes` | array | `[]` | Migration-only volumes; `tmp` is reserved. |
 | `migrations.extraVolumeMounts` | array | `[]` | Read-only mounts at or below `/run/secrets/extra-codeowners` or `/run/secrets/database-ca`; other paths are rejected. |
 | `service.type` | enum | `ClusterIP` | `ClusterIP`, `NodePort`, or `LoadBalancer`. |
@@ -709,6 +742,12 @@ descriptions.
 | `ingress.tls` | array | `[]` | Entries require a nonempty Secret name and at least one host. |
 | `resources.requests` | object | `100m` CPU, `128Mi` memory | Application and migration requests. |
 | `resources.limits` | object | `512Mi` memory | No CPU limit by default. |
+| `probes.startup.enabled` | boolean | `true` | Protects database and GitHub initialization from premature liveness restarts. |
+| `probes.startup.path` | string | `/health/live` | Must start with `/`. |
+| `probes.startup.initialDelaySeconds` | integer | `0` | At least 0. |
+| `probes.startup.periodSeconds` | integer | `5` | At least 1. |
+| `probes.startup.timeoutSeconds` | integer | `3` | At least 1. |
+| `probes.startup.failureThreshold` | integer | `60` | At least 1; the defaults allow five minutes for startup. |
 | `probes.liveness.enabled` | boolean | `true` | Enables the process-health probe. |
 | `probes.liveness.path` | string | `/health/live` | Must start with `/`. |
 | `probes.liveness.initialDelaySeconds` | integer | `10` | At least 0. |

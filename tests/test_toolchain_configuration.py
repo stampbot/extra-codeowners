@@ -10,6 +10,8 @@ import tomllib
 from pathlib import Path
 from typing import Any, cast
 
+import yaml  # type: ignore[import-untyped]
+
 ROOT = Path(__file__).resolve().parents[1]
 SETUP_UV = re.compile(r"^(?P<indent>\s*)uses: astral-sh/setup-uv@(?P<sha>[0-9a-f]{40})(?:\s+#.*)?$")
 
@@ -94,6 +96,44 @@ def test_ci_checks_lockfile_freshness_outside_frozen_mode() -> None:
 
     assert 'UV_FROZEN: "false"' in lock_check
     assert "run: uv lock --check" in lock_check
+
+
+def test_helm_chart_protects_startup_and_rejects_explicit_libpq_environment() -> None:
+    values = cast(
+        dict[str, Any],
+        yaml.safe_load((ROOT / "charts" / "extra-codeowners" / "values.yaml").read_text()),
+    )
+    startup = cast(dict[str, Any], cast(dict[str, Any], values["probes"])["startup"])
+    assert startup == {
+        "enabled": True,
+        "path": "/health/live",
+        "initialDelaySeconds": 0,
+        "periodSeconds": 5,
+        "timeoutSeconds": 3,
+        "failureThreshold": 60,
+    }
+
+    schema = json.loads((ROOT / "charts" / "extra-codeowners" / "values.schema.json").read_text())
+    probes = schema["properties"]["probes"]
+    assert "startup" in probes["required"]
+    assert probes["properties"]["startup"] == {"$ref": "#/definitions/probe"}
+
+    deployment = (
+        ROOT / "charts" / "extra-codeowners" / "templates" / "deployment.yaml"
+    ).read_text()
+    assert "{{- if .Values.probes.startup.enabled }}" in deployment
+    for field in (
+        "path",
+        "initialDelaySeconds",
+        "periodSeconds",
+        "timeoutSeconds",
+        "failureThreshold",
+    ):
+        assert f".Values.probes.startup.{field}" in deployment
+
+    helpers = (ROOT / "charts" / "extra-codeowners" / "templates" / "_helpers.tpl").read_text()
+    assert helpers.count('hasPrefix "PG" .name') == 2
+    assert helpers.count("must not set ambient libpq variable") == 2
 
 
 def test_pinned_uv_exposes_the_scheduled_audit_interface_without_network() -> None:

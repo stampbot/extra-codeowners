@@ -162,7 +162,9 @@ Organization guardrails must also cover repository-specific release, deployment,
 
 Runtime settings use Pydantic Settings. Environment variables use the `EXTRA_CODEOWNERS_` prefix. A local `.env` file is loaded when present. The `serve` command can override the host and port.
 
-Unknown keys loaded from `.env` are rejected. Values outside documented bounds are also rejected. Unrelated or unrecognized process environment variables are ignored.
+Unknown keys loaded from `.env` are rejected. Values outside documented
+bounds are also rejected. Unrelated process environment variables are
+ignored, except for the libpq connection variables listed below.
 
 ### Service settings
 
@@ -173,9 +175,36 @@ Unknown keys loaded from `.env` are rejected. Values outside documented bounds a
 | `EXTRA_CODEOWNERS_HOST` | string | `127.0.0.1` | Bind address. Use `0.0.0.0` only inside an appropriately isolated container or host. |
 | `EXTRA_CODEOWNERS_PORT` | integer | `8000` | Inclusive range `1` through `65535`. |
 | `EXTRA_CODEOWNERS_PUBLIC_URL` | absolute HTTP(S) URL or null | null | Public origin used to construct App Manifest webhook, callback, and completion URLs. Setup mode requires an `https://` origin with no credentials, no path other than `/`, and no query or fragment; otherwise this setting is optional. |
-| `EXTRA_CODEOWNERS_DATABASE_URL` | SQLAlchemy URL | `sqlite:///./extra-codeowners.db` | Durable queue and audit store. Production requires PostgreSQL and one explicit host or Unix-socket path; comma-separated hosts are rejected. Every non-local connection must set `sslmode=verify-full`, which verifies both the certificate chain and database hostname; `require` and `verify-ca` are rejected. An effective `localhost`, `127.0.0.1`, `::1`, or Unix-socket `host` may omit TLS. Any `hostaddr` or `service` routing override requires `verify-full`. SQLite remains available for development and tests. Treat the complete value as a secret. |
+| `EXTRA_CODEOWNERS_DATABASE_URL` | SQLAlchemy URL | `sqlite:///./extra-codeowners.db` | Durable queue and audit store. Production requires PostgreSQL through the exact `postgresql+psycopg` driver. The URL must contain one explicit host or Unix-socket path, database, username, and nonempty password. Treat the complete value as a secret. SQLite remains available for development and tests. |
 
-Locality is determined from the effective libpq route, not only the URL authority. A query-string `host` takes precedence over the authority host. A remote override therefore requires `sslmode=verify-full` even when the authority looks local. `hostaddr` and `service` always count as routing overrides and require verified TLS.
+The production URL is the only database connection source. Percent-encode
+reserved characters in its username and password. Hostless and
+comma-separated multi-host URLs are rejected, as is an authority host combined
+with a query-string `host`.
+
+Only four query parameters are supported:
+
+| Parameter | Constraint |
+| --- | --- |
+| `host` | Supplies the one host or Unix-socket path only when the URL authority omits its host. |
+| `hostaddr` | Supplies one nonempty address. It requires the explicit `host` used for certificate-name verification and `sslmode=verify-full`. |
+| `sslmode` | A remote route requires `verify-full`. `require` and `verify-ca` are rejected because they do not verify the database hostname. An operator-controlled `localhost`, `127.0.0.1`, `::1`, or Unix-socket route may omit TLS when `hostaddr` is absent. |
+| `sslrootcert` | Supplies a nonempty absolute path to a CA file, such as a read-only mounted Secret. |
+
+Unknown query parameters are rejected. In particular, `service` URLs,
+`PGSERVICE`, and `PGSERVICEFILE` are unsupported. The application also supplies
+the password directly, so it does not use `.pgpass`; `PGPASSFILE` is rejected.
+The runtime and migrator pin `search_path=public` instead of accepting
+caller-supplied libpq `options`.
+
+Production startup and database commands reject these ambient variables when
+they are present, even with an empty value:
+
+| Category | Rejected variables |
+| --- | --- |
+| Route and credentials | `PGDATABASE`, `PGHOST`, `PGHOSTADDR`, `PGPASSWORD`, `PGPASSFILE`, `PGPORT`, `PGSERVICE`, `PGSERVICEFILE`, `PGUSER` |
+| Connection and session | `PGAPPNAME`, `PGCLIENTENCODING`, `PGCONNECT_TIMEOUT`, `PGDATESTYLE`, `PGLOADBALANCEHOSTS`, `PGMAXPROTOCOLVERSION`, `PGMINPROTOCOLVERSION`, `PGOPTIONS`, `PGTARGETSESSIONATTRS`, `PGTZ` |
+| Transport security | `PGCHANNELBINDING`, `PGGSSDELEGATION`, `PGGSSENCMODE`, `PGGSSLIB`, `PGKRBSRVNAME`, `PGREQUIREAUTH`, `PGREQUIREPEER`, `PGREQUIRESSL`, `PGSSLCERT`, `PGSSLCERTMODE`, `PGSSLCOMPRESSION`, `PGSSLCRL`, `PGSSLCRLDIR`, `PGSSLKEY`, `PGSSLMAXPROTOCOLVERSION`, `PGSSLMINPROTOCOLVERSION`, `PGSSLMODE`, `PGSSLNEGOTIATION`, `PGSSLROOTCERT`, `PGSSLSNI`, `PGSYSCONFDIR` |
 
 PostgreSQL access has fixed fail-fast budgets:
 

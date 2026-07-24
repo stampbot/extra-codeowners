@@ -13,9 +13,55 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import ArgumentError
 
+from extra_codeowners.database import isolated_postgresql_connect_args
+
 MAX_SECRET_FILE_BYTES = 64 * 1024
 MAX_SECRET_SYMLINKS = 16
 MAX_SECRET_PATH_COMPONENTS = 256
+POSTGRESQL_CONNECTION_ENVIRONMENT = frozenset(
+    {
+        "PGAPPNAME",
+        "PGCHANNELBINDING",
+        "PGCLIENTENCODING",
+        "PGCONNECT_TIMEOUT",
+        "PGDATABASE",
+        "PGDATESTYLE",
+        "PGGSSENCMODE",
+        "PGGSSDELEGATION",
+        "PGGSSLIB",
+        "PGHOST",
+        "PGHOSTADDR",
+        "PGKRBSRVNAME",
+        "PGLOADBALANCEHOSTS",
+        "PGMAXPROTOCOLVERSION",
+        "PGMINPROTOCOLVERSION",
+        "PGOPTIONS",
+        "PGPASSFILE",
+        "PGPASSWORD",
+        "PGPORT",
+        "PGREQUIREPEER",
+        "PGREQUIREAUTH",
+        "PGREQUIRESSL",
+        "PGSERVICE",
+        "PGSERVICEFILE",
+        "PGSSLCERT",
+        "PGSSLCERTMODE",
+        "PGSSLCOMPRESSION",
+        "PGSSLCRL",
+        "PGSSLCRLDIR",
+        "PGSSLKEY",
+        "PGSSLMAXPROTOCOLVERSION",
+        "PGSSLMINPROTOCOLVERSION",
+        "PGSSLMODE",
+        "PGSSLNEGOTIATION",
+        "PGSSLROOTCERT",
+        "PGSSLSNI",
+        "PGSYSCONFDIR",
+        "PGTARGETSESSIONATTRS",
+        "PGTZ",
+        "PGUSER",
+    }
+)
 
 
 def _stable_file_identity(metadata: os.stat_result) -> tuple[int, ...]:
@@ -122,22 +168,47 @@ def _read_bounded_secret_file(path: Path) -> str:
 
 def validate_production_database_transport(database_url_value: str) -> None:
     """Reject a database URL whose transport is unsafe for production."""
+    ambient = sorted(name for name in POSTGRESQL_CONNECTION_ENVIRONMENT if name in os.environ)
+    if ambient:
+        raise ValueError(
+            "production PostgreSQL forbids ambient libpq connection settings; "
+            f"unset {', '.join(ambient)} and put explicit values in the database URL"
+        )
     try:
         database_url = make_url(database_url_value)
     except ArgumentError as error:
         msg = "production requires a valid PostgreSQL database URL"
         raise ValueError(msg) from error
-    if database_url.get_backend_name() != "postgresql":
-        msg = "production requires a PostgreSQL database URL"
+    if database_url.drivername != "postgresql+psycopg":
+        msg = "production requires PostgreSQL with the postgresql+psycopg driver"
         raise ValueError(msg)
     ssl_mode = database_url.query.get("sslmode")
     query_host = database_url.query.get("host")
+    hostaddr = database_url.query.get("hostaddr")
+    if (
+        (query_host is not None and not isinstance(query_host, str))
+        or (hostaddr is not None and not isinstance(hostaddr, str))
+        or (ssl_mode is not None and not isinstance(ssl_mode, str))
+        or (query_host is not None and database_url.host is not None)
+        or "service" in database_url.query
+    ):
+        raise ValueError("production PostgreSQL requires one unambiguous explicit route")
     effective_host = query_host if query_host is not None else database_url.host
-    if not isinstance(effective_host, str) or not effective_host or "," in effective_host:
+    if (
+        not isinstance(effective_host, str)
+        or not effective_host
+        or "," in effective_host
+        or (hostaddr is not None and (not hostaddr or "," in hostaddr))
+    ):
         msg = "production PostgreSQL requires one explicit host or Unix-socket path"
         raise ValueError(msg)
-    has_routing_override = "hostaddr" in database_url.query or "service" in database_url.query
-    local_transport = not has_routing_override and (
+    try:
+        isolated_postgresql_connect_args(database_url_value)
+    except (TypeError, ValueError) as error:
+        raise ValueError(
+            "production PostgreSQL requires an explicit database, username, and password"
+        ) from error
+    local_transport = hostaddr is None and (
         effective_host in {"localhost", "127.0.0.1", "::1"} or effective_host.startswith("/")
     )
     if ssl_mode != "verify-full" and not local_transport:

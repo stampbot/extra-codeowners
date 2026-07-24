@@ -50,8 +50,9 @@ uv run python -m extra_codeowners database migrate
 uv run python -m extra_codeowners serve
 ```
 
-The first command must report the bundled migration head. The second keeps
-running and serves the setup page.
+The first command must report the bundled migration head after validating the
+artifact's `required-release-contract`. The second keeps running and serves the
+setup page.
 
 This process does not need App credentials, so `/health/live` returns
 HTTP 200 while `/health/ready` returns HTTP 503. Don't route ordinary

@@ -151,10 +151,15 @@ jobs:
           --cov-report=xml
           --cov-fail-under=85
 
-      - name: Verify native PostgreSQL backup and restore
+      - name: Migrate native PostgreSQL backup source
         env:
           EXTRA_CODEOWNERS_DATABASE_URL: >-
             postgresql+psycopg://extra_codeowners:extra_codeowners@127.0.0.1:5432/extra_codeowners_test
+          EXTRA_CODEOWNERS_ENVIRONMENT: production
+        run: uv run python -m extra_codeowners database migrate
+
+      - name: Verify native PostgreSQL backup and restore
+        env:
           PGHOST: 127.0.0.1
           PGPASSWORD: extra_codeowners
           PGPORT: "5432"
@@ -162,7 +167,6 @@ jobs:
           RESTORE_DATABASE: extra_codeowners_restore_test
           SOURCE_DATABASE: extra_codeowners_test
         run: |
-          uv run python -m extra_codeowners database migrate
           .github/scripts/test-postgres-backup-restore.sh \
             'postgres:17.7-alpine@sha256:bb377b7239d2774ac8cc76f481596ce96c5a6b5e9d141f6d0a0ee371a6e7c0f2'
 

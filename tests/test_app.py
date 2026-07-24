@@ -2,8 +2,10 @@ import asyncio
 import hashlib
 import hmac
 import json
+import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -151,6 +153,113 @@ def migrated_store(database_url: str) -> QueueStore:
     store = QueueStore(database_url)
     store.initialize()
     return store
+
+
+@pytest.mark.asyncio
+async def test_lifespan_closes_an_owned_store_when_initialization_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instances: list[Any] = []
+
+    class FailingStore:
+        def __init__(self, database_url: str) -> None:
+            del database_url
+            self.closed = False
+            self.engine = SimpleNamespace(dialect=SimpleNamespace(name="sqlite"))
+            instances.append(self)
+
+        def initialize(self) -> None:
+            raise RuntimeError("database initialization failed")
+
+        def close(self) -> None:
+            self.closed = True
+
+    monkeypatch.setattr(app_module, "QueueStore", FailingStore)
+    app = app_module.create_app(configured_settings(), github=StubGitHub())  # type: ignore[arg-type]
+
+    with pytest.raises(RuntimeError, match="database initialization failed"):
+        async with app.router.lifespan_context(app):
+            raise AssertionError("lifespan yielded after failed initialization")
+
+    assert len(instances) == 1
+    assert instances[0].closed is True
+
+
+@pytest.mark.asyncio
+async def test_lifespan_startup_failure_stops_tasks_and_closes_owned_resources(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cleanup: list[str] = []
+    stores: list[Any] = []
+    github_clients: list[Any] = []
+    manifests: list[Any] = []
+
+    class OwnedStore:
+        def __init__(self, database_url: str) -> None:
+            del database_url
+            self.engine = SimpleNamespace(dialect=SimpleNamespace(name="sqlite"))
+            stores.append(self)
+
+        def initialize(self) -> None:
+            pass
+
+        def close(self) -> None:
+            cleanup.append("store")
+
+    class OwnedGitHub:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            del args, kwargs
+            github_clients.append(self)
+
+        async def verify_app_identity(
+            self,
+            *,
+            stop: asyncio.Event | None = None,
+        ) -> None:
+            del stop
+
+        async def close(self) -> None:
+            cleanup.append("github")
+
+    class OwnedManifest:
+        def __init__(self, settings: Settings) -> None:
+            del settings
+            manifests.append(self)
+
+        async def close(self) -> None:
+            cleanup.append("manifest")
+
+    class FailingEvaluationService:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            del args, kwargs
+            raise RuntimeError("evaluation service startup failed")
+
+    monkeypatch.setattr(app_module, "QueueStore", OwnedStore)
+    monkeypatch.setattr(app_module, "GitHubClient", OwnedGitHub)
+    monkeypatch.setattr(app_module, "ManifestService", OwnedManifest)
+    monkeypatch.setattr(app_module, "EvaluationService", FailingEvaluationService)
+    settings = Settings(
+        _env_file=None,
+        environment="test",
+        github_app_id=123,
+        github_private_key="private-key",
+        github_webhook_secret="webhook-secret",
+        worker_enabled=False,
+        reconcile_enabled=False,
+        setup_enabled=True,
+        setup_state_secret="setup-state-secret-at-least-32-bytes-long",
+        public_url="https://extra-codeowners.example.com",
+    )
+    app = app_module.create_app(settings)
+
+    with pytest.raises(RuntimeError, match="evaluation service startup failed"):
+        async with app.router.lifespan_context(app):
+            raise AssertionError("lifespan yielded after failed startup")
+
+    assert len(stores) == len(github_clients) == len(manifests) == 1
+    assert app.state.stop.is_set()
+    assert app.state.github_identity_task.done()
+    assert cleanup == ["manifest", "github", "store"]
 
 
 def webhook_headers(body: bytes, delivery: str = "delivery-1") -> dict[str, str]:
@@ -552,8 +661,28 @@ def test_readiness_fails_closed_when_the_initial_app_identity_probe_fails(
 def test_readiness_recovers_after_a_background_app_identity_probe(
     tmp_path: Path,
 ) -> None:
+    class ControlledRecoveryGitHub(StubGitHub):
+        def __init__(self) -> None:
+            super().__init__()
+            self.identity_attempts = 0
+            self.second_attempt_started = threading.Event()
+            self.allow_second_attempt = threading.Event()
+
+        async def verify_app_identity(
+            self,
+            *,
+            stop: asyncio.Event | None = None,
+        ) -> None:
+            del stop
+            self.identity_attempts += 1
+            if self.identity_attempts == 1:
+                raise RuntimeError("temporary failure")
+            if self.identity_attempts == 2:
+                self.second_attempt_started.set()
+                await asyncio.to_thread(self.allow_second_attempt.wait)
+
     store = migrated_store(f"sqlite:///{tmp_path / 'identity-recovers.db'}")
-    github = SequencedIdentityGitHub([RuntimeError("temporary failure"), None])
+    github = ControlledRecoveryGitHub()
     runtime = configured_settings().model_copy(
         update={
             "github_identity_probe_interval_seconds": 0.02,
@@ -563,12 +692,17 @@ def test_readiness_recovers_after_a_background_app_identity_probe(
     app = app_module.create_app(runtime, github=github, store=store)  # type: ignore[arg-type]
 
     with TestClient(app) as client:
-        assert client.get("/health/ready").status_code == 503
-        deadline = time.monotonic() + 1
-        response = client.get("/health/ready")
-        while response.status_code != 200 and time.monotonic() < deadline:
-            time.sleep(0.01)
+        try:
+            assert github.second_attempt_started.wait(timeout=1)
+            assert client.get("/health/ready").status_code == 503
+            github.allow_second_attempt.set()
+            deadline = time.monotonic() + 1
             response = client.get("/health/ready")
+            while response.status_code != 200 and time.monotonic() < deadline:
+                time.sleep(0.01)
+                response = client.get("/health/ready")
+        finally:
+            github.allow_second_attempt.set()
 
     assert github.identity_attempts >= 2
     assert response.status_code == 200
@@ -578,26 +712,41 @@ def test_readiness_recovers_after_a_background_app_identity_probe(
 def test_readiness_expires_a_stale_app_identity_proof_without_failing_liveness(
     tmp_path: Path,
 ) -> None:
+    class RevokedIdentityGitHub(SequencedIdentityGitHub):
+        def __init__(self) -> None:
+            super().__init__([None], fallback=RuntimeError("credentials revoked"))
+            self.revoked_attempt_finished = threading.Event()
+
+        async def verify_app_identity(
+            self,
+            *,
+            stop: asyncio.Event | None = None,
+        ) -> None:
+            try:
+                await super().verify_app_identity(stop=stop)
+            finally:
+                if self.identity_attempts >= 2:
+                    self.revoked_attempt_finished.set()
+
     store = migrated_store(f"sqlite:///{tmp_path / 'identity-stale.db'}")
-    github = SequencedIdentityGitHub(
-        [None],
-        fallback=RuntimeError("credentials revoked"),
-    )
+    github = RevokedIdentityGitHub()
     runtime = configured_settings().model_copy(
         update={
             "github_identity_probe_interval_seconds": 0.02,
-            "github_identity_freshness_seconds": 0.08,
+            "github_identity_freshness_seconds": 10,
         }
     )
     app = app_module.create_app(runtime, github=github, store=store)  # type: ignore[arg-type]
 
     with TestClient(app) as client:
         assert client.get("/health/ready").status_code == 200
-        deadline = time.monotonic() + 1
+        assert github.revoked_attempt_finished.wait(timeout=1)
+        assert client.get("/health/ready").status_code == 200
+        identity_probe = app.state.github_identity_probe
+        identity_probe._last_success_monotonic = (
+            time.monotonic() - runtime.github_identity_freshness_seconds - 1
+        )
         ready = client.get("/health/ready")
-        while ready.status_code != 503 and time.monotonic() < deadline:
-            time.sleep(0.01)
-            ready = client.get("/health/ready")
         live = client.get("/health/live")
 
     assert github.identity_attempts >= 2

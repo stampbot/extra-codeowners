@@ -3,12 +3,13 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from psycopg.pq import Conninfo
 from pydantic import ValidationError
 
-import extra_codeowners.settings as settings_module
 from extra_codeowners.settings import (
     MAX_SECRET_FILE_BYTES,
     MAX_SECRET_SYMLINKS,
+    POSTGRESQL_CONNECTION_ENVIRONMENT,
     Settings,
     validate_production_database_transport,
 )
@@ -155,7 +156,7 @@ def test_secret_file_reader_rejects_metadata_change_during_read(
     real_fstat = os.fstat
     calls = 0
 
-    def changing_fstat(descriptor: int):
+    def changing_fstat(descriptor: int) -> os.stat_result | SimpleNamespace:
         nonlocal calls
         calls += 1
         metadata = real_fstat(descriptor)
@@ -173,7 +174,7 @@ def test_secret_file_reader_rejects_metadata_change_during_read(
             st_ctime_ns=metadata.st_ctime_ns,
         )
 
-    monkeypatch.setattr(settings_module.os, "fstat", changing_fstat)
+    monkeypatch.setattr("extra_codeowners.settings.os.fstat", changing_fstat)
 
     with pytest.raises(ValueError, match="changed while it was read"):
         _ = settings.private_key_value
@@ -219,6 +220,14 @@ def test_production_requires_postgresql() -> None:
         "postgresql+psycopg://user:password@127.0.0.1/database",
         "postgresql+psycopg://user:password@[::1]/database",
         "postgresql+psycopg://user:password@/database?host=%2Frun%2Fpostgresql",
+        (
+            "postgresql+psycopg://user:password@db.example.test/database?"
+            "hostaddr=203.0.113.1&sslmode=verify-full"
+        ),
+        (
+            "postgresql+psycopg://user:password@db.example.test/database?"
+            "sslmode=verify-full&sslrootcert=%2Frun%2Fsecrets%2Fdatabase-ca%2Froot.pem"
+        ),
     ],
 )
 def test_production_database_transport_validator_accepts_safe_routes(
@@ -231,10 +240,21 @@ def test_production_database_transport_validator_accepts_safe_routes(
     "database_url",
     [
         "sqlite:///extra-codeowners.db",
+        "postgresql://user:password@localhost/database",
+        "postgresql+psycopg2://user:password@localhost/database",
         "postgresql+psycopg://user:password@db.example.test/database",
         "postgresql+psycopg://user:password@/database",
+        "postgresql+psycopg://user:@localhost/database",
         "postgresql+psycopg://user:password@localhost/database?hostaddr=203.0.113.1",
         "postgresql+psycopg://user:password@/database?service=remote-database",
+        (
+            "postgresql+psycopg://user:password@db.example.test/database?"
+            "sslmode=verify-full&options=-csearch_path%3Dunsafe"
+        ),
+        (
+            "postgresql+psycopg://user:password@db.example.test/database?"
+            "sslmode=verify-full&sslrootcert=relative.pem"
+        ),
         (
             "postgresql+psycopg://user:password@db-1.example.test,"
             "db-2.example.test/database?sslmode=verify-full"
@@ -328,8 +348,30 @@ def test_production_postgresql_does_not_misclassify_routed_remote_hosts(
         database_url=database_url,
     )
 
-    with pytest.raises(ValueError, match=r"one explicit host|sslmode=verify-full"):
+    with pytest.raises(
+        ValueError,
+        match=r"one explicit host|one unambiguous explicit route|sslmode=verify-full",
+    ):
         settings.validate_for_service()
+
+
+def test_production_postgresql_rejects_every_ambient_libpq_connection_setting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PGHOSTADDR", "203.0.113.1")
+
+    with pytest.raises(ValueError, match=r"ambient libpq.*PGHOSTADDR"):
+        validate_production_database_transport(
+            "postgresql+psycopg://user:password@localhost/database"
+        )
+
+
+def test_ambient_libpq_denylist_covers_the_bundled_client() -> None:
+    libpq_environment = {
+        item.envvar.decode() for item in Conninfo.get_defaults() if item.envvar is not None
+    }
+
+    assert libpq_environment <= POSTGRESQL_CONNECTION_ENVIRONMENT
 
 
 def test_setup_requires_state_secret() -> None:

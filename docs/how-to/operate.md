@@ -17,6 +17,7 @@ pull-request activity.
 
 | Signal | Healthy condition |
 | --- | --- |
+| Kubernetes startup probe | `/health/live` succeeds before the configured startup budget expires |
 | `/api/runtime-identity` | Every field matches the reviewed deployment record |
 | `/health/live` | HTTP 200 on every serving instance |
 | `/health/ready` | HTTP 200, with recent exact-App authentication, database access, and configured background tasks ready |
@@ -94,6 +95,19 @@ default. A transient failure leaves a still-fresh proof in place; readiness
 drops after the freshness window and recovers after a successful probe.
 Liveness remains independent so an App authentication outage does not create
 a restart loop.
+
+The Helm startup probe protects initialization from that ongoing liveness
+policy. By default, Kubernetes calls `/health/live` every five seconds with a
+three-second timeout and restarts the container after 60 failures. Liveness and
+readiness don't begin until startup succeeds, so the defaults provide a
+five-minute initialization budget.
+
+Alert on repeated `Startup probe failed` events or restarts before the first
+live response. Measure startup through the real database and secret mounts,
+then keep `periodSeconds * failureThreshold` above the observed worst case plus
+margin. Keep Helm and rollout wait timeouts higher still. Don't use a larger
+startup budget to hide a persistent schema, credential, mount, or network
+failure.
 
 Reconciliation requests work only for open pull requests that do not already
 have a queue row. When the response includes a canonical head, the database
@@ -369,7 +383,9 @@ Use overlapping credentials when the provider supports them:
 1. Create a replacement with the same narrow database privileges. Preserve
    `sslmode=verify-full` for a remote route, or the reviewed local proxy
    path.
-2. Store the URL as a new secret version without printing it.
+2. Store the explicit `postgresql+psycopg` URL as a new secret version without
+   printing it. Keep every ambient libpq connection variable out of the
+   process environment.
 3. Roll one instance. Verify readiness, queue access, and a disposable
    evaluation.
 4. Roll the remaining instances and confirm none uses the old version.

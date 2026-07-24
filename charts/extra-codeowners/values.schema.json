@@ -491,10 +491,14 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
+        "startup",
         "liveness",
         "readiness"
       ],
       "properties": {
+        "startup": {
+          "$ref": "#/definitions/probe"
+        },
         "liveness": {
           "$ref": "#/definitions/probe"
         },

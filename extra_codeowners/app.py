@@ -8,7 +8,7 @@ import socket
 import time
 import uuid
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from typing import Literal
 
 import structlog
@@ -208,102 +208,112 @@ def create_app(
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         runtime.validate_for_service()
         owned_store = store is None
-        queue_store = store or QueueStore(runtime.database_url.get_secret_value())
-        await asyncio.to_thread(queue_store.initialize)
-        app.state.store = queue_store
-        database_backend = queue_store.engine.dialect.name
-        if database_backend not in {"postgresql", "sqlite"}:
-            raise RuntimeError(f"unsupported initialized database backend {database_backend!r}")
-        app.state.runtime_identity = RuntimeIdentityResponse(
-            environment=runtime.environment,
-            github_api_url=str(runtime.github_api_url),
-            github_app_id=runtime.github_app_id,
-            database_backend=database_backend,
-            check_name=runtime.check_name,
-            policy_path=runtime.policy_path,
-            organization_policy_repository_name=runtime.org_config_repository,
-            application_version=__version__,
-            build_revision=(build_identity.source_revision if build_identity is not None else None),
-        )
-
-        owned_github = github is None
         github_client = github
-        if github_client is None and runtime.github_ready:
-            assert runtime.github_app_id is not None
-            assert runtime.private_key_value is not None
-            github_client = GitHubClient(
-                runtime.github_app_id,
-                runtime.private_key_value,
-                api_url=str(runtime.github_api_url),
-                api_version=runtime.github_api_version,
-            )
+        queue_store: QueueStore | None = None
+        manifest_service: ManifestService | None = None
+        stop = asyncio.Event()
+        tasks: list[asyncio.Task[None]] = []
+
         app.state.github = github_client
-        app.state.stop = asyncio.Event()
-        app.state.tasks = []
+        app.state.stop = stop
+        app.state.tasks = tasks
         app.state.worker_task = None
         app.state.reconciler_task = None
         app.state.github_identity_task = None
         app.state.github_identity_probe = None
         app.state.evaluator = None
-        INSECURE_MODE.set(int(runtime.allow_insecure_changes))
-        if runtime.allow_insecure_changes:
-            log.warning(
-                "insecure_changes_enabled",
-                warning=(
-                    "built-in non-delegable paths are disabled; organization guardrails remain"
+        app.state.manifest = manifest_service
+
+        async def stop_background_tasks() -> None:
+            stop.set()
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
+
+        async with AsyncExitStack() as resources:
+            queue_store = store or QueueStore(runtime.database_url.get_secret_value())
+            if owned_store:
+                resources.push_async_callback(asyncio.to_thread, queue_store.close)
+            await asyncio.to_thread(queue_store.initialize)
+            app.state.store = queue_store
+            database_backend = queue_store.engine.dialect.name
+            if database_backend not in {"postgresql", "sqlite"}:
+                raise RuntimeError(f"unsupported initialized database backend {database_backend!r}")
+            app.state.runtime_identity = RuntimeIdentityResponse(
+                environment=runtime.environment,
+                github_api_url=str(runtime.github_api_url),
+                github_app_id=runtime.github_app_id,
+                database_backend=database_backend,
+                check_name=runtime.check_name,
+                policy_path=runtime.policy_path,
+                organization_policy_repository_name=runtime.org_config_repository,
+                application_version=__version__,
+                build_revision=(
+                    build_identity.source_revision if build_identity is not None else None
                 ),
             )
 
-        manifest_service: ManifestService | None = None
-        if runtime.setup_enabled:
-            manifest_service = ManifestService(runtime)
-        app.state.manifest = manifest_service
-
-        if github_client is not None:
-            identity_probe = GitHubIdentityProbe(
-                github_client,
-                interval_seconds=runtime.github_identity_probe_interval_seconds,
-                freshness_seconds=runtime.github_identity_freshness_seconds,
-            )
-            app.state.github_identity_probe = identity_probe
-            await identity_probe.refresh(stop=app.state.stop)
-            identity_task = asyncio.create_task(
-                identity_probe.run(app.state.stop),
-                name="github-app-identity-probe",
-            )
-            app.state.github_identity_task = identity_task
-            app.state.tasks.append(identity_task)
-
-            owner = f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex[:12]}"
-            evaluator = EvaluationService(runtime, github_client, queue_store)
-            app.state.evaluator = evaluator
-            if runtime.worker_enabled:
-                worker = Worker(runtime, queue_store, evaluator, owner)
-                worker_task = asyncio.create_task(
-                    worker.run(app.state.stop), name="evaluation-worker"
+            if github_client is None and runtime.github_ready:
+                assert runtime.github_app_id is not None
+                assert runtime.private_key_value is not None
+                github_client = GitHubClient(
+                    runtime.github_app_id,
+                    runtime.private_key_value,
+                    api_url=str(runtime.github_api_url),
+                    api_version=runtime.github_api_version,
                 )
-                app.state.worker_task = worker_task
-                app.state.tasks.append(worker_task)
-            if runtime.reconcile_enabled:
-                reconciler = Reconciler(runtime, github_client, queue_store, owner)
-                reconciler_task = asyncio.create_task(
-                    reconciler.run(app.state.stop), name="open-pr-reconciler"
-                )
-                app.state.reconciler_task = reconciler_task
-                app.state.tasks.append(reconciler_task)
+                resources.push_async_callback(github_client.close)
+            app.state.github = github_client
 
-        try:
+            INSECURE_MODE.set(int(runtime.allow_insecure_changes))
+            if runtime.allow_insecure_changes:
+                log.warning(
+                    "insecure_changes_enabled",
+                    warning=(
+                        "built-in non-delegable paths are disabled; organization guardrails remain"
+                    ),
+                )
+
+            if runtime.setup_enabled:
+                manifest_service = ManifestService(runtime)
+                resources.push_async_callback(manifest_service.close)
+            app.state.manifest = manifest_service
+
+            # Register task cleanup after dependency cleanup so LIFO shutdown
+            # always stops background work before closing its clients or store.
+            resources.push_async_callback(stop_background_tasks)
+
+            if github_client is not None:
+                identity_probe = GitHubIdentityProbe(
+                    github_client,
+                    interval_seconds=runtime.github_identity_probe_interval_seconds,
+                    freshness_seconds=runtime.github_identity_freshness_seconds,
+                )
+                app.state.github_identity_probe = identity_probe
+                await identity_probe.refresh(stop=stop)
+                identity_task = asyncio.create_task(
+                    identity_probe.run(stop),
+                    name="github-app-identity-probe",
+                )
+                app.state.github_identity_task = identity_task
+                tasks.append(identity_task)
+
+                owner = f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex[:12]}"
+                evaluator = EvaluationService(runtime, github_client, queue_store)
+                app.state.evaluator = evaluator
+                if runtime.worker_enabled:
+                    worker = Worker(runtime, queue_store, evaluator, owner)
+                    worker_task = asyncio.create_task(worker.run(stop), name="evaluation-worker")
+                    app.state.worker_task = worker_task
+                    tasks.append(worker_task)
+                if runtime.reconcile_enabled:
+                    reconciler = Reconciler(runtime, github_client, queue_store, owner)
+                    reconciler_task = asyncio.create_task(
+                        reconciler.run(stop), name="open-pr-reconciler"
+                    )
+                    app.state.reconciler_task = reconciler_task
+                    tasks.append(reconciler_task)
+
             yield
-        finally:
-            app.state.stop.set()
-            if app.state.tasks:
-                await asyncio.gather(*app.state.tasks, return_exceptions=True)
-            if manifest_service is not None:
-                await manifest_service.close()
-            if owned_github and github_client is not None:
-                await github_client.close()
-            if owned_store:
-                await asyncio.to_thread(queue_store.close)
 
     app = FastAPI(
         title="Extra CODEOWNERS",
