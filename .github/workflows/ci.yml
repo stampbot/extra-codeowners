@@ -66,6 +66,8 @@ jobs:
           .github/scripts/build_python_distribution_spine.py
           .github/scripts/build_release_spine.py
           .github/scripts/container_evidence.py
+          .github/scripts/container_source_plan.py
+          .github/scripts/fetch_verified_sources.py
           .github/scripts/github_release_api.py
           .github/scripts/immutable_release_preflight.py
           .github/scripts/python_distribution_spine.py
@@ -73,6 +75,8 @@ jobs:
           .github/scripts/release_controller.py
           .github/scripts/release_spine.py
           .github/scripts/release_readiness.py
+          .github/scripts/run_evidence_parser.py
+          .github/scripts/verified_source_store.py
 
       - name: Lint YAML
         run: uv run yamllint .
@@ -806,10 +810,291 @@ jobs:
             --wheel-sha256 "$WHEEL_SHA256" \
             --selection-record-sha256 "$SELECTION_RECORD_SHA256"
 
+  verified-container-sources:
+    name: Fetch verified container sources once
+    needs: python-distribution
+    permissions:
+      contents: read
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    outputs:
+      artifact-id: ${{ steps.accept-artifact.outputs.artifact-id }}
+      artifact-digest: ${{ steps.accept-artifact.outputs.artifact-digest }}
+      direct-plan-sha256: ${{ steps.bindings.outputs.direct-plan-sha256 }}
+      direct-plan-size: ${{ steps.bindings.outputs.direct-plan-size }}
+      alpine-plan-sha256: ${{ steps.bindings.outputs.alpine-plan-sha256 }}
+      alpine-plan-size: ${{ steps.bindings.outputs.alpine-plan-size }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version-file: .python-version
+
+      - name: Download the selected Python distribution
+        id: python-distribution
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.python-distribution.outputs.artifact-id }}
+          path: ${{ runner.temp }}/verified-python
+          digest-mismatch: error
+
+      - name: Verify the selected Python distribution
+        env:
+          DISTRIBUTION_DIRECTORY: ${{ steps.python-distribution.outputs.download-path }}
+          SELECTION_RECORD_SHA256: >-
+            ${{ needs.python-distribution.outputs.selection-record-sha256 }}
+          WHEEL_SHA256: ${{ needs.python-distribution.outputs.wheel-sha256 }}
+        run: >-
+          python .github/scripts/build_python_artifacts.py verify-selection
+          --directory "$DISTRIBUTION_DIRECTORY"
+          --source-revision "$GITHUB_SHA"
+          --wheel-sha256 "$WHEEL_SHA256"
+          --selection-record-sha256 "$SELECTION_RECORD_SHA256"
+
+      - name: Set up pinned Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+        with:
+          cache-binary: false
+          version: v0.35.0
+          driver-opts: >-
+            image=moby/buildkit:v0.30.0@sha256:0168606be2315b7c807a03b3d8aa79beefdb31c98740cebdffdfeebf31190c9f
+
+      - name: Build the current-commit offline parser
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        env:
+          DOCKER_BUILD_RECORD_UPLOAD: "false"
+        with:
+          build-contexts: |
+            verified-python=${{ steps.python-distribution.outputs.download-path }}
+          build-args: |
+            APPLICATION_SOURCE_REVISION=${{ github.sha }}
+            APPLICATION_WHEEL_SHA256=${{ needs.python-distribution.outputs.wheel-sha256 }}
+            APPLICATION_SELECTION_RECORD_SHA256=${{ needs.python-distribution.outputs.selection-record-sha256 }}
+          context: .
+          load: true
+          platforms: linux/amd64
+          provenance: false
+          push: false
+          sbom: false
+          target: test
+          tags: extra-codeowners:source-parser-${{ github.sha }}
+
+      - name: Fetch both verified source stores under fixed timeouts
+        id: bindings
+        env:
+          SOURCE_ARTIFACT_ROOT: ${{ runner.temp }}/verified-source-artifact
+          SOURCE_WORK_ROOT: ${{ runner.temp }}/verified-source-work
+        run: |
+          set -euo pipefail
+          umask 077
+          if [ -e "$SOURCE_ARTIFACT_ROOT" ] || [ -e "$SOURCE_WORK_ROOT" ]; then
+            echo "Refusing to reuse an existing verified source workspace." >&2
+            exit 1
+          fi
+          install --directory --mode=0700 "$SOURCE_ARTIFACT_ROOT" "$SOURCE_WORK_ROOT"
+          direct_plan="${SOURCE_WORK_ROOT}/direct-plan.json"
+          direct_store="${SOURCE_ARTIFACT_ROOT}/direct-store"
+          direct_journal="${SOURCE_WORK_ROOT}/direct-fetch-journal.json"
+          grant_parser_read_access() {
+            for root in "$@"; do
+              find "$root" -xdev -type d \
+                -exec chmod 0755 -- {} +
+              find "$root" -xdev -type f \
+                -exec chmod 0644 -- {} +
+            done
+          }
+          python .github/scripts/container_source_plan.py direct-plan \
+            --policy .compliance/container-policy.json \
+            --uv-lock uv.lock \
+            --source-revision "$GITHUB_SHA" \
+            --output "$direct_plan"
+          direct_sha256="$(sha256sum "$direct_plan" | cut -d' ' -f1)"
+          direct_size="$(stat --format='%s' "$direct_plan")"
+          timeout --signal=TERM --kill-after=30s 30m \
+            python .github/scripts/fetch_verified_sources.py \
+              --plan "$direct_plan" \
+              --output "$direct_store" \
+              --journal "$direct_journal" \
+              --expected-plan-sha256 "$direct_sha256" \
+              --expected-plan-size "$direct_size" \
+              >"${SOURCE_WORK_ROOT}/direct-verification.json"
+          grant_parser_read_access "$direct_store"
+
+          parser_image_id="$(
+            docker image inspect \
+              --format '{{.Id}}' \
+              "extra-codeowners:source-parser-${GITHUB_SHA}"
+          )"
+          if ! [[ "$parser_image_id" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "Current-commit parser image has an invalid local image ID." >&2
+            exit 1
+          fi
+          parser_container_nonce="$(python -c 'import secrets; print(secrets.token_hex(16))')"
+          if ! [[ "$parser_container_nonce" =~ ^[0-9a-f]{32}$ ]]; then
+            echo "Cannot allocate a unique source-plan parser container name." >&2
+            exit 1
+          fi
+          parser_container_name="extra-codeowners-source-plan-${parser_container_nonce}"
+          plan_output="${SOURCE_WORK_ROOT}/source-plan-output"
+          if [ -e "$plan_output" ]; then
+            echo "Refusing to reuse an existing source-plan output mount." >&2
+            exit 1
+          fi
+          install --directory --mode=0700 "$plan_output"
+          sudo mount \
+            --types tmpfs \
+            --options size=64m,nr_inodes=8192,nosuid,nodev,noexec,mode=0700,uid=65532,gid=65532 \
+            tmpfs "$plan_output"
+          cleanup_plan_output() {
+            env -i \
+              DOCKER_CONFIG=/nonexistent \
+              HOME=/nonexistent \
+              PATH=/usr/bin:/bin \
+              /usr/bin/timeout --signal=TERM --kill-after=5s 15s \
+              /usr/bin/docker rm --force "$parser_container_name" \
+              >/dev/null 2>&1 || true
+            if mountpoint --quiet "$plan_output"; then
+              sudo umount "$plan_output" || sudo umount --lazy "$plan_output"
+            fi
+            rmdir "$plan_output"
+          }
+          trap cleanup_plan_output EXIT
+          timeout --signal=TERM --kill-after=30s 10m \
+            python .github/scripts/run_evidence_parser.py command \
+              --image "$parser_image_id" \
+              --container-name "$parser_container_name" \
+              --input "direct-store=$direct_store" \
+              --input "policy=${GITHUB_WORKSPACE}/.compliance/container-policy.json" \
+              --output "$plan_output" \
+              --parser source-plan \
+              --execute \
+              -- \
+              alpine-distfile-plan \
+              --policy /inputs/policy \
+              --direct-store /inputs/direct-store \
+              --expected-parent-plan-sha256 "$direct_sha256" \
+              --expected-parent-plan-size "$direct_size" \
+              --output /output/alpine-plan.json
+          sudo chown "$(id -u):$(id -g)" "$plan_output"
+          materialized_plan_root="${SOURCE_WORK_ROOT}/materialized-alpine-plan"
+          if [ -e "$materialized_plan_root" ]; then
+            echo "Refusing to reuse a source-plan materialization directory." >&2
+            exit 1
+          fi
+          install --directory --mode=0700 "$materialized_plan_root"
+          plan_binding="$(
+            python .github/scripts/run_evidence_parser.py materialize-source-plan \
+              --source "$plan_output" \
+              --destination "$materialized_plan_root"
+          )"
+          alpine_sha256="$(
+            jq -er '
+              select(
+                .schema_version == 1 and
+                .kind == "extra-codeowners/materialized-source-plan" and
+                .filename == "alpine-plan.json"
+              ) |
+              .sha256
+            ' <<<"$plan_binding"
+          )"
+          alpine_size="$(
+            jq -er '
+              select(
+                .schema_version == 1 and
+                .kind == "extra-codeowners/materialized-source-plan" and
+                .filename == "alpine-plan.json"
+              ) |
+              .size
+            ' <<<"$plan_binding"
+          )"
+          alpine_plan="${materialized_plan_root}/alpine-plan.json"
+          cleanup_plan_output
+          trap - EXIT
+          timeout --signal=TERM --kill-after=30s 30m \
+            python .github/scripts/fetch_verified_sources.py \
+              --plan "$alpine_plan" \
+              --output "${SOURCE_ARTIFACT_ROOT}/alpine-store" \
+              --journal "${SOURCE_WORK_ROOT}/alpine-fetch-journal.json" \
+              --expected-plan-sha256 "$alpine_sha256" \
+              --expected-plan-size "$alpine_size" \
+              >"${SOURCE_WORK_ROOT}/alpine-verification.json"
+          grant_parser_read_access "${SOURCE_ARTIFACT_ROOT}/alpine-store"
+
+          if ! [[ "$direct_sha256" =~ ^[0-9a-f]{64}$ ]] ||
+             ! [[ "$alpine_sha256" =~ ^[0-9a-f]{64}$ ]] ||
+             ! [[ "$direct_size" =~ ^[1-9][0-9]*$ ]] ||
+             ! [[ "$alpine_size" =~ ^[1-9][0-9]*$ ]]; then
+            echo "Verified source plan bindings are incomplete or invalid." >&2
+            exit 1
+          fi
+          if [ "$direct_size" -gt 4194304 ] || [ "$alpine_size" -gt 4194304 ]; then
+            echo "Verified source plan binding exceeds its fixed byte limit." >&2
+            exit 1
+          fi
+          test -d "${SOURCE_ARTIFACT_ROOT}/direct-store"
+          test -d "${SOURCE_ARTIFACT_ROOT}/alpine-store"
+          {
+            printf 'direct-plan-sha256=%s\n' "$direct_sha256"
+            printf 'direct-plan-size=%s\n' "$direct_size"
+            printf 'alpine-plan-sha256=%s\n' "$alpine_sha256"
+            printf 'alpine-plan-size=%s\n' "$alpine_size"
+          } >>"$GITHUB_OUTPUT"
+
+      - name: Upload the shared verified source stores
+        id: upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: >-
+            verified-source-stores-${{ github.sha }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/verified-source-artifact/
+          if-no-files-found: error
+          retention-days: 5
+
+      - name: Require a complete verified source artifact identity
+        id: accept-artifact
+        env:
+          ARTIFACT_DIGEST: ${{ steps.upload.outputs.artifact-digest }}
+          ARTIFACT_ID: ${{ steps.upload.outputs.artifact-id }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]]; then
+            echo "Verified source upload returned an invalid artifact ID." >&2
+            exit 1
+          fi
+          if ! [[ "$ARTIFACT_DIGEST" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "Verified source upload returned an invalid artifact digest." >&2
+            exit 1
+          fi
+          {
+            printf 'artifact-id=%s\n' "$ARTIFACT_ID"
+            printf 'artifact-digest=%s\n' "$ARTIFACT_DIGEST"
+          } >>"$GITHUB_OUTPUT"
+
+      - name: Upload bounded source-fetch diagnostics
+        if: ${{ always() && !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: >-
+            verified-source-fetch-diagnostics-${{ github.sha }}-attempt-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/verified-source-work/direct-fetch-journal.json
+            ${{ runner.temp }}/verified-source-work/alpine-fetch-journal.json
+          if-no-files-found: warn
+          retention-days: 2
+
   container:
     name: Container build (${{ matrix.architecture }})
-    needs: python-distribution
+    needs:
+      - python-distribution
+      - verified-container-sources
     if: ${{ always() }}
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
     timeout-minutes: 90
     strategy:
@@ -835,14 +1120,46 @@ jobs:
         ports:
           - 5432:5432
     steps:
-      - name: Require the selected Python distribution
+      - name: Require the selected Python distribution and verified sources
         env:
           DISTRIBUTION_RESULT: ${{ needs.python-distribution.result }}
+          SOURCE_ARTIFACT_DIGEST: >-
+            ${{ needs.verified-container-sources.outputs.artifact-digest }}
+          SOURCE_ARTIFACT_ID: ${{ needs.verified-container-sources.outputs.artifact-id }}
+          SOURCE_RESULT: ${{ needs.verified-container-sources.result }}
+          DIRECT_PLAN_SHA256: >-
+            ${{ needs.verified-container-sources.outputs.direct-plan-sha256 }}
+          DIRECT_PLAN_SIZE: ${{ needs.verified-container-sources.outputs.direct-plan-size }}
+          ALPINE_PLAN_SHA256: >-
+            ${{ needs.verified-container-sources.outputs.alpine-plan-sha256 }}
+          ALPINE_PLAN_SIZE: ${{ needs.verified-container-sources.outputs.alpine-plan-size }}
         run: |
+          set -euo pipefail
           if [ "$DISTRIBUTION_RESULT" != success ]; then
             echo "Python distribution selection result was $DISTRIBUTION_RESULT, not success." >&2
             exit 1
           fi
+          if [ "$SOURCE_RESULT" != success ]; then
+            echo "Verified source fetch result was $SOURCE_RESULT, not success." >&2
+            exit 1
+          fi
+          if ! [[ "$SOURCE_ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]] ||
+             ! [[ "$SOURCE_ARTIFACT_DIGEST" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "Verified source artifact identity is invalid." >&2
+            exit 1
+          fi
+          for digest in "$DIRECT_PLAN_SHA256" "$ALPINE_PLAN_SHA256"; do
+            if ! [[ "$digest" =~ ^[0-9a-f]{64}$ ]]; then
+              echo "Verified source plan digest is invalid." >&2
+              exit 1
+            fi
+          done
+          for size in "$DIRECT_PLAN_SIZE" "$ALPINE_PLAN_SIZE"; do
+            if ! [[ "$size" =~ ^[1-9][0-9]*$ ]] || [ "$size" -gt 4194304 ]; then
+              echo "Verified source plan size is invalid." >&2
+              exit 1
+            fi
+          done
 
       - name: Check out repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -862,6 +1179,14 @@ jobs:
           path: ${{ runner.temp }}/verified-python
           digest-mismatch: error
 
+      - name: Download both verified source stores by immutable ID
+        id: verified-sources
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.verified-container-sources.outputs.artifact-id }}
+          path: ${{ runner.temp }}/verified-source-stores
+          digest-mismatch: error
+
       - name: Verify the selected Python distribution
         env:
           DISTRIBUTION_DIRECTORY: ${{ steps.python-distribution.outputs.download-path }}
@@ -874,6 +1199,24 @@ jobs:
           --source-revision "$GITHUB_SHA"
           --wheel-sha256 "$WHEEL_SHA256"
           --selection-record-sha256 "$SELECTION_RECORD_SHA256"
+
+      - name: Prepare fixed rootless parser read-only inputs
+        env:
+          PYTHON_DISTRIBUTION_DIRECTORY: ${{ steps.python-distribution.outputs.download-path }}
+          VERIFIED_SOURCE_DIRECTORY: ${{ steps.verified-sources.outputs.download-path }}
+        run: |
+          set -euo pipefail
+          test -d "${VERIFIED_SOURCE_DIRECTORY}/direct-store"
+          test -d "${VERIFIED_SOURCE_DIRECTORY}/alpine-store"
+          for root in \
+            "$PYTHON_DISTRIBUTION_DIRECTORY" \
+            "${VERIFIED_SOURCE_DIRECTORY}/direct-store" \
+            "${VERIFIED_SOURCE_DIRECTORY}/alpine-store"; do
+            find "$root" -xdev -type d \
+              -exec chmod 0755 -- {} +
+            find "$root" -xdev -type f \
+              -exec chmod 0644 -- {} +
+          done
 
       - name: Set up uv for evidence collection
         uses: astral-sh/setup-uv@6ee6290f1cbc4156c0bdd66691b2c144ef8df19a # v7.4.0
@@ -974,8 +1317,6 @@ jobs:
           subject_digest="$(docker image inspect --format '{{.Id}}' "$image")"
           inventory="container-evidence/components-${ARCHITECTURE}.json"
           files="container-evidence/all-layer-files-${ARCHITECTURE}.json"
-          bundle="container-evidence/extra-codeowners-ci-linux-${ARCHITECTURE}-evidence.tar.gz"
-          predicate="container-evidence/evidence-predicate-${ARCHITECTURE}.json"
           uv run --frozen python .github/scripts/container_evidence.py inventory \
             --image "$image" \
             --platform "$PLATFORM" \
@@ -1009,19 +1350,106 @@ jobs:
               "$APPLICATION_SELECTION_RECORD_SHA256"
           uv run --frozen python .github/scripts/container_evidence.py verify \
             --inventory "$inventory"
-          uv run --frozen python .github/scripts/container_evidence.py bundle \
-            --inventory "$inventory" \
-            --files-inventory "$files" \
-            --output "$bundle" \
-            --predicate-output "$predicate" \
-            --version 0.0.0-ci \
-            --source-date-epoch "$(git show -s --format=%ct HEAD)" \
-            --selected-python-directory "$PYTHON_DISTRIBUTION_DIRECTORY" \
-            --application-source-revision "$GITHUB_SHA" \
-            --application-wheel-sha256 "$APPLICATION_WHEEL_SHA256" \
-            --application-selection-record-sha256 \
-              "$APPLICATION_SELECTION_RECORD_SHA256" \
-            --require-image-revision
+
+      - name: Build source evidence in the offline parser sandbox
+        env:
+          ALPINE_PLAN_SHA256: >-
+            ${{ needs.verified-container-sources.outputs.alpine-plan-sha256 }}
+          ALPINE_PLAN_SIZE: ${{ needs.verified-container-sources.outputs.alpine-plan-size }}
+          APPLICATION_SELECTION_RECORD_SHA256: >-
+            ${{ needs.python-distribution.outputs.selection-record-sha256 }}
+          APPLICATION_WHEEL_SHA256: ${{ needs.python-distribution.outputs.wheel-sha256 }}
+          ARCHITECTURE: ${{ matrix.architecture }}
+          DIRECT_PLAN_SHA256: >-
+            ${{ needs.verified-container-sources.outputs.direct-plan-sha256 }}
+          DIRECT_PLAN_SIZE: ${{ needs.verified-container-sources.outputs.direct-plan-size }}
+          PYTHON_DISTRIBUTION_DIRECTORY: ${{ steps.python-distribution.outputs.download-path }}
+          VERIFIED_SOURCE_DIRECTORY: ${{ steps.verified-sources.outputs.download-path }}
+        run: |
+          set -euo pipefail
+          parser_image="extra-codeowners:test-${ARCHITECTURE}"
+          parser_image_id="$(docker image inspect --format '{{.Id}}' "$parser_image")"
+          if ! [[ "$parser_image_id" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "Current-commit evidence parser has an invalid local image ID." >&2
+            exit 1
+          fi
+          parser_container_nonce="$(python -c 'import secrets; print(secrets.token_hex(16))')"
+          if ! [[ "$parser_container_nonce" =~ ^[0-9a-f]{32}$ ]]; then
+            echo "Cannot allocate a unique evidence parser container name." >&2
+            exit 1
+          fi
+          parser_container_name="extra-codeowners-evidence-${parser_container_nonce}"
+          output="${RUNNER_TEMP}/evidence-output-${ARCHITECTURE}"
+          if [ -e "$output" ]; then
+            echo "Refusing to reuse an existing evidence output mount." >&2
+            exit 1
+          fi
+          install --directory --mode=0700 "$output"
+          sudo mount \
+            --types tmpfs \
+            --options size=1152m,nr_inodes=8192,nosuid,nodev,noexec,mode=0700,uid=65532,gid=65532 \
+            tmpfs "$output"
+          cleanup_evidence_output() {
+            env -i \
+              DOCKER_CONFIG=/nonexistent \
+              HOME=/nonexistent \
+              PATH=/usr/bin:/bin \
+              /usr/bin/timeout --signal=TERM --kill-after=5s 15s \
+              /usr/bin/docker rm --force "$parser_container_name" \
+              >/dev/null 2>&1 || true
+            if mountpoint --quiet "$output"; then
+              sudo umount "$output" || sudo umount --lazy "$output"
+            fi
+            rmdir "$output"
+          }
+          trap cleanup_evidence_output EXIT
+          bundle="extra-codeowners-ci-linux-${ARCHITECTURE}-evidence.tar.gz"
+          predicate="evidence-predicate-${ARCHITECTURE}.json"
+          source_date_epoch="$(git show -s --format=%ct HEAD)"
+          timeout --signal=TERM --kill-after=30s 60m \
+            python .github/scripts/run_evidence_parser.py command \
+              --image "$parser_image_id" \
+              --container-name "$parser_container_name" \
+              --input "alpine-store=${VERIFIED_SOURCE_DIRECTORY}/alpine-store" \
+              --input "direct-store=${VERIFIED_SOURCE_DIRECTORY}/direct-store" \
+              --input "files=${GITHUB_WORKSPACE}/container-evidence/all-layer-files-${ARCHITECTURE}.json" \
+              --input "inventory=${GITHUB_WORKSPACE}/container-evidence/components-${ARCHITECTURE}.json" \
+              --input "python=${PYTHON_DISTRIBUTION_DIRECTORY}" \
+              --input "repo=${GITHUB_WORKSPACE}" \
+              --output "$output" \
+              --parser evidence \
+              --execute \
+              -- \
+              bundle \
+              --inventory /inputs/inventory \
+              --files-inventory /inputs/files \
+              --policy /inputs/repo/.compliance/container-policy.json \
+              --uv-lock /inputs/repo/uv.lock \
+              --direct-source-store-root /inputs/direct-store \
+              --direct-source-plan-sha256 "$DIRECT_PLAN_SHA256" \
+              --direct-source-plan-size "$DIRECT_PLAN_SIZE" \
+              --alpine-source-store-root /inputs/alpine-store \
+              --alpine-source-plan-sha256 "$ALPINE_PLAN_SHA256" \
+              --alpine-source-plan-size "$ALPINE_PLAN_SIZE" \
+              --repo /inputs/repo \
+              --bundle-work-root /work \
+              --output "/output/${bundle}" \
+              --predicate-output "/output/${predicate}" \
+              --version 0.0.0-ci \
+              --source-date-epoch "$source_date_epoch" \
+              --selected-python-directory /inputs/python \
+              --application-source-revision "$GITHUB_SHA" \
+              --application-wheel-sha256 "$APPLICATION_WHEEL_SHA256" \
+              --application-selection-record-sha256 \
+                "$APPLICATION_SELECTION_RECORD_SHA256" \
+              --require-image-revision
+          sudo chown "$(id -u):$(id -g)" "$output"
+          python .github/scripts/run_evidence_parser.py materialize-evidence \
+            --source "$output" \
+            --destination "${GITHUB_WORKSPACE}/container-evidence" \
+            --architecture "$ARCHITECTURE"
+          cleanup_evidence_output
+          trap - EXIT
 
       - name: Upload container distribution evidence
         if: ${{ always() && !cancelled() }}

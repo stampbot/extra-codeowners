@@ -1269,6 +1269,8 @@ def test_workflows_only_type_check_the_preflight_module() -> None:
             ".github/scripts/build_python_distribution_spine.py",
             ".github/scripts/build_release_spine.py",
             ".github/scripts/container_evidence.py",
+            ".github/scripts/container_source_plan.py",
+            ".github/scripts/fetch_verified_sources.py",
             ".github/scripts/github_release_api.py",
             script,
             ".github/scripts/python_distribution_spine.py",
@@ -1276,6 +1278,8 @@ def test_workflows_only_type_check_the_preflight_module() -> None:
             ".github/scripts/release_controller.py",
             ".github/scripts/release_spine.py",
             ".github/scripts/release_readiness.py",
+            ".github/scripts/run_evidence_parser.py",
+            ".github/scripts/verified_source_store.py",
         ),
         ("release.yml", "quality", "Verify Python source"): (
             "uv",
@@ -1287,6 +1291,8 @@ def test_workflows_only_type_check_the_preflight_module() -> None:
             ".github/scripts/build_python_distribution_spine.py",
             ".github/scripts/build_release_spine.py",
             ".github/scripts/container_evidence.py",
+            ".github/scripts/container_source_plan.py",
+            ".github/scripts/fetch_verified_sources.py",
             ".github/scripts/github_release_api.py",
             script,
             ".github/scripts/python_distribution_spine.py",
@@ -1294,6 +1300,8 @@ def test_workflows_only_type_check_the_preflight_module() -> None:
             ".github/scripts/release_controller.py",
             ".github/scripts/release_spine.py",
             ".github/scripts/release_readiness.py",
+            ".github/scripts/run_evidence_parser.py",
+            ".github/scripts/verified_source_store.py",
         ),
     }
     forbidden_markers = (

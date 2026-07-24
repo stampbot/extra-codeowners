@@ -1,22 +1,25 @@
 from __future__ import annotations
 
+import ast
 import base64
 import copy
 import importlib.util
 import io
 import json
 import os
+import socket
 import stat
 import subprocess
 import sys
 import tarfile
 import tomllib
+import urllib.request
 import zipfile
 import zlib
 from collections.abc import Iterable
 from pathlib import Path, PurePosixPath
 from types import ModuleType, SimpleNamespace
-from typing import Any, cast
+from typing import Any, ClassVar, cast
 
 import pytest
 
@@ -32,6 +35,7 @@ def load_script(name: str) -> ModuleType:
 
 
 evidence = load_script("container_evidence")
+source_plan = load_script("container_source_plan")
 readiness = load_script("release_readiness")
 DEMO_METADATA_PATH = "opt/venv/lib/python3.14/site-packages/demo-1.0.dist-info/METADATA"
 PYVENV_CONFIG = (
@@ -5877,9 +5881,48 @@ def test_recipe_checksum_parser_enforces_aggregate_size(
         evidence.recipe_checksums(recipe, "demo")
 
 
-def test_fetch_rejects_an_invalid_expected_digest_before_network() -> None:
+def test_verified_source_read_rejects_an_invalid_expected_digest_before_store_read() -> None:
+    reader = SimpleNamespace(
+        read_request=lambda _request_id: pytest.fail("invalid digest reached the source store")
+    )
     with pytest.raises(evidence.EvidenceError, match="invalid expected sha256 digest"):
-        evidence.fetch("https://example.com/source.tar.gz", "not-a-digest")
+        evidence._read_verified_source(
+            reader,
+            "source:test",
+            "https://example.com/source.tar.gz",
+            "not-a-digest",
+        )
+
+
+def test_container_evidence_has_no_ambient_network_fetch_primitive() -> None:
+    source_path = Path(__file__).parents[1] / ".github" / "scripts" / "container_evidence.py"
+    tree = ast.parse(source_path.read_text())
+    imported_modules = {
+        alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Import)
+        for alias in node.names
+    }
+    imported_modules.update(
+        node.module
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module is not None
+    )
+    assert imported_modules.isdisjoint(
+        {
+            "aiohttp",
+            "http.client",
+            "httpx",
+            "requests",
+            "socket",
+            "urllib.error",
+            "urllib.request",
+        }
+    )
+    assert not any(
+        isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef)) and node.name == "fetch"
+        for node in ast.walk(tree)
+    )
 
 
 def test_source_url_rejects_an_out_of_range_port_before_network() -> None:
@@ -6132,86 +6175,386 @@ def test_cpython_source_archive_rejects_nonregular_payloads(
         evidence.verify_cpython_source_archive(content, source)
 
 
-def test_fetch_records_every_https_redirect(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_verified_source_read_preserves_the_request_and_safe_redirect_origins() -> None:
     content = b"verified content"
-
-    class Response:
-        def __init__(self) -> None:
-            self.headers = {"Content-Length": str(len(content))}
-
-        def __enter__(self) -> Response:
-            return self
-
-        def __exit__(self, *_args: object) -> None:
-            return None
-
-        def geturl(self) -> str:
-            return "https://cdn.example.com/source.tar.gz"
-
-        def read(self, _limit: int) -> bytes:
-            return content
-
-    class Opener:
-        def __init__(self, handler: Any) -> None:
-            self.handler = handler
-
-        def open(self, _request: Any, *, timeout: int) -> Response:
-            assert timeout == 60
-            self.handler.urls.append("https://cdn.example.com/source.tar.gz")
-            return Response()
-
-    monkeypatch.setattr(
-        evidence.urllib.request,
-        "build_opener",
-        lambda handler: Opener(handler),
-    )
-    download = evidence.fetch(
+    urls = (
         "https://example.com/source.tar.gz",
+        "https://redirect.example.com/",
+        "https://cdn.example.com/",
+    )
+    reader = SimpleNamespace(
+        read_request=lambda request_id: (
+            evidence.verified_source_store.VerifiedSourceRead(content, urls[0], urls)
+            if request_id == "source:test"
+            else pytest.fail(f"unexpected request ID: {request_id}")
+        )
+    )
+    source = evidence._read_verified_source(
+        reader,
+        "source:test",
+        urls[0],
         evidence.hashlib.sha256(content).hexdigest(),
     )
 
-    assert download.content == content
-    assert download.urls == (
-        "https://example.com/source.tar.gz",
-        "https://cdn.example.com/source.tar.gz",
+    assert source.content == content
+    assert source.urls == urls
+    record = evidence.source_record("demo", source.urls, content, "sources/demo.tar.gz")
+    assert record["url"] == urls[0]
+    assert record["urls"] == list(urls)
+
+
+def test_real_source_store_open_failure_is_translated_to_evidence_error(
+    tmp_path: Path,
+) -> None:
+    empty_store = tmp_path / "empty-store"
+    empty_store.mkdir()
+
+    with pytest.raises(evidence.EvidenceError, match="source store cannot be opened"):
+        evidence._open_verified_source_store(
+            empty_store,
+            expected_plan_sha256="a" * 64,
+            expected_plan_size=1,
+        )
+
+
+def test_alpine_distfile_request_id_hashes_the_exact_ascii_filename() -> None:
+    filename = "gcc-14.2.0.tar.xz"
+    assert evidence._alpine_distfile_request_id("v3.22", filename) == (
+        "alpine-distfile:v3.22:00cc4c1ebeff9c07c701bd69f07cbd8eb3c353e0e6e86025eb67ebfbd62e8944"
     )
-    record = evidence.source_record("demo", download.urls, content, "sources/demo.tar.gz")
-    assert record["url"] == download.urls[0]
-    assert record["urls"] == list(download.urls)
+    with pytest.raises(evidence.EvidenceError, match="not ASCII"):
+        evidence._alpine_distfile_request_id("v3.22", "café.tar.xz")
 
 
-def test_fetch_rejects_a_final_url_away_from_https(monkeypatch: pytest.MonkeyPatch) -> None:
-    class Response:
-        def __init__(self) -> None:
-            self.headers: dict[str, str] = {}
+def test_alpine_distfile_consumer_has_a_path_scoped_128_mib_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    assert (
+        evidence.MAX_ALPINE_DISTFILE_BYTES
+        == source_plan.MAX_NATIVE_SOURCE_BYTES
+        == 128 * 1024 * 1024
+    )
+    monkeypatch.setattr(evidence, "MAX_DOWNLOAD_BYTES", 3)
+    monkeypatch.setattr(evidence, "MAX_ARCHIVE_MEMBER_BYTES", 3)
+    monkeypatch.setattr(evidence, "MAX_NATIVE_COMPONENT_SOURCE_BYTES", 4)
+    monkeypatch.setattr(evidence, "MAX_ALPINE_DISTFILE_BYTES", 4)
+    url = "https://distfiles.alpinelinux.org/distfiles/v3.22/source.tar.xz"
 
-        def __enter__(self) -> Response:
-            return self
+    def reader_for(content: bytes) -> SimpleNamespace:
+        return SimpleNamespace(
+            read_request=lambda _request_id: evidence.verified_source_store.VerifiedSourceRead(
+                content, url, (url,)
+            )
+        )
 
-        def __exit__(self, *_args: object) -> None:
-            return None
+    accepted = b"abcd"
+    accepted_sha512 = evidence.hashlib.sha512(accepted).hexdigest()
+    source_budget = evidence.BundleBudget()
+    source = evidence._read_bounded_alpine_distfile(
+        reader_for(accepted),
+        "alpine-distfile:test",
+        url,
+        accepted_sha512,
+        source_budget,
+    )
+    assert source.content == accepted
+    assert source_budget.source_bytes == len(accepted)
 
-        def geturl(self) -> str:
-            return "http://example.com/source.tar.gz"
+    retained_budget = evidence.BundleBudget()
+    retained = evidence.retain_alpine_distfile(
+        tmp_path,
+        "sources/alpine/demo/abcdef/distfiles/source.tar.xz",
+        accepted,
+        budget=retained_budget,
+    )
+    assert retained.read_bytes() == accepted
+    assert retained_budget.retained_bytes == len(accepted)
+    assert (
+        evidence.extract_license_files(
+            accepted,
+            "alpine-demo",
+            tmp_path,
+            archive_name="source.tar.xz",
+            max_archive_bytes=evidence.MAX_ALPINE_DISTFILE_BYTES,
+        )
+        == []
+    )
 
-    class Opener:
-        def open(self, *_args: object, **_kwargs: object) -> Response:
-            return Response()
+    rejected = b"abcde"
+    with pytest.raises(evidence.EvidenceError, match="exceeds its consumer limit"):
+        evidence._read_bounded_alpine_distfile(
+            reader_for(rejected),
+            "alpine-distfile:test",
+            url,
+            evidence.hashlib.sha512(rejected).hexdigest(),
+            evidence.BundleBudget(),
+        )
+    with pytest.raises(evidence.EvidenceError, match="bundle member exceeds"):
+        evidence.retain_alpine_distfile(
+            tmp_path,
+            "sources/alpine/demo/abcdef/distfiles/rejected.tar.xz",
+            rejected,
+            budget=evidence.BundleBudget(),
+        )
+    with pytest.raises(evidence.EvidenceError, match="input-size limit"):
+        evidence.extract_license_files(
+            rejected,
+            "alpine-demo",
+            tmp_path,
+            archive_name="rejected.tar.xz",
+            max_archive_bytes=evidence.MAX_ALPINE_DISTFILE_BYTES,
+        )
 
-    monkeypatch.setattr(evidence.urllib.request, "build_opener", lambda *_args: Opener())
-    with pytest.raises(evidence.EvidenceError, match="credential-free HTTPS"):
-        evidence.fetch("https://example.com/source.tar.gz", "a" * 64)
+    with pytest.raises(evidence.EvidenceError, match="exceeds its consumer limit"):
+        evidence._read_bounded_verified_source(
+            reader_for(accepted),
+            "ordinary-source:test",
+            url,
+            accepted_sha512,
+            evidence.BundleBudget(),
+            "sha512",
+            max_bytes=evidence.MAX_DOWNLOAD_BYTES,
+        )
+    with pytest.raises(evidence.EvidenceError, match="bundle member exceeds"):
+        evidence.write_file(
+            tmp_path,
+            "sources/ordinary/source.tar.xz",
+            accepted,
+            budget=evidence.BundleBudget(),
+        )
 
 
-def test_redirect_handler_rejects_downgrades_and_too_many_redirects() -> None:
-    handler = evidence.AuditedRedirectHandler("https://example.com/source.tar.gz")
-    request = evidence.urllib.request.Request("https://example.com/source.tar.gz")
-    with pytest.raises(evidence.EvidenceError, match="credential-free HTTPS"):
-        handler.redirect_request(request, None, 302, "Found", {}, "http://example.com/next")
+def test_reviewed_native_zip_uses_its_explicit_archive_boundary() -> None:
+    content = source_zip_bytes([("LICENSE", b"reviewed license\n")])
+    expected = {
+        "LICENSE": {
+            "size": len(b"reviewed license\n"),
+            "sha256": evidence.sha256_bytes(b"reviewed license\n"),
+        }
+    }
 
-    handler.urls.extend(f"https://example.com/{index}" for index in range(5))
-    with pytest.raises(evidence.EvidenceError, match="exceeded 5 redirects"):
-        handler.redirect_request(request, None, 302, "Found", {}, "https://example.com/final")
+    assert evidence.reviewed_files_from_source_archive(
+        content,
+        archive_name="source.zip",
+        source_id="native-source:test",
+        expected=expected,
+        max_archive_bytes=len(content),
+    ) == {"LICENSE": b"reviewed license\n"}
+    with pytest.raises(evidence.EvidenceError, match="input-size limit"):
+        evidence.reviewed_files_from_source_archive(
+            content,
+            archive_name="source.zip",
+            source_id="native-source:test",
+            expected=expected,
+            max_archive_bytes=len(content) - 1,
+        )
+
+
+def test_bundle_request_id_mapping_covers_every_source_category() -> None:
+    assert evidence.BASE_SOURCE_REQUEST_IDS == {
+        "docker-python-recipe": "docker-python:recipe",
+        "cpython": "cpython:source",
+    }
+    assert evidence.DOCKER_PYTHON_LICENSE_REQUEST_ID == "docker-python:license"
+    assert (
+        evidence._python_wheel_request_id(
+            "linux/amd64",
+            "python:markupsafe@3.0.3",
+        )
+        == "python-wheel:linux/amd64:markupsafe@3.0.3"
+    )
+    assert (
+        evidence._python_sdist_request_id(
+            "Markup_Safe",
+            "3.0.3",
+        )
+        == "python-sdist:markup-safe@3.0.3"
+    )
+    assert evidence._native_source_request_ids("alpine:demo@1-r0", "alpine-aports") == {
+        "recipe": "native-source:alpine:demo@1-r0:recipe"
+    }
+    assert evidence._native_source_request_ids("crate:demo@1.0.0", "crates-io") == {
+        "crate": "native-source:crate:demo@1.0.0:crate"
+    }
+    assert evidence._native_source_request_ids(
+        "upstream:demo@1.0.0",
+        "checksummed-upstream-release",
+    ) == {
+        "checksum_document": "native-source:upstream:demo@1.0.0:checksum-document",
+        "archive": "native-source:upstream:demo@1.0.0:archive",
+    }
+    assert (
+        evidence._native_source_request_ids(
+            "owner:markupsafe@3.0.3",
+            "owner-sdist-subpath",
+        )
+        == {}
+    )
+    assert (
+        evidence._alpine_recipe_request_id(
+            "musl",
+            "a" * 40,
+        )
+        == f"alpine-recipe:musl@{'a' * 40}"
+    )
+    assert evidence._license_text_request_id("Apache-2.0") == "license-text:Apache-2.0"
+
+
+def test_bundle_request_id_mapping_matches_the_real_direct_planner() -> None:
+    policy_path = Path(".compliance/container-policy.json")
+    plan = source_plan.build_direct_plan(
+        policy_path,
+        Path("uv.lock"),
+        source_revision="a" * 40,
+    )
+    policy = json.loads(policy_path.read_text())
+    expected_ids = {
+        *evidence.BASE_SOURCE_REQUEST_IDS.values(),
+        evidence.DOCKER_PYTHON_LICENSE_REQUEST_ID,
+    }
+    for platform, components in policy["platforms"].items():
+        for component in components:
+            if (
+                component["ecosystem"] == "python"
+                and component["name"] != source_plan.APPLICATION_NAME
+            ):
+                expected_ids.add(
+                    evidence._python_sdist_request_id(
+                        component["name"],
+                        component["version"],
+                    )
+                )
+            elif component["ecosystem"] == "alpine":
+                expected_ids.add(
+                    evidence._alpine_recipe_request_id(
+                        component["origin"],
+                        component["aports_commit"],
+                    )
+                )
+        for owner in policy["native_component_coverage"][platform]:
+            expected_ids.add(evidence._python_wheel_request_id(platform, owner["owner"]))
+    for entry in policy["license_texts"]:
+        expected_ids.add(evidence._license_text_request_id(entry["id"]))
+    source_kinds = {source["kind"] for source in policy["native_component_sources"].values()}
+    assert source_kinds == {
+        "alpine-aports",
+        "checksummed-upstream-release",
+        "crates-io",
+        "owner-sdist-subpath",
+    }
+    for source_id, source in policy["native_component_sources"].items():
+        expected_ids.update(evidence._native_source_request_ids(source_id, source["kind"]).values())
+
+    assert {request["id"] for request in plan["requests"]} == expected_ids
+    assert evidence._alpine_distfile_request_id("v3.24", "source.tar.xz") == (
+        source_plan._distfile_request_id("v3.24", "source.tar.xz")
+    )
+
+
+def test_owner_sdist_source_reuses_the_cached_archive_and_redirect_chain() -> None:
+    cached = (
+        b"owner source",
+        (
+            "https://example.com/markupsafe.tar.gz",
+            "https://cdn.example.com/markupsafe.tar.gz",
+        ),
+        "sources/python/markupsafe/3.0.3/markupsafe.tar.gz",
+    )
+    result = evidence._reuse_owner_sdist_source(
+        {"owner": "python:markupsafe@3.0.3"},
+        "owner:markupsafe@3.0.3",
+        {("markupsafe", "3.0.3"): cached},
+    )
+
+    assert result is cached
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    (
+        ("kind", "wrong plan kind"),
+        ("parent", "does not bind the direct"),
+        ("checkout", "wrong checkout binding"),
+        ("recipes", "does not exactly cover direct recipe"),
+    ),
+)
+def test_verified_source_store_pair_rejects_cross_store_binding_drift(
+    mutation: str,
+    message: str,
+    tmp_path: Path,
+) -> None:
+    policy_path = tmp_path / "policy.json"
+    lock_path = tmp_path / "uv.lock"
+    policy_path.write_bytes(b"{}\n")
+    lock_path.write_bytes(b"version = 1\n")
+    revision = "a" * 40
+    policy_sha256 = evidence.sha256_bytes(policy_path.read_bytes())
+    lock_sha256 = evidence.sha256_bytes(lock_path.read_bytes())
+    direct_plan_descriptor = {
+        "algorithm": "sha256",
+        "digest": "b" * 64,
+        "size": 123,
+    }
+    direct_manifest_descriptor = {
+        "algorithm": "sha256",
+        "digest": "c" * 64,
+        "size": 456,
+    }
+    direct_requests: list[dict[str, Any]] = []
+    alpine_recipes: list[dict[str, Any]] = []
+    if mutation == "recipes":
+        direct_requests.append({"id": f"alpine-recipe:demo@{'d' * 40}"})
+    direct_plan = {
+        "kind": "direct",
+        "evidence_schema_version": evidence.SCHEMA_VERSION,
+        "source_revision": revision,
+        "policy_sha256": policy_sha256,
+        "uv_lock_sha256": lock_sha256,
+        "requests": direct_requests,
+    }
+    alpine_plan = {
+        "kind": "alpine-distfiles",
+        "evidence_schema_version": evidence.SCHEMA_VERSION,
+        "source_revision": revision,
+        "policy_sha256": policy_sha256,
+        "uv_lock_sha256": lock_sha256,
+        "parent_plan": direct_plan_descriptor,
+        "parent_manifest": direct_manifest_descriptor,
+        "recipes": alpine_recipes,
+        "requests": [],
+    }
+    if mutation == "kind":
+        alpine_plan["kind"] = "direct"
+    elif mutation == "parent":
+        alpine_plan["parent_manifest"] = {
+            **direct_manifest_descriptor,
+            "digest": "e" * 64,
+        }
+    elif mutation == "checkout":
+        alpine_plan["policy_sha256"] = "f" * 64
+
+    direct_reader = SimpleNamespace(
+        plan=direct_plan,
+        verification={
+            "plan": direct_plan_descriptor,
+            "manifest": direct_manifest_descriptor,
+        },
+        request_ids=tuple(request["id"] for request in direct_requests),
+    )
+    alpine_reader = SimpleNamespace(
+        plan=alpine_plan,
+        request_ids=(),
+    )
+
+    with pytest.raises(evidence.EvidenceError, match=message):
+        evidence._validate_verified_source_stores(
+            direct_reader,
+            alpine_reader,
+            policy_sha256=policy_sha256,
+            lock_sha256=lock_sha256,
+            source_revision=revision,
+        )
 
 
 def test_license_extraction_rejects_control_paths_in_tar_and_zip(tmp_path: Path) -> None:
@@ -7419,7 +7762,7 @@ def test_post_base_provenance_rejects_unclassified_regular_files(
     altered_inventory, altered_files = evidence._inventory_saved_image(
         altered_license_image, "linux/amd64", "sha256:" + "a" * 64
     )
-    with pytest.raises(evidence.EvidenceError, match="LICENSE differs from Git HEAD"):
+    with pytest.raises(evidence.EvidenceError, match="LICENSE differs from the selected Git"):
         evidence.verify_post_base_provenance(altered_inventory, altered_files, policy, tmp_path)
 
     extra_link_image = tmp_path / "extra-link.tar"
@@ -9536,12 +9879,14 @@ def test_application_source_binding_is_exact_and_effective(
     saved_image_layers(image, [layer])
     inventory, files = evidence._inventory_saved_image(image, "linux/amd64", "sha256:" + "a" * 64)
     monkeypatch.setattr(
-        evidence, "project_identity_at_head", lambda _repo: ("extra-codeowners", "0.1.0")
+        evidence,
+        "project_identity_at_head",
+        lambda _repo, **_kwargs: ("extra-codeowners", "0.1.0"),
     )
     monkeypatch.setattr(
         evidence,
         "application_sources_at_head",
-        lambda _repo: {"extra_codeowners/app.py": trusted_source},
+        lambda _repo, **_kwargs: {"extra_codeowners/app.py": trusted_source},
     )
 
     assert evidence.validate_application_source_binding(inventory, files, tmp_path) == (
@@ -9579,7 +9924,7 @@ def test_application_source_binding_is_exact_and_effective(
         record for record in tampered["regular_files"] if record["path"].endswith("/app.py")
     )
     app_record["sha256"] = "f" * 64
-    with pytest.raises(evidence.EvidenceError, match="differs from Git HEAD"):
+    with pytest.raises(evidence.EvidenceError, match="differs from the selected Git"):
         evidence.validate_application_source_binding(inventory, tampered, tmp_path)
 
     consistently_tampered = copy.deepcopy(tampered)
@@ -9589,7 +9934,7 @@ def test_application_source_binding_is_exact_and_effective(
         if record["path"].endswith(".dist-info/RECORD")
     )
     record_file["sha256"] = "e" * 64
-    with pytest.raises(evidence.EvidenceError, match="differs from Git HEAD"):
+    with pytest.raises(evidence.EvidenceError, match="differs from the selected Git"):
         evidence.validate_application_source_binding(inventory, consistently_tampered, tmp_path)
 
     absent = copy.deepcopy(inventory)
@@ -9640,6 +9985,52 @@ def test_project_identity_is_read_from_git_head(tmp_path: Path) -> None:
     pyproject.write_text('[project]\nname = "tampered"\nversion = "9.9.9"\n')
 
     assert evidence.project_identity_at_head(repo) == ("extra-codeowners", "0.1.0")
+
+
+def test_application_source_helpers_stay_on_the_selected_revision(tmp_path: Path) -> None:
+    repo, git = initialize_git_fixture(tmp_path)
+    package = repo / "extra_codeowners"
+    package.mkdir()
+    pyproject = repo / "pyproject.toml"
+    application = package / "app.py"
+    license_path = repo / "LICENSE"
+    pyproject.write_text('[project]\nname = "extra-codeowners"\nversion = "0.1.0"\n')
+    application.write_text("REVISION = 'selected'\n")
+    license_path.write_text("selected license\n")
+    commit_git_fixture(repo, git)
+    selected_revision = (
+        evidence.run(
+            [git, "-C", str(repo), "rev-parse", "HEAD"],
+            max_output_bytes=128,
+        )
+        .decode()
+        .strip()
+    )
+
+    pyproject.write_text('[project]\nname = "extra-codeowners"\nversion = "0.2.0"\n')
+    application.write_text("REVISION = 'new head'\n")
+    license_path.write_text("new license\n")
+    commit_git_fixture(repo, git)
+
+    assert evidence.project_identity_at_head(
+        repo,
+        source_revision=selected_revision,
+    ) == ("extra-codeowners", "0.1.0")
+    assert evidence.application_sources_at_head(
+        repo,
+        source_revision=selected_revision,
+    ) == {"extra_codeowners/app.py": b"REVISION = 'selected'\n"}
+    archive_bytes = evidence.deterministic_source_archive(
+        repo,
+        source_revision=selected_revision,
+    )
+    with tarfile.open(fileobj=io.BytesIO(archive_bytes), mode="r:") as archive:
+        application_source = archive.extractfile("extra_codeowners/app.py")
+        selected_license = archive.extractfile("LICENSE")
+        assert application_source is not None
+        assert selected_license is not None
+        assert application_source.read() == b"REVISION = 'selected'\n"
+        assert selected_license.read() == b"selected license\n"
 
 
 def test_project_identity_rejects_oversized_version_without_traceback(
@@ -9720,7 +10111,9 @@ def test_container_job_uses_the_locked_evidence_environment() -> None:
     )[1].split("      - name: Upload container distribution evidence\n", 1)[0]
     assert "astral-sh/setup-uv@" in container_job
     assert "uv sync --all-groups --frozen" in container_job
-    assert container_job.count("uv run --frozen python .github/scripts/container_evidence.py") == 4
+    assert container_job.count("uv run --frozen python .github/scripts/container_evidence.py") == 3
+    assert "python .github/scripts/container_evidence.py bundle" not in workflow
+    assert "--parser evidence" in evidence_step
     assert evidence_step.index(" inventory \\") < evidence_step.index(" run-metadata \\")
     assert evidence_step.index(" run-metadata \\") < evidence_step.index(" verify \\")
     assert evidence_step.index(" verify \\") < evidence_step.index(" bundle \\")
@@ -9741,13 +10134,17 @@ def test_container_build_toolchain_is_exactly_pinned_and_renovate_managed() -> N
     )
     qemu_action = "docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8"
     buildx_action = "docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c"
-    for workflow, expected_count in ((ci, 2), (release, 2)):
-        assert workflow.count(qemu_action) == expected_count
-        assert workflow.count(buildx_action) == expected_count
-        assert workflow.count(qemu) == expected_count
-        assert workflow.count("cache-binary: false") == expected_count
-        assert workflow.count("version: v0.35.0") == expected_count
-        assert workflow.count(buildkit) == expected_count
+    expected_counts = (
+        (ci, 2, 3),
+        (release, 2, 2),
+    )
+    for workflow, qemu_count, buildx_count in expected_counts:
+        assert workflow.count(qemu_action) == qemu_count
+        assert workflow.count(qemu) == qemu_count
+        assert workflow.count(buildx_action) == buildx_count
+        assert workflow.count("cache-binary: false") == buildx_count
+        assert workflow.count("version: v0.35.0") == buildx_count
+        assert workflow.count(buildkit) == buildx_count
 
     renovate = json.loads(Path("renovate.json").read_text())
     managers = {manager["description"]: manager for manager in renovate["customManagers"]}
@@ -10689,9 +11086,15 @@ def test_retains_exact_selected_proof_for_manifest(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     result: dict[str, Any] = {}
+    observed_command: list[str] = []
+    observed_cwd: Path | None = None
+    observed_pass_fds: tuple[int, ...] = ()
 
-    def fake_run(command: list[str], **_kwargs: Any) -> bytes:
-        nonlocal result
+    def fake_run(command: list[str], **kwargs: Any) -> bytes:
+        nonlocal observed_cwd, observed_pass_fds, result
+        observed_command.extend(command)
+        observed_cwd = kwargs.get("cwd")
+        observed_pass_fds = tuple(kwargs.get("pass_fds", ()))
         result, output = selected_retention_fixture(command)
         return output
 
@@ -10704,11 +11107,11 @@ def test_retains_exact_selected_proof_for_manifest(
     binding, installation = evidence.retain_selected_application_artifacts(
         directory=tmp_path / "incoming",
         output=tmp_path / "bundle" / "artifacts" / "application",
-        repo=tmp_path,
         source_revision="a" * 40,
         wheel_sha256=expected_payloads["wheel"],
         selection_record_sha256=expected_payloads["selection"],
         budget=budget,
+        pass_fds=(101,),
     )
 
     assert len(binding["files"]) == 5
@@ -10719,6 +11122,30 @@ def test_retains_exact_selected_proof_for_manifest(
     assert binding["selection_record_sha256"] == expected_payloads["selection"]
     assert installation == {"contract": "opaque to retention"}
     assert budget.retained_file_count == 5
+    assert observed_command[:2] == [
+        sys.executable,
+        str(evidence.SCRIPT_DIRECTORY / "build_python_artifacts.py"),
+    ]
+    assert observed_cwd == evidence.SCRIPT_DIRECTORY
+    assert observed_pass_fds == (101,)
+
+
+def test_run_can_inherit_a_retained_directory_descriptor(tmp_path: Path) -> None:
+    descriptor = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        observed = evidence.run(
+            [
+                sys.executable,
+                "-c",
+                "import os, sys; print(os.fstat(int(sys.argv[1])).st_ino)",
+                str(descriptor),
+            ],
+            max_output_bytes=128,
+            pass_fds=(descriptor,),
+        )
+        assert int(observed) == os.fstat(descriptor).st_ino
+    finally:
+        os.close(descriptor)
 
 
 @pytest.mark.parametrize(
@@ -10747,7 +11174,6 @@ def test_selected_proof_retention_fails_closed(
         evidence.retain_selected_application_artifacts(
             directory=tmp_path / "incoming",
             output=tmp_path / "bundle" / "artifacts" / "application",
-            repo=tmp_path,
             source_revision="a" * 40,
             wheel_sha256=evidence.sha256_bytes(b"wheel"),
             selection_record_sha256=evidence.sha256_bytes(b"selection-record"),
@@ -10755,9 +11181,19 @@ def test_selected_proof_retention_fails_closed(
         )
 
 
-@pytest.mark.parametrize("platform", ("linux/amd64", "linux/arm64"))
+@pytest.mark.parametrize(
+    ("platform", "fail_on_close"),
+    (
+        ("linux/amd64", False),
+        ("linux/arm64", False),
+        ("linux/amd64", True),
+    ),
+)
 def test_trusted_native_component_bundle_contract_is_internally_bound(
-    platform: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    platform: str,
+    fail_on_close: bool,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     _inventories, _locked, native_policy, _lock_sources = native_component_coverage_case()
     committed_policy = json.loads(Path(".compliance/container-policy.json").read_text())
@@ -10905,6 +11341,7 @@ def test_trusted_native_component_bundle_contract_is_internally_bound(
         "tags": [wheel_pin["tag"]],
     }
     wheel_content = b"\0" * cast(int, wheel_pin["size"])
+    locked_wheel["sha256"] = evidence.sha256_bytes(wheel_content)
     markupsafe_sdist = tar_bytes(
         {
             "markupsafe-3.0.3/LICENSE.txt": MARKUPSAFE_LICENSE_TEXT,
@@ -10913,39 +11350,52 @@ def test_trusted_native_component_bundle_contract_is_internally_bound(
     )
     assert len(markupsafe_sdist) < MARKUPSAFE_SOURCE["size"]
     markupsafe_sdist += b"\0" * (cast(int, MARKUPSAFE_SOURCE["size"]) - len(markupsafe_sdist))
+    markupsafe_source = {
+        **copy.deepcopy(MARKUPSAFE_SOURCE),
+        "sha256": evidence.sha256_bytes(markupsafe_sdist),
+    }
 
     revision = "4" * 40
     monkeypatch.setattr(evidence, "validate_all_layer_inventory", lambda *_args: None)
     monkeypatch.setattr(evidence, "verify_inventory", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(evidence, "verify_dockerfile_base", lambda *_args: None)
+    monkeypatch.setattr(evidence, "verify_dockerfile_base_bytes", lambda *_args: None)
     monkeypatch.setattr(
         evidence, "verify_application_artifact_labels", lambda *_args, **_kwargs: None
     )
     monkeypatch.setattr(evidence, "verify_base_layer_binding", lambda *_args: None)
-    monkeypatch.setattr(evidence, "verify_post_base_provenance", lambda *_args: None)
+    monkeypatch.setattr(
+        evidence,
+        "verify_post_base_provenance",
+        lambda *_args, **_kwargs: None,
+    )
     monkeypatch.setattr(
         evidence,
         "validate_application_source_binding",
-        lambda *_args: ("extra-codeowners", "0.0.0"),
+        lambda *_args, **_kwargs: ("extra-codeowners", "0.0.0"),
     )
     monkeypatch.setattr(
         evidence,
-        "parse_lock_sources",
-        lambda *_args: {("markupsafe", "3.0.3"): copy.deepcopy(MARKUPSAFE_SOURCE)},
+        "parse_lock_sources_bytes",
+        lambda *_args: {("markupsafe", "3.0.3"): copy.deepcopy(markupsafe_source)},
     )
     monkeypatch.setattr(evidence, "validate_source_policy_coverage", lambda *_args: None)
     monkeypatch.setattr(
-        evidence, "select_locked_native_wheels", lambda *_args: [copy.deepcopy(locked_wheel)]
+        evidence,
+        "select_locked_native_wheels_bytes",
+        lambda *_args: [copy.deepcopy(locked_wheel)],
     )
     monkeypatch.setattr(
         evidence,
         "verify_native_component_lock_bindings",
         lambda *_args: copy.deepcopy(native_coverage),
     )
-    monkeypatch.setattr(
-        evidence,
-        "retain_selected_application_artifacts",
-        lambda **_kwargs: (
+
+    def fake_retain_selected_application_artifacts(**kwargs: Any) -> tuple[dict[str, Any], object]:
+        inherited_descriptors = kwargs.get("pass_fds")
+        assert isinstance(inherited_descriptors, tuple)
+        assert len(inherited_descriptors) == 1
+        assert stat.S_ISDIR(os.fstat(inherited_descriptors[0]).st_mode)
+        return (
             {
                 "source_revision": revision,
                 "wheel_sha256": "5" * 64,
@@ -10953,14 +11403,23 @@ def test_trusted_native_component_bundle_contract_is_internally_bound(
                 "files": [],
             },
             {"trusted_fixture": True},
-        ),
+        )
+
+    monkeypatch.setattr(
+        evidence,
+        "retain_selected_application_artifacts",
+        fake_retain_selected_application_artifacts,
     )
     monkeypatch.setattr(
         evidence,
         "verify_selected_application_installation",
         lambda *_args: "/opt/venv/bin/python",
     )
-    monkeypatch.setattr(evidence, "deterministic_source_archive", lambda *_args: b"app source")
+    monkeypatch.setattr(
+        evidence,
+        "deterministic_source_archive",
+        lambda *_args, **_kwargs: b"app source",
+    )
     monkeypatch.setattr(evidence, "verify_cpython_source_binding", lambda *_args: None)
     monkeypatch.setattr(evidence, "verify_cpython_source_archive", lambda *_args: cpython_license)
     monkeypatch.setattr(evidence, "run", lambda *_args, **_kwargs: f"{revision}\n".encode())
@@ -10990,28 +11449,242 @@ def test_trusted_native_component_bundle_contract_is_internally_bound(
 
     monkeypatch.setattr(evidence, "retain_native_wheel_artifact", fake_retain_native_wheel_artifact)
 
-    downloads = {
-        docker_recipe_url: docker_recipe_content,
-        cpython_source_url: cpython_source_content,
-        source["recipe"]["url"]: recipe_content,
-        distfile["url"]: distfile_content,
-        cast(str, wheel_pin["url"]): wheel_content,
-        cast(str, MARKUPSAFE_SOURCE["url"]): markupsafe_sdist,
+    output = tmp_path / "evidence.tar.gz"
+    predicate_output = tmp_path / "predicate.json"
+    checksum_output = output.with_suffix(output.suffix + ".sha256")
+    direct_store_root = tmp_path / "direct-source-store"
+    alpine_store_root = tmp_path / "alpine-source-store"
+    bundle_work_root = tmp_path / "bundle-work"
+    repo_root = tmp_path / "repo"
+    selected_python_directory = tmp_path / "selected-python"
+    direct_store_root.mkdir()
+    alpine_store_root.mkdir()
+    bundle_work_root.mkdir()
+    repo_root.mkdir()
+    selected_python_directory.mkdir()
+    direct_plan_sha256 = "d" * 64
+    direct_plan_size = 1_234
+    alpine_plan_sha256 = "e" * 64
+    alpine_plan_size = 2_345
+
+    wheel_request_id = f"python-wheel:{platform}:markupsafe@3.0.3"
+    python_request_id = "python-sdist:markupsafe@3.0.3"
+    native_recipe_request_id = f"native-source:{source_id}:recipe"
+    native_distfile_request_id = evidence._alpine_distfile_request_id(
+        source["distfiles_release"],
+        distfile["filename"],
+    )
+    wheel_urls = (
+        cast(str, locked_wheel["url"]),
+        "https://cdn.example.com/",
+    )
+    python_urls = (
+        cast(str, markupsafe_source["url"]),
+        "https://cdn.example.com/",
+    )
+    native_distfile_urls = (
+        cast(str, distfile["url"]),
+        "https://cdn.example.com/",
+    )
+    direct_sources: dict[str, tuple[bytes, tuple[str, ...]]] = {
+        "docker-python:recipe": (docker_recipe_content, (docker_recipe_url,)),
+        "cpython:source": (cpython_source_content, (cpython_source_url,)),
+        native_recipe_request_id: (recipe_content, (cast(str, source["recipe"]["url"]),)),
+        wheel_request_id: (wheel_content, wheel_urls),
+        python_request_id: (markupsafe_sdist, python_urls),
+    }
+    alpine_sources: dict[str, tuple[bytes, tuple[str, ...]]] = {
+        native_distfile_request_id: (distfile_content, native_distfile_urls),
     }
 
-    fetched: list[tuple[str, str, str]] = []
-
-    def fake_fetch(
+    def plan_request(
+        request_id: str,
         url: str,
-        expected_hash: str,
-        algorithm: str = "sha256",
+        content: bytes,
         *,
+        algorithm: str = "sha256",
         max_bytes: int = evidence.MAX_DOWNLOAD_BYTES,
-    ) -> Any:
-        fetched.append((url, expected_hash, algorithm))
-        content = downloads[url]
-        assert len(content) <= max_bytes
-        return evidence.Download(content=content, urls=(url,))
+    ) -> dict[str, Any]:
+        return {
+            "id": request_id,
+            "url": url,
+            "allowed_hosts": [cast(str, evidence.urllib.parse.urlsplit(url).hostname)],
+            "algorithm": algorithm,
+            "digest": evidence.hashlib.new(algorithm, content).hexdigest(),
+            "expected_size": len(content),
+            "max_bytes": max_bytes,
+            "consumers": ["test:bundle"],
+        }
+
+    direct_requests = sorted(
+        (
+            plan_request(
+                request_id,
+                urls[0],
+                content,
+            )
+            for request_id, (content, urls) in direct_sources.items()
+        ),
+        key=lambda request: request["id"],
+    )
+    alpine_requests = [
+        plan_request(
+            native_distfile_request_id,
+            native_distfile_urls[0],
+            distfile_content,
+            algorithm="sha512",
+            max_bytes=evidence.MAX_NATIVE_COMPONENT_SOURCE_BYTES,
+        )
+    ]
+    policy_sha256 = evidence.sha256_bytes(policy_path.read_bytes())
+    lock_sha256 = evidence.sha256_bytes(lock_path.read_bytes())
+    direct_plan_descriptor = {
+        "algorithm": "sha256",
+        "digest": direct_plan_sha256,
+        "size": direct_plan_size,
+    }
+    direct_manifest_descriptor = {
+        "algorithm": "sha256",
+        "digest": "f" * 64,
+        "size": 3_456,
+    }
+    direct_plan = {
+        "schema_version": 1,
+        "media_type": evidence.verified_source_store.PLAN_MEDIA_TYPE,
+        "kind": "direct",
+        "evidence_schema_version": evidence.SCHEMA_VERSION,
+        "source_revision": revision,
+        "policy_sha256": policy_sha256,
+        "uv_lock_sha256": lock_sha256,
+        "requests": direct_requests,
+    }
+    alpine_plan = {
+        "schema_version": 1,
+        "media_type": evidence.verified_source_store.PLAN_MEDIA_TYPE,
+        "kind": "alpine-distfiles",
+        "evidence_schema_version": evidence.SCHEMA_VERSION,
+        "source_revision": revision,
+        "policy_sha256": policy_sha256,
+        "uv_lock_sha256": lock_sha256,
+        "parent_plan": direct_plan_descriptor,
+        "parent_manifest": direct_manifest_descriptor,
+        "recipes": [
+            {
+                "request_id": native_recipe_request_id,
+                "object_sha256": evidence.sha256_bytes(recipe_content),
+                "size": len(recipe_content),
+            }
+        ],
+        "requests": alpine_requests,
+    }
+
+    class FakeVerifiedSourceStoreReader:
+        instances: ClassVar[list[FakeVerifiedSourceStoreReader]] = []
+        reads: ClassVar[list[tuple[str, str]]] = []
+
+        def __init__(
+            self,
+            store_root: Path,
+            *,
+            expected_plan_sha256: str,
+            expected_plan_size: int,
+        ) -> None:
+            if store_root == direct_store_root:
+                self.kind = "direct"
+                self._plan = direct_plan
+                self._sources = direct_sources
+                assert expected_plan_sha256 == direct_plan_sha256
+                assert expected_plan_size == direct_plan_size
+                plan_descriptor = direct_plan_descriptor
+                manifest_descriptor = direct_manifest_descriptor
+            else:
+                assert store_root == alpine_store_root
+                self.kind = "alpine-distfiles"
+                self._plan = alpine_plan
+                self._sources = alpine_sources
+                assert expected_plan_sha256 == alpine_plan_sha256
+                assert expected_plan_size == alpine_plan_size
+                plan_descriptor = {
+                    "algorithm": "sha256",
+                    "digest": alpine_plan_sha256,
+                    "size": alpine_plan_size,
+                }
+                manifest_descriptor = {
+                    "algorithm": "sha256",
+                    "digest": "1" * 64,
+                    "size": 4_567,
+                }
+            self._verification = {
+                "schema_version": 1,
+                "kind": evidence.verified_source_store.RESULT_KIND,
+                "plan": plan_descriptor,
+                "manifest": manifest_descriptor,
+                "request_count": len(self._sources),
+                "object_count": len(self._sources),
+                "total_object_bytes": sum(
+                    len(content) for content, _urls in self._sources.values()
+                ),
+            }
+            self.closed = False
+            self.close_attempted = False
+            self.instances.append(self)
+
+        def __enter__(self) -> FakeVerifiedSourceStoreReader:
+            return self
+
+        def __exit__(self, exception_type: object, *_args: object) -> None:
+            if exception_type is None:
+                self.close()
+            else:
+                self.closed = True
+
+        @property
+        def plan(self) -> dict[str, Any]:
+            return copy.deepcopy(self._plan)
+
+        @property
+        def verification(self) -> dict[str, Any]:
+            return copy.deepcopy(self._verification)
+
+        @property
+        def request_ids(self) -> tuple[str, ...]:
+            return tuple(request["id"] for request in self._plan["requests"])
+
+        def read_request(self, request_id: str) -> Any:
+            self.reads.append((self.kind, request_id))
+            try:
+                content, urls = self._sources[request_id]
+            except KeyError as exc:
+                raise evidence.verified_source_store.SourceStoreError(
+                    f"unexpected request ID: {request_id}"
+                ) from exc
+            return evidence.verified_source_store.VerifiedSourceRead(content, urls[0], urls)
+
+        def close(self) -> None:
+            if self.closed:
+                return
+            self.close_attempted = True
+            self.closed = True
+            assert not output.exists()
+            assert not checksum_output.exists()
+            assert not predicate_output.exists()
+            if fail_on_close and self.kind == "alpine-distfiles":
+                raise evidence.verified_source_store.SourceStoreError(
+                    "fixture changed during final verification"
+                )
+
+    monkeypatch.setattr(
+        evidence.verified_source_store,
+        "VerifiedSourceStoreReader",
+        FakeVerifiedSourceStoreReader,
+    )
+
+    def unexpected_network(*_args: object, **_kwargs: object) -> Any:
+        pytest.fail("bundle attempted ambient network access")
+
+    monkeypatch.setattr(socket, "getaddrinfo", unexpected_network)
+    monkeypatch.setattr(socket, "socket", unexpected_network)
+    monkeypatch.setattr(urllib.request, "urlopen", unexpected_network)
 
     real_extract_license_files = evidence.extract_license_files
 
@@ -11043,28 +11716,48 @@ def test_trusted_native_component_bundle_contract_is_internally_bound(
         evidence.write_file(root, relative, cpython_license, budget=budget)
         return [relative]
 
-    monkeypatch.setattr(evidence, "fetch", fake_fetch)
     monkeypatch.setattr(evidence, "extract_license_files", fake_extract_license_files)
 
-    output = tmp_path / "evidence.tar.gz"
-    predicate_output = tmp_path / "predicate.json"
-    evidence.build_bundle(
-        inventory_path=inventory_path,
-        files_path=files_path,
-        policy_path=policy_path,
-        lock_path=lock_path,
-        repo=tmp_path,
-        output=output,
-        predicate_output=predicate_output,
-        version="0.0.0-test",
-        source_date_epoch=123,
-        selected_python_directory=tmp_path / "selected-python",
-        application_source_revision=revision,
-        application_wheel_sha256="5" * 64,
-        application_selection_record_sha256="6" * 64,
-        require_approval=False,
-        require_image_revision=False,
-    )
+    build_arguments = {
+        "inventory_path": inventory_path,
+        "files_path": files_path,
+        "policy_path": policy_path,
+        "lock_path": lock_path,
+        "direct_source_store_root": direct_store_root,
+        "direct_source_plan_sha256": direct_plan_sha256,
+        "direct_source_plan_size": direct_plan_size,
+        "alpine_source_store_root": alpine_store_root,
+        "alpine_source_plan_sha256": alpine_plan_sha256,
+        "alpine_source_plan_size": alpine_plan_size,
+        "bundle_work_root": bundle_work_root,
+        "repo": repo_root,
+        "output": output,
+        "predicate_output": predicate_output,
+        "version": "0.0.0-test",
+        "source_date_epoch": 123,
+        "selected_python_directory": selected_python_directory,
+        "application_source_revision": revision,
+        "application_wheel_sha256": "5" * 64,
+        "application_selection_record_sha256": "6" * 64,
+        "require_approval": False,
+        "require_image_revision": False,
+    }
+    if fail_on_close:
+        output.write_bytes(b"stale bundle")
+        checksum_output.write_text("stale checksum\n")
+        predicate_output.write_text('{"stale":true}\n')
+        with pytest.raises(evidence.EvidenceError, match="changed before bundle publication"):
+            evidence.build_bundle(**build_arguments)
+        assert all(reader.close_attempted for reader in FakeVerifiedSourceStoreReader.instances)
+        assert not output.exists()
+        assert not checksum_output.exists()
+        assert not predicate_output.exists()
+        assert not any(bundle_work_root.iterdir())
+        return
+
+    evidence.build_bundle(**build_arguments)
+    assert all(reader.close_attempted for reader in FakeVerifiedSourceStoreReader.instances)
+    assert not any(bundle_work_root.iterdir())
 
     archive_files: dict[str, bytes] = {}
     with tarfile.open(output, mode="r:gz") as archive:
@@ -11088,20 +11781,18 @@ def test_trusted_native_component_bundle_contract_is_internally_bound(
     assert manifest["native_wheel_artifacts"] == [
         {
             **locked_wheel,
-            "url": wheel_pin["url"],
-            "urls": [wheel_pin["url"]],
+            "url": wheel_urls[0],
+            "urls": list(wheel_urls),
             "path": wheel_relative,
             "generated_files": [],
             "embedded_sboms": [],
         }
     ]
     assert archive_files[wheel_relative] == wheel_content
-    assert (wheel_pin["url"], wheel_pin["sha256"], "sha256") in fetched
-    assert (
-        MARKUPSAFE_SOURCE["url"],
-        MARKUPSAFE_SOURCE["sha256"],
-        "sha256",
-    ) in fetched
+    assert ("direct", wheel_request_id) in FakeVerifiedSourceStoreReader.reads
+    assert ("direct", python_request_id) in FakeVerifiedSourceStoreReader.reads
+    assert ("direct", native_recipe_request_id) in FakeVerifiedSourceStoreReader.reads
+    assert ("alpine-distfiles", native_distfile_request_id) in (FakeVerifiedSourceStoreReader.reads)
 
     native_source_directory = evidence.sha256_bytes(source_id.encode())[:20]
     recipe_path = f"sources/native-components/{native_source_directory}/recipe.tar.gz"
@@ -11113,7 +11804,7 @@ def test_trusted_native_component_bundle_contract_is_internally_bound(
     assert archive_files[markupsafe_source_path] == markupsafe_sdist
     assert source_records[markupsafe_source_path] == evidence.source_record(
         "python-markupsafe-3.0.3",
-        cast(str, MARKUPSAFE_SOURCE["url"]),
+        python_urls,
         markupsafe_sdist,
         markupsafe_source_path,
     )
@@ -11122,7 +11813,7 @@ def test_trusted_native_component_bundle_contract_is_internally_bound(
     )
     assert source_records[distfile_path] == evidence.source_record(
         f"native-source:{source_id}",
-        distfile["url"],
+        native_distfile_urls,
         distfile_content,
         distfile_path,
         sha512=distfile["sha512"],
@@ -11185,20 +11876,251 @@ def test_trusted_native_component_bundle_contract_is_internally_bound(
     assert predicate["artifact"] == {"filename": output.name, "sha256": bundle_digest}
 
 
-def test_bundle_budget_enforces_cumulative_download_and_retained_limits(
+def test_bundle_budget_enforces_cumulative_source_and_retained_limits(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setattr(evidence, "MAX_BUNDLE_DOWNLOAD_BYTES", 3)
-    download_budget = evidence.BundleBudget()
-    download_budget.record_download(b"ab")
-    with pytest.raises(evidence.EvidenceError, match="cumulative download-size"):
-        download_budget.record_download(b"cd")
+    monkeypatch.setattr(evidence, "MAX_BUNDLE_SOURCE_BYTES", 3)
+    source_budget = evidence.BundleBudget()
+    source_budget.record_source(b"ab")
+    with pytest.raises(evidence.EvidenceError, match="cumulative source-size"):
+        source_budget.record_source(b"cd")
 
     monkeypatch.setattr(evidence, "MAX_BUNDLE_FILES", 1)
     retained_budget = evidence.BundleBudget()
     evidence.write_file(tmp_path, "first", b"one", budget=retained_budget)
     with pytest.raises(evidence.EvidenceError, match="cumulative file-count"):
         evidence.write_file(tmp_path, "second", b"two", budget=retained_budget)
+
+
+def test_bundle_path_boundary_clears_stale_outputs_and_publishes_exclusively(
+    tmp_path: Path,
+) -> None:
+    inputs = tmp_path / "inputs"
+    outputs = tmp_path / "outputs"
+    work_root = tmp_path / "work"
+    inputs.mkdir()
+    outputs.mkdir()
+    work_root.mkdir()
+    (inputs / "policy").write_text("trusted")
+    output = outputs / "evidence.tar.gz"
+    checksum = output.with_suffix(output.suffix + ".sha256")
+    predicate = outputs / "predicate.json"
+    for path in (output, checksum, predicate):
+        path.write_text("stale")
+
+    with evidence.BundlePathBoundary(
+        work_root=work_root,
+        inputs=(inputs,),
+        output=output,
+        predicate_output=predicate,
+    ) as boundary:
+        assert boundary.work_directory.resolve() == work_root.resolve()
+        assert not any(path.exists() for path in (output, checksum, predicate))
+        staging = boundary.work_directory / "staging"
+        staging.mkdir()
+        staged = (staging / "bundle", staging / "checksum", staging / "predicate")
+        for path, content in zip(staged, (b"bundle", b"checksum", b"predicate"), strict=True):
+            path.write_bytes(content)
+        boundary.publish(bundle=staged[0], checksum=staged[1], predicate=staged[2])
+
+    assert [path.read_bytes() for path in (output, checksum, predicate)] == [
+        b"bundle",
+        b"checksum",
+        b"predicate",
+    ]
+
+
+def test_bundle_path_boundary_removes_a_published_trio_on_later_failure(
+    tmp_path: Path,
+) -> None:
+    inputs = tmp_path / "inputs"
+    outputs = tmp_path / "outputs"
+    work_root = tmp_path / "work"
+    inputs.mkdir()
+    outputs.mkdir()
+    work_root.mkdir()
+    output = outputs / "evidence.tar.gz"
+    predicate = outputs / "predicate.json"
+
+    boundary = evidence.BundlePathBoundary(
+        work_root=work_root,
+        inputs=(inputs,),
+        output=output,
+        predicate_output=predicate,
+    )
+    assert boundary.__enter__() is boundary
+    staging = boundary.work_directory / "staging"
+    staging.mkdir()
+    staged = (staging / "bundle", staging / "checksum", staging / "predicate")
+    for path in staged:
+        path.write_bytes(path.name.encode())
+    boundary.publish(bundle=staged[0], checksum=staged[1], predicate=staged[2])
+    boundary.__exit__(RuntimeError, RuntimeError("later failure"), None)
+
+    assert not output.exists()
+    assert not output.with_suffix(output.suffix + ".sha256").exists()
+    assert not predicate.exists()
+
+
+def test_bundle_path_boundary_rejects_in_place_input_mutation_before_publish(
+    tmp_path: Path,
+) -> None:
+    input_file = tmp_path / "policy"
+    outputs = tmp_path / "outputs"
+    work_root = tmp_path / "work"
+    input_file.write_bytes(b"trusted")
+    outputs.mkdir()
+    work_root.mkdir()
+    output = outputs / "evidence.tar.gz"
+    checksum = output.with_suffix(output.suffix + ".sha256")
+    predicate = outputs / "predicate.json"
+
+    with (
+        pytest.raises(evidence.EvidenceError, match="input changed physical identity"),
+        evidence.BundlePathBoundary(
+            work_root=work_root,
+            inputs=(input_file,),
+            output=output,
+            predicate_output=predicate,
+        ) as boundary,
+    ):
+        staging = boundary.work_directory / "staging"
+        staging.mkdir()
+        staged = (staging / "bundle", staging / "checksum", staging / "predicate")
+        for path in staged:
+            path.write_bytes(path.name.encode())
+        original_mtime = input_file.stat().st_mtime_ns
+        input_file.write_bytes(b"mutated")
+        os.utime(
+            input_file,
+            ns=(original_mtime + 1_000_000_000, original_mtime + 1_000_000_000),
+        )
+        boundary.publish(bundle=staged[0], checksum=staged[1], predicate=staged[2])
+
+    assert not any(path.exists() for path in (output, checksum, predicate))
+
+
+def test_bundle_path_boundary_rejects_nonempty_linked_and_physical_overlaps(
+    tmp_path: Path,
+) -> None:
+    inputs = tmp_path / "inputs"
+    outputs = tmp_path / "outputs"
+    work_root = tmp_path / "work"
+    inputs.mkdir()
+    outputs.mkdir()
+    work_root.mkdir()
+    output = outputs / "evidence.tar.gz"
+    predicate = outputs / "predicate.json"
+
+    (work_root / "unexpected").write_text("occupied")
+    with pytest.raises(evidence.EvidenceError, match="empty dedicated"):
+        evidence.BundlePathBoundary(
+            work_root=work_root,
+            inputs=(inputs,),
+            output=output,
+            predicate_output=predicate,
+        )
+    (work_root / "unexpected").unlink()
+
+    linked_root = tmp_path / "work-link"
+    linked_root.symlink_to(work_root, target_is_directory=True)
+    with pytest.raises(evidence.EvidenceError, match="not a link"):
+        evidence.BundlePathBoundary(
+            work_root=linked_root,
+            inputs=(inputs,),
+            output=output,
+            predicate_output=predicate,
+        )
+
+    output_link = tmp_path / "output-link"
+    output_link.symlink_to(work_root, target_is_directory=True)
+    with pytest.raises(evidence.EvidenceError, match="overlaps the dedicated work"):
+        evidence.BundlePathBoundary(
+            work_root=work_root,
+            inputs=(inputs,),
+            output=output_link / "evidence.tar.gz",
+            predicate_output=predicate,
+        )
+
+    with pytest.raises(evidence.EvidenceError, match="overlaps a retained input"):
+        evidence.BundlePathBoundary(
+            work_root=work_root,
+            inputs=(inputs,),
+            output=inputs / "evidence.tar.gz",
+            predicate_output=predicate,
+        )
+
+    with pytest.raises(evidence.EvidenceError, match="paths must be distinct"):
+        evidence.BundlePathBoundary(
+            work_root=work_root,
+            inputs=(inputs,),
+            output=output,
+            predicate_output=output.with_suffix(output.suffix + ".sha256"),
+        )
+
+    with pytest.raises(evidence.EvidenceError, match="cannot inspect"):
+        evidence.BundlePathBoundary(
+            work_root=tmp_path / "missing-work",
+            inputs=(inputs,),
+            output=output,
+            predicate_output=predicate,
+        )
+
+
+@pytest.mark.parametrize("invalid_input", ("inventory", "policy"))
+def test_bundle_clears_stale_outputs_before_any_input_parse(
+    invalid_input: str,
+    tmp_path: Path,
+) -> None:
+    inventory = tmp_path / "inventory.json"
+    files = tmp_path / "files.json"
+    policy = tmp_path / "policy.json"
+    lock = tmp_path / "uv.lock"
+    inventory.write_text("not JSON" if invalid_input == "inventory" else "{}")
+    files.write_text("{}")
+    policy.write_text("not JSON" if invalid_input == "policy" else "{}")
+    lock.write_text("version = 1\n")
+    direct_store = tmp_path / "direct-store"
+    alpine_store = tmp_path / "alpine-store"
+    repo = tmp_path / "repo"
+    selected = tmp_path / "selected"
+    work = tmp_path / "work"
+    outputs = tmp_path / "outputs"
+    for directory in (direct_store, alpine_store, repo, selected, work, outputs):
+        directory.mkdir()
+    output = outputs / "evidence.tar.gz"
+    checksum = output.with_suffix(output.suffix + ".sha256")
+    predicate = outputs / "predicate.json"
+    for path in (output, checksum, predicate):
+        path.write_text("stale")
+
+    with pytest.raises(evidence.EvidenceError):
+        evidence.build_bundle(
+            inventory_path=inventory,
+            files_path=files,
+            policy_path=policy,
+            lock_path=lock,
+            direct_source_store_root=direct_store,
+            direct_source_plan_sha256="a" * 64,
+            direct_source_plan_size=1,
+            alpine_source_store_root=alpine_store,
+            alpine_source_plan_sha256="b" * 64,
+            alpine_source_plan_size=1,
+            bundle_work_root=work,
+            repo=repo,
+            output=output,
+            predicate_output=predicate,
+            version="0.0.0",
+            source_date_epoch=0,
+            selected_python_directory=selected,
+            application_source_revision="c" * 40,
+            application_wheel_sha256="d" * 64,
+            application_selection_record_sha256="e" * 64,
+            require_approval=False,
+            require_image_revision=False,
+        )
+
+    assert not any(path.exists() for path in (output, checksum, predicate))
 
 
 def test_bundle_member_producer_enforces_exact_size_boundary(
@@ -11210,11 +12132,12 @@ def test_bundle_member_producer_enforces_exact_size_boundary(
         evidence.write_file(tmp_path, "too-large", b"abcd")
 
 
-def test_native_component_source_size_exception_is_path_scoped(
+def test_large_source_member_exceptions_are_path_scoped_through_final_archive(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.setattr(evidence, "MAX_ARCHIVE_MEMBER_BYTES", 3)
     monkeypatch.setattr(evidence, "MAX_NATIVE_COMPONENT_SOURCE_BYTES", 4)
+    monkeypatch.setattr(evidence, "MAX_ALPINE_DISTFILE_BYTES", 4)
     native_root = tmp_path / "native"
     native_root.mkdir()
     evidence.write_file(
@@ -11225,9 +12148,26 @@ def test_native_component_source_size_exception_is_path_scoped(
     )
     evidence.create_deterministic_tar(native_root, tmp_path / "native.tar.gz", 123)
 
+    alpine_root = tmp_path / "alpine"
+    alpine_root.mkdir()
+    budget = evidence.BundleBudget()
+    retained = evidence.retain_alpine_distfile(
+        alpine_root,
+        "sources/alpine/demo/abcdef/distfiles/source.tar.xz",
+        b"abcd",
+        budget=budget,
+    )
+    evidence.create_deterministic_tar(alpine_root, tmp_path / "alpine.tar.gz", 123)
+    assert budget.retained_bytes == 4
+    retained.write_bytes(b"abcde")
+    with pytest.raises(evidence.EvidenceError, match="bundle member exceeds"):
+        evidence.create_deterministic_tar(alpine_root, tmp_path / "alpine-too-large.tar.gz", 123)
+
     ordinary_root = tmp_path / "ordinary"
     ordinary_root.mkdir()
-    (ordinary_root / "source.tar.xz").write_bytes(b"abcd")
+    near_miss = ordinary_root / "sources/alpine/demo/abcdef/recipes/APKBUILD"
+    near_miss.parent.mkdir(parents=True)
+    near_miss.write_bytes(b"abcd")
     with pytest.raises(evidence.EvidenceError, match="bundle member exceeds"):
         evidence.create_deterministic_tar(ordinary_root, tmp_path / "ordinary.tar.gz", 123)
 
@@ -11629,6 +12569,13 @@ def test_bundle_command_forwards_image_revision_requirement(
         files_inventory="files.json",
         policy="policy.json",
         uv_lock="uv.lock",
+        direct_source_store_root="direct-store",
+        direct_source_plan_sha256="d" * 64,
+        direct_source_plan_size=123,
+        alpine_source_store_root="alpine-store",
+        alpine_source_plan_sha256="e" * 64,
+        alpine_source_plan_size=456,
+        bundle_work_root="bundle-work",
         repo=str(tmp_path),
         output="bundle.tar.gz",
         predicate_output="predicate.json",
@@ -11648,6 +12595,11 @@ def test_bundle_command_forwards_image_revision_requirement(
     assert observed["require_image_revision"] is True
     assert observed["selected_python_directory"] == Path("selected-python")
     assert observed["application_selection_record_sha256"] == "c" * 64
+    assert observed["direct_source_store_root"] == Path("direct-store")
+    assert observed["direct_source_plan_size"] == 123
+    assert observed["alpine_source_store_root"] == Path("alpine-store")
+    assert observed["alpine_source_plan_sha256"] == "e" * 64
+    assert observed["bundle_work_root"] == Path("bundle-work")
 
 
 def test_evidence_cli_requires_selected_proof_identity() -> None:
@@ -11669,3 +12621,56 @@ def test_evidence_cli_requires_selected_proof_identity() -> None:
                 "1",
             ]
         )
+
+
+def test_evidence_cli_requires_both_verified_source_store_bindings() -> None:
+    arguments = [
+        "bundle",
+        "--inventory",
+        "inventory.json",
+        "--files-inventory",
+        "files.json",
+        "--output",
+        "bundle.tar.gz",
+        "--predicate-output",
+        "predicate.json",
+        "--version",
+        "1.0.0",
+        "--source-date-epoch",
+        "1",
+        "--selected-python-directory",
+        "selected-python",
+        "--application-source-revision",
+        "a" * 40,
+        "--application-wheel-sha256",
+        "b" * 64,
+        "--application-selection-record-sha256",
+        "c" * 64,
+    ]
+    with pytest.raises(SystemExit):
+        evidence.parser().parse_args(arguments)
+
+    parsed = evidence.parser().parse_args(
+        [
+            *arguments,
+            "--direct-source-store-root",
+            "direct-store",
+            "--direct-source-plan-sha256",
+            "d" * 64,
+            "--direct-source-plan-size",
+            "123",
+            "--alpine-source-store-root",
+            "alpine-store",
+            "--alpine-source-plan-sha256",
+            "e" * 64,
+            "--alpine-source-plan-size",
+            "456",
+            "--bundle-work-root",
+            "bundle-work",
+        ]
+    )
+    assert parsed.direct_source_store_root == "direct-store"
+    assert parsed.direct_source_plan_size == 123
+    assert parsed.alpine_source_store_root == "alpine-store"
+    assert parsed.alpine_source_plan_size == 456
+    assert parsed.bundle_work_root == "bundle-work"
