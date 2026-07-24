@@ -1347,8 +1347,11 @@ def test_local_source_probe_requires_exact_signature_and_clean_checkout(
     assert evidence["signature"] == "valid-and-exact-fingerprint-match"
     assert evidence["tracked_file_count"] == 1
     assert evidence["tracked_content"] == "hashed-twice-against-signed-tree"
+    assert evidence["untracked_and_ignored_content"] == "absent-at-both-observations"
     assert any("verify-commit" in call for call in calls)
     assert sum(call[0] == "status" for call in calls) == 2
+    assert calls.count(("ls-files", "--others", "-z", "--")) == 2
+    assert all("--exclude-standard" not in call for call in calls)
     assert ("for-each-ref", "--format=%(refname)", "refs/replace") in calls
     assert ("fsck", "--strict", "--no-dangling", "--no-reflogs", loaded.source_revision) in calls
 
@@ -1476,9 +1479,11 @@ def test_local_source_probe_verifies_ssh_commit_with_only_explicit_trust_file(
     checkout.chmod(0o700)
     (checkout / ".git").chmod(0o700)
     (checkout / ".git" / "objects").chmod(0o700)
+    (checkout / ".gitignore").write_text("httpx.py\n")
+    (checkout / ".gitignore").chmod(0o644)
     (checkout / "tracked.py").write_text("value = 1\n")
     (checkout / "tracked.py").chmod(0o644)
-    run([beta.GIT_BINARY, "add", "tracked.py"], cwd=checkout)
+    run([beta.GIT_BINARY, "add", ".gitignore", "tracked.py"], cwd=checkout)
     run(
         [
             beta.GIT_BINARY,
@@ -1520,6 +1525,19 @@ def test_local_source_probe_verifies_ssh_commit_with_only_explicit_trust_file(
     assert evidence["signature_format"] == "ssh"
     assert evidence["signer_fingerprint"] == fingerprint
     assert evidence["independent_source_attestation"] is False
+
+    ignored_module = checkout / "httpx.py"
+    ignored_module.write_text("raise RuntimeError('tracked ignore shadow executed')\n")
+    with pytest.raises(beta.PreflightError, match="untracked, or ignored"):
+        beta.LocalSystemProbe().source(loaded)
+    ignored_module.unlink()
+
+    (checkout / ".git" / "info" / "exclude").write_text("jwt.py\n")
+    locally_ignored_module = checkout / "jwt.py"
+    locally_ignored_module.write_text("raise RuntimeError('local exclude shadow executed')\n")
+    with pytest.raises(beta.PreflightError, match="untracked, or ignored"):
+        beta.LocalSystemProbe().source(loaded)
+    locally_ignored_module.unlink()
 
     run([beta.GIT_BINARY, "update-index", "--assume-unchanged", "tracked.py"], cwd=checkout)
     (checkout / "tracked.py").write_text("value = 'hidden modification'\n")

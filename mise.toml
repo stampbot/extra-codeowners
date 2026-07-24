@@ -28,7 +28,7 @@ depends = ["lint:python", "lint:workflows", "lint:yaml", "lint:markdown"]
 run = [
   "uv run ruff format --check .",
   "uv run ruff check .",
-  "uv run mypy extra_codeowners tests tools/evaluation_beta.py .github/scripts/build_python_artifacts.py .github/scripts/build_python_distribution_spine.py .github/scripts/build_release_spine.py .github/scripts/container_evidence.py .github/scripts/container_source_plan.py .github/scripts/fetch_verified_sources.py .github/scripts/github_release_api.py .github/scripts/immutable_release_preflight.py .github/scripts/python_distribution_spine.py .github/scripts/release_asset_assembler.py .github/scripts/release_controller.py .github/scripts/release_spine.py .github/scripts/release_readiness.py .github/scripts/run_evidence_parser.py .github/scripts/verified_source_store.py",
+  "uv run mypy extra_codeowners tests tools/evaluation_beta.py tools/evaluation_beta_bootstrap.py .github/scripts/build_python_artifacts.py .github/scripts/build_python_distribution_spine.py .github/scripts/build_release_spine.py .github/scripts/container_evidence.py .github/scripts/container_source_plan.py .github/scripts/fetch_verified_sources.py .github/scripts/github_release_api.py .github/scripts/immutable_release_preflight.py .github/scripts/python_distribution_spine.py .github/scripts/release_asset_assembler.py .github/scripts/release_controller.py .github/scripts/release_spine.py .github/scripts/release_readiness.py .github/scripts/run_evidence_parser.py .github/scripts/verified_source_store.py",
 ]
 
 [tasks."lint:workflows"]
@@ -74,7 +74,7 @@ run = "uv run python -m tools.capture_github_lifecycle_contract"
 
 [tasks."beta:preflight"]
 description = "Verify the disposable non-required evaluation beta prerequisites"
-run = "uv run python -m tools.evaluation_beta preflight"
+run = "uv run --no-sync python -I -S -B tools/evaluation_beta_bootstrap.py preflight"
 
 [tasks."test:property"]
 description = "Run bounded generative security tests with the pull-request profile"

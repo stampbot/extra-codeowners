@@ -9,6 +9,11 @@ GitHub writes mint short-lived, metadata-only installation tokens.
 
 from __future__ import annotations
 
+if __name__ == "__main__":
+    raise SystemExit(
+        "run this tool through: python -I -S -B tools/evaluation_beta_bootstrap.py preflight"
+    )
+
 import argparse
 import base64
 import binascii
@@ -1947,8 +1952,9 @@ class LocalSystemProbe:
                     checkout_fd=checkout_fd,
                 )
                 untracked_files = self._run_git(
-                    ["ls-files", "--others", "--exclude-standard", "-z", "--"],
+                    ["ls-files", "--others", "-z", "--"],
                     checkout_fd=checkout_fd,
+                    output_limit=GIT_INDEX_OUTPUT_BYTES,
                 )
                 index_entries = self._run_git(
                     ["ls-files", "--stage", "-z", "--"],
@@ -1972,7 +1978,9 @@ class LocalSystemProbe:
                     output_limit=GIT_INDEX_OUTPUT_BYTES,
                 )
                 if tracked_changes or untracked_files:
-                    raise PreflightError("source checkout has tracked or untracked modifications")
+                    raise PreflightError(
+                        "source checkout has tracked, untracked, or ignored modifications"
+                    )
 
                 tree: dict[str, tuple[str, str]] = {}
                 for entry in (item for item in signed_tree.split("\0") if item):
@@ -2139,6 +2147,7 @@ class LocalSystemProbe:
             "signature_format": signature_format,
             "signer_fingerprint": config.source_signer_fingerprint,
             "checkout_clean_observations": 2,
+            "untracked_and_ignored_content": "absent-at-both-observations",
             "safe_index_flags_and_file_modes": True,
             "tracked_file_count": tracked_file_count,
             "tracked_source_bytes": tracked_source_bytes,
@@ -3084,7 +3093,7 @@ def write_report_exclusive(path: Path, report: JsonObject) -> None:
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="python -m tools.evaluation_beta",
+        prog="python -I -S -B tools/evaluation_beta_bootstrap.py",
         description="Read-only safety tooling for the disposable evaluation beta.",
     )
     commands = parser.add_subparsers(dest="command", required=True)
@@ -3207,7 +3216,3 @@ def main(argv: Sequence[str] | None = None) -> int:
         sys.stderr.write("evaluation-beta preflight failed; inspect the sanitized report\n")
         return 1
     return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

@@ -1,7 +1,7 @@
 # Evaluation beta preflight
 
-`python -m tools.evaluation_beta preflight` collects fail-closed evidence for
-the disposable, non-required evaluation beta. It reads a reviewed source
+`tools/evaluation_beta_bootstrap.py preflight` collects fail-closed evidence
+for the disposable, non-required evaluation beta. It reads a reviewed source
 checkout, GitHub.com, one running service, and PostgreSQL. It then writes one
 sanitized JSON report.
 
@@ -16,11 +16,23 @@ for the operator procedure.
 
 ## Command
 
-Run the module from the reviewed Extra CODEOWNERS source root:
+Run the bootstrap from the reviewed Extra CODEOWNERS source root. Set
+`UV_PROJECT_ENVIRONMENT` to a directory outside that checkout before
+bootstrapping or running the command:
 
 ```text
-python -m tools.evaluation_beta preflight [--config PATH] [--report PATH]
+python -I -S -B tools/evaluation_beta_bootstrap.py preflight \
+  [--config PATH] [--report PATH]
 ```
+
+Use `uv run --no-sync` to run that command from the already-bootstrapped
+external environment. The launcher refuses to run without isolated, no-site,
+and no-bytecode interpreter modes. Before importing third-party or checkout
+code, it uses fixed `/usr/bin/git` commands to reject untracked and ignored
+content. It appends the external environment after the standard library and
+the reviewed checkout last; it does not process `.pth` files or site
+customization. The source probe then compares the index and tracked files with
+the signed tree.
 
 | Option | Default | Meaning |
 | --- | --- | --- |
@@ -71,7 +83,7 @@ contains every field and no secrets.
 | `source_revision` | Yes | Full 40- or 64-character hexadecimal commit ID expected at checkout `HEAD`; normalized to lowercase. |
 | `source_signer_fingerprint` | Yes | Full 40- or 64-character OpenPGP fingerprint, normalized to uppercase, or an exact case-sensitive SSH `SHA256:` fingerprint with 43 base64 characters. |
 | `source_ssh_allowed_signers_file` | For SSH signatures | SSH public-key trust file. A relative path is based at the configuration file's directory. Required for an SSH fingerprint and forbidden for an OpenPGP fingerprint. |
-| `source_checkout` | No | Reviewed source directory; defaults to `.`. A relative path is based at the configuration file's directory. |
+| `source_checkout` | No | Reviewed source directory with no untracked or ignored files; defaults to `.`. A relative path is based at the configuration file's directory. |
 | `python_version` | Yes | Exact running Python version, such as `3.12.7`. |
 | `uv_version` | Yes | Exact version parsed from `uv --version`. |
 | `extra_codeowners_version` | Yes | Exact imported package version. The package must load from `source_checkout`. |
@@ -149,7 +161,7 @@ the other independent checks.
 
 | Check ID | Passing evidence |
 | --- | --- |
-| `source` | Fixed `/usr/bin/git` sees a current-user-owned, non-shared-writable, standalone, non-shallow checkout without alternates, replacement refs, linked-worktree metadata, gitlinks, or tracked and untracked changes. `HEAD` is the pinned commit, strict `fsck` succeeds, and `show` plus `verify-commit` report a good signature from the exact fingerprint. Each of two observations requires safe index flags and modes, exact index equality with the signed commit tree, and matching worktree Git blob hashes. Evidence records the tracked-file count, byte count, and `tracked_content: hashed-twice-against-signed-tree`. |
+| `source` | Fixed `/usr/bin/git` sees a current-user-owned, non-shared-writable, standalone, non-shallow checkout without alternates, replacement refs, linked-worktree metadata, gitlinks, or tracked, untracked, or ignored changes. `HEAD` is the pinned commit, strict `fsck` succeeds, and `show` plus `verify-commit` report a good signature from the exact fingerprint. Each of two observations requires safe index flags and modes, exact index equality with the signed commit tree, no ignored content, and matching worktree Git blob hashes. Evidence records the tracked-file count, byte count, `untracked_and_ignored_content: absent-at-both-observations`, and `tracked_content: hashed-twice-against-signed-tree`. |
 | `tool_versions` | Python, uv, and Extra CODEOWNERS versions match. Python imported the package from the configured checkout. |
 | `app_installations` | Both keys match their exact App identities, permissions, events, organization ownership, single-installation inventories, and repository selections. No installation request is pending. The checker hook configuration and approver bot identity match. Each short-lived probe token contains only Metadata read. |
 | `public_repositories` | Both configured repositories are public, available, organization-owned objects with the expected numeric IDs, full names, default branches, and branch commits. |
@@ -167,6 +179,11 @@ ASCII letters, digits, `_`, `.`, `-`, and slash-separated safe segments. Every
 worktree file must be a current-user-owned, single-link, non-group- or
 world-writable regular file no larger than 64 MiB. Its executable state must
 match the signed mode. The total tracked content cannot exceed 512 MiB.
+
+Every untracked path is rejected, whether or not Git ignore rules hide it.
+Keep virtual environments, build output, editor state, and operator inputs
+outside the checkout. This prevents an ignored module in the source root from
+shadowing a reviewed dependency while still producing a passing report.
 
 At both observations, every index tag must be exact uppercase `H`; this
 rejects `assume-unchanged`, `skip-worktree`, and fsmonitor-valid state. The

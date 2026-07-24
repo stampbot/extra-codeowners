@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
+import sys
 import tomllib
 from pathlib import Path
 from typing import Any, cast
@@ -150,6 +152,156 @@ def test_pinned_uv_exposes_the_scheduled_audit_interface_without_network() -> No
     assert "Audit the project's dependencies" in result.stdout
     assert "--locked" in result.stdout
     assert "--python-version" in result.stdout
+
+
+def test_evaluation_beta_bootstrap_rejects_ignored_imports_before_execution(
+    tmp_path: Path,
+) -> None:
+    checkout = tmp_path / "source"
+    ignored_bytecode = shutil.ignore_patterns("__pycache__", "*.pyc")
+    shutil.copytree(
+        ROOT / "extra_codeowners",
+        checkout / "extra_codeowners",
+        ignore=ignored_bytecode,
+    )
+    shutil.copytree(ROOT / "tools", checkout / "tools", ignore=ignored_bytecode)
+    (checkout / ".gitignore").write_text(
+        "__pycache__/\n*.pyc\nhttpx.py\nsitecustomize.py\nsubprocess.py\n",
+        encoding="utf-8",
+    )
+    git_environment = os.environ.copy()
+    git_environment.update(
+        {
+            "GIT_AUTHOR_EMAIL": "tests@example.invalid",
+            "GIT_AUTHOR_NAME": "Extra CODEOWNERS tests",
+            "GIT_COMMITTER_EMAIL": "tests@example.invalid",
+            "GIT_COMMITTER_NAME": "Extra CODEOWNERS tests",
+        }
+    )
+    for arguments in (
+        ("init", "--quiet"),
+        ("add", "."),
+        ("commit", "--quiet", "-m", "test source"),
+    ):
+        result = subprocess.run(  # noqa: S603 - fixed Git binary and test arguments.
+            ["/usr/bin/git", *arguments],
+            cwd=checkout,
+            env=git_environment,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stderr
+
+    environment = os.environ.copy()
+    environment["PYTHONPATH"] = str(checkout)
+    environment["PYTHONDONTWRITEBYTECODE"] = "1"
+    environment["VIRTUAL_ENV"] = sys.prefix
+    markers = [tmp_path / f"{name}.executed" for name in ("httpx", "sitecustomize", "subprocess")]
+    hostile_source = (
+        "from pathlib import Path\nPath({marker!r}).write_text('executed', encoding='utf-8')\n"
+    )
+    for name, marker in zip(("httpx", "sitecustomize", "subprocess"), markers, strict=True):
+        (checkout / f"{name}.py").write_text(
+            hostile_source.format(marker=str(marker)),
+            encoding="utf-8",
+        )
+
+    result = subprocess.run(  # noqa: S603 - fixed test interpreter and script.
+        [
+            sys.executable,
+            "-I",
+            "-S",
+            "-B",
+            str(checkout / "tools" / "evaluation_beta_bootstrap.py"),
+            "--help",
+        ],
+        cwd=checkout,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 2
+    assert "untracked or ignored content" in result.stderr
+    assert all(not marker.exists() for marker in markers)
+
+    for name in ("httpx", "sitecustomize", "subprocess"):
+        (checkout / f"{name}.py").unlink()
+    result = subprocess.run(  # noqa: S603 - fixed test interpreter and script.
+        [
+            sys.executable,
+            "-I",
+            "-S",
+            "-B",
+            str(checkout / "tools" / "evaluation_beta_bootstrap.py"),
+            "--help",
+        ],
+        cwd=checkout,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "Read-only safety tooling" in result.stdout
+    assert list(checkout.rglob("*.pyc")) == []
+    assert list(checkout.rglob("__pycache__")) == []
+
+    direct_result = subprocess.run(
+        [sys.executable, "-B", "-m", "tools.evaluation_beta", "--help"],
+        cwd=checkout,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert direct_result.returncode != 0
+    assert "evaluation_beta_bootstrap.py preflight" in direct_result.stderr
+
+    fake_environment = tmp_path / "fake-venv"
+    fake_site_packages = (
+        fake_environment
+        / "lib"
+        / f"python{sys.version_info.major}.{sys.version_info.minor}"
+        / "site-packages"
+    )
+    fake_site_packages.parent.mkdir(parents=True)
+    fake_site_packages.symlink_to(checkout, target_is_directory=True)
+    environment["VIRTUAL_ENV"] = str(fake_environment)
+    linked_environment_result = subprocess.run(  # noqa: S603 - fixed test interpreter.
+        [
+            sys.executable,
+            "-I",
+            "-S",
+            "-B",
+            str(checkout / "tools" / "evaluation_beta_bootstrap.py"),
+            "--help",
+        ],
+        cwd=checkout,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert linked_environment_result.returncode == 2
+    assert "site-packages must be outside" in linked_environment_result.stderr
+
+
+def test_evaluation_beta_entrypoints_use_the_isolated_bootstrap() -> None:
+    mise = (ROOT / "mise.toml").read_text(encoding="utf-8")
+    how_to = (ROOT / "docs" / "how-to" / "preflight-evaluation-beta.md").read_text(encoding="utf-8")
+    reference = (ROOT / "docs" / "reference" / "evaluation-beta-preflight.md").read_text(
+        encoding="utf-8"
+    )
+
+    command = "uv run --no-sync python -I -S -B tools/evaluation_beta_bootstrap.py preflight"
+    assert command in mise
+    assert command in re.sub(r"\\\n\s*", "", how_to)
+    assert "python -I -S -B tools/evaluation_beta_bootstrap.py preflight" in reference
+    assert "export PYTHONDONTWRITEBYTECODE=1" in how_to
 
 
 def test_renovate_owns_the_complete_uv_toolchain_update() -> None:
@@ -608,12 +760,16 @@ def test_source_store_scripts_are_type_checked_and_available_to_container_tests(
         assert f"!{path}" in dockerignore, f"Docker build context excludes {path}"
 
 
-def test_evaluation_beta_tool_is_in_every_python_type_check_entrypoint() -> None:
-    required = "tools/evaluation_beta.py"
+def test_evaluation_beta_tools_are_in_every_python_type_check_entrypoint() -> None:
+    required = {
+        "tools/evaluation_beta.py",
+        "tools/evaluation_beta_bootstrap.py",
+    }
     sources = {
         "mise": (ROOT / "mise.toml").read_text(encoding="utf-8"),
         "CI": (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8"),
         "release": (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8"),
     }
     for source_name, source in sources.items():
-        assert required in source, f"{source_name} does not type-check {required}"
+        for path in required:
+            assert path in source, f"{source_name} does not type-check {path}"

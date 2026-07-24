@@ -123,6 +123,7 @@ jobs:
           uv run ruff format --check .
           uv run ruff check .
           uv run mypy extra_codeowners tests tools/evaluation_beta.py \
+            tools/evaluation_beta_bootstrap.py \
             .github/scripts/build_python_artifacts.py \
              .github/scripts/build_python_distribution_spine.py \
              .github/scripts/build_release_spine.py \

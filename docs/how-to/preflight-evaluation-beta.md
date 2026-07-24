@@ -19,16 +19,24 @@ record for the manual beta in
 
 Run the preflight on a trusted Linux workstation. It needs Bash, a mounted
 `/proc`, `/usr/bin/git`, `jq`, and the tools installed by `mise`. From a
-standalone Extra CODEOWNERS clone, run:
+standalone Extra CODEOWNERS clone, put the uv environment outside the checkout
+before installing anything:
 
 ```bash
+export BETA_DIR="$HOME/.config/extra-codeowners/evaluation-beta"
+install -d -m 0700 -- "$BETA_DIR"
+export UV_PROJECT_ENVIRONMENT="$BETA_DIR/venv"
+export PYTHONDONTWRITEBYTECODE=1
 mise run bootstrap
 ```
 
 The source check rejects shallow clones, linked worktrees, alternate object
 stores, Git submodules, and group- or world-writable checkout content and
-metadata. Remove group and world write permission throughout the checkout
-tree. A normal standalone clone is the least surprising choice.
+metadata. It also rejects every untracked file, including files hidden by
+`.gitignore` or `.git/info/exclude`. Keeping the virtual environment outside
+the checkout prevents installed packages from becoming unsigned checkout
+content. Remove group and world write permission throughout the checkout tree.
+A fresh standalone clone is the least surprising choice.
 
 Prepare these resources under one disposable GitHub.com organization:
 
@@ -129,11 +137,14 @@ approver's numeric bot user ID too.
 
 ## Store the local inputs
 
-Create an operator-only directory outside the source checkout:
+Keep using the operator-only directory and external uv environment created
+earlier. Restore these variables first if you opened a new shell:
 
 ```bash
 export BETA_DIR="$HOME/.config/extra-codeowners/evaluation-beta"
-install -d -m 0700 -- "$BETA_DIR"
+export UV_PROJECT_ENVIRONMENT="$BETA_DIR/venv"
+export PYTHONDONTWRITEBYTECODE=1
+test -d "$BETA_DIR"
 ```
 
 Set `CHECKER_KEY_DOWNLOAD` and `APPROVER_KEY_DOWNLOAD` to the private-key files
@@ -168,24 +179,29 @@ inspect the checkout:
 
 ```bash
 git status --porcelain=v1 --untracked-files=all
+git ls-files --others --
 git show -s --show-signature \
   --format='commit=%H%nsignature_status=%G?%nsigner_fingerprint=%GF' \
   HEAD
 git verify-commit HEAD
 ```
 
-The status command must print nothing. `signature_status` must be `G`, and
-`git verify-commit` must exit `0`. Decide which signing key you trust before
-you copy its full fingerprint. The preflight verifies an exact match; it
-cannot make that trust decision for you.
+The first two commands must print nothing. The second command deliberately
+includes ignored files, unlike normal Git status output. If it lists a local
+virtual environment, build output, editor file, or any other path, use a fresh
+clone or move that content outside the checkout before continuing.
+`signature_status` must be `G`, and `git verify-commit` must exit `0`. Decide
+which signing key you trust before you copy its full fingerprint. The
+preflight verifies an exact match; it cannot make that trust decision for you.
 
 The signed tree may contain 1 to 10,000 tracked files and 512 MiB in total.
 Each file must be no larger than 64 MiB. The preflight rejects tracked
-symlinks, submodules, unusual modes, unsafe path characters, index flags that
-hide changes, files not owned by the current user, and files with more than
-one hard link. It compares the index with the signed tree and hashes every
-tracked file twice. A checkout that only appears clean because of
-`assume-unchanged`, `skip-worktree`, or fsmonitor state fails.
+symlinks, submodules, unusual modes, unsafe path characters, untracked or
+ignored files, index flags that hide changes, files not owned by the current
+user, and files with more than one hard link. It compares the index with the
+signed tree and hashes every tracked file twice. A checkout that only appears
+clean because of ignore rules, `assume-unchanged`, `skip-worktree`, or
+fsmonitor state fails.
 
 For an SSH-signed commit, copy a reviewed allowed-signers file beside the
 configuration:
@@ -215,8 +231,8 @@ local versions from the same shell that will run the preflight:
 ```bash
 uv run python --version
 uv --version
-uv run python -c \
-  'import extra_codeowners; print(extra_codeowners.__version__)'
+uv run --no-sync python -I -S -B \
+  tools/evaluation_beta_bootstrap.py --version
 ```
 
 Pin both public repositories by numeric ID, default-branch name, and full
@@ -325,10 +341,21 @@ Reports are create-once. Choose a new path for every attempt:
 ```bash
 export BETA_REPORT="$BETA_DIR/preflight-$(date -u +%Y%m%dT%H%M%SZ).json"
 test ! -e "$BETA_REPORT"
-uv run python -m tools.evaluation_beta preflight \
+uv run --no-sync python -I -S -B \
+  tools/evaluation_beta_bootstrap.py preflight \
   --config "$BETA_DIR/preflight.toml" \
   --report "$BETA_REPORT"
 ```
+
+A uv environment inside the checkout makes this command fail. Keep
+`UV_PROJECT_ENVIRONMENT` set to the external path used during bootstrap, and
+keep bytecode writes disabled. The `-I -S -B` flags are part of the security
+boundary: the standard-library-only bootstrap rejects untracked and ignored
+checkout content before it makes the external environment or checkout
+importable. It then loads dependencies before the checkout, without processing
+`.pth` files or site customization. The full source check compares tracked
+files with the signed tree after startup. Do not shorten this command to a
+direct module invocation.
 
 A passing run exits `0` and creates a mode-`0600` report. Require the exact
 schema, source deployment kind, 11 check IDs, and passing outcomes:
@@ -456,6 +483,8 @@ unset EXTRA_CODEOWNERS_BETA_CHECKER_PRIVATE_KEY_FILE
 unset EXTRA_CODEOWNERS_BETA_APPROVER_PRIVATE_KEY_FILE
 unset EXTRA_CODEOWNERS_BETA_OPERATOR_TOKEN_FILE
 unset EXTRA_CODEOWNERS_BETA_DATABASE_URL
+unset UV_PROJECT_ENVIRONMENT
+unset PYTHONDONTWRITEBYTECODE
 ```
 
 After the full beta, close its pull requests without merging and disable the
