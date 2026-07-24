@@ -70,16 +70,19 @@ existingSecret: ""
 # allowInsecureChanges disables only the application's built-in non-delegable paths.
 allowInsecureChanges: false
 
-# extraEnvFrom appends Kubernetes EnvFromSource entries to the container.
+# extraEnvFrom is reserved and must remain empty. Use extraEnv with explicit
+# names and valueFrom references so chart validation can inspect every key.
 extraEnvFrom: []
 
-# extraEnv appends non-chart-managed Kubernetes EnvVar entries to the container.
+# extraEnv appends named Kubernetes EnvVar entries. Chart-managed settings and
+# interpreter or dynamic-loader variables are rejected.
 extraEnv: []
 
 # extraVolumes appends Kubernetes Volume entries other than the built-in tmp volume.
 extraVolumes: []
 
-# extraVolumeMounts appends mounts outside the built-in /tmp mount.
+# extraVolumeMounts appends read-only mounts at or below
+# /run/secrets/extra-codeowners. Other mount paths are rejected.
 extraVolumeMounts: []
 
 # extraArgs overrides the image's default command arguments but not its entrypoint.
@@ -103,13 +106,16 @@ migrations:
   serviceAccountName: ""
   # migrations.existingSecret names a database-only Secret exposed to the migration container.
   existingSecret: ""
-  # migrations.extraEnvFrom appends migration-only Kubernetes EnvFromSource entries.
+  # migrations.extraEnvFrom is reserved and must remain empty. Use
+  # migrations.extraEnv with explicit names and valueFrom references.
   extraEnvFrom: []
-  # migrations.extraEnv appends migration-only Kubernetes EnvVar entries.
+  # migrations.extraEnv appends named migration EnvVar entries. Chart-managed
+  # settings and interpreter or dynamic-loader variables are rejected.
   extraEnv: []
   # migrations.extraVolumes appends migration-only volumes other than the built-in tmp volume.
   extraVolumes: []
-  # migrations.extraVolumeMounts appends migration-only mounts outside the built-in /tmp mount.
+  # migrations.extraVolumeMounts appends read-only mounts at or below
+  # /run/secrets/extra-codeowners or /run/secrets/database-ca.
   extraVolumeMounts: []
 
 # service configures the in-cluster HTTP service.

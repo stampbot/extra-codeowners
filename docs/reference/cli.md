@@ -46,7 +46,13 @@ In production mode, startup rejects:
 - a database other than PostgreSQL
 - a remote PostgreSQL URL that does not use `sslmode=verify-full`.
 
-The weaker `require` and `verify-ca` modes are rejected because they do not verify the database hostname. TLS may be omitted when the effective database host is `localhost`, `127.0.0.1`, `::1`, no host, or a Unix-socket or local-proxy path. A query-string `host` overrides the URL authority for this check. Any `hostaddr` or `service` routing override requires `sslmode=verify-full`.
+The weaker `require` and `verify-ca` modes are rejected because they do not
+verify the database hostname. Every production URL must name exactly one
+nonempty host or Unix-socket path; hostless and comma-separated multi-host URLs
+are rejected. TLS may be omitted only for `localhost`, `127.0.0.1`, `::1`, a
+Unix-socket path, or a local-proxy path. A query-string `host` overrides the
+URL authority for this check. A `hostaddr` or `service` routing override is
+allowed only with an explicit single host and `sslmode=verify-full`.
 
 Setup mode also requires a setup-state secret containing at least 32 bytes and an HTTPS public URL that contains only an origin—no credentials, path, query, or fragment.
 

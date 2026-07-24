@@ -155,6 +155,7 @@ code-owner enforcement on anywhere that matters.
 | Decide whether the trust model fits | [Native CODEOWNERS comparison](docs/explanation/native-codeowners.md) and [threat model](docs/explanation/threat-model.md) |
 | See what is usable today | [Project status](docs/reference/project-status.md) |
 | Run one check in a disposable organization | [First-check tutorial](docs/tutorials/development-installation.md) |
+| Verify the non-required beta boundary | [Evaluation beta preflight](docs/how-to/preflight-evaluation-beta.md) |
 | Register the App through its setup URL | [App registration guide](docs/how-to/register-app.md) |
 | Enroll an App and delegate paths | [Configuration guide](docs/how-to/configure.md) |
 | Diagnose a failed, pending, or missing check | [Check troubleshooting guide](docs/how-to/troubleshoot-check.md) |

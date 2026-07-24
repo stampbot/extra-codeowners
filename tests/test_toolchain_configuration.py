@@ -70,6 +70,7 @@ def test_uv_version_is_identical_locally_in_containers_and_in_workflows() -> Non
     assert '["uv", "--version"]' in dockerfile
     assert "if actual != expected:" in dockerfile
     assert "digest-selected uv is" in dockerfile
+    assert 'ENTRYPOINT ["/opt/venv/bin/python", "-I", "-m", "extra_codeowners"]' in dockerfile
 
     workflow_versions = _workflow_uv_versions()
     assert workflow_versions, "at least one setup-uv invocation is required"
@@ -441,6 +442,34 @@ def test_release_scan_consumes_only_the_same_run_selected_distribution() -> None
     assert "uv build" not in privileged
 
 
+def test_release_image_consumes_the_verified_selected_distribution() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+    image = workflow.split("  image:\n", 1)[1].split("  chart:\n", 1)[0]
+    download = image.split("      - name: Download the selected Python distribution\n", 1)[1].split(
+        "      - name: Verify the selected Python distribution\n", 1
+    )[0]
+
+    assert "      - python-distribution-proof" in image
+    assert "artifact-ids: ${{ needs.python-distribution-proof.outputs.artifact-id }}" in download
+    assert "digest-mismatch: error" in download
+    for mutable_input in ("name:", "pattern:", "run-id:", "repository:", "github-token:"):
+        assert mutable_input not in download
+    assert "verify-selection" in image
+    assert '--source-revision "$GITHUB_SHA"' in image
+    assert '--wheel-sha256 "$WHEEL_SHA256"' in image
+    assert '--selection-record-sha256 "$SELECTION_RECORD_SHA256"' in image
+    assert "verified-python=${{ steps.python-distribution.outputs.download-path }}" in image
+    assert "APPLICATION_SOURCE_REVISION=${{ github.sha }}" in image
+    assert (
+        "APPLICATION_WHEEL_SHA256=${{ needs.python-distribution-proof.outputs.wheel-sha256 }}"
+        in image
+    )
+    assert (
+        "APPLICATION_SELECTION_RECORD_SHA256=${{ "
+        "needs.python-distribution-proof.outputs.selection-record-sha256 }}" in image
+    )
+
+
 def test_dockerfile_can_only_install_the_selected_application_wheel() -> None:
     dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
     dockerignore = (ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines()
@@ -456,6 +485,8 @@ def test_dockerfile_can_only_install_the_selected_application_wheel() -> None:
     assert "--network=none" in builder
     assert "verify-selection" in builder
     assert "--selection-record-sha256" in builder
+    assert "> /build-identity.json" in builder
+    assert "chmod 0444 /build-identity.json" in builder
     assert "uv pip install" in builder
     assert "--offline" in builder
     assert "--no-index" in builder
@@ -470,9 +501,28 @@ def test_dockerfile_can_only_install_the_selected_application_wheel() -> None:
     assert 'Path("/opt/venv/lib/python3.14/site-packages")' in test_stage
     assert dockerfile.count("org.stampbot.extra-codeowners.application-wheel.sha256") == 2
     assert dockerfile.count("org.stampbot.extra-codeowners.python-selection-record.sha256") == 2
+    assert (
+        "RUN --mount=from=builder,source=/build-identity.json,"
+        "target=/run/build-identity.json,ro" in dockerfile
+    )
+    assert "/run/build-identity.json \\\n      /app/build-identity.json" in dockerfile
+    assert "COPY --from=builder --chown=0:0 --chmod=0444" not in dockerfile
+    assert "EXTRA_CODEOWNERS_BUILD_REVISION" not in dockerfile
     assert "ARTIFACT_ID" not in dockerfile
     assert "RUN_ATTEMPT" not in dockerfile
     assert "VCS_REF" not in dockerfile
+
+
+def test_container_smoke_binds_baked_identity_to_oci_labels_and_live_api() -> None:
+    smoke = (ROOT / ".github" / "scripts" / "smoke-container.sh").read_text(encoding="utf-8")
+
+    assert "org.opencontainers.image.revision" in smoke
+    assert "org.stampbot.extra-codeowners.application-wheel.sha256" in smoke
+    assert "org.stampbot.extra-codeowners.python-selection-record.sha256" in smoke
+    assert "load_build_identity" in smoke
+    assert "BUILD_IDENTITY_PATH.stat().st_mode) == 0o444" in smoke
+    assert '"http://127.0.0.1:8000/api/runtime-identity"' in smoke
+    assert 'identity["build_revision"] == os.environ["EXPECTED_BUILD_REVISION"]' in smoke
 
 
 def test_workflows_do_not_pass_the_removed_vcs_ref_build_argument() -> None:
@@ -516,3 +566,14 @@ def test_source_store_scripts_are_type_checked_and_available_to_container_tests(
             assert path in source, f"{source_name} does not type-check {path}"
         assert path in test_stage, f"container test stage does not copy {path}"
         assert f"!{path}" in dockerignore, f"Docker build context excludes {path}"
+
+
+def test_evaluation_beta_tool_is_in_every_python_type_check_entrypoint() -> None:
+    required = "tools/evaluation_beta.py"
+    sources = {
+        "mise": (ROOT / "mise.toml").read_text(encoding="utf-8"),
+        "CI": (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8"),
+        "release": (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8"),
+    }
+    for source_name, source in sources.items():
+        assert required in source, f"{source_name} does not type-check {required}"

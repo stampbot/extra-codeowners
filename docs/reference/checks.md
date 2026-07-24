@@ -171,7 +171,14 @@ A delegated application approval is eligible only when all of these conditions h
 - every `required_labels` value is present and every `forbidden_labels` value is absent
 - the path is not non-delegable.
 
-Label comparison is case-insensitive. Labels only narrow a delegation: changing a label without a valid application review never satisfies ownership. Extra CODEOWNERS reads labels but does not create, remove, or rename them.
+Label comparison is case-insensitive. A label changes delegation eligibility;
+without a valid application review, it never satisfies ownership. Extra
+CODEOWNERS reads labels but does not create, remove, or rename them.
+
+Labels are not independent authority. The pull-request write permission an
+App needs to approve also lets it change pull-request labels. Use label
+conditions for workflow routing or operator intent, and use paths, owners, and
+non-delegable files to contain a compromised App.
 
 Overlapping delegation entries are alternatives. If one matching entry for an application passes its label conditions, that application is eligible for the path and owner set. Different approved applications may cover different paths in one owner-set requirement, but every path must have eligible approval coverage.
 

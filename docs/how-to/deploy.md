@@ -150,9 +150,10 @@ database hostname.
 The effective libpq route decides whether a connection is local. A query-string
 `host` overrides the URL authority. Any `hostaddr` or `service`
 override requires `verify-full`, even if the authority looks local. Only
-`localhost`, `127.0.0.1`, `::1`, a Unix-socket path, or an
-omitted host may use an operator-controlled local transport without TLS. You
-must authenticate and secure that proxy's upstream connection.
+`localhost`, `127.0.0.1`, `::1`, or a Unix-socket path may use an
+operator-controlled local transport without TLS. An omitted or comma-separated
+host is rejected. You must authenticate and secure that proxy's upstream
+connection.
 
 Normal service startup checks the exact Alembic head and table structure. It
 never creates or changes schema. Follow
@@ -258,9 +259,12 @@ Manifest conversion code is sensitive. With setup disabled, `/setup` and
 `/setup/complete` return `404`. A callback request that includes
 its required `code` and `state` parameters also returns `404`.
 
-Keep `/metrics`, `/health/live`, `/health/ready`, and
-`/setup` behind operator-controlled routing. If the proxy cannot route by
-path, require network or proxy authentication everywhere except the webhook.
+Use path-level access control even when every route shares one HTTPS origin.
+Keep `/`, `/api/runtime-identity`, `/api/docs`, `/api/openapi.json`,
+`/docs/oauth2-redirect`, `/metrics`, both `/health` routes, and every `/setup`
+route behind operator-controlled routing. If the proxy cannot enforce that
+split, require network or proxy authentication everywhere except the exact
+webhook path.
 
 ## Verify the deployment
 
@@ -270,13 +274,21 @@ with an operator-only endpoint:
 ```bash
 curl --fail-with-body https://operator-endpoint.example.com/health/live
 curl --fail-with-body https://operator-endpoint.example.com/health/ready
+curl --fail-with-body \
+  https://operator-endpoint.example.com/api/runtime-identity
 ```
 
-Both requests must return HTTP 200. If the instance runs background work,
-confirm `worker` and `reconciler` are `true` in both responses.
-Also confirm that `EXTRA_CODEOWNERS_WORKER_ENABLED` and
-`EXTRA_CODEOWNERS_RECONCILE_ENABLED` are true; the health payload treats
-an intentionally disabled task as healthy.
+All three requests must return HTTP 200. Compare every runtime-identity field
+with the reviewed deployment settings. An official image must report its full
+verified source commit in `build_revision`; a source installation reports
+`null`. The endpoint is a deployment self-report, not independent provenance
+evidence.
+
+If the instance runs background work, confirm that `worker_enabled`,
+`reconciler_enabled`, `worker`, and `reconciler` are `true` in both health
+responses. The first two fields confirm that the process is configured to run
+those tasks. The other two report task health.
+
 Confirm the metrics scraper can read `/metrics` and that
 `extra_codeowners_insecure_changes_enabled` is `0`.
 

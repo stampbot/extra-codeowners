@@ -4,7 +4,7 @@ from time import monotonic
 from typing import Any, cast
 
 import pytest
-from sqlalchemy import Table, inspect, select, update
+from sqlalchemy import Table, create_engine, inspect, select, update
 from sqlalchemy.exc import IntegrityError
 
 from extra_codeowners.database import (
@@ -17,6 +17,7 @@ from extra_codeowners.database import (
     ServiceLease,
     SharedHeadEpoch,
     utcnow,
+    validate_database_schema,
 )
 from extra_codeowners.migrations import upgrade_database
 
@@ -43,6 +44,17 @@ def test_schema_version_is_required_for_readiness(tmp_path: Path) -> None:
         assert "schema version 999" in str(error)
     else:  # pragma: no cover - a mismatched schema must fail closed
         raise AssertionError("incompatible schema was accepted")
+
+
+def test_complete_schema_contract_accepts_a_supplied_read_only_engine(tmp_path: Path) -> None:
+    database_path = tmp_path / "read-only-preflight.db"
+    upgrade_database(f"sqlite:///{database_path}")
+    engine = create_engine(f"sqlite:///file:{database_path}?mode=ro&uri=true")
+
+    try:
+        validate_database_schema(engine)
+    finally:
+        engine.dispose()
 
 
 def test_legacy_schema_is_rejected_without_mutating_it(tmp_path: Path) -> None:

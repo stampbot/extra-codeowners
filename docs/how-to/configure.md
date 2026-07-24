@@ -115,9 +115,14 @@ Start with the smallest useful path list. `for_owners` is mandatory so a rule
 cannot silently replace a different team. If broad owner coverage is truly
 intended, spell it out with `for_owners = ["*"]`.
 
-Labels only narrow authority. They never count as approval, and Extra
-CODEOWNERS does not create or manage them. Decide separately who may add the
-labels and how they are removed.
+Labels gate whether a delegation is eligible. They never count as approval,
+and Extra CODEOWNERS does not create or manage them.
+
+Do not use labels to contain a compromised approving App. The pull-request
+write permission needed to approve also authorizes GitHub's
+[add-labels endpoint](https://docs.github.com/en/rest/issues/labels#add-labels-to-an-issue).
+Use required and forbidden labels for operator intent or workflow routing; use
+paths, owners, and non-delegable files for the security boundary.
 
 Validate both files from a source checkout with development dependencies
 installed:

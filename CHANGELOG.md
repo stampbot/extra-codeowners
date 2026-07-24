@@ -114,6 +114,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Rel
   not-run, missing, and invalid observations, plus a bounded lifecycle-delivery
   collector that uses GitHub's cursor links and retains payload shape without
   payload values.
+- A fail-closed prerequisite preflight and sanitized local report for the
+  disposable, non-required evaluation beta.
 - A first-check tutorial that proves human CODEOWNER evaluation before App delegation.
 - A pull-request check troubleshooting guide and CI-validated policy examples.
 - A byte-for-byte HMAC probe for reviewing tutorial webhook-relay updates.

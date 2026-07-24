@@ -17,8 +17,9 @@ pull-request activity.
 
 | Signal | Healthy condition |
 | --- | --- |
+| `/api/runtime-identity` | Every field matches the reviewed deployment record |
 | `/health/live` | HTTP 200 on every serving instance |
-| `/health/ready` | HTTP 200, with database and configured background tasks ready |
+| `/health/ready` | HTTP 200, with recent exact-App authentication, database access, and configured background tasks ready |
 | `extra_codeowners_queue_depth` | Returns to the local baseline after webhook bursts |
 | `extra_codeowners_shared_head_invalidation_depth` | Returns to `0`; a sustained value means exact-commit revocations are waiting |
 | `extra_codeowners_shared_head_invalidations_total{result="failed"}` | No unexplained increase |
@@ -31,6 +32,12 @@ pull-request activity.
 Also watch evaluation latency and failures, PostgreSQL latency, repeated GitHub
 API `403` or `429` responses, and every unexplained long-lived
 `in_progress` check.
+
+Read runtime identity through an operator-only route after every rollout.
+Official images report their verified source commit in `build_revision`;
+source installations report `null`. Treat the response as a consistency
+check. It is an unauthenticated self-report, not proof of source or image
+provenance.
 
 A replica that observes another process holding the reconciler lease does not
 record an attempt. Shutdown before a scan begins does not record one either.
@@ -73,11 +80,20 @@ them. One practical alert expression is
 `time() - max(extra_codeowners_reconciliation_last_success_timestamp_seconds)`,
 with a threshold equal to your reconciliation objective.
 
-If an instance is meant to run background work, enable both the worker and
-reconciler and confirm that both health-response fields are `true`. Keep
-the deployment settings in the same check because a disabled task reports as
-healthy. Every node also needs an accurate UTC clock. Clock skew can break
-GitHub authentication, setup-state expiry, and database leases.
+If an instance is meant to run background work, enable both tasks and confirm
+that `worker_enabled`, `reconciler_enabled`, `worker`, and `reconciler` are
+`true` in its health responses. The enabled fields report process
+configuration; the other two report task health. Every node also needs an
+accurate UTC clock. Clock skew can break GitHub authentication, setup-state
+expiry, and database leases.
+
+Readiness also requires a recent authenticated `GET /app` response whose
+numeric ID matches the configured checker App. The service probes on a
+30-second default interval and retains a successful proof for 90 seconds by
+default. A transient failure leaves a still-fresh proof in place; readiness
+drops after the freshness window and recovers after a successful probe.
+Liveness remains independent so an App authentication outage does not create
+a restart loop.
 
 Reconciliation requests work only for open pull requests that do not already
 have a queue row. When the response includes a canonical head, the database

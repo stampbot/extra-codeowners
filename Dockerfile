@@ -52,7 +52,9 @@ RUN --mount=from=verified-python,target=/verified-python,ro \
       --directory /verified-python \
       --source-revision "${APPLICATION_SOURCE_REVISION}" \
       --wheel-sha256 "${APPLICATION_WHEEL_SHA256}" \
-      --selection-record-sha256 "${APPLICATION_SELECTION_RECORD_SHA256}" >/dev/null && \
+      --selection-record-sha256 "${APPLICATION_SELECTION_RECORD_SHA256}" \
+      > /build-identity.json && \
+    chmod 0444 /build-identity.json && \
     wheel="$(find /verified-python -maxdepth 1 -type f -name 'extra_codeowners-*.whl' -print)" && \
     test -n "$wheel" && test "$(printf '%s\n' "$wheel" | wc -l)" -eq 1 && \
     uv pip install \
@@ -175,7 +177,12 @@ COPY --from=builder /opt/venv /opt/venv
 # but remove package installers from the immutable application runtime. Create
 # the license parents with their final metadata before COPY so no historical
 # layer contains unsafe directory headers.
-RUN install -d -o 0 -g 0 -m 0755 \
+RUN --mount=from=builder,source=/build-identity.json,target=/run/build-identity.json,ro \
+    --network=none \
+    install -o 0 -g 0 -m 0444 \
+      /run/build-identity.json \
+      /app/build-identity.json && \
+    install -d -o 0 -g 0 -m 0755 \
       /usr/share/licenses \
       /usr/share/licenses/extra-codeowners && \
     rm -rf \
@@ -196,5 +203,5 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD ["/opt/venv/bin/python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/live', timeout=3)"]
 
-ENTRYPOINT ["/opt/venv/bin/python", "-m", "extra_codeowners"]
+ENTRYPOINT ["/opt/venv/bin/python", "-I", "-m", "extra_codeowners"]
 CMD ["serve", "--host", "0.0.0.0", "--port", "8000"]

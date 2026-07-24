@@ -379,6 +379,165 @@ class _EvaluationJobBindingLostError(Exception):
     """Abort a hintless bind so its tentative exact-head bump rolls back."""
 
 
+def validate_database_schema(engine: Engine) -> None:
+    """Validate the complete database schema contract using a supplied engine."""
+    inspector = inspect(engine)
+    dialect_name = engine.dialect.name
+    tables = set(inspector.get_table_names())
+    if "alembic_version" not in tables:
+        raise RuntimeError(
+            "database has not been migrated; run `extra-codeowners database migrate`"
+        )
+    with engine.connect() as connection:
+        revisions = connection.execute(text("SELECT version_num FROM alembic_version")).scalars()
+        current_revisions = tuple(revisions)
+    if current_revisions != (DATABASE_MIGRATION_HEAD,):
+        raise RuntimeError(
+            f"database migration revision {current_revisions!r} is incompatible with "
+            f"required revision {DATABASE_MIGRATION_HEAD!r}; run "
+            "`extra-codeowners database migrate`"
+        )
+    actual_serials: dict[tuple[str, str], str | None] = {}
+    if dialect_name == "postgresql":
+        with engine.connect() as connection:
+            for table in Base.metadata.sorted_tables:
+                generated_column = table.autoincrement_column
+                if generated_column is not None:
+                    actual_serials[(table.name, generated_column.name)] = connection.scalar(
+                        text("SELECT pg_get_serial_sequence(:table_name, :column_name)"),
+                        {
+                            "table_name": table.name,
+                            "column_name": generated_column.name,
+                        },
+                    )
+    for table in Base.metadata.sorted_tables:
+        if table.name not in tables:
+            raise RuntimeError(f"database schema is missing table {table.name!r}")
+        inspected_columns = inspector.get_columns(table.name)
+        actual_columns = {column["name"] for column in inspected_columns}
+        expected_columns = {column.name for column in table.columns}
+        missing = expected_columns - actual_columns
+        if missing:
+            raise RuntimeError(
+                f"database table {table.name!r} is missing columns {sorted(missing)!r}"
+            )
+        actual_by_name = {column["name"]: column for column in inspected_columns}
+        for expected_column in table.columns:
+            actual_column = actual_by_name[expected_column.name]
+            actual_type = actual_column["type"]
+            expected_affinity = expected_column.type._type_affinity
+            if expected_affinity is None or not isinstance(actual_type, expected_affinity):
+                raise RuntimeError(
+                    f"database column {table.name}.{expected_column.name} has incompatible "
+                    f"type {actual_type!s}; expected {expected_column.type!s}"
+                )
+            expected_length = getattr(expected_column.type, "length", None)
+            actual_length = getattr(actual_type, "length", None)
+            if expected_length != actual_length:
+                raise RuntimeError(
+                    f"database column {table.name}.{expected_column.name} has incompatible "
+                    f"length {actual_length!r}; expected {expected_length!r}"
+                )
+            if bool(actual_column["nullable"]) != bool(expected_column.nullable):
+                raise RuntimeError(
+                    f"database column {table.name}.{expected_column.name} has incompatible "
+                    f"nullable={actual_column['nullable']!r}; expected "
+                    f"nullable={expected_column.nullable!r}"
+                )
+            expected_timezone = getattr(expected_column.type, "timezone", None)
+            actual_timezone = getattr(actual_type, "timezone", None)
+            if (
+                dialect_name == "postgresql"
+                and expected_timezone is not None
+                and actual_timezone != expected_timezone
+            ):
+                raise RuntimeError(
+                    f"database column {table.name}.{expected_column.name} has incompatible "
+                    f"timezone={actual_timezone!r}; expected timezone={expected_timezone!r}"
+                )
+            actual_default = actual_column.get("default")
+            actual_identity = actual_column.get("identity")
+            actual_computed = actual_column.get("computed")
+            actual_autoincrement = bool(actual_column.get("autoincrement"))
+            expected_generated = expected_column is table.autoincrement_column
+            generation_matches = (
+                actual_default is None
+                and actual_identity is None
+                and actual_computed is None
+                and not actual_autoincrement
+            )
+            if dialect_name == "postgresql" and expected_generated:
+                sequence_name = f"{table.name}_{expected_column.name}_seq"
+                default_schema = inspector.default_schema_name
+                expected_serial = (
+                    f"{default_schema}.{sequence_name}" if default_schema else sequence_name
+                )
+                allowed_defaults = {
+                    f"nextval('{sequence_name}'::regclass)",
+                    f"nextval('{expected_serial}'::regclass)",
+                }
+                generation_matches = (
+                    actual_serials[(table.name, expected_column.name)] == expected_serial
+                    and actual_default in allowed_defaults
+                    and actual_identity is None
+                    and actual_computed is None
+                    and actual_autoincrement
+                )
+            elif dialect_name == "sqlite" and expected_generated:
+                generation_matches = (
+                    actual_default is None and actual_identity is None and actual_computed is None
+                )
+            if not generation_matches:
+                raise RuntimeError(
+                    f"database column {table.name}.{expected_column.name} has incompatible "
+                    "default, owned sequence, identity, computed value, or autoincrement "
+                    "behavior"
+                )
+        expected_primary_key = {column.name for column in table.primary_key.columns}
+        actual_primary_key = set(inspector.get_pk_constraint(table.name)["constrained_columns"])
+        if actual_primary_key != expected_primary_key:
+            raise RuntimeError(
+                f"database table {table.name!r} has incompatible primary key "
+                f"{sorted(actual_primary_key)!r}; expected {sorted(expected_primary_key)!r}"
+            )
+        expected_indexes = {str(index.name) for index in table.indexes if index.name is not None}
+        actual_indexes = {
+            str(index["name"])
+            for index in inspector.get_indexes(table.name)
+            if index["name"] is not None
+        }
+        missing_indexes = expected_indexes - actual_indexes
+        if missing_indexes:
+            raise RuntimeError(
+                f"database table {table.name!r} is missing indexes {sorted(missing_indexes)!r}"
+            )
+        expected_uniques = {
+            str(constraint.name)
+            for constraint in table.constraints
+            if isinstance(constraint, UniqueConstraint) and constraint.name is not None
+        }
+        actual_uniques = {
+            str(constraint["name"])
+            for constraint in inspector.get_unique_constraints(table.name)
+            if constraint["name"] is not None
+        }
+        missing_uniques = expected_uniques - actual_uniques
+        if missing_uniques:
+            raise RuntimeError(
+                f"database table {table.name!r} is missing unique constraints "
+                f"{sorted(missing_uniques)!r}"
+            )
+    with engine.connect() as connection:
+        version = connection.scalar(
+            select(SchemaMetadata.version).where(SchemaMetadata.singleton_id == 1)
+        )
+    if version != SCHEMA_VERSION:
+        raise RuntimeError(
+            f"database schema version {version!r} is incompatible with required version "
+            f"{SCHEMA_VERSION}"
+        )
+
+
 class QueueStore:
     """Database-backed latest-wins work queue.
 
@@ -438,167 +597,7 @@ class QueueStore:
 
     def validate_schema(self) -> None:
         """Validate the Alembic head, compatibility marker, and required schema."""
-        inspector = inspect(self.engine)
-        dialect_name = self.engine.dialect.name
-        tables = set(inspector.get_table_names())
-        if "alembic_version" not in tables:
-            raise RuntimeError(
-                "database has not been migrated; run `extra-codeowners database migrate`"
-            )
-        with self.engine.connect() as connection:
-            revisions = connection.execute(
-                text("SELECT version_num FROM alembic_version")
-            ).scalars()
-            current_revisions = tuple(revisions)
-        if current_revisions != (DATABASE_MIGRATION_HEAD,):
-            raise RuntimeError(
-                f"database migration revision {current_revisions!r} is incompatible with "
-                f"required revision {DATABASE_MIGRATION_HEAD!r}; run "
-                "`extra-codeowners database migrate`"
-            )
-        actual_serials: dict[tuple[str, str], str | None] = {}
-        if dialect_name == "postgresql":
-            with self.engine.connect() as connection:
-                for table in Base.metadata.sorted_tables:
-                    generated_column = table.autoincrement_column
-                    if generated_column is not None:
-                        actual_serials[(table.name, generated_column.name)] = connection.scalar(
-                            text("SELECT pg_get_serial_sequence(:table_name, :column_name)"),
-                            {
-                                "table_name": table.name,
-                                "column_name": generated_column.name,
-                            },
-                        )
-        for table in Base.metadata.sorted_tables:
-            if table.name not in tables:
-                raise RuntimeError(f"database schema is missing table {table.name!r}")
-            inspected_columns = inspector.get_columns(table.name)
-            actual_columns = {column["name"] for column in inspected_columns}
-            expected_columns = {column.name for column in table.columns}
-            missing = expected_columns - actual_columns
-            if missing:
-                raise RuntimeError(
-                    f"database table {table.name!r} is missing columns {sorted(missing)!r}"
-                )
-            actual_by_name = {column["name"]: column for column in inspected_columns}
-            for expected_column in table.columns:
-                actual_column = actual_by_name[expected_column.name]
-                actual_type = actual_column["type"]
-                expected_affinity = expected_column.type._type_affinity
-                if expected_affinity is None or not isinstance(actual_type, expected_affinity):
-                    raise RuntimeError(
-                        f"database column {table.name}.{expected_column.name} has incompatible "
-                        f"type {actual_type!s}; expected {expected_column.type!s}"
-                    )
-                expected_length = getattr(expected_column.type, "length", None)
-                actual_length = getattr(actual_type, "length", None)
-                if expected_length != actual_length:
-                    raise RuntimeError(
-                        f"database column {table.name}.{expected_column.name} has incompatible "
-                        f"length {actual_length!r}; expected {expected_length!r}"
-                    )
-                if bool(actual_column["nullable"]) != bool(expected_column.nullable):
-                    raise RuntimeError(
-                        f"database column {table.name}.{expected_column.name} has incompatible "
-                        f"nullable={actual_column['nullable']!r}; expected "
-                        f"nullable={expected_column.nullable!r}"
-                    )
-                expected_timezone = getattr(expected_column.type, "timezone", None)
-                actual_timezone = getattr(actual_type, "timezone", None)
-                if (
-                    dialect_name == "postgresql"
-                    and expected_timezone is not None
-                    and actual_timezone != expected_timezone
-                ):
-                    raise RuntimeError(
-                        f"database column {table.name}.{expected_column.name} has incompatible "
-                        f"timezone={actual_timezone!r}; expected timezone={expected_timezone!r}"
-                    )
-                actual_default = actual_column.get("default")
-                actual_identity = actual_column.get("identity")
-                actual_computed = actual_column.get("computed")
-                actual_autoincrement = bool(actual_column.get("autoincrement"))
-                expected_generated = expected_column is table.autoincrement_column
-                generation_matches = (
-                    actual_default is None
-                    and actual_identity is None
-                    and actual_computed is None
-                    and not actual_autoincrement
-                )
-                if dialect_name == "postgresql" and expected_generated:
-                    sequence_name = f"{table.name}_{expected_column.name}_seq"
-                    default_schema = inspector.default_schema_name
-                    expected_serial = (
-                        f"{default_schema}.{sequence_name}" if default_schema else sequence_name
-                    )
-                    allowed_defaults = {
-                        f"nextval('{sequence_name}'::regclass)",
-                        f"nextval('{expected_serial}'::regclass)",
-                    }
-                    generation_matches = (
-                        actual_serials[(table.name, expected_column.name)] == expected_serial
-                        and actual_default in allowed_defaults
-                        and actual_identity is None
-                        and actual_computed is None
-                        and actual_autoincrement
-                    )
-                elif dialect_name == "sqlite" and expected_generated:
-                    generation_matches = (
-                        actual_default is None
-                        and actual_identity is None
-                        and actual_computed is None
-                    )
-                if not generation_matches:
-                    raise RuntimeError(
-                        f"database column {table.name}.{expected_column.name} has incompatible "
-                        "default, owned sequence, identity, computed value, or autoincrement "
-                        "behavior"
-                    )
-            expected_primary_key = {column.name for column in table.primary_key.columns}
-            actual_primary_key = set(inspector.get_pk_constraint(table.name)["constrained_columns"])
-            if actual_primary_key != expected_primary_key:
-                raise RuntimeError(
-                    f"database table {table.name!r} has incompatible primary key "
-                    f"{sorted(actual_primary_key)!r}; expected {sorted(expected_primary_key)!r}"
-                )
-            expected_indexes = {
-                str(index.name) for index in table.indexes if index.name is not None
-            }
-            actual_indexes = {
-                str(index["name"])
-                for index in inspector.get_indexes(table.name)
-                if index["name"] is not None
-            }
-            missing_indexes = expected_indexes - actual_indexes
-            if missing_indexes:
-                raise RuntimeError(
-                    f"database table {table.name!r} is missing indexes {sorted(missing_indexes)!r}"
-                )
-            expected_uniques = {
-                str(constraint.name)
-                for constraint in table.constraints
-                if isinstance(constraint, UniqueConstraint) and constraint.name is not None
-            }
-            actual_uniques = {
-                str(constraint["name"])
-                for constraint in inspector.get_unique_constraints(table.name)
-                if constraint["name"] is not None
-            }
-            missing_uniques = expected_uniques - actual_uniques
-            if missing_uniques:
-                raise RuntimeError(
-                    f"database table {table.name!r} is missing unique constraints "
-                    f"{sorted(missing_uniques)!r}"
-                )
-        with self._sessions() as session:
-            version = session.scalar(
-                select(SchemaMetadata.version).where(SchemaMetadata.singleton_id == 1)
-            )
-        if version != SCHEMA_VERSION:
-            raise RuntimeError(
-                f"database schema version {version!r} is incompatible with required version "
-                f"{SCHEMA_VERSION}"
-            )
+        validate_database_schema(self.engine)
 
     def close(self) -> None:
         """Dispose pooled connections."""

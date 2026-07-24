@@ -76,8 +76,15 @@ needs a particular pre-existing ServiceAccount.
 
 The chart sets `EXTRA_CODEOWNERS_ENVIRONMENT=production`. The runtime
 Secret must replace the image's development-only SQLite default with a
-production PostgreSQL URL. Chart validation prevents `extraEnv` from
-overriding the environment or insecure-mode settings.
+production PostgreSQL URL.
+
+The chart fixes the executable search path and dynamic-loader environment. It
+rejects interpreter and loader names in `extraEnv` and
+`migrations.extraEnv`, and it rejects nonempty `extraEnvFrom` values because
+their keys cannot be inspected at render time. Extension mounts are read-only
+and limited to the chart's reserved secret-path prefixes. Treat
+`existingSecret` and `migrations.existingSecret` as trusted inputs: Helm cannot
+inspect the keys in an existing Secret.
 
 Security-sensitive defaults also run as UID and GID 65532, drop every Linux
 capability, disable privilege escalation, use a read-only root filesystem, and
@@ -177,6 +184,12 @@ Replace the App ID and every database placeholder. Percent-encode reserved URL
 characters. For remote PostgreSQL, keep `sslmode=verify-full` and add the
 provider's CA settings when needed. Treat the complete URL as a secret.
 
+If the provider uses a private CA, mount its certificate read-only below
+`/run/secrets/extra-codeowners/` in both the runtime and migration containers.
+Set libpq's `sslrootcert` parameter to that exact file. Migration-only CA
+mounts may instead use `/run/secrets/database-ca/`; the runtime does not allow
+that prefix.
+
 Export only file paths:
 
 ```bash
@@ -247,9 +260,10 @@ kubectl --namespace extra-codeowners create secret generic \
   --from-file=github-webhook-secret="$GITHUB_WEBHOOK_SECRET_FILE"
 ```
 
-The migration Job receives only `extra-codeowners-database`. It never
-inherits runtime `existingSecret`, `extraEnvFrom`,
-`extraEnv`, `extraVolumes`, or `extraVolumeMounts`.
+The migration Job receives only `extra-codeowners-database`. It never inherits
+runtime `existingSecret`, `extraEnv`, `extraVolumes`, or
+`extraVolumeMounts`. Both `extraEnvFrom` settings are unsupported and must
+remain empty.
 
 ## Configure and preflight the release
 
@@ -257,9 +271,12 @@ Save this non-secret configuration as `deployment-values.yaml`:
 
 ```yaml
 existingSecret: extra-codeowners-runtime
-extraEnvFrom:
-  - secretRef:
-      name: extra-codeowners-database
+extraEnv:
+  - name: EXTRA_CODEOWNERS_DATABASE_URL
+    valueFrom:
+      secretKeyRef:
+        name: extra-codeowners-database
+        key: EXTRA_CODEOWNERS_DATABASE_URL
 imagePullSecrets:
   - name: extra-codeowners-registry
 nodeSelector:
@@ -327,7 +344,7 @@ helm install extra-codeowners \
 
 The migration hook must complete before Helm creates the Deployment. The
 application then remains unready until its GitHub and database settings are
-valid.
+valid and a fresh authenticated App identity probe succeeds.
 
 Wait for rollout and run the live-endpoint test:
 
@@ -393,9 +410,10 @@ helm upgrade extra-codeowners \
   --values ingress-values.yaml
 ```
 
-Expose only `/webhooks/github` publicly. Keep `/metrics`,
-`/health/live`, `/health/ready`, and setup routes behind an
-authenticated operator path or use port forwarding.
+Expose only `POST /webhooks/github` publicly. Keep `/`,
+`/api/runtime-identity`, `/api/docs`, `/api/openapi.json`,
+`/docs/oauth2-redirect`, `/metrics`, both health routes, and setup routes
+behind an authenticated operator path or use port forwarding.
 
 The default NetworkPolicy permits ingress to the named HTTP port from any peer,
 which works with ingress controllers across common cluster layouts. Restrict
@@ -634,10 +652,11 @@ then remove any remaining tag. Never delete a shared upstream release artifact.
 
 ## Values reference
 
-`values.schema.json` rejects unknown top-level properties and validates
-the constraints below during `helm lint`, `helm template`,
-`helm install`, and `helm upgrade`. The checked-in
-`values.yaml` repeats the default descriptions.
+`values.schema.json` rejects unknown top-level properties and validates typed
+constraints. Template validation enforces the remaining cross-field and
+security restrictions during `helm lint`, `helm template`, `helm install`,
+and `helm upgrade`. The checked-in `values.yaml` repeats the default
+descriptions.
 
 | Value | Type | Default | Constraints and effect |
 | --- | --- | --- | --- |
@@ -661,12 +680,12 @@ the constraints below during `helm lint`, `helm template`,
 | `podLabels` | string map | `{}` | Adds labels; cannot override chart name, instance, or component labels. |
 | `podSecurityContext` | object | nonroot, GID 65532 volumes, `RuntimeDefault` seccomp | Applies at pod level. |
 | `securityContext` | object | UID/GID 65532, read-only root, no capabilities | Applies to application and migration containers. |
-| `existingSecret` | string | empty | Runtime Secret exposed with `envFrom`; never created by the chart. |
+| `existingSecret` | string | empty | Trusted runtime Secret exposed with `envFrom`; never created or key-validated by the chart. |
 | `allowInsecureChanges` | boolean | `false` | Disables only built-in non-delegable paths for every served installation. |
-| `extraEnvFrom` | array | `[]` | Additional runtime `EnvFromSource` objects. |
-| `extraEnv` | array | `[]` | `EnvVar` objects with `name` and exactly one of `value` or `valueFrom`; cannot override chart-managed environment or insecure-mode variables. |
+| `extraEnvFrom` | array | `[]` | Reserved. Any nonempty value is rejected because the chart cannot validate imported names. Use `extraEnv` with explicit `valueFrom` entries. |
+| `extraEnv` | array | `[]` | `EnvVar` objects with `name` and exactly one of `value` or `valueFrom`. Cannot override chart-managed variables or set `PATH`, `PYTHON*`, `LD_*`, `DYLD_*`, `GCONV_PATH`, `LOCPATH`, `OPENSSL_*`, or `SSLKEYLOGFILE`. |
 | `extraVolumes` | array | `[]` | Volume objects with `name`; `tmp` is reserved. |
-| `extraVolumeMounts` | array | `[]` | Mounts with `name` and `mountPath`; `tmp` and `/tmp` are reserved. |
+| `extraVolumeMounts` | array | `[]` | Read-only mounts at or below `/run/secrets/extra-codeowners`; other paths are rejected. |
 | `extraArgs` | string array | `[]` | Replaces image arguments without replacing its entrypoint. |
 | `migrations.enabled` | boolean | `true` | Runs the pre-install and pre-upgrade Alembic Job. |
 | `migrations.lockTimeoutSeconds` | number | `60` | Greater than 0 and at most 300 seconds. |
@@ -675,11 +694,11 @@ the constraints below during `helm lint`, `helm template`,
 | `migrations.ttlSecondsAfterFinished` | integer | `3600` | 60 through 604800 seconds. |
 | `migrations.annotations` | string map | `{}` | Additional annotations; hook, weight, and delete-policy annotations are reserved. |
 | `migrations.serviceAccountName` | string | empty | Existing migration identity; empty uses the namespace's default account. |
-| `migrations.existingSecret` | string | empty | Migration-only Secret exposed with `envFrom`. |
-| `migrations.extraEnvFrom` | array | `[]` | Migration-only `EnvFromSource` objects. |
-| `migrations.extraEnv` | array | `[]` | Migration-only `EnvVar` objects with `name` and exactly one of `value` or `valueFrom`; cannot override the production environment. |
+| `migrations.existingSecret` | string | empty | Trusted migration-only Secret exposed with `envFrom`; its keys are not validated by the chart. |
+| `migrations.extraEnvFrom` | array | `[]` | Reserved. Any nonempty value is rejected; use explicit `migrations.extraEnv` entries. |
+| `migrations.extraEnv` | array | `[]` | Migration-only `EnvVar` objects with `name` and exactly one of `value` or `valueFrom`. Cannot override the production environment or set the interpreter and loader names rejected by runtime `extraEnv`. |
 | `migrations.extraVolumes` | array | `[]` | Migration-only volumes; `tmp` is reserved. |
-| `migrations.extraVolumeMounts` | array | `[]` | Migration-only mounts; `tmp` and `/tmp` are reserved. |
+| `migrations.extraVolumeMounts` | array | `[]` | Read-only mounts at or below `/run/secrets/extra-codeowners` or `/run/secrets/database-ca`; other paths are rejected. |
 | `service.type` | enum | `ClusterIP` | `ClusterIP`, `NodePort`, or `LoadBalancer`. |
 | `service.port` | integer | `80` | 1 through 65535. |
 | `service.annotations` | string map | `{}` | Adds Service annotations. |

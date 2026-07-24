@@ -277,6 +277,28 @@ class GitHubClient:
         }
         return str(jwt.encode(payload, self._private_key, algorithm="RS256"))
 
+    async def verify_app_identity(
+        self,
+        *,
+        stop: asyncio.Event | None = None,
+    ) -> None:
+        """Verify that these credentials authenticate as the configured App ID."""
+        response = await self._request(
+            "GET",
+            "/app",
+            app_authenticated=True,
+            stop=stop,
+        )
+        authenticated_app_id = response.get("id")
+        if (
+            isinstance(authenticated_app_id, bool)
+            or not isinstance(authenticated_app_id, int)
+            or authenticated_app_id != self.app_id
+        ):
+            raise GitHubError(
+                "authenticated GitHub App identity does not match the configured App ID"
+            )
+
     async def _installation_token(
         self,
         installation_id: int,

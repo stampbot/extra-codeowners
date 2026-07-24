@@ -94,8 +94,8 @@ forbidden_labels = ["needs-security-review"]
 | `delegations[].app` | string | yes | Alias from the organization's `apps` table. Repository policy cannot introduce an application. |
 | `delegations[].paths` | array of strings | yes | Between 1 and 100 eligible changed-file patterns. A repository policy may contain at most 1,000 patterns across all delegations. All changed paths remain subject to standard `CODEOWNERS` ownership. |
 | `delegations[].for_owners` | array of strings | yes | Between 1 and 100 `@user` or `@organization/team` CODEOWNERS identities, normalized case-insensitively. Use `"*"` alone and explicitly to cover any owner set; omission, duplicates, or combining `"*"` with names is invalid. |
-| `delegations[].required_labels` | array of strings | no | At most 50 labels that must all be present before this delegation is eligible. Matching is case-insensitive. Labels restrict authority; they never approve a pull request on their own. |
-| `delegations[].forbidden_labels` | array of strings | no | At most 50 labels that must all be absent. Matching is case-insensitive and defaults to an empty array. A label cannot be both required and forbidden. |
+| `delegations[].required_labels` | array of strings | no | At most 50 labels that must all be present before this delegation is eligible. Matching is case-insensitive. Labels gate evaluator behavior but are not independent authority: an App with pull-request write permission can change them. |
+| `delegations[].forbidden_labels` | array of strings | no | At most 50 labels that must all be absent. Matching is case-insensitive and defaults to an empty array. A label cannot be both required and forbidden. Treat this as workflow routing, not containment for a compromised App. |
 
 Multiple delegation entries are additive alternatives. For entries that overlap on an application, path, and owner set, any one entry with satisfied label conditions makes the application eligible. Restrictions from separate entries are not combined.
 
@@ -173,7 +173,7 @@ Unknown keys loaded from `.env` are rejected. Values outside documented bounds a
 | `EXTRA_CODEOWNERS_HOST` | string | `127.0.0.1` | Bind address. Use `0.0.0.0` only inside an appropriately isolated container or host. |
 | `EXTRA_CODEOWNERS_PORT` | integer | `8000` | Inclusive range `1` through `65535`. |
 | `EXTRA_CODEOWNERS_PUBLIC_URL` | absolute HTTP(S) URL or null | null | Public origin used to construct App Manifest webhook, callback, and completion URLs. Setup mode requires an `https://` origin with no credentials, no path other than `/`, and no query or fragment; otherwise this setting is optional. |
-| `EXTRA_CODEOWNERS_DATABASE_URL` | SQLAlchemy URL | `sqlite:///./extra-codeowners.db` | Durable queue and audit store. Production requires PostgreSQL. Every non-local connection must set `sslmode=verify-full`, which verifies both the certificate chain and database hostname; `require` and `verify-ca` are rejected. An effective `localhost`, `127.0.0.1`, `::1`, or Unix-socket `host` may omit TLS. Any `hostaddr` or `service` routing override requires `verify-full`. SQLite remains available for development and tests. Treat the complete value as a secret. |
+| `EXTRA_CODEOWNERS_DATABASE_URL` | SQLAlchemy URL | `sqlite:///./extra-codeowners.db` | Durable queue and audit store. Production requires PostgreSQL and one explicit host or Unix-socket path; comma-separated hosts are rejected. Every non-local connection must set `sslmode=verify-full`, which verifies both the certificate chain and database hostname; `require` and `verify-ca` are rejected. An effective `localhost`, `127.0.0.1`, `::1`, or Unix-socket `host` may omit TLS. Any `hostaddr` or `service` routing override requires `verify-full`. SQLite remains available for development and tests. Treat the complete value as a secret. |
 
 Locality is determined from the effective libpq route, not only the URL authority. A query-string `host` takes precedence over the authority host. A remote override therefore requires `sslmode=verify-full` even when the authority looks local. `hostaddr` and `service` always count as routing overrides and require verified TLS.
 
@@ -198,13 +198,31 @@ Advisory-lock acquisition replaces the statement timeout with that operation's b
 | `EXTRA_CODEOWNERS_GITHUB_WEBHOOK_SECRET_FILE` | path or null | null | File containing the webhook HMAC secret. Production requires at least 32 bytes after one terminal line ending is removed. Preferred for deployed workloads. Mutually exclusive with the inline setting. |
 | `EXTRA_CODEOWNERS_GITHUB_API_URL` | absolute HTTP(S) URL | `https://api.github.com` | REST API origin. Production requires HTTPS. Alternate GitHub deployments are not supported until version-specific integration tests exist. |
 | `EXTRA_CODEOWNERS_GITHUB_API_VERSION` | string | `2026-03-10` | Value of `X-GitHub-Api-Version`, currently a [supported GitHub REST API version](https://docs.github.com/en/rest/about-the-rest-api/api-versions). Change only after compatibility testing. |
+| `EXTRA_CODEOWNERS_GITHUB_IDENTITY_PROBE_INTERVAL_SECONDS` | number | `30` | Seconds between authenticated App identity probes; inclusive range `5` through `300`. Each probe calls `GET /app` with the configured private key and requires the returned App ID to equal `EXTRA_CODEOWNERS_GITHUB_APP_ID`. |
+| `EXTRA_CODEOWNERS_GITHUB_IDENTITY_FRESHNESS_SECONDS` | number | `90` | Maximum age in seconds of the last successful identity probe; inclusive range `10` through `900`. It must be at least twice the probe interval. Readiness fails after this window without a successful refresh. |
 
-Secret-file readers remove at most one terminal LF or CRLF, as commonly added by secret tooling, and preserve all other bytes. Inline private keys may use literal `\n` sequences for PEM line breaks; webhook secrets are not newline-expanded. Empty credential values do not make the service ready.
+Secret-file readers support projected Kubernetes Secret symlinks while limiting
+resolution to 16 symlinks and 256 path operations. The resolved target must be
+a regular UTF-8 file no larger than 64 KiB. The service opens every path
+component with no-follow descriptor flags and rejects a file that changes
+while it is read.
+
+Readers remove at most one terminal LF or CRLF, as commonly added by secret
+tooling, and preserve all other bytes. Inline private keys may use literal
+`\n` sequences for PEM line breaks; webhook secrets are not newline-expanded.
+Empty credential values do not make the service ready.
 
 GitHub connect, pool, read, and write waits each use a fixed 20-second
 inactivity timeout. The client also applies a 20-second wall-clock deadline to
 each non-streaming request, including the reconciliation requests used during
 graceful shutdown. These limits are not runtime settings.
+
+The service attempts an identity probe during startup and continues in the
+background. A failed refresh does not erase a still-fresh success, which
+avoids dropping readiness for one transient request. Once the freshness window
+expires, `/health/ready` reports `github_credentials: false` until an
+authenticated `GET /app` succeeds with the exact configured App ID. Liveness
+does not depend on this probe.
 
 ### Queue and reconciliation settings
 
