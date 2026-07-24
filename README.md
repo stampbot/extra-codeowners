@@ -6,50 +6,82 @@
 [![CodeQL](https://github.com/stampbot/extra-codeowners/actions/workflows/codeql.yml/badge.svg)](https://github.com/stampbot/extra-codeowners/actions/workflows/codeql.yml)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/stampbot/extra-codeowners/badge)](https://scorecard.dev/viewer/?uri=github.com/stampbot/extra-codeowners)
 [![Documentation](https://readthedocs.org/projects/extra-codeowners/badge/?version=latest)](https://extra-codeowners.readthedocs.io/)
-[![Python 3.12–3.14](https://img.shields.io/badge/python-3.12%E2%80%933.14-blue.svg)](https://www.python.org/) [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![Python 3.12–3.14](https://img.shields.io/badge/python-3.12%E2%80%933.14-blue.svg)](https://www.python.org/)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-Extra CODEOWNERS is a self-hosted GitHub App that uses an existing trusted
-GitHub App's pull-request approval to satisfy `CODEOWNERS` for a small,
-explicit set of paths. People and teams stay in the standard `CODEOWNERS`
-file. App identity, paths, owners, and label restrictions live in separate
-policy.
+Extra CODEOWNERS is a self-hosted GitHub App that lets a required check accept
+either a human CODEOWNER approval or a narrowly delegated approval from another
+GitHub App. People and teams stay in the standard `CODEOWNERS` file. App
+identity and delegated authority live in separate policy.
 
-[Stampbot](https://github.com/dannysauer/stampbot) is the first planned
-integration: let it approve `uv.lock`, while people keep the approval policy.
+> [!WARNING]
+> Extra CODEOWNERS is pre-release software. Don't use it to enforce production
+> merges yet. A public GitHub Container Registry (GHCR) preview exists, but it
+> predates the current release controls and is not a supported deployable
+> artifact. Don't deploy, mirror, or redistribute it. The
+> [project status](docs/reference/project-status.md) records the enforcement
+> and distribution blockers.
 
-> [!CAUTION]
-> Extra CODEOWNERS is alpha software. Don't replace GitHub's native **Require
-> review from Code Owners** rule in production yet. The live contract still has
-> open work in
-> [issue #1](https://github.com/stampbot/extra-codeowners/issues/1).
-> There is no supported release or image, hosted service, or Marketplace
-> Action. An older public image may still be discoverable; do not deploy it.
+## The routine pull request that still needs a person
 
-## What the check does
+Suppose a platform team owns `uv.lock`.
+[Stampbot](https://github.com/dannysauer/stampbot)'s repository policy allows
+a routine dependency update, so Stampbot approves the current pull-request
+head. GitHub's native code-owner rule still waits for a person: GitHub
+documents `CODEOWNERS` entries for users and teams, not GitHub App bot
+accounts.
 
-GitHub documents `CODEOWNERS` for users and teams with write access. It does
-not document GitHub App bot accounts as a supported owner type. Extra
-CODEOWNERS keeps App authority out of that file instead of depending on
-undocumented behavior.
+Extra CODEOWNERS fills that gap with a required check:
 
 ```text
-CODEOWNERS + human approval -----------------+
-                                              +--> Extra CODEOWNERS / approval
-App enrollment + delegation + App approval --+
+Human CODEOWNER approves the current head
+                         \
+                          -> Extra CODEOWNERS / approval succeeds
+                         /
+Enrolled App approves the current head
+and policy covers its path and owner
 ```
 
-The checker reads the current paths, labels, and reviews. Every effective
-`CODEOWNERS` owner set needs an eligible human approval or an enrolled App
-approval whose delegation covers the path, owner, and labels.
+For a regular pull request, the appropriate human approval satisfies the
+check. For the delegated `uv.lock` update, the evaluator is designed to accept
+Stampbot's approval. Local tests cover that decision, but the project has not
+recorded a dated live GitHub run of the App-review and required-check contract.
+A pull request that touches both delegated and undelegated code still needs
+every effective owner set covered.
 
-It does not submit reviews, grant an App repository access, or replace the
-repository's ordinary approval count. It publishes one check:
-`Extra CODEOWNERS / approval`.
+The check doesn't submit reviews, grant repository access, merge pull requests,
+or replace any other repository rule. Keep the ordinary approval count,
+stale-review behavior, signed-commit rules, and unrelated required checks.
+GitHub's public contract does not say whether a third-party App review counts
+toward the ordinary numeric approval rule; the project still needs a dated live
+test for that behavior.
 
-## What policy looks like
+## Authority has two policy scopes
 
-The organization enrolls an App by numeric App ID, bot user ID, and slug. A
-member repository opts in separately and grants a smaller scope:
+Your normal `CODEOWNERS` file continues to assign people and teams:
+
+```text
+/uv.lock @example-org/platform
+```
+
+The policy values below are deliberately fake.
+
+Organization policy then enrolls the App by immutable identity and adds paths
+where no enrolled App may stand in for a person:
+
+```toml
+schema_version = 1
+
+[apps.example-automation]
+slug = "example-automation"
+app_id = 123456
+bot_user_id = 234567
+
+[guardrails]
+non_delegable_paths = ["/infrastructure/production/**"]
+```
+
+Repository policy opts in one repository and grants a smaller alternative:
 
 ```toml
 schema_version = 1
@@ -62,116 +94,81 @@ for_owners = ["@example-org/platform"]
 required_labels = ["dependencies"]
 ```
 
-This rule is useful only when organization policy also enrolls
-`example-automation`. The complete, validated pair lives under
-[`examples/policy/`](examples/policy/).
+The organization scope answers “which App may ever qualify?” and “which paths
+never accept App substitution?” The repository scope answers “which paths and
+owners may this App cover here?” A repository can't enroll a new App or weaken
+an organization guardrail.
 
-Approval policy, workflows, and local actions reject App substitution by
-default. The
-[threat model](docs/explanation/threat-model.md#what-the-insecure-changes-escape-hatch-changes)
-explains additional guardrails and the process-wide insecure override.
+The complete validated example is under
+[`examples/policy/`](examples/policy/). The
+[configuration guide](docs/how-to/configure.md) explains labels, path
+patterns, built-in non-delegable files, and the process-wide insecure escape
+hatch.
 
-## Run locally
+## What changes in GitHub
 
-From the repository root, with Bash, `curl`, and `mise` installed, review
-`mise.toml` before allowing it to execute with `mise trust`. This smoke test
-uses a temporary SQLite database and stops the server on exit. It still records
-the `mise` trust decision, installs the pinned tools, and creates or updates
-`.venv/`.
+Extra CODEOWNERS is meant to replace one switch: **Require review from Code
+Owners**. In a disposable test repository, keep the rest of the pull-request
+rule and require `Extra CODEOWNERS / approval` from the Extra CODEOWNERS App as
+the expected source.
+
+That composition is not ready for production. GitHub Check Runs belong to
+commits, while code-owner evidence belongs to a pull request. A second pull
+request can briefly inherit a successful result attached to the same commit
+before webhook processing revokes it.
+[Issue #1](https://github.com/stampbot/extra-codeowners/issues/1) tracks the
+live provider tests and the remaining safety work.
+
+Read [why this uses a separate check](docs/explanation/native-codeowners.md)
+before changing repository rules. Then follow the
+[disposable-repository procedure](docs/how-to/prepare-repository-rules.md),
+which includes rollback steps.
+
+## Evaluate the source
+
+There is intentionally no production install command yet. To inspect the code
+and run its local test suite, use Bash from a clean checkout with Git and
+[`mise`](https://mise.jdx.dev/) installed:
 
 ```bash
-(
-  set -euo pipefail
-
-  if [[ -e .env ]]; then
-    echo 'Move .env out of the repository before running this smoke test.' >&2
-    exit 1
-  fi
-  if env | grep '^EXTRA_CODEOWNERS_' >/dev/null; then
-    echo 'Unset existing EXTRA_CODEOWNERS_* variables first.' >&2
-    exit 1
-  fi
-
-  smoke_root="$(mktemp -d)"
-  server_pid=""
-  # shellcheck disable=SC2329  # Invoked by the EXIT trap.
-  cleanup() {
-    exit_status=$?
-    trap - EXIT INT TERM
-    set +e
-    if [[ -n "$server_pid" ]]; then
-      kill "$server_pid" 2>/dev/null
-      wait "$server_pid" 2>/dev/null
-    fi
-    find "$smoke_root" -mindepth 1 -delete
-    rmdir "$smoke_root"
-    exit "$exit_status"
-  }
-  trap cleanup EXIT
-  trap 'exit 130' INT
-  trap 'exit 143' TERM
-
-  export EXTRA_CODEOWNERS_DATABASE_URL="sqlite:///${smoke_root}/smoke.db"
-  export EXTRA_CODEOWNERS_WORKER_ENABLED=false
-  export EXTRA_CODEOWNERS_RECONCILE_ENABLED=false
-  mise trust
-  mise install
-  mise run bootstrap
-  mise exec -- uv run python -m extra_codeowners database migrate
-  mise exec -- uv run python -m extra_codeowners serve &
-  server_pid=$!
-  response="$(
-    curl --silent --show-error --fail-with-body \
-      --connect-timeout 2 --max-time 5 --retry-max-time 20 \
-      --retry 10 --retry-connrefused --retry-delay 1 \
-      http://127.0.0.1:8000/health/live
-  )"
-  if ! kill -0 "$server_pid" 2>/dev/null ||
-    ! jobs -pr | grep -Fx "$server_pid" >/dev/null; then
-    wait "$server_pid" || true
-    echo 'Extra CODEOWNERS exited before the liveness check completed.' >&2
-    exit 1
-  fi
-  expected='{"status":"alive","worker":true,"reconciler":true}'
-  if [[ "$response" != "$expected" ]]; then
-    printf 'Unexpected liveness response: %s\n' "$response" >&2
-    exit 1
-  fi
-  printf '%s\n' "$response"
-)
+git clone https://github.com/stampbot/extra-codeowners.git
+cd extra-codeowners
+mise trust
+mise install
+mise run bootstrap
+mise run test
 ```
 
-In that response, `true` means healthy. A disabled component counts as
-healthy, and this smoke test disables both the worker and reconciler. The
-response proves process liveness, not GitHub readiness or production safety.
+Review `mise.toml` before `mise trust`. The commands record a local trust
+decision, install pinned tools, and create `.venv/`; a successful run ends with
+the test suite passing. They do not register a GitHub App or prove the live
+GitHub contracts.
 
-## Try it safely
+To publish a real check in a disposable organization, follow the
+[first-check tutorial](docs/tutorials/development-installation.md). Keep native
+code-owner enforcement on anywhere that matters.
 
-The [first-check tutorial](docs/tutorials/development-installation.md) ends
-with a real check on a disposable pull request. Keep native enforcement on in
-production; the
-[project status](docs/reference/project-status.md) explains why.
+## Find the right documentation
 
-## Documentation
-
-| Task | Start here |
+| If you want to… | Start here |
 | --- | --- |
 | Decide whether the trust model fits | [Native CODEOWNERS comparison](docs/explanation/native-codeowners.md) and [threat model](docs/explanation/threat-model.md) |
-| Run the first check | [Development installation tutorial](docs/tutorials/development-installation.md) |
+| See what is usable today | [Project status](docs/reference/project-status.md) |
+| Run one check in a disposable organization | [First-check tutorial](docs/tutorials/development-installation.md) |
 | Register the App through its setup URL | [App registration guide](docs/how-to/register-app.md) |
-| Delegate paths to an App | [Configuration guide](docs/how-to/configure.md) |
-| Understand a failed or pending check | [Check troubleshooting guide](docs/how-to/troubleshoot-check.md) |
-| Understand the service design | [Architecture](docs/explanation/architecture.md) |
-| Plan a deployment | [Deployment guide](docs/how-to/deploy.md) |
-| Operate an installation | [Operations guide](docs/how-to/operate.md) |
-| Look up exact behavior | [Configuration](docs/reference/configuration.md), [checks](docs/reference/checks.md), [CLI](docs/reference/cli.md), and [HTTP API](docs/reference/http-api.md) |
+| Enroll an App and delegate paths | [Configuration guide](docs/how-to/configure.md) |
+| Diagnose a failed, pending, or missing check | [Check troubleshooting guide](docs/how-to/troubleshoot-check.md) |
+| Review the service and security design | [Architecture](docs/explanation/architecture.md) and [checks reference](docs/reference/checks.md) |
+| Evaluate future deployment and operations | [Deployment guide](docs/how-to/deploy.md) and [operations guide](docs/how-to/operate.md) |
+| Contribute code or docs | [Contributor guide](CONTRIBUTING.md) |
 
-The full documentation is published on
+The complete documentation is published on
 [Read the Docs](https://extra-codeowners.readthedocs.io/).
 
-## Community
+## Community and project policy
 
 - Ask for help under the [support policy](SUPPORT.md).
 - Report vulnerabilities privately under the [security policy](SECURITY.md).
-- Read the [contributor guide](CONTRIBUTING.md), [changelog](CHANGELOG.md),
-  [governance](GOVERNANCE.md), and [maintainer documentation](docs/maintainers/index.md).
+- Read the [governance](GOVERNANCE.md), [changelog](CHANGELOG.md), and
+  [maintainer documentation](docs/maintainers/index.md).
+- Extra CODEOWNERS is licensed under the [Apache License 2.0](LICENSE).

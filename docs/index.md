@@ -1,93 +1,115 @@
 # Extra CODEOWNERS documentation
 
-Extra CODEOWNERS publishes a GitHub check that accepts either a human
-CODEOWNER approval or an approval from a specifically enrolled GitHub App.
-People and teams stay in `CODEOWNERS`; App authority lives in separate policy.
+Your dependency automation already knows when a pull request is routine.
+[Stampbot](https://github.com/dannysauer/stampbot) may approve a trusted
+`uv.lock` update after its own rules pass, but GitHub's native code-owner
+setting still expects a person or team from `CODEOWNERS`.
 
-!!! warning "Development and test use only"
+Extra CODEOWNERS publishes an alternative required check. It accepts a
+current-head approval from an appropriate human, or a current-head approval
+from an enrolled GitHub App when policy delegates that path and owner to the
+App. A regular pull request still goes to its human owners. The evaluator
+implements both paths, but the project has not recorded a dated live GitHub run
+of the App-review and required-check contract.
 
-    Extra CODEOWNERS is not ready to replace GitHub's native code-owner rule on
-    a production repository. Read the
-    [current project status](reference/project-status.md) before you install or
-    test it.
+!!! warning "Pre-release: evaluate only in a disposable environment"
 
-## Start here
+    Extra CODEOWNERS is not ready to enforce production merges. A public GitHub
+    Container Registry (GHCR) preview exists, but it predates the current
+    release controls and is not a supported deployable artifact. Don't deploy,
+    mirror, or redistribute it. Read the
+    [current project status](reference/project-status.md) before you register
+    or test the App.
 
-If this is your first visit, read the
-[native CODEOWNERS comparison](explanation/native-codeowners.md). It explains
-what the extra check replaces, what stays with GitHub, and why App delegation
-uses a separate policy file.
+## Understand the boundary first
 
-Then choose the task that matches what you're doing.
+The existing `CODEOWNERS` file keeps its people and teams. Extra CODEOWNERS
+adds two policy scopes:
 
-### Run the first check
+- Organization policy enrolls Apps by immutable identity and names paths where
+  App substitution is never accepted.
+- Repository policy opts in one repository and delegates narrower paths,
+  owner sets, and optional label restrictions.
+
+The repository can't enroll a new App or weaken an organization guardrail.
+The [native CODEOWNERS comparison](explanation/native-codeowners.md) walks
+through the complete decision and the GitHub rule it is meant to replace. The
+[threat model](explanation/threat-model.md) covers the trust and failure
+boundaries.
+
+## Choose your route
+
+### Repository administrator evaluating the idea
+
+Start with these pages, in order:
+
+1. [Compare native CODEOWNERS with the extra check](explanation/native-codeowners.md).
+2. [Check what is implemented and what is still blocked](reference/project-status.md).
+3. [Run the first check in a disposable organization](tutorials/development-installation.md).
+4. [Exercise the replacement repository rule and its rollback](how-to/prepare-repository-rules.md).
+
+The live GitHub contracts are not all proven. Keep GitHub's native **Require
+review from Code Owners** rule on production repositories.
+
+### Policy administrator
+
+Use the [configuration guide](how-to/configure.md) to enroll an App, delegate
+low-risk paths, and test the human-only boundary. The
+[configuration reference](reference/configuration.md) lists every field,
+default, limit, and failure mode.
+
+### Developer testing the App
 
 The [first-check tutorial](tutorials/development-installation.md) starts with a
-clean checkout and a disposable GitHub organization. It uses a human approval
-so you can prove the checker works before you introduce another App.
+clean checkout and ends with a real Check Run on a disposable pull request. It
+uses a human approval first, so you can isolate the checker from the approving
+App.
 
-### Register and configure the App
+If you already have a development service:
 
-- [Register an App with the setup URL](how-to/register-app.md)
-- [Configure organization and repository policy](how-to/configure.md)
-- [Prepare repository rules in a disposable repository](how-to/prepare-repository-rules.md)
-- [Run the live GitHub contract fixture](how-to/run-live-github-contract.md)
+- [register a GitHub App with the setup URL](how-to/register-app.md)
+- [configure both policy scopes](how-to/configure.md)
+- [run the live GitHub contract fixture](how-to/run-live-github-contract.md).
 
-### Understand a check result
+### Operator reviewing a future deployment
 
-Use [Troubleshoot a check](how-to/troubleshoot-check.md) when you are looking at
-a failed, pending, or missing check on a pull request. It starts with the text
-GitHub shows and tells you when an operator needs to get involved.
+There is no supported image, chart package, or production deployment today.
+The current source still defines useful contracts for review:
 
-The [checks reference](reference/checks.md) contains the complete evaluation
-contract.
+- [prepare a future deployment](how-to/deploy.md)
+- [upgrade, back up, and restore](how-to/upgrade.md)
+- [operate and recover](how-to/operate.md)
+- [review the architecture](explanation/architecture.md).
 
-### Operate a development deployment
+These pages describe the source and the intended operating boundary. They
+aren't a release or production-readiness claim.
 
-There is no supported image or chart release yet. The deployment, upgrade, and
-operations guides describe the contract implemented by the current source:
+### Maintainer or contributor
 
-- [Prepare a future deployment](how-to/deploy.md)
-- [Upgrade, back up, and restore](how-to/upgrade.md)
-- [Operate and recover](how-to/operate.md)
+The [maintainer index](maintainers/index.md) collects release evidence,
+supply-chain controls, dependency review, and live-contract work. For local
+development and pull-request requirements, use the repository's
+[contributor guide](https://github.com/stampbot/extra-codeowners/blob/main/CONTRIBUTING.md).
 
-These pages are useful for evaluation and design review. They are not a
-production-readiness claim.
+## Look up exact behavior
 
-## Reference
+Use reference pages when you need the contract rather than a walkthrough:
 
-Use the reference pages for exact fields, limits, permissions, routes, and
-failure behavior:
-
-- [configuration](reference/configuration.md)
 - [checks and evaluation](reference/checks.md)
+- [configuration](reference/configuration.md)
 - [command line](reference/cli.md)
-- [GitHub permissions and events](reference/github-permissions.md)
+- [GitHub permissions and webhook events](reference/github-permissions.md)
 - [HTTP API](reference/http-api.md)
 - [project status](reference/project-status.md).
 
-## Understand the design
+For a failed, pending, or missing Check Run, start with
+[Troubleshoot a check](how-to/troubleshoot-check.md). It follows the text shown
+in GitHub and tells you when an operator needs to intervene.
 
-The [architecture](explanation/architecture.md) follows a webhook from
-authenticated ingress to a Check Run. The
-[threat model](explanation/threat-model.md) explains who holds authority and
-where fail-closed behavior still depends on GitHub delivery.
+## Get help
 
-The other explanation pages cover database migrations, property tests, and the
-runtime base image.
-
-## Maintainer and release engineering
-
-Supply-chain evidence, release candidates, DCO hardening, and publication
-controls are project-maintainer work. They have their own
-[maintainer documentation index](maintainers/index.md) so they don't interrupt
-the setup and policy paths above.
-
-## Get help or contribute
-
-Use the repository's [support policy](https://github.com/stampbot/extra-codeowners/blob/main/SUPPORT.md)
+Use the repository's
+[support policy](https://github.com/stampbot/extra-codeowners/blob/main/SUPPORT.md)
 for questions and operational incidents. Report vulnerabilities through the
 [private security policy](https://github.com/stampbot/extra-codeowners/security/policy),
-not through a public issue. The
-[contributor guide](https://github.com/stampbot/extra-codeowners/blob/main/CONTRIBUTING.md)
-explains local checks, commit sign-off, and pull-request expectations.
+not through a public issue.
