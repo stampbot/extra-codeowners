@@ -94,9 +94,11 @@ RUN --mount=from=verified-python,target=/verified-python,ro \
 
 FROM builder AS test
 
-# Source-binding tests exercise Git object reads. This test-only stage is never
-# copied into or published as the runtime image.
-RUN apk add --no-cache git=2.54.0-r0
+# Source-binding tests exercise Git object reads and SSH commit verification.
+# These test-only packages are never copied into or published as the runtime image.
+RUN apk add --no-cache \
+    git=2.54.0-r0 \
+    openssh-keygen=10.3_p1-r0
 
 COPY .github/dependabot.yml ./.github/dependabot.yml
 COPY .github/scripts/build_python_distribution_spine.py \
@@ -112,10 +114,12 @@ COPY .github/scripts/build_python_distribution_spine.py \
      .github/scripts/release_readiness.py \
      .github/scripts/release_spine.py \
      .github/scripts/run_evidence_parser.py \
+     .github/scripts/smoke-container.sh \
      .github/scripts/verified_source_store.py \
      ./.github/scripts/
 COPY .github/workflows/ ./.github/workflows/
 COPY .compliance/container-policy.json ./.compliance/container-policy.json
+COPY charts/ ./charts/
 COPY docs/ ./docs/
 COPY examples/ ./examples/
 COPY .dockerignore Dockerfile mise.toml mise.tutorial.toml renovate.json ./

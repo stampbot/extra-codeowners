@@ -19,6 +19,7 @@
 !.github/scripts/python_distribution_spine.py
 !.github/scripts/release_asset_assembler.py
 !.github/scripts/run_evidence_parser.py
+!.github/scripts/smoke-container.sh
 !.github/scripts/verified_source_store.py
 !.github/workflows/
 .github/workflows/*
@@ -39,7 +40,6 @@ htmlcov
 site
 dist
 build
-charts
 docs
 !docs/
 docs/*

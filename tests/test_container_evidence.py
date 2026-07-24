@@ -10129,6 +10129,7 @@ def test_application_archive_ignores_export_transforms(tmp_path: Path) -> None:
 
 def test_runtime_identity_expectations_match_dockerfile_and_mise() -> None:
     dockerfile = Path("Dockerfile").read_text()
+    dockerignore = Path(".dockerignore").read_text().splitlines()
     mise = evidence.tomllib.loads(Path("mise.toml").read_text())
     builder_stage = dockerfile.split(" AS builder\n", 1)[1].split("\nFROM builder AS test", 1)[0]
     test_stage = dockerfile.split("FROM builder AS test\n", 1)[1].split("\nFROM python:", 1)[0]
@@ -10143,7 +10144,13 @@ def test_runtime_identity_expectations_match_dockerfile_and_mise() -> None:
     ) in builder_stage
     assert dockerfile.count("UV_NO_INSTALLER_METADATA=1") == 1
     assert builder_stage.index("UV_NO_INSTALLER_METADATA=1") < builder_stage.index("uv sync")
-    assert "RUN apk add --no-cache git=2.54.0-r0" in test_stage
+    assert "RUN apk add --no-cache \\" in test_stage
+    assert "git=2.54.0-r0" in test_stage
+    assert "openssh-keygen=10.3_p1-r0" in test_stage
+    assert ".github/scripts/smoke-container.sh \\" in test_stage
+    assert "COPY charts/ ./charts/" in test_stage
+    assert "!.github/scripts/smoke-container.sh" in dockerignore
+    assert "charts" not in dockerignore
 
 
 def test_container_job_uses_the_locked_evidence_environment() -> None:
