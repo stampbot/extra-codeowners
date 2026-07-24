@@ -1802,14 +1802,31 @@ def validate_effective_python_installations(
     return {path: installation.name for path, installation in active_claims.items()}
 
 
-def run(command: Sequence[str], *, max_output_bytes: int, cwd: Path | None = None) -> bytes:
+def run(
+    command: Sequence[str],
+    *,
+    max_output_bytes: int,
+    cwd: Path | None = None,
+    pass_fds: Sequence[int] = (),
+) -> bytes:
     """Run a fixed command with bounded stdout and stderr capture."""
 
     if max_output_bytes < 0:
         raise EvidenceError("command output limit must not be negative")
+    inherited_descriptors = tuple(pass_fds)
+    if (
+        len(inherited_descriptors) > 16
+        or len(set(inherited_descriptors)) != len(inherited_descriptors)
+        or any(
+            type(descriptor) is not int or descriptor < 0 for descriptor in inherited_descriptors
+        )
+    ):
+        raise EvidenceError("inherited command descriptors are invalid")
     process = subprocess.Popen(  # noqa: S603 - every caller supplies a fixed executable
         command,
+        close_fds=True,
         cwd=cwd,
+        pass_fds=inherited_descriptors,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
@@ -7583,6 +7600,7 @@ def retain_selected_application_artifacts(
     wheel_sha256: str,
     selection_record_sha256: str,
     budget: BundleBudget,
+    pass_fds: Sequence[int] = (),
 ) -> tuple[dict[str, Any], object]:
     """Use the Python verifier to retain and describe the exact five-file proof."""
 
@@ -7605,6 +7623,7 @@ def retain_selected_application_artifacts(
         ],
         cwd=SCRIPT_DIRECTORY,
         max_output_bytes=MAX_SELECTED_HELPER_OUTPUT_BYTES,
+        pass_fds=pass_fds,
     )
     parsed = strict_json_loads(raw_result, "selected Python retention helper")
     if (
@@ -9545,6 +9564,12 @@ class BundlePathBoundary:
         if self._closed:
             raise EvidenceError("bundle path boundary is closed")
         return Path(f"/proc/self/fd/{self._work_descriptor}")
+
+    @property
+    def work_descriptor(self) -> int:
+        if self._closed:
+            raise EvidenceError("bundle path boundary is closed")
+        return self._work_descriptor
 
     def _remove_outputs(self) -> None:
         for target in getattr(self, "_targets", ()):
@@ -12093,6 +12118,7 @@ def _build_bundle_with_boundary(
             wheel_sha256=application_wheel_sha256,
             selection_record_sha256=application_selection_record_sha256,
             budget=budget,
+            pass_fds=(path_boundary.work_descriptor,),
         )
         launcher_interpreter = verify_selected_application_installation(
             inventory, installation_contract

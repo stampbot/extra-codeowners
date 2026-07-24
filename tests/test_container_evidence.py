@@ -11088,11 +11088,13 @@ def test_retains_exact_selected_proof_for_manifest(
     result: dict[str, Any] = {}
     observed_command: list[str] = []
     observed_cwd: Path | None = None
+    observed_pass_fds: tuple[int, ...] = ()
 
     def fake_run(command: list[str], **kwargs: Any) -> bytes:
-        nonlocal observed_cwd, result
+        nonlocal observed_cwd, observed_pass_fds, result
         observed_command.extend(command)
         observed_cwd = kwargs.get("cwd")
+        observed_pass_fds = tuple(kwargs.get("pass_fds", ()))
         result, output = selected_retention_fixture(command)
         return output
 
@@ -11109,6 +11111,7 @@ def test_retains_exact_selected_proof_for_manifest(
         wheel_sha256=expected_payloads["wheel"],
         selection_record_sha256=expected_payloads["selection"],
         budget=budget,
+        pass_fds=(101,),
     )
 
     assert len(binding["files"]) == 5
@@ -11124,6 +11127,25 @@ def test_retains_exact_selected_proof_for_manifest(
         str(evidence.SCRIPT_DIRECTORY / "build_python_artifacts.py"),
     ]
     assert observed_cwd == evidence.SCRIPT_DIRECTORY
+    assert observed_pass_fds == (101,)
+
+
+def test_run_can_inherit_a_retained_directory_descriptor(tmp_path: Path) -> None:
+    descriptor = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        observed = evidence.run(
+            [
+                sys.executable,
+                "-c",
+                "import os, sys; print(os.fstat(int(sys.argv[1])).st_ino)",
+                str(descriptor),
+            ],
+            max_output_bytes=128,
+            pass_fds=(descriptor,),
+        )
+        assert int(observed) == os.fstat(descriptor).st_ino
+    finally:
+        os.close(descriptor)
 
 
 @pytest.mark.parametrize(
@@ -11367,10 +11389,13 @@ def test_trusted_native_component_bundle_contract_is_internally_bound(
         "verify_native_component_lock_bindings",
         lambda *_args: copy.deepcopy(native_coverage),
     )
-    monkeypatch.setattr(
-        evidence,
-        "retain_selected_application_artifacts",
-        lambda **_kwargs: (
+
+    def fake_retain_selected_application_artifacts(**kwargs: Any) -> tuple[dict[str, Any], object]:
+        inherited_descriptors = kwargs.get("pass_fds")
+        assert isinstance(inherited_descriptors, tuple)
+        assert len(inherited_descriptors) == 1
+        assert stat.S_ISDIR(os.fstat(inherited_descriptors[0]).st_mode)
+        return (
             {
                 "source_revision": revision,
                 "wheel_sha256": "5" * 64,
@@ -11378,7 +11403,12 @@ def test_trusted_native_component_bundle_contract_is_internally_bound(
                 "files": [],
             },
             {"trusted_fixture": True},
-        ),
+        )
+
+    monkeypatch.setattr(
+        evidence,
+        "retain_selected_application_artifacts",
+        fake_retain_selected_application_artifacts,
     )
     monkeypatch.setattr(
         evidence,
