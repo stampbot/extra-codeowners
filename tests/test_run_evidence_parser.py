@@ -1117,7 +1117,7 @@ def make_evidence_outputs(root: Path, architecture: str = "amd64") -> dict[str, 
     values = {
         archive: archive_content,
         f"{archive}.sha256": f"{digest}  {archive}\n".encode("ascii"),
-        f"evidence-predicate-{architecture}.json": sandbox.canonical_json(
+        f"evidence-predicate-{architecture}.json": collector.canonical_json(
             {
                 "artifact": {"filename": archive, "sha256": digest},
                 "media_type": "application/vnd.in-toto+json",
@@ -1129,6 +1129,27 @@ def make_evidence_outputs(root: Path, architecture: str = "amd64") -> dict[str, 
     for name, content in values.items():
         (root / name).write_bytes(content)
     return values
+
+
+def test_materializer_and_collector_share_the_evidence_json_contract() -> None:
+    value = {
+        "artifact": {"filename": "evidence.tar.gz", "sha256": "a" * 64},
+        "description": "canonical Unicode: \u2603",
+        "schema_version": 7,
+    }
+
+    assert sandbox.canonical_evidence_json(value) == collector.canonical_json(value)
+
+
+def test_evidence_json_reencoding_is_bounded_before_pretty_print_amplification(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sandbox, "EVIDENCE_PREDICATE_BYTES", 1024)
+    compact_value = [0] * 300
+    assert len(json.dumps(compact_value, separators=(",", ":")).encode()) < 1024
+
+    with pytest.raises(sandbox.ParserSandboxError, match="exceeds its byte limit"):
+        sandbox.canonical_evidence_json(compact_value)
 
 
 def allow_materialization_tmpfs(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1341,6 +1362,7 @@ def test_materializes_only_the_exact_stable_evidence_outputs(
         "bad-checksum",
         "bad-predicate",
         "deep-predicate",
+        "oversized-number",
     ),
 )
 def test_materialization_rejects_hostile_or_ambiguous_output_sets(
@@ -1372,7 +1394,7 @@ def test_materialization_rejects_hostile_or_ambiguous_output_sets(
         (source / checksum).write_bytes(f"{'0' * 64}  {archive}\n".encode("ascii"))
     elif attack == "bad-predicate":
         (source / predicate).write_bytes(
-            sandbox.canonical_json(
+            collector.canonical_json(
                 {
                     "artifact": {"filename": archive, "sha256": "0" * 64},
                     "schema_version": 7,
@@ -1381,6 +1403,8 @@ def test_materialization_rejects_hostile_or_ambiguous_output_sets(
         )
     elif attack == "deep-predicate":
         (source / predicate).write_bytes(b"[" * 2000 + b"0" + b"]" * 2000)
+    elif attack == "oversized-number":
+        (source / predicate).write_bytes(b"9" * 5000)
     allow_materialization_tmpfs(monkeypatch)
 
     with pytest.raises(sandbox.ParserSandboxError):

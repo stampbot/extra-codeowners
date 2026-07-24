@@ -147,6 +147,28 @@ def canonical_json(value: object) -> bytes:
         raise ParserSandboxError("parser command cannot be encoded as canonical JSON") from exc
 
 
+def canonical_evidence_json(value: object) -> bytes:
+    """Return the collector's one accepted evidence JSON representation."""
+
+    output = bytearray()
+    encoder = json.JSONEncoder(
+        allow_nan=False,
+        ensure_ascii=False,
+        indent=2,
+        sort_keys=True,
+    )
+    try:
+        for chunk in encoder.iterencode(value):
+            encoded = chunk.encode("utf-8")
+            if len(output) + len(encoded) > EVIDENCE_PREDICATE_BYTES - 1:
+                raise ParserSandboxError("evidence predicate canonical JSON exceeds its byte limit")
+            output.extend(encoded)
+        output.extend(b"\n")
+    except (RecursionError, TypeError, ValueError, UnicodeEncodeError) as exc:
+        raise ParserSandboxError("evidence predicate cannot be encoded as canonical JSON") from exc
+    return bytes(output)
+
+
 def _safe_text(value: str, source: str, *, maximum: int) -> str:
     if not 1 <= len(value.encode("utf-8")) <= maximum or SAFE_ARGUMENT.fullmatch(value) is None:
         raise ParserSandboxError(f"{source} contains unsupported characters or is too long")
@@ -1227,9 +1249,9 @@ def materialize_evidence_output(source: Path, destination: Path, architecture: s
             raise ParserSandboxError("evidence checksum does not bind the exact archive")
         try:
             predicate_value = json.loads(retained[predicate])
-        except (RecursionError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        except (RecursionError, UnicodeDecodeError, ValueError) as exc:
             raise ParserSandboxError("evidence predicate is not canonical JSON") from exc
-        if canonical_json(predicate_value) != retained[predicate]:
+        if canonical_evidence_json(predicate_value) != retained[predicate]:
             raise ParserSandboxError("evidence predicate is not canonical JSON")
         if not isinstance(predicate_value, dict) or predicate_value.get("artifact") != {
             "filename": archive,
