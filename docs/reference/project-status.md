@@ -1,6 +1,6 @@
 # Project status
 
-Last verified: 2026-07-23.
+Last verified: 2026-07-24.
 
 Extra CODEOWNERS is pre-release. The source can publish a check in a disposable
 development environment, but there is no supported production enforcement or
@@ -12,6 +12,7 @@ deployable release.
 | --- | --- |
 | Source checkout for development and evaluation | Available |
 | App Manifest registration flow | Implemented for development testing |
+| Disposable evaluation-beta preflight | Available from source; verifies prerequisites but does not run the beta |
 | Production code-owner enforcement | Not supported; the live GitHub contract remains open in [issue #1][issue-1] |
 | Supported GitHub release | Not available |
 | Supported container image | Not available |
@@ -37,6 +38,8 @@ The repository contains:
   deployment
 - a Helm chart in source form
 - unit, integration, property, workflow, and container tests
+- a [read-only preflight](../how-to/preflight-evaluation-beta.md) for the
+  disposable, non-required evaluation beta
 - CI-built container candidates and review evidence.
 
 Use these parts to review the policy model or run a disposable live test. They

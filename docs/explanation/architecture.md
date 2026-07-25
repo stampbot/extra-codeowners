@@ -363,9 +363,10 @@ only after fresh evidence and the final fences.
 ## Durable store and deployment
 
 SQLite keeps local development simple. Production startup requires PostgreSQL
-because all instances must share delivery deduplication, exact-head
-invalidation progress, queue leases, retry state, authority and shared-head
-generations, publication guards, and audit records.
+through the exact `postgresql+psycopg` driver because all instances must share
+delivery deduplication, exact-head invalidation progress, queue leases, retry
+state, authority and shared-head generations, publication guards, and audit
+records.
 
 PostgreSQL operations use fixed fail-fast budgets: three seconds to connect,
 two seconds to obtain a pooled connection, and three seconds for an ordinary

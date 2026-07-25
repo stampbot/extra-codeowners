@@ -51,24 +51,49 @@ spec:
             - name: http
               containerPort: 8000
               protocol: TCP
-          {{- if or .Values.existingSecret .Values.extraEnvFrom }}
+          {{- if .Values.existingSecret }}
           envFrom:
-            {{- if .Values.existingSecret }}
             - secretRef:
                 name: {{ .Values.existingSecret }}
-            {{- end }}
-            {{- with .Values.extraEnvFrom }}
-            {{- toYaml . | nindent 12 }}
-            {{- end }}
           {{- end }}
           env:
             - name: EXTRA_CODEOWNERS_ENVIRONMENT
               value: production
             - name: EXTRA_CODEOWNERS_ALLOW_INSECURE_CHANGES
               value: {{ .Values.allowInsecureChanges | quote }}
+            - name: PATH
+              value: /opt/venv/bin:/usr/local/bin:/usr/bin:/bin
+            - name: LD_LIBRARY_PATH
+              value: /opt/venv/lib:/usr/local/lib:/usr/lib:/lib
+            - name: LD_PRELOAD
+              value: ""
+            - name: LD_AUDIT
+              value: ""
+            - name: GCONV_PATH
+              value: /usr/lib/gconv
+            - name: LOCPATH
+              value: /usr/lib/locale
+            - name: OPENSSL_CONF
+              value: /dev/null
+            - name: OPENSSL_MODULES
+              value: /usr/lib/ossl-modules
+            - name: OPENSSL_ENGINES
+              value: /usr/lib/engines-3
+            - name: SSLKEYLOGFILE
+              value: /dev/null
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
+          {{- if .Values.probes.startup.enabled }}
+          startupProbe:
+            httpGet:
+              path: {{ .Values.probes.startup.path }}
+              port: http
+            initialDelaySeconds: {{ .Values.probes.startup.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.startup.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.startup.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.startup.failureThreshold }}
+          {{- end }}
           {{- if .Values.probes.liveness.enabled }}
           livenessProbe:
             httpGet:

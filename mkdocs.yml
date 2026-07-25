@@ -34,6 +34,7 @@ nav:
       - Register a GitHub App: how-to/register-app.md
       - Configure policy: how-to/configure.md
       - Prepare repository rules: how-to/prepare-repository-rules.md
+      - Preflight a disposable evaluation beta: how-to/preflight-evaluation-beta.md
       - Troubleshoot a check: how-to/troubleshoot-check.md
       - Prepare a future deployment: how-to/deploy.md
       - Upgrade, back up, and restore: how-to/upgrade.md
@@ -45,6 +46,7 @@ nav:
       - Command line: reference/cli.md
       - GitHub permissions and events: reference/github-permissions.md
       - HTTP API: reference/http-api.md
+      - Evaluation beta preflight: reference/evaluation-beta-preflight.md
       - Database upgrade notes: reference/upgrade-notes.md
   - Explanation:
       - Native CODEOWNERS comparison: explanation/native-codeowners.md

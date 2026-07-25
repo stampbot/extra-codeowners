@@ -7721,6 +7721,49 @@ def test_post_base_provenance_rejects_unclassified_regular_files(
     )
     evidence.verify_post_base_provenance(clean_inventory, clean_files, policy, tmp_path)
 
+    build_identity = b'{"schema_version":1,"source_revision":"' + b"a" * 40 + b'"}\n'
+    identity_files = {
+        **application_files,
+        "app/build-identity.json": build_identity,
+    }
+    identity_application = tar_bytes(
+        identity_files,
+        links=VENV_LINKS,
+        directories=explicit_parent_directories((*identity_files, *VENV_LINKS)),
+        headers={"app/build-identity.json": {"mode": 0o444}},
+    )
+    identity_image = tmp_path / "identity.tar"
+    saved_image_layers(identity_image, [base, identity_application])
+    identity_inventory, identity_layer_files = evidence._inventory_saved_image(
+        identity_image, "linux/amd64", "sha256:" + "a" * 64
+    )
+    identity_policy = copy.deepcopy(policy)
+    identity_directory_effects, _identity_removals = (
+        evidence.canonical_post_base_filesystem_changes(
+            identity_layer_files,
+            1,
+            "linux/amd64",
+        )
+    )
+    identity_policy["filesystem_baselines"]["linux/amd64"]["post_base_directory_effects"] = (
+        identity_directory_effects
+    )
+    evidence.verify_post_base_provenance(
+        identity_inventory,
+        identity_layer_files,
+        identity_policy,
+        tmp_path,
+        expected_build_identity=build_identity,
+    )
+    with pytest.raises(evidence.EvidenceError, match="verified Python selection"):
+        evidence.verify_post_base_provenance(
+            identity_inventory,
+            identity_layer_files,
+            identity_policy,
+            tmp_path,
+            expected_build_identity=build_identity.replace(b"a", b"b"),
+        )
+
     hostile_image = tmp_path / "hostile.tar"
     saved_image_layers(hostile_image, [base, application, tar_bytes({hostile_path: b"payload"})])
     hostile_inventory, hostile_files = evidence._inventory_saved_image(
@@ -10086,6 +10129,7 @@ def test_application_archive_ignores_export_transforms(tmp_path: Path) -> None:
 
 def test_runtime_identity_expectations_match_dockerfile_and_mise() -> None:
     dockerfile = Path("Dockerfile").read_text()
+    dockerignore = Path(".dockerignore").read_text().splitlines()
     mise = evidence.tomllib.loads(Path("mise.toml").read_text())
     builder_stage = dockerfile.split(" AS builder\n", 1)[1].split("\nFROM builder AS test", 1)[0]
     test_stage = dockerfile.split("FROM builder AS test\n", 1)[1].split("\nFROM python:", 1)[0]
@@ -10100,7 +10144,13 @@ def test_runtime_identity_expectations_match_dockerfile_and_mise() -> None:
     ) in builder_stage
     assert dockerfile.count("UV_NO_INSTALLER_METADATA=1") == 1
     assert builder_stage.index("UV_NO_INSTALLER_METADATA=1") < builder_stage.index("uv sync")
-    assert "RUN apk add --no-cache git=2.54.0-r0" in test_stage
+    assert "RUN apk add --no-cache \\" in test_stage
+    assert "git=2.54.0-r0" in test_stage
+    assert "openssh-keygen=10.3_p1-r0" in test_stage
+    assert ".github/scripts/smoke-container.sh \\" in test_stage
+    assert "COPY charts/ ./charts/" in test_stage
+    assert "!.github/scripts/smoke-container.sh" in dockerignore
+    assert "charts" not in dockerignore
 
 
 def test_container_job_uses_the_locked_evidence_environment() -> None:
@@ -11104,7 +11154,7 @@ def test_retains_exact_selected_proof_for_manifest(
         "wheel": evidence.sha256_bytes(b"wheel"),
         "selection": evidence.sha256_bytes(b"selection-record"),
     }
-    binding, installation = evidence.retain_selected_application_artifacts(
+    binding, installation, build_identity = evidence.retain_selected_application_artifacts(
         directory=tmp_path / "incoming",
         output=tmp_path / "bundle" / "artifacts" / "application",
         source_revision="a" * 40,
@@ -11121,6 +11171,19 @@ def test_retains_exact_selected_proof_for_manifest(
     assert binding["wheel_sha256"] == expected_payloads["wheel"]
     assert binding["selection_record_sha256"] == expected_payloads["selection"]
     assert installation == {"contract": "opaque to retention"}
+    assert json.loads(build_identity) == {
+        field: result[field]
+        for field in (
+            "schema_version",
+            "source_revision",
+            "selection_record_sha256",
+            "wheel_filename",
+            "wheel_sha256",
+            "sdist_filename",
+            "sdist_sha256",
+        )
+    }
+    assert build_identity.endswith(b"\n")
     assert budget.retained_file_count == 5
     assert observed_command[:2] == [
         sys.executable,
@@ -11390,7 +11453,9 @@ def test_trusted_native_component_bundle_contract_is_internally_bound(
         lambda *_args: copy.deepcopy(native_coverage),
     )
 
-    def fake_retain_selected_application_artifacts(**kwargs: Any) -> tuple[dict[str, Any], object]:
+    def fake_retain_selected_application_artifacts(
+        **kwargs: Any,
+    ) -> tuple[dict[str, Any], object, bytes]:
         inherited_descriptors = kwargs.get("pass_fds")
         assert isinstance(inherited_descriptors, tuple)
         assert len(inherited_descriptors) == 1
@@ -11403,6 +11468,7 @@ def test_trusted_native_component_bundle_contract_is_internally_bound(
                 "files": [],
             },
             {"trusted_fixture": True},
+            b'{"fixture":"verified-build-identity"}\n',
         )
 
     monkeypatch.setattr(

@@ -24,17 +24,18 @@ The protected assets are:
 ## Where trust changes
 
 ```text
-GitHub -- HMAC-signed webhook --> public webhook boundary
-                                         |
-                                         v
-                              queue and audit database
-                                         |
-                                         v
-                                  evaluation workers
-                                    |           |
-                 short-lived token  |           | sanitized data
-                                    v           v
-                                  GitHub    checks, logs, metrics
+GitHub -- HMAC-signed POST --> shared HTTPS origin: /webhooks/github
+operator network ----------> same origin: health, identity, metrics, setup
+                                      |
+                                      v
+                           queue and audit database
+                                      |
+                                      v
+                               evaluation workers
+                                 |           |
+              short-lived token  |           | sanitized data
+                                 v           v
+                               GitHub    checks and operator output
 
 operator secret manager --------> webhook boundary and workers
 organization administrators ----> organization enrollment policy ----+
@@ -42,18 +43,23 @@ repository maintainers ---------> base-commit delegation policy -----+--> worker
 ```
 
 GitHub authenticates the installation and signs the webhook body. The request
-then crosses the public boundary into the operator's service. A durable queue
-separates accepting that event from evaluating it. Workers cross back into
-GitHub with short-lived, installation-scoped tokens.
+then crosses the public boundary into the operator's service. Only the exact
+webhook path needs public ingress. Health, runtime identity, metrics,
+documentation, and setup may share the origin, but the proxy must restrict
+those paths to operators. The application does not authenticate them.
+
+A durable queue separates accepting an event from evaluating it. Workers cross
+back into GitHub with short-lived, installation-scoped tokens.
 
 Policy crosses a different boundary. Organization administrators decide which
 App identities may be trusted. Repository maintainers may delegate to those
 Apps, but only within the organization's guardrails and using policy from the
 pull request's base commit.
 
-The operator trusts the database and secret manager. Checks, logs, and metrics
-usually have a wider audience, so they are lower-trust outputs. Credentials and
-complete private payloads must not cross into them.
+The operator trusts the database and secret manager. Checks, logs, metrics, and
+runtime identity usually have a wider audience, so they are lower-trust
+outputs. Runtime identity is a service self-report, not provenance evidence.
+Credentials and complete private payloads must not cross into any of them.
 
 ## Threats, controls, and residual risk
 
@@ -88,7 +94,7 @@ of the security contract.
 | Automation uses a normal GitHub user account | Govern CODEOWNERS users and team membership outside this service. Reserve application delegation for actors GitHub identifies as Apps. | Actor type `User` does not prove personhood. A machine user with owner authority is treated like any other user. |
 | Human or team ownership eligibility changes after approval | Revalidate direct-user repository permission, team visibility, repository access, and active membership. Subscribe to repository and organization authority events and reconcile open pull requests. | Success may remain stale while event delivery and fan-out run, or until reconciliation recovers a missed event. |
 | App access is suspended or an ordinary target repository is removed from its installation | Keep native human enforcement until access changes finish, and restore it before intentional removal. Acknowledge a well-formed ordinary-target removal without pretending revocation succeeded. | Once access is gone, Extra CODEOWNERS cannot revoke an existing check in that repository. |
-| A trusted application is compromised | Limit delegation by path, effective owner, and labels. Preserve non-delegable paths. | Within that scope, the application is intentionally trusted to approve. |
+| A trusted application is compromised | Limit delegation by path and effective owner, then preserve non-delegable paths. Use labels for workflow routing, not as a separate trust boundary. | Pull-request write permission lets the application change labels as well as submit its review. Within the path-and-owner scope, the application is intentionally trusted to approve. |
 | The operator loses GitHub API access or reaches a rate limit | Fail closed, retry indefinitely with a configured maximum ordinary backoff, honor separately bounded provider `Retry-After` or reset timing, and expose queue state and API failures. | Availability failures block merges while retries continue at bounded intervals. The service has no remaining-quota metric. |
 | Another actor publishes a check with the same name | Require the Extra CODEOWNERS App as the expected source. Register the App with Commit statuses (`statuses`) write so GitHub can offer it as an organization-ruleset source, then omit that permission from runtime tokens. | A rule configured by name alone is vulnerable to source confusion. |
 | A proxy, browser, or observer captures App Manifest setup material | Require HTTPS and signed, short-lived state; suppress access logs; return no-store pages with a restrictive content security policy; disable setup after use. | The one-time callback and displayed conversion response contain credentials. A compromised operator endpoint or browser can disclose them. |

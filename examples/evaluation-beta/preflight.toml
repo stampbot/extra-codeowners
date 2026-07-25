@@ -1,0 +1,39 @@
+# This file contains no secrets. Replace every example value before running the
+# preflight, then keep the edited copy outside the source checkout.
+schema_version = 1
+
+source_revision = "0123456789abcdef0123456789abcdef01234567"
+# SSH signatures need an explicit public-key allowlist. This relative path is
+# resolved from the directory that contains this config file.
+source_signer_fingerprint = "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+source_ssh_allowed_signers_file = "allowed_signers"
+source_checkout = "../.."
+python_version = "3.12.0"
+uv_version = "0.11.28"
+extra_codeowners_version = "0.1.0"
+postgres_server_version_num = 170000
+
+organization_id = 100000
+target_repository = "example-org/extra-codeowners-beta"
+target_repository_id = 100001
+organization_policy_repository = "example-org/.github"
+organization_policy_repository_id = 100002
+target_default_branch = "main"
+target_default_branch_sha = "1111111111111111111111111111111111111111"
+organization_policy_default_branch = "main"
+organization_policy_default_branch_sha = "2222222222222222222222222222222222222222"
+
+checker_app_id = 1000001
+checker_app_slug = "example-extra-codeowners-beta"
+checker_installation_id = 11000001
+approver_app_id = 2000002
+approver_app_slug = "example-approver-beta"
+approver_installation_id = 22000002
+approver_bot_user_id = 2000003
+
+service_url = "https://beta.example.org"
+checker_webhook_url = "https://beta.example.org/webhooks/github"
+check_name = "Extra CODEOWNERS / approval"
+policy_path = ".github/extra-codeowners.toml"
+delegation_test_path = "docs/beta-probe.md"
+delegation_test_labels = ["bot-approved"]

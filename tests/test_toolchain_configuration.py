@@ -3,12 +3,20 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
+import sys
 import tomllib
 from pathlib import Path
 from typing import Any, cast
+
+import pytest
+import yaml  # type: ignore[import-untyped]
+
+import extra_codeowners
+from tools import evaluation_beta_bootstrap as beta_bootstrap
 
 ROOT = Path(__file__).resolve().parents[1]
 SETUP_UV = re.compile(r"^(?P<indent>\s*)uses: astral-sh/setup-uv@(?P<sha>[0-9a-f]{40})(?:\s+#.*)?$")
@@ -70,6 +78,7 @@ def test_uv_version_is_identical_locally_in_containers_and_in_workflows() -> Non
     assert '["uv", "--version"]' in dockerfile
     assert "if actual != expected:" in dockerfile
     assert "digest-selected uv is" in dockerfile
+    assert 'ENTRYPOINT ["/opt/venv/bin/python", "-I", "-m", "extra_codeowners"]' in dockerfile
 
     workflow_versions = _workflow_uv_versions()
     assert workflow_versions, "at least one setup-uv invocation is required"
@@ -95,6 +104,44 @@ def test_ci_checks_lockfile_freshness_outside_frozen_mode() -> None:
     assert "run: uv lock --check" in lock_check
 
 
+def test_helm_chart_protects_startup_and_rejects_explicit_libpq_environment() -> None:
+    values = cast(
+        dict[str, Any],
+        yaml.safe_load((ROOT / "charts" / "extra-codeowners" / "values.yaml").read_text()),
+    )
+    startup = cast(dict[str, Any], cast(dict[str, Any], values["probes"])["startup"])
+    assert startup == {
+        "enabled": True,
+        "path": "/health/live",
+        "initialDelaySeconds": 0,
+        "periodSeconds": 5,
+        "timeoutSeconds": 3,
+        "failureThreshold": 60,
+    }
+
+    schema = json.loads((ROOT / "charts" / "extra-codeowners" / "values.schema.json").read_text())
+    probes = schema["properties"]["probes"]
+    assert "startup" in probes["required"]
+    assert probes["properties"]["startup"] == {"$ref": "#/definitions/probe"}
+
+    deployment = (
+        ROOT / "charts" / "extra-codeowners" / "templates" / "deployment.yaml"
+    ).read_text()
+    assert "{{- if .Values.probes.startup.enabled }}" in deployment
+    for field in (
+        "path",
+        "initialDelaySeconds",
+        "periodSeconds",
+        "timeoutSeconds",
+        "failureThreshold",
+    ):
+        assert f".Values.probes.startup.{field}" in deployment
+
+    helpers = (ROOT / "charts" / "extra-codeowners" / "templates" / "_helpers.tpl").read_text()
+    assert helpers.count('hasPrefix "PG" .name') == 2
+    assert helpers.count("must not set ambient libpq variable") == 2
+
+
 def test_pinned_uv_exposes_the_scheduled_audit_interface_without_network() -> None:
     uv = shutil.which("uv")
     assert uv is not None, "the pinned uv executable must be available to the test suite"
@@ -109,6 +156,594 @@ def test_pinned_uv_exposes_the_scheduled_audit_interface_without_network() -> No
     assert "Audit the project's dependencies" in result.stdout
     assert "--locked" in result.stdout
     assert "--python-version" in result.stdout
+
+
+def _committed_minimal_beta_bootstrap(
+    tmp_path: Path,
+) -> tuple[Path, Path, dict[str, str]]:
+    checkout = tmp_path / "minimal-source"
+    tools = checkout / "tools"
+    tools.mkdir(parents=True)
+    package = checkout / "extra_codeowners"
+    package.mkdir()
+    shutil.copy2(ROOT / "tools" / "evaluation_beta_bootstrap.py", tools)
+    shutil.copy2(ROOT / "pyproject.toml", checkout)
+    (checkout / "pyproject.toml").chmod(0o644)
+    (tools / "__init__.py").write_text('"""Test tools package."""\n', encoding="utf-8")
+    (package / "__init__.py").write_text(
+        "from pathlib import Path\n"
+        "import os\n\n"
+        "Path(os.environ['CHECKOUT_PACKAGE_MARKER']).write_text('checkout', encoding='utf-8')\n",
+        encoding="utf-8",
+    )
+    (tools / "evaluation_beta.py").write_text(
+        "from pathlib import Path\n"
+        "import os\n"
+        "import extra_codeowners\n\n"
+        "def main() -> int:\n"
+        "    Path(os.environ['CHECKOUT_MARKER']).write_text('checkout', encoding='utf-8')\n"
+        "    return 0\n",
+        encoding="utf-8",
+    )
+    for directory in (checkout, tools, package):
+        directory.chmod(0o755)
+    for path in checkout.rglob("*.py"):
+        path.chmod(0o644)
+
+    git_environment = os.environ.copy()
+    git_environment.update(
+        {
+            "GIT_AUTHOR_EMAIL": "tests@example.invalid",
+            "GIT_AUTHOR_NAME": "Extra CODEOWNERS tests",
+            "GIT_COMMITTER_EMAIL": "tests@example.invalid",
+            "GIT_COMMITTER_NAME": "Extra CODEOWNERS tests",
+        }
+    )
+    for arguments in (
+        ("init", "--quiet"),
+        ("add", "."),
+        ("commit", "--quiet", "-m", "test source"),
+    ):
+        result = subprocess.run(  # noqa: S603 - fixed Git binary and test arguments.
+            ["/usr/bin/git", *arguments],
+            cwd=checkout,
+            env=git_environment,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stderr
+
+    revision = subprocess.run(
+        ["/usr/bin/git", "rev-parse", "HEAD"],
+        cwd=checkout,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert revision.returncode == 0, revision.stderr
+    config_path = tmp_path / "minimal-preflight.toml"
+    config_path.write_text(
+        f"source_checkout = {json.dumps(str(checkout))}\n"
+        f"source_revision = {json.dumps(revision.stdout.strip())}\n",
+        encoding="utf-8",
+    )
+    config_path.chmod(0o600)
+
+    fake_environment = tmp_path / "minimal-venv"
+    site_packages = (
+        fake_environment
+        / "lib"
+        / f"python{sys.version_info.major}.{sys.version_info.minor}"
+        / "site-packages"
+    )
+    site_packages.mkdir(parents=True)
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "CHECKOUT_MARKER": str(tmp_path / "checkout.executed"),
+            "CHECKOUT_PACKAGE_MARKER": str(tmp_path / "checkout-package.executed"),
+            "EXTRA_CODEOWNERS_BETA_CONFIG_FILE": str(config_path),
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "VIRTUAL_ENV": str(fake_environment),
+        }
+    )
+    return checkout, site_packages, environment
+
+
+def _run_minimal_beta_bootstrap(
+    checkout: Path,
+    environment: dict[str, str],
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(  # noqa: S603 - fixed test interpreter and script.
+        [
+            sys.executable,
+            "-I",
+            "-S",
+            "-B",
+            str(checkout / "tools" / "evaluation_beta_bootstrap.py"),
+            "preflight",
+        ],
+        cwd=checkout,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+
+@pytest.mark.parametrize(
+    ("index_operation", "expected_error"),
+    [
+        (None, "tracked source content does not exactly match HEAD"),
+        ("add", "source index does not exactly match HEAD"),
+        ("--assume-unchanged", "unsafe index flags"),
+        ("--skip-worktree", "unsafe index flags"),
+    ],
+)
+def test_evaluation_beta_bootstrap_rejects_tracked_code_before_import(
+    tmp_path: Path,
+    index_operation: str | None,
+    expected_error: str,
+) -> None:
+    checkout, _, environment = _committed_minimal_beta_bootstrap(tmp_path)
+    evaluator = checkout / "tools" / "evaluation_beta.py"
+    hostile_marker = tmp_path / "tracked.executed"
+    if index_operation in {"--assume-unchanged", "--skip-worktree"}:
+        result = subprocess.run(  # noqa: S603 - fixed Git binary and test arguments.
+            ["/usr/bin/git", "update-index", index_operation, "tools/evaluation_beta.py"],
+            cwd=checkout,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stderr
+    evaluator.write_text(
+        evaluator.read_text(encoding="utf-8")
+        + f"\nPath({str(hostile_marker)!r}).write_text('executed', encoding='utf-8')\n",
+        encoding="utf-8",
+    )
+    if index_operation == "add":
+        result = subprocess.run(
+            ["/usr/bin/git", "add", "tools/evaluation_beta.py"],
+            cwd=checkout,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stderr
+
+    result = _run_minimal_beta_bootstrap(checkout, environment)
+
+    assert result.returncode == 2
+    assert expected_error in result.stderr
+    assert not hostile_marker.exists()
+    assert not Path(environment["CHECKOUT_MARKER"]).exists()
+
+
+def test_evaluation_beta_bootstrap_prefers_reviewed_checkout_to_external_tools(
+    tmp_path: Path,
+) -> None:
+    checkout, site_packages, environment = _committed_minimal_beta_bootstrap(tmp_path)
+    external_marker = tmp_path / "external.executed"
+    external_package_marker = tmp_path / "external-package.executed"
+    external_tools = site_packages / "tools"
+    external_tools.mkdir()
+    (external_tools / "__init__.py").write_text('"""Hostile external tools."""\n', encoding="utf-8")
+    (external_tools / "evaluation_beta.py").write_text(
+        "from pathlib import Path\n\n"
+        "def main() -> int:\n"
+        f"    Path({str(external_marker)!r}).write_text('executed', encoding='utf-8')\n"
+        "    return 0\n",
+        encoding="utf-8",
+    )
+    external_package = site_packages / "extra_codeowners"
+    external_package.mkdir()
+    (external_package / "__init__.py").write_text(
+        "from pathlib import Path\n\n"
+        f"Path({str(external_package_marker)!r}).write_text('executed', encoding='utf-8')\n",
+        encoding="utf-8",
+    )
+
+    result = _run_minimal_beta_bootstrap(checkout, environment)
+
+    assert result.returncode == 0, result.stderr
+    assert Path(environment["CHECKOUT_MARKER"]).read_text(encoding="utf-8") == "checkout"
+    assert Path(environment["CHECKOUT_PACKAGE_MARKER"]).read_text(encoding="utf-8") == "checkout"
+    assert not external_marker.exists()
+    assert not external_package_marker.exists()
+
+
+def test_evaluation_beta_bootstrap_ignores_hostile_stat_cache_configuration(
+    tmp_path: Path,
+) -> None:
+    checkout, _, environment = _committed_minimal_beta_bootstrap(tmp_path)
+    evaluator = checkout / "tools" / "evaluation_beta.py"
+    for key, value in (("core.checkStat", "minimal"), ("core.trustctime", "false")):
+        result = subprocess.run(  # noqa: S603 - fixed Git binary and bounded test arguments.
+            ["/usr/bin/git", "config", "--local", key, value],
+            cwd=checkout,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stderr
+    initial = evaluator.stat()
+    os.utime(
+        evaluator,
+        ns=(initial.st_atime_ns, initial.st_mtime_ns - 2_000_000_000),
+    )
+    refresh = subprocess.run(
+        ["/usr/bin/git", "update-index", "--really-refresh"],
+        cwd=checkout,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert refresh.returncode == 0, refresh.stderr
+
+    before = evaluator.stat()
+    source = evaluator.read_bytes()
+    assert b"'checkout'" in source
+    evaluator.write_bytes(source.replace(b"'checkout'", b"'attacked'", 1))
+    os.utime(evaluator, ns=(before.st_atime_ns, before.st_mtime_ns))
+
+    status = subprocess.run(
+        ["/usr/bin/git", "status", "--porcelain", "--untracked-files=no"],
+        cwd=checkout,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert status.returncode == 0, status.stderr
+    assert status.stdout == ""
+
+    result = _run_minimal_beta_bootstrap(checkout, environment)
+
+    assert result.returncode == 2
+    assert "tracked source content does not exactly match HEAD" in result.stderr
+    assert not Path(environment["CHECKOUT_MARKER"]).exists()
+
+
+def test_evaluation_beta_bootstrap_rejects_replacement_refs_before_import(
+    tmp_path: Path,
+) -> None:
+    checkout, _, environment = _committed_minimal_beta_bootstrap(tmp_path)
+    git_environment = os.environ.copy()
+    git_environment.update(
+        {
+            "GIT_AUTHOR_EMAIL": "tests@example.invalid",
+            "GIT_AUTHOR_NAME": "Extra CODEOWNERS tests",
+            "GIT_COMMITTER_EMAIL": "tests@example.invalid",
+            "GIT_COMMITTER_NAME": "Extra CODEOWNERS tests",
+        }
+    )
+    tree = subprocess.run(
+        ["/usr/bin/git", "write-tree"],
+        cwd=checkout,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert tree.returncode == 0, tree.stderr
+    replacement = subprocess.run(  # noqa: S603 - fixed Git and locally generated tree.
+        ["/usr/bin/git", "commit-tree", tree.stdout.strip(), "-m", "replacement"],
+        cwd=checkout,
+        env=git_environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert replacement.returncode == 0, replacement.stderr
+    replace = subprocess.run(  # noqa: S603 - fixed Git and locally generated commit.
+        ["/usr/bin/git", "replace", "HEAD", replacement.stdout.strip()],
+        cwd=checkout,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert replace.returncode == 0, replace.stderr
+
+    result = _run_minimal_beta_bootstrap(checkout, environment)
+
+    assert result.returncode == 2
+    assert "replacement refs" in result.stderr
+    assert not Path(environment["CHECKOUT_MARKER"]).exists()
+
+
+def test_evaluation_beta_bootstrap_binds_head_to_config_before_import(
+    tmp_path: Path,
+) -> None:
+    checkout, _, environment = _committed_minimal_beta_bootstrap(tmp_path)
+    config_path = Path(environment["EXTRA_CODEOWNERS_BETA_CONFIG_FILE"])
+    config = config_path.read_text(encoding="utf-8")
+    config_path.write_text(
+        re.sub(r'(?m)^source_revision = "[0-9a-f]+"$', f'source_revision = "{"0" * 40}"', config),
+        encoding="utf-8",
+    )
+
+    result = _run_minimal_beta_bootstrap(checkout, environment)
+
+    assert result.returncode == 2
+    assert "HEAD does not match configured source_revision" in result.stderr
+    assert not Path(environment["CHECKOUT_MARKER"]).exists()
+
+
+def test_evaluation_beta_bootstrap_normalizes_the_configured_revision(
+    tmp_path: Path,
+) -> None:
+    checkout, _, environment = _committed_minimal_beta_bootstrap(tmp_path)
+    config_path = Path(environment["EXTRA_CODEOWNERS_BETA_CONFIG_FILE"])
+    config = config_path.read_text(encoding="utf-8")
+    revision = re.search(r'(?m)^source_revision = "([0-9a-f]+)"$', config)
+    assert revision is not None
+    config_path.write_text(
+        config.replace(
+            revision.group(0),
+            f'source_revision = "  {revision.group(1).upper()}  "',
+        ),
+        encoding="utf-8",
+    )
+
+    result = _run_minimal_beta_bootstrap(checkout, environment)
+
+    assert result.returncode == 0, result.stderr
+    assert Path(environment["CHECKOUT_MARKER"]).exists()
+
+
+def test_evaluation_beta_bootstrap_requires_an_explicit_checkout(
+    tmp_path: Path,
+) -> None:
+    checkout, _, environment = _committed_minimal_beta_bootstrap(tmp_path)
+    config_path = Path(environment["EXTRA_CODEOWNERS_BETA_CONFIG_FILE"])
+    config = config_path.read_text(encoding="utf-8")
+    config_path.write_text(
+        re.sub(r"(?m)^source_checkout = .+\n", "", config),
+        encoding="utf-8",
+    )
+
+    result = _run_minimal_beta_bootstrap(checkout, environment)
+
+    assert result.returncode == 2
+    assert "must pin source_revision and source_checkout" in result.stderr
+    assert not Path(environment["CHECKOUT_MARKER"]).exists()
+
+
+def test_evaluation_beta_bootstrap_requires_an_external_trust_anchor(
+    tmp_path: Path,
+) -> None:
+    checkout, _, environment = _committed_minimal_beta_bootstrap(tmp_path)
+    external_config = Path(environment["EXTRA_CODEOWNERS_BETA_CONFIG_FILE"])
+    checkout_config = checkout / "preflight.toml"
+    shutil.copy2(external_config, checkout_config)
+    checkout_config.chmod(0o600)
+    environment["EXTRA_CODEOWNERS_BETA_CONFIG_FILE"] = str(checkout_config)
+
+    result = _run_minimal_beta_bootstrap(checkout, environment)
+
+    assert result.returncode == 2
+    assert "configuration must be outside the source checkout" in result.stderr
+    assert not Path(environment["CHECKOUT_MARKER"]).exists()
+
+
+def test_evaluation_beta_bootstrap_rejects_a_tree_as_the_pinned_revision(
+    tmp_path: Path,
+) -> None:
+    checkout, _, environment = _committed_minimal_beta_bootstrap(tmp_path)
+    tree = subprocess.run(
+        ["/usr/bin/git", "write-tree"],
+        cwd=checkout,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert tree.returncode == 0, tree.stderr
+    tree_id = tree.stdout.strip()
+    (checkout / ".git" / "HEAD").write_text(f"{tree_id}\n", encoding="ascii")
+    config_path = Path(environment["EXTRA_CODEOWNERS_BETA_CONFIG_FILE"])
+    config = config_path.read_text(encoding="utf-8")
+    config_path.write_text(
+        re.sub(r'(?m)^source_revision = "[0-9a-f]+"$', f'source_revision = "{tree_id}"', config),
+        encoding="utf-8",
+    )
+
+    result = _run_minimal_beta_bootstrap(checkout, environment)
+
+    assert result.returncode == 2
+    assert "source revision is not a commit object" in result.stderr
+    assert not Path(environment["CHECKOUT_MARKER"]).exists()
+
+
+@pytest.mark.parametrize("path", [b".", b"..", b"dir/../outside.py", b"dir/./inside.py"])
+def test_evaluation_beta_bootstrap_rejects_dot_path_components(path: bytes) -> None:
+    with pytest.raises(beta_bootstrap.BootstrapError, match="unsafe tracked path"):
+        beta_bootstrap._safe_tracked_path(path)
+
+
+def test_evaluation_beta_bootstrap_rejects_ignored_imports_before_execution(
+    tmp_path: Path,
+) -> None:
+    checkout = tmp_path / "source"
+    ignored_bytecode = shutil.ignore_patterns("__pycache__", "*.pyc")
+    shutil.copytree(
+        Path(extra_codeowners.__file__).resolve().parent,
+        checkout / "extra_codeowners",
+        ignore=ignored_bytecode,
+    )
+    shutil.copytree(ROOT / "tools", checkout / "tools", ignore=ignored_bytecode)
+    shutil.copy2(ROOT / "pyproject.toml", checkout)
+    (checkout / ".gitignore").write_text(
+        "__pycache__/\n*.pyc\nhttpx.py\nsitecustomize.py\nsubprocess.py\n",
+        encoding="utf-8",
+    )
+    git_environment = os.environ.copy()
+    git_environment.update(
+        {
+            "GIT_AUTHOR_EMAIL": "tests@example.invalid",
+            "GIT_AUTHOR_NAME": "Extra CODEOWNERS tests",
+            "GIT_COMMITTER_EMAIL": "tests@example.invalid",
+            "GIT_COMMITTER_NAME": "Extra CODEOWNERS tests",
+        }
+    )
+    for arguments in (
+        ("init", "--quiet"),
+        ("add", "."),
+        ("commit", "--quiet", "-m", "test source"),
+    ):
+        result = subprocess.run(  # noqa: S603 - fixed Git binary and test arguments.
+            ["/usr/bin/git", *arguments],
+            cwd=checkout,
+            env=git_environment,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stderr
+    for directory in (checkout, *checkout.rglob("*")):
+        if directory.is_dir():
+            directory.chmod(0o755)
+    for path in checkout.rglob("*"):
+        if path.is_file():
+            path.chmod(0o755 if os.access(path, os.X_OK) else 0o644)
+
+    environment = os.environ.copy()
+    environment["PYTHONPATH"] = str(checkout)
+    environment["PYTHONDONTWRITEBYTECODE"] = "1"
+    environment["VIRTUAL_ENV"] = sys.prefix
+    markers = [tmp_path / f"{name}.executed" for name in ("httpx", "sitecustomize", "subprocess")]
+    hostile_source = (
+        "from pathlib import Path\nPath({marker!r}).write_text('executed', encoding='utf-8')\n"
+    )
+    for name, marker in zip(("httpx", "sitecustomize", "subprocess"), markers, strict=True):
+        (checkout / f"{name}.py").write_text(
+            hostile_source.format(marker=str(marker)),
+            encoding="utf-8",
+        )
+
+    result = subprocess.run(  # noqa: S603 - fixed test interpreter and script.
+        [
+            sys.executable,
+            "-I",
+            "-S",
+            "-B",
+            str(checkout / "tools" / "evaluation_beta_bootstrap.py"),
+            "--version",
+        ],
+        cwd=checkout,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 2
+    assert "untracked or ignored content" in result.stderr
+    assert all(not marker.exists() for marker in markers)
+
+    for name in ("httpx", "sitecustomize", "subprocess"):
+        (checkout / f"{name}.py").unlink()
+    result = subprocess.run(  # noqa: S603 - fixed test interpreter and script.
+        [
+            sys.executable,
+            "-I",
+            "-S",
+            "-B",
+            str(checkout / "tools" / "evaluation_beta_bootstrap.py"),
+            "--version",
+        ],
+        cwd=checkout,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    assert result.stdout.strip() == project["project"]["version"]
+    assert list(checkout.rglob("*.pyc")) == []
+    assert list(checkout.rglob("__pycache__")) == []
+
+    direct_result = subprocess.run(
+        [sys.executable, "-B", "-m", "tools.evaluation_beta", "--help"],
+        cwd=checkout,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert direct_result.returncode != 0
+    assert "evaluation_beta_bootstrap.py preflight" in direct_result.stderr
+
+    fake_environment = tmp_path / "fake-venv"
+    fake_site_packages = (
+        fake_environment
+        / "lib"
+        / f"python{sys.version_info.major}.{sys.version_info.minor}"
+        / "site-packages"
+    )
+    fake_site_packages.parent.mkdir(parents=True)
+    fake_site_packages.symlink_to(checkout, target_is_directory=True)
+    environment["VIRTUAL_ENV"] = str(fake_environment)
+    linked_environment_result = subprocess.run(  # noqa: S603 - fixed test interpreter.
+        [
+            sys.executable,
+            "-I",
+            "-S",
+            "-B",
+            str(checkout / "tools" / "evaluation_beta_bootstrap.py"),
+            "--version",
+        ],
+        cwd=checkout,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert linked_environment_result.returncode == 2
+    assert "site-packages must be outside" in linked_environment_result.stderr
+
+
+@pytest.mark.parametrize("arguments", [("--help",), ("preflight", "--help"), ("--version",)])
+def test_evaluation_beta_bootstrap_information_does_not_import_project_code(
+    tmp_path: Path,
+    arguments: tuple[str, ...],
+) -> None:
+    checkout, _, environment = _committed_minimal_beta_bootstrap(tmp_path)
+
+    result = subprocess.run(  # noqa: S603 - fixed test interpreter and script.
+        [
+            sys.executable,
+            "-I",
+            "-S",
+            "-B",
+            str(checkout / "tools" / "evaluation_beta_bootstrap.py"),
+            *arguments,
+        ],
+        cwd=checkout,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert not Path(environment["CHECKOUT_MARKER"]).exists()
+    assert not Path(environment["CHECKOUT_PACKAGE_MARKER"]).exists()
+
+
+def test_evaluation_beta_entrypoints_use_the_isolated_bootstrap() -> None:
+    mise = (ROOT / "mise.toml").read_text(encoding="utf-8")
+    how_to = (ROOT / "docs" / "how-to" / "preflight-evaluation-beta.md").read_text(encoding="utf-8")
+    reference = (ROOT / "docs" / "reference" / "evaluation-beta-preflight.md").read_text(
+        encoding="utf-8"
+    )
+
+    command = "uv run --no-sync python -I -S -B tools/evaluation_beta_bootstrap.py preflight"
+    assert command in mise
+    assert command in re.sub(r"\\\n\s*", "", how_to)
+    assert "python -I -S -B tools/evaluation_beta_bootstrap.py preflight" in reference
+    assert "export PYTHONDONTWRITEBYTECODE=1" in how_to
 
 
 def test_renovate_owns_the_complete_uv_toolchain_update() -> None:
@@ -441,6 +1076,34 @@ def test_release_scan_consumes_only_the_same_run_selected_distribution() -> None
     assert "uv build" not in privileged
 
 
+def test_release_image_consumes_the_verified_selected_distribution() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+    image = workflow.split("  image:\n", 1)[1].split("  chart:\n", 1)[0]
+    download = image.split("      - name: Download the selected Python distribution\n", 1)[1].split(
+        "      - name: Verify the selected Python distribution\n", 1
+    )[0]
+
+    assert "      - python-distribution-proof" in image
+    assert "artifact-ids: ${{ needs.python-distribution-proof.outputs.artifact-id }}" in download
+    assert "digest-mismatch: error" in download
+    for mutable_input in ("name:", "pattern:", "run-id:", "repository:", "github-token:"):
+        assert mutable_input not in download
+    assert "verify-selection" in image
+    assert '--source-revision "$GITHUB_SHA"' in image
+    assert '--wheel-sha256 "$WHEEL_SHA256"' in image
+    assert '--selection-record-sha256 "$SELECTION_RECORD_SHA256"' in image
+    assert "verified-python=${{ steps.python-distribution.outputs.download-path }}" in image
+    assert "APPLICATION_SOURCE_REVISION=${{ github.sha }}" in image
+    assert (
+        "APPLICATION_WHEEL_SHA256=${{ needs.python-distribution-proof.outputs.wheel-sha256 }}"
+        in image
+    )
+    assert (
+        "APPLICATION_SELECTION_RECORD_SHA256=${{ "
+        "needs.python-distribution-proof.outputs.selection-record-sha256 }}" in image
+    )
+
+
 def test_dockerfile_can_only_install_the_selected_application_wheel() -> None:
     dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
     dockerignore = (ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines()
@@ -456,6 +1119,8 @@ def test_dockerfile_can_only_install_the_selected_application_wheel() -> None:
     assert "--network=none" in builder
     assert "verify-selection" in builder
     assert "--selection-record-sha256" in builder
+    assert "> /build-identity.json" in builder
+    assert "chmod 0444 /build-identity.json" in builder
     assert "uv pip install" in builder
     assert "--offline" in builder
     assert "--no-index" in builder
@@ -470,9 +1135,28 @@ def test_dockerfile_can_only_install_the_selected_application_wheel() -> None:
     assert 'Path("/opt/venv/lib/python3.14/site-packages")' in test_stage
     assert dockerfile.count("org.stampbot.extra-codeowners.application-wheel.sha256") == 2
     assert dockerfile.count("org.stampbot.extra-codeowners.python-selection-record.sha256") == 2
+    assert (
+        "RUN --mount=from=builder,source=/build-identity.json,"
+        "target=/run/build-identity.json,ro" in dockerfile
+    )
+    assert "/run/build-identity.json \\\n      /app/build-identity.json" in dockerfile
+    assert "COPY --from=builder --chown=0:0 --chmod=0444" not in dockerfile
+    assert "EXTRA_CODEOWNERS_BUILD_REVISION" not in dockerfile
     assert "ARTIFACT_ID" not in dockerfile
     assert "RUN_ATTEMPT" not in dockerfile
     assert "VCS_REF" not in dockerfile
+
+
+def test_container_smoke_binds_baked_identity_to_oci_labels_and_live_api() -> None:
+    smoke = (ROOT / ".github" / "scripts" / "smoke-container.sh").read_text(encoding="utf-8")
+
+    assert "org.opencontainers.image.revision" in smoke
+    assert "org.stampbot.extra-codeowners.application-wheel.sha256" in smoke
+    assert "org.stampbot.extra-codeowners.python-selection-record.sha256" in smoke
+    assert "load_build_identity" in smoke
+    assert "BUILD_IDENTITY_PATH.stat().st_mode) == 0o444" in smoke
+    assert '"http://127.0.0.1:8000/api/runtime-identity"' in smoke
+    assert 'identity["build_revision"] == os.environ["EXPECTED_BUILD_REVISION"]' in smoke
 
 
 def test_workflows_do_not_pass_the_removed_vcs_ref_build_argument() -> None:
@@ -516,3 +1200,18 @@ def test_source_store_scripts_are_type_checked_and_available_to_container_tests(
             assert path in source, f"{source_name} does not type-check {path}"
         assert path in test_stage, f"container test stage does not copy {path}"
         assert f"!{path}" in dockerignore, f"Docker build context excludes {path}"
+
+
+def test_evaluation_beta_tools_are_in_every_python_type_check_entrypoint() -> None:
+    required = {
+        "tools/evaluation_beta.py",
+        "tools/evaluation_beta_bootstrap.py",
+    }
+    sources = {
+        "mise": (ROOT / "mise.toml").read_text(encoding="utf-8"),
+        "CI": (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8"),
+        "release": (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8"),
+    }
+    for source_name, source in sources.items():
+        for path in required:
+            assert path in source, f"{source_name} does not type-check {path}"

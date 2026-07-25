@@ -36,6 +36,8 @@ Thumbs.db
 *.sqlite3
 live-github-contract-report.json
 live-github-lifecycle-report.json
+evaluation-beta-preflight.toml
+evaluation-beta-preflight-report.json
 
 # Helm packages
 *.tgz

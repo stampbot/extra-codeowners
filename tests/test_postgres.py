@@ -860,22 +860,99 @@ def test_postgres_revision_0001_matches_immutable_adoption_contract() -> None:
 
 
 @pytest.mark.parametrize(
-    ("alter_statement", "error_match"),
+    ("alter_statements", "error_match"),
     [
         (
-            "ALTER TABLE evaluation_jobs ALTER COLUMN id DROP DEFAULT",
+            ("ALTER TABLE evaluation_jobs ALTER COLUMN id DROP DEFAULT",),
             "owned sequence",
         ),
         (
-            "ALTER TABLE evaluation_jobs ALTER COLUMN requested_at "
-            "TYPE TIMESTAMP WITHOUT TIME ZONE",
+            ("ALTER SEQUENCE evaluation_jobs_id_seq INCREMENT BY 2 CYCLE",),
+            "owned sequence",
+        ),
+        (
+            (
+                "ALTER TABLE evaluation_jobs ALTER COLUMN requested_at "
+                "TYPE TIMESTAMP WITHOUT TIME ZONE",
+            ),
             "timezone",
         ),
+        (
+            (
+                "DROP INDEX ix_evaluation_jobs_claim",
+                "CREATE INDEX ix_evaluation_jobs_claim ON evaluation_jobs "
+                "(state, lease_until, available_at)",
+            ),
+            "incompatible indexes",
+        ),
+        (
+            (
+                "DROP INDEX ix_shared_head_epochs_claim",
+                "CREATE INDEX ix_shared_head_epochs_claim ON shared_head_epochs "
+                "(available_at, lease_until) WHERE generation > 0",
+            ),
+            "incompatible indexes",
+        ),
+        (
+            (
+                "ALTER TABLE evaluation_jobs DROP CONSTRAINT uq_evaluation_job_pr",
+                "ALTER TABLE evaluation_jobs ADD CONSTRAINT uq_evaluation_job_pr "
+                "UNIQUE (installation_id, repository_full_name, head_sha_hint)",
+            ),
+            "incompatible unique constraints",
+        ),
+        (
+            (
+                "ALTER TABLE shared_head_epochs DROP CONSTRAINT "
+                "ck_shared_head_epochs_generation_positive",
+                "ALTER TABLE shared_head_epochs ADD CONSTRAINT "
+                "ck_shared_head_epochs_generation_positive CHECK (generation >= 0)",
+            ),
+            "incompatible check constraints",
+        ),
+        (
+            (
+                "ALTER TABLE evaluation_jobs DROP CONSTRAINT uq_evaluation_job_pr",
+                "ALTER TABLE evaluation_jobs ADD CONSTRAINT uq_evaluation_job_pr "
+                "UNIQUE (installation_id, repository_full_name, pull_number) "
+                "DEFERRABLE INITIALLY DEFERRED",
+            ),
+            "unsafe PostgreSQL constraint state",
+        ),
+        (
+            (
+                "ALTER TABLE schema_metadata DROP CONSTRAINT schema_metadata_pkey",
+                "ALTER TABLE schema_metadata ADD CONSTRAINT schema_metadata_pkey "
+                "PRIMARY KEY (singleton_id) DEFERRABLE INITIALLY DEFERRED",
+            ),
+            "unsafe PostgreSQL constraint state",
+        ),
+        (
+            (
+                "ALTER TABLE shared_head_epochs DROP CONSTRAINT "
+                "ck_shared_head_epochs_generation_positive",
+                "ALTER TABLE shared_head_epochs ADD CONSTRAINT "
+                "ck_shared_head_epochs_generation_positive CHECK (generation >= 1) NOT VALID",
+            ),
+            "unsafe PostgreSQL constraint state",
+        ),
     ],
-    ids=("missing-serial-default", "timestamp-without-timezone"),
+    ids=(
+        "missing-serial-default",
+        "unsafe-sequence-configuration",
+        "timestamp-without-timezone",
+        "reordered-index",
+        "wrong-partial-index",
+        "wrong-unique-columns",
+        "wrong-check-expression",
+        "deferrable-unique",
+        "deferrable-primary-key",
+        "unvalidated-check",
+    ),
 )
 def test_postgres_runtime_schema_validation_rejects_behavior_changes(
-    alter_statement: str, error_match: str
+    alter_statements: tuple[str, ...],
+    error_match: str,
 ) -> None:
     url = postgres_url()
     store = QueueStore(url)
@@ -885,7 +962,8 @@ def test_postgres_runtime_schema_validation_rejects_behavior_changes(
     try:
         upgrade_database(url)
         with store.engine.begin() as connection:
-            connection.execute(text(alter_statement))
+            for statement in alter_statements:
+                connection.execute(text(statement))
 
         with pytest.raises(RuntimeError, match=error_match):
             store.initialize()
