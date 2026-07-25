@@ -5260,8 +5260,10 @@ def verify_owner_sdist_cargo_packages(
         ) == normalize_package_name(str(package["name"]))
         if (
             not isinstance(expected_target_name, str)
-            or not expected_target_name.strip()
-            or "-" in expected_target_name
+            or not expected_target_name
+            or any(
+                character != "_" and not character.isalnum() for character in expected_target_name
+            )
             or (expected_target_name != observed_target_name and not package_name_observation)
             or not isinstance(expected_target_path, str)
             or not isinstance(autolib, bool)

@@ -4179,12 +4179,15 @@ def test_owner_sdist_does_not_invent_a_disabled_default_library() -> None:
         )
 
 
-def test_owner_sdist_rejects_an_invalid_explicit_library_target_name() -> None:
+@pytest.mark.parametrize("target_name", ("demo-native", "demo.native", "demo native", ""))
+def test_owner_sdist_rejects_an_invalid_explicit_library_target_name(
+    target_name: str,
+) -> None:
     archive, source, subtree, bindings = owner_sdist_cargo_package_case(
         root_manifest=(
             b'[package]\nname = "demo-native"\n'
             b"version.workspace = true\nlicense.workspace = true\n"
-            b'\n[lib]\nname = "demo-native"\npath = "src/lib.rs"\n'
+            + f'\n[lib]\nname = "{target_name}"\npath = "src/lib.rs"\n'.encode()
         )
     )
 
