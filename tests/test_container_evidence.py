@@ -1864,7 +1864,10 @@ def test_hash_bound_image_export_is_inventoried_from_one_stable_descriptor(
         "linux/amd64",
         "sha256:" + "a" * 64,
     )
-    assert evidence.image_archive_inventory(image, record) == expected
+    snapshots = tmp_path / "snapshots"
+    snapshots.mkdir()
+    assert evidence.image_archive_inventory(image, record, snapshots) == expected
+    assert list(snapshots.iterdir()) == []
 
 
 @pytest.mark.parametrize(
@@ -1903,6 +1906,16 @@ def test_image_export_record_rejects_identity_and_archive_drift(
 
     with pytest.raises(evidence.EvidenceError, match=message):
         evidence.image_archive_inventory(image, record)
+
+
+def test_image_export_record_requires_an_integer_schema_version(tmp_path: Path) -> None:
+    image = tmp_path / "image.tar"
+    saved_image(image)
+    value = image_export_record(image)
+    value["schema_version"] = 1.0
+
+    with pytest.raises(evidence.EvidenceError, match="unsupported contract"):
+        evidence.validate_image_export_record(value)
 
 
 def test_image_export_record_and_archive_reject_links(
@@ -1945,6 +1958,16 @@ def test_image_export_archive_replacement_during_parse_fails_closed(
         image.write_bytes(b"x" * image.stat().st_size)
         return {}, {}
 
+    fixed_identity = evidence._image_export_file_identity(
+        image.stat(),
+        source="container image export archive",
+        expected_size=image.stat().st_size,
+    )
+    monkeypatch.setattr(
+        evidence,
+        "_image_export_file_identity",
+        lambda *_args, **_kwargs: fixed_identity,
+    )
     monkeypatch.setattr(evidence, "_inventory_saved_image", replace_during_parse)
     with pytest.raises(evidence.EvidenceError, match="changed while it was parsed"):
         evidence.image_archive_inventory(image, record)

@@ -19,6 +19,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / ".github" / "scripts" / "run_evidence_parser.py"
 COLLECTOR_SCRIPT = ROOT / ".github" / "scripts" / "container_evidence.py"
+EXPORT_SCRIPT = ROOT / ".github" / "scripts" / "export_container_image.py"
 IMAGE = f"ghcr.io/stampbot/evidence-parser@sha256:{'1' * 64}"
 SOURCE_CONTAINER_NAME = f"extra-codeowners-source-plan-{'1' * 32}"
 EVIDENCE_CONTAINER_NAME = f"extra-codeowners-evidence-{'2' * 32}"
@@ -36,6 +37,7 @@ def load_script(path: Path, name: str) -> ModuleType:
 
 sandbox: Any = load_script(SCRIPT, "run_evidence_parser_for_test")
 collector: Any = load_script(COLLECTOR_SCRIPT, "container_evidence_for_sandbox_contract")
+exporter: Any = load_script(EXPORT_SCRIPT, "export_container_image_for_sandbox_contract")
 
 
 def make_mounts(tmp_path: Path) -> tuple[dict[str, Path], Path]:
@@ -191,8 +193,13 @@ def test_image_inventory_parser_has_a_separate_bounded_offline_profile(
     assert "--cap-drop=ALL" in command
     assert "--security-opt=no-new-privileges=true" in command
     assert "--security-opt=seccomp=builtin" in command
-    assert "--memory=3221225472" in command
-    assert "--memory-swap=3221225472" in command
+    assert "--memory=5368709120" in command
+    assert "--memory-swap=5368709120" in command
+    snapshot_mount = (
+        "--tmpfs=/image-snapshot:rw,nosuid,nodev,noexec,size=2432696320,"
+        "nr_inodes=16,mode=0700,uid=65532,gid=65532"
+    )
+    assert command.count(snapshot_mount) == 1
     assert not any(argument.startswith("--tmpfs=/work:") for argument in command)
     assert not any("docker.sock" in argument for argument in command)
     assert not any("repo" in argument for argument in command)
@@ -223,6 +230,26 @@ def test_evidence_work_capacity_covers_retained_tree_and_staged_output() -> None
     assert resident_filesystem_capacity == 4288 * 1024 * 1024
     assert sandbox.EVIDENCE_MEMORY_HEADROOM_BYTES == 832 * 1024 * 1024
     assert sandbox.EVIDENCE_MEMORY_BYTES - resident_filesystem_capacity == 832 * 1024 * 1024
+
+
+def test_image_inventory_capacity_covers_the_largest_accepted_snapshot() -> None:
+    resident_filesystem_capacity = (
+        sandbox.IMAGE_SNAPSHOT_BYTES + sandbox.IMAGE_INVENTORY_OUTPUT_BYTES + sandbox.SCRATCH_BYTES
+    )
+
+    assert (
+        sandbox.MAX_IMAGE_ARCHIVE_BYTES
+        == collector.MAX_DOCKER_SAVE_BYTES
+        == exporter.MAX_IMAGE_ARCHIVE_BYTES
+    )
+    assert sandbox.IMAGE_SNAPSHOT_OVERHEAD_BYTES == 16 * 1024 * 1024
+    assert sandbox.IMAGE_SNAPSHOT_BYTES > sandbox.MAX_IMAGE_ARCHIVE_BYTES
+    assert sandbox.IMAGE_INVENTORY_MEMORY_BYTES == 5 * 1024 * 1024 * 1024
+    assert (
+        sandbox.IMAGE_INVENTORY_MEMORY_BYTES - resident_filesystem_capacity
+        == sandbox.IMAGE_INVENTORY_MEMORY_HEADROOM_BYTES
+    )
+    assert sandbox.IMAGE_INVENTORY_MEMORY_HEADROOM_BYTES == 2_701_131_776
 
 
 def test_host_command_defers_parser_owned_output_inventory_to_fixed_uid(
@@ -1034,6 +1061,70 @@ def test_evidence_mount_preflight_requires_a_distinct_large_bounded_work_tmpfs(
         sandbox._require_inside_mounts(("store",), "evidence")
 
 
+def test_image_inventory_mount_preflight_requires_a_distinct_snapshot_tmpfs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mountinfo = tmp_path / "mountinfo"
+    mountinfo.write_text(
+        "".join(
+            (
+                "1 0 0:1 / / ro,relatime - overlay overlay rw,lowerdir=/layers\n",
+                (
+                    "2 1 0:2 / /scratch rw,nosuid,nodev,noexec,relatime - "
+                    "tmpfs tmpfs rw,size=67108864\n"
+                ),
+                (
+                    "3 1 0:3 / /output rw,nosuid,nodev,noexec,relatime - "
+                    "tmpfs tmpfs rw,size=167772160\n"
+                ),
+                (
+                    "4 1 0:4 / /image-snapshot rw,nosuid,nodev,noexec,relatime - "
+                    "tmpfs tmpfs rw,size=2432696320\n"
+                ),
+                "5 1 0:5 / /inputs/archive ro,relatime - ext4 source rw\n",
+                "6 1 0:6 / /inputs/export-record ro,relatime - ext4 source rw\n",
+            )
+        ),
+        encoding="ascii",
+    )
+    monkeypatch.setattr(sandbox, "MOUNTINFO_PATH", mountinfo)
+    monkeypatch.setattr(sandbox, "_require_inside_tmpfs_identity", lambda _path, _source: None)
+
+    def filesystem(path: Path) -> SimpleNamespace:
+        limits = {
+            Path("/scratch"): (sandbox.SCRATCH_BYTES, sandbox.SCRATCH_INODES),
+            Path("/output"): (sandbox.IMAGE_INVENTORY_OUTPUT_BYTES, sandbox.OUTPUT_INODES),
+            Path("/image-snapshot"): (
+                sandbox.IMAGE_SNAPSHOT_BYTES,
+                sandbox.IMAGE_SNAPSHOT_INODES,
+            ),
+        }
+        byte_limit, inode_limit = limits[path]
+        return SimpleNamespace(
+            f_frsize=4096,
+            f_blocks=byte_limit // 4096,
+            f_files=inode_limit,
+        )
+
+    monkeypatch.setattr(sandbox.os, "statvfs", filesystem)
+
+    sandbox._require_inside_mounts(("archive", "export-record"), "image-inventory")
+
+    mountinfo.write_text(
+        mountinfo.read_text(encoding="ascii").replace(
+            (
+                "4 1 0:4 / /image-snapshot rw,nosuid,nodev,noexec,relatime - "
+                "tmpfs tmpfs rw,size=2432696320\n"
+            ),
+            "",
+        ),
+        encoding="ascii",
+    )
+    with pytest.raises(sandbox.ParserSandboxError, match="image inventory snapshot"):
+        sandbox._require_inside_mounts(("archive", "export-record"), "image-inventory")
+
+
 def test_network_preflight_requires_only_loopback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1153,6 +1244,61 @@ def test_source_plan_staging_remains_on_the_small_scratch_tmpfs(
     sandbox._inside_command("source-plan", ("store",), ("alpine-distfile-plan",))
 
     assert cast(dict[str, str], captured["environment"])["TMPDIR"] == "/scratch"
+
+
+def test_image_inventory_inside_command_injects_the_fixed_snapshot_directory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+    monkeypatch.setattr(sandbox.os, "geteuid", lambda: sandbox.PARSER_UID)
+    monkeypatch.setattr(sandbox.os, "getegid", lambda: sandbox.PARSER_GID)
+    monkeypatch.setattr(sandbox, "_require_no_ambient_credentials", lambda: None)
+    monkeypatch.setattr(sandbox, "_require_zero_capabilities", lambda: None)
+    monkeypatch.setattr(sandbox, "_require_no_docker_socket", lambda: None)
+    monkeypatch.setattr(sandbox, "_require_offline_network", lambda: None)
+    monkeypatch.setattr(sandbox, "_require_inside_mounts", lambda _names, _parser: None)
+    monkeypatch.setattr(sandbox, "_require_empty_directory", lambda _path, _source: None)
+    monkeypatch.setattr(sandbox.os, "umask", lambda _mode: 0)
+
+    def fake_execve(
+        _executable: str,
+        command: tuple[str, ...],
+        environment: dict[str, str],
+    ) -> None:
+        captured["command"] = command
+        captured["environment"] = environment
+
+    monkeypatch.setattr(sandbox.os, "execve", fake_execve)
+    arguments = (
+        "inventory-image-archive",
+        "--archive",
+        "/inputs/archive",
+        "--export-record",
+        "/inputs/export-record",
+        "--output",
+        "/output/components-amd64.json",
+        "--files-output",
+        "/output/all-layer-files-amd64.json",
+    )
+
+    sandbox._inside_command(
+        "image-inventory",
+        ("archive", "export-record"),
+        arguments,
+    )
+
+    assert cast(tuple[str, ...], captured["command"])[-2:] == (
+        "--snapshot-directory",
+        "/image-snapshot",
+    )
+    assert cast(dict[str, str], captured["environment"])["TMPDIR"] == "/scratch"
+
+    with pytest.raises(sandbox.ParserSandboxError, match="fixed by the sandbox"):
+        sandbox._inside_command(
+            "image-inventory",
+            ("archive", "export-record"),
+            (*arguments, "--snapshot-directory=/scratch"),
+        )
 
 
 def test_evidence_inside_command_requires_only_the_exact_repo_safe_directory(

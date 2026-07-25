@@ -36,14 +36,21 @@ PARSER_GID = 65532
 PARSER_PIDS = 64
 PARSER_CPUS = "1.0"
 SOURCE_PLAN_MEMORY_BYTES = 512 * 1024 * 1024
-IMAGE_INVENTORY_MEMORY_BYTES = 3 * 1024 * 1024 * 1024
 SCRATCH_BYTES = 64 * 1024 * 1024
 SCRATCH_INODES = 4096
+MAX_IMAGE_ARCHIVE_BYTES = 2 * 1024 * 1024 * 1024 + 256 * 1024 * 1024
+IMAGE_SNAPSHOT_OVERHEAD_BYTES = 16 * 1024 * 1024
+IMAGE_SNAPSHOT_BYTES = MAX_IMAGE_ARCHIVE_BYTES + IMAGE_SNAPSHOT_OVERHEAD_BYTES
+IMAGE_SNAPSHOT_INODES = 16
 SOURCE_PLAN_OUTPUT_BYTES = 64 * 1024 * 1024
 SOURCE_PLAN_BYTES = 4 * 1024 * 1024
 IMAGE_INVENTORY_JSON_BYTES = 64 * 1024 * 1024
 IMAGE_INVENTORY_OUTPUT_BYTES = 160 * 1024 * 1024
 IMAGE_INVENTORY_MATERIALIZED_BYTES = 2 * IMAGE_INVENTORY_JSON_BYTES
+IMAGE_INVENTORY_MEMORY_BYTES = 5 * 1024 * 1024 * 1024
+IMAGE_INVENTORY_MEMORY_HEADROOM_BYTES = IMAGE_INVENTORY_MEMORY_BYTES - (
+    IMAGE_SNAPSHOT_BYTES + IMAGE_INVENTORY_OUTPUT_BYTES + SCRATCH_BYTES
+)
 EVIDENCE_OUTPUT_BYTES = 1152 * 1024 * 1024
 OUTPUT_INODES = 8192
 # The collector may retain a full 1 GiB tree while staging a full output trio.
@@ -75,6 +82,7 @@ CONTAINER_WRAPPER = "/build/.github/scripts/run_evidence_parser.py"
 CONTAINER_INPUT_ROOT = "/inputs"
 CONTAINER_OUTPUT = "/output"
 CONTAINER_SCRATCH = "/scratch"
+CONTAINER_IMAGE_SNAPSHOT = "/image-snapshot"
 CONTAINER_WORK = "/work"
 PARSER_PROGRAMS = {
     "evidence": "/build/.github/scripts/container_evidence.py",
@@ -498,6 +506,12 @@ def build_docker_command(
         "--env=PYTHONDONTWRITEBYTECODE=1",
         "--env=PYTHONUNBUFFERED=1",
     ]
+    if parser == "image-inventory":
+        command.append(
+            f"--tmpfs={CONTAINER_IMAGE_SNAPSHOT}:rw,nosuid,nodev,noexec,"
+            f"size={IMAGE_SNAPSHOT_BYTES},nr_inodes={IMAGE_SNAPSHOT_INODES},"
+            f"mode=0700,uid={PARSER_UID},gid={PARSER_GID}"
+        )
     if parser == "evidence":
         command.append(
             f"--tmpfs={CONTAINER_WORK}:rw,nosuid,nodev,noexec,"
@@ -726,6 +740,18 @@ def _require_inside_mounts(input_names: Sequence[str], parser: str) -> None:
             or not {"nosuid", "nodev", "noexec"}.issubset(work.options)
         ):
             raise ParserSandboxError("evidence work is not a writable tmpfs")
+    if parser == "image-inventory":
+        snapshot = _exact_mount(
+            records,
+            Path(CONTAINER_IMAGE_SNAPSHOT),
+            "image inventory snapshot",
+        )
+        if (
+            snapshot.filesystem != "tmpfs"
+            or "rw" not in snapshot.options
+            or not {"nosuid", "nodev", "noexec"}.issubset(snapshot.options)
+        ):
+            raise ParserSandboxError("image inventory snapshot is not a writable tmpfs")
 
     for name in input_names:
         target = Path(CONTAINER_INPUT_ROOT) / name
@@ -758,6 +784,8 @@ def _require_inside_mounts(input_names: Sequence[str], parser: str) -> None:
         }
         if parser == "evidence":
             permitted_writable_mounts.add(Path(CONTAINER_WORK))
+        if parser == "image-inventory":
+            permitted_writable_mounts.add(Path(CONTAINER_IMAGE_SNAPSHOT))
         if record.mount_point in permitted_writable_mounts:
             continue
         if any(record.mount_point.is_relative_to(root) for root in writable_roots):
@@ -779,6 +807,18 @@ def _require_inside_mounts(input_names: Sequence[str], parser: str) -> None:
                 ),
             )
             if parser == "evidence"
+            else ()
+        ),
+        *(
+            (
+                (
+                    Path(CONTAINER_IMAGE_SNAPSHOT),
+                    IMAGE_SNAPSHOT_BYTES,
+                    IMAGE_SNAPSHOT_INODES,
+                    "image inventory snapshot",
+                ),
+            )
+            if parser == "image-inventory"
             else ()
         ),
     ):
@@ -822,6 +862,17 @@ def _inside_command(parser: str, input_names: Sequence[str], arguments: Sequence
         PARSER_PROGRAMS[parser],
         *checked_arguments,
     )
+    if parser == "image-inventory":
+        if any(
+            argument == "--snapshot-directory" or argument.startswith("--snapshot-directory=")
+            for argument in checked_arguments
+        ):
+            raise ParserSandboxError("the image snapshot directory is fixed by the sandbox")
+        command = (
+            *command,
+            "--snapshot-directory",
+            CONTAINER_IMAGE_SNAPSHOT,
+        )
     environment = {
         "HOME": CONTAINER_SCRATCH,
         "PATH": "/opt/venv/bin:/usr/local/bin:/usr/bin:/bin",

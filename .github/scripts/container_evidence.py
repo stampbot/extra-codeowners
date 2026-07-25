@@ -2281,8 +2281,8 @@ def validate_image_export_record(value: object) -> Mapping[str, Any]:
         "container image export record",
     )
     if (
-        record["schema_version"] != IMAGE_EXPORT_SCHEMA_VERSION
-        or isinstance(record["schema_version"], bool)
+        type(record["schema_version"]) is not int
+        or record["schema_version"] != IMAGE_EXPORT_SCHEMA_VERSION
         or record["kind"] != IMAGE_EXPORT_KIND
     ):
         raise EvidenceError("container image export record has an unsupported contract")
@@ -2344,6 +2344,7 @@ def _image_export_file_identity(
 def image_archive_inventory(
     archive_path: Path,
     export_record_path: Path,
+    snapshot_directory: Path | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Verify and parse one Docker export entirely inside the offline boundary."""
 
@@ -2367,6 +2368,7 @@ def image_archive_inventory(
         raise EvidenceError("container image export requires secure descriptor support")
     absolute_archive = archive_path.absolute()
     descriptor = -1
+    snapshot_descriptor = -1
     try:
         before = _image_export_file_identity(
             os.stat(absolute_archive, follow_symlinks=False),
@@ -2384,20 +2386,45 @@ def image_archive_inventory(
         )
         if opened != before:
             raise EvidenceError("container image export archive changed before it was opened")
-        digest = hashlib.sha256()
-        received = 0
-        while received <= expected_size:
-            chunk = os.read(descriptor, min(1024 * 1024, expected_size + 1 - received))
-            if not chunk:
-                break
-            received += len(chunk)
-            if received > expected_size:
-                raise EvidenceError("container image export archive exceeds its recorded size")
-            digest.update(chunk)
-        if received != expected_size or digest.hexdigest() != archive_record["sha256"]:
-            raise EvidenceError("container image export archive differs from its binding")
+        with tempfile.TemporaryFile(
+            mode="w+b",
+            prefix="extra-codeowners-image-export-",
+            dir=snapshot_directory,
+        ) as snapshot:
+            digest = hashlib.sha256()
+            received = 0
+            while received <= expected_size:
+                chunk = os.pread(
+                    descriptor,
+                    min(1024 * 1024, expected_size + 1 - received),
+                    received,
+                )
+                if not chunk:
+                    break
+                received += len(chunk)
+                if received > expected_size:
+                    raise EvidenceError("container image export archive exceeds its recorded size")
+                digest.update(chunk)
+                if snapshot.write(chunk) != len(chunk):
+                    raise EvidenceError("cannot create private container image export snapshot")
+            if received != expected_size or digest.hexdigest() != archive_record["sha256"]:
+                raise EvidenceError("container image export archive differs from its binding")
 
-        descriptor_path = Path(f"/proc/self/fd/{descriptor}")
+            snapshot.flush()
+            os.fchmod(snapshot.fileno(), stat.S_IRUSR)
+            snapshot_descriptor = os.open(
+                f"/proc/self/fd/{snapshot.fileno()}",
+                os.O_RDONLY | nonblock | cloexec,
+            )
+            snapshot_metadata = os.fstat(snapshot_descriptor)
+            if (
+                not stat.S_ISREG(snapshot_metadata.st_mode)
+                or snapshot_metadata.st_nlink != 0
+                or snapshot_metadata.st_size != expected_size
+            ):
+                raise EvidenceError("private container image export snapshot is invalid")
+
+        descriptor_path = Path(f"/proc/self/fd/{snapshot_descriptor}")
         if not descriptor_path.exists():
             raise EvidenceError("container image export descriptor is unavailable")
         inventory, files = _inventory_saved_image(
@@ -2406,6 +2433,22 @@ def image_archive_inventory(
             str(image_record["subject_digest"]),
             expected_config_digest=str(image_record["config_digest"]),
         )
+        digest = hashlib.sha256()
+        received = 0
+        while received <= expected_size:
+            chunk = os.pread(
+                descriptor,
+                min(1024 * 1024, expected_size + 1 - received),
+                received,
+            )
+            if not chunk:
+                break
+            received += len(chunk)
+            if received > expected_size:
+                raise EvidenceError("container image export archive changed while it was parsed")
+            digest.update(chunk)
+        if received != expected_size or digest.hexdigest() != archive_record["sha256"]:
+            raise EvidenceError("container image export archive changed while it was parsed")
         after = _image_export_file_identity(
             os.fstat(descriptor),
             source="container image export archive",
@@ -2422,6 +2465,9 @@ def image_archive_inventory(
     except OSError as exc:
         raise EvidenceError(f"cannot read container image export archive: {exc}") from exc
     finally:
+        if snapshot_descriptor >= 0:
+            with contextlib.suppress(OSError):
+                os.close(snapshot_descriptor)
         if descriptor >= 0:
             with contextlib.suppress(OSError):
                 os.close(descriptor)
@@ -13875,6 +13921,7 @@ def command_inventory_image_archive(args: argparse.Namespace) -> None:
     inventory, files = image_archive_inventory(
         Path(args.archive),
         Path(args.export_record),
+        Path(args.snapshot_directory),
     )
     Path(args.output).write_bytes(canonical_json(inventory))
     Path(args.files_output).write_bytes(canonical_json(files))
@@ -14307,6 +14354,7 @@ def parser() -> argparse.ArgumentParser:
     inventory.add_argument("--export-record", required=True)
     inventory.add_argument("--output", required=True)
     inventory.add_argument("--files-output", required=True)
+    inventory.add_argument("--snapshot-directory", required=True)
     inventory.set_defaults(function=command_inventory_image_archive)
 
     verify = subcommands.add_parser("verify", help="compare an inventory with reviewed policy")
