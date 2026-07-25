@@ -5113,6 +5113,7 @@ def verify_owner_sdist_cargo_packages(
         if (
             source["path"] != "."
             or not isinstance(root_package, dict)
+            or "workspace" in root_package
             or set(packages) != {"."}
             or packages["."]["manifest"] != workspace_manifest
         ):
@@ -5146,6 +5147,13 @@ def verify_owner_sdist_cargo_packages(
         workspace_package_paths: list[str] = []
         for raw_member in raw_members:
             assert isinstance(raw_member, str)
+            if raw_member == ".":
+                if not root_workspace:
+                    raise EvidenceError(
+                        f"owner-sdist Cargo workspace member is not a root package: {source_id}"
+                    )
+                workspace_package_paths.append(".")
+                continue
             try:
                 member_path = workspace_relative_root / checked_path(raw_member)
                 relative = member_path.relative_to(source_path)
@@ -5154,7 +5162,7 @@ def verify_owner_sdist_cargo_packages(
                     f"owner-sdist Cargo workspace member escapes the reviewed subtree: {source_id}"
                 ) from exc
             workspace_package_paths.append("." if not relative.parts else str(relative))
-        if root_workspace:
+        if root_workspace and "." not in workspace_package_paths:
             workspace_package_paths.append(".")
         if len(workspace_package_paths) != len(set(workspace_package_paths)) or set(
             workspace_package_paths
@@ -5252,6 +5260,8 @@ def verify_owner_sdist_cargo_packages(
         ) == normalize_package_name(str(package["name"]))
         if (
             not isinstance(expected_target_name, str)
+            or not expected_target_name.strip()
+            or "-" in expected_target_name
             or (expected_target_name != observed_target_name and not package_name_observation)
             or not isinstance(expected_target_path, str)
             or not isinstance(autolib, bool)

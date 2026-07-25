@@ -4179,12 +4179,43 @@ def test_owner_sdist_does_not_invent_a_disabled_default_library() -> None:
         )
 
 
-@pytest.mark.parametrize("workspace_suffix", (b"", b"\n[workspace]\n"))
+def test_owner_sdist_rejects_an_invalid_explicit_library_target_name() -> None:
+    archive, source, subtree, bindings = owner_sdist_cargo_package_case(
+        root_manifest=(
+            b'[package]\nname = "demo-native"\n'
+            b"version.workspace = true\nlicense.workspace = true\n"
+            b'\n[lib]\nname = "demo-native"\npath = "src/lib.rs"\n'
+        )
+    )
+
+    with pytest.raises(evidence.EvidenceError, match="library target differs"):
+        evidence.verify_owner_sdist_cargo_packages(
+            archive,
+            source_id="owner-sdist:python:demo@1.0#src/native",
+            source=source,
+            archive_name="demo-1.0.tar.gz",
+            subtree=subtree,
+            bindings=bindings,
+        )
+
+
+@pytest.mark.parametrize(
+    ("workspace_suffix", "package_workspace", "expected_error"),
+    (
+        (b"", b"", None),
+        (b"\n[workspace]\n", b"", None),
+        (b'\n[workspace]\nmembers = ["."]\n', b"", None),
+        (b"", b'workspace = ".."\n', "no exact Cargo workspace or root package"),
+    ),
+    ids=("plain", "implicit-workspace-root", "explicit-workspace-root", "external-workspace"),
+)
 def test_owner_sdist_root_package_binds_exact_manifest_and_source_file(
     workspace_suffix: bytes,
+    package_workspace: bytes,
+    expected_error: str | None,
 ) -> None:
     manifest = (
-        b'[package]\nname = "demo"\nversion = "1.0"\nlicense = "MIT"\n\n'
+        b'[package]\nname = "demo"\nversion = "1.0"\nlicense = "MIT"\n' + package_workspace + b"\n"
         b'[lib]\nname = "_demo"\npath = "src/native.rs"\n'
     ) + workspace_suffix
     license_text = b"MIT fixture license\n"
@@ -4261,6 +4292,18 @@ def test_owner_sdist_root_package_binds_exact_manifest_and_source_file(
         archive_name="demo-1.0.tar.gz",
     )
     assert verified_subtree == subtree
+    if expected_error is not None:
+        with pytest.raises(evidence.EvidenceError, match=expected_error):
+            evidence.verify_owner_sdist_cargo_packages(
+                archive,
+                source_id=source_id,
+                source=source,
+                archive_name="demo-1.0.tar.gz",
+                subtree=verified_subtree,
+                bindings={binding},
+            )
+        return
+
     evidence.verify_owner_sdist_cargo_packages(
         archive,
         source_id=source_id,
