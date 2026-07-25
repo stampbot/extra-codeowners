@@ -26,7 +26,7 @@ SCRIPT = ROOT / ".github" / "scripts" / "container_source_plan.py"
 POLICY = ROOT / ".compliance" / "container-policy.json"
 UV_LOCK = ROOT / "uv.lock"
 REVISION = "1" * 40
-REAL_PLAN_SHA256 = "2f42832c6d7f31140ae562b92c4952648b579893b09b946331dd1b875ff6975d"
+REAL_PLAN_SHA256 = "aab239390b2ee6403b8c4a599a0170528ec4c475c609a0f00f594c5565d2df08"
 REQUEST_KEYS = {
     "id",
     "url",
