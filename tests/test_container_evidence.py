@@ -4359,6 +4359,7 @@ def test_owner_sdist_root_package_binds_exact_manifest_and_source_file(
 def owner_sdist_root_workspace_child_case(
     *,
     root_manifest: bytes | None = None,
+    child_manifest: bytes | None = None,
 ) -> tuple[
     bytes,
     dict[str, Any],
@@ -4372,7 +4373,8 @@ def owner_sdist_root_workspace_child_case(
             b'[package]\nname = "demo-root"\nversion = "1.0.0"\nlicense = "MIT"\n'
             b'\n[workspace]\n\n[dependencies]\ndemo-child = { path = "child" }\n'
         )
-    child_manifest = b'[package]\nname = "demo-child"\nversion = "1.0.0"\nlicense = "MIT"\n'
+    if child_manifest is None:
+        child_manifest = b'[package]\nname = "demo-child"\nversion = "1.0.0"\nlicense = "MIT"\n'
     root_source = b"pub fn root() {}\n"
     child_source = b"pub fn child() {}\n"
     notice = b"MIT fixture license\n"
@@ -4458,6 +4460,102 @@ def test_owner_sdist_accounts_for_implicit_path_dependency_workspace_members() -
             archive,
             source_id=source_id,
             source=omitted,
+            archive_name="demo-1.0.tar.gz",
+            subtree=subtree,
+            bindings=bindings,
+        )
+
+
+def test_owner_sdist_accounts_for_standalone_local_path_dependencies() -> None:
+    root_manifest = (
+        b'[package]\nname = "demo-root"\nversion = "1.0.0"\nlicense = "MIT"\n'
+        b'\n[dependencies]\ndemo-child = { path = "child" }\n'
+    )
+    archive, source, subtree, bindings = owner_sdist_root_workspace_child_case(
+        root_manifest=root_manifest
+    )
+    source_id = "owner-sdist:python:demo@1.0#."
+
+    evidence.verify_owner_sdist_cargo_packages(
+        archive,
+        source_id=source_id,
+        source=source,
+        archive_name="demo-1.0.tar.gz",
+        subtree=subtree,
+        bindings=bindings,
+    )
+
+    omitted = copy.deepcopy(source)
+    omitted["cargo_packages"] = [omitted["cargo_packages"][0]]
+    with pytest.raises(evidence.EvidenceError, match="path dependency is not reviewed"):
+        evidence.verify_owner_sdist_cargo_packages(
+            archive,
+            source_id=source_id,
+            source=omitted,
+            archive_name="demo-1.0.tar.gz",
+            subtree=subtree,
+            bindings=bindings,
+        )
+
+
+def test_unreachable_standalone_package_cannot_self_justify_its_review() -> None:
+    root_manifest = b'[package]\nname = "demo-root"\nversion = "1.0.0"\nlicense = "MIT"\n'
+    child_manifest = (
+        b'[package]\nname = "demo-child"\nversion = "1.0.0"\nlicense = "MIT"\n'
+        b'\n[dependencies]\ndemo-child = { path = "." }\n'
+    )
+    archive, source, subtree, bindings = owner_sdist_root_workspace_child_case(
+        root_manifest=root_manifest,
+        child_manifest=child_manifest,
+    )
+
+    with pytest.raises(evidence.EvidenceError, match="Cargo local packages differ"):
+        evidence.verify_owner_sdist_cargo_packages(
+            archive,
+            source_id="owner-sdist:python:demo@1.0#.",
+            source=source,
+            archive_name="demo-1.0.tar.gz",
+            subtree=subtree,
+            bindings=bindings,
+        )
+
+
+def test_owner_sdist_resolves_used_workspace_path_dependencies() -> None:
+    root_manifest = (
+        b'[package]\nname = "demo-root"\nversion = "1.0.0"\nlicense = "MIT"\n'
+        b"\n[workspace]\n"
+        b'\n[workspace.dependencies]\ndemo-child = { path = "child" }\n'
+        b"\n[dependencies]\ndemo-child.workspace = true\n"
+    )
+    archive, source, subtree, bindings = owner_sdist_root_workspace_child_case(
+        root_manifest=root_manifest
+    )
+
+    evidence.verify_owner_sdist_cargo_packages(
+        archive,
+        source_id="owner-sdist:python:demo@1.0#.",
+        source=source,
+        archive_name="demo-1.0.tar.gz",
+        subtree=subtree,
+        bindings=bindings,
+    )
+
+
+def test_unused_workspace_path_dependency_cannot_justify_a_reviewed_package() -> None:
+    root_manifest = (
+        b'[package]\nname = "demo-root"\nversion = "1.0.0"\nlicense = "MIT"\n'
+        b"\n[workspace]\n"
+        b'\n[workspace.dependencies]\ndemo-child = { path = "child" }\n'
+    )
+    archive, source, subtree, bindings = owner_sdist_root_workspace_child_case(
+        root_manifest=root_manifest
+    )
+
+    with pytest.raises(evidence.EvidenceError, match="Cargo workspace members differ"):
+        evidence.verify_owner_sdist_cargo_packages(
+            archive,
+            source_id="owner-sdist:python:demo@1.0#.",
+            source=source,
             archive_name="demo-1.0.tar.gz",
             subtree=subtree,
             bindings=bindings,
