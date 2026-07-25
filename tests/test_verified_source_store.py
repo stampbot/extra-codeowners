@@ -365,7 +365,7 @@ def test_accepts_the_real_direct_planner_contract() -> None:
         source_store.strict_json_bytes(raw, "real source plan", maximum=4 * 1024 * 1024)
     )
 
-    assert len(validated["requests"]) == 132
+    assert len(validated["requests"]) == 214
     assert (
         validated["policy_sha256"]
         == hashlib.sha256((ROOT / ".compliance" / "container-policy.json").read_bytes()).hexdigest()

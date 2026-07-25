@@ -75,7 +75,7 @@ verification instead of becoming an inferred gap.
 | `python:greenlet@3.5.3` | Closed | None |
 | `python:markupsafe@3.0.3` | Closed | None |
 | `python:psycopg-binary@3.3.4` | Open | `missing-libpq-sbom`, `unreviewed-bundled-library-sources` |
-| `python:pydantic-core@2.46.4` | Open | `missing-libgcc-sbom`, `unreviewed-cargo-sources` |
+| `python:pydantic-core@2.46.4` | Open | `missing-libgcc-sbom` |
 | `python:sqlalchemy@2.0.51` | Closed | None |
 
 Cryptography binds all 32 registry components to their exact crates.io
@@ -86,6 +86,16 @@ record supplies the official archive, checksum document, and license. The arm64
 auditwheel PURL remains `NotpineForGHA`. A relationship links that `libgcc`
 occurrence to Greenlet's closed Alpine GCC evidence because the payload bytes
 match exactly.
+
+Pydantic Core binds all 87 registry components from its SBOM to exact crates.io
+archives, manifests, checksums, licenses, and notices. Its retained sdist
+supplies the root Cargo package and exact `Cargo.lock`; the lock records 16
+additional registry packages that are not SBOM components. The compiled
+library target comes from the pinned manifest; bundle generation checks it
+before associating the `src/lib.rs` observation with the extension payload.
+Pydantic Core remains open because the wheel's bundled GCC 12.4 `libgcc` has
+no SBOM observation or proven source-to-payload relationship. The retained
+sources do not prove which build produced the wheel.
 
 Greenlet's reviewed components use the commit-pinned Alpine GCC recipe and
 source archive. MarkupSafe and SQLAlchemy have no embedded SBOM, so their
