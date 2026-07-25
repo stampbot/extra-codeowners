@@ -5108,8 +5108,8 @@ def verify_owner_sdist_cargo_packages(
         "Cargo root or workspace manifest",
     )
     workspace = workspace_document.get("workspace")
+    root_package = workspace_document.get("package")
     if workspace is None:
-        root_package = workspace_document.get("package")
         if (
             source["path"] != "."
             or not isinstance(root_package, dict)
@@ -5123,12 +5123,17 @@ def verify_owner_sdist_cargo_packages(
     else:
         if not isinstance(workspace, dict):
             raise EvidenceError(f"owner-sdist has an invalid Cargo workspace: {source_id}")
-        workspace_package_value = workspace.get("package")
-        raw_members = workspace.get("members")
-        if (
-            not isinstance(workspace_package_value, dict)
-            or not isinstance(raw_members, list)
-            or not raw_members
+        root_workspace = (
+            source["path"] == "."
+            and isinstance(root_package, dict)
+            and "." in packages
+            and packages["."]["manifest"] == workspace_manifest
+        )
+        workspace_package_value = workspace.get("package", {})
+        raw_members = workspace.get("members", [])
+        if not isinstance(workspace_package_value, dict) or (
+            not isinstance(raw_members, list)
+            or (not root_workspace and not raw_members)
             or len(raw_members) > MAX_OBSERVATIONS_PER_OWNER
             or not all(isinstance(member, str) for member in raw_members)
         ):
@@ -5149,6 +5154,8 @@ def verify_owner_sdist_cargo_packages(
                     f"owner-sdist Cargo workspace member escapes the reviewed subtree: {source_id}"
                 ) from exc
             workspace_package_paths.append("." if not relative.parts else str(relative))
+        if root_workspace:
+            workspace_package_paths.append(".")
         if len(workspace_package_paths) != len(set(workspace_package_paths)) or set(
             workspace_package_paths
         ) != set(packages):
@@ -5233,10 +5240,22 @@ def verify_owner_sdist_cargo_packages(
             str(package["name"]).replace("-", "_"),
         )
         expected_target_path = library.get("path", "src/lib.rs")
+        package_document = document.get("package")
+        if not isinstance(package_document, dict):
+            raise EvidenceError(
+                f"owner-sdist Cargo package has no exact identity: {source_id}/{package_path}"
+            )
+        uses_default_library = "lib" not in document
+        autolib = package_document.get("autolib", True)
+        package_name_observation = normalize_package_name(
+            observed_target_name
+        ) == normalize_package_name(str(package["name"]))
         if (
             not isinstance(expected_target_name, str)
-            or expected_target_name != observed_target_name
+            or (expected_target_name != observed_target_name and not package_name_observation)
             or not isinstance(expected_target_path, str)
+            or not isinstance(autolib, bool)
+            or (uses_default_library and not autolib)
         ):
             raise EvidenceError(
                 f"owner-sdist Cargo package library target differs: {source_id}/{package_path}"

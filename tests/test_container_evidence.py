@@ -4039,7 +4039,10 @@ def test_owner_sdist_zip_subtree_tracks_top_level_roots() -> None:
         )
 
 
-def owner_sdist_cargo_package_case() -> tuple[
+def owner_sdist_cargo_package_case(
+    *,
+    root_manifest: bytes | None = None,
+) -> tuple[
     bytes,
     dict[str, Any],
     list[dict[str, Any]],
@@ -4051,9 +4054,10 @@ def owner_sdist_cargo_package_case() -> tuple[
         b'[workspace]\nmembers = ["src/native/", "src/native/child"]\n\n'
         b'[workspace.package]\nversion = "1.0.0"\nlicense = "MIT"\n'
     )
-    root_manifest = (
-        b'[package]\nname = "demo-native"\nversion.workspace = true\nlicense.workspace = true\n'
-    )
+    if root_manifest is None:
+        root_manifest = (
+            b'[package]\nname = "demo-native"\nversion.workspace = true\nlicense.workspace = true\n'
+        )
     child_manifest = (
         b'[package]\nname = "demo-child"\nversion.workspace = true\nlicense.workspace = true\n'
     )
@@ -4127,7 +4131,7 @@ def owner_sdist_cargo_package_case() -> tuple[
         ],
     }
     bindings: set[tuple[str, str | None, str]] = {
-        (".", "src/lib.rs", "demo_native"),
+        (".", "src/lib.rs", "demo-native"),
         ("child", None, "demo-child"),
     }
     return archive, source, subtree, bindings
@@ -4154,11 +4158,35 @@ def test_owner_sdist_cargo_packages_bind_exact_manifests_and_source_files() -> N
     )
 
 
-def test_owner_sdist_root_package_binds_exact_manifest_and_source_file() -> None:
+def test_owner_sdist_does_not_invent_a_disabled_default_library() -> None:
+    archive, source, subtree, bindings = owner_sdist_cargo_package_case(
+        root_manifest=(
+            b'[package]\nname = "demo-native"\n'
+            b"version.workspace = true\nlicense.workspace = true\n"
+            b"autolib = false\n"
+            b'\n[[bin]]\nname = "demo-native"\npath = "src/lib.rs"\n'
+        )
+    )
+
+    with pytest.raises(evidence.EvidenceError, match="library target differs"):
+        evidence.verify_owner_sdist_cargo_packages(
+            archive,
+            source_id="owner-sdist:python:demo@1.0#src/native",
+            source=source,
+            archive_name="demo-1.0.tar.gz",
+            subtree=subtree,
+            bindings=bindings,
+        )
+
+
+@pytest.mark.parametrize("workspace_suffix", (b"", b"\n[workspace]\n"))
+def test_owner_sdist_root_package_binds_exact_manifest_and_source_file(
+    workspace_suffix: bytes,
+) -> None:
     manifest = (
         b'[package]\nname = "demo"\nversion = "1.0"\nlicense = "MIT"\n\n'
         b'[lib]\nname = "_demo"\npath = "src/native.rs"\n'
-    )
+    ) + workspace_suffix
     license_text = b"MIT fixture license\n"
     source_file = b"pub fn demo() {}\n"
     files = {
@@ -4297,8 +4325,8 @@ def test_owner_sdist_cargo_packages_reject_coordinated_source_substitution(
     elif mutation == "license":
         source["reviewed_license"] = "GPL-3.0-only"
     else:
-        bindings.remove((".", "src/lib.rs", "demo_native"))
-        bindings.add((".", "src/nonexistent.rs", "demo_native"))
+        bindings.remove((".", "src/lib.rs", "demo-native"))
+        bindings.add((".", "src/nonexistent.rs", "demo-native"))
 
     with pytest.raises(evidence.EvidenceError, match=message):
         evidence.verify_owner_sdist_cargo_packages(

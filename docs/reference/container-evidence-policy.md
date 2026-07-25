@@ -429,12 +429,15 @@ CycloneDX license expression or SPDX ID, and it must equal
 Owner-subtree package records pin each Cargo package's path, name, version, and
 exact `Cargo.toml` bytes. Each local observation must name one of those
 packages. Its PURL path and file `bom-ref` must agree, and a PURL fragment must
-name a regular file in the verified subtree. If an SBOM uses a compiled-library
-name instead of the package name, bundle generation also requires the name and
-fragment to match the pinned manifest's library target. Bundle generation
-parses the pinned root or workspace and package manifests, resolves inherited
-version and license fields, and requires the package list to match the selected
-root package or workspace members exactly.
+name a regular file in the verified subtree. A fragmented observation may keep
+the normalized package name or use the compiled-library target name. In both
+cases, the fragment must match the pinned manifest's library target path. An
+explicit `[lib]` target is honored; the verifier does not invent a default
+`src/lib.rs` target when `[package] autolib = false`. Bundle generation parses
+the pinned root or workspace and package manifests, including a package that is
+also its workspace root, resolves inherited version and license fields, and
+requires the package list to match the selected root package or workspace
+members exactly.
 
 Owner-subtree and checksummed-release reviews carry the same
 `reviewed_license` expression as their source record. Bundle generation
