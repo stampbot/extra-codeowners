@@ -96,6 +96,7 @@ MAX_TAR_EXTENSIONS_TOTAL_BYTES = 8 * 1024 * 1024
 MAX_IMAGE_MEMBERS = 250_000
 MAX_IMAGE_TOTAL_BYTES = 2 * 1024 * 1024 * 1024
 MAX_DOCKER_SAVE_BYTES = MAX_IMAGE_TOTAL_BYTES + 256 * 1024 * 1024
+MAX_IMAGE_EXPORT_RECORD_BYTES = 64 * 1024
 MAX_PROCESS_ERROR_BYTES = 64 * 1024
 MAX_JSON_BYTES = 64 * 1024 * 1024
 MAX_JSON_DEPTH = 64
@@ -108,6 +109,8 @@ MAX_CPYTHON_PATCHLEVEL_BYTES = 64 * 1024
 MAX_RECORD_ENTRIES = 100_000
 MAX_HISTORICAL_RECORD_ENTRIES = MAX_RECORD_ENTRIES
 MAX_CYCLONEDX_COMPONENTS = 10_000
+IMAGE_EXPORT_SCHEMA_VERSION = 1
+IMAGE_EXPORT_KIND = "extra-codeowners/container-image-export"
 MAX_CYCLONEDX_HASHES = 16
 MAX_CYCLONEDX_LICENSES = 16
 MAX_CYCLONEDX_OBSERVATION_FIELDS = 16
@@ -157,6 +160,7 @@ LICENSE_NAME = re.compile(
     r"(^|/)(copying|copyright|licen[cs]es?|notice|authors?)([._-].*)?$", re.IGNORECASE
 )
 SHA256 = re.compile(r"^sha256:[0-9a-f]{64}$")
+LOWER_SHA256 = re.compile(r"^[0-9a-f]{64}$")
 SHA512_LINE = re.compile(r"^([0-9a-f]{128})  (\S.*)$")
 SHELL_VARIABLE = re.compile(r"\$[A-Za-z_][A-Za-z0-9_]*|\$\{[^{}]+\}")
 DIST_INFO = re.compile(r"(?:^|/)site-packages/([^/]+)\.dist-info/METADATA$")
@@ -1869,55 +1873,12 @@ def run(
 
 
 def executable(name: str) -> str:
+    """Resolve one fixed helper required by the offline collector."""
+
     path = shutil.which(name)
     if path is None:
         raise EvidenceError(f"required executable is not available: {name}")
     return path
-
-
-def save_docker_image_bounded(image_id: str, destination: Path) -> None:
-    """Stream docker-save output with hard stdout and diagnostic limits."""
-
-    process = subprocess.Popen(  # noqa: S603 - fixed executable and arguments
-        [executable("docker"), "image", "save", image_id],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    if process.stdout is None or process.stderr is None:
-        process.kill()
-        process.wait()
-        raise EvidenceError("cannot capture docker image save output")
-    selector = selectors.DefaultSelector()
-    selector.register(process.stdout, selectors.EVENT_READ, "stdout")
-    selector.register(process.stderr, selectors.EVENT_READ, "stderr")
-    saved_bytes = 0
-    error = bytearray()
-    try:
-        with destination.open("wb") as output:
-            while selector.get_map():
-                for key, _events in selector.select():
-                    chunk = os.read(key.fd, 1024 * 1024)
-                    if not chunk:
-                        selector.unregister(key.fileobj)
-                        continue
-                    if key.data == "stdout":
-                        saved_bytes += len(chunk)
-                        if saved_bytes > MAX_DOCKER_SAVE_BYTES:
-                            raise EvidenceError("docker save archive exceeds the size limit")
-                        output.write(chunk)
-                    elif len(error) < MAX_PROCESS_ERROR_BYTES:
-                        remaining = MAX_PROCESS_ERROR_BYTES - len(error)
-                        error.extend(chunk[:remaining])
-        return_code = process.wait()
-    except BaseException:
-        process.kill()
-        process.wait()
-        raise
-    finally:
-        selector.close()
-    if return_code:
-        detail = bytes(error).decode(errors="replace").strip()
-        raise EvidenceError(f"docker image save failed: {detail}")
 
 
 def load_json_bytes(content: bytes, source: str) -> dict[str, Any]:
@@ -2311,82 +2272,159 @@ def hash_member(
     return digest.hexdigest()
 
 
-def image_inventory(
-    image: str,
-    platform: str,
-    subject_digest: str,
-    *,
-    allow_config_digest_subject: bool = False,
-) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Inventory effective components and every regular file in every image layer."""
+def validate_image_export_record(value: object) -> Mapping[str, Any]:
+    """Validate the narrow Docker-export to offline-parser handoff."""
 
-    if not SHA256.fullmatch(subject_digest):
-        raise EvidenceError("subject digest must be sha256:<64 lowercase hex characters>")
-    inspect = strict_json_loads(
-        run(["docker", "image", "inspect", image], max_output_bytes=MAX_JSON_BYTES),
-        "docker inspect",
+    record = require_exact_fields(
+        value,
+        {"schema_version", "kind", "archive", "image"},
+        "container image export record",
     )
-    if not isinstance(inspect, list) or len(inspect) != 1:
-        raise EvidenceError("docker image inspect did not return exactly one image")
-    info = inspect[0]
-    if not isinstance(info, dict):
-        raise EvidenceError("docker image inspect entry is not an object")
-    expected_arch = platform.removeprefix("linux/")
-    if info.get("Os") != "linux" or info.get("Architecture") != expected_arch:
-        raise EvidenceError(
-            f"image platform is {info.get('Os')}/{info.get('Architecture')}, expected {platform}"
-        )
-    image_id = verify_local_image_subject(
-        info,
-        subject_digest,
-        allow_config_digest_subject=allow_config_digest_subject,
-    )
-
-    with tempfile.TemporaryDirectory(prefix="extra-codeowners-image-") as temporary:
-        saved = Path(temporary) / "image.tar"
-        save_docker_image_bounded(image_id, saved)
-        inventory, files = _inventory_saved_image(
-            saved,
-            platform,
-            subject_digest,
-            expected_config_digest=image_id,
-        )
-
-    return inventory, files
-
-
-def verify_local_image_subject(
-    info: Mapping[str, Any],
-    subject_digest: str,
-    *,
-    allow_config_digest_subject: bool,
-) -> str:
-    """Bind a claimed subject to a pulled manifest or an explicitly local config."""
-
-    image_id = info.get("Id")
-    if not isinstance(image_id, str) or not SHA256.fullmatch(image_id):
-        raise EvidenceError("Docker returned an invalid image configuration digest")
-    repo_digests = info.get("RepoDigests")
-    if repo_digests is None:
-        repo_digests = []
-    if not isinstance(repo_digests, list) or not all(
-        isinstance(item, str) for item in repo_digests
+    if (
+        record["schema_version"] != IMAGE_EXPORT_SCHEMA_VERSION
+        or isinstance(record["schema_version"], bool)
+        or record["kind"] != IMAGE_EXPORT_KIND
     ):
-        raise EvidenceError("Docker returned invalid repository digests")
-    manifest_digests: set[str] = set()
-    for item in repo_digests:
-        _, separator, digest = item.rpartition("@")
-        if not separator or not SHA256.fullmatch(digest):
-            raise EvidenceError(f"Docker returned an invalid repository digest: {item!r}")
-        manifest_digests.add(digest)
-    if subject_digest in manifest_digests:
-        return image_id
-    if allow_config_digest_subject and subject_digest == image_id:
-        return image_id
-    raise EvidenceError(
-        "claimed subject digest is not a repository digest for the local image; "
-        "configuration digests are allowed only for explicitly local CI evidence"
+        raise EvidenceError("container image export record has an unsupported contract")
+    archive = require_exact_fields(
+        record["archive"],
+        {"filename", "sha256", "size"},
+        "container image export archive",
     )
+    if (
+        archive["filename"] != "image.tar"
+        or not isinstance(archive["sha256"], str)
+        or LOWER_SHA256.fullmatch(archive["sha256"]) is None
+        or not isinstance(archive["size"], int)
+        or isinstance(archive["size"], bool)
+        or not 1 <= archive["size"] <= MAX_DOCKER_SAVE_BYTES
+    ):
+        raise EvidenceError("container image export archive binding is invalid")
+    image = require_exact_fields(
+        record["image"],
+        {"config_digest", "platform", "subject_digest"},
+        "container image export identity",
+    )
+    if (
+        image["platform"] not in {"linux/amd64", "linux/arm64"}
+        or not isinstance(image["config_digest"], str)
+        or SHA256.fullmatch(image["config_digest"]) is None
+        or not isinstance(image["subject_digest"], str)
+        or SHA256.fullmatch(image["subject_digest"]) is None
+    ):
+        raise EvidenceError("container image export identity is invalid")
+    return record
+
+
+def _image_export_file_identity(
+    metadata: os.stat_result,
+    *,
+    source: str,
+    expected_size: int,
+) -> tuple[int, ...]:
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_nlink != 1
+        or metadata.st_size != expected_size
+    ):
+        raise EvidenceError(f"{source} is not one exact single-link regular file")
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_mode,
+        metadata.st_nlink,
+        metadata.st_uid,
+        metadata.st_gid,
+        metadata.st_size,
+        metadata.st_mtime_ns,
+        metadata.st_ctime_ns,
+    )
+
+
+def image_archive_inventory(
+    archive_path: Path,
+    export_record_path: Path,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Verify and parse one Docker export entirely inside the offline boundary."""
+
+    record = validate_image_export_record(
+        strict_json_loads(
+            read_stable_local_bytes(
+                export_record_path,
+                max_bytes=MAX_IMAGE_EXPORT_RECORD_BYTES,
+                source="container image export record",
+            ),
+            "container image export record",
+        )
+    )
+    archive_record = record["archive"]
+    image_record = record["image"]
+    expected_size = int(archive_record["size"])
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    nonblock = getattr(os, "O_NONBLOCK", 0)
+    cloexec = getattr(os, "O_CLOEXEC", 0)
+    if not nofollow or not nonblock or not cloexec:
+        raise EvidenceError("container image export requires secure descriptor support")
+    absolute_archive = archive_path.absolute()
+    descriptor = -1
+    try:
+        before = _image_export_file_identity(
+            os.stat(absolute_archive, follow_symlinks=False),
+            source="container image export archive",
+            expected_size=expected_size,
+        )
+        descriptor = os.open(
+            absolute_archive,
+            os.O_RDONLY | nofollow | nonblock | cloexec,
+        )
+        opened = _image_export_file_identity(
+            os.fstat(descriptor),
+            source="container image export archive",
+            expected_size=expected_size,
+        )
+        if opened != before:
+            raise EvidenceError("container image export archive changed before it was opened")
+        digest = hashlib.sha256()
+        received = 0
+        while received <= expected_size:
+            chunk = os.read(descriptor, min(1024 * 1024, expected_size + 1 - received))
+            if not chunk:
+                break
+            received += len(chunk)
+            if received > expected_size:
+                raise EvidenceError("container image export archive exceeds its recorded size")
+            digest.update(chunk)
+        if received != expected_size or digest.hexdigest() != archive_record["sha256"]:
+            raise EvidenceError("container image export archive differs from its binding")
+
+        descriptor_path = Path(f"/proc/self/fd/{descriptor}")
+        if not descriptor_path.exists():
+            raise EvidenceError("container image export descriptor is unavailable")
+        inventory, files = _inventory_saved_image(
+            descriptor_path,
+            str(image_record["platform"]),
+            str(image_record["subject_digest"]),
+            expected_config_digest=str(image_record["config_digest"]),
+        )
+        after = _image_export_file_identity(
+            os.fstat(descriptor),
+            source="container image export archive",
+            expected_size=expected_size,
+        )
+        path_after = _image_export_file_identity(
+            os.stat(absolute_archive, follow_symlinks=False),
+            source="container image export archive",
+            expected_size=expected_size,
+        )
+        if after != before or path_after != before:
+            raise EvidenceError("container image export archive changed while it was parsed")
+        return inventory, files
+    except OSError as exc:
+        raise EvidenceError(f"cannot read container image export archive: {exc}") from exc
+    finally:
+        if descriptor >= 0:
+            with contextlib.suppress(OSError):
+                os.close(descriptor)
 
 
 def _inventory_saved_image(
@@ -13833,12 +13871,10 @@ def extract_ci_artifact(archive_path: Path, architecture: str, output: Path) -> 
             shutil.rmtree(temporary, ignore_errors=True)
 
 
-def command_inventory(args: argparse.Namespace) -> None:
-    inventory, files = image_inventory(
-        args.image,
-        args.platform,
-        args.subject_digest,
-        allow_config_digest_subject=args.allow_config_digest_subject,
+def command_inventory_image_archive(args: argparse.Namespace) -> None:
+    inventory, files = image_archive_inventory(
+        Path(args.archive),
+        Path(args.export_record),
     )
     Path(args.output).write_bytes(canonical_json(inventory))
     Path(args.files_output).write_bytes(canonical_json(files))
@@ -14263,18 +14299,15 @@ def command_run_metadata(args: argparse.Namespace) -> None:
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description=__doc__)
     subcommands = result.add_subparsers(required=True)
-    inventory = subcommands.add_parser("inventory", help="inventory a local single-platform image")
-    inventory.add_argument("--image", required=True)
-    inventory.add_argument("--platform", choices=("linux/amd64", "linux/arm64"), required=True)
-    inventory.add_argument("--subject-digest", required=True)
+    inventory = subcommands.add_parser(
+        "inventory-image-archive",
+        help="inventory one hash-bound image export inside the offline parser",
+    )
+    inventory.add_argument("--archive", required=True)
+    inventory.add_argument("--export-record", required=True)
     inventory.add_argument("--output", required=True)
     inventory.add_argument("--files-output", required=True)
-    inventory.add_argument(
-        "--allow-config-digest-subject",
-        action="store_true",
-        help="allow a local-only config digest instead of a pulled repository manifest digest",
-    )
-    inventory.set_defaults(function=command_inventory)
+    inventory.set_defaults(function=command_inventory_image_archive)
 
     verify = subcommands.add_parser("verify", help="compare an inventory with reviewed policy")
     verify.add_argument("--inventory", required=True)

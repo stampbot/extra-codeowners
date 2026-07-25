@@ -573,6 +573,36 @@ def saved_image_layers(path: Path, layers: list[bytes], *, architecture: str = "
     path.write_bytes(tar_bytes(contents))
 
 
+def image_export_record(
+    path: Path,
+    *,
+    platform: str = "linux/amd64",
+    subject_digest: str = "sha256:" + "a" * 64,
+) -> dict[str, object]:
+    with tarfile.open(path, mode="r:") as archive:
+        manifest_stream = archive.extractfile("manifest.json")
+        assert manifest_stream is not None
+        manifest = json.loads(manifest_stream.read())
+    config_name = manifest[0]["Config"]
+    return {
+        "schema_version": evidence.IMAGE_EXPORT_SCHEMA_VERSION,
+        "kind": evidence.IMAGE_EXPORT_KIND,
+        "archive": {
+            "filename": "image.tar",
+            "sha256": evidence.sha256_file(
+                path,
+                max_bytes=evidence.MAX_DOCKER_SAVE_BYTES,
+            ),
+            "size": path.stat().st_size,
+        },
+        "image": {
+            "config_digest": f"sha256:{config_name.rsplit('/', 1)[-1]}",
+            "platform": platform,
+            "subject_digest": subject_digest,
+        },
+    }
+
+
 def saved_image(path: Path, *, architecture: str = "amd64") -> None:
     apk_architecture = {"amd64": "x86_64", "arm64": "aarch64"}[architecture]
     first = tar_bytes(
@@ -1821,22 +1851,121 @@ def test_saved_image_requires_exact_config_rootfs_binding(rootfs_kind: str, tmp_
         evidence._inventory_saved_image(image, "linux/amd64", "sha256:" + "a" * 64)
 
 
-def test_docker_save_stream_has_an_exact_output_bound(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+def test_hash_bound_image_export_is_inventoried_from_one_stable_descriptor(
+    tmp_path: Path,
 ) -> None:
-    fake_docker = tmp_path / "docker"
-    fake_docker.write_text("#!/bin/sh\nprintf abc")
-    fake_docker.chmod(0o755)
-    monkeypatch.setattr(evidence, "executable", lambda _name: str(fake_docker))
-    monkeypatch.setattr(evidence, "MAX_DOCKER_SAVE_BYTES", 3)
-    output = tmp_path / "image.tar"
+    image = tmp_path / "image.tar"
+    saved_image(image)
+    record = tmp_path / "image-export.json"
+    record.write_bytes(evidence.canonical_json(image_export_record(image)))
 
-    evidence.save_docker_image_bounded("sha256:" + "a" * 64, output)
-    assert output.read_bytes() == b"abc"
+    expected = evidence._inventory_saved_image(
+        image,
+        "linux/amd64",
+        "sha256:" + "a" * 64,
+    )
+    assert evidence.image_archive_inventory(image, record) == expected
 
-    fake_docker.write_text("#!/bin/sh\nprintf abcd")
-    with pytest.raises(evidence.EvidenceError, match="exceeds the size limit"):
-        evidence.save_docker_image_bounded("sha256:" + "a" * 64, output)
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    (
+        ("archive-sha256", "differs from its binding"),
+        ("archive-size", "not one exact single-link regular file"),
+        ("config-digest", "configuration does not match"),
+        ("platform", "platform does not match"),
+        ("subject-digest", "identity is invalid"),
+        ("schema", "unsupported contract"),
+    ),
+)
+def test_image_export_record_rejects_identity_and_archive_drift(
+    mutation: str,
+    message: str,
+    tmp_path: Path,
+) -> None:
+    image = tmp_path / "image.tar"
+    saved_image(image)
+    value = image_export_record(image)
+    if mutation == "archive-sha256":
+        cast(dict[str, object], value["archive"])["sha256"] = "b" * 64
+    elif mutation == "archive-size":
+        cast(dict[str, object], value["archive"])["size"] = image.stat().st_size - 1
+    elif mutation == "config-digest":
+        cast(dict[str, object], value["image"])["config_digest"] = "sha256:" + "b" * 64
+    elif mutation == "platform":
+        cast(dict[str, object], value["image"])["platform"] = "linux/arm64"
+    elif mutation == "subject-digest":
+        cast(dict[str, object], value["image"])["subject_digest"] = "sha256:" + "A" * 64
+    else:
+        value["schema_version"] = 2
+    record = tmp_path / "image-export.json"
+    record.write_bytes(evidence.canonical_json(value))
+
+    with pytest.raises(evidence.EvidenceError, match=message):
+        evidence.image_archive_inventory(image, record)
+
+
+def test_image_export_record_and_archive_reject_links(
+    tmp_path: Path,
+) -> None:
+    image = tmp_path / "image.tar"
+    saved_image(image)
+    record_target = tmp_path / "record-target.json"
+    record_target.write_bytes(evidence.canonical_json(image_export_record(image)))
+    record_link = tmp_path / "image-export.json"
+    record_link.symlink_to(record_target)
+    with pytest.raises(evidence.EvidenceError, match="single-link regular file"):
+        evidence.image_archive_inventory(image, record_link)
+
+    record_link.unlink()
+    record_link.write_bytes(record_target.read_bytes())
+    archive_link = tmp_path / "second-image.tar"
+    os.link(image, archive_link)
+    with pytest.raises(evidence.EvidenceError, match="single-link regular file"):
+        evidence.image_archive_inventory(image, record_link)
+
+
+def test_image_export_archive_replacement_during_parse_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    image = tmp_path / "image.tar"
+    saved_image(image)
+    record = tmp_path / "image-export.json"
+    record.write_bytes(evidence.canonical_json(image_export_record(image)))
+
+    def replace_during_parse(
+        _saved: Path,
+        _platform: str,
+        _subject_digest: str,
+        *,
+        expected_config_digest: str | None = None,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        assert expected_config_digest is not None
+        image.write_bytes(b"x" * image.stat().st_size)
+        return {}, {}
+
+    monkeypatch.setattr(evidence, "_inventory_saved_image", replace_during_parse)
+    with pytest.raises(evidence.EvidenceError, match="changed while it was parsed"):
+        evidence.image_archive_inventory(image, record)
+
+
+def test_image_export_record_rejects_duplicate_json_keys(tmp_path: Path) -> None:
+    image = tmp_path / "image.tar"
+    saved_image(image)
+    value = evidence.canonical_json(image_export_record(image))
+    duplicate = value.replace(
+        b'  "kind": "extra-codeowners/container-image-export",\n',
+        (
+            b'  "kind": "extra-codeowners/container-image-export",\n'
+            b'  "kind": "extra-codeowners/container-image-export",\n'
+        ),
+    )
+    record = tmp_path / "image-export.json"
+    record.write_bytes(duplicate)
+
+    with pytest.raises(evidence.EvidenceError, match="duplicate JSON object key"):
+        evidence.image_archive_inventory(image, record)
 
 
 def test_docker_save_outer_members_are_bounded_before_random_access(
@@ -2144,36 +2273,6 @@ def test_apk_architecture_must_match_image_platform(tmp_path: Path) -> None:
 
     with pytest.raises(evidence.EvidenceError, match="does not match linux/amd64"):
         evidence._inventory_saved_image(image, "linux/amd64", "sha256:" + "a" * 64)
-
-
-def test_claimed_subject_must_match_a_local_repository_digest() -> None:
-    config_digest = "sha256:" + "a" * 64
-    manifest_digest = "sha256:" + "b" * 64
-    info = {
-        "Id": config_digest,
-        "RepoDigests": [f"ghcr.io/stampbot/extra-codeowners@{manifest_digest}"],
-    }
-
-    assert (
-        evidence.verify_local_image_subject(
-            info, manifest_digest, allow_config_digest_subject=False
-        )
-        == config_digest
-    )
-    with pytest.raises(evidence.EvidenceError, match="claimed subject digest"):
-        evidence.verify_local_image_subject(
-            info, "sha256:" + "c" * 64, allow_config_digest_subject=False
-        )
-    with pytest.raises(evidence.EvidenceError, match="claimed subject digest"):
-        evidence.verify_local_image_subject(info, config_digest, allow_config_digest_subject=False)
-    assert (
-        evidence.verify_local_image_subject(
-            {"Id": config_digest, "RepoDigests": []},
-            config_digest,
-            allow_config_digest_subject=True,
-        )
-        == config_digest
-    )
 
 
 def test_apk_database_requires_commit_provenance() -> None:
@@ -10837,14 +10936,18 @@ def test_container_job_uses_the_locked_evidence_environment() -> None:
     workflow = Path(".github/workflows/ci.yml").read_text()
     container_job = workflow.split("  container:\n", 1)[1]
     evidence_step = container_job.split(
-        "      - name: Collect and verify container distribution evidence\n", 1
+        "      - name: Export container bytes without parsing image layers\n", 1
     )[1].split("      - name: Upload container distribution evidence\n", 1)[0]
     assert "astral-sh/setup-uv@" in container_job
     assert "uv sync --all-groups --frozen" in container_job
-    assert container_job.count("uv run --frozen python .github/scripts/container_evidence.py") == 3
+    assert container_job.count("uv run --frozen python .github/scripts/container_evidence.py") == 2
     assert "python .github/scripts/container_evidence.py bundle" not in workflow
+    assert "--parser image-inventory" in evidence_step
     assert "--parser evidence" in evidence_step
-    assert evidence_step.index(" inventory \\") < evidence_step.index(" run-metadata \\")
+    assert evidence_step.index("export_container_image.py") < evidence_step.index(
+        "inventory-image-archive"
+    )
+    assert evidence_step.index("inventory-image-archive") < evidence_step.index(" run-metadata \\")
     assert evidence_step.index(" run-metadata \\") < evidence_step.index(" verify \\")
     assert evidence_step.index(" verify \\") < evidence_step.index(" bundle \\")
     assert "packages: write" not in workflow
@@ -13113,6 +13216,10 @@ def test_workflows_keep_release_blocked_and_collect_review_evidence_in_ci() -> N
     assert '--platform "$PLATFORM"' in ci
     assert "--require-image-revision" in ci
     assert "--allow-config-digest-subject" in ci
+    assert ".github/scripts/export_container_image.py" in ci
+    assert "--parser image-inventory" in ci
+    assert "inventory-image-archive" in ci
+    assert "container_evidence.py inventory " not in ci
     assert (
         "Upload container distribution evidence\n        if: ${{ always() && !cancelled() }}" in ci
     )

@@ -587,11 +587,18 @@ imply that a wider gate passed.
 
 | Command | Scope |
 | --- | --- |
+| `inventory-image-archive` | Inside the rootless offline parser, verify one Docker-only export record and its exact archive hash, size, configuration digest, subject, and platform; then inventory every layer through one stable no-follow descriptor. |
 | `verify` | One standalone component inventory, the policy schema, exact components, payload baselines, native-component coverage, APK database history, license coverage, and optional distribution approval. |
 | `bundle` | The `verify` scope plus the all-layer inventory, Dockerfile and base binding, post-base provenance, Git source binding, lock-to-wheel and lock-to-sdist binding, verified direct and Alpine source stores, recipe and distfile verification, retained notices, and deterministic archive limits. It requires trusted plan digests and sizes and has no network fallback. |
 | `native-component-coverage-view` | The canonical per-owner coverage ledger after full standalone inventory verification. |
 | `filesystem-policy-view` | A human-readable projection of raw layer records into the canonical directory-effect and removal policy. |
 | `verify-ci-policy` | The offline policy checks possible from an extracted pull-request artifact, materialized policy blob, and materialized Dockerfile blob. |
+
+`export_container_image.py` is deliberately not an archive parser or a
+collector command. It is the Docker-owning producer for
+`inventory-image-archive`: it inspects bounded Docker JSON, streams the saved
+image under a fixed byte limit, and writes the binding record. It never opens
+the archive it creates.
 
 Run `verify` for one platform inventory with:
 

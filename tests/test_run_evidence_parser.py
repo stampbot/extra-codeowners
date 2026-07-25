@@ -22,6 +22,7 @@ COLLECTOR_SCRIPT = ROOT / ".github" / "scripts" / "container_evidence.py"
 IMAGE = f"ghcr.io/stampbot/evidence-parser@sha256:{'1' * 64}"
 SOURCE_CONTAINER_NAME = f"extra-codeowners-source-plan-{'1' * 32}"
 EVIDENCE_CONTAINER_NAME = f"extra-codeowners-evidence-{'2' * 32}"
+IMAGE_INVENTORY_CONTAINER_NAME = f"extra-codeowners-image-inventory-{'3' * 32}"
 
 
 def load_script(path: Path, name: str) -> ModuleType:
@@ -152,6 +153,60 @@ def test_accepts_an_exact_local_docker_image_id(
         "nr_inodes=131072,mode=0700,uid=65532,gid=65532"
     )
     assert command.count(work_mount) == 1
+
+
+def test_image_inventory_parser_has_a_separate_bounded_offline_profile(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    archive = tmp_path / "image.tar"
+    record = tmp_path / "image-export.json"
+    archive.write_bytes(b"opaque archive")
+    record.write_bytes(b"{}\n")
+    output = tmp_path / "output"
+    output.mkdir()
+    allow_test_output(monkeypatch)
+
+    command = sandbox.build_docker_command(
+        image=IMAGE,
+        container_name=IMAGE_INVENTORY_CONTAINER_NAME,
+        inputs={"archive": archive, "export-record": record},
+        output=output,
+        parser="image-inventory",
+        parser_arguments=(
+            "inventory-image-archive",
+            "--archive",
+            "/inputs/archive",
+            "--export-record",
+            "/inputs/export-record",
+            "--output",
+            "/output/components-amd64.json",
+            "--files-output",
+            "/output/all-layer-files-amd64.json",
+        ),
+    )
+
+    assert "--network=none" in command
+    assert "--read-only" in command
+    assert "--cap-drop=ALL" in command
+    assert "--security-opt=no-new-privileges=true" in command
+    assert "--security-opt=seccomp=builtin" in command
+    assert "--memory=3221225472" in command
+    assert "--memory-swap=3221225472" in command
+    assert not any(argument.startswith("--tmpfs=/work:") for argument in command)
+    assert not any("docker.sock" in argument for argument in command)
+    assert not any("repo" in argument for argument in command)
+    assert command[-9:] == (
+        "inventory-image-archive",
+        "--archive",
+        "/inputs/archive",
+        "--export-record",
+        "/inputs/export-record",
+        "--output",
+        "/output/components-amd64.json",
+        "--files-output",
+        "/output/all-layer-files-amd64.json",
+    )
 
 
 def test_evidence_work_capacity_covers_retained_tree_and_staged_output() -> None:
@@ -403,7 +458,7 @@ def test_output_must_be_a_small_empty_hardened_tmpfs(
 
 @pytest.mark.parametrize(
     ("parser", "megabytes"),
-    (("source-plan", 64), ("evidence", 1152)),
+    (("source-plan", 64), ("image-inventory", 160), ("evidence", 1152)),
 )
 def test_each_parser_has_one_fixed_output_tmpfs_bound(
     tmp_path: Path,
@@ -1329,6 +1384,141 @@ def test_source_plan_materialization_rejects_in_place_mutation(
         sandbox.materialize_source_plan(source, destination)
 
     assert list(destination.iterdir()) == []
+
+
+def make_image_inventory_outputs(root: Path, architecture: str = "amd64") -> dict[str, bytes]:
+    values = {
+        f"components-{architecture}.json": collector.canonical_json(
+            {
+                "schema_version": 7,
+                "platform": f"linux/{architecture}",
+                "subject_digest": "sha256:" + "a" * 64,
+            }
+        ),
+        f"all-layer-files-{architecture}.json": collector.canonical_json(
+            {
+                "schema_version": 7,
+                "platform": f"linux/{architecture}",
+                "subject_digest": "sha256:" + "a" * 64,
+                "layers": [],
+            }
+        ),
+    }
+    for name, content in values.items():
+        (root / name).write_bytes(content)
+    return values
+
+
+def test_materializes_only_the_exact_stable_image_inventory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "image-output"
+    destination = tmp_path / "trusted-inventory"
+    source.mkdir(mode=0o700)
+    destination.mkdir(mode=0o700)
+    expected = make_image_inventory_outputs(source)
+    allow_materialization_tmpfs(monkeypatch)
+
+    binding = sandbox.materialize_image_inventory(source, destination, "amd64")
+
+    assert {path.name: path.read_bytes() for path in destination.iterdir()} == expected
+    assert all(path.stat().st_nlink == 1 for path in destination.iterdir())
+    assert all(stat.S_IMODE(path.stat().st_mode) == 0o644 for path in destination.iterdir())
+    assert binding == {
+        "schema_version": 1,
+        "kind": "extra-codeowners/materialized-image-inventory",
+        "architecture": "amd64",
+        "files": [
+            {
+                "filename": name,
+                "sha256": sandbox.hashlib.sha256(expected[name]).hexdigest(),
+                "size": len(expected[name]),
+            }
+            for name in (
+                "components-amd64.json",
+                "all-layer-files-amd64.json",
+            )
+        ],
+    }
+
+
+@pytest.mark.parametrize(
+    "attack",
+    (
+        "extra-entry",
+        "case-variant",
+        "symlink",
+        "fifo",
+        "hardlink",
+        "oversized",
+        "occupied-destination",
+    ),
+)
+def test_image_inventory_materialization_rejects_hostile_output_sets(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    attack: str,
+) -> None:
+    source = tmp_path / "image-output"
+    destination = tmp_path / "trusted-inventory"
+    source.mkdir(mode=0o700)
+    destination.mkdir(mode=0o700)
+    expected = make_image_inventory_outputs(source)
+    component = source / "components-amd64.json"
+    if attack == "extra-entry":
+        (source / "extra").write_bytes(b"unexpected")
+    elif attack == "case-variant":
+        (source / "COMPONENTS-AMD64.JSON").write_bytes(b"unexpected")
+    elif attack == "symlink":
+        component.unlink()
+        component.symlink_to(source / "all-layer-files-amd64.json")
+    elif attack == "fifo":
+        component.unlink()
+        os.mkfifo(component)
+    elif attack == "hardlink":
+        os.link(component, tmp_path / "outside-hardlink")
+    elif attack == "oversized":
+        component.write_bytes(b"x" * (sandbox.IMAGE_INVENTORY_JSON_BYTES + 1))
+    else:
+        (destination / "occupied").write_bytes(b"do not replace")
+    allow_materialization_tmpfs(monkeypatch)
+
+    with pytest.raises(sandbox.ParserSandboxError):
+        sandbox.materialize_image_inventory(source, destination, "amd64")
+
+    for name in expected:
+        assert not (destination / name).exists()
+    assert not any(
+        path.name.startswith(".extra-codeowners-materialize-") for path in destination.iterdir()
+    )
+
+
+def test_image_inventory_materialization_requires_explicit_host_handoff(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "image-output"
+    destination = tmp_path / "trusted-inventory"
+    source.mkdir(mode=0o700)
+    destination.mkdir(mode=0o700)
+    make_image_inventory_outputs(source)
+    captured: dict[str, object] = {}
+
+    def require_tmpfs(path: Path, parser: str, **kwargs: object) -> None:
+        captured.update({"path": path, "parser": parser, **kwargs})
+
+    monkeypatch.setattr(sandbox, "_require_bounded_output_tmpfs", require_tmpfs)
+
+    sandbox.materialize_image_inventory(source, destination, "amd64")
+
+    assert captured == {
+        "path": source,
+        "parser": "image-inventory",
+        "require_empty": False,
+        "owner_uid": os.getuid(),
+        "owner_gid": os.getgid(),
+    }
 
 
 def test_materializes_only_the_exact_stable_evidence_outputs(

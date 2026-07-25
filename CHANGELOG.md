@@ -77,6 +77,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Rel
 - A read-only immutable-release preflight contract that binds GitHub's setting
   to one repository and workflow run without sharing publication authority.
 - A non-root container, Helm chart source, and supply-chain workflows.
+- A Docker-only, bounded image exporter and a separate rootless, networkless
+  layer parser. Their create-once handoff binds the saved archive to its exact
+  hash, size, configuration digest, subject, and platform; only two bounded
+  inventory JSON files cross back to the host.
 - Schema-v7 container evidence with a lossless review ledger that separates
   observed artifact facts, reviewed source mappings, and closure. It preserves
   document-local and repeated SBOM occurrence identity, component hashes and
