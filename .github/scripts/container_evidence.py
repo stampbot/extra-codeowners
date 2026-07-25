@@ -5109,6 +5109,13 @@ def verify_owner_sdist_cargo_packages(
     )
     workspace = workspace_document.get("workspace")
     root_package = workspace_document.get("package")
+    package_documents = {
+        package_path: parse_manifest(
+            str(package["manifest"]["member"]),
+            f"Cargo package manifest for {package_path}",
+        )
+        for package_path, package in packages.items()
+    }
     if workspace is None:
         if (
             source["path"] != "."
@@ -5124,19 +5131,25 @@ def verify_owner_sdist_cargo_packages(
     else:
         if not isinstance(workspace, dict):
             raise EvidenceError(f"owner-sdist has an invalid Cargo workspace: {source_id}")
-        root_workspace = (
-            source["path"] == "."
-            and isinstance(root_package, dict)
-            and "." in packages
-            and packages["."]["manifest"] == workspace_manifest
-        )
+        if root_package is not None and not isinstance(root_package, dict):
+            raise EvidenceError(f"owner-sdist has an invalid Cargo workspace: {source_id}")
+        root_workspace = source["path"] == "." and isinstance(root_package, dict)
+        if isinstance(root_package, dict) and (
+            not root_workspace
+            or "workspace" in root_package
+            or "." not in packages
+            or packages["."]["manifest"] != workspace_manifest
+        ):
+            raise EvidenceError(f"owner-sdist has an invalid Cargo workspace: {source_id}")
         workspace_package_value = workspace.get("package", {})
         raw_members = workspace.get("members", [])
+        raw_exclude = workspace.get("exclude", [])
         if not isinstance(workspace_package_value, dict) or (
             not isinstance(raw_members, list)
             or (not root_workspace and not raw_members)
             or len(raw_members) > MAX_OBSERVATIONS_PER_OWNER
             or not all(isinstance(member, str) for member in raw_members)
+            or raw_exclude != []
         ):
             raise EvidenceError(f"owner-sdist has an invalid Cargo workspace: {source_id}")
         workspace_package = workspace_package_value
@@ -5144,15 +5157,19 @@ def verify_owner_sdist_cargo_packages(
         source_path = PurePosixPath(str(source["path"]))
         workspace_member = PurePosixPath(str(workspace_manifest["member"]))
         workspace_relative_root = PurePosixPath(*workspace_member.parts[1:-1])
-        workspace_package_paths: list[str] = []
+        explicit_workspace_package_paths: list[str] = []
         for raw_member in raw_members:
             assert isinstance(raw_member, str)
+            if any(character in raw_member for character in "*?[]{}"):
+                raise EvidenceError(
+                    f"owner-sdist Cargo workspace globs are unsupported: {source_id}"
+                )
             if raw_member == ".":
                 if not root_workspace:
                     raise EvidenceError(
                         f"owner-sdist Cargo workspace member is not a root package: {source_id}"
                     )
-                workspace_package_paths.append(".")
+                explicit_workspace_package_paths.append(".")
                 continue
             try:
                 member_path = workspace_relative_root / checked_path(raw_member)
@@ -5161,12 +5178,168 @@ def verify_owner_sdist_cargo_packages(
                 raise EvidenceError(
                     f"owner-sdist Cargo workspace member escapes the reviewed subtree: {source_id}"
                 ) from exc
-            workspace_package_paths.append("." if not relative.parts else str(relative))
-        if root_workspace and "." not in workspace_package_paths:
-            workspace_package_paths.append(".")
-        if len(workspace_package_paths) != len(set(workspace_package_paths)) or set(
-            workspace_package_paths
-        ) != set(packages):
+            explicit_workspace_package_paths.append("." if not relative.parts else str(relative))
+        if len(explicit_workspace_package_paths) != len(set(explicit_workspace_package_paths)):
+            raise EvidenceError(f"owner-sdist Cargo workspace members differ: {source_id}")
+        workspace_package_paths = set(explicit_workspace_package_paths)
+        if root_workspace:
+            workspace_package_paths.add(".")
+
+        def resolve_cargo_relative_path(raw_path: object, base: PurePosixPath) -> PurePosixPath:
+            if not isinstance(raw_path, str):
+                raise EvidenceError(f"owner-sdist Cargo path dependency is invalid: {source_id}")
+            try:
+                encoded = raw_path.encode("utf-8")
+            except UnicodeEncodeError as exc:
+                raise EvidenceError(
+                    f"owner-sdist Cargo path dependency is invalid: {source_id}"
+                ) from exc
+            if (
+                not raw_path
+                or len(encoded) > MAX_PATH_BYTES
+                or raw_path.startswith("/")
+                or "\\" in raw_path
+                or "//" in raw_path
+                or any(
+                    ord(character) < 32 or 0x7F <= ord(character) <= 0x9F for character in raw_path
+                )
+            ):
+                raise EvidenceError(f"owner-sdist Cargo path dependency is invalid: {source_id}")
+            parts = list(base.parts) if str(base) != "." else []
+            raw_parts = raw_path.split("/")
+            if raw_parts[-1] == "":
+                raw_parts.pop()
+            for part in raw_parts:
+                if part == ".":
+                    continue
+                if part in {"", ".."}:
+                    if part != ".." or not parts:
+                        raise EvidenceError(
+                            f"owner-sdist Cargo path dependency escapes retained source: "
+                            f"{source_id}"
+                        )
+                    parts.pop()
+                    continue
+                parts.append(part)
+            return PurePosixPath(*parts) if parts else PurePosixPath(".")
+
+        def dependency_tables(
+            document: Mapping[str, Any],
+            purpose: str,
+        ) -> list[Mapping[str, Any]]:
+            result: list[Mapping[str, Any]] = []
+            for table_name in ("dependencies", "dev-dependencies", "build-dependencies"):
+                value = document.get(table_name)
+                if value is None:
+                    continue
+                if not isinstance(value, dict):
+                    raise EvidenceError(
+                        f"owner-sdist has an invalid Cargo dependency table: {source_id}/{purpose}"
+                    )
+                result.append(value)
+            target = document.get("target")
+            if target is not None:
+                if not isinstance(target, dict):
+                    raise EvidenceError(
+                        f"owner-sdist has an invalid Cargo target table: {source_id}/{purpose}"
+                    )
+                for target_value in target.values():
+                    if not isinstance(target_value, dict):
+                        raise EvidenceError(
+                            f"owner-sdist has an invalid Cargo target table: {source_id}/{purpose}"
+                        )
+                    for table_name in (
+                        "dependencies",
+                        "dev-dependencies",
+                        "build-dependencies",
+                    ):
+                        value = target_value.get(table_name)
+                        if value is None:
+                            continue
+                        if not isinstance(value, dict):
+                            raise EvidenceError(
+                                f"owner-sdist has an invalid Cargo dependency table: "
+                                f"{source_id}/{purpose}"
+                            )
+                        result.append(value)
+            return result
+
+        path_dependency_count = 0
+
+        def add_path_dependencies(
+            tables: Sequence[Mapping[str, Any]],
+            *,
+            base: PurePosixPath,
+            purpose: str,
+        ) -> None:
+            nonlocal path_dependency_count
+            for table in tables:
+                for dependency_name, dependency in table.items():
+                    if not isinstance(dependency_name, str):
+                        raise EvidenceError(
+                            f"owner-sdist has an invalid Cargo dependency: {source_id}/{purpose}"
+                        )
+                    if not isinstance(dependency, dict) or "path" not in dependency:
+                        continue
+                    path_dependency_count += 1
+                    if path_dependency_count > MAX_OBSERVATIONS_PER_OWNER:
+                        raise EvidenceError(
+                            f"owner-sdist has too many Cargo path dependencies: {source_id}"
+                        )
+                    target = resolve_cargo_relative_path(dependency["path"], base)
+                    try:
+                        target.relative_to(workspace_relative_root)
+                        relative = target.relative_to(source_path)
+                    except ValueError as exc:
+                        raise EvidenceError(
+                            f"owner-sdist Cargo path dependency escapes the reviewed "
+                            f"workspace: {source_id}/{purpose}"
+                        ) from exc
+                    package_path = "." if not relative.parts else str(relative)
+                    if package_path not in packages:
+                        raise EvidenceError(
+                            f"owner-sdist Cargo path dependency is not reviewed: "
+                            f"{source_id}/{package_path}"
+                        )
+                    workspace_package_paths.add(package_path)
+
+        workspace_dependencies = workspace.get("dependencies")
+        if workspace_dependencies is not None:
+            if not isinstance(workspace_dependencies, dict):
+                raise EvidenceError(
+                    f"owner-sdist has an invalid Cargo dependency table: {source_id}/workspace"
+                )
+            add_path_dependencies(
+                (workspace_dependencies,),
+                base=workspace_relative_root,
+                purpose="workspace",
+            )
+        for package_path, document in package_documents.items():
+            package_base = (
+                source_path if package_path == "." else source_path / checked_path(package_path)
+            )
+            add_path_dependencies(
+                dependency_tables(document, package_path),
+                base=package_base,
+                purpose=package_path,
+            )
+            package_document = document.get("package")
+            if isinstance(package_document, dict) and "workspace" in package_document:
+                if root_workspace and package_path == ".":
+                    raise EvidenceError(f"owner-sdist has an invalid Cargo workspace: {source_id}")
+                if (
+                    resolve_cargo_relative_path(
+                        package_document["workspace"],
+                        package_base,
+                    )
+                    != workspace_relative_root
+                ):
+                    raise EvidenceError(
+                        f"owner-sdist Cargo package references another workspace: "
+                        f"{source_id}/{package_path}"
+                    )
+
+        if workspace_package_paths != set(packages):
             raise EvidenceError(f"owner-sdist Cargo workspace members differ: {source_id}")
 
     def resolved_package_field(
@@ -5206,10 +5379,7 @@ def verify_owner_sdist_cargo_packages(
                 f"owner-sdist Cargo package manifest is outside the reviewed subtree: "
                 f"{source_id}/{package_path}"
             )
-        document = parse_manifest(
-            str(manifest_record["member"]),
-            f"Cargo package manifest for {package_path}",
-        )
+        document = package_documents[package_path]
         package_document = document.get("package")
         if not isinstance(package_document, dict):
             raise EvidenceError(
@@ -5233,10 +5403,7 @@ def verify_owner_sdist_cargo_packages(
         if fragment_member is None:
             continue
         package = packages[package_path]
-        document = parse_manifest(
-            str(package["manifest"]["member"]),
-            f"Cargo package manifest for {package_path}",
-        )
+        document = package_documents[package_path]
         library = document.get("lib", {})
         if not isinstance(library, dict):
             raise EvidenceError(

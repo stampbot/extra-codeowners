@@ -4209,8 +4209,19 @@ def test_owner_sdist_rejects_an_invalid_explicit_library_target_name(
         (b"\n[workspace]\n", b"", None),
         (b'\n[workspace]\nmembers = ["."]\n', b"", None),
         (b"", b'workspace = ".."\n', "no exact Cargo workspace or root package"),
+        (
+            b"\n[workspace]\n",
+            b'workspace = ".."\n',
+            "invalid Cargo workspace",
+        ),
     ),
-    ids=("plain", "implicit-workspace-root", "explicit-workspace-root", "external-workspace"),
+    ids=(
+        "plain",
+        "implicit-workspace-root",
+        "explicit-workspace-root",
+        "external-workspace",
+        "conflicting-root-workspace",
+    ),
 )
 def test_owner_sdist_root_package_binds_exact_manifest_and_source_file(
     workspace_suffix: bytes,
@@ -4342,6 +4353,136 @@ def test_owner_sdist_root_package_binds_exact_manifest_and_source_file(
             archive_name="demo-1.0.tar.gz",
             subtree=verified_subtree,
             bindings={wrong_binding},
+        )
+
+
+def owner_sdist_root_workspace_child_case(
+    *,
+    root_manifest: bytes | None = None,
+) -> tuple[
+    bytes,
+    dict[str, Any],
+    list[dict[str, Any]],
+    set[tuple[str, str | None, str]],
+]:
+    """Build a root-package workspace whose child is an implicit path member."""
+
+    if root_manifest is None:
+        root_manifest = (
+            b'[package]\nname = "demo-root"\nversion = "1.0.0"\nlicense = "MIT"\n'
+            b'\n[workspace]\n\n[dependencies]\ndemo-child = { path = "child" }\n'
+        )
+    child_manifest = b'[package]\nname = "demo-child"\nversion = "1.0.0"\nlicense = "MIT"\n'
+    root_source = b"pub fn root() {}\n"
+    child_source = b"pub fn child() {}\n"
+    notice = b"MIT fixture license\n"
+    files = {
+        "Cargo.toml": root_manifest,
+        "LICENSE": notice,
+        "child/Cargo.toml": child_manifest,
+        "child/src/lib.rs": child_source,
+        "src/lib.rs": root_source,
+    }
+    subtree = [
+        {
+            "path": path,
+            "type": "file",
+            "mode": 0o644,
+            "size": len(content),
+            "sha256": evidence.sha256_bytes(content),
+        }
+        for path, content in sorted(files.items())
+    ]
+    archive = tar_bytes({f"demo-1.0/{path}": content for path, content in files.items()})
+    root_manifest_record = {
+        "member": "demo-1.0/Cargo.toml",
+        "sha256": evidence.sha256_bytes(root_manifest),
+        "size": len(root_manifest),
+    }
+    child_manifest_record = {
+        "member": "demo-1.0/child/Cargo.toml",
+        "sha256": evidence.sha256_bytes(child_manifest),
+        "size": len(child_manifest),
+    }
+    source = {
+        "kind": "owner-sdist-subpath",
+        "owner": "python:demo@1.0",
+        "path": ".",
+        "tree_sha256": evidence.sha256_bytes(evidence.canonical_json(subtree)),
+        "member_count": len(subtree),
+        "expanded_size": sum(len(content) for content in files.values()),
+        "reviewed_license": "MIT",
+        "workspace_manifest": root_manifest_record,
+        "cargo_packages": [
+            {
+                "path": ".",
+                "name": "demo-root",
+                "version": "1.0.0",
+                "manifest": root_manifest_record,
+            },
+            {
+                "path": "child",
+                "name": "demo-child",
+                "version": "1.0.0",
+                "manifest": child_manifest_record,
+            },
+        ],
+        "notices": [
+            {
+                "member": "demo-1.0/LICENSE",
+                "sha256": evidence.sha256_bytes(notice),
+                "size": len(notice),
+            }
+        ],
+    }
+    return archive, source, subtree, {(".", "src/lib.rs", "demo-root")}
+
+
+def test_owner_sdist_accounts_for_implicit_path_dependency_workspace_members() -> None:
+    archive, source, subtree, bindings = owner_sdist_root_workspace_child_case()
+    source_id = "owner-sdist:python:demo@1.0#."
+
+    evidence.verify_owner_sdist_cargo_packages(
+        archive,
+        source_id=source_id,
+        source=source,
+        archive_name="demo-1.0.tar.gz",
+        subtree=subtree,
+        bindings=bindings,
+    )
+
+    omitted = copy.deepcopy(source)
+    omitted["cargo_packages"] = [omitted["cargo_packages"][0]]
+    with pytest.raises(evidence.EvidenceError, match="path dependency is not reviewed"):
+        evidence.verify_owner_sdist_cargo_packages(
+            archive,
+            source_id=source_id,
+            source=omitted,
+            archive_name="demo-1.0.tar.gz",
+            subtree=subtree,
+            bindings=bindings,
+        )
+
+
+def test_owner_sdist_requires_the_implicit_workspace_root_package() -> None:
+    root_manifest = (
+        b'[package]\nname = "demo-root"\nversion = "1.0.0"\nlicense = "MIT"\n'
+        b'\n[workspace]\nmembers = ["child"]\n'
+    )
+    archive, source, subtree, _bindings = owner_sdist_root_workspace_child_case(
+        root_manifest=root_manifest
+    )
+    source_id = "owner-sdist:python:demo@1.0#."
+    source["cargo_packages"] = [source["cargo_packages"][1]]
+
+    with pytest.raises(evidence.EvidenceError, match="invalid Cargo workspace"):
+        evidence.verify_owner_sdist_cargo_packages(
+            archive,
+            source_id=source_id,
+            source=source,
+            archive_name="demo-1.0.tar.gz",
+            subtree=subtree,
+            bindings=set(),
         )
 
 
