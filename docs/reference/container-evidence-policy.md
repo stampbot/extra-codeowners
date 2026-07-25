@@ -416,7 +416,7 @@ records.
 | --- | --- |
 | `alpine-aports` | `alpine:ORIGIN@VERSION`; a commit-pinned aports recipe, exact release distfiles, literal recipe identity and license, bounded sibling symlink exceptions, and retained notices. Every upstream recipe source must appear once with its exact checksum. Each allowed symlink must resolve directly to a retained regular sibling. |
 | `crates-io` | `crates-io:NAME@VERSION`; the canonical crates.io archive, exact `NAME-VERSION/Cargo.toml`, raw and normalized license, and retained notices. Archive root, manifest name/version/license, PURL, archive hash, and reviewed expression are bound together. Every regular archive member whose name denotes a license or notice must appear in the policy's exact notice set. |
-| `owner-sdist-subpath` | `owner-sdist:OWNER#PATH`; a canonical subtree—or `#.` for a single root Cargo package—of that same owner's locked sdist, with tree SHA-256, member count, expanded size, root or workspace and package manifests, reviewed license, and notices. Tar and ZIP parsers reject unsafe paths, duplicate members, devices, sparse files, and links. |
+| `owner-sdist-subpath` | `owner-sdist:OWNER#PATH`; a canonical subtree of that same owner's locked sdist. `#.` selects the archive root. The record pins the tree SHA-256, member count, expanded size, root or workspace manifest, every selected or reachable package manifest, reviewed license, and notices. Tar and ZIP parsers reject unsafe paths, duplicate members, devices, sparse files, and links. |
 | `checksummed-upstream-release` | `upstream-release:NAME@VERSION`; an exact archive, exact checksum document, selected filename, reviewed license, and notices. The observation name, version, download PURL, and SHA-256 must identify that archive. The strict GNU-style checksum parser requires exactly one matching record. |
 
 For crates.io records, `raw_license` must match the exact Cargo manifest.
@@ -428,16 +428,26 @@ CycloneDX license expression or SPDX ID, and it must equal
 
 Owner-subtree package records pin each Cargo package's path, name, version, and
 exact `Cargo.toml` bytes. Each local observation must name one of those
-packages. Its PURL path and file `bom-ref` must agree, and a PURL fragment must
-name a regular file in the verified subtree. A fragmented observation may keep
-the normalized package name or use the compiled-library target name. In both
-cases, the fragment must match the pinned manifest's library target path. An
-explicit `[lib]` target is honored; the verifier does not invent a default
-`src/lib.rs` target when `[package] autolib = false`. Bundle generation parses
-the pinned root or workspace and package manifests, including a package that is
-also its workspace root, resolves inherited version and license fields, and
-requires the package list to match the selected root package or workspace
-members exactly.
+packages. A reachable local dependency may lack its own SBOM observation, but
+it must still have a reviewed package record and a matching local entry in
+`Cargo.lock`.
+
+For an observed package, the PURL path and file `bom-ref` must agree, and a
+PURL fragment must name a regular file in the verified subtree. The absolute
+checkout prefix in a build-generated `bom-ref` is treated as opaque; the
+reviewed package identity comes from the Cargo PURL and pinned manifest. A
+fragmented observation may keep the normalized package name or use the
+compiled-library target name. In both cases, the fragment must match the
+pinned manifest's library target path. An explicit `[lib]` target is honored;
+the verifier does not invent a default `src/lib.rs` target when
+`autolib = false` is set in `[package]`.
+
+Bundle generation parses the pinned root or workspace and package manifests,
+including a package that is also its workspace root. It resolves inherited
+version, license, and local path-dependency fields. The reviewed package list
+must match the selected root plus declared or implicit workspace members and
+their reachable local path dependencies. An unused package or workspace
+dependency cannot justify its own inclusion.
 
 Owner-subtree and checksummed-release reviews carry the same
 `reviewed_license` expression as their source record. Bundle generation

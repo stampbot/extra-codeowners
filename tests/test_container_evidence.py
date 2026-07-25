@@ -4327,11 +4327,25 @@ def test_owner_sdist_root_package_binds_exact_manifest_and_source_file(
         bindings={binding},
     )
 
-    wrong_root = copy.deepcopy(observation)
-    wrong_root["bom_ref"] = "path+file:///build/unrelated#1.0 bin-target-0"
+    alternate_checkout = copy.deepcopy(observation)
+    alternate_checkout["bom_ref"] = (
+        "path+file:///build/repository-name-differs-from-python-owner#1.0 bin-target-0"
+    )
+    assert (
+        evidence.owner_sdist_observation_path(
+            alternate_checkout,
+            owner="python:demo@1.0",
+            source_id=source_id,
+            source_record=source,
+        )
+        == binding
+    )
+
+    missing_checkout = copy.deepcopy(observation)
+    missing_checkout["bom_ref"] = "path+file:///#1.0 bin-target-0"
     with pytest.raises(evidence.EvidenceError, match="owner-sdist review differs"):
         evidence.owner_sdist_observation_path(
-            wrong_root,
+            missing_checkout,
             owner="python:demo@1.0",
             source_id=source_id,
             source_record=source,
@@ -5021,6 +5035,159 @@ def test_cargo_lock_verifier_rejects_missing_duplicate_foreign_and_unreviewed_pa
 
     with pytest.raises(evidence.EvidenceError, match="reviewed source file differs"):
         verify(valid + b"\n", context_content=valid)
+
+
+def test_cargo_lock_verifier_includes_unobserved_reviewed_local_packages() -> None:
+    crate_source_id = "crates-io:demo-crate@1.2.3"
+    local_source_id = "owner-sdist:python:demo@1.0#."
+    checksum = "a" * 64
+    sources: dict[str, dict[str, Any]] = {
+        crate_source_id: {
+            "kind": "crates-io",
+            "name": "demo-crate",
+            "version": "1.2.3",
+            "crate": {"sha256": checksum},
+        },
+        local_source_id: {
+            "kind": "owner-sdist-subpath",
+            "cargo_packages": [
+                {"name": "demo-root", "version": "1.0.0"},
+                {"name": "demo-child", "version": "1.0.0"},
+            ],
+        },
+    }
+    registry_package = (
+        "[[package]]\n"
+        'name = "demo-crate"\n'
+        'version = "1.2.3"\n'
+        f'source = "{evidence.CARGO_CRATES_IO_SOURCE}"\n'
+        f'checksum = "{checksum}"\n'
+    )
+    local_packages = (
+        '\n[[package]]\nname = "demo-root"\nversion = "1.0.0"\n'
+        '\n[[package]]\nname = "demo-child"\nversion = "1.0.0"\n'
+    )
+    lock = f"version = 4\n\n{registry_package}{local_packages}".encode()
+    context: dict[str, Any] = {
+        "owner": "python:demo@1.0",
+        "owner_root_observations": set(),
+        "owner_sdist_bindings": {
+            local_source_id: {(".", "src/lib.rs", "demo-root")},
+        },
+        "observations": {},
+        "record": {
+            "cargo_lock": {
+                "member": "demo-1.0/Cargo.lock",
+                "sha256": evidence.sha256_bytes(lock),
+                "size": len(lock),
+                "source_ids": [crate_source_id],
+                "non_sbom_packages": [],
+            },
+            "component_reviews": [],
+        },
+    }
+
+    assert (
+        evidence.verify_owner_cargo_lock(
+            context,
+            sources,
+            tar_bytes({"demo-1.0/Cargo.lock": lock}),
+            archive_name="demo-1.0.tar.gz",
+        )
+        == lock
+    )
+
+    missing_child = lock.replace(
+        b'\n[[package]]\nname = "demo-child"\nversion = "1.0.0"\n',
+        b"",
+    )
+    missing_context = copy.deepcopy(context)
+    missing_context["record"]["cargo_lock"]["sha256"] = evidence.sha256_bytes(missing_child)
+    missing_context["record"]["cargo_lock"]["size"] = len(missing_child)
+    with pytest.raises(evidence.EvidenceError, match="local packages differ"):
+        evidence.verify_owner_cargo_lock(
+            missing_context,
+            sources,
+            tar_bytes({"demo-1.0/Cargo.lock": missing_child}),
+            archive_name="demo-1.0.tar.gz",
+        )
+
+
+def test_native_policy_allows_reviewed_local_package_without_sbom_observation() -> None:
+    policy = native_component_v7_policy_case()
+    source_id = "owner-sdist:python:demo@1.0#."
+    root_manifest = {
+        "member": "demo-1.0/Cargo.toml",
+        "sha256": "a" * 64,
+        "size": 100,
+    }
+    policy["native_component_sources"] = {
+        source_id: {
+            "kind": "owner-sdist-subpath",
+            "owner": "python:demo@1.0",
+            "path": ".",
+            "tree_sha256": "b" * 64,
+            "member_count": 5,
+            "expanded_size": 500,
+            "reviewed_license": "MIT",
+            "workspace_manifest": root_manifest,
+            "cargo_packages": [
+                {
+                    "path": ".",
+                    "name": "native-core",
+                    "version": "1.0.0",
+                    "manifest": root_manifest,
+                },
+                {
+                    "path": "child",
+                    "name": "native-child",
+                    "version": "1.0.0",
+                    "manifest": {
+                        "member": "demo-1.0/child/Cargo.toml",
+                        "sha256": "c" * 64,
+                        "size": 100,
+                    },
+                },
+            ],
+            "notices": [
+                {
+                    "member": "demo-1.0/LICENSE",
+                    "sha256": "d" * 64,
+                    "size": 100,
+                }
+            ],
+        }
+    }
+    for records in policy["native_component_coverage"].values():
+        owner = records[0]
+        sbom = owner["sboms"][0]
+        component = sbom["observation"]["components"][0]
+        component.update(
+            {
+                "name": "native-core",
+                "version": "1.0.0",
+                "purl": "pkg:cargo/native-core@1.0.0?download_url=file://.#src/lib.rs",
+                "bom_ref": ("path+file:///build/repository-name#1.0.0 bin-target-0"),
+                "hashes": [],
+                "licenses": [{"license": {"id": "MIT"}}],
+            }
+        )
+        rehash_policy_sbom(owner, sbom)
+        reference = evidence.retained_observation_reference(
+            sbom["path"],
+            sbom["observation"]["observation_sha256"],
+            component,
+        )
+        owner["component_reviews"] = [
+            {
+                "observations": [reference],
+                "source": source_id,
+                "reviewed_license": "MIT",
+            }
+        ]
+        owner["payload_dispositions"][0]["observations"] = [reference]
+
+    evidence.validate_native_component_policy_schema(policy)
 
 
 def test_native_component_v7_open_owner_requires_exact_unresolved_evidence() -> None:

@@ -316,8 +316,10 @@ size, the sorted crates.io source IDs represented by SBOM observations, and
 the exact registry packages found only in the lockfile. Bundle generation
 reparses the retained lockfile and the pinned Cargo manifests. It rejects
 missing or duplicate packages, foreign registries, checksum drift, unaccounted
-registry packages, and local Cargo packages that disagree with the workspace,
-the reviewed subtree, or the SBOM observations.
+registry packages, and local Cargo packages that disagree with the reviewed
+manifests or lockfile. A local package does not need its own upstream SBOM
+observation. It must still be reachable from the selected root or workspace,
+listed in the reviewed source record, and present in `Cargo.lock`.
 
 This proves agreement among the SBOM, lockfile, registry archive, manifest,
 license, and notices. It does not prove that those sources built the wheel.

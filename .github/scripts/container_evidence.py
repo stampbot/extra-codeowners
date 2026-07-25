@@ -4720,6 +4720,16 @@ def verify_owner_cargo_lock(
         )
 
     expected_local: set[tuple[str, str]] = set()
+    for source_id in owner_context.get("owner_sdist_bindings", {}):
+        source_record = sources[source_id]
+        if source_record["kind"] != "owner-sdist-subpath":
+            raise EvidenceError(
+                f"retained owner Cargo.lock has an invalid local source for {owner}"
+            )
+        expected_local.update(
+            (str(package["name"]), str(package["version"]))
+            for package in source_record["cargo_packages"]
+        )
     for reference in owner_context["owner_root_observations"]:
         observation = owner_context["observations"][reference]
         cargo_identity = cargo_purl_identity(
@@ -5778,16 +5788,10 @@ def owner_sdist_observation_path(
         )
     reviewed_path = PurePosixPath(str(source_record["path"]))
     if reviewed_path == PurePosixPath("."):
-        _owner, owner_name, _owner_version = parse_native_owner(
-            owner,
-            f"native-component coverage {owner} owner-sdist review",
-        )
         relative_parts = () if relative_path is None else relative_path.parts
         root_index = len(observed_path.parts) - len(relative_parts) - 1
-        if (
-            root_index < 0
-            or normalize_package_name(observed_path.parts[root_index]) != owner_name
-            or (relative_parts and observed_path.parts[root_index + 1 :] != relative_parts)
+        if root_index < 1 or (
+            relative_parts and observed_path.parts[root_index + 1 :] != relative_parts
         ):
             raise EvidenceError(
                 f"native-component coverage {owner} owner-sdist review differs from {source_id}"
@@ -6221,9 +6225,10 @@ def validate_native_owner_review(
         expected_package_paths = {
             str(package["path"]) for package in sources[source_id]["cargo_packages"]
         }
-        if {
-            package_path for package_path, _fragment, _target_name in bindings
-        } != expected_package_paths:
+        if (
+            not {package_path for package_path, _fragment, _target_name in bindings}
+            <= expected_package_paths
+        ):
             raise EvidenceError(
                 f"native-component coverage {owner} owner-sdist packages differ from {source_id}"
             )
