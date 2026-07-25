@@ -22,10 +22,13 @@ Collect:
 - the current chart version and complete values, when using Helm
 - the current and target
   [database upgrade notes](../reference/upgrade-notes.md)
-- a PostgreSQL role that can alter only the Extra CODEOWNERS database
+- a PostgreSQL role with read access to the production Extra CODEOWNERS
+  database and ownership of only the isolated restore database
 - tested `pg_dump` and `pg_restore` versions compatible with the
   server
-- storage for the backup and a separate test restore
+- an operator-owned backup directory on a trusted Linux host with
+  `mktemp`, `sha256sum`, and GNU `stat`
+- storage for a separate test restore
 - access to pause webhook ingress and application processes
 - repository administration access to restore GitHub's native code-owner rule.
 
@@ -205,23 +208,77 @@ In the trusted Bash shell, set these variables through your approved secret
 mechanism:
 
 ```bash
+set -euo pipefail
+while IFS= read -r variable; do
+  if [[ "$variable" == PG* && "$variable" != "PGPASSWORD" ]]; then
+    unset "$variable"
+  fi
+done < <(compgen -e)
 : "${PGPASSWORD:?set PGPASSWORD through the approved secret mechanism}"
 export PGHOST="db.example.com"
 export PGPORT="5432"
 export PGUSER="extra_codeowners_backup"
 export PGPASSWORD
 export PGDATABASE="extra_codeowners"
+export PGSSLMODE="verify-full"
+export PGSSLROOTCERT="/path/to/reviewed-postgresql-ca.pem"
+test -f "$PGSSLROOTCERT"
+test -r "$PGSSLROOTCERT"
+test ! -L "$PGSSLROOTCERT"
+PGSSLROOTCERT_MODE="$(stat -c %a -- "$PGSSLROOTCERT")"
+test $((8#$PGSSLROOTCERT_MODE & 8#022)) -eq 0
+PGSSLROOTCERT_SHA256="$(sha256sum -- "$PGSSLROOTCERT" | cut -d' ' -f1)"
+test "${#PGSSLROOTCERT_SHA256}" -eq 64
+export PGGSSENCMODE="disable"
 ```
 
 `PGPASSWORD` must already contain the backup role's password without printing
 it. The other values must explicitly identify the production Extra CODEOWNERS
-database. These variables are for `pg_dump` and `pg_restore` only; the helper
-removes them before any application command.
+database. `PGHOST` must be a DNS name covered by the database server
+certificate, and `PGSSLROOTCERT` must name the reviewed CA file for that
+server. `verify-full` makes both PostgreSQL clients reject a bad certificate
+or hostname instead of falling back to an unauthenticated connection.
+`PGGSSENCMODE=disable` prevents libpq from preferring GSSAPI encryption and
+bypassing that certificate path when the operator host has Kerberos
+credentials. Record the CA checksum in the change record.
+
+These variables are for `pg_dump` and `pg_restore` only; the helper removes
+them before any application command.
 
 Don't set `PGSERVICE`, `PGSERVICEFILE`, or `PGPASSFILE`, and don't rely on
-`.pgpass`. Run:
+`.pgpass`.
+
+Create a new private directory under the approved backup parent. Do not reuse
+a directory from an earlier attempt:
 
 ```bash
+set -euo pipefail
+BACKUP_PARENT="/path/to/operator-owned/backup-storage"
+test -d "$BACKUP_PARENT"
+test ! -L "$BACKUP_PARENT"
+test -O "$BACKUP_PARENT"
+test "$(stat -c %u -- "$BACKUP_PARENT")" -eq "$(id -u)"
+test "$(stat -c %a -- "$BACKUP_PARENT")" = "700"
+umask 077
+BACKUP_DIR="$(
+  mktemp --directory \
+    "$BACKUP_PARENT/extra-codeowners-upgrade.XXXXXXXXXX"
+)"
+BACKUP_NAME="extra-codeowners-before-upgrade.dump"
+BACKUP_FILE="$BACKUP_DIR/$BACKUP_NAME"
+BACKUP_CHECKSUM_FILE="$BACKUP_FILE.sha256"
+chmod 0700 -- "$BACKUP_DIR"
+test "$(stat -c %u -- "$BACKUP_DIR")" -eq "$(id -u)"
+test "$(stat -c %a -- "$BACKUP_DIR")" = "700"
+test ! -e "$BACKUP_FILE"
+test ! -e "$BACKUP_CHECKSUM_FILE"
+```
+
+The random directory is created atomically. Its mode and ownership checks
+must pass before the database client runs. Create the dump and its checksum:
+
+```bash
+set -euo pipefail
 pg_dump \
   --host="$PGHOST" \
   --port="$PGPORT" \
@@ -229,24 +286,63 @@ pg_dump \
   --format=custom \
   --no-owner \
   --no-acl \
-  --file=extra-codeowners-before-upgrade.dump \
+  --file="$BACKUP_FILE" \
   --dbname="$PGDATABASE"
+test -s "$BACKUP_FILE"
+test -f "$BACKUP_FILE"
+test ! -L "$BACKUP_FILE"
+chmod 0600 -- "$BACKUP_FILE"
+test "$(stat -c %u -- "$BACKUP_FILE")" -eq "$(id -u)"
+test "$(stat -c %a -- "$BACKUP_FILE")" = "600"
+(
+  set -o noclobber
+  cd "$BACKUP_DIR" || exit 1
+  sha256sum -- "$BACKUP_NAME" > "$BACKUP_NAME.sha256"
+)
+test -s "$BACKUP_CHECKSUM_FILE"
+test -f "$BACKUP_CHECKSUM_FILE"
+test ! -L "$BACKUP_CHECKSUM_FILE"
+test "$(stat -c %u -- "$BACKUP_CHECKSUM_FILE")" -eq "$(id -u)"
+test "$(stat -c %a -- "$BACKUP_CHECKSUM_FILE")" = "600"
 ```
 
-The command must exit with status zero and create a nonempty dump. Encrypt it
-with the approved backup system. Record its checksum, snapshot time, server
-major version, retention rule, and access controls.
+Every command must succeed. Encrypt the dump with the approved backup system.
+Record the checksum, snapshot time, server major version, retention rule, and
+access controls. Keep the plaintext only in the private directory for as long
+as the tested restore or rollback procedure needs it.
 
 A successful `pg_dump` is not restore evidence.
 
 ## 4. Restore and verify the backup
 
 Create an empty, access-restricted PostgreSQL database outside the production
-service path. Set `RESTORE_DATABASE` to its name, then restore through the same
-explicit host, port, and role:
+service path. Make `PGUSER` its owner, or grant that role `CONNECT` and the
+schema and object-creation rights needed by `pg_restore`, without granting
+access to any unrelated database. Set `RESTORE_DATABASE` to its name, then
+restore through the same explicit host, port, role, and authenticated TLS
+settings. Verify the protected file, CA, and recorded checksums immediately
+before the restore:
 
 ```bash
+set -euo pipefail
 RESTORE_DATABASE="extra_codeowners_restore"
+test -s "$BACKUP_FILE"
+test -f "$BACKUP_FILE"
+test ! -L "$BACKUP_FILE"
+test "$(stat -c %u -- "$BACKUP_FILE")" -eq "$(id -u)"
+test "$(stat -c %a -- "$BACKUP_FILE")" = "600"
+test -s "$BACKUP_CHECKSUM_FILE"
+test -f "$BACKUP_CHECKSUM_FILE"
+test ! -L "$BACKUP_CHECKSUM_FILE"
+test "$(stat -c %u -- "$BACKUP_CHECKSUM_FILE")" -eq "$(id -u)"
+test "$(stat -c %a -- "$BACKUP_CHECKSUM_FILE")" = "600"
+test "$(
+  sha256sum -- "$PGSSLROOTCERT" | cut -d' ' -f1
+)" = "$PGSSLROOTCERT_SHA256"
+(
+  cd "$BACKUP_DIR" || exit 1
+  sha256sum --check --strict -- "$BACKUP_NAME.sha256"
+)
 pg_restore \
   --host="$PGHOST" \
   --port="$PGPORT" \
@@ -255,7 +351,7 @@ pg_restore \
   --no-owner \
   --no-acl \
   --dbname="$RESTORE_DATABASE" \
-  extra-codeowners-before-upgrade.dump
+  "$BACKUP_FILE"
 ```
 
 Inject `EXTRA_CODEOWNERS_DATABASE_URL` for the isolated database, then run
@@ -278,7 +374,10 @@ After the PostgreSQL client work is complete, remove its credentials from the
 shell:
 
 ```bash
-unset PGHOST PGPORT PGUSER PGPASSWORD PGDATABASE RESTORE_DATABASE
+unset PGHOST PGPORT PGUSER PGPASSWORD PGDATABASE
+unset PGSSLMODE PGSSLROOTCERT PGSSLROOTCERT_MODE PGSSLROOTCERT_SHA256
+unset PGGSSENCMODE RESTORE_DATABASE
+unset BACKUP_PARENT BACKUP_DIR BACKUP_NAME BACKUP_FILE BACKUP_CHECKSUM_FILE
 ```
 
 Before step 5, replace `EXTRA_CODEOWNERS_DATABASE_URL` with the production URL

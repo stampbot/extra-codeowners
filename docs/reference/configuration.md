@@ -180,7 +180,8 @@ ignored, except for the libpq connection variables listed below.
 The production URL is the only database connection source. Percent-encode
 reserved characters in its username and password. Hostless and
 comma-separated multi-host URLs are rejected, as is an authority host combined
-with a query-string `host`.
+with a query-string `host`. An explicit authority port must be between 1 and
+65535; omission uses PostgreSQL's default port 5432.
 
 Only four query parameters are supported:
 
@@ -194,8 +195,9 @@ Only four query parameters are supported:
 Unknown query parameters are rejected. In particular, `service` URLs,
 `PGSERVICE`, and `PGSERVICEFILE` are unsupported. The application also supplies
 the password directly, so it does not use `.pgpass`; `PGPASSFILE` is rejected.
-The runtime and migrator pin `search_path=public` instead of accepting
-caller-supplied libpq `options`.
+The runtime and migrator set `gssencmode=disable` so GSSAPI encryption cannot
+bypass the pinned TLS certificate path. They pin `search_path=public` instead
+of accepting caller-supplied libpq `options`.
 
 Production startup and database commands reject these ambient variables when
 they are present, even with an empty value:

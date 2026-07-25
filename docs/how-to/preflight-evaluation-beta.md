@@ -67,7 +67,8 @@ policy must contain one delegation with:
 - that exact file path, not a glob
 - the exact effective CODEOWNER set, without `*`
 - the approver App
-- the exact labels used by the test as `required_labels`.
+- the exact labels used by the test as `required_labels`
+- an empty or omitted `forbidden_labels` set.
 
 The [configuration guide](configure.md) explains the policy format. The
 preflight rejects any broader beta enrollment or delegation.
@@ -134,6 +135,39 @@ hook is disabled.
 
 Record both Apps' numeric IDs, slugs, and installation IDs. Record the
 approver's numeric bot user ID too.
+
+Collect the public organization, repository, branch, and bot-account values
+with `gh`. Replace the four names first:
+
+```bash
+ORG="example"
+TARGET_REPOSITORY="extra-codeowners-beta"
+POLICY_REPOSITORY=".github"
+APPROVER_APP_SLUG="approver-beta"
+
+gh api "/orgs/$ORG" \
+  --jq '{organization_id: .id, organization_login: .login}'
+for REPOSITORY in "$TARGET_REPOSITORY" "$POLICY_REPOSITORY"; do
+  DEFAULT_BRANCH="$(
+    gh api "/repos/$ORG/$REPOSITORY" --jq '.default_branch'
+  )"
+  gh api "/repos/$ORG/$REPOSITORY" \
+    --jq '{repository_id: .id, full_name: .full_name,
+           default_branch: .default_branch}'
+  gh api "/repos/$ORG/$REPOSITORY/commits/$DEFAULT_BRANCH" \
+    --jq '{default_branch_sha: .sha}'
+done
+gh api "/users/${APPROVER_APP_SLUG}%5Bbot%5D" \
+  --jq '{approver_bot_user_id: .id, login: .login}'
+unset DEFAULT_BRANCH REPOSITORY
+```
+
+GitHub shows each App ID on the App's **General** settings page. The App slug
+is the final segment of that page's URL. Open each installation under the
+organization's **Settings → GitHub Apps** page; the installation ID is the
+numeric final segment of its URL. Match the displayed App and selected
+repositories before recording it. These setup reads may use your operator
+`gh` login; the preflight itself does not read `GH_TOKEN` or `GITHUB_TOKEN`.
 
 ## Store the local inputs
 
@@ -287,9 +321,11 @@ export EXTRA_CODEOWNERS_BETA_DATABASE_URL
 
 Use the exact `postgresql+psycopg` driver and include one host, database,
 username, and nonempty password. Percent-encode reserved characters in the
-username and password. A remote connection must use
-`sslmode=verify-full`. A direct loopback address or an operator-controlled
-Unix-socket proxy may omit TLS.
+username and password. An authority port, when present, must be between 1 and
+65535; omitting it selects PostgreSQL's port 5432. A remote connection must
+use `sslmode=verify-full`. A direct loopback address or an operator-controlled
+Unix-socket proxy may omit TLS. The preflight disables GSSAPI encryption so
+libpq cannot bypass the pinned TLS certificate path.
 
 The URL may use only `host`, `hostaddr`, `sslmode`, and `sslrootcert` query
 parameters. A query-string `host` requires an empty authority host. An explicit
@@ -350,12 +386,15 @@ uv run --no-sync python -I -S -B \
 A uv environment inside the checkout makes this command fail. Keep
 `UV_PROJECT_ENVIRONMENT` set to the external path used during bootstrap, and
 keep bytecode writes disabled. The `-I -S -B` flags are part of the security
-boundary: the standard-library-only bootstrap rejects untracked and ignored
-checkout content before it makes the external environment or checkout
-importable. It then loads dependencies before the checkout, without processing
-`.pth` files or site customization. The full source check compares tracked
-files with the signed tree after startup. Do not shorten this command to a
-direct module invocation.
+boundary: the standard-library-only bootstrap rejects tracked, untracked, and
+ignored changes, unsafe index flags, and replacement refs before it makes
+either source location importable. It first reads the owner-only configuration
+outside the checkout and requires this checkout's `HEAD` and raw tracked bytes
+to match the exact `source_revision`. It keeps the standard library first,
+followed by the reviewed checkout and external dependencies, without
+processing `.pth` files or site customization. The full source check then
+verifies the commit signature and repeats the signed-tree comparison. Do not
+shorten this command to a direct module invocation.
 
 A passing run exits `0` and creates a mode-`0600` report. Require the exact
 schema, source deployment kind, 11 check IDs, and passing outcomes:
@@ -415,8 +454,8 @@ several failures. Start with each failed check ID:
 - `branch_safety`: restore native code-owner review and a minimum review count
   of one. Remove the Extra CODEOWNERS required context and any merge queue.
 - `codeowners` and `policy`: fix GitHub's `.github/CODEOWNERS` errors and
-  restore the one exact App, delegation, file, owner set, and required-label
-  set.
+  restore the one exact App, delegation, file, owner set, required-label set,
+  and empty forbidden-label set.
 - `service_health`: compare the entire runtime identity with the TOML file.
   Confirm production mode, PostgreSQL, recent checker-App authentication, and
   healthy worker and reconciler tasks.

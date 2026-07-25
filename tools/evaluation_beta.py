@@ -322,7 +322,7 @@ class BetaConfig(BaseModel):
     source_revision: str
     source_signer_fingerprint: str
     source_ssh_allowed_signers_file: Path | None = None
-    source_checkout: Path = Path(".")
+    source_checkout: Path
     python_version: str
     uv_version: str
     extra_codeowners_version: str
@@ -447,7 +447,7 @@ class BetaConfig(BaseModel):
             or parsed.query
             or parsed.fragment
             or parsed.path not in {"", "/"}
-            or not 1 <= (port or 443) <= 65535
+            or not 1 <= (443 if port is None else port) <= 65535
         ):
             raise ValueError("service_url must be one HTTPS origin without credentials or a path")
         return normalized
@@ -469,7 +469,7 @@ class BetaConfig(BaseModel):
             or parsed.query
             or parsed.fragment
             or parsed.path != "/webhooks/github"
-            or not 1 <= (port or 443) <= 65535
+            or not 1 <= (443 if port is None else port) <= 65535
         ):
             raise ValueError(
                 "checker_webhook_url must be an HTTPS origin followed by /webhooks/github"
@@ -2601,10 +2601,11 @@ def _check_policy(config: BetaConfig, github: GitHubProbe) -> Evidence:
         or frozenset(delegation.for_owners) != owners
         or "*" in delegation.for_owners
         or delegation.required_labels != frozenset(labels)
+        or delegation.forbidden_labels
     ):
         raise PreflightError(
             "beta delegation must exactly match the configured App, test path, "
-            "CODEOWNERS, and required labels"
+            "CODEOWNERS, required labels, and no forbidden labels"
         )
 
     def alias_is_eligible(selected_labels: frozenset[str]) -> bool:
@@ -3107,7 +3108,7 @@ def _parser() -> argparse.ArgumentParser:
         default=Path(
             os.getenv("EXTRA_CODEOWNERS_BETA_CONFIG_FILE", "evaluation-beta-preflight.toml")
         ),
-        help="non-secret TOML configuration file",
+        help="owner-only non-secret TOML configuration outside the checkout",
     )
     preflight.add_argument(
         "--report",

@@ -188,14 +188,16 @@ Replace the App ID and every database placeholder. The URL must use the exact
 `postgresql+psycopg` driver and contain one explicit host, database, username,
 and nonempty password. Percent-encode reserved characters in the username and
 password. For remote PostgreSQL, keep `sslmode=verify-full`. Treat the complete
-URL as a secret.
+URL as a secret. An explicit port must be between 1 and 65535; omit it only
+when port 5432 is correct.
 
 Only `host`, `hostaddr`, `sslmode`, and `sslrootcert` query parameters are
 supported. `hostaddr` requires one explicit hostname, supplied either by the
 URL authority or by the `host` query parameter, plus `sslmode=verify-full`.
 Connection-service URLs, `.pgpass`, ambient libpq connection variables, and
 unknown query parameters are unsupported. The runtime and migrator pin
-`search_path=public`.
+`gssencmode=disable` so GSSAPI encryption cannot bypass the reviewed TLS
+certificate path, and pin `search_path=public`.
 
 If the provider uses a private CA, mount its certificate read-only below
 `/run/secrets/extra-codeowners/` in both the runtime and migration containers.

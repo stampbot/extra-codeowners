@@ -106,7 +106,25 @@ def test_isolated_postgresql_connect_args_neutralize_ambient_hostaddr(
     assert arguments["host"] == "localhost"
     assert arguments["hostaddr"] == ""
     assert arguments["port"] == 5432
+    assert arguments["gssencmode"] == "disable"
     assert arguments["sslmode"] == "disable"
+
+
+@pytest.mark.parametrize("port", [1, 65535])
+def test_isolated_postgresql_connect_args_preserve_valid_explicit_ports(port: int) -> None:
+    arguments = isolated_postgresql_connect_args(
+        f"postgresql+psycopg://user:password@localhost:{port}/database"
+    )
+
+    assert arguments["port"] == port
+
+
+@pytest.mark.parametrize("port", [-1, 0, 65536])
+def test_isolated_postgresql_connect_args_reject_invalid_explicit_ports(port: int) -> None:
+    with pytest.raises(ValueError, match="port must be between 1 and 65535"):
+        isolated_postgresql_connect_args(
+            f"postgresql+psycopg://user:password@localhost:{port}/database"
+        )
 
 
 def test_isolated_postgresql_connect_args_preserve_an_explicit_absolute_ca() -> None:

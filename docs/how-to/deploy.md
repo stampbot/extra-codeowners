@@ -142,7 +142,8 @@ postgresql+psycopg://DB_USER:DB_PASSWORD@DB_HOST:5432/DB_NAME?sslmode=verify-ful
 Replace every uppercase placeholder. The host, database, username, and
 nonempty password must all appear in the URL. Percent-encode reserved
 characters in the username and password, then treat the complete URL as a
-secret.
+secret. An explicit port must be between 1 and 65535; omit it only when port
+5432 is correct.
 
 Keep `sslmode=verify-full` for a remote database. Add provider CA options
 such as `sslrootcert=/run/secrets/extra-codeowners/database-ca.pem` when
@@ -161,7 +162,8 @@ Only `host`, `hostaddr`, `sslmode`, and `sslrootcert` query parameters are
 supported. Connection-service URLs, `PGSERVICE`, `PGSERVICEFILE`, `.pgpass`,
 and `PGPASSFILE` are not. Keep every ambient libpq connection variable out of
 the application and migrator environments; production validation fails even
-when one is present with an empty value. Both processes pin
+when one is present with an empty value. Both processes disable GSSAPI
+encryption so it cannot bypass the reviewed TLS certificate path, and pin
 `search_path=public`.
 
 Normal service startup checks the Alembic head and the

@@ -53,6 +53,9 @@ def isolated_postgresql_connect_args(database_url: str) -> dict[str, object]:
     if "PGSERVICE" in os.environ:
         raise ValueError("ambient PGSERVICE is not allowed")
     parsed = make_url(database_url)
+    port = parsed.port
+    if port is not None and not 1 <= port <= 65535:
+        raise ValueError("PostgreSQL URL port must be between 1 and 65535")
     allowed_query_parameters = {"host", "hostaddr", "sslmode", "sslrootcert"}
     if set(parsed.query) - allowed_query_parameters:
         raise ValueError("PostgreSQL URL contains unsupported connection parameters")
@@ -88,7 +91,10 @@ def isolated_postgresql_connect_args(database_url: str) -> dict[str, object]:
         # PGSERVICE is rejected above because libpq has no safe empty override.
         "hostaddr": hostaddr or "",
         "password": parsed.password,
-        "port": parsed.port or 5432,
+        "port": 5432 if port is None else port,
+        # libpq otherwise prefers GSSAPI encryption to SSL when credentials
+        # are available, bypassing the pinned TLS certificate contract.
+        "gssencmode": "disable",
         "sslmode": sslmode or ("disable" if local and not hostaddr else "verify-full"),
         "user": parsed.username,
     }

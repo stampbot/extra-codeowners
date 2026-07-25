@@ -651,6 +651,11 @@ def test_policy_must_enroll_and_delegate_to_configured_approver(
             ),
             "must exactly match",
         ),
+        (
+            ORGANIZATION_POLICY,
+            REPOSITORY_POLICY + b'forbidden_labels = ["do-not-approve"]\n',
+            "no forbidden labels",
+        ),
     ],
 )
 def test_policy_scope_is_exactly_the_disposable_fixture(
@@ -881,6 +886,11 @@ def test_database_failure_is_sanitized_and_insecure_metric_must_be_zero(
         ({"source_revision": "main"}, "source_revision"),
         ({"service_url": "http://beta.example.test"}, "service_url"),
         ({"service_url": "https://user:secret@beta.example.test"}, "service_url"),
+        ({"service_url": "https://beta.example.test:0"}, "service_url"),
+        (
+            {"checker_webhook_url": "https://beta.example.test:0/webhooks/github"},
+            "checker_webhook_url",
+        ),
         (
             {"checker_webhook_url": "https://other.example.test/webhooks/github"},
             "inspected service_url",
@@ -1010,6 +1020,14 @@ def test_config_file_is_bounded_and_resolves_checkout_relative_to_it(
     loaded = beta.BetaConfig.from_file(path)
 
     assert loaded.source_checkout == checkout.resolve()
+
+
+def test_beta_config_requires_an_explicit_source_checkout(tmp_path: Path) -> None:
+    values = config_values(tmp_path)
+    values.pop("source_checkout")
+
+    with pytest.raises(ValidationError, match="source_checkout"):
+        beta.BetaConfig.model_validate(values)
 
 
 @pytest.mark.parametrize("kind", ["mode", "hardlink", "owner", "symlink", "fifo"])
@@ -1956,6 +1974,7 @@ def test_database_probe_is_postgres_read_only_and_at_exact_migration(
     assert captured["connect_args"]["dbname"] == "beta"
     assert captured["connect_args"]["user"] == "operator"
     assert captured["connect_args"]["password"] == "secret"
+    assert captured["connect_args"]["gssencmode"] == "disable"
     assert captured["connect_args"]["sslmode"] == "verify-full"
     assert captured["poolclass"] is NullPool
     assert captured["pool_pre_ping"] is False
@@ -1987,6 +2006,9 @@ def test_database_probe_rejects_ambient_libpq_connection_settings(
     "database_url",
     [
         "postgresql+psycopg://operator:secret@db.example.test/beta",
+        ("postgresql+psycopg://operator:secret@db.example.test:0/beta?sslmode=verify-full"),
+        ("postgresql+psycopg://operator:secret@db.example.test:-1/beta?sslmode=verify-full"),
+        ("postgresql+psycopg://operator:secret@db.example.test:65536/beta?sslmode=verify-full"),
         (
             "postgresql+psycopg://operator:secret@db.example.test/beta"
             "?sslmode=verify-full&options=-csearch_path%3Dunsafe"

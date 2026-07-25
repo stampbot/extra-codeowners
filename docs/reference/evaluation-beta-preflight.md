@@ -28,15 +28,19 @@ python -I -S -B tools/evaluation_beta_bootstrap.py preflight \
 Use `uv run --no-sync` to run that command from the already-bootstrapped
 external environment. The launcher refuses to run without isolated, no-site,
 and no-bytecode interpreter modes. Before importing third-party or checkout
-code, it uses fixed `/usr/bin/git` commands to reject untracked and ignored
-content. It appends the external environment after the standard library and
-the reviewed checkout last; it does not process `.pth` files or site
-customization. The source probe then compares the index and tracked files with
-the signed tree.
+code, it uses fixed `/usr/bin/git` commands to reject tracked, untracked, and
+ignored changes, index flags that can hide changes, and replacement refs. It
+reads the owner-only configuration outside the checkout with the standard
+library, then requires this checkout's `HEAD`, index, and raw tracked bytes to
+match the configured `source_revision` before importing it. It appends the
+reviewed checkout and then the external environment after the standard
+library, so an external package cannot replace project or preflight code. It
+does not process `.pth` files or site customization. The source probe then
+verifies the commit signature and repeats the signed-tree comparison.
 
 | Option | Default | Meaning |
 | --- | --- | --- |
-| `--config PATH` | `EXTRA_CODEOWNERS_BETA_CONFIG_FILE`, then `evaluation-beta-preflight.toml` | Non-secret TOML configuration. |
+| `--config PATH` | `EXTRA_CODEOWNERS_BETA_CONFIG_FILE`, then `evaluation-beta-preflight.toml` | Owner-only, non-secret TOML configuration outside `source_checkout`. |
 | `--report PATH` | `EXTRA_CODEOWNERS_BETA_REPORT_FILE`, then `evaluation-beta-preflight-report.json` | New JSON report path. The parent directory must already exist. |
 
 An explicit option takes precedence over its environment-variable default.
@@ -83,7 +87,7 @@ contains every field and no secrets.
 | `source_revision` | Yes | Full 40- or 64-character hexadecimal commit ID expected at checkout `HEAD`; normalized to lowercase. |
 | `source_signer_fingerprint` | Yes | Full 40- or 64-character OpenPGP fingerprint, normalized to uppercase, or an exact case-sensitive SSH `SHA256:` fingerprint with 43 base64 characters. |
 | `source_ssh_allowed_signers_file` | For SSH signatures | SSH public-key trust file. A relative path is based at the configuration file's directory. Required for an SSH fingerprint and forbidden for an OpenPGP fingerprint. |
-| `source_checkout` | No | Reviewed source directory with no untracked or ignored files; defaults to `.`. A relative path is based at the configuration file's directory. |
+| `source_checkout` | Yes | Reviewed source directory with no tracked, untracked, or ignored changes. A relative path is based at the configuration file's directory. The bootstrap requires this explicit path so it can bind the configured revision before importing checkout code. |
 | `python_version` | Yes | Exact running Python version, such as `3.12.7`. |
 | `uv_version` | Yes | Exact version parsed from `uv --version`. |
 | `extra_codeowners_version` | Yes | Exact imported package version. The package must load from `source_checkout`. |
@@ -120,7 +124,8 @@ segments and cannot exceed 255 characters.
 The target and `.github` repositories must share one organization. Repository
 IDs, App IDs, App slugs, and installation IDs must identify distinct objects
 where their roles differ. `checker_webhook_url` and `service_url` must share
-the exact origin.
+the exact origin. Explicit URL and PostgreSQL authority ports must be between
+1 and 65535; an omitted PostgreSQL port means 5432.
 
 For SSH signatures, the preflight ignores Git's global configuration. It
 passes the configured allowed-signers descriptor to Git explicitly and
@@ -167,7 +172,7 @@ the other independent checks.
 | `public_repositories` | Both configured repositories are public, available, organization-owned objects with the expected numeric IDs, full names, default branches, and branch commits. |
 | `branch_safety` | Active rules or classic protection require native code-owner review and at least one approving review. The configured Extra CODEOWNERS context is not required, and no merge queue is active. |
 | `codeowners` | GitHub reports no errors for `.github/CODEOWNERS` at the pinned target commit. The bounded UTF-8 file parses locally, contains a rule, and owns the test path. |
-| `policy` | The pinned repository and organization policy files parse and compile with built-in non-delegable paths enabled. Organization policy enrolls exactly the configured approver and no other App. Repository policy contains one delegation and no other delegation; it names the exact test path, exact CODEOWNER set, exact App, and exact required-label set. Each configured label must be present for eligibility. |
+| `policy` | The pinned repository and organization policy files parse and compile with built-in non-delegable paths enabled. Organization policy enrolls exactly the configured approver and no other App. Repository policy contains one delegation and no other delegation; it names the exact test path, exact CODEOWNER set, exact App, exact required-label set, and no forbidden labels. Each configured label must be present for eligibility. |
 | `service_health` | `/`, `/api/runtime-identity`, `/health/live`, and `/health/ready` match a production source deployment of the configured checker. The service reports PostgreSQL, the exact policy and check settings, enabled and healthy worker and reconciler tasks, and a recent successful GitHub authentication as the configured App ID. A source deployment must report `build_revision: null`. |
 | `postgresql` | The URL uses the exact `postgresql+psycopg` driver and one explicit host, database, username, and nonempty password. The connection enforces read-only transactions, `search_path=public`, and five-second statement, lock, and idle-transaction timeouts. The server version, Alembic head, and `required-release-contract` match the running code. Evidence reports `schema_contract: required-release-contract`. |
 | `insecure_changes_metric` | `/metrics` contains exactly one unlabelled `extra_codeowners_insecure_changes_enabled` sample with value `0`. |
@@ -197,14 +202,17 @@ The source check requires Linux facilities including `/proc/self/fd`,
 time, a small environment, disabled hooks and prompts, and no system or global
 Git configuration.
 
-Remote PostgreSQL connections require `sslmode=verify-full`. A direct
-loopback address or operator-controlled Unix-socket proxy may omit TLS.
-An optional `hostaddr` requires an explicit host and `verify-full`.
-`sslrootcert`, when present, must name a nonempty absolute path. Service-file
-routing, unknown query parameters, ambient libpq connection variables,
-hostless and comma-separated routes, an authority host combined with a
-query-string `host`, and caller-supplied libpq `options` are rejected. The URL
-must carry its own password, so `.pgpass` and `PGPASSFILE` are not used.
+Remote PostgreSQL connections require `sslmode=verify-full`. A direct loopback
+address or operator-controlled Unix-socket proxy may omit TLS. An authority
+port, when present, must be between 1 and 65535; omission means 5432. An
+optional `hostaddr` requires an explicit host and `verify-full`.
+`sslrootcert`, when present, must name a nonempty absolute path. The connection
+sets `gssencmode=disable`, preventing GSSAPI encryption from bypassing the
+pinned TLS certificate path. Service-file routing, unknown query parameters,
+ambient libpq connection variables, hostless and comma-separated routes, an
+authority host combined with a query-string `host`, and caller-supplied libpq
+`options` are rejected. The URL must carry its own password, so `.pgpass` and
+`PGPASSFILE` are not used.
 
 GitHub and service requests time out after 10 seconds, do not follow redirects,
 and ignore ambient proxy and certificate environment variables. Responses,
