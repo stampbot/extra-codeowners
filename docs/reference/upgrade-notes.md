@@ -53,12 +53,13 @@ compatibility marker from `1` to `2`.
 An already-running process does not revalidate the Alembic head before every
 claim. Stop every older ingress, worker, and reconciler before this revision
 runs. Start only the target artifact after `database check` reports
-`0003_shared_head_epochs`. Readiness removes an old process from webhook
+`0003_shared_head_epochs` and validates that artifact's
+`required-release-contract`. Readiness removes an old process from webhook
 traffic after migration, but it does not cancel work that process already
 claimed. For Kubernetes, a zero-replica Deployment is not proof of a drain
 while an HPA or GitOps controller can recreate pods. Keep autoscaling disabled
 for the migration update, wait out both worker and reconciler leases, and
-verify the target pod and exact database head. Apply the reviewed final
+verify the target pod and database contract. Apply the reviewed final
 autoscaling state in a separate update before resuming GitOps; an HPA should
 exist only when those values enable it.
 

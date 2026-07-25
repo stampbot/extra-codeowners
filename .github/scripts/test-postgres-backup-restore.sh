@@ -23,6 +23,20 @@ if [[ "$SOURCE_DATABASE" == "$RESTORE_DATABASE" ]]; then
   exit 1
 fi
 
+run_without_libpq_environment() {
+  local -a libpq_variables=()
+  local variable
+  while IFS= read -r variable; do
+    if [[ "$variable" == PG* ]]; then
+      libpq_variables+=("$variable")
+    fi
+  done < <(compgen -e)
+  (
+    unset "${libpq_variables[@]}"
+    "$@"
+  )
+}
+
 backup_dir="$(mktemp -d)"
 cleanup() {
   docker run --rm --network host \
@@ -206,6 +220,8 @@ docker run --rm --network host \
 
 restore_url="postgresql+psycopg://${PGUSER}:${PGPASSWORD}@${PGHOST}:${PGPORT}/${RESTORE_DATABASE}"
 EXTRA_CODEOWNERS_DATABASE_URL="$restore_url" \
+  EXTRA_CODEOWNERS_ENVIRONMENT=production \
+  run_without_libpq_environment \
   uv run python -m extra_codeowners database check >/dev/null
 
 capture_state "$RESTORE_DATABASE" "$backup_dir/restore-state.json"

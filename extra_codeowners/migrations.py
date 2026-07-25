@@ -31,6 +31,8 @@ from extra_codeowners import __version__
 from extra_codeowners.database import (
     DATABASE_CONNECT_TIMEOUT_SECONDS,
     DATABASE_MIGRATION_HEAD,
+    isolated_postgresql_connect_args,
+    validate_database_schema,
 )
 
 # Signed BLAKE2b-64 of ``extra-codeowners\0database-migrations``. Keep this
@@ -220,8 +222,12 @@ def _engine(database_url: str) -> Engine:
     connect_args: dict[str, object]
     if database_url.startswith("postgresql"):
         connect_args = {
+            **isolated_postgresql_connect_args(database_url),
             "connect_timeout": DATABASE_CONNECT_TIMEOUT_SECONDS,
-            "options": f"-c statement_timeout={MIGRATION_STATEMENT_TIMEOUT_MILLISECONDS}",
+            "options": (
+                f"-c statement_timeout={MIGRATION_STATEMENT_TIMEOUT_MILLISECONDS} "
+                "-c search_path=public"
+            ),
         }
     elif database_url.startswith("sqlite"):
         connect_args = {"check_same_thread": False}
@@ -532,5 +538,8 @@ def upgrade_database(
             connection.commit()
             _apply_upgrade(config, revision)
             connection.commit()
+            migrated_revision = MigrationContext.configure(connection).get_current_revision()
+            if migrated_revision == DATABASE_MIGRATION_HEAD:
+                validate_database_schema(connection)
     finally:
         engine.dispose()

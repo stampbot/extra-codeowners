@@ -25,6 +25,33 @@ if [[ "$actual_architecture" != "$expected_architecture" ]]; then
   exit 1
 fi
 
+expected_build_revision="$(
+  docker image inspect \
+    --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' \
+    "$image"
+)"
+expected_wheel_sha256="$(
+  docker image inspect \
+    --format '{{ index .Config.Labels "org.stampbot.extra-codeowners.application-wheel.sha256" }}' \
+    "$image"
+)"
+expected_selection_record_sha256="$(
+  docker image inspect \
+    --format \
+      '{{ index .Config.Labels "org.stampbot.extra-codeowners.python-selection-record.sha256" }}' \
+    "$image"
+)"
+if ! [[ "$expected_build_revision" =~ ^[0-9a-f]{40}$ ]]; then
+  printf 'Container image has an invalid source-revision label.\n' >&2
+  exit 1
+fi
+for digest in "$expected_wheel_sha256" "$expected_selection_record_sha256"; do
+  if ! [[ "$digest" =~ ^[0-9a-f]{64}$ ]]; then
+    printf 'Container image has an invalid application-artifact label.\n' >&2
+    exit 1
+  fi
+done
+
 if [[ "$(docker image inspect --format '{{.Config.User}}' "$image")" != "65532:65532" ]]; then
   printf 'Container image must run as UID/GID 65532.\n' >&2
   exit 1
@@ -72,12 +99,17 @@ docker run --detach \
   --security-opt no-new-privileges \
   "$image" >/dev/null
 
-docker exec "$container_name" /opt/venv/bin/python -c '
+docker exec \
+  --env "EXPECTED_BUILD_REVISION=$expected_build_revision" \
+  --env "EXPECTED_SELECTION_RECORD_SHA256=$expected_selection_record_sha256" \
+  --env "EXPECTED_WHEEL_SHA256=$expected_wheel_sha256" \
+  "$container_name" /opt/venv/bin/python -c '
 import os
 import stat
 from pathlib import Path
 
 import extra_codeowners
+from extra_codeowners.build_identity import BUILD_IDENTITY_PATH, load_build_identity
 
 path = Path(extra_codeowners.__file__)
 assert path.stat().st_uid == 0, "application code must be root-owned"
@@ -106,6 +138,20 @@ assert stat.S_IMODE(license_path.stat().st_mode) == 0o644
 for parent in (license_path.parent, license_path.parent.parent):
     assert stat.S_IMODE(parent.stat().st_mode) == 0o755, f"unsafe license parent: {parent}"
 assert not os.access(license_path, os.W_OK), "runtime UID must not rewrite the license"
+
+build_identity = load_build_identity()
+assert build_identity is not None, "official image must contain verified build identity"
+assert build_identity.source_revision == os.environ["EXPECTED_BUILD_REVISION"]
+assert build_identity.wheel_sha256 == os.environ["EXPECTED_WHEEL_SHA256"]
+assert (
+    build_identity.selection_record_sha256
+    == os.environ["EXPECTED_SELECTION_RECORD_SHA256"]
+)
+assert BUILD_IDENTITY_PATH.stat().st_uid == 0, "build identity must be root-owned"
+assert stat.S_IMODE(BUILD_IDENTITY_PATH.stat().st_mode) == 0o444
+assert not os.access(BUILD_IDENTITY_PATH, os.W_OK), (
+    "runtime UID must not rewrite build identity"
+)
 '
 
 docker exec --interactive "$container_name" /opt/venv/bin/python - \
@@ -118,6 +164,27 @@ import urllib.request
 with urllib.request.urlopen("http://127.0.0.1:8000/health/live", timeout=3) as response:
     assert response.status == 200
 ' 2>/dev/null; then
+    if ! docker exec \
+      --env "EXPECTED_BUILD_REVISION=$expected_build_revision" \
+      "$container_name" /opt/venv/bin/python -c '
+import json
+import os
+import urllib.request
+
+with urllib.request.urlopen(
+    "http://127.0.0.1:8000/api/runtime-identity",
+    timeout=3,
+) as response:
+    assert response.status == 200
+    assert response.headers.get("Cache-Control") == "no-store, max-age=0"
+    identity = json.load(response)
+assert identity["build_revision"] == os.environ["EXPECTED_BUILD_REVISION"]
+assert identity["database_backend"] == "sqlite"
+'; then
+      docker logs "$container_name" >&2
+      printf 'Container runtime-identity endpoint failed build binding.\n' >&2
+      exit 1
+    fi
     if ! docker exec "$container_name" /opt/venv/bin/python -c '
 import urllib.error
 import urllib.request

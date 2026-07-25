@@ -11,8 +11,9 @@ It does not try to repair one on the way up.
 
 Alembic is the project's migration layer. It is maintained for SQLAlchemy and
 ships in the same uv-built Python package as the service. Each revision states
-the intended database operations. SQLAlchemy metadata verifies the result; it
-is not an upgrade plan.
+the intended database operations. After Alembic runs, the application compares
+the result with its `required-release-contract`. That contract is not an
+upgrade plan or a universal proof of every PostgreSQL object.
 
 ## One component changes the schema
 
@@ -25,11 +26,21 @@ reviewed target artifact
 explicit migration command -- bounded advisory lock --> PostgreSQL
                                                         |
                                                         v
-                                              startup schema validator
-                                                |                 |
-                              exact head and structure      missing or incompatible
-                                                |                 |
-                                                v                 v
+                                          Alembic target head
+                                                        |
+                                                        v
+                                           required-release-contract
+                                              |                 |
+                                            passes            drift
+                                              |                 |
+                                              v                 v
+                                     migrator success     nonzero exit
+
+service startup --------------------> required-release-contract
+                                              |                 |
+                                            passes            drift
+                                              |                 |
+                                              v                 v
                                      webhook, worker,       startup fails
                                      and reconciler         closed
 ```
@@ -43,14 +54,33 @@ The wait loop calls `pg_try_advisory_lock`. Waiting for another migrator
 therefore has its own deadline instead of consuming the 60-second SQL statement
 budget.
 
-At startup, the service verifies all of the following:
+The migrator runs the contract check after Alembic targets the bundled head.
+It does this even when the database was already at that head. Drift blocks the
+success message and exits nonzero.
+
+The migrator and service startup verify all of the following:
 
 - the one expected Alembic head
 - the application compatibility marker
-- required tables and columns
-- compatible column definitions and PostgreSQL timestamp time-zone modes
-- primary keys, named unique constraints, and indexes
-- expected generated values.
+- every required table and its exact columns
+- column types, lengths, nullability, PostgreSQL time-zone modes, and generated
+  values, including canonical owned integer-sequence type, start, increment,
+  bounds, cache, and cycle settings
+- ordered, exact-named primary keys and exact named unique constraints
+- exact named index columns, uniqueness, predicates, and supported options
+- exact named check-constraint expressions
+- no foreign keys on required application tables
+- safe PostgreSQL catalog states for expected constraints and indexes.
+
+Expected PostgreSQL primary-key, unique, and check constraints must be
+validated and nondeferrable. The primary-key and unique backing indexes, along
+with the other expected indexes, must have their canonical immediate, valid,
+ready, live `btree` state, uniqueness, and predicate. Both paths pin
+`search_path=public`.
+
+The contract covers the database objects this release requires. It does not
+inventory unrelated tables, roles, grants, triggers, extensions, or every
+server policy.
 
 Readiness performs a lighter check of the revision and a representative query.
 Neither startup nor readiness calls `create_all` or applies a migration.

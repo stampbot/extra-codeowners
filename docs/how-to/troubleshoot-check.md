@@ -71,9 +71,14 @@ Open **Details** beside the check. Match the summary to the next action.
 | Several open pull requests share the head | Give each pull request a distinct commit, then wait for reevaluation. |
 | The changed-file limit was reached | Split or reduce the pull request. Extra CODEOWNERS will not authorize a truncated file list. |
 
-Labels only restrict App authority. Adding a label never counts as approval.
-An eligible human approval can still satisfy an owner set when an App
-delegation's label conditions do not match.
+Labels change whether an App delegation is eligible. Adding a label never
+counts as approval. An eligible human approval can still satisfy an owner set
+when an App delegation's label conditions do not match.
+
+An approving App already has permission to change pull-request labels, so
+label conditions are not an independent defense against that App being
+compromised. Investigate the App and rotate its credentials; do not try to
+contain the incident with labels.
 
 ### Validate policy
 

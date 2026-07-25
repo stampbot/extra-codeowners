@@ -8,10 +8,13 @@ from threading import Thread
 from examples.tutorial.relay_probe import ProbeHandler, ProbeServer, _signature, send
 from extra_codeowners.models import OrganizationPolicy, RepositoryPolicy
 from extra_codeowners.policy import compile_policy
+from tools.evaluation_beta import BetaConfig
 
 ROOT = Path(__file__).resolve().parents[1]
 POLICY_EXAMPLES = ROOT / "examples" / "policy"
+BETA_PREFLIGHT_EXAMPLE = ROOT / "examples" / "evaluation-beta" / "preflight.toml"
 FIRST_CHECK_TUTORIAL = ROOT / "docs" / "tutorials" / "development-installation.md"
+UPGRADE_RUNBOOK = ROOT / "docs" / "how-to" / "upgrade.md"
 CLOUDFLARED_VERSION = "2026.7.2"
 CLOUDFLARED_CONFIG = ROOT / "mise.tutorial.toml"
 CLOUDFLARED_ASSETS = {
@@ -72,11 +75,77 @@ def test_published_policy_pair_compiles_and_preserves_its_guardrails() -> None:
     )[0].eligible
 
 
+def test_published_beta_preflight_config_is_complete_and_contains_no_secrets() -> None:
+    source = BETA_PREFLIGHT_EXAMPLE.read_text(encoding="utf-8")
+    values = tomllib.loads(source)
+    reference = (ROOT / "docs/reference/evaluation-beta-preflight.md").read_text(encoding="utf-8")
+    procedure = (ROOT / "docs/how-to/preflight-evaluation-beta.md").read_text(encoding="utf-8")
+
+    config = BetaConfig.model_validate(values)
+
+    assert set(values) == set(BetaConfig.model_fields)
+    assert config.target_repository == "example-org/extra-codeowners-beta"
+    assert config.organization_policy_repository == "example-org/.github"
+    assert config.source_signer_fingerprint.startswith("SHA256:")
+    assert config.source_ssh_allowed_signers_file == Path("allowed_signers")
+    assert "source_ssh_allowed_signers_file" in reference
+    assert "source_ssh_allowed_signers_file" in procedure
+    assert "Git's global configuration" in reference
+    assert 'gh api "/orgs/$ORG"' in procedure
+    assert 'gh api "/repos/$ORG/$REPOSITORY"' in procedure
+    assert '"/users/${APPROVER_APP_SLUG}%5Bbot%5D"' in procedure
+    assert "Settings → GitHub Apps" in procedure
+    assert "replacement refs" in procedure
+    assert "raw tracked bytes" in procedure
+    assert "exact `source_revision`" in procedure
+    assert "outside the checkout" in procedure
+    assert "before importing it" in reference
+    assert "outside `source_checkout`" in reference
+    for field in BetaConfig.model_fields:
+        assert f"| `{field}` |" in reference
+    for secret_marker in (
+        "PRIVATE KEY",
+        "github_pat_",
+        "ghs_",
+        "postgresql://",
+        "password",
+        "token",
+    ):
+        assert secret_marker not in source
+
+
 def test_published_diagrams_do_not_need_a_browser_side_renderer() -> None:
     markdown_files = [ROOT / "README.md", *(ROOT / "docs").rglob("*.md")]
 
     for path in markdown_files:
         assert "```mermaid" not in path.read_text(encoding="utf-8"), path
+
+
+def test_upgrade_backup_example_preserves_transport_and_file_security() -> None:
+    runbook = UPGRADE_RUNBOOK.read_text(encoding="utf-8")
+
+    for required in (
+        'export PGSSLMODE="verify-full"',
+        "export PGSSLROOTCERT=",
+        'export PGGSSENCMODE="disable"',
+        'test ! -L "$PGSSLROOTCERT"',
+        "PGSSLROOTCERT_SHA256=",
+        '[[ "$variable" == PG* && "$variable" != "PGPASSWORD" ]]',
+        "mktemp --directory",
+        "umask 077",
+        'test "$(stat -c %a -- "$BACKUP_PARENT")" = "700"',
+        'test ! -e "$BACKUP_FILE"',
+        'chmod 0600 -- "$BACKUP_FILE"',
+        'cd "$BACKUP_DIR" || exit 1',
+        'sha256sum --check --strict -- "$BACKUP_NAME.sha256"',
+        '--file="$BACKUP_FILE"',
+        '"$BACKUP_FILE"',
+    ):
+        assert required in runbook
+
+    assert runbook.count("set -euo pipefail") >= 4
+    assert "--file=extra-codeowners-before-upgrade.dump" not in runbook
+    assert "\n  extra-codeowners-before-upgrade.dump\n" not in runbook
 
 
 def test_first_check_tutorial_uses_the_checksum_pinned_tunnel_config() -> None:

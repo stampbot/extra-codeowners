@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import stat
 from functools import cached_property
 from pathlib import Path
 from typing import Literal, Self
@@ -10,6 +12,211 @@ from pydantic import AnyHttpUrl, Field, SecretStr, field_validator, model_valida
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import ArgumentError
+
+from extra_codeowners.database import isolated_postgresql_connect_args
+
+MAX_SECRET_FILE_BYTES = 64 * 1024
+MAX_SECRET_SYMLINKS = 16
+MAX_SECRET_PATH_COMPONENTS = 256
+POSTGRESQL_CONNECTION_ENVIRONMENT = frozenset(
+    {
+        "PGAPPNAME",
+        "PGCHANNELBINDING",
+        "PGCLIENTENCODING",
+        "PGCONNECT_TIMEOUT",
+        "PGDATABASE",
+        "PGDATESTYLE",
+        "PGGSSENCMODE",
+        "PGGSSDELEGATION",
+        "PGGSSLIB",
+        "PGHOST",
+        "PGHOSTADDR",
+        "PGKRBSRVNAME",
+        "PGLOADBALANCEHOSTS",
+        "PGMAXPROTOCOLVERSION",
+        "PGMINPROTOCOLVERSION",
+        "PGOPTIONS",
+        "PGPASSFILE",
+        "PGPASSWORD",
+        "PGPORT",
+        "PGREQUIREPEER",
+        "PGREQUIREAUTH",
+        "PGREQUIRESSL",
+        "PGSERVICE",
+        "PGSERVICEFILE",
+        "PGSSLCERT",
+        "PGSSLCERTMODE",
+        "PGSSLCOMPRESSION",
+        "PGSSLCRL",
+        "PGSSLCRLDIR",
+        "PGSSLKEY",
+        "PGSSLMAXPROTOCOLVERSION",
+        "PGSSLMINPROTOCOLVERSION",
+        "PGSSLMODE",
+        "PGSSLNEGOTIATION",
+        "PGSSLROOTCERT",
+        "PGSSLSNI",
+        "PGSYSCONFDIR",
+        "PGTARGETSESSIONATTRS",
+        "PGTZ",
+        "PGUSER",
+    }
+)
+
+
+def _stable_file_identity(metadata: os.stat_result) -> tuple[int, ...]:
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_mode,
+        metadata.st_nlink,
+        metadata.st_uid,
+        metadata.st_gid,
+        metadata.st_size,
+        metadata.st_mtime_ns,
+        metadata.st_ctime_ns,
+    )
+
+
+def _resolved_secret_components(path: Path) -> tuple[str, ...]:
+    """Resolve a bounded symlink chain without using the eventual data descriptor."""
+    absolute = Path(os.path.abspath(path))
+    pending = list(absolute.parts[1:])
+    resolved: list[str] = []
+    symlinks = 0
+    operations = 0
+    while pending:
+        operations += 1
+        if operations > MAX_SECRET_PATH_COMPONENTS:
+            raise ValueError("secret file path exceeds its component limit")
+        component = pending.pop(0)
+        candidate = Path("/").joinpath(*resolved, component)
+        try:
+            metadata = os.lstat(candidate)
+        except OSError as error:
+            raise ValueError("secret file path could not be inspected safely") from error
+        if stat.S_ISLNK(metadata.st_mode):
+            symlinks += 1
+            if symlinks > MAX_SECRET_SYMLINKS:
+                raise ValueError("secret file path exceeds its symlink limit")
+            try:
+                target = Path(os.readlink(candidate))
+            except OSError as error:
+                raise ValueError("secret file symlink could not be read safely") from error
+            if target.is_absolute():
+                expanded = Path(os.path.abspath(target))
+            else:
+                expanded = Path(os.path.abspath(candidate.parent / target))
+            pending = [*expanded.parts[1:], *pending]
+            resolved.clear()
+            continue
+        if pending and not stat.S_ISDIR(metadata.st_mode):
+            raise ValueError("secret file path traverses a non-directory")
+        resolved.append(component)
+    if not resolved:
+        raise ValueError("secret file path must name a file")
+    return tuple(resolved)
+
+
+def _open_resolved_secret(components: tuple[str, ...]) -> int:
+    required_flags = ("O_CLOEXEC", "O_DIRECTORY", "O_NOFOLLOW", "O_NONBLOCK")
+    if any(not hasattr(os, name) for name in required_flags):
+        raise ValueError("secret files require secure descriptor flags")
+    directory_flags = os.O_RDONLY | os.O_CLOEXEC | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_NONBLOCK
+    file_flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK
+    descriptor = -1
+    try:
+        descriptor = os.open("/", directory_flags)
+        for component in components[:-1]:
+            child = os.open(component, directory_flags, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = child
+        result = os.open(components[-1], file_flags, dir_fd=descriptor)
+    except OSError as error:
+        raise ValueError("secret file could not be opened safely") from error
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+    return result
+
+
+def _read_bounded_secret_file(path: Path) -> str:
+    components = _resolved_secret_components(path)
+    descriptor = _open_resolved_secret(components)
+    try:
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode):
+            raise ValueError("secret file must resolve to a regular file")
+        if not 0 <= before.st_size <= MAX_SECRET_FILE_BYTES:
+            raise ValueError("secret file exceeds its size limit")
+        with os.fdopen(descriptor, "rb", closefd=False) as source:
+            content = source.read(MAX_SECRET_FILE_BYTES + 1)
+        after = os.fstat(descriptor)
+        if _stable_file_identity(before) != _stable_file_identity(after):
+            raise ValueError("secret file changed while it was read")
+        if len(content) != before.st_size:
+            raise ValueError("secret file changed while it was read")
+        try:
+            return content.decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise ValueError("secret file is not UTF-8") from error
+    except OSError as error:
+        raise ValueError("secret file could not be read safely") from error
+    finally:
+        os.close(descriptor)
+
+
+def validate_production_database_transport(database_url_value: str) -> None:
+    """Reject a database URL whose transport is unsafe for production."""
+    ambient = sorted(name for name in POSTGRESQL_CONNECTION_ENVIRONMENT if name in os.environ)
+    if ambient:
+        raise ValueError(
+            "production PostgreSQL forbids ambient libpq connection settings; "
+            f"unset {', '.join(ambient)} and put explicit values in the database URL"
+        )
+    try:
+        database_url = make_url(database_url_value)
+    except ArgumentError as error:
+        msg = "production requires a valid PostgreSQL database URL"
+        raise ValueError(msg) from error
+    if database_url.drivername != "postgresql+psycopg":
+        msg = "production requires PostgreSQL with the postgresql+psycopg driver"
+        raise ValueError(msg)
+    ssl_mode = database_url.query.get("sslmode")
+    query_host = database_url.query.get("host")
+    hostaddr = database_url.query.get("hostaddr")
+    if (
+        (query_host is not None and not isinstance(query_host, str))
+        or (hostaddr is not None and not isinstance(hostaddr, str))
+        or (ssl_mode is not None and not isinstance(ssl_mode, str))
+        or (query_host is not None and database_url.host is not None)
+        or "service" in database_url.query
+    ):
+        raise ValueError("production PostgreSQL requires one unambiguous explicit route")
+    effective_host = query_host if query_host is not None else database_url.host
+    if (
+        not isinstance(effective_host, str)
+        or not effective_host
+        or "," in effective_host
+        or (hostaddr is not None and (not hostaddr or "," in hostaddr))
+    ):
+        msg = "production PostgreSQL requires one explicit host or Unix-socket path"
+        raise ValueError(msg)
+    try:
+        isolated_postgresql_connect_args(database_url_value)
+    except (TypeError, ValueError) as error:
+        raise ValueError(
+            "production PostgreSQL requires an explicit database, username, and password"
+        ) from error
+    local_transport = hostaddr is None and (
+        effective_host in {"localhost", "127.0.0.1", "::1"} or effective_host.startswith("/")
+    )
+    if ssl_mode != "verify-full" and not local_transport:
+        msg = (
+            "remote production PostgreSQL must use sslmode=verify-full; a local "
+            "socket/proxy transport may omit TLS"
+        )
+        raise ValueError(msg)
 
 
 class Settings(BaseSettings):
@@ -24,6 +231,7 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         env_prefix="EXTRA_CODEOWNERS_",
         extra="forbid",
+        hide_input_in_errors=True,
         validate_default=True,
     )
 
@@ -39,6 +247,8 @@ class Settings(BaseSettings):
     github_webhook_secret_file: Path | None = None
     github_api_url: AnyHttpUrl = AnyHttpUrl("https://api.github.com")
     github_api_version: str = "2026-03-10"
+    github_identity_probe_interval_seconds: float = Field(default=30, ge=5, le=300)
+    github_identity_freshness_seconds: float = Field(default=90, ge=10, le=900)
     public_url: AnyHttpUrl | None = None
 
     database_url: SecretStr = SecretStr("sqlite:///./extra-codeowners.db")
@@ -59,6 +269,18 @@ class Settings(BaseSettings):
     setup_enabled: bool = False
     setup_state_secret: SecretStr | None = None
     setup_state_ttl_seconds: int = Field(default=600, ge=60, le=3600)
+
+    @field_validator("github_api_url")
+    @classmethod
+    def validate_github_api_url(cls, value: AnyHttpUrl) -> AnyHttpUrl:
+        if (
+            value.username is not None
+            or value.password is not None
+            or value.query is not None
+            or value.fragment is not None
+        ):
+            raise ValueError("github_api_url must not contain credentials, a query, or a fragment")
+        return value
 
     @field_validator("org_config_repository")
     @classmethod
@@ -93,6 +315,11 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def validate_secret_sources(self) -> Self:
         """Reject ambiguous secret sources and incomplete setup mode."""
+        if self.github_identity_freshness_seconds < 2 * self.github_identity_probe_interval_seconds:
+            raise ValueError(
+                "github_identity_freshness_seconds must be at least twice "
+                "github_identity_probe_interval_seconds"
+            )
         pairs = (
             ("github_private_key", self.github_private_key, self.github_private_key_file),
             (
@@ -139,7 +366,7 @@ class Settings(BaseSettings):
         if inline is not None:
             value = inline.get_secret_value()
         elif file_path is not None:
-            value = file_path.read_text(encoding="utf-8")
+            value = _read_bounded_secret_file(file_path)
             # Kubernetes and Docker secret files conventionally contain one
             # terminal line ending. Preserve every other byte, including
             # intentional spaces in webhook secrets.
@@ -192,36 +419,7 @@ class Settings(BaseSettings):
     def validate_database(self) -> None:
         """Reject database transports that are unsafe for production commands."""
         if self.environment == "production":
-            try:
-                database_url = make_url(self.database_url.get_secret_value())
-            except ArgumentError as error:
-                msg = "production requires a valid PostgreSQL database URL"
-                raise ValueError(msg) from error
-            if database_url.get_backend_name() != "postgresql":
-                msg = "production requires a PostgreSQL database URL"
-                raise ValueError(msg)
-            ssl_mode = database_url.query.get("sslmode")
-            query_host = database_url.query.get("host")
-            effective_host = query_host if query_host is not None else database_url.host
-            has_routing_override = (
-                "hostaddr" in database_url.query or "service" in database_url.query
-            )
-            local_transport = not has_routing_override and (
-                (
-                    isinstance(effective_host, str)
-                    and (
-                        effective_host in {"localhost", "127.0.0.1", "::1"}
-                        or effective_host.startswith("/")
-                    )
-                )
-                or effective_host is None
-            )
-            if ssl_mode != "verify-full" and not local_transport:
-                msg = (
-                    "remote production PostgreSQL must use sslmode=verify-full; a local "
-                    "socket/proxy transport may omit TLS"
-                )
-                raise ValueError(msg)
+            validate_production_database_transport(self.database_url.get_secret_value())
 
     def is_organization_config_repository(self, repository_full_name: str) -> bool:
         """Return whether a repository is this owner's shared policy source."""

@@ -61,7 +61,8 @@ jobs:
 
       - name: Type check
         run: >-
-          uv run mypy extra_codeowners tests
+          uv run mypy extra_codeowners tests tools/evaluation_beta.py
+          tools/evaluation_beta_bootstrap.py
           .github/scripts/build_python_artifacts.py
           .github/scripts/build_python_distribution_spine.py
           .github/scripts/build_release_spine.py
@@ -180,10 +181,16 @@ jobs:
         if: ${{ !matrix.coverage }}
         run: uv run pytest --no-cov
 
-      - name: Verify native PostgreSQL backup and restore
+      - name: Migrate native PostgreSQL backup source
         if: matrix.postgres
         env:
           EXTRA_CODEOWNERS_DATABASE_URL: ${{ matrix.test-postgres-url }}
+          EXTRA_CODEOWNERS_ENVIRONMENT: production
+        run: uv run python -m extra_codeowners database migrate
+
+      - name: Verify native PostgreSQL backup and restore
+        if: matrix.postgres
+        env:
           PGHOST: 127.0.0.1
           PGPASSWORD: extra_codeowners
           PGPORT: "5432"
@@ -191,7 +198,6 @@ jobs:
           RESTORE_DATABASE: extra_codeowners_restore_test
           SOURCE_DATABASE: extra_codeowners_test
         run: |
-          uv run python -m extra_codeowners database migrate
           .github/scripts/test-postgres-backup-restore.sh \
             'postgres:17.7-alpine@sha256:bb377b7239d2774ac8cc76f481596ce96c5a6b5e9d141f6d0a0ee371a6e7c0f2'
 
@@ -324,11 +330,13 @@ jobs:
             --set extraVolumes[0].secret.secretName=extra-codeowners-github \
             --set extraVolumeMounts[0].name=github-credentials \
             --set extraVolumeMounts[0].mountPath=/run/secrets/extra-codeowners \
+            --set extraVolumeMounts[0].readOnly=true \
             --set migrations.existingSecret=extra-codeowners-database \
             --set migrations.extraVolumes[0].name=database-ca \
             --set migrations.extraVolumes[0].secret.secretName=extra-codeowners-database-ca \
             --set migrations.extraVolumeMounts[0].name=database-ca \
             --set migrations.extraVolumeMounts[0].mountPath=/run/secrets/database-ca \
+            --set migrations.extraVolumeMounts[0].readOnly=true \
             --show-only templates/migration-job.yaml > rendered-migration-job.yaml
           helm template extra-codeowners charts/extra-codeowners \
             --show-only templates/service.yaml > rendered-service.yaml
@@ -346,11 +354,17 @@ jobs:
           grep -Fq 'enableServiceLinks: false' rendered-migration-job.yaml
           grep -Fq 'name: extra-codeowners-database' rendered-migration-job.yaml
           grep -Fq 'name: database-ca' rendered-migration-job.yaml
+          grep -Fq 'name: LD_LIBRARY_PATH' rendered-migration-job.yaml
+          grep -Fq 'name: OPENSSL_CONF' rendered-migration-job.yaml
           grep -Fq 'app.kubernetes.io/component: application' rendered-service.yaml
           grep -Fq 'app.kubernetes.io/name: extra-codeowners' <<< "$deployment_selector"
           grep -Fq 'app.kubernetes.io/instance: extra-codeowners' <<< "$deployment_selector"
           grep -Fq 'app.kubernetes.io/component: application' rendered-deployment.yaml
           grep -Fq 'enableServiceLinks: false' rendered-deployment.yaml
+          grep -Fq 'name: LD_LIBRARY_PATH' rendered-deployment.yaml
+          grep -Fq 'value: /opt/venv/lib:/usr/local/lib:/usr/lib:/lib' rendered-deployment.yaml
+          grep -Fq 'name: OPENSSL_CONF' rendered-deployment.yaml
+          grep -Fq 'value: /dev/null' rendered-deployment.yaml
           grep -Fq 'app.kubernetes.io/instance: extra-codeowners' rendered-network-policy.yaml
           if grep -Fq 'app.kubernetes.io/component:' <<< "$deployment_selector"; then
             echo 'Deployment immutable selector no longer matches the legacy release selector.' >&2
@@ -392,11 +406,30 @@ jobs:
           reject_values "runtime-environment override" \
             --set-string extraEnv[0].name=EXTRA_CODEOWNERS_ENVIRONMENT \
             --set-string extraEnv[0].value=development
+          reject_values "runtime ambient libpq environment" \
+            --set-string extraEnv[0].name=PGHOST \
+            --set-string extraEnv[0].value=database.example.com
+          reject_values "runtime interpreter environment injection" \
+            --set-string extraEnv[0].name=PYTHONPATH \
+            --set-string extraEnv[0].value=/run/secrets/extra-codeowners
+          reject_values "runtime loader environment injection" \
+            --set-string extraEnv[0].name=LD_PRELOAD \
+            --set-string extraEnv[0].value=/run/secrets/extra-codeowners/injected.so
+          reject_values "runtime uninspectable environment source" \
+            --set-string extraEnvFrom[0].secretRef.name=uninspectable
           reject_values "migration hook override" \
             --set-string migrations.annotations.helm\\.sh/hook=post-install
           reject_values "migration environment override" \
             --set-string migrations.extraEnv[0].name=EXTRA_CODEOWNERS_ENVIRONMENT \
             --set-string migrations.extraEnv[0].value=development
+          reject_values "migration ambient libpq environment" \
+            --set-string migrations.extraEnv[0].name=PGSERVICE \
+            --set-string migrations.extraEnv[0].value=database
+          reject_values "migration loader environment injection" \
+            --set-string migrations.extraEnv[0].name=LD_LIBRARY_PATH \
+            --set-string migrations.extraEnv[0].value=/run/secrets/database-ca
+          reject_values "migration uninspectable environment source" \
+            --set-string migrations.extraEnvFrom[0].secretRef.name=uninspectable
           reject_values "migration temporary-volume override" \
             --set-string migrations.extraVolumes[0].name=tmp \
             --set-string migrations.extraVolumes[0].emptyDir={}
@@ -413,6 +446,31 @@ jobs:
           reject_values "temporary-mount override" \
             --set-string extraVolumeMounts[0].name=other \
             --set-string extraVolumeMounts[0].mountPath=/tmp
+          reject_values "build-identity parent-mount override" \
+            --set-string extraVolumeMounts[0].name=other \
+            --set-string extraVolumeMounts[0].mountPath=/app
+          reject_values "build-identity file-mount override" \
+            --set-string extraVolumeMounts[0].name=other \
+            --set-string extraVolumeMounts[0].mountPath=/app/build-identity.json
+          reject_values "normalized build-identity mount override" \
+            --set-string extraVolumeMounts[0].name=other \
+            --set-string extraVolumeMounts[0].mountPath=/app/other/../build-identity.json
+          reject_values "runtime interpreter mount override" \
+            --set-string extraVolumeMounts[0].name=other \
+            --set-string extraVolumeMounts[0].mountPath=/opt/venv/lib \
+            --set extraVolumeMounts[0].readOnly=true
+          reject_values "runtime writable secret mount" \
+            --set-string extraVolumeMounts[0].name=other \
+            --set-string extraVolumeMounts[0].mountPath=/run/secrets/extra-codeowners/other \
+            --set extraVolumeMounts[0].readOnly=false
+          reject_values "normalized runtime secret escape" \
+            --set-string extraVolumeMounts[0].name=other \
+            --set-string extraVolumeMounts[0].mountPath=/run/secrets/extra-codeowners/../../../opt/venv \
+            --set extraVolumeMounts[0].readOnly=true
+          reject_values "migration interpreter mount override" \
+            --set-string migrations.extraVolumeMounts[0].name=other \
+            --set-string migrations.extraVolumeMounts[0].mountPath=/opt/venv/lib \
+            --set migrations.extraVolumeMounts[0].readOnly=true
           reject_values "rolling-update settings on Recreate" \
             --set deploymentStrategy.rollingUpdate.maxSurge=1
 
