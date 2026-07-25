@@ -19,8 +19,8 @@ or release authority from running.
 Four open issues define the evidence and publication path covered by this
 guide:
 
-- [#18](https://github.com/stampbot/extra-codeowners/issues/18) covers CFFI,
-  Psycopg, and Pydantic Core source closure.
+- [#18](https://github.com/stampbot/extra-codeowners/issues/18) covers CFFI and
+  Psycopg source closure plus Pydantic Core's unresolved GCC payload.
 - [#28](https://github.com/stampbot/extra-codeowners/issues/28) covers the
   privilege-separated release pipeline and bounded recipient verifier.
 - [#32](https://github.com/stampbot/extra-codeowners/issues/32) covers retaining
@@ -709,10 +709,7 @@ for architecture in amd64 arm64; do
         },
         {
           "owner": "python:pydantic-core@2.46.4",
-          "omissions": [
-            "missing-libgcc-sbom",
-            "unreviewed-cargo-sources"
-          ]
+          "omissions": ["missing-libgcc-sbom"]
         }
       ])
       and ([.observed_sbom_anomalies[].owner] == [
@@ -867,7 +864,7 @@ It must retain these open records and exact omission IDs:
 | --- | --- |
 | `python:cffi@2.1.0` | `unproven-libffi-build-input` |
 | `python:psycopg-binary@3.3.4` | `missing-libpq-sbom`, `unreviewed-bundled-library-sources` |
-| `python:pydantic-core@2.46.4` | `missing-libgcc-sbom`, `unreviewed-cargo-sources` |
+| `python:pydantic-core@2.46.4` | `missing-libgcc-sbom` |
 
 Do not accept a shortened unresolved summary. Each open ledger entry is the
 full policy record, including observations, dispositions, source decisions,

@@ -416,7 +416,7 @@ records.
 | --- | --- |
 | `alpine-aports` | `alpine:ORIGIN@VERSION`; a commit-pinned aports recipe, exact release distfiles, literal recipe identity and license, bounded sibling symlink exceptions, and retained notices. Every upstream recipe source must appear once with its exact checksum. Each allowed symlink must resolve directly to a retained regular sibling. |
 | `crates-io` | `crates-io:NAME@VERSION`; the canonical crates.io archive, exact `NAME-VERSION/Cargo.toml`, raw and normalized license, and retained notices. Archive root, manifest name/version/license, PURL, archive hash, and reviewed expression are bound together. Every regular archive member whose name denotes a license or notice must appear in the policy's exact notice set. |
-| `owner-sdist-subpath` | `owner-sdist:OWNER#PATH`; a canonical subtree of that same owner's locked sdist, with tree SHA-256, member count, expanded size, Cargo workspace and package manifests, reviewed license, and notices. Tar and ZIP parsers reject unsafe paths, duplicate members, devices, sparse files, and links. |
+| `owner-sdist-subpath` | `owner-sdist:OWNER#PATH`; a canonical subtree—or `#.` for a single root Cargo package—of that same owner's locked sdist, with tree SHA-256, member count, expanded size, root or workspace and package manifests, reviewed license, and notices. Tar and ZIP parsers reject unsafe paths, duplicate members, devices, sparse files, and links. |
 | `checksummed-upstream-release` | `upstream-release:NAME@VERSION`; an exact archive, exact checksum document, selected filename, reviewed license, and notices. The observation name, version, download PURL, and SHA-256 must identify that archive. The strict GNU-style checksum parser requires exactly one matching record. |
 
 For crates.io records, `raw_license` must match the exact Cargo manifest.
@@ -429,9 +429,12 @@ CycloneDX license expression or SPDX ID, and it must equal
 Owner-subtree package records pin each Cargo package's path, name, version, and
 exact `Cargo.toml` bytes. Each local observation must name one of those
 packages. Its PURL path and file `bom-ref` must agree, and a PURL fragment must
-name a regular file in the verified subtree. Bundle generation parses the
-pinned workspace and package manifests, resolves inherited version and license
-fields, and requires the package list to match the workspace members exactly.
+name a regular file in the verified subtree. If an SBOM uses a compiled-library
+name instead of the package name, bundle generation also requires the name and
+fragment to match the pinned manifest's library target. Bundle generation
+parses the pinned root or workspace and package manifests, resolves inherited
+version and license fields, and requires the package list to match the selected
+root package or workspace members exactly.
 
 Owner-subtree and checksummed-release reviews carry the same
 `reviewed_license` expression as their source record. Bundle generation
@@ -462,7 +465,13 @@ The current ledger closes Cryptography 48.0.1, Greenlet 3.5.3, MarkupSafe
 | --- | --- |
 | `python:cffi@2.1.0` | `unproven-libffi-build-input` |
 | `python:psycopg-binary@3.3.4` | `missing-libpq-sbom`, `unreviewed-bundled-library-sources` |
-| `python:pydantic-core@2.46.4` | `missing-libgcc-sbom`, `unreviewed-cargo-sources` |
+| `python:pydantic-core@2.46.4` | `missing-libgcc-sbom` |
+
+Pydantic Core's open state no longer implies missing Cargo sources. Its record
+binds all 87 crates.io observations, the exact root package and lockfile from
+the retained sdist, and 16 additional lock-only registry entries. The remaining
+omission is limited to the bundled GCC 12.4 `libgcc`, which has no SBOM
+observation or proven source-to-payload relationship.
 
 Each platform also reports three reviewed metadata-root-echo anomalies: the
 Cryptography, Greenlet, and Psycopg auditwheel documents. The ledger therefore

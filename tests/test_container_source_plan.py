@@ -26,7 +26,7 @@ SCRIPT = ROOT / ".github" / "scripts" / "container_source_plan.py"
 POLICY = ROOT / ".compliance" / "container-policy.json"
 UV_LOCK = ROOT / "uv.lock"
 REVISION = "1" * 40
-REAL_PLAN_SHA256 = "aab239390b2ee6403b8c4a599a0170528ec4c475c609a0f00f594c5565d2df08"
+REAL_PLAN_SHA256 = "0e323aa2c8c47348ab460d013c558991f9199967d6ba444319093a0cf4ac0c64"
 REQUEST_KEYS = {
     "id",
     "url",
@@ -453,15 +453,15 @@ def test_real_policy_direct_plan_is_stable_and_complete() -> None:
 
     requests = first["requests"]
     assert isinstance(requests, list)
-    assert len(requests) == 132
+    assert len(requests) == 214
     assert [request["id"] for request in requests] == sorted(request["id"] for request in requests)
     assert len({request["id"] for request in requests}) == len(requests)
     assert Counter(request["id"].split(":", maxsplit=1)[0] for request in requests) == {
         "alpine-recipe": 20,
         "cpython": 1,
         "docker-python": 2,
-        "license-text": 22,
-        "native-source": 35,
+        "license-text": 24,
+        "native-source": 115,
         "python-sdist": 38,
         "python-wheel": 14,
     }
@@ -514,6 +514,13 @@ def test_real_policy_plan_covers_platform_wheels_and_reuses_owner_sdist() -> Non
         "platform:linux/arm64:native-owner:python:cryptography@48.0.1",
         "platform:linux/arm64:python:cryptography@48.0.1",
     ]
+    pydantic_request = requests["python-sdist:pydantic-core@2.46.4"]
+    assert pydantic_request["consumers"] == [
+        "platform:linux/amd64:native-owner:python:pydantic-core@2.46.4",
+        "platform:linux/amd64:python:pydantic-core@2.46.4",
+        "platform:linux/arm64:native-owner:python:pydantic-core@2.46.4",
+        "platform:linux/arm64:python:pydantic-core@2.46.4",
+    ]
     assert not any(request_id.startswith("native-source:owner-sdist:") for request_id in requests)
 
 
@@ -536,7 +543,7 @@ def test_real_policy_missing_sizes_remain_bounded() -> None:
     requests = plan["requests"]
     unknown_size = [request for request in requests if request["expected_size"] is None]
 
-    assert len(unknown_size) == 44
+    assert len(unknown_size) == 46
     assert all(request["max_bytes"] > 0 for request in unknown_size)
     assert {request["id"].split(":", maxsplit=1)[0] for request in unknown_size} == {
         "alpine-recipe",

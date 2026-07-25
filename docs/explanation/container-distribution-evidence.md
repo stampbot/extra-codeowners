@@ -341,15 +341,22 @@ retained inputs built either wheel.
 MarkupSafe and SQLAlchemy have no embedded SBOM, so their SBOM and
 component-review arrays are empty while their native payload sets remain exact.
 
+Pydantic Core retains and verifies all 87 crates.io sources named by its SBOM,
+the root Cargo package from its sdist, and the exact lockfile with 16 additional
+registry entries. Its extension payload is covered by those observations. The
+owner stays open because its separate bundled `libgcc` payload has no SBOM
+observation or proven build input. Source retention still does not prove that
+the retained inputs built the wheel.
+
 Three owners are still open:
 
 - CFFI has no embedded native-component inventory, and its upstream build did
   not record the digest of the libffi 3.4.6 source it downloaded.
 - Psycopg still lacks a `libpq` SBOM observation and reviewed source closure
   for its bundled libraries.
-- Pydantic Core still lacks a `libgcc` observation and retained source closure
-  for the crates represented by its SBOM. Its bundled `libgcc` identifies GCC
-  12.4.0, not the reviewed Alpine GCC 14.2 payload used by other owners.
+- Pydantic Core still lacks a `libgcc` observation and source-to-payload
+  relationship. Its bundled `libgcc` identifies GCC 12.4.0, not the reviewed
+  Alpine GCC 14.2 payload used by other owners.
 
 `inventory/native-component-coverage.json` copies closed records into
 `resolved_owners` and open records into `unresolved_owners`. It also names the

@@ -108,6 +108,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Rel
   `NotpineForGHA` observation remains literal and shares Greenlet's closed
   Alpine GCC evidence only through exact `libgcc` payload equivalence. This
   record does not claim wheel reproducibility or build provenance.
+- Pydantic Core source retention for all 87 crates.io components in its SBOM,
+  including exact archives, manifests, checksums, licenses, and notices. The
+  retained sdist supplies the root Cargo package and exact lockfile with 16
+  additional registry entries. Library-target verification binds
+  `_pydantic_core` and `src/lib.rs` to the pinned manifest before the extension
+  payload can cite those observations. The owner remains open because its
+  bundled GCC 12.4 `libgcc` has no SBOM observation or proven build input.
 - Diátaxis documentation, a threat model, operating guides, and Read the Docs configuration.
 - Bounded pull-request and scheduled property tests for untrusted parsing and policy inputs.
 - Machine-readable live GitHub evidence completeness that distinguishes false,

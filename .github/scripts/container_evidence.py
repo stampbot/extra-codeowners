@@ -4229,12 +4229,16 @@ def validate_owner_subpath_component_source(
     )
     owner = record["owner"]
     path_value = record["path"]
+    path_is_archive_root = path_value == "."
     if (
         not isinstance(owner, str)
         or not owner.startswith("python:")
         or "@" not in owner
         or not isinstance(path_value, str)
-        or str(checked_canonical_path(path_value, "owner-sdist source path")) != path_value
+        or (
+            not path_is_archive_root
+            and str(checked_canonical_path(path_value, "owner-sdist source path")) != path_value
+        )
         or source_id != f"owner-sdist:{owner}#{path_value}"
     ):
         raise EvidenceError(f"native-component source {source_id} has a conflicting identity")
@@ -4891,8 +4895,14 @@ def verify_owner_sdist_subtree(
 ) -> list[dict[str, Any]]:
     """Verify a canonical file manifest for one path inside a hostile owner sdist."""
 
-    configured_path = checked_canonical_path(
-        str(source["path"]), f"owner-sdist subtree path for {source_id}"
+    raw_configured_path = str(source["path"])
+    configured_path = (
+        PurePosixPath(".")
+        if raw_configured_path == "."
+        else checked_canonical_path(
+            raw_configured_path,
+            f"owner-sdist subtree path for {source_id}",
+        )
     )
     records: list[dict[str, Any]] = []
     roots: set[str] = set()
@@ -5095,40 +5105,54 @@ def verify_owner_sdist_cargo_packages(
 
     workspace_document = parse_manifest(
         str(workspace_manifest["member"]),
-        "Cargo workspace manifest",
+        "Cargo root or workspace manifest",
     )
     workspace = workspace_document.get("workspace")
-    if not isinstance(workspace, dict):
-        raise EvidenceError(f"owner-sdist has no exact Cargo workspace: {source_id}")
-    workspace_package = workspace.get("package")
-    raw_members = workspace.get("members")
-    if (
-        not isinstance(workspace_package, dict)
-        or not isinstance(raw_members, list)
-        or not raw_members
-        or len(raw_members) > MAX_OBSERVATIONS_PER_OWNER
-        or not all(isinstance(member, str) for member in raw_members)
-    ):
-        raise EvidenceError(f"owner-sdist has an invalid Cargo workspace: {source_id}")
-
-    source_path = PurePosixPath(str(source["path"]))
-    workspace_member = PurePosixPath(str(workspace_manifest["member"]))
-    workspace_relative_root = PurePosixPath(*workspace_member.parts[1:-1])
-    workspace_package_paths: list[str] = []
-    for raw_member in raw_members:
-        assert isinstance(raw_member, str)
-        try:
-            member_path = workspace_relative_root / checked_path(raw_member)
-            relative = member_path.relative_to(source_path)
-        except (EvidenceError, ValueError) as exc:
+    if workspace is None:
+        root_package = workspace_document.get("package")
+        if (
+            source["path"] != "."
+            or not isinstance(root_package, dict)
+            or set(packages) != {"."}
+            or packages["."]["manifest"] != workspace_manifest
+        ):
             raise EvidenceError(
-                f"owner-sdist Cargo workspace member escapes the reviewed subtree: {source_id}"
-            ) from exc
-        workspace_package_paths.append("." if not relative.parts else str(relative))
-    if len(workspace_package_paths) != len(set(workspace_package_paths)) or set(
-        workspace_package_paths
-    ) != set(packages):
-        raise EvidenceError(f"owner-sdist Cargo workspace members differ: {source_id}")
+                f"owner-sdist has no exact Cargo workspace or root package: {source_id}"
+            )
+        workspace_package: Mapping[str, Any] = {}
+    else:
+        if not isinstance(workspace, dict):
+            raise EvidenceError(f"owner-sdist has an invalid Cargo workspace: {source_id}")
+        workspace_package_value = workspace.get("package")
+        raw_members = workspace.get("members")
+        if (
+            not isinstance(workspace_package_value, dict)
+            or not isinstance(raw_members, list)
+            or not raw_members
+            or len(raw_members) > MAX_OBSERVATIONS_PER_OWNER
+            or not all(isinstance(member, str) for member in raw_members)
+        ):
+            raise EvidenceError(f"owner-sdist has an invalid Cargo workspace: {source_id}")
+        workspace_package = workspace_package_value
+
+        source_path = PurePosixPath(str(source["path"]))
+        workspace_member = PurePosixPath(str(workspace_manifest["member"]))
+        workspace_relative_root = PurePosixPath(*workspace_member.parts[1:-1])
+        workspace_package_paths: list[str] = []
+        for raw_member in raw_members:
+            assert isinstance(raw_member, str)
+            try:
+                member_path = workspace_relative_root / checked_path(raw_member)
+                relative = member_path.relative_to(source_path)
+            except (EvidenceError, ValueError) as exc:
+                raise EvidenceError(
+                    f"owner-sdist Cargo workspace member escapes the reviewed subtree: {source_id}"
+                ) from exc
+            workspace_package_paths.append("." if not relative.parts else str(relative))
+        if len(workspace_package_paths) != len(set(workspace_package_paths)) or set(
+            workspace_package_paths
+        ) != set(packages):
+            raise EvidenceError(f"owner-sdist Cargo workspace members differ: {source_id}")
 
     def resolved_package_field(
         package_document: Mapping[str, Any],
@@ -5188,11 +5212,51 @@ def verify_owner_sdist_cargo_packages(
                 f"owner-sdist Cargo package identity or license differs: {source_id}/{package_path}"
             )
 
-    for package_path, fragment_member in bindings:
+    for package_path, fragment_member, observed_target_name in bindings:
         if package_path not in packages:
             raise EvidenceError(f"owner-sdist Cargo observation has no package: {source_id}")
         if fragment_member is None:
             continue
+        package = packages[package_path]
+        document = parse_manifest(
+            str(package["manifest"]["member"]),
+            f"Cargo package manifest for {package_path}",
+        )
+        library = document.get("lib", {})
+        if not isinstance(library, dict):
+            raise EvidenceError(
+                f"owner-sdist Cargo package has an invalid library target: "
+                f"{source_id}/{package_path}"
+            )
+        expected_target_name = library.get(
+            "name",
+            str(package["name"]).replace("-", "_"),
+        )
+        expected_target_path = library.get("path", "src/lib.rs")
+        if (
+            not isinstance(expected_target_name, str)
+            or expected_target_name != observed_target_name
+            or not isinstance(expected_target_path, str)
+        ):
+            raise EvidenceError(
+                f"owner-sdist Cargo package library target differs: {source_id}/{package_path}"
+            )
+        try:
+            target_path = checked_canonical_path(
+                expected_target_path,
+                f"owner-sdist Cargo package library target {source_id}/{package_path}",
+            )
+        except EvidenceError as exc:
+            raise EvidenceError(
+                f"owner-sdist Cargo package library target differs: {source_id}/{package_path}"
+            ) from exc
+        expected_fragment_member = str(
+            target_path if package_path == "." else PurePosixPath(package_path) / target_path
+        )
+        if fragment_member != expected_fragment_member:
+            raise EvidenceError(
+                f"owner-sdist Cargo package library target differs: {source_id}/{package_path}"
+            )
         fragment_record = subtree_records.get(fragment_member)
         if fragment_record is None or fragment_record["type"] != "file":
             raise EvidenceError(
@@ -5317,7 +5381,7 @@ def validate_observation_references(
     return references
 
 
-OwnerSdistObservationBinding = tuple[str, str | None]
+OwnerSdistObservationBinding = tuple[str, str | None, str]
 
 
 def owner_sdist_observation_path(
@@ -5451,16 +5515,36 @@ def owner_sdist_observation_path(
             f"native-component coverage {owner} owner-sdist review differs from {source_id}"
         )
     reviewed_path = PurePosixPath(str(source_record["path"]))
-    expected_suffix = reviewed_path if relative_path is None else reviewed_path / relative_path
-    if len(observed_path.parts) < len(expected_suffix.parts) or (
-        observed_path.parts[-len(expected_suffix.parts) :] != expected_suffix.parts
-    ):
-        raise EvidenceError(
-            f"native-component coverage {owner} owner-sdist review differs from {source_id}"
+    if reviewed_path == PurePosixPath("."):
+        _owner, owner_name, _owner_version = parse_native_owner(
+            owner,
+            f"native-component coverage {owner} owner-sdist review",
         )
+        relative_parts = () if relative_path is None else relative_path.parts
+        root_index = len(observed_path.parts) - len(relative_parts) - 1
+        if (
+            root_index < 0
+            or normalize_package_name(observed_path.parts[root_index]) != owner_name
+            or (relative_parts and observed_path.parts[root_index + 1 :] != relative_parts)
+        ):
+            raise EvidenceError(
+                f"native-component coverage {owner} owner-sdist review differs from {source_id}"
+            )
+    else:
+        expected_suffix = reviewed_path if relative_path is None else reviewed_path / relative_path
+        if len(observed_path.parts) < len(expected_suffix.parts) or (
+            observed_path.parts[-len(expected_suffix.parts) :] != expected_suffix.parts
+        ):
+            raise EvidenceError(
+                f"native-component coverage {owner} owner-sdist review differs from {source_id}"
+            )
+    observed_name = str(observation["name"])
     if (
         observation["type"] != "library"
-        or normalize_package_name(str(observation["name"])) != normalize_package_name(cargo_name)
+        or (
+            fragment_path is None
+            and normalize_package_name(observed_name) != normalize_package_name(cargo_name)
+        )
         or observation["version"] != cargo_version
         or observation["hashes"]
     ):
@@ -5472,7 +5556,7 @@ def owner_sdist_observation_path(
         if fragment_path is None
         else str(fragment_path if relative_path is None else relative_path / fragment_path)
     )
-    return package_path, fragment_member
+    return package_path, fragment_member, observed_name
 
 
 def validate_component_review_source_binding(
@@ -5875,7 +5959,9 @@ def validate_native_owner_review(
         expected_package_paths = {
             str(package["path"]) for package in sources[source_id]["cargo_packages"]
         }
-        if {package_path for package_path, _fragment in bindings} != expected_package_paths:
+        if {
+            package_path for package_path, _fragment, _target_name in bindings
+        } != expected_package_paths:
             raise EvidenceError(
                 f"native-component coverage {owner} owner-sdist packages differ from {source_id}"
             )

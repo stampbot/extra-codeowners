@@ -4043,7 +4043,7 @@ def owner_sdist_cargo_package_case() -> tuple[
     bytes,
     dict[str, Any],
     list[dict[str, Any]],
-    set[tuple[str, str | None]],
+    set[tuple[str, str | None, str]],
 ]:
     """Build one exact owner-sdist Cargo workspace and its reviewed subtree."""
 
@@ -4126,9 +4126,9 @@ def owner_sdist_cargo_package_case() -> tuple[
             }
         ],
     }
-    bindings: set[tuple[str, str | None]] = {
-        (".", "src/lib.rs"),
-        ("child", None),
+    bindings: set[tuple[str, str | None, str]] = {
+        (".", "src/lib.rs", "demo_native"),
+        ("child", None, "demo-child"),
     }
     return archive, source, subtree, bindings
 
@@ -4154,6 +4154,123 @@ def test_owner_sdist_cargo_packages_bind_exact_manifests_and_source_files() -> N
     )
 
 
+def test_owner_sdist_root_package_binds_exact_manifest_and_source_file() -> None:
+    manifest = (
+        b'[package]\nname = "demo"\nversion = "1.0"\nlicense = "MIT"\n\n'
+        b'[lib]\nname = "_demo"\npath = "src/native.rs"\n'
+    )
+    license_text = b"MIT fixture license\n"
+    source_file = b"pub fn demo() {}\n"
+    files = {
+        "Cargo.toml": manifest,
+        "LICENSE": license_text,
+        "src/native.rs": source_file,
+    }
+    subtree = [
+        {
+            "path": path,
+            "type": "file",
+            "mode": 0o644,
+            "size": len(content),
+            "sha256": evidence.sha256_bytes(content),
+        }
+        for path, content in sorted(files.items())
+    ]
+    archive = tar_bytes({f"demo-1.0/{path}": content for path, content in files.items()})
+    manifest_record = {
+        "member": "demo-1.0/Cargo.toml",
+        "sha256": evidence.sha256_bytes(manifest),
+        "size": len(manifest),
+    }
+    source = {
+        "kind": "owner-sdist-subpath",
+        "owner": "python:demo@1.0",
+        "path": ".",
+        "tree_sha256": evidence.sha256_bytes(evidence.canonical_json(subtree)),
+        "member_count": len(subtree),
+        "expanded_size": sum(len(content) for content in files.values()),
+        "reviewed_license": "MIT",
+        "workspace_manifest": manifest_record,
+        "cargo_packages": [
+            {
+                "path": ".",
+                "name": "demo",
+                "version": "1.0",
+                "manifest": manifest_record,
+            }
+        ],
+        "notices": [
+            {
+                "member": "demo-1.0/LICENSE",
+                "sha256": evidence.sha256_bytes(license_text),
+                "size": len(license_text),
+            }
+        ],
+    }
+    source_id = "owner-sdist:python:demo@1.0#."
+    observation = {
+        "type": "library",
+        "name": "_demo",
+        "version": "1.0",
+        "purl": "pkg:cargo/demo@1.0?download_url=file://.#src/native.rs",
+        "bom_ref": "path+file:///build/demo#1.0 bin-target-0",
+        "hashes": [],
+        "licenses": [],
+    }
+    binding = evidence.owner_sdist_observation_path(
+        observation,
+        owner="python:demo@1.0",
+        source_id=source_id,
+        source_record=source,
+    )
+    assert binding == (".", "src/native.rs", "_demo")
+
+    evidence.validate_owner_subpath_component_source(source_id, source)
+    verified_subtree = evidence.verify_owner_sdist_subtree(
+        archive,
+        source_id=source_id,
+        source=source,
+        archive_name="demo-1.0.tar.gz",
+    )
+    assert verified_subtree == subtree
+    evidence.verify_owner_sdist_cargo_packages(
+        archive,
+        source_id=source_id,
+        source=source,
+        archive_name="demo-1.0.tar.gz",
+        subtree=verified_subtree,
+        bindings={binding},
+    )
+
+    wrong_root = copy.deepcopy(observation)
+    wrong_root["bom_ref"] = "path+file:///build/unrelated#1.0 bin-target-0"
+    with pytest.raises(evidence.EvidenceError, match="owner-sdist review differs"):
+        evidence.owner_sdist_observation_path(
+            wrong_root,
+            owner="python:demo@1.0",
+            source_id=source_id,
+            source_record=source,
+        )
+
+    wrong_target = copy.deepcopy(observation)
+    wrong_target["name"] = "_other"
+    wrong_binding = evidence.owner_sdist_observation_path(
+        wrong_target,
+        owner="python:demo@1.0",
+        source_id=source_id,
+        source_record=source,
+    )
+    with pytest.raises(evidence.EvidenceError, match="library target differs"):
+        evidence.verify_owner_sdist_cargo_packages(
+            archive,
+            source_id=source_id,
+            source=source,
+            archive_name="demo-1.0.tar.gz",
+            subtree=verified_subtree,
+            bindings={wrong_binding},
+        )
+
+
 @pytest.mark.parametrize(
     ("mutation", "message"),
     (
@@ -4161,7 +4278,7 @@ def test_owner_sdist_cargo_packages_bind_exact_manifests_and_source_files() -> N
         ("name", "identity or license differs"),
         ("version", "identity or license differs"),
         ("license", "identity or license differs"),
-        ("fragment", "observation source path is absent"),
+        ("fragment", "library target differs"),
     ),
 )
 def test_owner_sdist_cargo_packages_reject_coordinated_source_substitution(
@@ -4180,8 +4297,8 @@ def test_owner_sdist_cargo_packages_reject_coordinated_source_substitution(
     elif mutation == "license":
         source["reviewed_license"] = "GPL-3.0-only"
     else:
-        bindings.remove((".", "src/lib.rs"))
-        bindings.add((".", "src/nonexistent.rs"))
+        bindings.remove((".", "src/lib.rs", "demo_native"))
+        bindings.add((".", "src/nonexistent.rs", "demo_native"))
 
     with pytest.raises(evidence.EvidenceError, match=message):
         evidence.verify_owner_sdist_cargo_packages(
@@ -4750,7 +4867,7 @@ def test_native_component_lock_binding_accepts_exact_reviewed_source_fallback() 
         )
 
 
-def test_committed_native_owner_policy_closes_cryptography_and_remains_incomplete() -> None:
+def test_committed_policy_retains_pydantic_cargo_sources_and_stays_incomplete() -> None:
     policy = cast(dict[str, Any], json.loads(Path(".compliance/container-policy.json").read_text()))
     evidence.validate_policy_schema(policy)
 
@@ -4762,12 +4879,12 @@ def test_committed_native_owner_policy_closes_cryptography_and_remains_incomplet
     assert source["recipe"]["sha256"] == (
         "5c623d22ac85b64f1dab2346cee6991432723cc7983ec7cb13a5b58692bfc658"
     )
-    crate_source_ids = {
+    all_crate_source_ids = {
         source_id
         for source_id, source_record in policy["native_component_sources"].items()
         if source_record["kind"] == "crates-io"
     }
-    assert crate_source_ids == {
+    cryptography_crate_source_ids = {
         "crates-io:asn1@0.24.1",
         "crates-io:asn1_derive@0.24.1",
         "crates-io:base64@0.22.1",
@@ -4801,12 +4918,13 @@ def test_committed_native_owner_policy_closes_cryptography_and_remains_incomplet
         "crates-io:unicode-ident@1.0.24",
         "crates-io:vcpkg@0.2.15",
     }
+    assert cryptography_crate_source_ids <= all_crate_source_ids
     assert all(
         source_record["notices"]
         and source_record["crate"]["sha256"]
         and source_record["manifest"]["sha256"]
         for source_id, source_record in policy["native_component_sources"].items()
-        if source_id in crate_source_ids
+        if source_id in all_crate_source_ids
     )
     local_source_id = "owner-sdist:python:cryptography@48.0.1#src/rust"
     local_source = policy["native_component_sources"][local_source_id]
@@ -4953,6 +5071,56 @@ def test_committed_native_owner_policy_closes_cryptography_and_remains_incomplet
         "version": "4.0.1",
     }
 
+    parsed_pydantic = evidence.parse_cyclonedx_sbom(
+        real_v7_fixture_bytes("pydantic_core-2.46.4.pydantic-core.cyclonedx.json"),
+        "committed Pydantic Core source policy",
+    )
+    pydantic_crate_source_ids = {
+        f"crates-io:{identity[0]}@{identity[1]}"
+        for component in parsed_pydantic["components"]
+        if (identity := evidence.cargo_purl_identity(component["purl"], "Pydantic fixture"))
+        is not None
+        and "download_url=file:" not in component["purl"]
+    }
+    assert len(pydantic_crate_source_ids) == 87
+    assert all_crate_source_ids == (cryptography_crate_source_ids | pydantic_crate_source_ids)
+    pydantic_local_source_id = "owner-sdist:python:pydantic-core@2.46.4#."
+    pydantic_local_source = policy["native_component_sources"][pydantic_local_source_id]
+    assert {
+        key: value
+        for key, value in pydantic_local_source.items()
+        if key not in {"cargo_packages", "workspace_manifest"}
+    } == {
+        "expanded_size": 3031381,
+        "kind": "owner-sdist-subpath",
+        "member_count": 257,
+        "notices": [
+            {
+                "member": "pydantic_core-2.46.4/LICENSE",
+                "sha256": ("2afdd30d54b4d62b6f488a6bcc1546e84ec5061f13f4209c03d012348783795a"),
+                "size": 1080,
+            }
+        ],
+        "owner": "python:pydantic-core@2.46.4",
+        "path": ".",
+        "reviewed_license": "MIT",
+        "tree_sha256": "350aed81d517fedf586f95cc71bc45689a49a1cebbe2d2a39dbc490f2b556331",
+    }
+    pydantic_manifest = {
+        "member": "pydantic_core-2.46.4/Cargo.toml",
+        "sha256": "20fcd4066f125dec91012a0cdb7f7c901963226c98906a7e414210a64ac1fcc3",
+        "size": 2875,
+    }
+    assert pydantic_local_source["workspace_manifest"] == pydantic_manifest
+    assert pydantic_local_source["cargo_packages"] == [
+        {
+            "manifest": pydantic_manifest,
+            "name": "pydantic-core",
+            "path": ".",
+            "version": "2.46.4",
+        }
+    ]
+
     expected_owners = [
         "python:cffi@2.1.0",
         "python:cryptography@48.0.1",
@@ -4980,10 +5148,7 @@ def test_committed_native_owner_policy_closes_cryptography_and_remains_incomplet
             "missing-libpq-sbom",
             "unreviewed-bundled-library-sources",
         ],
-        "python:pydantic-core@2.46.4": [
-            "missing-libgcc-sbom",
-            "unreviewed-cargo-sources",
-        ],
+        "python:pydantic-core@2.46.4": ["missing-libgcc-sbom"],
         "python:sqlalchemy@2.0.51": [],
     }
     for platform in ("linux/amd64", "linux/arm64"):
@@ -5004,11 +5169,11 @@ def test_committed_native_owner_policy_closes_cryptography_and_remains_incomplet
             "non_sbom_packages": [],
             "sha256": "585b66741011c621f66405ee9392b9fd35b62a7dbdabba6e37edc8cbad5c5a9a",
             "size": 8521,
-            "source_ids": sorted(crate_source_ids),
+            "source_ids": sorted(cryptography_crate_source_ids),
         }
         assert {
             review["source"] for review in cryptography["component_reviews"]
-        } == crate_source_ids | {local_source_id, openssl_source_id}
+        } == cryptography_crate_source_ids | {local_source_id, openssl_source_id}
         rust_sbom = next(
             sbom
             for sbom in cryptography["sboms"]
@@ -5043,6 +5208,41 @@ def test_committed_native_owner_policy_closes_cryptography_and_remains_incomplet
             if omission["id"] == "missing-libgcc-sbom"
         )
         assert libgcc["component"]["version"] == "12.4.0"
+        assert {
+            key: value
+            for key, value in pydantic["cargo_lock"].items()
+            if key != "non_sbom_packages"
+        } == {
+            "member": "pydantic_core-2.46.4/Cargo.lock",
+            "sha256": "c3c27fc600d7dafd149229c6501271dbc5f6b4f7b1bfa116b32e77217c2b5038",
+            "size": 24727,
+            "source_ids": sorted(pydantic_crate_source_ids),
+        }
+        assert len(pydantic["cargo_lock"]["non_sbom_packages"]) == 16
+        assert {
+            review["source"] for review in pydantic["component_reviews"]
+        } == pydantic_crate_source_ids | {pydantic_local_source_id}
+        local_review = next(
+            review
+            for review in pydantic["component_reviews"]
+            if review["source"] == pydantic_local_source_id
+        )
+        assert local_review["reviewed_license"] == "MIT"
+        assert [reference["purl"] for reference in local_review["observations"]] == [
+            "pkg:cargo/pydantic-core@2.46.4?download_url=file://.#src/lib.rs"
+        ]
+        binary_payload = next(
+            disposition
+            for disposition in pydantic["payload_dispositions"]
+            if disposition["role"] == "pydantic_core/_pydantic_core.cpython-314.so"
+        )
+        assert binary_payload["kind"] == "sbom-components"
+        assert len(binary_payload["observations"]) == 89
+        assert pydantic["review"] == {
+            "reason": "The bundled libgcc build input remains unproven.",
+            "state": "open",
+            "unresolved_items": ["missing-libgcc-sbom"],
+        }
         assert (
             sum(
                 sbom["metadata_root"]["anomaly_review"] is not None

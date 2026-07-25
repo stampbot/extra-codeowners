@@ -46,7 +46,7 @@ contract:
 
 | Issue | Work still required |
 | --- | --- |
-| [#18](https://github.com/stampbot/extra-codeowners/issues/18) | Complete notice and corresponding-source records for CFFI, Psycopg, and Pydantic Core. |
+| [#18](https://github.com/stampbot/extra-codeowners/issues/18) | Prove CFFI's libffi build input, close Psycopg's bundled-library sources, and bind Pydantic Core's bundled `libgcc` to an exact source. |
 | [#28](https://github.com/stampbot/extra-codeowners/issues/28) | Move image and layer inventory parsing behind the rootless offline boundary, freeze the wire format, and ship an adversarially tested recipient verifier, signing and publication path, and how-to. |
 | [#32](https://github.com/stampbot/extra-codeowners/issues/32) | Bind the retained Python selection records and exact wheel digest into the complete release evidence, then bind the installed runtime to that same wheel. |
 
@@ -71,6 +71,13 @@ subtree and the official checksummed OpenSSL 4.0.1 release. The arm64
 `NotpineForGHA` observation remains literal. A relationship links it to
 Greenlet's reviewed Alpine GCC evidence because the `libgcc` payload bytes
 match exactly.
+
+Pydantic Core adds exact archives, manifests, checksums, licenses, and notices
+for all 87 crates.io components in its SBOM. The retained sdist supplies its
+root Cargo package and exact lockfile, including 16 registry packages that the
+SBOM does not claim as components. The extension payload cites the complete
+reviewed observation set. Its separate bundled `libgcc` payload remains
+unresolved.
 
 MarkupSafe adds one exact native payload, no SBOM observations, and an owner
 payload disposition. SQLAlchemy adds five exact native payloads with the same
@@ -275,7 +282,7 @@ not reduced to path/hash summaries. The current open records are:
 | --- | --- |
 | `python:cffi@2.1.0` | `unproven-libffi-build-input` |
 | `python:psycopg-binary@3.3.4` | `missing-libpq-sbom`, `unreviewed-bundled-library-sources` |
-| `python:pydantic-core@2.46.4` | `missing-libgcc-sbom`, `unreviewed-cargo-sources` |
+| `python:pydantic-core@2.46.4` | `missing-libgcc-sbom` |
 
 Cryptography, Greenlet, MarkupSafe, and SQLAlchemy are closed. The resulting
 ledger has `complete: false`, `remaining_owner_count: 3`, and the three sorted
