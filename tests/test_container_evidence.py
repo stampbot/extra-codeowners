@@ -409,6 +409,7 @@ def empty_filesystem_baselines() -> dict[str, dict[str, list[dict[str, Any]]]]:
     return {
         platform: {
             "apk_database_occurrences": [],
+            "post_base_apk_world_occurrences": [],
             "post_base_directory_effects": [],
             "post_base_removals": [],
         }
@@ -2330,11 +2331,13 @@ def test_exact_apk_database_baseline_covers_virtual_records(tmp_path: Path) -> N
         "filesystem_baselines": {
             "linux/amd64": {
                 "apk_database_occurrences": clean_inventory["apk_database_occurrences"],
+                "post_base_apk_world_occurrences": [],
                 "post_base_directory_effects": [],
                 "post_base_removals": [],
             },
             "linux/arm64": {
                 "apk_database_occurrences": [],
+                "post_base_apk_world_occurrences": [],
                 "post_base_directory_effects": [],
                 "post_base_removals": [],
             },
@@ -2356,6 +2359,84 @@ def test_exact_apk_database_baseline_covers_virtual_records(tmp_path: Path) -> N
     )
     with pytest.raises(evidence.EvidenceError, match="APK databases differ"):
         evidence.verify_apk_database_baseline(hostile_inventory, policy)
+
+
+def test_post_base_apk_world_requires_exact_reviewed_occurrences(tmp_path: Path) -> None:
+    clean_image = tmp_path / "clean-apk-world.tar"
+    saved_image_layers(
+        clean_image,
+        [
+            tar_bytes(
+                {
+                    "etc/apk/world": b"python3\n",
+                    "lib/apk/db/installed": apk_database(),
+                }
+            ),
+            tar_bytes({"etc/apk/world": b"libffi\nlibpq\npython3\n"}),
+        ],
+    )
+    _inventory, clean_files = evidence._inventory_saved_image(
+        clean_image, "linux/amd64", "sha256:" + "a" * 64
+    )
+    base_digest = clean_files["layers"][0]["digest"]
+    occurrences = evidence.post_base_apk_world_occurrences(clean_files, 1, "linux/amd64")
+    policy = {
+        "base_image_platforms": {
+            "linux/amd64": {"layer_diff_ids": [base_digest]},
+            "linux/arm64": {"layer_diff_ids": ["sha256:" + "b" * 64]},
+        },
+        "filesystem_baselines": {
+            "linux/amd64": {
+                "apk_database_occurrences": [],
+                "post_base_apk_world_occurrences": occurrences,
+                "post_base_directory_effects": [],
+                "post_base_removals": [],
+            },
+            "linux/arm64": {
+                "apk_database_occurrences": [],
+                "post_base_apk_world_occurrences": [],
+                "post_base_directory_effects": [],
+                "post_base_removals": [],
+            },
+        },
+    }
+
+    evidence.verify_post_base_apk_world_baseline(clean_files, policy)
+
+    changed_image = tmp_path / "changed-apk-world.tar"
+    saved_image_layers(
+        changed_image,
+        [
+            tar_bytes(
+                {
+                    "etc/apk/world": b"python3\n",
+                    "lib/apk/db/installed": apk_database(),
+                }
+            ),
+            tar_bytes({"etc/apk/world": b"libffi\nlibpq\npython3\nunexpected\n"}),
+        ],
+    )
+    _inventory, changed_files = evidence._inventory_saved_image(
+        changed_image, "linux/amd64", "sha256:" + "a" * 64
+    )
+    with pytest.raises(evidence.EvidenceError, match="APK world occurrences differ"):
+        evidence.verify_post_base_apk_world_baseline(changed_files, policy)
+
+    invalid_layer = copy.deepcopy(clean_files)
+    next(
+        record
+        for record in invalid_layer["regular_files"]
+        if record["path"] == "etc/apk/world" and record["layer"] == 1
+    )["layer"] = True
+    with pytest.raises(evidence.EvidenceError, match="invalid post-base APK world layer"):
+        evidence.post_base_apk_world_occurrences(invalid_layer, 1, "linux/amd64")
+
+    invalid_path = copy.deepcopy(policy)
+    invalid_path["filesystem_baselines"]["linux/amd64"]["post_base_apk_world_occurrences"][0][
+        "path"
+    ] = "etc/apk/repositories"
+    with pytest.raises(evidence.EvidenceError, match="APK world policy has an invalid path"):
+        evidence.verify_post_base_apk_world_baseline(clean_files, invalid_path)
 
 
 @pytest.mark.parametrize("field", ["P", "V", "A", "L", "o", "c"])
@@ -8414,6 +8495,7 @@ def test_post_base_provenance_rejects_unclassified_regular_files(
     installed["demo-1.0.dist-info/RECORD"] = wheel_record(installed, "demo-1.0.dist-info/RECORD")
     base = tar_bytes({"lib/apk/db/installed": apk_database()})
     application_files = {
+        "etc/apk/world": b"libpq\npython3\n",
         "opt/venv/pyvenv.cfg": PYVENV_CONFIG,
         "usr/share/licenses/extra-codeowners/LICENSE": license_content,
         **{f"{site}/{path}": content for path, content in installed.items()},
@@ -8432,6 +8514,7 @@ def test_post_base_provenance_rejects_unclassified_regular_files(
     clean_directory_effects, _clean_removals = evidence.canonical_post_base_filesystem_changes(
         clean_files, 1, "linux/amd64"
     )
+    clean_apk_world = evidence.post_base_apk_world_occurrences(clean_files, 1, "linux/amd64")
     policy = {
         "base_image_platforms": {
             "linux/amd64": {
@@ -8444,11 +8527,13 @@ def test_post_base_provenance_rejects_unclassified_regular_files(
         "filesystem_baselines": {
             "linux/amd64": {
                 "apk_database_occurrences": clean_inventory["apk_database_occurrences"],
+                "post_base_apk_world_occurrences": clean_apk_world,
                 "post_base_directory_effects": clean_directory_effects,
                 "post_base_removals": [],
             },
             "linux/arm64": {
                 "apk_database_occurrences": [],
+                "post_base_apk_world_occurrences": [],
                 "post_base_directory_effects": [],
                 "post_base_removals": [],
             },
@@ -8692,11 +8777,13 @@ def test_directory_effects_retain_real_transitions_and_reject_hostile_noops(
         "filesystem_baselines": {
             "linux/amd64": {
                 "apk_database_occurrences": [],
+                "post_base_apk_world_occurrences": [],
                 "post_base_directory_effects": effects,
                 "post_base_removals": [],
             },
             "linux/arm64": {
                 "apk_database_occurrences": [],
+                "post_base_apk_world_occurrences": [],
                 "post_base_directory_effects": [],
                 "post_base_removals": [],
             },
@@ -8769,11 +8856,13 @@ def test_removal_policy_ignores_whiteout_marker_header_metadata(tmp_path: Path) 
         "filesystem_baselines": {
             "linux/amd64": {
                 "apk_database_occurrences": [],
+                "post_base_apk_world_occurrences": [],
                 "post_base_directory_effects": [],
                 "post_base_removals": expected,
             },
             "linux/arm64": {
                 "apk_database_occurrences": [],
+                "post_base_apk_world_occurrences": [],
                 "post_base_directory_effects": [],
                 "post_base_removals": [],
             },
@@ -8852,11 +8941,13 @@ def test_post_base_provenance_rejects_hostile_tar_security_metadata(
         "filesystem_baselines": {
             "linux/amd64": {
                 "apk_database_occurrences": clean_inventory["apk_database_occurrences"],
+                "post_base_apk_world_occurrences": [],
                 "post_base_directory_effects": clean_directory_effects,
                 "post_base_removals": [],
             },
             "linux/arm64": {
                 "apk_database_occurrences": [],
+                "post_base_apk_world_occurrences": [],
                 "post_base_directory_effects": [],
                 "post_base_removals": [],
             },
@@ -11778,7 +11869,11 @@ def test_policy_schema_rejects_noncanonical_retained_paths() -> None:
     unexpanded_record["path"] += "/"
     variants.append(unexpanded)
 
-    for category in ("apk_database_occurrences", "post_base_directory_effects"):
+    for category in (
+        "apk_database_occurrences",
+        "post_base_apk_world_occurrences",
+        "post_base_directory_effects",
+    ):
         filesystem = copy.deepcopy(policy)
         record = filesystem["filesystem_baselines"]["linux/amd64"][category][0]
         record["path"] = "./" + record["path"]
@@ -13401,6 +13496,7 @@ def test_filesystem_policy_view_emits_validated_semantic_projection(tmp_path: Pa
     assert output.read_bytes() == evidence.canonical_json(
         {
             "platform": "linux/amd64",
+            "post_base_apk_world_occurrences": [],
             "post_base_directory_effects": [
                 {
                     "layer": 1,

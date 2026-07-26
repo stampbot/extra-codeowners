@@ -611,11 +611,11 @@ signature or external provenance statement.
 Use the pull request's exact source tree only as untrusted review data. The
 trusted helper invocation above enforces the standalone inventory, complete
 policy schema, components, payload baselines, APK history, and license
-coverage. It also replays and enforces canonical post-base directory effects
-and removals. The artifact extractor separately enforces the all-layer schema
-and cross-file relationships. The
-following diffs make the policy decisions visible to a human. Set `PR_SOURCE`
-to the same read-only checkout of the exact synthetic merge commit used above:
+coverage. It also binds exact post-base APK world history and replays canonical
+directory effects and removals. The artifact extractor separately enforces the
+all-layer schema and cross-file relationships. The following diffs make the
+policy decisions visible to a human. Set `PR_SOURCE` to the same read-only
+checkout of the exact synthetic merge commit used above:
 
 ```bash
 test "$POLICY" = "$REVIEWED_INPUTS/container-policy.json"
@@ -757,6 +757,8 @@ for architecture in amd64 arm64; do
   jq -e --ascii-output --sort-keys --arg platform "$platform" '
       {
         platform: $platform,
+        post_base_apk_world_occurrences:
+          .filesystem_baselines[$platform].post_base_apk_world_occurrences,
         post_base_directory_effects:
           .filesystem_baselines[$platform].post_base_directory_effects,
         post_base_removals:
@@ -769,13 +771,14 @@ done
 ```
 
 No diff output means the exact ordered base diff IDs, top-level components,
-raw wheel surfaces, APK database history, and canonical post-base directory
-effects and removals match reviewed policy. Review the printed structured wheel
-payloads, coverage ledger, and CPython runtime record as well. The CPython
-record must bind the expected version header, interpreter link, interpreter,
-and shared library from one reviewed base layer. Each embedded SBOM and native
-payload must name the expected wheel owner, and its CycloneDX or ELF identity
-must agree with the upstream component and selected architecture.
+raw wheel surfaces, APK database and post-base APK world history, and canonical
+directory effects and removals match reviewed policy. Review the printed
+structured wheel payloads, coverage ledger, and CPython runtime record as well.
+The CPython record must bind the expected version header, interpreter link,
+interpreter, and shared library from one reviewed base layer. Each embedded
+SBOM and native payload must name the expected wheel owner, and its CycloneDX
+or ELF identity must agree with the upstream component and selected
+architecture.
 
 The filesystem projection validates all raw headers but omits only
 exporter-specific directory re-emissions and whiteout marker attributes that do

@@ -8,6 +8,8 @@ import hashlib
 import importlib.util
 import io
 import json
+import os
+import platform
 import stat
 import sys
 import tarfile
@@ -415,8 +417,10 @@ def test_wheel_inspection_detects_elf_payloads_without_a_dot_so_suffix(
         member: str,
         expected_machine: str,
         work: Path,
+        *,
+        pass_fds: tuple[int, ...] = (),
     ) -> dict[str, object]:
-        del content, expected_machine, work
+        del content, expected_machine, work, pass_fds
         inspected.append(member)
         return {"needed": [], "path": member}
 
@@ -431,6 +435,47 @@ def test_wheel_inspection_detects_elf_payloads_without_a_dot_so_suffix(
         )
 
     assert inspected == [name]
+
+
+def test_elf_inspection_inherits_retained_work_descriptor(tmp_path: Path) -> None:
+    machine = platform.machine()
+    if machine not in wheelhouse.PLATFORM_BY_MACHINE:
+        pytest.skip(f"unsupported test machine: {machine}")
+    work_root = tmp_path / "work"
+    work_root.mkdir()
+    descriptor = os.open(work_root, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        work = Path(f"/proc/self/fd/{descriptor}") / "verification"
+        work.mkdir()
+        record = wheelhouse._elf_record(
+            Path("/bin/true").read_bytes(),
+            "bin/true",
+            wheelhouse.PLATFORM_BY_MACHINE[machine][2],
+            work,
+            pass_fds=(descriptor,),
+        )
+    finally:
+        os.close(descriptor)
+
+    assert record["machine"] == wheelhouse.PLATFORM_BY_MACHINE[machine][2]
+    assert isinstance(record["needed"], list)
+    assert record["path"] == "bin/true"
+
+
+@pytest.mark.parametrize(
+    "descriptors",
+    [(-1,), (True,), (3, 3), tuple(range(17))],
+)
+def test_build_command_rejects_invalid_inherited_descriptors(
+    tmp_path: Path, descriptors: tuple[int, ...]
+) -> None:
+    with pytest.raises(wheelhouse.WheelhouseError, match="descriptors are invalid"):
+        wheelhouse._run(
+            ("/bin/true",),
+            {"PATH": "/usr/bin:/bin"},
+            cwd=tmp_path,
+            pass_fds=descriptors,
+        )
 
 
 def test_wheel_inspection_requires_record_coverage(tmp_path: Path) -> None:

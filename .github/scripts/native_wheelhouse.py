@@ -930,12 +930,29 @@ def _reset_private_child(root: Path, name: str) -> Path:
     return child
 
 
-def _run(command: Sequence[str], environment: Mapping[str, str], *, cwd: Path) -> str:
+def _run(
+    command: Sequence[str],
+    environment: Mapping[str, str],
+    *,
+    cwd: Path,
+    pass_fds: Sequence[int] = (),
+) -> str:
+    inherited_descriptors = tuple(pass_fds)
+    if (
+        len(inherited_descriptors) > 16
+        or len(set(inherited_descriptors)) != len(inherited_descriptors)
+        or any(
+            type(descriptor) is not int or descriptor < 0 for descriptor in inherited_descriptors
+        )
+    ):
+        raise WheelhouseError("inherited build command descriptors are invalid")
     try:
         result = subprocess.run(  # noqa: S603 - callers pass fixed absolute executables.
             tuple(command),
+            close_fds=True,
             cwd=cwd,
             env=dict(environment),
+            pass_fds=inherited_descriptors,
             check=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -1325,7 +1342,14 @@ def _verify_record(
         raise WheelhouseError("wheel RECORD does not cover every member")
 
 
-def _elf_record(content: bytes, name: str, expected_machine: str, work: Path) -> dict[str, object]:
+def _elf_record(
+    content: bytes,
+    name: str,
+    expected_machine: str,
+    work: Path,
+    *,
+    pass_fds: Sequence[int] = (),
+) -> dict[str, object]:
     with tempfile.NamedTemporaryFile(
         mode="w+b",
         dir=work,
@@ -1343,6 +1367,7 @@ def _elf_record(content: bytes, name: str, expected_machine: str, work: Path) ->
                 "PATH": "/usr/bin:/bin",
             },
             cwd=work,
+            pass_fds=pass_fds,
         )
     machine = ""
     needed: list[str] = []
@@ -1371,6 +1396,7 @@ def inspect_wheel(
     machine: str,
     work: Path,
     verified_python_abi: str | None = None,
+    pass_fds: Sequence[int] = (),
 ) -> dict[str, object]:
     """Validate one wheel, including RECORD and exact native dependencies."""
 
@@ -1482,6 +1508,7 @@ def inspect_wheel(
                     name,
                     elf_machine,
                     work,
+                    pass_fds=pass_fds,
                 )
             )
     if len(native) != expected.native_payloads:
@@ -1951,6 +1978,8 @@ def verify_wheelhouse(
     wheelhouse: Path,
     expected_platform: str,
     work: Path,
+    *,
+    pass_fds: Sequence[int] = (),
 ) -> Mapping[str, Any]:
     """Verify the published wheelhouse inventory and immutable content bindings."""
 
@@ -2041,6 +2070,7 @@ def verify_wheelhouse(
             machine=machine,
             work=work,
             verified_python_abi=str(inputs.python["abi"]),
+            pass_fds=pass_fds,
         )
         if observed != wheel_record:
             raise WheelhouseError("native wheelhouse wheel differs from its manifest")
@@ -2346,6 +2376,8 @@ def verify_consumer_store(
     contract_value: object,
     expected_platform: str,
     work: Path,
+    *,
+    pass_fds: Sequence[int] = (),
 ) -> tuple[Mapping[str, Any], Mapping[str, Any], Path]:
     """Verify one transported consumer store and return its selected manifest."""
 
@@ -2408,6 +2440,7 @@ def verify_consumer_store(
                 directory,
                 platform_name,
                 work,
+                pass_fds=pass_fds,
             )
             selected_directory = directory
     assert selected_manifest is not None

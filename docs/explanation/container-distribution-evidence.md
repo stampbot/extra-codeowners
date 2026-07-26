@@ -392,7 +392,9 @@ This distinction does not discard evidence. Raw headers and layer digests stay
 in `all-layer-files.json`, and every post-base directory header must still be
 root-owned with mode `0755`. The canonical replay only removes differences that
 produce the same validated filesystem state across trusted Docker/OCI
-exporters.
+exporters. Regular-file policy stays byte-exact: every post-base
+`/etc/apk/world` occurrence is bound to its layer, digest, size, mode, owner,
+group, and final-effect status.
 
 ### Artifact names expose the workflow identity
 

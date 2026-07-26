@@ -153,6 +153,18 @@
           "uid": 0
         }
       ],
+      "post_base_apk_world_occurrences": [
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 7,
+          "mode": 420,
+          "path": "etc/apk/world",
+          "sha256": "495f9467cd29a3d8df494c11937a435def70e78a566579fd3cacdc4bb2faa54d",
+          "size": 160,
+          "uid": 0
+        }
+      ],
       "post_base_directory_effects": [
         {
           "gid": 0,
@@ -2000,6 +2012,18 @@
           "uid": 0
         }
       ],
+      "post_base_apk_world_occurrences": [
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 7,
+          "mode": 420,
+          "path": "etc/apk/world",
+          "sha256": "e696889a8942b0253cfd7c65317749bd7dd704004fb326f00ec437c6e0b0a368",
+          "size": 160,
+          "uid": 0
+        }
+      ],
       "post_base_directory_effects": [
         {
           "gid": 0,
@@ -3048,42 +3072,42 @@
           "gid": 0,
           "layer": 5,
           "mode": 493,
-          "path": "opt/venv/lib/python3.14/site-packages/psycopg_binary",
+          "path": "opt/venv/lib/python3.14/site-packages/psycopg_c",
           "uid": 0
         },
         {
           "gid": 0,
           "layer": 5,
           "mode": 493,
-          "path": "opt/venv/lib/python3.14/site-packages/psycopg_binary-3.3.4.dist-info",
+          "path": "opt/venv/lib/python3.14/site-packages/psycopg_c-3.3.4.dist-info",
           "uid": 0
         },
         {
           "gid": 0,
           "layer": 5,
           "mode": 493,
-          "path": "opt/venv/lib/python3.14/site-packages/psycopg_binary-3.3.4.dist-info/licenses",
+          "path": "opt/venv/lib/python3.14/site-packages/psycopg_c-3.3.4.dist-info/licenses",
           "uid": 0
         },
         {
           "gid": 0,
           "layer": 5,
           "mode": 493,
-          "path": "opt/venv/lib/python3.14/site-packages/psycopg_binary-3.3.4.dist-info/sboms",
+          "path": "opt/venv/lib/python3.14/site-packages/psycopg_c/_psycopg",
           "uid": 0
         },
         {
           "gid": 0,
           "layer": 5,
           "mode": 493,
-          "path": "opt/venv/lib/python3.14/site-packages/psycopg_binary.libs",
+          "path": "opt/venv/lib/python3.14/site-packages/psycopg_c/pq",
           "uid": 0
         },
         {
           "gid": 0,
           "layer": 5,
           "mode": 493,
-          "path": "opt/venv/lib/python3.14/site-packages/psycopg_binary/types",
+          "path": "opt/venv/lib/python3.14/site-packages/psycopg_c/types",
           "uid": 0
         },
         {
@@ -3182,20 +3206,6 @@
           "layer": 5,
           "mode": 493,
           "path": "opt/venv/lib/python3.14/site-packages/pydantic_core-2.46.4.dist-info/licenses",
-          "uid": 0
-        },
-        {
-          "gid": 0,
-          "layer": 5,
-          "mode": 493,
-          "path": "opt/venv/lib/python3.14/site-packages/pydantic_core-2.46.4.dist-info/sboms",
-          "uid": 0
-        },
-        {
-          "gid": 0,
-          "layer": 5,
-          "mode": 493,
-          "path": "opt/venv/lib/python3.14/site-packages/pydantic_core.libs",
           "uid": 0
         },
         {
@@ -3748,12 +3758,33 @@
           "gid": 0,
           "layer": 6,
           "mode": 493,
-          "path": "usr/share/licenses",
+          "path": "usr/share/extra-codeowners",
           "uid": 0
         },
         {
           "gid": 0,
           "layer": 6,
+          "mode": 493,
+          "path": "usr/share/extra-codeowners/native-wheelhouse",
+          "uid": 0
+        },
+        {
+          "gid": 0,
+          "layer": 7,
+          "mode": 365,
+          "path": "usr/share/extra-codeowners/native-wheelhouse",
+          "uid": 0
+        },
+        {
+          "gid": 0,
+          "layer": 8,
+          "mode": 493,
+          "path": "usr/share/licenses",
+          "uid": 0
+        },
+        {
+          "gid": 0,
+          "layer": 8,
           "mode": 493,
           "path": "usr/share/licenses/extra-codeowners",
           "uid": 0

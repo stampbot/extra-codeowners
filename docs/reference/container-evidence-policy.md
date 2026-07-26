@@ -67,7 +67,7 @@ The policy has exactly these fields:
 | `native_wheelhouse_contract_sha256` | `sha256` | Digest of the reviewed consumer contract that selects the signed wheelhouse image, source revision, manifests, and workflow identity. | Source planning, image-label verification, wheel selection, and bundle retention. |
 | `native_component_sources` | object | Tagged, immutable source records for reviewed components nested inside wheels. | Schema, source-retention, and notice gates. |
 | `native_component_coverage` | platform object | Exact wheel observations, review decisions, payload dispositions, omissions, and owner review state. | `verify`, lock binding, coverage ledger, notices, and bundle generation. |
-| `filesystem_baselines` | platform object | Exact APK database history plus canonical post-base directory effects and removals. | Deep `bundle` provenance verification and offline CI policy review. |
+| `filesystem_baselines` | platform object | Exact APK database history, post-base APK world history, and canonical directory effects and removals. | Deep `bundle` provenance verification and offline CI policy review. |
 | `docker_python_recipe` | object | Pinned Docker Official Python recipe and license. | Direct-source planning, verified-store consumption, and CPython binding. |
 | `cpython_source` | object | Pinned CPython source archive and source-carried identity evidence. | Direct-source planning, verified-store consumption, recipe binding, and runtime/source identity binding. |
 | `python_sources` | array | Pinned fallback sources for components absent from `uv.lock`. | Exact source-coverage and bundle gates. |
@@ -262,6 +262,22 @@ acceptable substitute.
 For native-wheel retention, an owner must appear in exactly one historical
 installation record. Repeated installation of the same owner fails closed;
 there is no last-match or effective-file fallback.
+
+`filesystem_baselines` also has both platform keys. Each platform record has
+exactly four arrays:
+
+| Field | Contract |
+| --- | --- |
+| `apk_database_occurrences` | Every layered `lib/apk/db/installed` occurrence, including a lower-layer record that is not effective in the final image. Records use the regular-file occurrence fields above. |
+| `post_base_apk_world_occurrences` | Every `etc/apk/world` occurrence after the reviewed base-layer prefix. Records use the same occurrence fields and must have that exact path. |
+| `post_base_directory_effects` | Root-owned directory creations or security-metadata changes that affect the post-base filesystem. Each record pins `layer`, `path`, `mode`, `uid`, and `gid`. |
+| `post_base_removals` | Effective post-base whiteout or opaque-directory effects. Each record pins its kind, marker path, and target. |
+
+The APK database describes installed package metadata; APK world describes the
+selected top-level package set. The policy binds both because a runtime
+`apk add` can replace them independently. Directory and removal baselines are
+semantic projections, while both APK files retain exact layer, digest, size,
+mode, owner, group, and final-effect status.
 
 ## Native-component closure
 
@@ -588,9 +604,9 @@ imply that a wider gate passed.
 | --- | --- |
 | `inventory-image-archive` | Inside the rootless offline parser, verify one Docker-only export record and its exact archive hash, size, configuration digest, subject, and platform; then inventory every layer through one stable no-follow descriptor. |
 | `verify` | One standalone component inventory, the policy schema, exact components, payload baselines, native-component coverage, APK database history, license coverage, and optional distribution approval. |
-| `bundle` | The `verify` scope plus the all-layer inventory, Dockerfile and base binding, post-base provenance, Git source binding, lock-to-wheel and lock-to-sdist binding, verified direct and Alpine source stores, recipe and distfile verification, retained notices, and deterministic archive limits. It requires trusted plan digests and sizes and has no network fallback. |
+| `bundle` | The `verify` scope plus the all-layer inventory, Dockerfile and base binding, exact post-base APK world history, post-base provenance, Git source binding, lock-to-wheel and lock-to-sdist binding, verified direct and Alpine source stores, recipe and distfile verification, retained notices, and deterministic archive limits. It requires trusted plan digests and sizes and has no network fallback. |
 | `native-component-coverage-view` | The canonical per-owner coverage ledger after full standalone inventory verification. |
-| `filesystem-policy-view` | A human-readable projection of raw layer records into the canonical directory-effect and removal policy. |
+| `filesystem-policy-view` | A human-readable projection of raw layer records into exact post-base APK world history and canonical directory-effect and removal policy. |
 | `verify-ci-policy` | The offline policy checks possible from an extracted pull-request artifact, materialized policy blob, and materialized Dockerfile blob. |
 
 `export_container_image.py` is deliberately not an archive parser or a
@@ -635,20 +651,22 @@ uv run --frozen python .github/scripts/container_evidence.py \
 ```
 
 The command validates the standalone all-layer fields it consumes, binds the
-reviewed base prefix, and emits `platform`, `post_base_directory_effects`, and
+reviewed base prefix, and emits `platform`,
+`post_base_apk_world_occurrences`, `post_base_directory_effects`, and
 `post_base_removals`. It does not replace `verify-ci-policy` or `bundle`.
 
 For extracted pull-request artifacts, a reviewer using a previously trusted
 helper runs `verify-ci-policy` with the component inventory, all-layer
 inventory, materialized policy blob, and materialized Dockerfile blob. That
 command composes deep inventory validation, the complete standalone policy
-gate, the reviewed base-layer prefix, canonical post-base directory and removal
-policy, and exact Dockerfile base/index binding. It does not run the post-base
-regular-file or link provenance gates, application source binding, or exact
-source-policy coverage. It also does not fetch sources or open the nested
-evidence tar. Those gates remain dependent on the independently reviewed CI
-collector, workflow, and exact successful job; the extracted artifact set does
-not contain all inputs needed to re-run them.
+gate, the reviewed base-layer prefix, exact post-base APK world history,
+canonical directory and removal policy, and exact Dockerfile base/index
+binding. It does not run the broader post-base regular-file or link provenance
+gates, application source binding, or exact source-policy coverage. It also
+does not fetch sources or open the nested evidence tar. Those gates remain
+dependent on the independently reviewed CI collector, workflow, and exact
+successful job; the extracted artifact set does not contain all inputs needed
+to re-run them.
 
 See [review container evidence](../how-to/review-container-evidence.md) for the
 maintainer workflow and

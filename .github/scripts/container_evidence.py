@@ -2241,6 +2241,7 @@ def validate_policy_schema(policy: Mapping[str, Any]) -> None:
         validate_payload_records(
             baseline["apk_database_occurrences"], f"APK database policy for {platform}"
         )
+        validate_post_base_apk_world_policy(baseline["post_base_apk_world_occurrences"], platform)
         validate_directory_effect_policy(baseline["post_base_directory_effects"], platform)
         validate_removal_policy(baseline["post_base_removals"], platform)
 
@@ -7588,6 +7589,7 @@ def filesystem_baseline(policy: Mapping[str, Any], platform: object) -> Mapping[
     baseline = baselines.get(platform)
     if not isinstance(baseline, dict) or set(baseline) != {
         "apk_database_occurrences",
+        "post_base_apk_world_occurrences",
         "post_base_directory_effects",
         "post_base_removals",
     }:
@@ -7605,6 +7607,68 @@ def verify_apk_database_baseline(inventory: Mapping[str, Any], policy: Mapping[s
     )
     if canonical_json(observed) != canonical_json(expected):
         raise EvidenceError("layered APK databases differ from reviewed policy")
+
+
+APK_WORLD_PATH = "etc/apk/world"
+
+
+def post_base_apk_world_occurrences(
+    files: Mapping[str, Any], base_layer_count: int, platform: object
+) -> list[dict[str, Any]]:
+    """Return the exact package-selection file history added above the base."""
+
+    regular_files = files.get("regular_files")
+    if (
+        not isinstance(regular_files, list)
+        or not isinstance(base_layer_count, int)
+        or isinstance(base_layer_count, bool)
+        or base_layer_count < 0
+    ):
+        raise EvidenceError(f"invalid post-base APK world state for {platform!r}")
+    records: list[dict[str, Any]] = []
+    for record in regular_files:
+        if not isinstance(record, dict) or record.get("path") != APK_WORLD_PATH:
+            continue
+        layer = record.get("layer")
+        if not isinstance(layer, int) or isinstance(layer, bool) or layer < 0:
+            raise EvidenceError(f"invalid post-base APK world layer for {platform!r}")
+        if layer >= base_layer_count:
+            records.append(payload_record_projection(record))
+    validated = validate_payload_records(records, f"post-base APK world inventory for {platform!r}")
+    return sorted(validated, key=lambda record: (record["layer"], record["path"]))
+
+
+def validate_post_base_apk_world_policy(value: object, platform: str) -> list[dict[str, Any]]:
+    """Validate the reviewed exact APK world occurrence list."""
+
+    records = validate_payload_records(value, f"post-base APK world policy for {platform}")
+    if any(record["path"] != APK_WORLD_PATH for record in records):
+        raise EvidenceError(f"post-base APK world policy has an invalid path for {platform}")
+    ordered = sorted(records, key=lambda record: (record["layer"], record["path"]))
+    if records != ordered:
+        raise EvidenceError(f"post-base APK world policy is not ordered for {platform}")
+    return records
+
+
+def verify_post_base_apk_world_baseline(
+    files: Mapping[str, Any], policy: Mapping[str, Any]
+) -> None:
+    """Bind every application-layer APK world replacement byte-for-byte."""
+
+    platform = files.get("platform")
+    if not isinstance(platform, str):
+        raise EvidenceError("all-layer inventory platform is missing")
+    baseline = filesystem_baseline(policy, platform)
+    expected = validate_post_base_apk_world_policy(
+        baseline["post_base_apk_world_occurrences"], platform
+    )
+    observed = post_base_apk_world_occurrences(
+        files,
+        post_base_layer_count(files, policy),
+        platform,
+    )
+    if canonical_json(observed) != canonical_json(expected):
+        raise EvidenceError("post-base APK world occurrences differ from reviewed policy")
 
 
 def validate_wheel_installations(
@@ -8838,6 +8902,7 @@ def verify_post_base_filesystem_policy(files: Mapping[str, Any], policy: Mapping
     platform = files.get("platform")
     base_layer_count = post_base_layer_count(files, policy)
     baseline = filesystem_baseline(policy, platform)
+    verify_post_base_apk_world_baseline(files, policy)
     observed_directory_effects, observed_removals = canonical_post_base_filesystem_changes(
         files, base_layer_count, platform
     )
@@ -8863,6 +8928,7 @@ def verify_post_base_provenance(
     """Reject every unclassified file-system change above the reviewed base."""
 
     base_layer_count = post_base_layer_count(files, policy)
+    verify_post_base_apk_world_baseline(files, policy)
 
     def require_root_header(record: Mapping[str, Any], mode: int, subject: str) -> None:
         validate_header_identity(record, subject)
@@ -8912,6 +8978,9 @@ def verify_post_base_provenance(
             if record["effective"] is not True:
                 raise EvidenceError("post-base pyvenv.cfg is later hidden or replaced")
             require_root_header(record, 0o644, "post-base pyvenv.cfg")
+            continue
+        if path == APK_WORLD_PATH:
+            require_root_header(record, 0o644, "post-base APK world file")
             continue
         if path == expected_license["path"]:
             license_occurrences += 1
@@ -13337,6 +13406,7 @@ def _build_bundle_with_boundary(
                 wheelhouse_contract,
                 str(inventory["platform"]),
                 Path(temporary) / "native-wheelhouse-verification",
+                pass_fds=(path_boundary.work_descriptor,),
             )
         except native_wheelhouse.WheelhouseError as exc:
             raise EvidenceError(f"native wheelhouse consumer store does not verify: {exc}") from exc
@@ -15025,10 +15095,14 @@ def command_filesystem_policy_view(args: argparse.Namespace) -> None:
     directory_effects, removals = canonical_post_base_filesystem_changes(
         files, post_base_layer_count(files, policy), platform
     )
+    apk_world_occurrences = post_base_apk_world_occurrences(
+        files, post_base_layer_count(files, policy), platform
+    )
     Path(args.output).write_bytes(
         canonical_json(
             {
                 "platform": platform,
+                "post_base_apk_world_occurrences": apk_world_occurrences,
                 "post_base_directory_effects": directory_effects,
                 "post_base_removals": removals,
             }
