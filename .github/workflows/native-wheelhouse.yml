@@ -211,15 +211,8 @@ jobs:
           image="${IMAGE}@${DIGEST}"
           raw_manifest="$(docker buildx imagetools inspect "$image" --raw)"
           jq -e '
-            [.manifests[]
-             | select(
-                 .platform.os == "linux"
-                 and (
-                   .platform.architecture == "amd64"
-                   or .platform.architecture == "arm64"
-                 )
-               )
-             | [.platform.os, .platform.architecture]]
+            [.manifests[] | [.platform.os, .platform.architecture]]
+            | map(select(. != ["unknown", "unknown"]))
             | sort
             | . == [["linux", "amd64"], ["linux", "arm64"]]
           ' <<<"$raw_manifest" >/dev/null
@@ -296,45 +289,140 @@ jobs:
 
       - name: Add verified wheelhouse tags
         env:
-          DIGEST: ${{ steps.publish.outputs.digest }}
+          CANDIDATE_DIGEST: ${{ steps.publish.outputs.digest }}
         run: |
           set -euo pipefail
           immutable_tag="${IMAGE}:sha-${GITHUB_SHA}"
-          for tag in "$immutable_tag" "${IMAGE}:latest"; do
-            existing_digest="$(
+          selected_digest="$CANDIDATE_DIGEST"
+          existing_commit_digest="$(
+            docker buildx imagetools inspect "$immutable_tag" 2>/dev/null \
+              | awk '$1 == "Digest:" { print $2; exit }' \
+              || true
+          )"
+          if [[ -n "$existing_commit_digest" \
+            && ! "$existing_commit_digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::Existing wheelhouse commit tag has an invalid digest"
+            exit 1
+          fi
+
+          if [[ -n "$existing_commit_digest" \
+            && "$existing_commit_digest" != "$CANDIDATE_DIGEST" ]]; then
+            cosign verify \
+              --certificate-identity \
+                "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/native-wheelhouse.yml@refs/heads/main" \
+              --certificate-oidc-issuer \
+                "https://token.actions.githubusercontent.com" \
+              "${IMAGE}@${existing_commit_digest}"
+
+            raw_manifest="$(
+              docker buildx imagetools inspect \
+                "${IMAGE}@${existing_commit_digest}" \
+                --raw
+            )"
+            jq -e '
+              [.manifests[] | [.platform.os, .platform.architecture]]
+              | map(select(. != ["unknown", "unknown"]))
+              | sort
+              | . == [["linux", "amd64"], ["linux", "arm64"]]
+            ' <<<"$raw_manifest" >/dev/null
+
+            for architecture in amd64 arm64; do
+              existing_directory="$(
+                printf '%s/existing-wheelhouse-%s' \
+                  "$RUNNER_TEMP" \
+                  "$architecture"
+              )"
+              mkdir --mode=0700 "$existing_directory"
+              (
+                container_id=""
+                # Invoked by the EXIT trap.
+                # shellcheck disable=SC2329
+                cleanup() {
+                  if [[ -n "$container_id" ]]; then
+                    docker rm --force "$container_id" >/dev/null 2>&1 || true
+                  fi
+                }
+                trap cleanup EXIT
+                docker pull --quiet \
+                  --platform "linux/${architecture}" \
+                  "${IMAGE}@${existing_commit_digest}"
+                container_id="$(
+                  docker create \
+                    --platform "linux/${architecture}" \
+                    "${IMAGE}@${existing_commit_digest}" \
+                    /wheelhouse-not-executed
+                )"
+                revision="$(
+                  docker inspect \
+                    --format \
+                      '{{ index .Config.Labels "org.opencontainers.image.revision" }}' \
+                    "$container_id"
+                )"
+                if [[ "$revision" != "$GITHUB_SHA" ]]; then
+                  echo "::error::Existing wheelhouse revision label is invalid"
+                  exit 1
+                fi
+                docker cp \
+                  "${container_id}:/wheelhouse/." \
+                  "$existing_directory"
+              )
+              python .github/scripts/native_wheelhouse.py verify \
+                --inputs containers/native-wheelhouse/inputs.json \
+                --wheelhouse "$existing_directory" \
+                --platform "linux/${architecture}" \
+                --work "${RUNNER_TEMP}/existing-verify-${architecture}"
+              if ! diff \
+                --brief \
+                --no-dereference \
+                --recursive \
+                "${RUNNER_TEMP}/wheelhouse-${architecture}" \
+                "$existing_directory"; then
+                echo "::error::Existing wheelhouse payload differs from this run"
+                exit 1
+              fi
+            done
+            selected_digest="$existing_commit_digest"
+          fi
+
+          tag_and_wait() {
+            local tag="$1"
+            local digest="$2"
+            local may_move="$3"
+            local resolved_digest=""
+            resolved_digest="$(
               docker buildx imagetools inspect "$tag" 2>/dev/null \
                 | awk '$1 == "Digest:" { print $2; exit }' \
                 || true
             )"
-            if [[ "$tag" == "$immutable_tag" \
-              && -n "$existing_digest" \
-              && "$existing_digest" != "$DIGEST" ]]; then
+            if [[ "$resolved_digest" == "$digest" ]]; then
+              return
+            fi
+            if [[ -n "$resolved_digest" && "$may_move" != "true" ]]; then
               echo "::error::Refusing to move existing wheelhouse commit tag"
               exit 1
             fi
-            if [[ "$existing_digest" == "$DIGEST" ]]; then
-              continue
-            fi
-            docker buildx imagetools create --tag "$tag" "${IMAGE}@${DIGEST}"
-            tagged_digest=""
+            docker buildx imagetools create --tag "$tag" "${IMAGE}@${digest}"
             for _ in $(seq 1 10); do
-              tagged_digest="$(
+              resolved_digest="$(
                 docker buildx imagetools inspect "$tag" 2>/dev/null \
                   | awk '$1 == "Digest:" { print $2; exit }' \
                   || true
               )"
-              if [[ "$tagged_digest" == "$DIGEST" ]]; then
+              if [[ "$resolved_digest" == "$digest" ]]; then
                 break
               fi
               sleep 2
             done
-            if [[ "$tagged_digest" != "$DIGEST" ]]; then
+            if [[ "$resolved_digest" != "$digest" ]]; then
               echo "::error::Wheelhouse tag did not resolve to the signed digest"
               exit 1
             fi
-          done
+          }
+
+          tag_and_wait "$immutable_tag" "$selected_digest" false
+          tag_and_wait "${IMAGE}:latest" "$selected_digest" true
           {
             echo "## Published native wheelhouse"
             echo
-            echo "\`${IMAGE}@${DIGEST}\`"
+            echo "\`${IMAGE}@${selected_digest}\`"
           } >> "$GITHUB_STEP_SUMMARY"

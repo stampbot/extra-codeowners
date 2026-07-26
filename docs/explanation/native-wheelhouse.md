@@ -66,6 +66,12 @@ software bills of materials (SBOMs), attaches provenance, and signs the image
 digest with GitHub Actions' keyless identity. It moves the commit tag and
 `latest` only after those steps pass.
 
+The commit tag is immutable. If a run creates that tag and then fails while
+updating `latest`, a retry doesn't replace it with a newly generated
+provenance-bearing digest. The retry verifies the existing signature,
+two-platform index, source-revision labels, and both platform payloads against
+its fresh wheelhouse artifacts. Only an exact match can repair `latest`.
+
 The package name is:
 
 ```text

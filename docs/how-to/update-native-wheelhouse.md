@@ -196,6 +196,12 @@ The command must report a valid signature for the workflow identity above.
 Keep the full `IMAGE@DIGEST` value in the pull request that updates the
 application build. Never pin `latest`.
 
+If publication fails after creating the `sha-$GITHUB_SHA` tag, rerun the same
+workflow. The retry keeps that tag immutable and reuses its digest only after
+checking the workflow signature, revision labels, platform index, and exact
+wheelhouse bytes against the new run. Don't delete or move the commit tag to
+force a retry.
+
 If a published wheelhouse is wrong, leave its digest in place. Fix the inputs,
 publish a new digest, and revert any consuming application to its last known
 good digest while the replacement builds.

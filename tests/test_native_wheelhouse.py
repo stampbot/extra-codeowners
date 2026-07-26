@@ -616,6 +616,25 @@ def test_published_sbom_artifacts_are_unique_across_run_attempts() -> None:
     assert "name: native-wheelhouse-sboms-${{ github.sha }}-${{ github.run_attempt }}" in source
 
 
+def test_publication_retry_reuses_only_a_verified_commit_digest() -> None:
+    source = WORKFLOW.read_text(encoding="utf-8")
+    retry = source.split("      - name: Add verified wheelhouse tags\n", 1)[1]
+
+    assert source.count('map(select(. != ["unknown", "unknown"]))') == 2
+    assert "cosign verify" in retry
+    assert "org.opencontainers.image.revision" in retry
+    assert "docker cp" in retry
+    assert "/wheelhouse-not-executed" in retry
+    assert "native_wheelhouse.py verify" in retry
+    assert "--no-dereference" in retry
+    assert "--recursive" in retry
+    assert retry.index("cosign verify") < retry.index('selected_digest="$existing_commit_digest"')
+    assert 'tag_and_wait "$immutable_tag" "$selected_digest" false' in retry
+    assert 'tag_and_wait "${IMAGE}:latest" "$selected_digest" true' in retry
+    assert '"$may_move" != "true"' in retry
+    assert 'echo "\\`${IMAGE}@${selected_digest}\\`"' in retry
+
+
 def test_native_wheelhouse_script_is_in_the_narrow_docker_context() -> None:
     dockerignore = (ROOT / ".dockerignore").read_text(encoding="utf-8")
 

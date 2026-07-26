@@ -83,7 +83,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Rel
   non-reproducible output, contradictory wheel compatibility metadata, and
   unreviewed ELF payloads regardless of filename. It then publishes only the
   verified files in a signed, provenance-attested scratch image. The
-  application image does not consume the wheelhouse yet.
+  immutable commit digest can be reused after a partially successful
+  publication only when its signature, revision, platforms, and payloads match
+  a fresh build. The application image does not consume the wheelhouse yet.
 - A Docker-only, bounded image exporter and a separate rootless, networkless
   layer parser. Their create-once handoff binds the saved archive to its exact
   hash, size, configuration digest, subject, and platform; only two bounded
