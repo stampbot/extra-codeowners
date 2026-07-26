@@ -122,6 +122,7 @@ COPY .github/scripts/build_python_distribution_spine.py \
 COPY .github/workflows/ ./.github/workflows/
 COPY .compliance/container-policy.json ./.compliance/container-policy.json
 COPY charts/ ./charts/
+COPY containers/native-wheelhouse/ ./containers/native-wheelhouse/
 COPY docs/ ./docs/
 COPY examples/ ./examples/
 COPY .dockerignore Dockerfile mise.toml mise.tutorial.toml renovate.json ./

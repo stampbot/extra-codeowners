@@ -876,7 +876,10 @@ def test_native_wheelhouse_script_is_in_the_narrow_docker_context() -> None:
     assert "!.github/scripts/native_wheelhouse.py" in dockerignore
 
 
-def test_application_test_image_contains_native_wheelhouse_verifier() -> None:
+def test_application_test_image_contains_native_wheelhouse_contract() -> None:
     application_dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
 
     assert "     .github/scripts/native_wheelhouse.py \\\n" in application_dockerfile
+    assert "COPY containers/native-wheelhouse/ ./containers/native-wheelhouse/\n" in (
+        application_dockerfile
+    )
