@@ -336,7 +336,7 @@ jobs:
               (
                 container_id=""
                 # Invoked by the EXIT trap.
-                # shellcheck disable=SC2329
+                # shellcheck disable=SC2317,SC2329
                 cleanup() {
                   if [[ -n "$container_id" ]]; then
                     docker rm --force "$container_id" >/dev/null 2>&1 || true
