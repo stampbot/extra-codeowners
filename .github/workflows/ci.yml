@@ -1327,7 +1327,7 @@ jobs:
           enable-cache: false
 
       - name: Install locked evidence dependencies
-        run: uv sync --all-groups --frozen
+        run: uv sync --only-group evidence --frozen
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
@@ -1498,7 +1498,7 @@ jobs:
           set -euo pipefail
           inventory="container-evidence/components-${ARCHITECTURE}.json"
           checkout_sha="$(git rev-parse HEAD)"
-          uv run --frozen python .github/scripts/container_evidence.py run-metadata \
+          uv run --frozen --no-sync python .github/scripts/container_evidence.py run-metadata \
             --inventory "$inventory" \
             --output "container-evidence/run-metadata-${ARCHITECTURE}.json" \
             --run-id "$GITHUB_RUN_ID" \
@@ -1521,7 +1521,7 @@ jobs:
             --application-wheel-sha256 "$APPLICATION_WHEEL_SHA256" \
             --application-selection-record-sha256 \
               "$APPLICATION_SELECTION_RECORD_SHA256"
-          uv run --frozen python .github/scripts/container_evidence.py verify \
+          uv run --frozen --no-sync python .github/scripts/container_evidence.py verify \
             --inventory "$inventory"
 
       - name: Build source evidence in the offline parser sandbox

@@ -10926,13 +10926,21 @@ def test_runtime_identity_expectations_match_dockerfile_and_mise() -> None:
 
 def test_container_job_uses_the_locked_evidence_environment() -> None:
     workflow = Path(".github/workflows/ci.yml").read_text()
+    project = evidence.tomllib.loads(Path("pyproject.toml").read_text())
     container_job = workflow.split("  container:\n", 1)[1]
     evidence_step = container_job.split(
         "      - name: Export container bytes without parsing image layers\n", 1
     )[1].split("      - name: Upload container distribution evidence\n", 1)[0]
     assert "astral-sh/setup-uv@" in container_job
-    assert "uv sync --all-groups --frozen" in container_job
-    assert container_job.count("uv run --frozen python .github/scripts/container_evidence.py") == 2
+    assert project["dependency-groups"]["evidence"] == ["packaging>=26.0,<27"]
+    assert "uv sync --only-group evidence --frozen" in container_job
+    assert "uv sync --all-groups --frozen" not in container_job
+    assert (
+        container_job.count(
+            "uv run --frozen --no-sync python .github/scripts/container_evidence.py"
+        )
+        == 2
+    )
     assert "python .github/scripts/container_evidence.py bundle" not in workflow
     assert "--parser image-inventory" in evidence_step
     assert "--parser evidence" in evidence_step
