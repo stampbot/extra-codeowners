@@ -13142,7 +13142,7 @@
       {
         "ecosystem": "python",
         "effective": true,
-        "metadata_sha256": "74b84d42171ecd15a71e448d966a84c7f6b011a98e049acaf84b0c8daca255fd",
+        "metadata_sha256": "c9ce37dfe07646366dc9c4c517eb7b85b3a6ce86ba10c494117ce80aaea83ec0",
         "name": "extra-codeowners",
         "observed_license": "Apache-2.0",
         "version": "0.1.0"
@@ -13828,7 +13828,7 @@
       {
         "ecosystem": "python",
         "effective": true,
-        "metadata_sha256": "74b84d42171ecd15a71e448d966a84c7f6b011a98e049acaf84b0c8daca255fd",
+        "metadata_sha256": "c9ce37dfe07646366dc9c4c517eb7b85b3a6ce86ba10c494117ce80aaea83ec0",
         "name": "extra-codeowners",
         "observed_license": "Apache-2.0",
         "version": "0.1.0"
@@ -14557,7 +14557,7 @@
           "layer": 5,
           "mode": 420,
           "path": "opt/venv/lib/python3.14/site-packages/extra_codeowners-0.1.0.dist-info/RECORD",
-          "sha256": "443493a0889c0ef073c1be64ce4bd7c466e4920c5f216f71ade86f39200533d6",
+          "sha256": "0906229dbc13f2561231ed8fdec9eb5d07bc6e2d079c53fb2ef550ed9a44ca2b",
           "size": 2937,
           "uid": 0
         },
@@ -15555,7 +15555,7 @@
           "layer": 5,
           "mode": 420,
           "path": "opt/venv/lib/python3.14/site-packages/extra_codeowners-0.1.0.dist-info/RECORD",
-          "sha256": "443493a0889c0ef073c1be64ce4bd7c466e4920c5f216f71ade86f39200533d6",
+          "sha256": "0906229dbc13f2561231ed8fdec9eb5d07bc6e2d079c53fb2ef550ed9a44ca2b",
           "size": 2937,
           "uid": 0
         },
