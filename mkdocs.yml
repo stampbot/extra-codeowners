@@ -61,9 +61,11 @@ nav:
       - Respond to dependency audit: how-to/respond-to-dependency-audit.md
       - Review stacked pull requests: how-to/review-stacked-pull-requests.md
       - Update the tutorial webhook relay: maintainers/update-tutorial-relay.md
+      - Update the native wheelhouse: how-to/update-native-wheelhouse.md
       - Review CI container evidence: how-to/review-container-evidence.md
       - DCO evidence contract: reference/dco-evidence.md
       - Runtime base image decision: explanation/runtime-base.md
+      - Native dependency wheelhouse: explanation/native-wheelhouse.md
       - Container distribution evidence: explanation/container-distribution-evidence.md
       - Container evidence policy: reference/container-evidence-policy.md
       - Raw Python-distribution spine format: reference/python-distribution-spine-format.md

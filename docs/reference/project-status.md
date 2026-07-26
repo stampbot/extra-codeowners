@@ -18,6 +18,7 @@ deployable release.
 | Supported container image | Not available |
 | Packaged Helm chart | Not available; a chart exists in source only |
 | Public GitHub Container Registry (GHCR) package | A pre-compliance preview is public, but it is unsupported |
+| Native dependency wheelhouse | Build and publication path implemented; not yet consumed by the application image |
 | Hosted service | Not available |
 | `extra-codeowners-action` Marketplace Action | Not available |
 

@@ -92,6 +92,12 @@ work. Until it closes, the derived ledger keeps
 candidate. Issue #28 independently blocks tagged publication. Passing CI does
 not override either condition.
 
+The separate [native wheelhouse build](native-wheelhouse.md) creates
+reproducible replacements for CFFI, Psycopg C, and Pydantic Core. The current
+application image still installs the upstream wheels reviewed on this page.
+Until a digest-pinned integration updates the application and its evidence,
+the three owner records remain open.
+
 ## How the CI collector builds the evidence
 
 The collector saves the candidate by immutable configuration ID. Before it

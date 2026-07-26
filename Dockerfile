@@ -109,6 +109,7 @@ COPY .github/scripts/build_python_distribution_spine.py \
      .github/scripts/fetch_verified_sources.py \
      .github/scripts/github_release_api.py \
      .github/scripts/immutable_release_preflight.py \
+     .github/scripts/native_wheelhouse.py \
      .github/scripts/python_distribution_spine.py \
      .github/scripts/release_asset_assembler.py \
      .github/scripts/release_controller.py \
@@ -121,6 +122,7 @@ COPY .github/scripts/build_python_distribution_spine.py \
 COPY .github/workflows/ ./.github/workflows/
 COPY .compliance/container-policy.json ./.compliance/container-policy.json
 COPY charts/ ./charts/
+COPY containers/native-wheelhouse/ ./containers/native-wheelhouse/
 COPY docs/ ./docs/
 COPY examples/ ./examples/
 COPY .dockerignore Dockerfile mise.toml mise.tutorial.toml renovate.json ./

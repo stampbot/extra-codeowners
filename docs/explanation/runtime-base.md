@@ -170,6 +170,11 @@ open review state is why
 [issue #18](https://github.com/stampbot/extra-codeowners/issues/18) still blocks
 distribution.
 
+A separate [native wheelhouse build](native-wheelhouse.md) now produces
+reproducible CFFI, Psycopg C, and Pydantic Core wheels from reviewed inputs.
+The application image does not consume that wheelhouse yet, so it does not
+change the evidence or approval state described here.
+
 ### Vulnerability handling
 
 The first scan uploads raw JSON without applying VEX. Findings remain there

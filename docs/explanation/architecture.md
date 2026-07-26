@@ -470,6 +470,12 @@ owners retain structured open omissions for the surfaces that still lack
 complete evidence. These records retain sources and notices; they do not claim
 wheel reproducibility or build provenance.
 
+The [native wheelhouse](native-wheelhouse.md) has its own build and publication
+path for reproducible CFFI, Psycopg C, Pydantic Core, and Setuptools wheels.
+That path is deliberately separate from the application build. The application
+does not consume it yet, so current container candidates and their evidence are
+unchanged.
+
 The tagged workflow contains intended image, chart, Python, SBOM, provenance,
 signature, and GitHub-release jobs. An unconditional blocker keeps every
 privileged job unreachable. The repository also contains a dormant release
