@@ -60,11 +60,16 @@ workflow change. It uses native GitHub-hosted amd64 and arm64 runners; it
 doesn't emulate one architecture on the other.
 
 Each runner uploads a short-lived platform artifact. A trusted `main` branch
-job downloads both artifacts and verifies them again before publication. That
-job wraps the already-built files in a multi-platform scratch image, generates
-software bills of materials (SBOMs), attaches provenance, and signs the image
-digest with GitHub Actions' keyless identity. It moves the commit tag and
-`latest` only after those steps pass.
+job selects both uploads by immutable artifact ID and verifies them again
+before publication. The selector accepts the newest completed upload for each
+architecture from the same workflow run, even when GitHub reruns only failed
+jobs and the two producers come from different attempts. It rejects expired,
+foreign, oversized, or ambiguous artifacts.
+
+The publication job wraps the already-built files in a multi-platform scratch
+image, generates software bills of materials (SBOMs), attaches provenance,
+and signs the image digest with GitHub Actions' keyless identity. It moves the
+commit tag and `latest` only after those steps pass.
 
 The commit tag is immutable. If a run creates that tag and then fails while
 updating `latest`, a retry doesn't replace it with a newly generated

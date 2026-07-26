@@ -119,6 +119,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
+      actions: read
       attestations: write
       contents: read
       id-token: write
@@ -134,21 +135,78 @@ jobs:
         with:
           python-version: "3.14.6"
 
+      - name: List producer artifact identities
+        id: producer-artifact-inventory
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          github-token: ${{ github.token }}
+          result-encoding: string
+          script: |
+            const artifacts = await github.paginate(
+              github.rest.actions.listWorkflowRunArtifacts,
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                run_id: context.runId,
+                per_page: 100,
+              },
+              (response) => response.data.artifacts,
+            );
+            if (artifacts.length > 1000) {
+              throw new Error("Workflow run has too many artifacts");
+            }
+            const identities = artifacts.map((artifact) => ({
+              digest: artifact.digest,
+              expired: artifact.expired,
+              id: artifact.id,
+              name: artifact.name,
+              size_in_bytes: artifact.size_in_bytes,
+              workflow_run: {
+                head_sha: artifact.workflow_run?.head_sha,
+                id: artifact.workflow_run?.id,
+              },
+            }));
+            const encoded = JSON.stringify(identities);
+            if (Buffer.byteLength(encoded, "utf8") > 512 * 1024) {
+              throw new Error("Producer artifact metadata is too large");
+            }
+            return encoded;
+
+      - name: Select verified producer artifacts by immutable ID
+        id: producer-artifacts
+        env:
+          NATIVE_WHEELHOUSE_ARTIFACTS: >-
+            ${{ steps.producer-artifact-inventory.outputs.result }}
+        run: |
+          set -euo pipefail
+          python .github/scripts/native_wheelhouse.py select-producer-artifacts \
+            --source-revision "$GITHUB_SHA" \
+            --run-id "$GITHUB_RUN_ID" \
+            --current-attempt "$GITHUB_RUN_ATTEMPT" \
+            >> "$GITHUB_OUTPUT"
+
       - name: Download the verified amd64 wheelhouse
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: native-wheelhouse-${{ github.sha }}-amd64-${{ github.run_attempt }}
+          artifact-ids: ${{ steps.producer-artifacts.outputs.amd64-artifact-id }}
           path: ${{ runner.temp }}/wheelhouse-amd64
           digest-mismatch: error
 
       - name: Download the verified arm64 wheelhouse
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: native-wheelhouse-${{ github.sha }}-arm64-${{ github.run_attempt }}
+          artifact-ids: ${{ steps.producer-artifacts.outputs.arm64-artifact-id }}
           path: ${{ runner.temp }}/wheelhouse-arm64
           digest-mismatch: error
 
       - name: Reverify both transported wheelhouses
+        env:
+          AMD64_ARTIFACT_ID: ${{ steps.producer-artifacts.outputs.amd64-artifact-id }}
+          AMD64_PRODUCER_ATTEMPT: >-
+            ${{ steps.producer-artifacts.outputs.amd64-producer-attempt }}
+          ARM64_ARTIFACT_ID: ${{ steps.producer-artifacts.outputs.arm64-artifact-id }}
+          ARM64_PRODUCER_ATTEMPT: >-
+            ${{ steps.producer-artifacts.outputs.arm64-producer-attempt }}
         run: |
           set -euo pipefail
           for architecture in amd64 arm64; do
@@ -158,6 +216,12 @@ jobs:
               --platform "linux/${architecture}" \
               --work "${RUNNER_TEMP}/transport-verify-${architecture}"
           done
+          {
+            echo "## Verified producer artifacts"
+            echo
+            echo "- amd64: artifact ${AMD64_ARTIFACT_ID}, attempt ${AMD64_PRODUCER_ATTEMPT}"
+            echo "- arm64: artifact ${ARM64_ARTIFACT_ID}, attempt ${ARM64_PRODUCER_ATTEMPT}"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Log in to GHCR
         uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0

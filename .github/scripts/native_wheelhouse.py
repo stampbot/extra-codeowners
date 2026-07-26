@@ -45,10 +45,15 @@ MAX_WHEEL_MEMBERS = 20_000
 MAX_WHEEL_EXPANDED_BYTES = 256 * 1024 * 1024
 MAX_PATH_BYTES = 4096
 MAX_PROCESS_SECONDS = 45 * 60
+MAX_PRODUCER_ARTIFACTS = 1000
+MAX_PRODUCER_ARTIFACT_BYTES = 1024 * 1024 * 1024
+MAX_PRODUCER_ARTIFACT_JSON_BYTES = 512 * 1024
 COPY_BYTES = 1024 * 1024
 
 LOWER_SHA256 = re.compile(r"[0-9a-f]{64}")
 LOWER_COMMIT = re.compile(r"[0-9a-f]{40}")
+OCI_SHA256 = re.compile(r"sha256:[0-9a-f]{64}")
+POSITIVE_DECIMAL = re.compile(r"[1-9][0-9]{0,18}")
 IDENTIFIER = re.compile(r"[a-z][a-z0-9-]{0,63}")
 PACKAGE_PIN = re.compile(r"(\.?[a-z0-9][a-z0-9+_.-]*)=([A-Za-z0-9][A-Za-z0-9+_.-]*)")
 APK_NAME = re.compile(r"\.?[a-z0-9][a-z0-9+_.-]*")
@@ -115,6 +120,14 @@ class ExpectedWheel:
     version: str
     native_payloads: int
     needed_libraries: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ProducerArtifact:
+    """One immutable wheelhouse artifact selected from a workflow run."""
+
+    artifact_id: int
+    producer_attempt: int
 
 
 @dataclass(frozen=True)
@@ -1809,9 +1822,137 @@ def verify_wheelhouse(
         raise WheelhouseError("native wheelhouse omits a reviewed wheel")
 
 
+def _positive_decimal(value: str, source: str) -> int:
+    text_value = _text(value, source, pattern=POSITIVE_DECIMAL)
+    number = int(text_value)
+    if number > (2**63) - 1:
+        raise WheelhouseError(f"{source} is outside its integer bound")
+    return number
+
+
+def select_producer_artifacts(
+    raw: str,
+    source_revision: str,
+    run_id: str,
+    current_attempt: str,
+) -> dict[str, ProducerArtifact]:
+    """Select the newest verified platform uploads from one workflow run."""
+
+    revision = _text(source_revision, "source revision", pattern=LOWER_COMMIT)
+    expected_run_id = _positive_decimal(run_id, "workflow run ID")
+    maximum_attempt = _positive_decimal(current_attempt, "current workflow run attempt")
+    try:
+        encoded = raw.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise WheelhouseError("producer artifact metadata is not valid UTF-8") from exc
+    if not 1 <= len(encoded) <= MAX_PRODUCER_ARTIFACT_JSON_BYTES:
+        raise WheelhouseError("producer artifact metadata exceeds its size limit")
+    try:
+        value = json.loads(
+            encoded,
+            object_pairs_hook=_unique_object,
+            parse_constant=_reject_constant,
+            parse_float=_reject_float,
+        )
+    except (RecursionError, UnicodeDecodeError, ValueError) as exc:
+        raise WheelhouseError("producer artifact metadata is not strict JSON") from exc
+    if not isinstance(value, list) or not value or len(value) > MAX_PRODUCER_ARTIFACTS:
+        raise WheelhouseError("producer artifact inventory has an invalid size")
+
+    expected_name = re.compile(rf"native-wheelhouse-{revision}-(amd64|arm64)-([1-9][0-9]{{0,18}})")
+    candidates: dict[str, dict[int, ProducerArtifact]] = {
+        "amd64": {},
+        "arm64": {},
+    }
+    for index, raw_artifact in enumerate(value):
+        artifact = _exact_fields(
+            raw_artifact,
+            {
+                "digest",
+                "expired",
+                "id",
+                "name",
+                "size_in_bytes",
+                "workflow_run",
+            },
+            f"producer artifact {index}",
+        )
+        artifact_id = _integer(
+            artifact["id"],
+            f"producer artifact {index} ID",
+            minimum=1,
+            maximum=(2**63) - 1,
+        )
+        _text(
+            artifact["digest"],
+            f"producer artifact {index} digest",
+            pattern=OCI_SHA256,
+        )
+        name = _text(artifact["name"], f"producer artifact {index} name")
+        _integer(
+            artifact["size_in_bytes"],
+            f"producer artifact {index} size",
+            minimum=1,
+            maximum=MAX_PRODUCER_ARTIFACT_BYTES,
+        )
+        if type(artifact["expired"]) is not bool:
+            raise WheelhouseError(f"producer artifact {index} expiry is invalid")
+        workflow_run = _exact_fields(
+            artifact["workflow_run"],
+            {"head_sha", "id"},
+            f"producer artifact {index} workflow run",
+        )
+        artifact_run_id = _integer(
+            workflow_run["id"],
+            f"producer artifact {index} workflow run ID",
+            minimum=1,
+            maximum=(2**63) - 1,
+        )
+        artifact_revision = _text(
+            workflow_run["head_sha"],
+            f"producer artifact {index} workflow revision",
+            pattern=LOWER_COMMIT,
+        )
+        if artifact_run_id != expected_run_id or artifact_revision != revision:
+            raise WheelhouseError("producer artifact belongs to a different workflow run")
+
+        match = expected_name.fullmatch(name)
+        if match is None or artifact["expired"]:
+            continue
+        architecture, producer_attempt_text = match.groups()
+        producer_attempt = _positive_decimal(
+            producer_attempt_text,
+            f"producer artifact {index} attempt",
+        )
+        if producer_attempt > maximum_attempt:
+            raise WheelhouseError("producer artifact attempt is newer than the workflow")
+        if producer_attempt in candidates[architecture]:
+            raise WheelhouseError("producer artifact attempt is duplicated")
+        candidates[architecture][producer_attempt] = ProducerArtifact(
+            artifact_id=artifact_id,
+            producer_attempt=producer_attempt,
+        )
+
+    selected: dict[str, ProducerArtifact] = {}
+    for architecture in ("amd64", "arm64"):
+        platform_candidates = candidates[architecture]
+        if not platform_candidates:
+            raise WheelhouseError(f"no usable {architecture} producer artifact exists")
+        selected[architecture] = platform_candidates[max(platform_candidates)]
+    return selected
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
+
+    artifacts = commands.add_parser(
+        "select-producer-artifacts",
+        help="select immutable wheelhouse uploads across workflow reruns",
+    )
+    artifacts.add_argument("--source-revision", required=True)
+    artifacts.add_argument("--run-id", required=True)
+    artifacts.add_argument("--current-attempt", required=True)
 
     validate = commands.add_parser("validate-inputs", help="validate reviewed builder inputs")
     validate.add_argument("--inputs", type=Path, required=True)
@@ -1869,6 +2010,23 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     args = _parser().parse_args(argv)
     try:
+        if args.command == "select-producer-artifacts":
+            raw_artifacts = os.environ.get("NATIVE_WHEELHOUSE_ARTIFACTS")
+            if raw_artifacts is None:
+                raise WheelhouseError("producer artifact metadata is unavailable")
+            selected = select_producer_artifacts(
+                raw_artifacts,
+                args.source_revision,
+                args.run_id,
+                args.current_attempt,
+            )
+            for architecture in ("amd64", "arm64"):
+                artifact = selected[architecture]
+                sys.stdout.write(
+                    f"{architecture}-artifact-id={artifact.artifact_id}\n"
+                    f"{architecture}-producer-attempt={artifact.producer_attempt}\n"
+                )
+            return 0
         inputs = load_inputs(args.inputs)
         if args.command == "validate-inputs":
             return 0

@@ -616,6 +616,241 @@ def test_published_sbom_artifacts_are_unique_across_run_attempts() -> None:
     assert "name: native-wheelhouse-sboms-${{ github.sha }}-${{ github.run_attempt }}" in source
 
 
+def producer_artifact(
+    name: str,
+    artifact_id: int,
+    *,
+    revision: str,
+    run_id: int,
+    expired: bool = False,
+) -> dict[str, object]:
+    return {
+        "digest": f"sha256:{artifact_id:064x}",
+        "expired": expired,
+        "id": artifact_id,
+        "name": name,
+        "size_in_bytes": 4096,
+        "workflow_run": {
+            "head_sha": revision,
+            "id": run_id,
+        },
+    }
+
+
+def test_producer_artifact_selection_survives_failed_jobs_only_reruns() -> None:
+    revision = "a" * 40
+    run_id = 12345
+    artifacts = [
+        producer_artifact(
+            f"native-wheelhouse-{revision}-amd64-1",
+            101,
+            revision=revision,
+            run_id=run_id,
+        ),
+        producer_artifact(
+            f"native-wheelhouse-{revision}-arm64-1",
+            201,
+            revision=revision,
+            run_id=run_id,
+        ),
+    ]
+
+    selected = wheelhouse.select_producer_artifacts(
+        json.dumps(artifacts),
+        revision,
+        str(run_id),
+        "2",
+    )
+
+    assert selected == {
+        "amd64": wheelhouse.ProducerArtifact(artifact_id=101, producer_attempt=1),
+        "arm64": wheelhouse.ProducerArtifact(artifact_id=201, producer_attempt=1),
+    }
+
+
+def test_producer_artifact_selection_prefers_each_platforms_newest_attempt() -> None:
+    revision = "b" * 40
+    run_id = 23456
+    artifacts = [
+        producer_artifact(
+            f"native-wheelhouse-{revision}-amd64-1",
+            101,
+            revision=revision,
+            run_id=run_id,
+        ),
+        producer_artifact(
+            f"native-wheelhouse-{revision}-amd64-3",
+            103,
+            revision=revision,
+            run_id=run_id,
+        ),
+        producer_artifact(
+            f"native-wheelhouse-{revision}-arm64-1",
+            201,
+            revision=revision,
+            run_id=run_id,
+        ),
+        producer_artifact(
+            f"native-wheelhouse-{revision}-arm64-2",
+            202,
+            revision=revision,
+            run_id=run_id,
+        ),
+        producer_artifact(
+            f"native-wheelhouse-{revision}-arm64-3",
+            203,
+            revision=revision,
+            run_id=run_id,
+            expired=True,
+        ),
+    ]
+
+    selected = wheelhouse.select_producer_artifacts(
+        json.dumps(artifacts),
+        revision,
+        str(run_id),
+        "3",
+    )
+
+    assert selected == {
+        "amd64": wheelhouse.ProducerArtifact(artifact_id=103, producer_attempt=3),
+        "arm64": wheelhouse.ProducerArtifact(artifact_id=202, producer_attempt=2),
+    }
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        ("duplicate", "duplicated"),
+        ("future", "newer than the workflow"),
+        ("wrong-run", "different workflow run"),
+        ("wrong-revision", "different workflow run"),
+        ("invalid-digest", "digest has an invalid value"),
+        ("expired-arm64", "no usable arm64"),
+    ],
+)
+def test_producer_artifact_selection_rejects_ambiguous_or_foreign_inputs(
+    mutation: str,
+    message: str,
+) -> None:
+    revision = "c" * 40
+    run_id = 34567
+    amd64 = producer_artifact(
+        f"native-wheelhouse-{revision}-amd64-1",
+        101,
+        revision=revision,
+        run_id=run_id,
+    )
+    arm64 = producer_artifact(
+        f"native-wheelhouse-{revision}-arm64-1",
+        201,
+        revision=revision,
+        run_id=run_id,
+    )
+    artifacts = [amd64, arm64]
+    if mutation == "duplicate":
+        artifacts.append(
+            producer_artifact(
+                f"native-wheelhouse-{revision}-amd64-1",
+                102,
+                revision=revision,
+                run_id=run_id,
+            )
+        )
+    elif mutation == "future":
+        amd64["name"] = f"native-wheelhouse-{revision}-amd64-3"
+    elif mutation == "wrong-run":
+        assert isinstance(amd64["workflow_run"], dict)
+        amd64["workflow_run"]["id"] = run_id + 1
+    elif mutation == "wrong-revision":
+        assert isinstance(amd64["workflow_run"], dict)
+        amd64["workflow_run"]["head_sha"] = "d" * 40
+    elif mutation == "invalid-digest":
+        amd64["digest"] = "sha256:" + ("A" * 64)
+    elif mutation == "expired-arm64":
+        arm64["expired"] = True
+    else:
+        raise AssertionError(f"unsupported mutation: {mutation}")
+
+    with pytest.raises(wheelhouse.WheelhouseError, match=message):
+        wheelhouse.select_producer_artifacts(
+            json.dumps(artifacts),
+            revision,
+            str(run_id),
+            "2",
+        )
+
+
+def test_producer_artifact_cli_emits_only_fixed_digit_outputs(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    revision = "e" * 40
+    run_id = 45678
+    artifacts = [
+        producer_artifact(
+            f"native-wheelhouse-{revision}-amd64-1",
+            101,
+            revision=revision,
+            run_id=run_id,
+        ),
+        producer_artifact(
+            f"native-wheelhouse-{revision}-arm64-2",
+            202,
+            revision=revision,
+            run_id=run_id,
+        ),
+    ]
+    monkeypatch.setenv("NATIVE_WHEELHOUSE_ARTIFACTS", json.dumps(artifacts))
+
+    result = wheelhouse.main(
+        [
+            "select-producer-artifacts",
+            "--source-revision",
+            revision,
+            "--run-id",
+            str(run_id),
+            "--current-attempt",
+            "2",
+        ]
+    )
+
+    assert result == 0
+    assert capsys.readouterr().out == (
+        "amd64-artifact-id=101\n"
+        "amd64-producer-attempt=1\n"
+        "arm64-artifact-id=202\n"
+        "arm64-producer-attempt=2\n"
+    )
+
+
+def test_publication_downloads_immutable_ids_from_verified_producer_attempts() -> None:
+    source = WORKFLOW.read_text(encoding="utf-8")
+    publish = source.split("\n  publish:\n", 1)[1]
+    inventory = publish.split("      - name: List producer artifact identities\n", 1)[1].split(
+        "      - name: Select verified producer artifacts by immutable ID\n",
+        1,
+    )[0]
+    downloads = publish.split(
+        "      - name: Download the verified amd64 wheelhouse\n",
+        1,
+    )[1].split("      - name: Reverify both transported wheelhouses\n", 1)[0]
+
+    assert "      actions: read\n" in publish
+    assert "actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3" in inventory
+    assert "github.rest.actions.listWorkflowRunArtifacts" in inventory
+    assert 'Buffer.byteLength(encoded, "utf8") > 512 * 1024' in inventory
+    assert "native_wheelhouse.py select-producer-artifacts" in publish
+    assert '>> "$GITHUB_OUTPUT"' in publish
+    assert downloads.count("artifact-ids:") == 2
+    assert "steps.producer-artifacts.outputs.amd64-artifact-id" in downloads
+    assert "steps.producer-artifacts.outputs.arm64-artifact-id" in downloads
+    assert "\n          name:" not in downloads
+    assert "github.run_attempt" not in downloads
+    assert "AMD64_PRODUCER_ATTEMPT" in publish
+    assert "ARM64_PRODUCER_ATTEMPT" in publish
+
+
 def test_publication_retry_reuses_only_a_verified_commit_digest() -> None:
     source = WORKFLOW.read_text(encoding="utf-8")
     retry = source.split("      - name: Add verified wheelhouse tags\n", 1)[1]
