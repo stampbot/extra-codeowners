@@ -1,0 +1,140 @@
+{
+  "base_image": {
+    "digest": "sha256:26730869004e2b9c4b9ad09cab8625e81d256d1ce97e72df5520e806b1709f92",
+    "reference": "python:3.14.6-alpine3.24"
+  },
+  "builder_packages": [
+    "binutils=2.45.1-r1",
+    "build-base=0.5-r4",
+    "cargo=1.96.1-r0",
+    "cython=3.2.4-r2",
+    "libffi-dev=3.5.2-r1",
+    "libpq-dev=18.4-r0",
+    "maturin=1.11.5-r1",
+    "py3-build=1.4.2-r0",
+    "py3-setuptools=82.0.1-r1",
+    "py3-wheel=0.47.0-r0",
+    "rust=1.96.1-r0"
+  ],
+  "cargo": {
+    "registry_packages": 103,
+    "source": "registry+https://github.com/rust-lang/crates.io-index"
+  },
+  "expected_wheels": [
+    {
+      "distribution": "cffi",
+      "native_payloads": 1,
+      "needed_libraries": [
+        "libffi.so.8"
+      ],
+      "version": "2.1.0"
+    },
+    {
+      "distribution": "psycopg-c",
+      "native_payloads": 2,
+      "needed_libraries": [
+        "libpq.so.5"
+      ],
+      "version": "3.3.4"
+    },
+    {
+      "distribution": "pydantic-core",
+      "native_payloads": 1,
+      "needed_libraries": [
+        "libgcc_s.so.1"
+      ],
+      "version": "2.46.4"
+    },
+    {
+      "distribution": "setuptools",
+      "native_payloads": 0,
+      "needed_libraries": [],
+      "version": "80.3.1"
+    }
+  ],
+  "kind": "extra-codeowners/native-wheelhouse-inputs",
+  "python": {
+    "abi": "cp314",
+    "implementation": "cpython",
+    "version": "3.14.6"
+  },
+  "schema_version": 1,
+  "source_date_epoch": 1783371027,
+  "sources": [
+    {
+      "filename": "cffi.tar.gz",
+      "id": "cffi",
+      "root": "cffi-d9f6f70adac5ca9f260abf5405cf4d0373767b65",
+      "sha256": "2a31842634fc3f9975c67ec82928b68f66d9a95b8c93b88b0ed36fa560003468",
+      "size": 540432,
+      "upstream": {
+        "commit": "d9f6f70adac5ca9f260abf5405cf4d0373767b65",
+        "repository": "https://github.com/python-cffi/cffi",
+        "signature_review": "verified-commit",
+        "tag": "v2.1.0",
+        "tag_object": null
+      },
+      "url": "https://github.com/python-cffi/cffi/archive/d9f6f70adac5ca9f260abf5405cf4d0373767b65.tar.gz"
+    },
+    {
+      "filename": "psycopg.tar.gz",
+      "id": "psycopg",
+      "root": "psycopg-3.3.4",
+      "sha256": "714f0e916a0d239f42dc0554bab31cd2b79d9d11b7a96cd397116dba7c658abf",
+      "size": 611451,
+      "upstream": {
+        "commit": "83f110367cdd249cc0a352e2246ecea9e878e5a0",
+        "repository": "https://github.com/psycopg/psycopg",
+        "signature_review": "verified-tag",
+        "tag": "3.3.4",
+        "tag_object": "6697f47c113ea47c671fd2c7a286074b88182a9b"
+      },
+      "url": "https://github.com/psycopg/psycopg/archive/refs/tags/3.3.4.tar.gz"
+    },
+    {
+      "filename": "pydantic-core.tar.gz",
+      "id": "pydantic-core",
+      "root": "pydantic_core-2.46.4",
+      "sha256": "62f875393d7f270851f20523dd2e29f082bcc82292d66db2b64ea71f64b6e1c1",
+      "size": 471464,
+      "upstream": {
+        "commit": "cf67d4b3193c3fe43ede18612ed62785eee11382",
+        "repository": "https://github.com/pydantic/pydantic-core",
+        "signature_review": "unsigned-tag",
+        "tag": "core-v2.46.4",
+        "tag_object": "1fbb516380fce5f7242f5dac737d6bdf3a06438c"
+      },
+      "url": "https://files.pythonhosted.org/packages/9d/56/921726b776ace8d8f5db44c4ef961006580d91dc52b803c489fafd1aa249/pydantic_core-2.46.4.tar.gz"
+    },
+    {
+      "filename": "setuptools.tar.gz",
+      "id": "setuptools",
+      "release_patch": {
+        "member": "setup.cfg",
+        "original_sha256": "816396ac9dd9e210cf429a6a0ba344e7a025666c937a69692f4f2d1f2b2c7128",
+        "removed_members": [
+          {
+            "member": "bootstrap.egg-info/PKG-INFO",
+            "sha256": "d9bf4c16ebe173b916e7f888c209c1c32e34c176c34353a57752b0c7da37d7a3"
+          },
+          {
+            "member": "bootstrap.egg-info/entry_points.txt",
+            "sha256": "575cfedbe1064477b8baca395d8b216edad49c3571aadd1617ebfdf3f6ec5cdf"
+          }
+        ],
+        "replacement_sha256": "6c4fc9ab01bac1b8921fcb33431592b0cd42e83a469780f6bf63e830689cb6fa"
+      },
+      "root": "setuptools-f37845bce6bb06ec25c24cf30210a485e945d21e",
+      "sha256": "7342096b2de0309193cbddb1c446a2d0ae763dac17368413af15b25088edd290",
+      "size": 1352779,
+      "upstream": {
+        "commit": "f37845bce6bb06ec25c24cf30210a485e945d21e",
+        "repository": "https://github.com/pypa/setuptools",
+        "signature_review": "verified-tag-and-commit",
+        "tag": "v80.3.1",
+        "tag_object": "bfb263de79aadd10b18cbc0736dd7bbd801a7d1d"
+      },
+      "url": "https://github.com/pypa/setuptools/archive/f37845bce6bb06ec25c24cf30210a485e945d21e.tar.gz"
+    }
+  ]
+}

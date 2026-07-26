@@ -17,6 +17,7 @@ distribution.
 - [Container evidence policy](../reference/container-evidence-policy.md)
 - [Container evidence release contract](../reference/container-evidence-release-contract.md)
 - [Runtime base image decision](../explanation/runtime-base.md)
+- [Why native dependencies have their own build](../explanation/native-wheelhouse.md)
 
 ## Review and incident procedures
 
@@ -24,6 +25,7 @@ distribution.
 - [Respond to a dependency audit](../how-to/respond-to-dependency-audit.md)
 - [Review stacked pull requests](../how-to/review-stacked-pull-requests.md)
 - [Update the tutorial webhook relay](update-tutorial-relay.md)
+- [Update the native wheelhouse](../how-to/update-native-wheelhouse.md)
 
 ## Publication and contributor controls
 
