@@ -394,7 +394,10 @@ root-owned with mode `0755`. The canonical replay only removes differences that
 produce the same validated filesystem state across trusted Docker/OCI
 exporters. Regular-file policy stays byte-exact: every post-base
 `/etc/apk/world` occurrence is bound to its layer, digest, size, mode, owner,
-group, and final-effect status.
+group, and final-effect status. Package-manager state, runtime library files,
+and runtime library links introduced above the base have their own exact
+platform baselines. Those baselines classify accepted image changes; they do
+not turn file co-presence into build provenance.
 
 ### Artifact names expose the workflow identity
 

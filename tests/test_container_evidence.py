@@ -412,6 +412,8 @@ def empty_filesystem_baselines() -> dict[str, dict[str, list[dict[str, Any]]]]:
             "post_base_apk_world_occurrences": [],
             "post_base_directory_effects": [],
             "post_base_removals": [],
+            "post_base_system_links": [],
+            "post_base_system_regular_occurrences": [],
         }
         for platform in ("linux/amd64", "linux/arm64")
     }
@@ -2334,12 +2336,16 @@ def test_exact_apk_database_baseline_covers_virtual_records(tmp_path: Path) -> N
                 "post_base_apk_world_occurrences": [],
                 "post_base_directory_effects": [],
                 "post_base_removals": [],
+                "post_base_system_links": [],
+                "post_base_system_regular_occurrences": [],
             },
             "linux/arm64": {
                 "apk_database_occurrences": [],
                 "post_base_apk_world_occurrences": [],
                 "post_base_directory_effects": [],
                 "post_base_removals": [],
+                "post_base_system_links": [],
+                "post_base_system_regular_occurrences": [],
             },
         }
     }
@@ -2391,12 +2397,16 @@ def test_post_base_apk_world_requires_exact_reviewed_occurrences(tmp_path: Path)
                 "post_base_apk_world_occurrences": occurrences,
                 "post_base_directory_effects": [],
                 "post_base_removals": [],
+                "post_base_system_links": [],
+                "post_base_system_regular_occurrences": [],
             },
             "linux/arm64": {
                 "apk_database_occurrences": [],
                 "post_base_apk_world_occurrences": [],
                 "post_base_directory_effects": [],
                 "post_base_removals": [],
+                "post_base_system_links": [],
+                "post_base_system_regular_occurrences": [],
             },
         },
     }
@@ -2437,6 +2447,113 @@ def test_post_base_apk_world_requires_exact_reviewed_occurrences(tmp_path: Path)
     ] = "etc/apk/repositories"
     with pytest.raises(evidence.EvidenceError, match="APK world policy has an invalid path"):
         evidence.verify_post_base_apk_world_baseline(clean_files, invalid_path)
+
+    insecure_mode = copy.deepcopy(policy)
+    insecure_mode["filesystem_baselines"]["linux/amd64"]["post_base_apk_world_occurrences"][0][
+        "mode"
+    ] = 0o666
+    with pytest.raises(evidence.EvidenceError, match="must be root-owned with mode 0o0644"):
+        evidence.verify_post_base_apk_world_baseline(clean_files, insecure_mode)
+
+
+def test_post_base_system_files_and_links_require_exact_reviewed_occurrences(
+    tmp_path: Path,
+) -> None:
+    system_files = {
+        "lib/apk/db/scripts.tar.gz": b"scripts",
+        "lib/apk/db/triggers": b"triggers",
+        "usr/lib/libgcc_s.so.1": b"libgcc",
+        "usr/lib/libpq.so.5.18": b"libpq",
+        "var/log/apk.log": b"log",
+    }
+    clean_image = tmp_path / "clean-system-files.tar"
+    saved_image_layers(
+        clean_image,
+        [
+            tar_bytes({"lib/apk/db/installed": apk_database()}),
+            tar_bytes(
+                system_files,
+                links={"usr/lib/libpq.so.5": "libpq.so.5.18"},
+                headers={"usr/lib/libpq.so.5.18": {"mode": 0o755}},
+            ),
+        ],
+    )
+    _inventory, clean_files = evidence._inventory_saved_image(
+        clean_image, "linux/amd64", "sha256:" + "a" * 64
+    )
+    base_digest = clean_files["layers"][0]["digest"]
+    regular = evidence.post_base_system_regular_occurrences(clean_files, 1, "linux/amd64")
+    links = evidence.post_base_system_links(clean_files, 1, "linux/amd64")
+    policy = {
+        "base_image_platforms": {
+            "linux/amd64": {"layer_diff_ids": [base_digest]},
+            "linux/arm64": {"layer_diff_ids": ["sha256:" + "b" * 64]},
+        },
+        "filesystem_baselines": {
+            "linux/amd64": {
+                "apk_database_occurrences": [],
+                "post_base_apk_world_occurrences": [],
+                "post_base_directory_effects": [],
+                "post_base_removals": [],
+                "post_base_system_links": links,
+                "post_base_system_regular_occurrences": regular,
+            },
+            "linux/arm64": {
+                "apk_database_occurrences": [],
+                "post_base_apk_world_occurrences": [],
+                "post_base_directory_effects": [],
+                "post_base_removals": [],
+                "post_base_system_links": [],
+                "post_base_system_regular_occurrences": [],
+            },
+        },
+    }
+
+    evidence.verify_post_base_system_baselines(clean_files, policy)
+
+    changed_image = tmp_path / "changed-system-files.tar"
+    changed_files = {**system_files, "usr/lib/libpq.so.5.18": b"changed"}
+    saved_image_layers(
+        changed_image,
+        [
+            tar_bytes({"lib/apk/db/installed": apk_database()}),
+            tar_bytes(
+                changed_files,
+                links={"usr/lib/libpq.so.5": "libpq.so.5.18"},
+                headers={"usr/lib/libpq.so.5.18": {"mode": 0o755}},
+            ),
+        ],
+    )
+    _inventory, changed_inventory = evidence._inventory_saved_image(
+        changed_image, "linux/amd64", "sha256:" + "a" * 64
+    )
+    with pytest.raises(evidence.EvidenceError, match="system files differ"):
+        evidence.verify_post_base_system_baselines(changed_inventory, policy)
+
+    changed_link_image = tmp_path / "changed-system-link.tar"
+    saved_image_layers(
+        changed_link_image,
+        [
+            tar_bytes({"lib/apk/db/installed": apk_database()}),
+            tar_bytes(
+                system_files,
+                links={"usr/lib/libpq.so.5": "libpq.so.5.17"},
+                headers={"usr/lib/libpq.so.5.18": {"mode": 0o755}},
+            ),
+        ],
+    )
+    _inventory, changed_link_inventory = evidence._inventory_saved_image(
+        changed_link_image, "linux/amd64", "sha256:" + "a" * 64
+    )
+    with pytest.raises(evidence.EvidenceError, match="system links differ"):
+        evidence.verify_post_base_system_baselines(changed_link_inventory, policy)
+
+    insecure_link = copy.deepcopy(policy)
+    insecure_link["filesystem_baselines"]["linux/amd64"]["post_base_system_links"][0]["mode"] = (
+        0o755
+    )
+    with pytest.raises(evidence.EvidenceError, match="system-link policy is invalid"):
+        evidence.verify_post_base_system_baselines(clean_files, insecure_link)
 
 
 @pytest.mark.parametrize("field", ["P", "V", "A", "L", "o", "c"])
@@ -7840,7 +7957,10 @@ def test_license_extraction_ignores_safe_non_license_tar_symlinks(tmp_path: Path
             "demo/LICENSE": b"license text\n",
             "demo/src/tool.c": b"int main(void) { return 0; }\n",
         },
-        links={"demo/src/tool-static.c": "tool.c"},
+        links={
+            "demo/src/tool-static.c": "tool.c",
+            "demo/src/subdir/tool-parent.c": "../tool.c",
+        },
     )
 
     retained = evidence.extract_license_files(archive, "demo", tmp_path)
@@ -7910,6 +8030,22 @@ def test_tar_extension_payload_is_bounded_before_materialization(
     monkeypatch.setattr(evidence, "MAX_TAR_EXTENSION_BYTES", 1024)
 
     with pytest.raises(evidence.EvidenceError, match="extension header"):
+        evidence.extract_license_files(archive_bytes.getvalue(), "demo", tmp_path)
+
+
+def test_tar_extension_payload_has_a_cumulative_bound(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    archive_bytes = io.BytesIO()
+    with tarfile.open(fileobj=archive_bytes, mode="w", format=tarfile.PAX_FORMAT) as archive:
+        for name in ("LICENSE", "NOTICE"):
+            member = tarfile.TarInfo(name)
+            member.size = 4
+            member.pax_headers = {"comment": "x" * 600}
+            archive.addfile(member, io.BytesIO(b"text"))
+    monkeypatch.setattr(evidence, "MAX_TAR_EXTENSIONS_TOTAL_BYTES", 1_000)
+
+    with pytest.raises(evidence.EvidenceError, match="cumulative size limit"):
         evidence.extract_license_files(archive_bytes.getvalue(), "demo", tmp_path)
 
 
@@ -8496,6 +8632,7 @@ def test_post_base_provenance_rejects_unclassified_regular_files(
     base = tar_bytes({"lib/apk/db/installed": apk_database()})
     application_files = {
         "etc/apk/world": b"libpq\npython3\n",
+        "lib/apk/db/installed": apk_database(),
         "opt/venv/pyvenv.cfg": PYVENV_CONFIG,
         "usr/share/licenses/extra-codeowners/LICENSE": license_content,
         **{f"{site}/{path}": content for path, content in installed.items()},
@@ -8530,12 +8667,16 @@ def test_post_base_provenance_rejects_unclassified_regular_files(
                 "post_base_apk_world_occurrences": clean_apk_world,
                 "post_base_directory_effects": clean_directory_effects,
                 "post_base_removals": [],
+                "post_base_system_links": [],
+                "post_base_system_regular_occurrences": [],
             },
             "linux/arm64": {
                 "apk_database_occurrences": [],
                 "post_base_apk_world_occurrences": [],
                 "post_base_directory_effects": [],
                 "post_base_removals": [],
+                "post_base_system_links": [],
+                "post_base_system_regular_occurrences": [],
             },
         },
     }
@@ -8780,12 +8921,16 @@ def test_directory_effects_retain_real_transitions_and_reject_hostile_noops(
                 "post_base_apk_world_occurrences": [],
                 "post_base_directory_effects": effects,
                 "post_base_removals": [],
+                "post_base_system_links": [],
+                "post_base_system_regular_occurrences": [],
             },
             "linux/arm64": {
                 "apk_database_occurrences": [],
                 "post_base_apk_world_occurrences": [],
                 "post_base_directory_effects": [],
                 "post_base_removals": [],
+                "post_base_system_links": [],
+                "post_base_system_regular_occurrences": [],
             },
         },
     }
@@ -8859,12 +9004,16 @@ def test_removal_policy_ignores_whiteout_marker_header_metadata(tmp_path: Path) 
                 "post_base_apk_world_occurrences": [],
                 "post_base_directory_effects": [],
                 "post_base_removals": expected,
+                "post_base_system_links": [],
+                "post_base_system_regular_occurrences": [],
             },
             "linux/arm64": {
                 "apk_database_occurrences": [],
                 "post_base_apk_world_occurrences": [],
                 "post_base_directory_effects": [],
                 "post_base_removals": [],
+                "post_base_system_links": [],
+                "post_base_system_regular_occurrences": [],
             },
         },
     }
@@ -8944,12 +9093,16 @@ def test_post_base_provenance_rejects_hostile_tar_security_metadata(
                 "post_base_apk_world_occurrences": [],
                 "post_base_directory_effects": clean_directory_effects,
                 "post_base_removals": [],
+                "post_base_system_links": [],
+                "post_base_system_regular_occurrences": [],
             },
             "linux/arm64": {
                 "apk_database_occurrences": [],
                 "post_base_apk_world_occurrences": [],
                 "post_base_directory_effects": [],
                 "post_base_removals": [],
+                "post_base_system_links": [],
+                "post_base_system_regular_occurrences": [],
             },
         },
     }
@@ -11873,11 +12026,19 @@ def test_policy_schema_rejects_noncanonical_retained_paths() -> None:
         "apk_database_occurrences",
         "post_base_apk_world_occurrences",
         "post_base_directory_effects",
+        "post_base_system_regular_occurrences",
     ):
         filesystem = copy.deepcopy(policy)
         record = filesystem["filesystem_baselines"]["linux/amd64"][category][0]
         record["path"] = "./" + record["path"]
         variants.append(filesystem)
+
+    system_link = copy.deepcopy(policy)
+    system_link_record = system_link["filesystem_baselines"]["linux/amd64"][
+        "post_base_system_links"
+    ][0]
+    system_link_record["path"] = "./" + system_link_record["path"]
+    variants.append(system_link)
 
     whiteout = copy.deepcopy(policy)
     whiteout_record = whiteout["filesystem_baselines"]["linux/amd64"]["post_base_removals"][0]
@@ -13513,6 +13674,8 @@ def test_filesystem_policy_view_emits_validated_semantic_projection(tmp_path: Pa
                     "target": "removed",
                 }
             ],
+            "post_base_system_links": [],
+            "post_base_system_regular_occurrences": [],
         }
     )
 

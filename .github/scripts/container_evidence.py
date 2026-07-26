@@ -99,7 +99,7 @@ MAX_ARCHIVE_MEMBER_BYTES = 64 * 1024 * 1024
 MAX_ARCHIVE_MEMBERS = 250_000
 MAX_ARCHIVE_TOTAL_BYTES = 1024 * 1024 * 1024
 MAX_TAR_EXTENSION_BYTES = 1024 * 1024
-MAX_TAR_EXTENSIONS_TOTAL_BYTES = 8 * 1024 * 1024
+MAX_TAR_EXTENSIONS_TOTAL_BYTES = 16 * 1024 * 1024
 MAX_IMAGE_MEMBERS = 250_000
 MAX_IMAGE_TOTAL_BYTES = 2 * 1024 * 1024 * 1024
 MAX_DOCKER_SAVE_BYTES = MAX_IMAGE_TOTAL_BYTES + 256 * 1024 * 1024
@@ -1323,6 +1323,41 @@ def checked_link_target(value: str) -> None:
         raise EvidenceError(f"unsafe archive link target: {value!r}")
 
 
+def checked_source_symlink_target(member_path: PurePosixPath, value: str) -> PurePosixPath:
+    """Resolve one source symlink without permitting archive-root traversal."""
+
+    try:
+        encoded = value.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise EvidenceError(f"unsafe archive link target: {value!r}") from exc
+    target = PurePosixPath(value)
+    if (
+        not value
+        or len(encoded) > MAX_PATH_BYTES
+        or "\\" in value
+        or target.is_absolute()
+        or target.as_posix() != value
+        or any(
+            part in {"", "."}
+            or any(ord(character) < 32 or 0x7F <= ord(character) <= 0x9F for character in part)
+            for part in target.parts
+        )
+    ):
+        raise EvidenceError(f"unsafe archive link target: {value!r}")
+
+    resolved_parts = list(member_path.parent.parts)
+    for part in target.parts:
+        if part == "..":
+            if not resolved_parts:
+                raise EvidenceError(f"unsafe archive link target: {value!r}")
+            resolved_parts.pop()
+        else:
+            resolved_parts.append(part)
+    if not resolved_parts or not member_path.parts or resolved_parts[0] != member_path.parts[0]:
+        raise EvidenceError(f"unsafe archive link target: {value!r}")
+    return PurePosixPath(*resolved_parts)
+
+
 def checked_image_link_target(value: str) -> None:
     """Validate, but never resolve, an OCI link target."""
 
@@ -2242,6 +2277,10 @@ def validate_policy_schema(policy: Mapping[str, Any]) -> None:
             baseline["apk_database_occurrences"], f"APK database policy for {platform}"
         )
         validate_post_base_apk_world_policy(baseline["post_base_apk_world_occurrences"], platform)
+        validate_post_base_system_regular_policy(
+            baseline["post_base_system_regular_occurrences"], platform
+        )
+        validate_post_base_system_link_policy(baseline["post_base_system_links"], platform)
         validate_directory_effect_policy(baseline["post_base_directory_effects"], platform)
         validate_removal_policy(baseline["post_base_removals"], platform)
 
@@ -7592,6 +7631,8 @@ def filesystem_baseline(policy: Mapping[str, Any], platform: object) -> Mapping[
         "post_base_apk_world_occurrences",
         "post_base_directory_effects",
         "post_base_removals",
+        "post_base_system_links",
+        "post_base_system_regular_occurrences",
     }:
         raise EvidenceError(f"invalid filesystem baseline for {platform!r}")
     return baseline
@@ -7610,6 +7651,15 @@ def verify_apk_database_baseline(inventory: Mapping[str, Any], policy: Mapping[s
 
 
 APK_WORLD_PATH = "etc/apk/world"
+POST_BASE_SYSTEM_REGULAR_MODES = {
+    "lib/apk/db/scripts.tar.gz": 0o644,
+    "lib/apk/db/triggers": 0o644,
+    "usr/lib/libgcc_s.so.1": 0o644,
+    "usr/lib/libpq.so.5.18": 0o755,
+    "var/log/apk.log": 0o644,
+}
+POST_BASE_SYSTEM_REGULAR_PATHS = frozenset(POST_BASE_SYSTEM_REGULAR_MODES)
+POST_BASE_SYSTEM_LINK_PATHS = frozenset({"usr/lib/libpq.so.5"})
 
 
 def post_base_apk_world_occurrences(
@@ -7644,6 +7694,12 @@ def validate_post_base_apk_world_policy(value: object, platform: str) -> list[di
     records = validate_payload_records(value, f"post-base APK world policy for {platform}")
     if any(record["path"] != APK_WORLD_PATH for record in records):
         raise EvidenceError(f"post-base APK world policy has an invalid path for {platform}")
+    if any(
+        record["mode"] != 0o644 or record["uid"] != 0 or record["gid"] != 0 for record in records
+    ):
+        raise EvidenceError(
+            f"post-base APK world policy must be root-owned with mode 0o0644 for {platform}"
+        )
     ordered = sorted(records, key=lambda record: (record["layer"], record["path"]))
     if records != ordered:
         raise EvidenceError(f"post-base APK world policy is not ordered for {platform}")
@@ -7669,6 +7725,168 @@ def verify_post_base_apk_world_baseline(
     )
     if canonical_json(observed) != canonical_json(expected):
         raise EvidenceError("post-base APK world occurrences differ from reviewed policy")
+
+
+def post_base_system_regular_occurrences(
+    files: Mapping[str, Any], base_layer_count: int, platform: object
+) -> list[dict[str, Any]]:
+    """Return exact reviewed system files added above the base."""
+
+    regular_files = files.get("regular_files")
+    if (
+        not isinstance(regular_files, list)
+        or not isinstance(base_layer_count, int)
+        or isinstance(base_layer_count, bool)
+        or base_layer_count < 0
+    ):
+        raise EvidenceError(f"invalid post-base system-file state for {platform!r}")
+    records: list[dict[str, Any]] = []
+    for record in regular_files:
+        if not isinstance(record, dict) or record.get("path") not in (
+            POST_BASE_SYSTEM_REGULAR_PATHS
+        ):
+            continue
+        layer = record.get("layer")
+        if not isinstance(layer, int) or isinstance(layer, bool) or layer < 0:
+            raise EvidenceError(f"invalid post-base system-file layer for {platform!r}")
+        if layer >= base_layer_count:
+            records.append(payload_record_projection(record))
+    return validate_post_base_system_regular_policy(records, str(platform))
+
+
+def validate_post_base_system_regular_policy(value: object, platform: str) -> list[dict[str, Any]]:
+    """Validate the exact reviewed post-base system-file allowlist."""
+
+    records = validate_payload_records(value, f"post-base system-file policy for {platform}")
+    if any(
+        record["path"] not in POST_BASE_SYSTEM_REGULAR_PATHS
+        or record["effective"] is not True
+        or record["uid"] != 0
+        or record["gid"] != 0
+        or record["mode"] != POST_BASE_SYSTEM_REGULAR_MODES[record["path"]]
+        for record in records
+    ):
+        raise EvidenceError(f"post-base system-file policy is invalid for {platform}")
+    ordered = sorted(records, key=lambda record: (record["layer"], record["path"]))
+    if records != ordered:
+        raise EvidenceError(f"post-base system-file policy is not ordered for {platform}")
+    return records
+
+
+def validate_post_base_system_link_policy(value: object, platform: str) -> list[dict[str, Any]]:
+    """Validate the exact reviewed post-base system-link allowlist."""
+
+    if not isinstance(value, list) or len(value) > MAX_IMAGE_MEMBERS:
+        raise EvidenceError(f"post-base system-link policy is invalid for {platform}")
+    records: list[dict[str, Any]] = []
+    seen: set[tuple[int, str]] = set()
+    fields = {"kind", "layer", "path", "target", "mode", "uid", "gid"}
+    for value_record in value:
+        record = require_exact_fields(
+            value_record,
+            fields,
+            f"post-base system-link policy for {platform}",
+        )
+        layer = record.get("layer")
+        path_value = record.get("path")
+        target = record.get("target")
+        if (
+            record.get("kind") != "symlink"
+            or not isinstance(layer, int)
+            or isinstance(layer, bool)
+            or layer < 0
+            or not isinstance(path_value, str)
+            or not isinstance(target, str)
+        ):
+            raise EvidenceError(f"post-base system-link policy is invalid for {platform}")
+        path = str(
+            checked_canonical_path(
+                path_value,
+                f"post-base system-link policy path for {platform}",
+            )
+        )
+        if path not in POST_BASE_SYSTEM_LINK_PATHS:
+            raise EvidenceError(f"post-base system-link policy is invalid for {platform}")
+        checked_image_link_target(target)
+        validate_header_identity(record, f"post-base system-link policy for {platform}")
+        if record["mode"] != 0o777 or record["uid"] != 0 or record["gid"] != 0:
+            raise EvidenceError(f"post-base system-link policy is invalid for {platform}")
+        identity = (layer, path)
+        if identity in seen:
+            raise EvidenceError(f"post-base system-link policy is duplicated for {platform}")
+        seen.add(identity)
+        records.append(
+            {
+                "kind": "symlink",
+                "layer": layer,
+                "path": path,
+                "target": target,
+                "mode": record["mode"],
+                "uid": record["uid"],
+                "gid": record["gid"],
+            }
+        )
+    ordered = sorted(records, key=lambda record: (record["layer"], record["path"]))
+    if records != ordered:
+        raise EvidenceError(f"post-base system-link policy is not ordered for {platform}")
+    return records
+
+
+def post_base_system_links(
+    files: Mapping[str, Any], base_layer_count: int, platform: object
+) -> list[dict[str, Any]]:
+    """Return exact reviewed system links added above the base."""
+
+    non_regular = files.get("non_regular_files")
+    if (
+        not isinstance(non_regular, list)
+        or not isinstance(base_layer_count, int)
+        or isinstance(base_layer_count, bool)
+        or base_layer_count < 0
+    ):
+        raise EvidenceError(f"invalid post-base system-link state for {platform!r}")
+    records: list[dict[str, Any]] = []
+    for record in non_regular:
+        if not isinstance(record, dict) or record.get("path") not in POST_BASE_SYSTEM_LINK_PATHS:
+            continue
+        layer = record.get("layer")
+        if not isinstance(layer, int) or isinstance(layer, bool) or layer < 0:
+            raise EvidenceError(f"invalid post-base system-link layer for {platform!r}")
+        if layer >= base_layer_count:
+            try:
+                records.append(
+                    {
+                        field: record[field]
+                        for field in ("kind", "layer", "path", "target", "mode", "uid", "gid")
+                    }
+                )
+            except KeyError as exc:
+                raise EvidenceError(
+                    f"invalid post-base system-link record for {platform!r}"
+                ) from exc
+    return validate_post_base_system_link_policy(records, str(platform))
+
+
+def verify_post_base_system_baselines(files: Mapping[str, Any], policy: Mapping[str, Any]) -> None:
+    """Bind reviewed post-base package-manager state and runtime libraries."""
+
+    platform = files.get("platform")
+    if not isinstance(platform, str):
+        raise EvidenceError("all-layer inventory platform is missing")
+    base_layer_count = post_base_layer_count(files, policy)
+    baseline = filesystem_baseline(policy, platform)
+    expected_regular = validate_post_base_system_regular_policy(
+        baseline["post_base_system_regular_occurrences"], platform
+    )
+    observed_regular = post_base_system_regular_occurrences(files, base_layer_count, platform)
+    if canonical_json(observed_regular) != canonical_json(expected_regular):
+        raise EvidenceError("post-base system files differ from reviewed policy")
+    expected_links = validate_post_base_system_link_policy(
+        baseline["post_base_system_links"], platform
+    )
+    observed_links = post_base_system_links(files, base_layer_count, platform)
+    if canonical_json(observed_links) != canonical_json(expected_links):
+        raise EvidenceError("post-base system links differ from reviewed policy")
 
 
 def validate_wheel_installations(
@@ -8903,6 +9121,7 @@ def verify_post_base_filesystem_policy(files: Mapping[str, Any], policy: Mapping
     base_layer_count = post_base_layer_count(files, policy)
     baseline = filesystem_baseline(policy, platform)
     verify_post_base_apk_world_baseline(files, policy)
+    verify_post_base_system_baselines(files, policy)
     observed_directory_effects, observed_removals = canonical_post_base_filesystem_changes(
         files, base_layer_count, platform
     )
@@ -8928,7 +9147,16 @@ def verify_post_base_provenance(
     """Reject every unclassified file-system change above the reviewed base."""
 
     base_layer_count = post_base_layer_count(files, policy)
+    verify_apk_database_baseline(inventory, policy)
     verify_post_base_apk_world_baseline(files, policy)
+    verify_post_base_system_baselines(files, policy)
+    apk_database_occurrences = {
+        canonical_json(record)
+        for record in validate_payload_records(
+            inventory.get("apk_database_occurrences"),
+            "APK database inventory",
+        )
+    }
 
     def require_root_header(record: Mapping[str, Any], mode: int, subject: str) -> None:
         validate_header_identity(record, subject)
@@ -8979,8 +9207,22 @@ def verify_post_base_provenance(
                 raise EvidenceError("post-base pyvenv.cfg is later hidden or replaced")
             require_root_header(record, 0o644, "post-base pyvenv.cfg")
             continue
+        if path == "lib/apk/db/installed":
+            if canonical_json(payload_record_projection(record)) not in apk_database_occurrences:
+                raise EvidenceError(
+                    "post-base APK database does not match its reviewed inventory occurrence"
+                )
+            require_root_header(record, 0o644, "post-base APK database")
+            continue
         if path == APK_WORLD_PATH:
             require_root_header(record, 0o644, "post-base APK world file")
+            continue
+        if path in POST_BASE_SYSTEM_REGULAR_PATHS:
+            require_root_header(
+                record,
+                POST_BASE_SYSTEM_REGULAR_MODES[path],
+                f"post-base reviewed system file {path}",
+            )
             continue
         if path == expected_license["path"]:
             license_occurrences += 1
@@ -9023,12 +9265,19 @@ def verify_post_base_provenance(
     post_base_non_regular = [
         record for record in files["non_regular_files"] if record["layer"] >= base_layer_count
     ]
-    observed_links = {
+    venv_links = {
         record["path"]: record.get("target")
         for record in post_base_non_regular
-        if record.get("kind") == "symlink"
+        if record.get("path") in VENV_LINKS and record.get("kind") == "symlink"
     }
-    if len(observed_links) != len(post_base_non_regular) or observed_links != VENV_LINKS:
+    system_link_paths = {
+        str(record["path"])
+        for record in post_base_non_regular
+        if record.get("path") in POST_BASE_SYSTEM_LINK_PATHS
+    }
+    if venv_links != VENV_LINKS or len(venv_links) + len(system_link_paths) != len(
+        post_base_non_regular
+    ):
         raise EvidenceError("image contains an unreviewed post-base non-regular file")
     for record in post_base_non_regular:
         require_root_header(record, 0o777, f"post-base link {record['path']}")
@@ -12964,6 +13213,8 @@ def extract_license_files(
             ) as tar_source:
                 count = 0
                 total = 0
+                regular_paths: set[str] = set()
+                symlink_targets: list[tuple[str, str]] = []
                 for tar_member in tar_source:
                     count += 1
                     if count > MAX_ARCHIVE_MEMBERS:
@@ -12980,17 +13231,19 @@ def extract_license_files(
                             raise EvidenceError(
                                 f"source archive symlink has a payload: {component}"
                             )
-                        checked_link_target(tar_member.linkname)
+                        target = checked_source_symlink_target(path, tar_member.linkname)
                         if LICENSE_NAME.search(str(path)):
                             raise EvidenceError(
                                 f"source archive license entry is not regular: {component}"
                             )
+                        symlink_targets.append((str(path), str(target)))
                         # Source archives are inspected in memory and never extracted. A
-                        # bounded, traversal-free non-license symlink cannot influence
-                        # which regular license bytes are retained.
+                        # bounded in-tree non-license symlink cannot influence which
+                        # regular license bytes are retained.
                         continue
                     if not tar_member.isfile():
                         raise EvidenceError(f"source archive has an unsupported entry: {component}")
+                    regular_paths.add(str(path))
                     total += tar_member.size
                     if total > MAX_ARCHIVE_TOTAL_BYTES:
                         raise EvidenceError(f"source archive is too large: {component}")
@@ -12998,6 +13251,16 @@ def extract_license_files(
                         continue
                     record_license_candidate(tar_member.name, tar_member.size)
                     retain(str(path), read_member(tar_source, tar_member))
+                unresolved = sorted(
+                    (path, target)
+                    for path, target in symlink_targets
+                    if target not in regular_paths
+                )
+                if unresolved:
+                    raise EvidenceError(
+                        f"unsafe archive link target: {unresolved[0][0]!r} "
+                        f"does not resolve to {unresolved[0][1]!r}"
+                    )
     except EvidenceError:
         raise
     except (
@@ -13655,6 +13918,7 @@ def _build_bundle_with_boundary(
             if component["ecosystem"] == "python" and component["name"] != "extra-codeowners"
         ]
         python_source_archives: dict[tuple[str, str], tuple[bytes, Sequence[str], str]] = {}
+        python_source_bindings: dict[tuple[str, str], dict[str, Any]] = {}
         for component in python_components:
             key = (component["name"], component["version"])
             source = lock_sources.get(key)
@@ -13677,6 +13941,9 @@ def _build_bundle_with_boundary(
             relative = f"sources/python/{key[0]}/{key[1]}/{safe_filename(url)}"
             write_file(root, relative, content, budget=budget)
             python_source_archives[key] = (content, download.urls, relative)
+            python_source_bindings[key] = {
+                field: source.get(field) for field in ("url", "sha256", "size")
+            }
             source_records.append(source_record(component_id, download.urls, content, relative))
             found = extract_license_files(
                 content,
@@ -13704,11 +13971,11 @@ def _build_bundle_with_boundary(
             source_id = str(wheel["source"])
             owner_source = owner_record["owner_source"]
             cached_python_source = python_source_archives.get((owner_name, owner_version))
-            cached_lock_source = lock_sources.get((owner_name, owner_version))
+            cached_python_binding = python_source_bindings.get((owner_name, owner_version))
             expected_owner_source = {
                 field: owner_source[field] for field in ("url", "sha256", "size")
             }
-            if cached_python_source is not None and cached_lock_source == expected_owner_source:
+            if cached_python_source is not None and cached_python_binding == expected_owner_source:
                 content, urls, relative = cached_python_source
             else:
                 download = direct_source(
@@ -15098,6 +15365,10 @@ def command_filesystem_policy_view(args: argparse.Namespace) -> None:
     apk_world_occurrences = post_base_apk_world_occurrences(
         files, post_base_layer_count(files, policy), platform
     )
+    system_regular_occurrences = post_base_system_regular_occurrences(
+        files, post_base_layer_count(files, policy), platform
+    )
+    system_links = post_base_system_links(files, post_base_layer_count(files, policy), platform)
     Path(args.output).write_bytes(
         canonical_json(
             {
@@ -15105,6 +15376,8 @@ def command_filesystem_policy_view(args: argparse.Namespace) -> None:
                 "post_base_apk_world_occurrences": apk_world_occurrences,
                 "post_base_directory_effects": directory_effects,
                 "post_base_removals": removals,
+                "post_base_system_links": system_links,
+                "post_base_system_regular_occurrences": system_regular_occurrences,
             }
         )
     )

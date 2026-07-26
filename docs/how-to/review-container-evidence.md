@@ -762,7 +762,11 @@ for architecture in amd64 arm64; do
         post_base_directory_effects:
           .filesystem_baselines[$platform].post_base_directory_effects,
         post_base_removals:
-          .filesystem_baselines[$platform].post_base_removals
+          .filesystem_baselines[$platform].post_base_removals,
+        post_base_system_links:
+          .filesystem_baselines[$platform].post_base_system_links,
+        post_base_system_regular_occurrences:
+          .filesystem_baselines[$platform].post_base_system_regular_occurrences
       }
     ' "$POLICY" > "$DIFF_ROOT/${architecture}-expected-filesystem-policy.json"
   diff --unified "$DIFF_ROOT/${architecture}-expected-filesystem-policy.json" \
@@ -772,18 +776,20 @@ done
 
 No diff output means the exact ordered base diff IDs, top-level components,
 raw wheel surfaces, APK database and post-base APK world history, and canonical
-directory effects and removals match reviewed policy. Review the printed
-structured wheel payloads, coverage ledger, and CPython runtime record as well.
-The CPython record must bind the expected version header, interpreter link,
-interpreter, and shared library from one reviewed base layer. Each embedded
-SBOM and native payload must name the expected wheel owner, and its CycloneDX
-or ELF identity must agree with the upstream component and selected
-architecture.
+directory effects and removals match reviewed policy. It also means the exact
+post-base system files and links match. Review the printed structured wheel
+payloads, coverage ledger, and CPython runtime record as well. The CPython
+record must bind the expected version header, interpreter link, interpreter,
+and shared library from one reviewed base layer. Each embedded SBOM and native
+payload must name the expected wheel owner, and its CycloneDX or ELF identity
+must agree with the upstream component and selected architecture.
 
 The filesystem projection validates all raw headers but omits only
 exporter-specific directory re-emissions and whiteout marker attributes that do
 not change filesystem state. Raw records and layer digests remain in
 `all-layer-files.json` for review. No diff does not mean the policy is correct.
+An exact runtime-library file in the system baseline is not proof that its
+source built or corresponds to a native wheel payload.
 The manual diff does not independently re-run the post-base regular-file or
 link provenance gates, application source binding, or exact source-policy
 coverage; those still depend on the independently reviewed CI collector,

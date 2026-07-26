@@ -165,6 +165,69 @@
           "uid": 0
         }
       ],
+      "post_base_system_links": [
+        {
+          "gid": 0,
+          "kind": "symlink",
+          "layer": 7,
+          "mode": 511,
+          "path": "usr/lib/libpq.so.5",
+          "target": "libpq.so.5.18",
+          "uid": 0
+        }
+      ],
+      "post_base_system_regular_occurrences": [
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 7,
+          "mode": 420,
+          "path": "lib/apk/db/scripts.tar.gz",
+          "sha256": "03fc98193acdfc51e9fe304e0fb6dac3d8001eb927406b8778d41196c24f16ca",
+          "size": 2095,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 7,
+          "mode": 420,
+          "path": "lib/apk/db/triggers",
+          "sha256": "16a6be73a0adec25f6c7b2256b3c812a108adebae65f501ed58187fb739d167c",
+          "size": 231,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 7,
+          "mode": 420,
+          "path": "usr/lib/libgcc_s.so.1",
+          "sha256": "5ea51dd885b6fc691eccc569d0bda739204204f6161e97075b26dc9c050d1ca1",
+          "size": 173920,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 7,
+          "mode": 493,
+          "path": "usr/lib/libpq.so.5.18",
+          "sha256": "966d60a939d83bde1e8c441bae4c78463229fbcc50d3022a4b0a95570d06cdd2",
+          "size": 358736,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 7,
+          "mode": 420,
+          "path": "var/log/apk.log",
+          "sha256": "e9f52aec6c5dee8d848e16a515d2cc3c764fb744194fa1da704f16c2cf3081c0",
+          "size": 14503,
+          "uid": 0
+        }
+      ],
       "post_base_directory_effects": [
         {
           "gid": 0,
@@ -2021,6 +2084,69 @@
           "path": "etc/apk/world",
           "sha256": "e696889a8942b0253cfd7c65317749bd7dd704004fb326f00ec437c6e0b0a368",
           "size": 160,
+          "uid": 0
+        }
+      ],
+      "post_base_system_links": [
+        {
+          "gid": 0,
+          "kind": "symlink",
+          "layer": 7,
+          "mode": 511,
+          "path": "usr/lib/libpq.so.5",
+          "target": "libpq.so.5.18",
+          "uid": 0
+        }
+      ],
+      "post_base_system_regular_occurrences": [
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 7,
+          "mode": 420,
+          "path": "lib/apk/db/scripts.tar.gz",
+          "sha256": "427132529e2c52cf6da994bf701437e6f99bc5c1e56fc96a396f57e83735bd1f",
+          "size": 2095,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 7,
+          "mode": 420,
+          "path": "lib/apk/db/triggers",
+          "sha256": "e00c27841928a6a7366490bcd3b5d068b2496fc6e1d20cd936f0bd992af86f67",
+          "size": 231,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 7,
+          "mode": 420,
+          "path": "usr/lib/libgcc_s.so.1",
+          "sha256": "b83bc14b3e1660d66b0387077aea7e104fce3ed93bb56d05e30e4e2cdb37b473",
+          "size": 133008,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 7,
+          "mode": 493,
+          "path": "usr/lib/libpq.so.5.18",
+          "sha256": "73895febbe67616b24adba4887eef1a1b5a9041c7164f0f47640adea9b108bb6",
+          "size": 395680,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 7,
+          "mode": 420,
+          "path": "var/log/apk.log",
+          "sha256": "1db12865a9b017a00625bd366cd679622f233782a19dbeeb4312f717e283a1b9",
+          "size": 14513,
           "uid": 0
         }
       ],
