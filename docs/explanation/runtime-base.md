@@ -86,10 +86,14 @@ scan.
 ### Runtime compatibility
 
 The ordinary Python matrix runs the full test suite, including PostgreSQL
-integration tests. Container jobs then build each architecture independently.
-The workflows pin the Buildx client to 0.35.0, disable the setup action's
-mutable binary cache, and pin the multi-platform BuildKit 0.30.0 and QEMU
-10.2.3 images by digest. Renovate tracks all three references.
+integration tests. The container jobs then build and test each architecture on
+a native GitHub-hosted runner. Each job checks `uname -m` before BuildKit
+starts, so a runner with the wrong architecture fails with a direct error.
+
+Those jobs pin the Buildx client to 0.35.0, disable the setup action's mutable
+binary cache, and pin the BuildKit 0.30.0 image by digest. The separate
+multi-platform release-spine proof still uses a digest-pinned QEMU 10.2.3
+image. Renovate tracks all three references.
 
 The builder asserts the exact Python patch version. It also suppresses uv's
 installer-only metadata so `uv_cache.json` cannot carry its source ctime into
