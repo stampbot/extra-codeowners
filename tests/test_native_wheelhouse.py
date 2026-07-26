@@ -82,6 +82,7 @@ def pure_wheel(
     compatibility_metadata: bytes = (
         b"Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n"
     ),
+    extra_files: dict[str, bytes] | None = None,
 ) -> Path:
     files = {
         "setuptools/__init__.py": b'"""Synthetic package."""\n',
@@ -97,6 +98,7 @@ def pure_wheel(
         ),
         "setuptools-80.3.1.dist-info/WHEEL": (compatibility_metadata),
     }
+    files.update(extra_files or {})
     record_name = "setuptools-80.3.1.dist-info/RECORD"
     rows = [
         [name, f"sha256={wheel_digest(content)}", str(len(content))]
@@ -348,6 +350,41 @@ def test_wheel_inspection_rejects_contradictory_compatibility_metadata(
             machine="x86_64",
             work=tmp_path,
         )
+
+
+@pytest.mark.parametrize("name", ["lib/libexample.so.1", "bin/native-tool"])
+def test_wheel_inspection_detects_elf_payloads_without_a_dot_so_suffix(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    name: str,
+) -> None:
+    path = pure_wheel(
+        tmp_path / "setuptools-80.3.1-py3-none-any.whl",
+        extra_files={name: wheelhouse.ELF_MAGIC + b"synthetic"},
+    )
+    inspected: list[str] = []
+
+    def inspect_elf(
+        content: bytes,
+        member: str,
+        expected_machine: str,
+        work: Path,
+    ) -> dict[str, object]:
+        del content, expected_machine, work
+        inspected.append(member)
+        return {"needed": [], "path": member}
+
+    monkeypatch.setattr(wheelhouse, "_elf_record", inspect_elf)
+
+    with pytest.raises(wheelhouse.WheelhouseError, match="native payload count"):
+        wheelhouse.inspect_wheel(
+            path,
+            wheelhouse.ExpectedWheel("setuptools", "80.3.1", 0, ()),
+            machine="x86_64",
+            work=tmp_path,
+        )
+
+    assert inspected == [name]
 
 
 def test_wheel_inspection_requires_record_coverage(tmp_path: Path) -> None:

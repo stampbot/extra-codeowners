@@ -165,7 +165,8 @@ Review these items before merging:
 - both manifests contain exactly their reviewed Alpine platform closure
 - signature-review claims match the evidence you checked
 - wheel filenames, `WHEEL` compatibility metadata, native payload counts, and
-  shared libraries match the expected platform
+  shared libraries match the expected platform; inspect every reported ELF
+  payload, including versioned libraries and executables
 - the Setuptools wheel still matches its published digest, or the pull request
   explains why a reviewed release changed it
 - no build stage gained network access

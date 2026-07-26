@@ -38,7 +38,9 @@ The build then follows this sequence:
 6. The same stage checks each wheel's filename, `WHEEL` compatibility fields,
    package metadata, `RECORD` hashes, native architecture, and shared-library
    requirements. `Root-Is-Purelib` and `Tag` must agree with the filename and
-   the observed native payloads.
+   the observed native payloads. Every file is checked for ELF content, so a
+   versioned library or executable cannot bypass inspection by avoiding a
+   `.so` suffix.
 7. The final scratch image contains the verified wheelhouse. The compiler
    toolchain and source trees don't cross that boundary.
 

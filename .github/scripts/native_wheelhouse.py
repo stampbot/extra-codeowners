@@ -58,6 +58,7 @@ LIBRARY_NAME = re.compile(r"[A-Za-z0-9+_.-]+")
 NEEDED_LIBRARY = re.compile(r"Shared library: \[([A-Za-z0-9+_.-]+)\]")
 URLSAFE_SHA256 = re.compile(r"sha256=([A-Za-z0-9_-]{43})")
 CARGO_CACHE = re.compile(r"index\.crates\.io-[0-9a-f]{16}")
+ELF_MAGIC = b"\x7fELF"
 
 PLATFORM_BY_MACHINE = {
     "aarch64": ("linux/arm64", "linux_aarch64", "AArch64", "libc.musl-aarch64.so.1"),
@@ -1353,7 +1354,11 @@ def inspect_wheel(
             raise WheelhouseError("wheel compatibility metadata contradicts its contents")
         _verify_record(archive, members, record_names[0])
         for name, item in members.items():
-            if not name.endswith(".so"):
+            if item.is_dir():
+                continue
+            with archive.open(item) as stream:
+                header = stream.read(len(ELF_MAGIC))
+            if header != ELF_MAGIC:
                 continue
             native.append(
                 _elf_record(
