@@ -94,7 +94,7 @@ def pure_wheel(
             b"Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n"
         ),
         "setuptools-80.3.1.dist-info/METADATA": (
-            b"Metadata-Version: 2.4\nName: setuptools\nVersion: 80.3.1\n"
+            b"Metadata-Version: 2.4\nName: setuptools\nVersion: 80.3.1\nLicense-Expression: MIT\n"
         ),
         "setuptools-80.3.1.dist-info/WHEEL": (compatibility_metadata),
     }
@@ -136,6 +136,14 @@ def test_reviewed_inputs_are_strict_and_complete() -> None:
         "pydantic-core",
         "setuptools",
     ]
+    assert [
+        (item.distribution, item.license_expression, item.source) for item in inputs.expected_wheels
+    ] == [
+        ("cffi", "MIT-0", "cffi"),
+        ("psycopg-c", "LGPL-3.0-only", "psycopg"),
+        ("pydantic-core", "MIT", "pydantic-core"),
+        ("setuptools", "MIT", "setuptools"),
+    ]
     setuptools = inputs.sources[-1]
     assert setuptools.upstream["signature_review"] == "verified-tag-and-commit"
     assert [item.member for item in setuptools.release_patch.removed_members] == [
@@ -166,6 +174,14 @@ def test_reviewed_inputs_are_strict_and_complete() -> None:
                 "alpine-baselayout=3.7.2-r1"
             ),
             "closure repeats a package name",
+        ),
+        (
+            lambda value: value["expected_wheels"][0].update({"source": "setuptools"}),
+            "map one-to-one",
+        ),
+        (
+            lambda value: value["expected_wheels"][0].update({"license_expression": "MIT-0\n"}),
+            "invalid value",
         ),
     ],
 )
@@ -307,7 +323,14 @@ def test_setuptools_release_patch_rejects_hidden_removal_content(tmp_path: Path)
 
 def test_wheel_inspection_accepts_nested_vendored_metadata(tmp_path: Path) -> None:
     path = pure_wheel(tmp_path / "setuptools-80.3.1-py3-none-any.whl")
-    expected = wheelhouse.ExpectedWheel("setuptools", "80.3.1", 0, ())
+    expected = wheelhouse.ExpectedWheel(
+        "setuptools",
+        "80.3.1",
+        "MIT",
+        "setuptools",
+        0,
+        (),
+    )
 
     record = wheelhouse.inspect_wheel(
         path,
@@ -317,7 +340,29 @@ def test_wheel_inspection_accepts_nested_vendored_metadata(tmp_path: Path) -> No
     )
 
     assert record["distribution"] == "setuptools"
+    assert record["license_expression"] == "MIT"
+    assert record["source"] == "setuptools"
     assert record["native_payloads"] == []
+
+
+def test_wheel_inspection_binds_the_declared_license(tmp_path: Path) -> None:
+    path = pure_wheel(tmp_path / "setuptools-80.3.1-py3-none-any.whl")
+    expected = wheelhouse.ExpectedWheel(
+        "setuptools",
+        "80.3.1",
+        "Apache-2.0",
+        "setuptools",
+        0,
+        (),
+    )
+
+    with pytest.raises(wheelhouse.WheelhouseError, match="core metadata differs"):
+        wheelhouse.inspect_wheel(
+            path,
+            expected,
+            machine="x86_64",
+            work=tmp_path,
+        )
 
 
 @pytest.mark.parametrize(
@@ -346,7 +391,7 @@ def test_wheel_inspection_rejects_contradictory_compatibility_metadata(
     ):
         wheelhouse.inspect_wheel(
             path,
-            wheelhouse.ExpectedWheel("setuptools", "80.3.1", 0, ()),
+            wheelhouse.ExpectedWheel("setuptools", "80.3.1", "MIT", "setuptools", 0, ()),
             machine="x86_64",
             work=tmp_path,
         )
@@ -379,7 +424,7 @@ def test_wheel_inspection_detects_elf_payloads_without_a_dot_so_suffix(
     with pytest.raises(wheelhouse.WheelhouseError, match="native payload count"):
         wheelhouse.inspect_wheel(
             path,
-            wheelhouse.ExpectedWheel("setuptools", "80.3.1", 0, ()),
+            wheelhouse.ExpectedWheel("setuptools", "80.3.1", "MIT", "setuptools", 0, ()),
             machine="x86_64",
             work=tmp_path,
         )
@@ -396,7 +441,7 @@ def test_wheel_inspection_requires_record_coverage(tmp_path: Path) -> None:
     with pytest.raises(wheelhouse.WheelhouseError, match="does not cover every member"):
         wheelhouse.inspect_wheel(
             path,
-            wheelhouse.ExpectedWheel("setuptools", "80.3.1", 0, ()),
+            wheelhouse.ExpectedWheel("setuptools", "80.3.1", "MIT", "setuptools", 0, ()),
             machine="x86_64",
             work=tmp_path,
         )
@@ -433,7 +478,14 @@ def test_cargo_lock_requires_one_local_package_and_exact_registry(tmp_path: Path
 
 def synthetic_published_wheelhouse(tmp_path: Path) -> tuple[Any, Path]:
     real = wheelhouse.load_inputs(INPUTS)
-    expected_wheel = wheelhouse.ExpectedWheel("setuptools", "80.3.1", 0, ())
+    expected_wheel = wheelhouse.ExpectedWheel(
+        "setuptools",
+        "80.3.1",
+        "MIT",
+        "setuptools",
+        0,
+        (),
+    )
     inputs = replace(
         real,
         cargo_registry_packages=1,
@@ -497,7 +549,11 @@ def synthetic_published_wheelhouse(tmp_path: Path) -> tuple[Any, Path]:
         "sources": wheelhouse._source_records(inputs),
         "wheels": [wheel_record],
     }
-    write_json(published / "manifest.json", manifest)
+    manifest_path = write_json(published / "manifest.json", manifest)
+    write_json(
+        published / wheelhouse.SBOM_FILENAME,
+        wheelhouse._spdx_document(manifest, manifest_path.read_bytes()),
+    )
     return inputs, published
 
 
@@ -519,6 +575,84 @@ def test_published_verifier_uses_private_work_and_exact_inventory(tmp_path: Path
             published,
             "linux/amd64",
             tmp_path / "second-work",
+        )
+
+
+def test_published_spdx_describes_the_exact_wheel_archives(tmp_path: Path) -> None:
+    _inputs, published = synthetic_published_wheelhouse(tmp_path)
+    manifest_raw = (published / "manifest.json").read_bytes()
+    manifest = json.loads(manifest_raw)
+    sbom = json.loads((published / wheelhouse.SBOM_FILENAME).read_text(encoding="utf-8"))
+    wheel = manifest["wheels"][0]
+
+    assert set(sbom) == {
+        "SPDXID",
+        "creationInfo",
+        "dataLicense",
+        "documentNamespace",
+        "name",
+        "packages",
+        "relationships",
+        "spdxVersion",
+    }
+    assert sbom["SPDXID"] == "SPDXRef-DOCUMENT"
+    assert sbom["spdxVersion"] == "SPDX-2.3"
+    assert sbom["dataLicense"] == "CC0-1.0"
+    assert sbom["creationInfo"] == {
+        "created": "2026-07-06T20:50:27Z",
+        "creators": ["Tool: extra-codeowners-native-wheelhouse-2"],
+    }
+    assert sbom["documentNamespace"].endswith(hashlib.sha256(manifest_raw).hexdigest())
+    assert sbom["packages"] == [
+        {
+            "SPDXID": "SPDXRef-Package-setuptools",
+            "checksums": [
+                {
+                    "algorithm": "SHA256",
+                    "checksumValue": wheel["sha256"],
+                }
+            ],
+            "copyrightText": "NOASSERTION",
+            "downloadLocation": "NOASSERTION",
+            "externalRefs": [
+                {
+                    "referenceCategory": "PACKAGE-MANAGER",
+                    "referenceLocator": "pkg:pypi/setuptools@80.3.1",
+                    "referenceType": "purl",
+                }
+            ],
+            "filesAnalyzed": False,
+            "licenseConcluded": "NOASSERTION",
+            "licenseDeclared": "MIT",
+            "name": "setuptools",
+            "packageFileName": wheel["filename"],
+            "primaryPackagePurpose": "LIBRARY",
+            "sourceInfo": ("Built from checksum-bound native wheelhouse source record setuptools."),
+            "versionInfo": "80.3.1",
+        }
+    ]
+    assert sbom["relationships"] == [
+        {
+            "relatedSpdxElement": "SPDXRef-Package-setuptools",
+            "relationshipType": "DESCRIBES",
+            "spdxElementId": "SPDXRef-DOCUMENT",
+        }
+    ]
+
+
+def test_published_verifier_rejects_spdx_drift(tmp_path: Path) -> None:
+    inputs, published = synthetic_published_wheelhouse(tmp_path)
+    sbom_path = published / wheelhouse.SBOM_FILENAME
+    sbom = json.loads(sbom_path.read_text(encoding="utf-8"))
+    sbom["packages"][0]["checksums"][0]["checksumValue"] = "0" * 64
+    write_json(sbom_path, sbom)
+
+    with pytest.raises(wheelhouse.WheelhouseError, match="SPDX document differs"):
+        wheelhouse.verify_wheelhouse(
+            inputs,
+            published,
+            "linux/amd64",
+            tmp_path / "verify-work",
         )
 
 
@@ -612,8 +746,16 @@ def test_publish_dockerfile_only_wraps_verified_platform_artifacts() -> None:
 
 def test_published_sbom_artifacts_are_unique_across_run_attempts() -> None:
     source = WORKFLOW.read_text(encoding="utf-8")
+    publish = source.split("\n  publish:\n", 1)[1]
 
     assert "name: native-wheelhouse-sboms-${{ github.sha }}-${{ github.run_attempt }}" in source
+    assert source.count("          sbom: false\n") == 2
+    assert ".SBOM" not in publish
+    assert (
+        '"${RUNNER_TEMP}/wheelhouse-${architecture}/sbom.spdx.json" \\\n'
+        '              "native-wheelhouse-sbom-linux-${architecture}.spdx.json"' in publish
+    )
+    assert publish.index("/sbom.spdx.json") < publish.index("      - name: Log in to GHCR")
 
 
 def producer_artifact(

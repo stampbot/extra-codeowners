@@ -231,6 +231,9 @@ jobs:
               --wheelhouse "${RUNNER_TEMP}/wheelhouse-${architecture}" \
               --platform "linux/${architecture}" \
               --work "${RUNNER_TEMP}/transport-verify-${architecture}"
+            install --mode=0444 \
+              "${RUNNER_TEMP}/wheelhouse-${architecture}/sbom.spdx.json" \
+              "native-wheelhouse-sbom-linux-${architecture}.spdx.json"
           done
           {
             echo "## Verified producer artifacts"
@@ -274,11 +277,11 @@ jobs:
           push: true
           tags: ${{ steps.candidate.outputs.tag }}
           provenance: mode=max
-          sbom: true
+          sbom: false
           build-args: |
             SOURCE_REVISION=${{ github.sha }}
 
-      - name: Verify the published platform index and extract SBOMs
+      - name: Verify the published platform index
         id: platforms
         env:
           DIGEST: ${{ steps.publish.outputs.digest }}
@@ -312,10 +315,6 @@ jobs:
               ' <<<"$raw_manifest"
             )"
             echo "${architecture}_digest=${platform_digest}" >> "$GITHUB_OUTPUT"
-            docker buildx imagetools inspect "$image" \
-              --format "{{ json (index .SBOM \"linux/${architecture}\").SPDX }}" \
-              | jq -e 'select(.SPDXID == "SPDXRef-DOCUMENT")' \
-              > "native-wheelhouse-sbom-linux-${architecture}.spdx.json"
           done
 
       - name: Attest wheelhouse provenance

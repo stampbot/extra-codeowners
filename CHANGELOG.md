@@ -87,7 +87,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Rel
   publication only when its signature, revision, platforms, and payloads match
   a fresh build. Failed-jobs-only reruns select each successful platform upload
   by immutable artifact ID instead of assuming both producers ran in the
-  current attempt. The application image does not consume the wheelhouse yet.
+  current attempt. Each platform now carries deterministic SPDX 2.3 generated
+  from the exact verified wheel manifest. Its package records bind wheel
+  filenames, SHA-256 checksums, Python package URLs, declared licenses, and
+  reviewed source records. Publication reverifies those bytes, attests them to
+  their platform manifests, and uploads separately signed copies instead of
+  relying on an empty scratch-image scan. The application image does not
+  consume the wheelhouse yet.
 - A Docker-only, bounded image exporter and a separate rootless, networkless
   layer parser. Their create-once handoff binds the saved archive to its exact
   hash, size, configuration digest, subject, and platform; only two bounded

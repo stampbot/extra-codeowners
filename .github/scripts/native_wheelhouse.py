@@ -22,15 +22,17 @@ import tomllib
 import zipfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from email.parser import BytesParser
 from pathlib import Path, PurePosixPath
 from typing import Any, NoReturn, cast
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 INPUT_KIND = "extra-codeowners/native-wheelhouse-inputs"
 MANIFEST_KIND = "extra-codeowners/native-wheelhouse"
 CARGO_INVENTORY_KIND = "extra-codeowners/native-wheelhouse-cargo-inputs"
 CARGO_REGISTRY = "registry+https://github.com/rust-lang/crates.io-index"
+SBOM_FILENAME = "sbom.spdx.json"
 SETUPTOOLS_RELEASE_CONFIG = b"[egg_info]\ntag_build = \ntag_date = 0\n"
 
 MAX_INPUT_BYTES = 1024 * 1024
@@ -60,6 +62,7 @@ APK_NAME = re.compile(r"\.?[a-z0-9][a-z0-9+_.-]*")
 APK_VERSION = re.compile(r"[A-Za-z0-9][A-Za-z0-9+_.-]*")
 WHEEL_COMPONENT = re.compile(r"[A-Za-z0-9_.]+")
 LIBRARY_NAME = re.compile(r"[A-Za-z0-9+_.-]+")
+SPDX_LICENSE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9.+-]{0,127}")
 NEEDED_LIBRARY = re.compile(r"Shared library: \[([A-Za-z0-9+_.-]+)\]")
 URLSAFE_SHA256 = re.compile(r"sha256=([A-Za-z0-9_-]{43})")
 CARGO_CACHE = re.compile(r"index\.crates\.io-[0-9a-f]{16}")
@@ -118,6 +121,8 @@ class ExpectedWheel:
 
     distribution: str
     version: str
+    license_expression: str
+    source: str
     native_payloads: int
     needed_libraries: tuple[str, ...]
 
@@ -387,7 +392,14 @@ def load_inputs(path: Path) -> Inputs:
     for index, raw_wheel in enumerate(raw_wheels):
         wheel = _exact_fields(
             raw_wheel,
-            {"distribution", "native_payloads", "needed_libraries", "version"},
+            {
+                "distribution",
+                "license_expression",
+                "native_payloads",
+                "needed_libraries",
+                "source",
+                "version",
+            },
             f"expected wheel {index}",
         )
         libraries = wheel["needed_libraries"]
@@ -409,6 +421,16 @@ def load_inputs(path: Path) -> Inputs:
                     pattern=IDENTIFIER,
                 ),
                 version=_text(wheel["version"], f"expected wheel {index} version"),
+                license_expression=_text(
+                    wheel["license_expression"],
+                    f"expected wheel {index} license expression",
+                    pattern=SPDX_LICENSE_ID,
+                ),
+                source=_text(
+                    wheel["source"],
+                    f"expected wheel {index} source",
+                    pattern=IDENTIFIER,
+                ),
                 native_payloads=_integer(
                     wheel["native_payloads"],
                     f"expected wheel {index} native payload count",
@@ -581,6 +603,9 @@ def load_inputs(path: Path) -> Inputs:
         raise WheelhouseError("setuptools source is missing its reviewed release patch")
     if any(item.release_patch is not None for item in sources if item.identifier != "setuptools"):
         raise WheelhouseError("only setuptools may carry the reviewed release patch")
+    wheel_sources = [item.source for item in wheels]
+    if sorted(wheel_sources) != source_ids or len(set(wheel_sources)) != len(wheel_sources):
+        raise WheelhouseError("expected wheels must map one-to-one to reviewed sources")
 
     epoch = _integer(
         record["source_date_epoch"],
@@ -1352,9 +1377,11 @@ def inspect_wheel(
         ):
             raise WheelhouseError("wheel dist-info identity differs from reviewed inputs")
         metadata = BytesParser().parsebytes(archive.read(metadata_names[0]))
+        license_expressions = [str(item) for item in metadata.get_all("License-Expression", [])]
         if (
             _normalize_distribution(str(metadata.get("Name", ""))) != expected.distribution
             or metadata.get("Version") != expected.version
+            or license_expressions != [expected.license_expression]
         ):
             raise WheelhouseError("wheel core metadata differs from reviewed inputs")
         wheel_metadata = BytesParser().parsebytes(archive.read(wheel_names[0]))
@@ -1390,11 +1417,13 @@ def inspect_wheel(
         "abi_tag": abi_tag,
         "distribution": expected.distribution,
         "filename": path.name,
+        "license_expression": expected.license_expression,
         "native_payloads": sorted(native, key=lambda item: cast(str, item["path"])),
         "platform_tag": platform_tag,
         "python_tag": python_tag,
         "sha256": digest,
         "size": size,
+        "source": expected.source,
         "version": version,
     }
 
@@ -1594,6 +1623,123 @@ def _source_records(inputs: Inputs) -> list[dict[str, object]]:
     return records
 
 
+def _spdx_document(
+    manifest: Mapping[str, Any],
+    manifest_raw: bytes,
+) -> dict[str, object]:
+    """Build deterministic SPDX for the exact wheel archives in one platform output."""
+
+    platform_name = _text(manifest.get("platform"), "native wheelhouse SPDX platform")
+    if platform_name not in {"linux/amd64", "linux/arm64"}:
+        raise WheelhouseError("native wheelhouse SPDX platform is unsupported")
+    source_date_epoch = _integer(
+        manifest.get("source_date_epoch"),
+        "native wheelhouse SPDX source date epoch",
+        minimum=315532800,
+        maximum=4_102_444_800,
+    )
+    raw_wheels = manifest.get("wheels")
+    if not isinstance(raw_wheels, list) or not raw_wheels:
+        raise WheelhouseError("native wheelhouse SPDX has no wheel inventory")
+
+    packages: list[dict[str, object]] = []
+    relationships: list[dict[str, str]] = []
+    distributions: list[str] = []
+    for index, raw_wheel in enumerate(raw_wheels):
+        wheel = _mapping(raw_wheel, f"native wheelhouse SPDX wheel {index}")
+        distribution = _text(
+            wheel.get("distribution"),
+            f"native wheelhouse SPDX wheel {index} distribution",
+            pattern=IDENTIFIER,
+        )
+        version = _text(
+            wheel.get("version"),
+            f"native wheelhouse SPDX wheel {index} version",
+        )
+        filename = _text(
+            wheel.get("filename"),
+            f"native wheelhouse SPDX wheel {index} filename",
+        )
+        if PurePosixPath(filename).name != filename:
+            raise WheelhouseError("native wheelhouse SPDX wheel filename is invalid")
+        digest = _text(
+            wheel.get("sha256"),
+            f"native wheelhouse SPDX wheel {index} digest",
+            pattern=LOWER_SHA256,
+        )
+        license_expression = _text(
+            wheel.get("license_expression"),
+            f"native wheelhouse SPDX wheel {index} license expression",
+            pattern=SPDX_LICENSE_ID,
+        )
+        source = _text(
+            wheel.get("source"),
+            f"native wheelhouse SPDX wheel {index} source",
+            pattern=IDENTIFIER,
+        )
+        package_id = f"SPDXRef-Package-{distribution}"
+        packages.append(
+            {
+                "SPDXID": package_id,
+                "checksums": [
+                    {
+                        "algorithm": "SHA256",
+                        "checksumValue": digest,
+                    }
+                ],
+                "copyrightText": "NOASSERTION",
+                "downloadLocation": "NOASSERTION",
+                "externalRefs": [
+                    {
+                        "referenceCategory": "PACKAGE-MANAGER",
+                        "referenceLocator": f"pkg:pypi/{distribution}@{version}",
+                        "referenceType": "purl",
+                    }
+                ],
+                "filesAnalyzed": False,
+                "licenseConcluded": "NOASSERTION",
+                "licenseDeclared": license_expression,
+                "name": distribution,
+                "packageFileName": filename,
+                "primaryPackagePurpose": "LIBRARY",
+                "sourceInfo": (
+                    f"Built from checksum-bound native wheelhouse source record {source}."
+                ),
+                "versionInfo": version,
+            }
+        )
+        relationships.append(
+            {
+                "relatedSpdxElement": package_id,
+                "relationshipType": "DESCRIBES",
+                "spdxElementId": "SPDXRef-DOCUMENT",
+            }
+        )
+        distributions.append(distribution)
+    if distributions != sorted(distributions) or len(set(distributions)) != len(distributions):
+        raise WheelhouseError("native wheelhouse SPDX packages are not canonical")
+
+    manifest_digest = hashlib.sha256(manifest_raw).hexdigest()
+    platform_slug = platform_name.replace("/", "-")
+    created = datetime.fromtimestamp(source_date_epoch, tz=UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return {
+        "SPDXID": "SPDXRef-DOCUMENT",
+        "creationInfo": {
+            "created": created,
+            "creators": [f"Tool: extra-codeowners-native-wheelhouse-{SCHEMA_VERSION}"],
+        },
+        "dataLicense": "CC0-1.0",
+        "documentNamespace": (
+            "https://github.com/stampbot/extra-codeowners/"
+            f"native-wheelhouse/spdx/{platform_slug}/{manifest_digest}"
+        ),
+        "name": f"extra-codeowners-native-wheelhouse-{platform_slug}",
+        "packages": packages,
+        "relationships": relationships,
+        "spdxVersion": "SPDX-2.3",
+    }
+
+
 def assemble_wheelhouse(
     inputs: Inputs,
     sources: Path,
@@ -1669,8 +1815,12 @@ def assemble_wheelhouse(
     cargo_path.write_bytes(cargo_raw)
     cargo_path.chmod(0o444)
     manifest_path = output / "manifest.json"
-    manifest_path.write_bytes(canonical_json(manifest))
+    manifest_raw = canonical_json(manifest)
+    manifest_path.write_bytes(manifest_raw)
     manifest_path.chmod(0o444)
+    sbom_path = output / SBOM_FILENAME
+    sbom_path.write_bytes(canonical_json(_spdx_document(manifest, manifest_raw)))
+    sbom_path.chmod(0o444)
 
 
 def _validate_builder_record(
@@ -1793,7 +1943,12 @@ def verify_wheelhouse(
     expected_records = {item.distribution: item for item in inputs.expected_wheels}
     machine = {"linux/amd64": "x86_64", "linux/arm64": "aarch64"}[expected_platform]
     observed_records: list[dict[str, object]] = []
-    expected_files = {"cargo-inputs.json", "inputs.json", "manifest.json"}
+    expected_files = {
+        "cargo-inputs.json",
+        "inputs.json",
+        "manifest.json",
+        SBOM_FILENAME,
+    }
     for raw_wheel in raw_wheels:
         wheel_record = _mapping(raw_wheel, "native wheelhouse wheel record")
         filename = _text(wheel_record.get("filename"), "native wheelhouse wheel filename")
@@ -1814,6 +1969,14 @@ def verify_wheelhouse(
             raise WheelhouseError("native wheelhouse wheel differs from its manifest")
         observed_records.append(observed)
         expected_files.add(filename)
+    _sbom, sbom_raw = _load_json(
+        wheelhouse / SBOM_FILENAME,
+        "native wheelhouse SPDX document",
+        maximum=8 * 1024 * 1024,
+    )
+    expected_sbom = canonical_json(_spdx_document(record, raw))
+    if sbom_raw != expected_sbom:
+        raise WheelhouseError("native wheelhouse SPDX document differs from its manifest")
     if {item.name for item in wheelhouse.iterdir()} != expected_files:
         raise WheelhouseError("native wheelhouse directory has an unexpected inventory")
     if sorted(cast(str, item["distribution"]) for item in observed_records) != sorted(

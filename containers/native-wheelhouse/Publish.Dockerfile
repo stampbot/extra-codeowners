@@ -15,6 +15,6 @@ LABEL org.opencontainers.image.title="Extra CODEOWNERS native wheelhouse" \
       org.opencontainers.image.source="https://github.com/stampbot/extra-codeowners" \
       org.opencontainers.image.revision="${SOURCE_REVISION}" \
       org.stampbot.extra-codeowners.python="CPython 3.14.6" \
-      org.stampbot.extra-codeowners.wheelhouse.schema="1"
+      org.stampbot.extra-codeowners.wheelhouse.schema="2"
 
 COPY --from=selected / /wheelhouse/
