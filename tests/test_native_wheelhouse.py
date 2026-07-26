@@ -24,6 +24,7 @@ SCRIPT = ROOT / ".github" / "scripts" / "native_wheelhouse.py"
 INPUTS = ROOT / "containers" / "native-wheelhouse" / "inputs.json"
 DOCKERFILE = ROOT / "containers" / "native-wheelhouse" / "Dockerfile"
 PUBLISH_DOCKERFILE = ROOT / "containers" / "native-wheelhouse" / "Publish.Dockerfile"
+WORKFLOW = ROOT / ".github" / "workflows" / "native-wheelhouse.yml"
 
 
 def load_script() -> ModuleType:
@@ -74,7 +75,14 @@ def wheel_digest(content: bytes) -> str:
     return base64.urlsafe_b64encode(hashlib.sha256(content).digest()).decode().rstrip("=")
 
 
-def pure_wheel(path: Path, *, complete_record: bool = True) -> Path:
+def pure_wheel(
+    path: Path,
+    *,
+    complete_record: bool = True,
+    compatibility_metadata: bytes = (
+        b"Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n"
+    ),
+) -> Path:
     files = {
         "setuptools/__init__.py": b'"""Synthetic package."""\n',
         "setuptools/_vendor/demo-1.0.dist-info/METADATA": (
@@ -87,9 +95,7 @@ def pure_wheel(path: Path, *, complete_record: bool = True) -> Path:
         "setuptools-80.3.1.dist-info/METADATA": (
             b"Metadata-Version: 2.4\nName: setuptools\nVersion: 80.3.1\n"
         ),
-        "setuptools-80.3.1.dist-info/WHEEL": (
-            b"Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n"
-        ),
+        "setuptools-80.3.1.dist-info/WHEEL": (compatibility_metadata),
     }
     record_name = "setuptools-80.3.1.dist-info/RECORD"
     rows = [
@@ -115,6 +121,12 @@ def test_reviewed_inputs_are_strict_and_complete() -> None:
         "abi": "cp314",
         "implementation": "cpython",
         "version": "3.14.6",
+    }
+    assert len(wheelhouse._expected_builder_packages(inputs, "linux/amd64")) == 91
+    assert len(wheelhouse._expected_builder_packages(inputs, "linux/arm64")) == 91
+    assert inputs.builder_platform_packages == {
+        "linux/amd64": (".python-rundeps=20260616.002228",),
+        "linux/arm64": (".python-rundeps=20260616.002107",),
     }
     assert [source.identifier for source in inputs.sources] == [
         "cffi",
@@ -146,6 +158,12 @@ def test_reviewed_inputs_are_strict_and_complete() -> None:
                 {"signature": value["sources"][0]["upstream"].pop("signature_review")}
             ),
             "unexpected fields",
+        ),
+        (
+            lambda value: value["builder_platform_packages"]["linux/amd64"].append(
+                "alpine-baselayout=3.7.2-r1"
+            ),
+            "closure repeats a package name",
         ),
     ],
 )
@@ -300,6 +318,38 @@ def test_wheel_inspection_accepts_nested_vendored_metadata(tmp_path: Path) -> No
     assert record["native_payloads"] == []
 
 
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        b"Wheel-Version: 1.0\nRoot-Is-Purelib: false\nTag: py3-none-any\n",
+        b"Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: cp314-cp314-linux_x86_64\n",
+        (
+            b"Wheel-Version: 1.0\nRoot-Is-Purelib: true\n"
+            b"Tag: py3-none-any\nTag: cp314-cp314-linux_x86_64\n"
+        ),
+    ],
+)
+def test_wheel_inspection_rejects_contradictory_compatibility_metadata(
+    tmp_path: Path,
+    metadata: bytes,
+) -> None:
+    path = pure_wheel(
+        tmp_path / "setuptools-80.3.1-py3-none-any.whl",
+        compatibility_metadata=metadata,
+    )
+
+    with pytest.raises(
+        wheelhouse.WheelhouseError,
+        match="compatibility metadata contradicts",
+    ):
+        wheelhouse.inspect_wheel(
+            path,
+            wheelhouse.ExpectedWheel("setuptools", "80.3.1", 0, ()),
+            machine="x86_64",
+            work=tmp_path,
+        )
+
+
 def test_wheel_inspection_requires_record_coverage(tmp_path: Path) -> None:
     path = pure_wheel(
         tmp_path / "setuptools-80.3.1-py3-none-any.whl",
@@ -379,7 +429,7 @@ def synthetic_published_wheelhouse(tmp_path: Path) -> tuple[Any, Path]:
     (published / "inputs.json").write_bytes(inputs.raw)
     packages = [
         {"name": item.split("=", 1)[0], "version": item.split("=", 1)[1]}
-        for item in inputs.builder_packages
+        for item in wheelhouse._expected_builder_packages(inputs, "linux/amd64")
     ]
     manifest = {
         "builder": {
@@ -450,6 +500,21 @@ def test_published_verifier_rejects_manifest_extensions(tmp_path: Path) -> None:
         )
 
 
+def test_published_verifier_rejects_an_unreviewed_builder_package(tmp_path: Path) -> None:
+    inputs, published = synthetic_published_wheelhouse(tmp_path)
+    manifest = json.loads((published / "manifest.json").read_text(encoding="utf-8"))
+    manifest["builder"]["alpine_packages"].append({"name": "zz-unreviewed", "version": "1-r0"})
+    write_json(published / "manifest.json", manifest)
+
+    with pytest.raises(wheelhouse.WheelhouseError, match="package closure is invalid"):
+        wheelhouse.verify_wheelhouse(
+            inputs,
+            published,
+            "linux/amd64",
+            tmp_path / "verify-work",
+        )
+
+
 def test_native_wheelhouse_dockerfile_enforces_isolated_offline_builds() -> None:
     inputs = real_input_value()
     source = DOCKERFILE.read_text(encoding="utf-8")
@@ -462,8 +527,16 @@ def test_native_wheelhouse_dockerfile_enforces_isolated_offline_builds() -> None
         f"FROM {inputs['base_image']['reference']}@{inputs['base_image']['digest']} AS toolchain"
         in source
     )
-    for package in inputs["builder_packages"]:
-        assert f"    {package}" in source
+    package_block = source.split("RUN apk add --no-cache \\\n", 1)[1].split(
+        " && \\\n    addgroup",
+        1,
+    )[0]
+    docker_packages = [
+        line.strip().removesuffix("\\").strip() for line in package_block.splitlines()
+    ]
+    assert docker_packages == inputs["builder_packages"]
+    inputs_copy = "COPY --chown=0:0 --chmod=0444 containers/native-wheelhouse/inputs.json"
+    assert source.index("RUN apk add --no-cache") < source.index(inputs_copy)
     for item in inputs["sources"]:
         assert f"--checksum=sha256:{item['sha256']}" in source
         assert item["url"] in source
@@ -498,6 +571,12 @@ def test_publish_dockerfile_only_wraps_verified_platform_artifacts() -> None:
     assert "ADD " not in final
     assert "org.opencontainers.image.licenses" not in final
     assert "COPY --from=selected / /wheelhouse/" in final
+
+
+def test_published_sbom_artifacts_are_unique_across_run_attempts() -> None:
+    source = WORKFLOW.read_text(encoding="utf-8")
+
+    assert "name: native-wheelhouse-sboms-${{ github.sha }}-${{ github.run_attempt }}" in source
 
 
 def test_native_wheelhouse_script_is_in_the_narrow_docker_context() -> None:

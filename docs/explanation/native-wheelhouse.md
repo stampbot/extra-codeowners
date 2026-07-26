@@ -17,27 +17,39 @@ application image.
 
 The reviewed inputs live in
 [`containers/native-wheelhouse/inputs.json`][inputs]. They pin the Python
-version, Alpine base digest, Alpine build packages, source archives, expected
-wheel identities, and Cargo package count.
+version, Alpine base digest, complete Alpine package closure for each
+architecture, source archives, expected wheel identities, and Cargo package
+count.
 
 The build then follows this sequence:
 
-1. BuildKit downloads four source archives and verifies each archive against
+1. The toolchain stage asks `apk` for every common package and version in the
+   reviewed closure. The pinned base supplies its architecture-specific
+   virtual package. The assembler later requires the installed package
+   database to match the combined platform closure exactly.
+2. BuildKit downloads four source archives and verifies each archive against
    the SHA-256 written next to its URL.
-2. A fetch-only stage reads Pydantic Core's `Cargo.lock`, downloads that exact
+3. A fetch-only stage reads Pydantic Core's `Cargo.lock`, downloads that exact
    crates.io closure, and rejects extra, missing, or checksum-mismatched crate
    archives.
-3. Two separate nonroot stages build the wheels. Both stages have networking
+4. Two separate nonroot stages build the wheels. Both stages have networking
    disabled and receive fresh copies of the same Cargo input directory.
-4. A third offline stage compares the two wheel sets byte for byte.
-5. The same stage checks each wheel's filename, package metadata, `RECORD`
-   hashes, native architecture, and shared-library requirements.
-6. The final scratch image contains the verified wheelhouse. The compiler
+5. A third offline stage compares the two wheel sets byte for byte.
+6. The same stage checks each wheel's filename, `WHEEL` compatibility fields,
+   package metadata, `RECORD` hashes, native architecture, and shared-library
+   requirements. `Root-Is-Purelib` and `Tag` must agree with the filename and
+   the observed native payloads.
+7. The final scratch image contains the verified wheelhouse. The compiler
    toolchain and source trees don't cross that boundary.
 
 Running the two builds in separate stages matters. The second build can't
 reuse an unpacked crate, compiler target directory, or generated file from the
 first one.
+
+The toolchain installation also precedes copies of the build script, source
+contract, and source archives. A dependency-source update can therefore reuse
+the completed compiler layer. Only a base, Alpine closure, or toolchain
+instruction change invalidates that layer.
 
 ## What gets published
 
@@ -106,8 +118,10 @@ the checksum-bound PyPI source distribution and says so.
 Two identical builds in one pinned toolchain show deterministic output under
 those conditions. They are not independent, diverse rebuilds. The base image,
 Alpine package repository, GitHub Actions runner, and BuildKit remain part of
-the trust path, which is why the workflow also records the builder package
-inventory and publishes signed provenance.
+the trust path. The full Alpine closure is version-pinned and checked against
+the installed database, so repository drift fails the build instead of
+silently changing it. The workflow also records that closure and publishes
+signed provenance.
 
 The application image doesn't consume this wheelhouse yet. Until a follow-up
 change replaces its locked upstream wheels with a verified wheelhouse digest,

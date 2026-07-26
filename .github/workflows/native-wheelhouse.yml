@@ -287,7 +287,7 @@ jobs:
       - name: Upload signed wheelhouse SBOMs
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: native-wheelhouse-sboms-${{ github.sha }}
+          name: native-wheelhouse-sboms-${{ github.sha }}-${{ github.run_attempt }}
           path: |
             native-wheelhouse-sbom-linux-*.spdx.json
             native-wheelhouse-sbom-linux-*.spdx.json.sigstore.json

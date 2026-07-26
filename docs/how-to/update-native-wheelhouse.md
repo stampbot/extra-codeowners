@@ -53,7 +53,8 @@ Edit
 sorted and update all fields affected by the release:
 
 - the base image reference and digest
-- exact Alpine package versions
+- the complete Alpine package closure in `builder_packages`, plus the
+  architecture-specific entries in `builder_platform_packages`
 - Python version and ABI
 - source URL, size, SHA-256, root directory, tag, commit, and signature review
 - expected wheel version, native payload count, and shared libraries
@@ -61,9 +62,22 @@ sorted and update all fields affected by the release:
 - `SOURCE_DATE_EPOCH` only when the input review deliberately selects a new
   stable timestamp; record the reason in the pull request
 
-Then mirror the source URLs, checksums, base digest, and Alpine package pins in
-[`containers/native-wheelhouse/Dockerfile`][dockerfile]. The tests require
-both files to agree.
+The two package arrays form the complete installed Alpine inventory, not just
+the packages named by a maintainer. Keep common packages in
+`builder_packages`; keep only genuine platform differences in
+`builder_platform_packages`. The current base has one such difference: its
+`.python-rundeps` virtual package. The assembler rejects a package that is
+missing, extra, or at another version.
+
+Then mirror the source URLs, checksums, base digest, and common Alpine closure
+in [`containers/native-wheelhouse/Dockerfile`][dockerfile]. The
+platform-specific virtual package comes from the pinned base and stays in
+`inputs.json`; the final installed-package check still requires it. Tests
+require the common Dockerfile list and the input contract to agree exactly.
+
+Keep the package-install instruction before the copies of `inputs.json`, the
+builder script, and the source archives. That order lets a source-only update
+reuse the completed compiler layer instead of reinstalling the toolchain.
 
 Setuptools is the only source with a release transformation. If its bootstrap
 layout changes, update the exact removed-file inventory and hashes. Don't
@@ -117,14 +131,21 @@ jq -e '
   and .reproducible_builds == 2
   and (.wheels | length == 4)
 ' "${WHEELHOUSE_OUTPUT}/wheelhouse/manifest.json"
+jq -r '
+  .builder.alpine_packages[]
+  | "\(.name)=\(.version)"
+' "${WHEELHOUSE_OUTPUT}/wheelhouse/manifest.json"
 find "${WHEELHOUSE_OUTPUT}/wheelhouse" \
   -maxdepth 1 -type f -printf '%f\n' | sort
 ```
 
-The `jq` command exits successfully only when the assembler recorded two
-matching builds and four wheels. The final command should list seven files:
-the four wheels plus `inputs.json`, `cargo-inputs.json`, and `manifest.json`.
-Remove the temporary output directory after you finish inspecting it.
+The first `jq` command exits successfully only when the assembler recorded two
+matching builds and four wheels. Review the package list printed by the second
+command against the platform closure in `inputs.json`; don't accept additions
+or version changes merely because `apk` resolved them. The final command
+should list seven files: the four wheels plus `inputs.json`,
+`cargo-inputs.json`, and `manifest.json`. Remove the temporary output
+directory after you finish inspecting it.
 
 The first run can take several minutes because it installs the compiler
 toolchain and fetches the Cargo closure. Buildx reuses those layers while the
@@ -141,9 +162,10 @@ Review these items before merging:
 
 - both architecture jobs passed
 - the source and toolchain changes in `inputs.json` are intentional
+- both manifests contain exactly their reviewed Alpine platform closure
 - signature-review claims match the evidence you checked
-- wheel filenames, native payload counts, and shared libraries match the
-  expected platform
+- wheel filenames, `WHEEL` compatibility metadata, native payload counts, and
+  shared libraries match the expected platform
 - the Setuptools wheel still matches its published digest, or the pull request
   explains why a reviewed release changed it
 - no build stage gained network access

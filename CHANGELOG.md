@@ -78,10 +78,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Rel
   to one repository and workflow run without sharing publication authority.
 - A non-root container, Helm chart source, and supply-chain workflows.
 - A dedicated amd64 and arm64 native-wheelhouse workflow that builds CFFI,
-  Psycopg C, Pydantic Core, and Setuptools twice from pinned inputs, rejects
-  non-reproducible output, and publishes only the verified files in a signed,
-  provenance-attested scratch image. The application image does not consume
-  the wheelhouse yet.
+  Psycopg C, Pydantic Core, and Setuptools twice from pinned inputs and a
+  complete platform-specific Alpine package closure. It rejects
+  non-reproducible output and contradictory wheel compatibility metadata, then
+  publishes only the verified files in a signed, provenance-attested scratch
+  image. The application image does not consume the wheelhouse yet.
 - A Docker-only, bounded image exporter and a separate rootless, networkless
   layer parser. Their create-once handoff binds the saved archive to its exact
   hash, size, configuration digest, subject, and platform; only two bounded

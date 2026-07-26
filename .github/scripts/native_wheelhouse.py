@@ -50,7 +50,7 @@ COPY_BYTES = 1024 * 1024
 LOWER_SHA256 = re.compile(r"[0-9a-f]{64}")
 LOWER_COMMIT = re.compile(r"[0-9a-f]{40}")
 IDENTIFIER = re.compile(r"[a-z][a-z0-9-]{0,63}")
-PACKAGE_PIN = re.compile(r"([a-z0-9][a-z0-9+_.-]*)=([A-Za-z0-9][A-Za-z0-9+_.-]*)")
+PACKAGE_PIN = re.compile(r"(\.?[a-z0-9][a-z0-9+_.-]*)=([A-Za-z0-9][A-Za-z0-9+_.-]*)")
 APK_NAME = re.compile(r"\.?[a-z0-9][a-z0-9+_.-]*")
 APK_VERSION = re.compile(r"[A-Za-z0-9][A-Za-z0-9+_.-]*")
 WHEEL_COMPONENT = re.compile(r"[A-Za-z0-9_.]+")
@@ -125,6 +125,7 @@ class Inputs:
     raw_size: int
     base_image: Mapping[str, str]
     builder_packages: tuple[str, ...]
+    builder_platform_packages: Mapping[str, tuple[str, ...]]
     cargo_source: str
     cargo_registry_packages: int
     expected_wheels: tuple[ExpectedWheel, ...]
@@ -248,6 +249,20 @@ def _integer(value: object, source: str, *, minimum: int, maximum: int) -> int:
     return value
 
 
+def _package_pins(value: object, source: str) -> tuple[str, ...]:
+    if not isinstance(value, list) or not value:
+        raise WheelhouseError(f"{source} must be a non-empty array")
+    packages = tuple(
+        _text(item, f"{source} item {index}", pattern=PACKAGE_PIN)
+        for index, item in enumerate(value)
+    )
+    identities = [item.partition("=")[::2] for item in packages]
+    names = [item[0] for item in identities]
+    if identities != sorted(identities) or len(names) != len(set(names)):
+        raise WheelhouseError(f"{source} must be sorted with unique package names")
+    return packages
+
+
 def _https_url(value: object, source: str) -> str:
     text = _text(value, source)
     if (
@@ -272,6 +287,7 @@ def load_inputs(path: Path) -> Inputs:
         {
             "base_image",
             "builder_packages",
+            "builder_platform_packages",
             "cargo",
             "expected_wheels",
             "kind",
@@ -315,15 +331,29 @@ def load_inputs(path: Path) -> Inputs:
     }:
         raise WheelhouseError("Python build identity is not the reviewed CPython version")
 
-    raw_packages = record["builder_packages"]
-    if not isinstance(raw_packages, list) or not raw_packages:
-        raise WheelhouseError("builder packages must be a non-empty array")
-    packages = tuple(
-        _text(item, f"builder package {index}", pattern=PACKAGE_PIN)
-        for index, item in enumerate(raw_packages)
+    packages = _package_pins(record["builder_packages"], "builder packages")
+    raw_platform_packages = _exact_fields(
+        record["builder_platform_packages"],
+        {"linux/amd64", "linux/arm64"},
+        "platform builder packages",
     )
-    if tuple(sorted(packages)) != packages or len(set(packages)) != len(packages):
-        raise WheelhouseError("builder packages must be sorted and unique")
+    platform_packages = {
+        platform_name: _package_pins(
+            raw_platform_packages[platform_name],
+            f"{platform_name} builder packages",
+        )
+        for platform_name in ("linux/amd64", "linux/arm64")
+    }
+    for platform_name in platform_packages:
+        combined = tuple(
+            sorted(
+                (*packages, *platform_packages[platform_name]),
+                key=lambda item: item.partition("=")[::2],
+            )
+        )
+        names = [item.partition("=")[0] for item in combined]
+        if len(names) != len(set(names)):
+            raise WheelhouseError(f"{platform_name} builder package closure repeats a package name")
 
     cargo = _exact_fields(record["cargo"], {"registry_packages", "source"}, "Cargo inputs")
     cargo_source = _text(cargo["source"], "Cargo registry source")
@@ -550,6 +580,7 @@ def load_inputs(path: Path) -> Inputs:
         raw_size=len(raw),
         base_image={"digest": base_digest, "reference": base_reference},
         builder_packages=packages,
+        builder_platform_packages=platform_packages,
         cargo_source=cargo_source,
         cargo_registry_packages=cargo_count,
         expected_wheels=tuple(wheels),
@@ -1285,12 +1316,41 @@ def inspect_wheel(
             raise WheelhouseError(
                 f"wheel does not contain one complete dist-info record: {path.name}"
             )
+        dist_info_directories = {
+            PurePosixPath(name).parent.as_posix()
+            for name in (*metadata_names, *wheel_names, *record_names)
+        }
+        if len(dist_info_directories) != 1:
+            raise WheelhouseError("wheel splits its primary dist-info record")
+        dist_info = dist_info_directories.pop()
+        dist_info_identity = (
+            PurePosixPath(dist_info)
+            .name.removesuffix(".dist-info")
+            .rsplit(
+                "-",
+                1,
+            )
+        )
+        if (
+            len(dist_info_identity) != 2
+            or _normalize_distribution(dist_info_identity[0]) != expected.distribution
+            or dist_info_identity[1] != expected.version
+        ):
+            raise WheelhouseError("wheel dist-info identity differs from reviewed inputs")
         metadata = BytesParser().parsebytes(archive.read(metadata_names[0]))
         if (
             _normalize_distribution(str(metadata.get("Name", ""))) != expected.distribution
             or metadata.get("Version") != expected.version
         ):
             raise WheelhouseError("wheel core metadata differs from reviewed inputs")
+        wheel_metadata = BytesParser().parsebytes(archive.read(wheel_names[0]))
+        expected_root = "false" if expected.native_payloads else "true"
+        expected_tag = f"{python_tag}-{abi_tag}-{platform_tag}"
+        wheel_versions = [str(item) for item in wheel_metadata.get_all("Wheel-Version", [])]
+        roots = [str(item) for item in wheel_metadata.get_all("Root-Is-Purelib", [])]
+        tags = [str(item) for item in wheel_metadata.get_all("Tag", [])]
+        if wheel_versions != ["1.0"] or roots != [expected_root] or tags != [expected_tag]:
+            raise WheelhouseError("wheel compatibility metadata contradicts its contents")
         _verify_record(archive, members, record_names[0])
         for name, item in members.items():
             if not name.endswith(".so"):
@@ -1329,6 +1389,18 @@ def _builder_python_abi() -> str:
     return "cp314"
 
 
+def _expected_builder_packages(inputs: Inputs, platform_name: str) -> tuple[str, ...]:
+    platform_packages = inputs.builder_platform_packages.get(platform_name)
+    if platform_packages is None:
+        raise WheelhouseError("builder package platform is unsupported")
+    return tuple(
+        sorted(
+            (*inputs.builder_packages, *platform_packages),
+            key=lambda item: item.partition("=")[::2],
+        )
+    )
+
+
 def _installed_apk_packages(inputs: Inputs) -> list[dict[str, str]]:
     path = Path("/lib/apk/db/installed")
     try:
@@ -1351,9 +1423,13 @@ def _installed_apk_packages(inputs: Inputs) -> list[dict[str, str]]:
     packages.sort(key=lambda item: (item["name"], item["version"]))
     if not packages or len({item["name"] for item in packages}) != len(packages):
         raise WheelhouseError("installed Alpine package inventory is invalid")
-    installed = {f"{item['name']}={item['version']}" for item in packages}
-    if not set(inputs.builder_packages).issubset(installed):
-        raise WheelhouseError("installed builder packages differ from reviewed pins")
+    machine = platform.machine()
+    if machine not in PLATFORM_BY_MACHINE:
+        raise WheelhouseError(f"unsupported native build machine: {machine}")
+    installed = tuple(f"{item['name']}={item['version']}" for item in packages)
+    expected = _expected_builder_packages(inputs, PLATFORM_BY_MACHINE[machine][0])
+    if installed != expected:
+        raise WheelhouseError("installed builder package closure differs from reviewed pins")
     return packages
 
 
@@ -1579,7 +1655,11 @@ def assemble_wheelhouse(
     manifest_path.chmod(0o444)
 
 
-def _validate_builder_record(value: object, inputs: Inputs) -> None:
+def _validate_builder_record(
+    value: object,
+    inputs: Inputs,
+    expected_platform: str,
+) -> None:
     builder = _exact_fields(
         value,
         {"alpine_packages", "base_image", "tools"},
@@ -1607,10 +1687,11 @@ def _validate_builder_record(value: object, inputs: Inputs) -> None:
         packages.append((name, version))
     if packages != sorted(packages) or len({name for name, _version in packages}) != len(packages):
         raise WheelhouseError("native wheelhouse builder packages are not canonical")
-    if not set(inputs.builder_packages).issubset(
-        {f"{name}={version}" for name, version in packages}
-    ):
-        raise WheelhouseError("native wheelhouse builder omits a reviewed package pin")
+    expected_packages = tuple(
+        item.partition("=")[::2] for item in _expected_builder_packages(inputs, expected_platform)
+    )
+    if tuple(packages) != expected_packages:
+        raise WheelhouseError("native wheelhouse builder package closure is invalid")
 
     tools = _exact_fields(
         builder["tools"],
@@ -1668,7 +1749,7 @@ def verify_wheelhouse(
         or record["sources"] != _source_records(inputs)
     ):
         raise WheelhouseError("native wheelhouse manifest identity is invalid")
-    _validate_builder_record(record["builder"], inputs)
+    _validate_builder_record(record["builder"], inputs, expected_platform)
 
     _embedded_inputs, embedded_inputs_raw = _load_json(
         wheelhouse / "inputs.json",
@@ -1730,6 +1811,17 @@ def _parser() -> argparse.ArgumentParser:
     validate = commands.add_parser("validate-inputs", help="validate reviewed builder inputs")
     validate.add_argument("--inputs", type=Path, required=True)
 
+    packages = commands.add_parser(
+        "emit-builder-packages",
+        help="emit the exact Alpine package closure for one build platform",
+    )
+    packages.add_argument("--inputs", type=Path, required=True)
+    packages.add_argument(
+        "--platform",
+        choices=("linux/amd64", "linux/arm64"),
+        required=True,
+    )
+
     cargo = commands.add_parser(
         "prepare-cargo",
         help="fetch the exact Cargo.lock closure for a later offline build",
@@ -1774,6 +1866,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         inputs = load_inputs(args.inputs)
         if args.command == "validate-inputs":
+            return 0
+        if args.command == "emit-builder-packages":
+            sys.stdout.write(
+                "".join(
+                    f"{package}\n" for package in _expected_builder_packages(inputs, args.platform)
+                )
+            )
             return 0
         if args.command == "prepare-cargo":
             prepare_cargo(inputs, args.sources, args.cargo_home, args.work)
