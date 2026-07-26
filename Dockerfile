@@ -42,6 +42,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
       --no-dev \
       --no-install-project \
       --no-install-package cffi \
+      --no-install-package psycopg-binary \
       --no-install-package psycopg-c \
       --no-install-package pydantic-core \
       --no-build
@@ -185,6 +186,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
       --group dev \
       --no-install-project \
       --no-install-package cffi \
+      --no-install-package psycopg-binary \
       --no-install-package psycopg-c \
       --no-install-package pydantic-core \
       --inexact \

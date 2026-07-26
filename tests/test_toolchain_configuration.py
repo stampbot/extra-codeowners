@@ -122,24 +122,23 @@ def test_runtime_selects_the_reviewed_psycopg_c_wheelhouse_distribution() -> Non
     )
 
     dependencies = cast(list[str], project["project"]["dependencies"])
-    assert "psycopg[c]>=3.2.0,<4" in dependencies
-    assert not any(dependency.startswith("psycopg[binary]") for dependency in dependencies)
+    assert "psycopg[binary]>=3.2.0,<4" in dependencies
+    assert not any(dependency.startswith("psycopg[c]") for dependency in dependencies)
 
     packages = {package["name"]: package for package in lock["package"]}
-    assert "psycopg-binary" not in packages
+    psycopg_binary = packages["psycopg-binary"]
     psycopg = packages["psycopg"]
-    psycopg_c = packages["psycopg-c"]
-    assert psycopg["optional-dependencies"]["c"] == [
+    assert psycopg["optional-dependencies"]["binary"] == [
         {
-            "name": "psycopg-c",
+            "name": "psycopg-binary",
             "marker": "implementation_name != 'pypy'",
         }
     ]
-    assert psycopg_c["version"] == psycopg["version"] == "3.3.4"
-    assert set(psycopg_c) == {"name", "version", "source", "sdist"}
+    assert psycopg_binary["version"] == psycopg["version"] == "3.3.4"
+    assert "psycopg-c" not in packages
 
     expected_wheels = {wheel["distribution"]: wheel for wheel in native_inputs["expected_wheels"]}
-    assert expected_wheels["psycopg-c"]["version"] == psycopg_c["version"]
+    assert expected_wheels["psycopg-c"]["version"] == psycopg["version"]
     assert expected_wheels["psycopg-c"]["needed_libraries"] == ["libpq.so.5"]
     assert '"psycopg-c": "psycopg_c"' in runtime_verifier
     assert "psycopg-binary" not in runtime_verifier
@@ -173,6 +172,7 @@ def test_dockerfile_consumes_the_immutable_verified_native_wheelhouse() -> None:
     assert dockerfile.count("libgcc=15.2.0-r5") == 2
     assert dockerfile.count("libpq=18.4-r0") == 2
     assert dockerfile.count("--no-install-package cffi") == 2
+    assert dockerfile.count("--no-install-package psycopg-binary") == 2
     assert dockerfile.count("--no-install-package psycopg-c") == 2
     assert dockerfile.count("--no-install-package pydantic-core") == 2
     assert dockerfile.count("native_wheelhouse.py verify-installed") == 2
@@ -1289,6 +1289,7 @@ def test_dockerfile_can_only_install_the_selected_application_wheel() -> None:
         "--no-dev",
         "--no-install-project",
         "--no-install-package cffi",
+        "--no-install-package psycopg-binary",
         "--no-install-package psycopg-c",
         "--no-install-package pydantic-core",
         "--no-build",
@@ -1312,6 +1313,7 @@ def test_dockerfile_can_only_install_the_selected_application_wheel() -> None:
         "--group dev",
         "--no-install-project",
         "--no-install-package cffi",
+        "--no-install-package psycopg-binary",
         "--no-install-package psycopg-c",
         "--no-install-package pydantic-core",
         "--inexact",

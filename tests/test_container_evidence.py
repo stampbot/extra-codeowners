@@ -7131,6 +7131,12 @@ def test_bundle_request_id_mapping_matches_the_real_direct_planner() -> None:
     )
     policy = json.loads(policy_path.read_text())
     lock_sources = evidence.parse_lock_sources(Path("uv.lock"))
+    source_fallbacks = {
+        (entry["name"], entry["version"]): {
+            field: entry[field] for field in ("url", "sha256", "size")
+        }
+        for entry in policy["python_sources"]
+    }
     expected_ids = {
         *evidence.BASE_SOURCE_REQUEST_IDS.values(),
         evidence.DOCKER_PYTHON_LICENSE_REQUEST_ID,
@@ -7157,7 +7163,10 @@ def test_bundle_request_id_mapping_matches_the_real_direct_planner() -> None:
         for owner in policy["native_component_coverage"][platform]:
             if owner["wheel"].get("provider") == evidence.NATIVE_WHEELHOUSE_PROVIDER:
                 name, version = owner["owner"].removeprefix("python:").rsplit("@", maxsplit=1)
-                if owner["owner_source"] != lock_sources[(name, version)]:
+                selected_source = lock_sources.get((name, version))
+                if selected_source is None:
+                    selected_source = source_fallbacks[(name, version)]
+                if owner["owner_source"] != selected_source:
                     expected_ids.add(f"native-wheelhouse-source:{owner['wheel']['source']}")
             else:
                 expected_ids.add(evidence._python_wheel_request_id(platform, owner["owner"]))

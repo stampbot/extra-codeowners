@@ -30,7 +30,7 @@ NATIVE_WHEELHOUSE_CONTRACT_SHA256 = hashlib.sha256(
     NATIVE_WHEELHOUSE_CONTRACT.read_bytes()
 ).hexdigest()
 REVISION = "1" * 40
-REAL_PLAN_SHA256 = "b5ba7aa98b566ea02b6500c5c300925a1f8ca15e2e5b713e2cfb5c13d15555e7"
+REAL_PLAN_SHA256 = "dc8418f3a70b4b25fc6ca60641cf38441c9bd98cd1671d8ed43453fd25817fc1"
 REQUEST_KEYS = {
     "id",
     "url",
@@ -462,7 +462,7 @@ def test_real_policy_direct_plan_is_stable_and_complete() -> None:
 
     requests = first["requests"]
     assert isinstance(requests, list)
-    assert len(requests) == 229
+    assert len(requests) == 228
     assert [request["id"] for request in requests] == sorted(request["id"] for request in requests)
     assert len({request["id"] for request in requests}) == len(requests)
     assert Counter(request["id"].split(":", maxsplit=1)[0] for request in requests) == {
@@ -471,7 +471,7 @@ def test_real_policy_direct_plan_is_stable_and_complete() -> None:
         "docker-python": 2,
         "license-text": 25,
         "native-source": 131,
-        "native-wheelhouse-source": 2,
+        "native-wheelhouse-source": 1,
         "python-sdist": 38,
         "python-wheel": 8,
     }
@@ -532,7 +532,8 @@ def test_real_policy_plan_covers_platform_wheels_and_reuses_owner_sdist() -> Non
         "platform:linux/arm64:python:pydantic-core@2.46.4",
     ]
     assert "native-wheelhouse-source:cffi" in requests
-    assert "native-wheelhouse-source:psycopg" in requests
+    assert "python-sdist:psycopg-c@3.3.4" in requests
+    assert "native-wheelhouse-source:psycopg" not in requests
     assert not any(request_id.startswith("native-source:owner-sdist:") for request_id in requests)
 
 

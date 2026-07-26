@@ -13977,6 +13977,13 @@
       "size": 1840799,
       "url": "https://files.pythonhosted.org/packages/01/91/47e7d486260f618783899587af63ccf7980fb60245c3e63dd4571c6b57ad/pip-26.1.2.tar.gz",
       "version": "26.1.2"
+    },
+    {
+      "name": "psycopg-c",
+      "sha256": "714f0e916a0d239f42dc0554bab31cd2b79d9d11b7a96cd397116dba7c658abf",
+      "size": 611451,
+      "url": "https://github.com/psycopg/psycopg/archive/refs/tags/3.3.4.tar.gz",
+      "version": "3.3.4"
     }
   ],
   "schema_version": 8,
