@@ -142,7 +142,8 @@ jobs:
           github-token: ${{ github.token }}
           result-encoding: string
           script: |
-            const artifacts = await github.paginate(
+            const artifacts = [];
+            const pages = github.paginate.iterator(
               github.rest.actions.listWorkflowRunArtifacts,
               {
                 owner: context.repo.owner,
@@ -150,10 +151,25 @@ jobs:
                 run_id: context.runId,
                 per_page: 100,
               },
-              (response) => response.data.artifacts,
             );
-            if (artifacts.length > 1000) {
-              throw new Error("Workflow run has too many artifacts");
+            for await (const response of pages) {
+              const page = response.data;
+              if (!Array.isArray(page)) {
+                throw new Error("Artifact API returned an invalid page");
+              }
+              if (artifacts.length + page.length > 1000) {
+                throw new Error("Workflow run has too many artifacts");
+              }
+              for (const artifact of page) {
+                if (
+                  artifact === null
+                  || typeof artifact !== "object"
+                  || Array.isArray(artifact)
+                ) {
+                  throw new Error("Artifact API returned an invalid artifact");
+                }
+                artifacts.push(artifact);
+              }
             }
             const identities = artifacts.map((artifact) => ({
               digest: artifact.digest,

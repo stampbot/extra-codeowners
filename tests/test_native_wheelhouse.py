@@ -839,6 +839,13 @@ def test_publication_downloads_immutable_ids_from_verified_producer_attempts() -
     assert "      actions: read\n" in publish
     assert "actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3" in inventory
     assert "github.rest.actions.listWorkflowRunArtifacts" in inventory
+    assert "github.paginate.iterator(" in inventory
+    assert "for await (const response of pages)" in inventory
+    assert "const page = response.data;" in inventory
+    assert "Array.isArray(page)" in inventory
+    assert "artifacts.length + page.length > 1000" in inventory
+    assert "artifacts.push(artifact)" in inventory
+    assert "response.data.artifacts" not in inventory
     assert 'Buffer.byteLength(encoded, "utf8") > 512 * 1024' in inventory
     assert "native_wheelhouse.py select-producer-artifacts" in publish
     assert '>> "$GITHUB_OUTPUT"' in publish
