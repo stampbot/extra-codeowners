@@ -25,7 +25,7 @@ The enforcement code is in `.github/scripts/container_evidence.py`, especially
 
 ## Common types and limits
 
-The current schema version is integer `7`. JSON must be UTF-8, no larger than
+The current schema version is integer `8`. JSON must be UTF-8, no larger than
 64 MiB, no deeper than 64 containers, and must not contain duplicate object
 keys, floating-point values, non-finite numbers, or invalid Unicode. Unless a
 field says otherwise, every object has exactly the listed keys.
@@ -54,7 +54,7 @@ The policy has exactly these fields:
 
 | Field | Type | Meaning | Consuming gate |
 | --- | --- | --- | --- |
-| `schema_version` | integer | Policy schema; exactly `7`. | Every command through `validate_policy_schema`. |
+| `schema_version` | integer | Policy schema; exactly `8`. | Every command through `validate_policy_schema`. |
 | `base_image` | string | Nonempty bounded Dockerfile base reference; the schema rejects whitespace and `@`. The checked-in value is a tagged Docker Official Python reference. | Exact Dockerfile binding during `bundle` and `verify-ci-policy`. |
 | `base_image_index_digest` | `qualified_sha256` | Reviewed multi-platform base index. | Schema validation during `verify`; exact Dockerfile/index binding during `bundle` and `verify-ci-policy`. |
 | `base_image_platforms` | platform object | Exact ordered base layer diff IDs for both platforms. | Base-prefix and post-base provenance gates. |
@@ -64,6 +64,7 @@ The policy has exactly these fields:
 | `license_texts` | array | Hash-pinned standard license texts required by reviewed expressions. | Inventory coverage, direct-source planning, and verified-store consumption. |
 | `custom_license_evidence` | object | Exact source-carried notice pins for every top-level `LicenseRef-*`. | Inventory coverage and retained-license verification. |
 | `unexpanded_python_payloads` | platform object | Exact raw wheel SBOM, native, and identity-file occurrences. Some owners may also have closed-world coverage. | `verify`; any drift fails. |
+| `native_wheelhouse_contract_sha256` | `sha256` | Digest of the reviewed consumer contract that selects the signed wheelhouse image, source revision, manifests, and workflow identity. | Source planning, image-label verification, wheel selection, and bundle retention. |
 | `native_component_sources` | object | Tagged, immutable source records for reviewed components nested inside wheels. | Schema, source-retention, and notice gates. |
 | `native_component_coverage` | platform object | Exact wheel observations, review decisions, payload dispositions, omissions, and owner review state. | `verify`, lock binding, coverage ledger, notices, and bundle generation. |
 | `filesystem_baselines` | platform object | Exact APK database history plus canonical post-base directory effects and removals. | Deep `bundle` provenance verification and offline CI policy review. |
@@ -205,7 +206,7 @@ The ID set must equal every non-operator, non-`LicenseRef-*` token required by
 the reviewed top-level expressions and every direct native-component review,
 including reviews in open owner records. Extra, missing, and duplicate text
 IDs fail both standalone verification and bundle source-policy verification
-with the same exact reviewed-identifier check. Schema 7
+with the same exact reviewed-identifier check. Schema 8
 does not allow `LicenseRef-*` in a nested native-component expression. The
 Greenlet closure therefore adds the pinned SPDX `GCC-exception-3.1` text
 alongside the existing `GPL-3.0-or-later` text.
@@ -267,7 +268,7 @@ there is no last-match or effective-file fallback.
 `native_component_coverage` is a closed-world review ledger, not a list of
 components inferred from package names. Both platforms must contain the same
 sorted owner set, and that set must exactly match every wheel owner with a
-native payload or embedded SBOM in the inventory. Schema 7 is the only accepted
+native payload or embedded SBOM in the inventory. Schema 8 is the only accepted
 version. Older owner-level `components` records are rejected.
 
 Each owner record has exactly these fields:
@@ -275,8 +276,9 @@ Each owner record has exactly these fields:
 | Field | Contract |
 | --- | --- |
 | `owner` | Canonical `python:NAME@VERSION`, unique on the platform. |
-| `wheel` | Exact HTTPS URL, SHA-256, and positive size for the platform wheel. The filename must match the owner and the supported CPython 3.14 musllinux platform. |
-| `owner_source` | Exact HTTPS URL, SHA-256, and size for the owner source. It must equal the `uv.lock` sdist record when one exists, or the exact reviewed `python_sources` fallback for a wheel-only owner. |
+| `wheel` | Either an exact HTTPS lock-file artifact or an exact `native-wheelhouse` provider record. A lock wheel must match the supported CPython 3.14 musllinux platform. A wheelhouse wheel must match the contract's native CPython 3.14 platform and bind its filename, source name, SHA-256, and positive size. |
+| `wheelhouse_build` | `null` for a lock wheel. A wheelhouse wheel must record the matching source name, sorted crates.io source IDs, local Cargo package identities, and at least one linked library with its exact Alpine package identity. |
+| `owner_source` | Exact HTTPS URL, SHA-256, and size for the owner source. Lock wheels bind this to the lock or reviewed fallback. Wheelhouse wheels bind it to the signed build manifest. |
 | `cargo_lock` | `null` unless the owner directly reviews a crates.io source; otherwise, the exact retained owner-sdist lockfile context described below. |
 | `native_payloads` | Sorted records with derived `role`, installed `path`, SHA-256, and positive `size`. |
 | `sboms` | Sorted, hash-pinned CycloneDX observations and a disposition for each metadata root. |
@@ -321,9 +323,7 @@ Occurrence references contain `sbom_path`, `observation_sha256`,
 `identity_kind`, and `purl`; a `bom-ref` identity also contains `bom_ref`.
 A nonempty `bom-ref` is the document-local identity. The PURL is the fallback
 only when `bom-ref` is empty. Repeated PURLs are valid only when every
-occurrence has its own unique, nonempty `bom-ref`. This preserves repeated
-occurrences such as Psycopg's four krb5 records and two libldap records instead
-of silently collapsing them.
+occurrence has its own unique, nonempty `bom-ref`.
 
 Some auditwheel documents repeat the metadata component once as the first
 top-level component and reuse its `bom-ref`. The collector accepts only that
@@ -476,18 +476,17 @@ The current ledger closes Cryptography 48.0.1, Greenlet 3.5.3, MarkupSafe
 
 | Owner | Open omission IDs |
 | --- | --- |
-| `python:cffi@2.1.0` | `unproven-libffi-build-input` |
-| `python:psycopg-binary@3.3.4` | `missing-libpq-sbom`, `unreviewed-bundled-library-sources` |
-| `python:pydantic-core@2.46.4` | `missing-libgcc-sbom` |
+| `python:cffi@2.1.0` | `unproven-libffi-runtime-file` |
+| `python:psycopg-c@3.3.4` | `unproven-libpq-runtime-file` |
+| `python:pydantic-core@2.46.4` | `unproven-libgcc-runtime-file` |
 
-Pydantic Core's open state no longer implies missing Cargo sources. Its record
-binds all 87 crates.io observations, the exact root package and lockfile from
-the retained sdist, and 16 additional lock-only registry entries. The remaining
-omission is limited to the bundled GCC 12.4 `libgcc`, which has no SBOM
-observation or proven source-to-payload relationship.
+The signed wheelhouse records Pydantic Core's source, local Cargo package,
+locked crates.io inputs, and `libgcc_s.so.1` link. Its remaining omission is
+the unproven relationship between that name and one exact APK-owned runtime
+file.
 
-Each platform also reports three reviewed metadata-root-echo anomalies: the
-Cryptography, Greenlet, and Psycopg auditwheel documents. The ledger therefore
+Each platform also reports two reviewed metadata-root-echo anomalies: the
+Cryptography and Greenlet auditwheel documents. The ledger therefore
 reports `complete: false`, `remaining_owner_count: 3`, and the three sorted
 owner names. `MANIFEST.json.source_completeness` is derived from this ledger;
 the raw component inventory has no caller-controlled completeness field.

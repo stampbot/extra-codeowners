@@ -690,7 +690,7 @@ for architecture in amd64 arm64; do
     --policy "$POLICY" \
     --output "$DIFF_ROOT/${architecture}-native-component-coverage.json"
   jq -e --arg platform "$platform" '
-      .schema_version == 7
+      .schema_version == 8
       and .platform == $platform
       and .complete == false
       and ([.resolved_owners[].owner] == [
@@ -705,29 +705,25 @@ for architecture in amd64 arm64; do
       }] == [
         {
           "owner": "python:cffi@2.1.0",
-          "omissions": ["unproven-libffi-build-input"]
+          "omissions": ["unproven-libffi-runtime-file"]
         },
         {
-          "owner": "python:psycopg-binary@3.3.4",
-          "omissions": [
-            "missing-libpq-sbom",
-            "unreviewed-bundled-library-sources"
-          ]
+          "owner": "python:psycopg-c@3.3.4",
+          "omissions": ["unproven-libpq-runtime-file"]
         },
         {
           "owner": "python:pydantic-core@2.46.4",
-          "omissions": ["missing-libgcc-sbom"]
+          "omissions": ["unproven-libgcc-runtime-file"]
         }
       ])
       and ([.observed_sbom_anomalies[].owner] == [
         "python:cryptography@48.0.1",
-        "python:greenlet@3.5.3",
-        "python:psycopg-binary@3.3.4"
+        "python:greenlet@3.5.3"
       ])
       and .remaining_owner_count == 3
       and (.remaining_owner_names == [
         "python:cffi@2.1.0",
-        "python:psycopg-binary@3.3.4",
+        "python:psycopg-c@3.3.4",
         "python:pydantic-core@2.46.4"
       ])
     ' "$DIFF_ROOT/${architecture}-native-component-coverage.json" >/dev/null
@@ -840,7 +836,7 @@ Review source policy with these precise boundaries:
   executable mode at `HEAD`, using recursive `git ls-tree -rz` and `git show`;
   it is not a mutable working-tree copy and is not described as `git archive`
 - every top-level `LicenseRef-*` must name exactly the covered components and
-  pin the source-carried notice path and digest for each one; schema 7 rejects
+  pin the source-carried notice path and digest for each one; schema 8 rejects
   `LicenseRef-*` in nested native-component expressions.
 
 The nested evidence tar is checksum-bound by the predicate and sidecar, but the
@@ -869,9 +865,9 @@ It must retain these open records and exact omission IDs:
 
 | Owner | Omission IDs |
 | --- | --- |
-| `python:cffi@2.1.0` | `unproven-libffi-build-input` |
-| `python:psycopg-binary@3.3.4` | `missing-libpq-sbom`, `unreviewed-bundled-library-sources` |
-| `python:pydantic-core@2.46.4` | `missing-libgcc-sbom` |
+| `python:cffi@2.1.0` | `unproven-libffi-runtime-file` |
+| `python:psycopg-c@3.3.4` | `unproven-libpq-runtime-file` |
+| `python:pydantic-core@2.46.4` | `unproven-libgcc-runtime-file` |
 
 Do not accept a shortened unresolved summary. Each open ledger entry is the
 full policy record, including observations, dispositions, source decisions,
@@ -887,13 +883,12 @@ The ledger must also report:
 - `complete: false`
 - `remaining_owner_count: 3`
 - the same three owner names in `remaining_owner_names`
-- one reviewed `metadata-root-echo` anomaly for each Cryptography, Greenlet,
-  and Psycopg auditwheel document.
+- one reviewed `metadata-root-echo` anomaly for each Cryptography and Greenlet
+  auditwheel document.
 
-Inspect the occurrence counts rather than grouping by PURL. Psycopg must retain
-four krb5 and two libldap occurrences, each separated by a unique nonempty
-`bom-ref`. A metadata-root echo is a separately reported upstream anomaly; it
-is not another component review.
+Inspect occurrence identities rather than grouping by PURL. A metadata-root
+echo is a separately reported upstream anomaly; it is not another component
+review.
 
 CPython is not part of the open ledger. Its top-level component and four
 runtime identities remain bound to the all-layer inventory, reviewed base

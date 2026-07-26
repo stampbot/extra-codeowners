@@ -135,6 +135,27 @@ sha256:3d6b173312bc2f71193fc44b33d22d377fedb074bfdd5bf8e5b333f7d4140671
 That match is useful evidence: the signed source and published bootstrap wheel
 lead to the same bytes in the pinned environment.
 
+## How application images consume it
+
+[`consumer.json`][consumer] pins the signed index, both platform manifests,
+the source revision, and the expected GitHub Actions identity. CI and release
+jobs verify that signature before they build a parser or download wheelhouse
+files. They then move both platform directories through one artifact selected
+by immutable ID and digest.
+
+The Dockerfile selects the same wheelhouse index by digest. It verifies the
+platform directory against the current input contract, installs the three
+runtime wheels offline with `--no-deps`, and checks every installed `RECORD`
+against the retained wheel bytes. The final image keeps those bytes under
+`/usr/share/extra-codeowners/native-wheelhouse/` with read-only permissions,
+so a recipient can connect the installed extensions to the reviewed build.
+
+Normal package and development installs select `psycopg-binary`, so a clean
+workstation does not need a compiler, PostgreSQL headers, or `pg_config`. The
+container deliberately excludes that distribution during dependency sync. It
+installs only the reviewed `psycopg-c` wheel, and its test stage refuses to add
+`psycopg-binary` back.
+
 ## What the evidence does not prove
 
 The `signature_review` fields record a maintainer's upstream review. The
@@ -156,12 +177,13 @@ the installed database, so repository drift fails the build instead of
 silently changing it. The workflow also records that closure and publishes
 signed provenance.
 
-The application image doesn't consume this wheelhouse yet. Until a follow-up
-change replaces its locked upstream wheels with a verified wheelhouse digest,
-the open native-wheel findings in
-[issue #18](https://github.com/stampbot/extra-codeowners/issues/18) still apply.
+Container evidence still leaves three exact runtime file relationships open:
+CFFI to `libffi`, Psycopg C to `libpq`, and Pydantic Core to `libgcc`.
+[Issue #18](https://github.com/stampbot/extra-codeowners/issues/18) remains
+open, and distribution approval remains false.
 
 See [Update the native wheelhouse](../how-to/update-native-wheelhouse.md) for
 the maintainer procedure.
 
 [inputs]: https://github.com/stampbot/extra-codeowners/blob/main/containers/native-wheelhouse/inputs.json
+[consumer]: https://github.com/stampbot/extra-codeowners/blob/main/containers/native-wheelhouse/consumer.json

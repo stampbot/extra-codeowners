@@ -66,8 +66,11 @@ and the [Distroless image matrix](https://github.com/GoogleContainerTools/distro
 
 ## Evidence from the selected image
 
-Both platforms passed the same evaluation. The runtime, database-migration,
-and pinned-toolchain checks were rerun together on 2026-07-15.
+Both platforms passed the same initial evaluation. The runtime,
+database-migration, and pinned-toolchain checks were rerun together on
+2026-07-15. The measurements below describe that dated base-image evaluation;
+they are not current image-size measurements after native-wheelhouse
+integration.
 
 | Evidence | amd64 | arm64 |
 | --- | ---: | ---: |
@@ -176,8 +179,12 @@ distribution.
 
 A separate [native wheelhouse build](native-wheelhouse.md) now produces
 reproducible CFFI, Psycopg C, and Pydantic Core wheels from reviewed inputs.
-The application image does not consume that wheelhouse yet, so it does not
-change the evidence or approval state described here.
+The application image selects that wheelhouse by signed contract and immutable
+digest, verifies it before use, installs those wheels offline, and retains the
+wheel bytes for recipient inspection. The build closes the earlier
+upstream-wheel input gaps. Distribution approval remains false because image
+evidence has not yet bound the wheelhouse's `libffi`, `libpq`, and `libgcc`
+link requirements to exact APK-owned runtime file occurrences.
 
 ### Vulnerability handling
 
