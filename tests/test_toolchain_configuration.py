@@ -874,6 +874,23 @@ def test_ci_calls_the_reusable_proof_and_preserves_the_required_check() -> None:
 
     assert "      - python-distribution" in container
     assert "if: ${{ always() }}" in container
+    assert "runs-on: ${{ matrix.runner }}" in container
+    assert (
+        "- architecture: amd64\n"
+        "            machine: x86_64\n"
+        "            platform: linux/amd64\n"
+        "            runner: ubuntu-24.04\n"
+    ) in container
+    assert (
+        "- architecture: arm64\n"
+        "            machine: aarch64\n"
+        "            platform: linux/arm64\n"
+        "            runner: ubuntu-24.04-arm\n"
+    ) in container
+    assert "name: Require the native runner architecture" in container
+    assert "EXPECTED_MACHINE: ${{ matrix.machine }}" in container
+    assert 'actual="$(uname -m)"' in container
+    assert "docker/setup-qemu-action" not in container
     assert 'if [ "$DISTRIBUTION_RESULT" != success ]; then' in container
     assert "artifact-ids: ${{ needs.python-distribution.outputs.artifact-id }}" in container
     assert (

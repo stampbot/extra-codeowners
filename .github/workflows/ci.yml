@@ -1155,16 +1155,20 @@ jobs:
     if: ${{ always() }}
     permissions:
       contents: read
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
         include:
           - architecture: amd64
+            machine: x86_64
             platform: linux/amd64
+            runner: ubuntu-24.04
           - architecture: arm64
+            machine: aarch64
             platform: linux/arm64
+            runner: ubuntu-24.04-arm
     services:
       postgres:
         image: postgres:17.7-alpine@sha256:bb377b7239d2774ac8cc76f481596ce96c5a6b5e9d141f6d0a0ee371a6e7c0f2
@@ -1180,6 +1184,17 @@ jobs:
         ports:
           - 5432:5432
     steps:
+      - name: Require the native runner architecture
+        env:
+          EXPECTED_MACHINE: ${{ matrix.machine }}
+        run: |
+          set -euo pipefail
+          actual="$(uname -m)"
+          if [ "$actual" != "$EXPECTED_MACHINE" ]; then
+            echo "::error::Container runner is $actual, expected $EXPECTED_MACHINE"
+            exit 1
+          fi
+
       - name: Require the selected Python distribution and verified sources
         env:
           DISTRIBUTION_RESULT: ${{ needs.python-distribution.result }}
@@ -1286,12 +1301,6 @@ jobs:
 
       - name: Install locked evidence dependencies
         run: uv sync --all-groups --frozen
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
-        with:
-          image: >-
-            tonistiigi/binfmt:qemu-v10.2.3@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
