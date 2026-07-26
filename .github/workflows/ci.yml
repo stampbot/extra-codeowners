@@ -68,6 +68,7 @@ jobs:
           .github/scripts/build_release_spine.py
           .github/scripts/container_evidence.py
           .github/scripts/container_source_plan.py
+          .github/scripts/export_container_image.py
           .github/scripts/fetch_verified_sources.py
           .github/scripts/github_release_api.py
           .github/scripts/immutable_release_preflight.py
@@ -1349,7 +1350,95 @@ jobs:
           ${{ matrix.architecture }}
           extra-codeowners-ci-smoke-${{ matrix.architecture }}
 
-      - name: Collect and verify container distribution evidence
+      - name: Export container bytes without parsing image layers
+        env:
+          ARCHITECTURE: ${{ matrix.architecture }}
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          set -euo pipefail
+          image="extra-codeowners:ci-${ARCHITECTURE}"
+          subject_digest="$(docker image inspect --format '{{.Id}}' "$image")"
+          export_root="${RUNNER_TEMP}/image-export-${ARCHITECTURE}"
+          timeout --signal=TERM --kill-after=30s 15m \
+            python .github/scripts/export_container_image.py \
+              --image "$image" \
+              --platform "$PLATFORM" \
+              --subject-digest "$subject_digest" \
+              --allow-config-digest-subject \
+              --output "$export_root" \
+              >/dev/null
+
+      - name: Inventory image layers in the offline parser sandbox
+        env:
+          ARCHITECTURE: ${{ matrix.architecture }}
+        run: |
+          set -euo pipefail
+          parser_image="extra-codeowners:test-${ARCHITECTURE}"
+          parser_image_id="$(docker image inspect --format '{{.Id}}' "$parser_image")"
+          if ! [[ "$parser_image_id" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "Current-commit image parser has an invalid local image ID." >&2
+            exit 1
+          fi
+          parser_container_nonce="$(python -c 'import secrets; print(secrets.token_hex(16))')"
+          if ! [[ "$parser_container_nonce" =~ ^[0-9a-f]{32}$ ]]; then
+            echo "Cannot allocate a unique image parser container name." >&2
+            exit 1
+          fi
+          parser_container_name="extra-codeowners-image-inventory-${parser_container_nonce}"
+          export_root="${RUNNER_TEMP}/image-export-${ARCHITECTURE}"
+          output="${RUNNER_TEMP}/image-inventory-output-${ARCHITECTURE}"
+          destination="${GITHUB_WORKSPACE}/container-evidence"
+          if [ -e "$output" ] || [ -e "$destination" ]; then
+            echo "Refusing to reuse an image inventory output directory." >&2
+            exit 1
+          fi
+          install --directory --mode=0700 "$output" "$destination"
+          sudo mount \
+            --types tmpfs \
+            --options size=160m,nr_inodes=8192,nosuid,nodev,noexec,mode=0700,uid=65532,gid=65532 \
+            tmpfs "$output"
+          cleanup_image_inventory() {
+            env -i \
+              DOCKER_CONFIG=/nonexistent \
+              HOME=/nonexistent \
+              PATH=/usr/bin:/bin \
+              /usr/bin/timeout --signal=TERM --kill-after=5s 15s \
+              /usr/bin/docker rm --force "$parser_container_name" \
+              >/dev/null 2>&1 || true
+            if mountpoint --quiet "$output"; then
+              sudo umount "$output" || sudo umount --lazy "$output"
+            fi
+            rmdir "$output" 2>/dev/null || true
+            unlink "${export_root}/image-export.json" 2>/dev/null || true
+            unlink "${export_root}/image.tar" 2>/dev/null || true
+            rmdir "$export_root" 2>/dev/null || true
+          }
+          trap cleanup_image_inventory EXIT
+          timeout --signal=TERM --kill-after=30s 45m \
+            python .github/scripts/run_evidence_parser.py command \
+              --image "$parser_image_id" \
+              --container-name "$parser_container_name" \
+              --input "archive=${export_root}/image.tar" \
+              --input "export-record=${export_root}/image-export.json" \
+              --output "$output" \
+              --parser image-inventory \
+              --execute \
+              -- \
+              inventory-image-archive \
+              --archive /inputs/archive \
+              --export-record /inputs/export-record \
+              --output "/output/components-${ARCHITECTURE}.json" \
+              --files-output "/output/all-layer-files-${ARCHITECTURE}.json"
+          sudo chown "$(id -u):$(id -g)" "$output"
+          python .github/scripts/run_evidence_parser.py materialize-image-inventory \
+            --source "$output" \
+            --destination "$destination" \
+            --architecture "$ARCHITECTURE" \
+            >/dev/null
+          cleanup_image_inventory
+          trap - EXIT
+
+      - name: Verify generated container inventory
         env:
           ARCHITECTURE: ${{ matrix.architecture }}
           EVENT_NAME: ${{ github.event_name }}
@@ -1370,18 +1459,7 @@ jobs:
             ${{ needs.python-distribution.outputs.selection-record-sha256 }}
         run: |
           set -euo pipefail
-          mkdir -p container-evidence
-          image="extra-codeowners:ci-${ARCHITECTURE}"
-          subject_digest="$(docker image inspect --format '{{.Id}}' "$image")"
           inventory="container-evidence/components-${ARCHITECTURE}.json"
-          files="container-evidence/all-layer-files-${ARCHITECTURE}.json"
-          uv run --frozen python .github/scripts/container_evidence.py inventory \
-            --image "$image" \
-            --platform "$PLATFORM" \
-            --subject-digest "$subject_digest" \
-            --output "$inventory" \
-            --files-output "$files" \
-            --allow-config-digest-subject
           checkout_sha="$(git rev-parse HEAD)"
           uv run --frozen python .github/scripts/container_evidence.py run-metadata \
             --inventory "$inventory" \

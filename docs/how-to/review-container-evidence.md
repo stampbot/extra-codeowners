@@ -38,6 +38,13 @@ Pull-request CI already binds the hash-pinned PEP 517 proof and exact installed
 application wheel into both platform artifacts. Read-only manual runs and the
 tagged candidate scan use the same proof implementation.
 
+CI also keeps Docker access out of the image parser. A narrow exporter streams
+the local candidate and writes a hash-bound identity record without opening the
+archive. A separate rootless process with no network, credentials, or Docker
+socket parses the image and emits the two inventories reviewed below. This
+workflow boundary does not make the resulting pull-request artifact a
+supported release asset.
+
 ## Before you start
 
 Plan for four isolated phases. The first and fourth can use separately created

@@ -67,6 +67,7 @@ def test_uv_version_is_identical_locally_in_containers_and_in_workflows() -> Non
     for script in (
         "build_release_spine.py",
         "container_evidence.py",
+        "export_container_image.py",
         "github_release_api.py",
         "immutable_release_preflight.py",
         "release_asset_assembler.py",
@@ -972,6 +973,66 @@ def test_ci_fetches_one_shared_verified_source_boundary_for_both_architectures()
     assert container.count("-exec chmod 0644") == 1
 
 
+def test_ci_exports_without_parsing_then_inventories_the_image_offline() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    container = workflow.split("  container:\n", 1)[1]
+    export_step = container.split(
+        "      - name: Export container bytes without parsing image layers\n",
+        1,
+    )[1].split("      - name:", 1)[0]
+    inventory_step = container.split(
+        "      - name: Inventory image layers in the offline parser sandbox\n",
+        1,
+    )[1].split("      - name:", 1)[0]
+    verify_step = container.split(
+        "      - name: Verify generated container inventory\n",
+        1,
+    )[1].split("      - name:", 1)[0]
+
+    assert "container_evidence.py inventory " not in workflow
+    assert "container_evidence.py inventory-image-archive" not in export_step
+    assert "export_container_image.py" in export_step
+    assert "docker image inspect --format '{{.Id}}'" in export_step
+    assert "--allow-config-digest-subject" in export_step
+    assert '--output "$export_root"' in export_step
+    for forbidden in (
+        "tar ",
+        "tarfile",
+        "unzip",
+        "container_evidence.py",
+        "run_evidence_parser.py",
+        "GITHUB_TOKEN",
+        "ACTIONS_ID_TOKEN",
+    ):
+        assert forbidden not in export_step
+
+    assert 'parser_image="extra-codeowners:test-${ARCHITECTURE}"' in inventory_step
+    assert "extra-codeowners-image-inventory-${parser_container_nonce}" in inventory_step
+    assert "--parser image-inventory" in inventory_step
+    assert "--execute" in inventory_step
+    assert "inventory-image-archive" in inventory_step
+    assert '--input "archive=${export_root}/image.tar"' in inventory_step
+    assert '--input "export-record=${export_root}/image-export.json"' in inventory_step
+    assert "--archive /inputs/archive" in inventory_step
+    assert "--export-record /inputs/export-record" in inventory_step
+    assert "size=160m,nr_inodes=8192,nosuid,nodev,noexec" in inventory_step
+    assert "timeout --signal=TERM --kill-after=30s 45m" in inventory_step
+    assert "materialize-image-inventory" in inventory_step
+    assert 'sudo chown "$(id -u):$(id -g)" "$output"' in inventory_step
+    assert "chown -R" not in inventory_step
+    assert "docker.sock" not in inventory_step
+    assert '--input "repo=' not in inventory_step
+    assert inventory_step.index("/usr/bin/docker rm --force") < inventory_step.index(
+        "mountpoint --quiet"
+    )
+    assert 'unlink "${export_root}/image.tar"' in inventory_step
+
+    assert "docker image inspect" not in verify_step
+    assert "image.tar" not in verify_step
+    assert "container_evidence.py run-metadata" in verify_step
+    assert "container_evidence.py verify" in verify_step
+
+
 def test_ci_runs_bundle_only_in_the_raw_id_offline_evidence_sandbox() -> None:
     workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     container = workflow.split("  container:\n", 1)[1]
@@ -1182,6 +1243,7 @@ def test_release_spine_scripts_are_in_every_python_type_check_entrypoint() -> No
 def test_source_store_scripts_are_type_checked_and_available_to_container_tests() -> None:
     required = {
         ".github/scripts/container_source_plan.py",
+        ".github/scripts/export_container_image.py",
         ".github/scripts/fetch_verified_sources.py",
         ".github/scripts/run_evidence_parser.py",
         ".github/scripts/verified_source_store.py",

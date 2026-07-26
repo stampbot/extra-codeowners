@@ -105,6 +105,7 @@ COPY .github/scripts/build_python_distribution_spine.py \
      .github/scripts/build_release_spine.py \
      .github/scripts/container_evidence.py \
      .github/scripts/container_source_plan.py \
+     .github/scripts/export_container_image.py \
      .github/scripts/fetch_verified_sources.py \
      .github/scripts/github_release_api.py \
      .github/scripts/immutable_release_preflight.py \

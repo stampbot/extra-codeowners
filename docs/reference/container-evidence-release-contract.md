@@ -34,12 +34,18 @@ member order, `MANIFEST.json` and source-record schemas, Sigstore issuer and
 transparency-log requirements, and the SBOM and provenance predicate
 contracts.
 
-CI now fetches direct and Alpine sources once into verified stores, reuses
-those stores for both architectures, and builds the final evidence bundle in a
-rootless parser with no network. That is one part of #28, not completion. Image
-and layer inventory parsing still sits outside that sandbox. A supported
-recipient verifier and an enabled, isolated path for signing and publication do
-not exist yet.
+CI now gives image and source parsing separate rootless, networkless
+boundaries. A Docker-only process exports the local candidate without opening
+its archive. The export record binds the archive hash and size to the image
+configuration, subject, and platform before a separate parser inventories the
+layers. CI also fetches direct and Alpine sources once into verified stores,
+reuses those stores for both architectures, and assembles the final bundle
+offline.
+
+That is substantial #28 groundwork, not a supported release path. The tagged
+workflow does not yet transport and attest the image-export handoff, run the
+recipient procedure against exact candidate assets, or grant isolated signing
+and publication authority. A supported recipient verifier does not exist yet.
 
 Three open security gates separate today's CI evidence from this release
 contract:
@@ -47,7 +53,7 @@ contract:
 | Issue | Work still required |
 | --- | --- |
 | [#18](https://github.com/stampbot/extra-codeowners/issues/18) | Prove CFFI's libffi build input, close Psycopg's bundled-library sources, and bind Pydantic Core's bundled `libgcc` to an exact source. |
-| [#28](https://github.com/stampbot/extra-codeowners/issues/28) | Move image and layer inventory parsing behind the rootless offline boundary, freeze the wire format, and ship an adversarially tested recipient verifier, signing and publication path, and how-to. |
+| [#28](https://github.com/stampbot/extra-codeowners/issues/28) | Carry the isolated CI handoffs into the tagged candidate pipeline, freeze the wire format, and ship an adversarially tested recipient verifier, signing and publication path, and how-to. |
 | [#32](https://github.com/stampbot/extra-codeowners/issues/32) | Bind the retained Python selection records and exact wheel digest into the complete release evidence, then bind the installed runtime to that same wheel. |
 
 The raw spine includes an adversarially tested transport verifier. It does not

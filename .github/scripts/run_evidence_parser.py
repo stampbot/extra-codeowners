@@ -28,6 +28,7 @@ from typing import NoReturn, cast
 SCHEMA_VERSION = 1
 COMMAND_KIND = "extra-codeowners/evidence-parser-command"
 SOURCE_PLAN_BINDING_KIND = "extra-codeowners/materialized-source-plan"
+IMAGE_INVENTORY_BINDING_KIND = "extra-codeowners/materialized-image-inventory"
 
 DOCKER_BINARY = "/usr/bin/docker"
 PARSER_UID = 65532
@@ -37,8 +38,19 @@ PARSER_CPUS = "1.0"
 SOURCE_PLAN_MEMORY_BYTES = 512 * 1024 * 1024
 SCRATCH_BYTES = 64 * 1024 * 1024
 SCRATCH_INODES = 4096
+MAX_IMAGE_ARCHIVE_BYTES = 2 * 1024 * 1024 * 1024 + 256 * 1024 * 1024
+IMAGE_SNAPSHOT_OVERHEAD_BYTES = 16 * 1024 * 1024
+IMAGE_SNAPSHOT_BYTES = MAX_IMAGE_ARCHIVE_BYTES + IMAGE_SNAPSHOT_OVERHEAD_BYTES
+IMAGE_SNAPSHOT_INODES = 16
 SOURCE_PLAN_OUTPUT_BYTES = 64 * 1024 * 1024
 SOURCE_PLAN_BYTES = 4 * 1024 * 1024
+IMAGE_INVENTORY_JSON_BYTES = 64 * 1024 * 1024
+IMAGE_INVENTORY_OUTPUT_BYTES = 160 * 1024 * 1024
+IMAGE_INVENTORY_MATERIALIZED_BYTES = 2 * IMAGE_INVENTORY_JSON_BYTES
+IMAGE_INVENTORY_MEMORY_BYTES = 5 * 1024 * 1024 * 1024
+IMAGE_INVENTORY_MEMORY_HEADROOM_BYTES = IMAGE_INVENTORY_MEMORY_BYTES - (
+    IMAGE_SNAPSHOT_BYTES + IMAGE_INVENTORY_OUTPUT_BYTES + SCRATCH_BYTES
+)
 EVIDENCE_OUTPUT_BYTES = 1152 * 1024 * 1024
 OUTPUT_INODES = 8192
 # The collector may retain a full 1 GiB tree while staging a full output trio.
@@ -70,9 +82,11 @@ CONTAINER_WRAPPER = "/build/.github/scripts/run_evidence_parser.py"
 CONTAINER_INPUT_ROOT = "/inputs"
 CONTAINER_OUTPUT = "/output"
 CONTAINER_SCRATCH = "/scratch"
+CONTAINER_IMAGE_SNAPSHOT = "/image-snapshot"
 CONTAINER_WORK = "/work"
 PARSER_PROGRAMS = {
     "evidence": "/build/.github/scripts/container_evidence.py",
+    "image-inventory": "/build/.github/scripts/container_evidence.py",
     "source-plan": "/build/.github/scripts/container_source_plan.py",
 }
 
@@ -98,7 +112,9 @@ BLOCKED_ENVIRONMENT_NAMES = frozenset(
 )
 
 INPUT_NAME = re.compile(r"[a-z][a-z0-9-]{0,31}")
-CONTAINER_NAME = re.compile(r"extra-codeowners-(?:evidence|source-plan)-[0-9a-f]{32}")
+CONTAINER_NAME = re.compile(
+    r"extra-codeowners-(?:evidence|image-inventory|source-plan)-[0-9a-f]{32}"
+)
 IMAGE_COMPONENT = re.compile(r"[a-z0-9]+(?:[._-][a-z0-9]+)*")
 REGISTRY_HOST = re.compile(r"[a-z0-9]+(?:[.-][a-z0-9]+)*")
 LOWER_SHA256 = re.compile(r"[0-9a-f]{64}")
@@ -313,6 +329,8 @@ def _exact_mount(records: Sequence[MountRecord], path: Path, source: str) -> Mou
 def _output_bytes(parser: str) -> int:
     if parser == "source-plan":
         return SOURCE_PLAN_OUTPUT_BYTES
+    if parser == "image-inventory":
+        return IMAGE_INVENTORY_OUTPUT_BYTES
     if parser == "evidence":
         return EVIDENCE_OUTPUT_BYTES
     raise ParserSandboxError("the requested parser program is not allowed")
@@ -321,6 +339,8 @@ def _output_bytes(parser: str) -> int:
 def _memory_bytes(parser: str) -> int:
     if parser == "source-plan":
         return SOURCE_PLAN_MEMORY_BYTES
+    if parser == "image-inventory":
+        return IMAGE_INVENTORY_MEMORY_BYTES
     if parser == "evidence":
         return EVIDENCE_MEMORY_BYTES
     raise ParserSandboxError("the requested parser program is not allowed")
@@ -486,6 +506,12 @@ def build_docker_command(
         "--env=PYTHONDONTWRITEBYTECODE=1",
         "--env=PYTHONUNBUFFERED=1",
     ]
+    if parser == "image-inventory":
+        command.append(
+            f"--tmpfs={CONTAINER_IMAGE_SNAPSHOT}:rw,nosuid,nodev,noexec,"
+            f"size={IMAGE_SNAPSHOT_BYTES},nr_inodes={IMAGE_SNAPSHOT_INODES},"
+            f"mode=0700,uid={PARSER_UID},gid={PARSER_GID}"
+        )
     if parser == "evidence":
         command.append(
             f"--tmpfs={CONTAINER_WORK}:rw,nosuid,nodev,noexec,"
@@ -714,6 +740,18 @@ def _require_inside_mounts(input_names: Sequence[str], parser: str) -> None:
             or not {"nosuid", "nodev", "noexec"}.issubset(work.options)
         ):
             raise ParserSandboxError("evidence work is not a writable tmpfs")
+    if parser == "image-inventory":
+        snapshot = _exact_mount(
+            records,
+            Path(CONTAINER_IMAGE_SNAPSHOT),
+            "image inventory snapshot",
+        )
+        if (
+            snapshot.filesystem != "tmpfs"
+            or "rw" not in snapshot.options
+            or not {"nosuid", "nodev", "noexec"}.issubset(snapshot.options)
+        ):
+            raise ParserSandboxError("image inventory snapshot is not a writable tmpfs")
 
     for name in input_names:
         target = Path(CONTAINER_INPUT_ROOT) / name
@@ -746,6 +784,8 @@ def _require_inside_mounts(input_names: Sequence[str], parser: str) -> None:
         }
         if parser == "evidence":
             permitted_writable_mounts.add(Path(CONTAINER_WORK))
+        if parser == "image-inventory":
+            permitted_writable_mounts.add(Path(CONTAINER_IMAGE_SNAPSHOT))
         if record.mount_point in permitted_writable_mounts:
             continue
         if any(record.mount_point.is_relative_to(root) for root in writable_roots):
@@ -767,6 +807,18 @@ def _require_inside_mounts(input_names: Sequence[str], parser: str) -> None:
                 ),
             )
             if parser == "evidence"
+            else ()
+        ),
+        *(
+            (
+                (
+                    Path(CONTAINER_IMAGE_SNAPSHOT),
+                    IMAGE_SNAPSHOT_BYTES,
+                    IMAGE_SNAPSHOT_INODES,
+                    "image inventory snapshot",
+                ),
+            )
+            if parser == "image-inventory"
             else ()
         ),
     ):
@@ -810,6 +862,17 @@ def _inside_command(parser: str, input_names: Sequence[str], arguments: Sequence
         PARSER_PROGRAMS[parser],
         *checked_arguments,
     )
+    if parser == "image-inventory":
+        if any(
+            argument == "--snapshot-directory" or argument.startswith("--snapshot-directory=")
+            for argument in checked_arguments
+        ):
+            raise ParserSandboxError("the image snapshot directory is fixed by the sandbox")
+        command = (
+            *command,
+            "--snapshot-directory",
+            CONTAINER_IMAGE_SNAPSHOT,
+        )
     environment = {
         "HOME": CONTAINER_SCRATCH,
         "PATH": "/opt/venv/bin:/usr/local/bin:/usr/bin:/bin",
@@ -863,6 +926,15 @@ def _materialized_names(architecture: str) -> tuple[str, str, str]:
         archive,
         f"evidence-predicate-{architecture}.json",
         f"{archive}.sha256",
+    )
+
+
+def _image_inventory_names(architecture: str) -> tuple[str, str]:
+    if architecture not in {"amd64", "arm64"}:
+        raise ParserSandboxError("image inventory architecture must be amd64 or arm64")
+    return (
+        f"components-{architecture}.json",
+        f"all-layer-files-{architecture}.json",
     )
 
 
@@ -924,6 +996,7 @@ def _copy_stable_output(
     destination_parent: int,
     name: str,
     maximum: int,
+    destination_mode: int = 0o600,
 ) -> tuple[str, tuple[int, ...], str, bytes]:
     nofollow = getattr(os, "O_NOFOLLOW", None)
     nonblock = getattr(os, "O_NONBLOCK", None)
@@ -994,6 +1067,7 @@ def _copy_stable_output(
                 written += count
         if received != before_metadata.st_size:
             raise ParserSandboxError(f"evidence output {name!r} changed while it was read")
+        os.fchmod(destination_descriptor, destination_mode)
         os.fsync(destination_descriptor)
         after = _regular_identity(
             os.fstat(source_descriptor),
@@ -1142,6 +1216,159 @@ def materialize_source_plan(source: Path, destination: Path) -> dict[str, object
 
     if binding is None:
         raise ParserSandboxError("source-plan materialization did not produce a binding")
+    return binding
+
+
+def materialize_image_inventory(
+    source: Path,
+    destination: Path,
+    architecture: str,
+) -> dict[str, object]:
+    """Copy one exact stable image-inventory pair into a private host directory."""
+
+    source = _canonical_host_path(source, "image inventory output", require_directory=True)
+    destination = _canonical_host_path(
+        destination,
+        "image inventory materialization destination",
+        require_directory=True,
+    )
+    if (
+        source == destination
+        or source.is_relative_to(destination)
+        or destination.is_relative_to(source)
+    ):
+        raise ParserSandboxError("image inventory source and destination must not overlap")
+    _require_bounded_output_tmpfs(
+        source,
+        "image-inventory",
+        require_empty=False,
+        owner_uid=os.getuid(),
+        owner_gid=os.getgid(),
+    )
+    names = _image_inventory_names(architecture)
+    source_parent = -1
+    destination_parent = -1
+    temporary_files: dict[str, str] = {}
+    published: list[str] = []
+    completed = False
+    binding: dict[str, object] | None = None
+    try:
+        source_parent, source_identity = _open_secure_directory(
+            source,
+            "image inventory output",
+        )
+        destination_parent, destination_identity = _open_secure_directory(
+            destination,
+            "image inventory materialization destination",
+        )
+        destination_metadata = os.fstat(destination_parent)
+        if (
+            destination_metadata.st_uid != os.getuid()
+            or destination_metadata.st_gid != os.getgid()
+            or stat.S_IMODE(destination_metadata.st_mode) != 0o700
+        ):
+            raise ParserSandboxError("image inventory destination is not private and host-owned")
+        try:
+            source_inventory = os.listdir(source_parent)
+            destination_inventory = os.listdir(destination_parent)
+        except OSError as exc:
+            raise ParserSandboxError("cannot inventory image inventory directories") from exc
+        if sorted(source_inventory) != sorted(names) or len(
+            {name.casefold() for name in source_inventory}
+        ) != len(source_inventory):
+            raise ParserSandboxError("image inventory output has an unexpected inventory")
+        if destination_inventory:
+            raise ParserSandboxError("image inventory destination must be empty")
+
+        identities: dict[str, tuple[int, ...]] = {}
+        digests: dict[str, str] = {}
+        total = 0
+        for name in names:
+            temporary, identity, digest, _retained = _copy_stable_output(
+                source_parent=source_parent,
+                destination_parent=destination_parent,
+                name=name,
+                maximum=IMAGE_INVENTORY_JSON_BYTES,
+                destination_mode=0o644,
+            )
+            temporary_files[name] = temporary
+            identities[name] = identity
+            digests[name] = digest
+            total += identity[6]
+            if total > IMAGE_INVENTORY_MATERIALIZED_BYTES:
+                raise ParserSandboxError("image inventory output exceeds its aggregate byte limit")
+
+        try:
+            final_inventory = os.listdir(source_parent)
+            source_after = os.fstat(source_parent)
+            destination_after = os.fstat(destination_parent)
+        except OSError as exc:
+            raise ParserSandboxError("cannot revalidate image inventory directories") from exc
+        if sorted(final_inventory) != sorted(names):
+            raise ParserSandboxError("image inventory output changed during materialization")
+        if (source_after.st_dev, source_after.st_ino) != source_identity or (
+            destination_after.st_dev,
+            destination_after.st_ino,
+        ) != destination_identity:
+            raise ParserSandboxError("an image inventory directory changed during materialization")
+        for name in names:
+            current = _regular_identity(
+                os.stat(name, dir_fd=source_parent, follow_symlinks=False),
+                name=name,
+                maximum=IMAGE_INVENTORY_JSON_BYTES,
+            )
+            if current != identities[name]:
+                raise ParserSandboxError(
+                    f"image inventory output {name!r} changed during materialization"
+                )
+
+        for name in names:
+            try:
+                os.link(
+                    temporary_files[name],
+                    name,
+                    src_dir_fd=destination_parent,
+                    dst_dir_fd=destination_parent,
+                    follow_symlinks=False,
+                )
+            except OSError as exc:
+                raise ParserSandboxError(
+                    f"cannot publish materialized image inventory {name!r}"
+                ) from exc
+            published.append(name)
+        os.fsync(destination_parent)
+        binding = {
+            "schema_version": SCHEMA_VERSION,
+            "kind": IMAGE_INVENTORY_BINDING_KIND,
+            "architecture": architecture,
+            "files": [
+                {
+                    "filename": name,
+                    "sha256": digests[name],
+                    "size": identities[name][6],
+                }
+                for name in names
+            ],
+        }
+        completed = True
+    except OSError as exc:
+        raise ParserSandboxError("cannot materialize image inventory output") from exc
+    finally:
+        if destination_parent >= 0:
+            if not completed:
+                for name in reversed(published):
+                    with contextlib.suppress(OSError):
+                        os.unlink(name, dir_fd=destination_parent)
+            for temporary in temporary_files.values():
+                with contextlib.suppress(OSError):
+                    os.unlink(temporary, dir_fd=destination_parent)
+        for descriptor in (source_parent, destination_parent):
+            if descriptor >= 0:
+                with contextlib.suppress(OSError):
+                    os.close(descriptor)
+
+    if binding is None:
+        raise ParserSandboxError("image inventory materialization did not produce a binding")
     return binding
 
 
@@ -1324,6 +1551,18 @@ def _argument_parser() -> argparse.ArgumentParser:
     )
     materialize_plan.add_argument("--source", required=True, type=Path)
     materialize_plan.add_argument("--destination", required=True, type=Path)
+
+    materialize_inventory = commands.add_parser(
+        "materialize-image-inventory",
+        help="safely copy one exact offline image inventory into a private host directory",
+    )
+    materialize_inventory.add_argument("--source", required=True, type=Path)
+    materialize_inventory.add_argument("--destination", required=True, type=Path)
+    materialize_inventory.add_argument(
+        "--architecture",
+        choices=("amd64", "arm64"),
+        required=True,
+    )
     return parser
 
 
@@ -1351,6 +1590,17 @@ def main(argv: Sequence[str] | None = None) -> int:
                     materialize_source_plan(
                         cast(Path, arguments.source),
                         cast(Path, arguments.destination),
+                    )
+                )
+            )
+            return 0
+        if arguments.command == "materialize-image-inventory":
+            sys.stdout.buffer.write(
+                canonical_json(
+                    materialize_image_inventory(
+                        cast(Path, arguments.source),
+                        cast(Path, arguments.destination),
+                        cast(str, arguments.architecture),
                     )
                 )
             )

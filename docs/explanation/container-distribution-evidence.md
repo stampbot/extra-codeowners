@@ -528,8 +528,31 @@ files retained under `artifacts/application/`.
 
 ## Why release collection needs a different boundary
 
-CI now separates source fetches from the parsers that inspect source archives.
-It uses this sequence:
+CI separates Docker access and network access from the parsers that inspect
+image layers and source archives. The image path is:
+
+```text
+local candidate image
+  -> Docker-only bounded export
+  -> hash-bound archive and export record
+  -> rootless, offline image and layer inventory
+  -> exact two-file inventory materialization
+```
+
+The exporter reads bounded `docker image inspect` JSON and streams
+`docker image save` into a create-once file. It does not import the evidence
+collector or any tar, ZIP, email, or network parser. Its record binds the
+archive SHA-256 and size to the image configuration digest, subject digest, and
+platform.
+
+The next process receives the archive and record as read-only files. It checks
+the record and archive through no-follow descriptors, then parses the saved
+image in the rootless sandbox. Only the component inventory and all-layer file
+inventory leave that sandbox. The host materializer accepts those two exact
+filenames, enforces per-file and aggregate limits, and rejects links,
+replacement races, extra entries, and an occupied destination.
+
+Source acquisition and final bundle assembly use a separate path:
 
 ```text
 trusted direct-source plan
@@ -537,22 +560,24 @@ trusted direct-source plan
   -> rootless, offline Alpine distfile plan
   -> unprivileged Alpine distfile fetch
   -> one verified-source artifact reused by both architectures
-  -> rootless, offline final parse and deterministic bundle
+  -> rootless, offline final source parse and deterministic bundle
 ```
 
-The final parser runs as UID and GID `65532` with `--network=none` and
-`--ipc=none`. It receives no Linux capabilities, privilege escalation,
-credential environment variables, or Docker socket. Its image and inputs are
-read-only. Scratch, work, and output live on bounded `tmpfs` mounts, and the
-wrapper also limits memory, CPU, processes, file descriptors, bytes, and inode
-counts. Only the exact set of three evidence files leaves that sandbox.
+All three parser roles run as UID and GID `65532` with `--network=none` and
+`--ipc=none`. They receive no Linux capabilities, privilege escalation,
+credential environment variables, or Docker socket. Their image and inputs
+are read-only. Scratch and output—and the final bundle's work area—live on
+bounded `tmpfs` mounts. The wrapper also limits memory, CPU, processes, file
+descriptors, bytes, and inode counts.
 
-This implements the source-store and final-bundle part of issue
-[#28](https://github.com/stampbot/extra-codeowners/issues/28). The image and
-layer inventory phase still runs outside this rootless, offline parser
-boundary. A recipient verifier and the isolated signing and publication path
-also remain outstanding. The current collector has no publication authority,
-and the release workflow still blocks every supported publication.
+This implements CI's source-store, image-inventory, and final-bundle parser
+boundaries from issue
+[#28](https://github.com/stampbot/extra-codeowners/issues/28). It does not wire
+those dormant materials into a supported release. A frozen recipient wire
+format, bounded recipient verifier, runnable release-candidate verification,
+and isolated signing and publication path remain outstanding. The current
+collector has no publication authority, and the release workflow still blocks
+every supported publication.
 
 Before any release may publish, the remaining three native-wheel owners must
 move from `open` to `closed`, or those wheels must be replaced with builds
