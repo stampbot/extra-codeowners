@@ -1,0 +1,19 @@
+{
+  "image": "ghcr.io/stampbot/extra-codeowners-native-wheelhouse",
+  "index_digest": "sha256:49367c7f9ebf4983ecd452f7ae75cebada98561328f3b586f9289c32601e2e8c",
+  "manifest_schema_version": 2,
+  "platforms": {
+    "linux/amd64": {
+      "manifest_digest": "sha256:75c859c5eff800d1ac6419157fbe65e3790cf08553ec9c4fdc2477c2adaae394"
+    },
+    "linux/arm64": {
+      "manifest_digest": "sha256:083c38adb31de3ae61ea32e0b81bf137664db5206118d833f3216e46c07b80e7"
+    }
+  },
+  "signature": {
+    "certificate_identity": "https://github.com/stampbot/extra-codeowners/.github/workflows/native-wheelhouse.yml@refs/heads/main",
+    "oidc_issuer": "https://token.actions.githubusercontent.com"
+  },
+  "source_ref": "refs/heads/main",
+  "source_revision": "0fd9ad42de969af08d2b7d2cb4fa8868fb2a4330"
+}

@@ -241,6 +241,16 @@ jobs:
           driver-opts: >-
             image=moby/buildkit:v0.30.0@sha256:0168606be2315b7c807a03b3d8aa79beefdb31c98740cebdffdfeebf31190c9f
 
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Verify the signed native wheelhouse index
+        run: >-
+          timeout --signal=TERM --kill-after=30s 10m
+          bash .github/scripts/verify-native-wheelhouse-index.sh
+          containers/native-wheelhouse/consumer.json
+          "${RUNNER_TEMP}/native-wheelhouse-index-verification"
+
       - name: Build release candidate without publishing
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
@@ -518,6 +528,16 @@ jobs:
           version: v0.35.0
           driver-opts: >-
             image=moby/buildkit:v0.30.0@sha256:0168606be2315b7c807a03b3d8aa79beefdb31c98740cebdffdfeebf31190c9f
+
+      - name: Install cosign for wheelhouse verification
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Verify the signed native wheelhouse index
+        run: >-
+          timeout --signal=TERM --kill-after=30s 10m
+          bash .github/scripts/verify-native-wheelhouse-index.sh
+          containers/native-wheelhouse/consumer.json
+          "${RUNNER_TEMP}/native-wheelhouse-index-verification"
 
       - name: Log in to GHCR
         uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0

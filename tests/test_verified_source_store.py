@@ -25,6 +25,7 @@ PLAN_SCRIPT = ROOT / ".github" / "scripts" / "container_source_plan.py"
 SOURCE_REVISION = "1" * 40
 POLICY_SHA256 = "2" * 64
 UV_LOCK_SHA256 = "3" * 64
+NATIVE_WHEELHOUSE_CONTRACT_SHA256 = "4" * 64
 
 
 def load_script(path: Path, name: str) -> ModuleType:
@@ -137,10 +138,11 @@ def plan_record(specs: tuple[RequestSpec, ...]) -> dict[str, Any]:
         "schema_version": 1,
         "media_type": "application/vnd.stampbot.container-source-plan.v1+json",
         "kind": "direct",
-        "evidence_schema_version": 7,
+        "evidence_schema_version": 8,
         "source_revision": SOURCE_REVISION,
         "policy_sha256": POLICY_SHA256,
         "uv_lock_sha256": UV_LOCK_SHA256,
+        "native_wheelhouse_contract_sha256": NATIVE_WHEELHOUSE_CONTRACT_SHA256,
         "requests": [
             request_record(spec) for spec in sorted(specs, key=lambda item: item.identifier)
         ],
@@ -365,7 +367,7 @@ def test_accepts_the_real_direct_planner_contract() -> None:
         source_store.strict_json_bytes(raw, "real source plan", maximum=4 * 1024 * 1024)
     )
 
-    assert len(validated["requests"]) == 214
+    assert len(validated["requests"]) == 229
     assert (
         validated["policy_sha256"]
         == hashlib.sha256((ROOT / ".compliance" / "container-policy.json").read_bytes()).hexdigest()

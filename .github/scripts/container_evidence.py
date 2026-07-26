@@ -53,9 +53,10 @@ SCRIPT_DIRECTORY = Path(__file__).resolve().parent
 if str(SCRIPT_DIRECTORY) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIRECTORY))
 
+import native_wheelhouse  # noqa: E402
 import verified_source_store  # noqa: E402
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 EVIDENCE_MEDIA_TYPE = f"application/vnd.stampbot.container-evidence.v{SCHEMA_VERSION}+tar+gzip"
 APPLICATION_NAME = "extra-codeowners"
 EXPECTED_RUNTIME_PYTHON = "3.14.6"
@@ -80,6 +81,12 @@ CPYTHON_IDENTITY_PATHS = {
 EXPECTED_UV_VERSION = "0.11.28"
 APPLICATION_WHEEL_LABEL = "org.stampbot.extra-codeowners.application-wheel.sha256"
 APPLICATION_SELECTION_LABEL = "org.stampbot.extra-codeowners.python-selection-record.sha256"
+NATIVE_WHEELHOUSE_INDEX_LABEL = "org.stampbot.extra-codeowners.native-wheelhouse.index-digest"
+NATIVE_WHEELHOUSE_REVISION_LABEL = "org.stampbot.extra-codeowners.native-wheelhouse.revision"
+NATIVE_WHEELHOUSE_SCHEMA_LABEL = "org.stampbot.extra-codeowners.native-wheelhouse.schema"
+NATIVE_WHEELHOUSE_PROVIDER = "native-wheelhouse"
+NATIVE_WHEELHOUSE_CONTRACT_PATH = Path("containers/native-wheelhouse/consumer.json")
+NATIVE_WHEELHOUSE_INPUTS_PATH = Path("containers/native-wheelhouse/inputs.json")
 BASE_SOURCE_REQUEST_IDS = {
     "docker-python-recipe": "docker-python:recipe",
     "cpython": "cpython:source",
@@ -1931,10 +1938,17 @@ def validate_policy_schema(policy: Mapping[str, Any]) -> None:
         "alpine_distfiles_release",
         "alpine_recipe_archives",
         "alpine_recipe_exceptions",
+        "native_wheelhouse_contract_sha256",
         "native_component_sources",
         "native_component_coverage",
     }
     require_exact_fields(policy, expected_top_level, "policy")
+    native_wheelhouse_contract_sha256 = policy.get("native_wheelhouse_contract_sha256")
+    if (
+        not isinstance(native_wheelhouse_contract_sha256, str)
+        or LOWER_SHA256.fullmatch(native_wheelhouse_contract_sha256) is None
+    ):
+        raise EvidenceError("policy native wheelhouse contract digest is invalid")
 
     base_image = policy.get("base_image")
     if isinstance(base_image, str):
@@ -3181,6 +3195,9 @@ def _inventory_saved_image(
         "image_version": labels.get("org.opencontainers.image.version", ""),
         "application_wheel_sha256": labels.get(APPLICATION_WHEEL_LABEL, ""),
         "application_selection_record_sha256": labels.get(APPLICATION_SELECTION_LABEL, ""),
+        "native_wheelhouse_index_digest": labels.get(NATIVE_WHEELHOUSE_INDEX_LABEL, ""),
+        "native_wheelhouse_revision": labels.get(NATIVE_WHEELHOUSE_REVISION_LABEL, ""),
+        "native_wheelhouse_schema": labels.get(NATIVE_WHEELHOUSE_SCHEMA_LABEL, ""),
         "apk_database_sha256": apk_record["sha256"],
         "apk_database_occurrences": apk_database_occurrences,
         "components": sorted(components, key=component_sort_key),
@@ -3993,10 +4010,19 @@ def validate_native_component_payloads(
     return records
 
 
-def validate_native_source_notices(value: object, source_id: str) -> list[Mapping[str, Any]]:
+def validate_native_source_notices(
+    value: object,
+    source_id: str,
+    *,
+    allow_empty: bool = False,
+) -> list[Mapping[str, Any]]:
     """Validate a canonical, bounded notice inventory shared by every source kind."""
 
-    if not isinstance(value, list) or not value or len(value) > MAX_SOURCE_LICENSE_FILES:
+    if (
+        not isinstance(value, list)
+        or (not allow_empty and not value)
+        or len(value) > MAX_SOURCE_LICENSE_FILES
+    ):
         raise EvidenceError(f"native-component source {source_id} has invalid notices")
     notices: list[Mapping[str, Any]] = []
     members: set[str] = set()
@@ -4286,7 +4312,11 @@ def validate_crates_io_component_source(source_id: str, raw_record: object) -> M
     )
     if record["normalized_license"] != expected_normalized_license:
         raise EvidenceError(f"native-component source {source_id} license normalization differs")
-    notices = validate_native_source_notices(record["notices"], source_id)
+    notices = validate_native_source_notices(
+        record["notices"],
+        source_id,
+        allow_empty=True,
+    )
     if any(notice["member"] == expected_member for notice in notices):
         raise EvidenceError(f"native-component source {source_id} repeats its manifest as a notice")
     return record
@@ -4475,7 +4505,7 @@ def validate_upstream_release_component_source(
 
 
 def native_component_sources(policy: Mapping[str, Any]) -> Mapping[str, Mapping[str, Any]]:
-    """Validate the schema-v7 tagged union of immutable component sources."""
+    """Validate the current schema's tagged union of immutable component sources."""
 
     value = policy.get("native_component_sources")
     if not isinstance(value, dict) or len(value) > MAX_NATIVE_COMPONENT_SOURCES:
@@ -6040,6 +6070,215 @@ def validate_bundle_source_reviewed_license_binding(
         )
 
 
+def wheel_tag_matches_native_wheelhouse_platform(tag: object, platform: str) -> bool:
+    """Require the wheelhouse's native CPython ABI and exact OCI architecture tag."""
+
+    expected_platform = {
+        "linux/amd64": "linux_x86_64",
+        "linux/arm64": "linux_aarch64",
+    }.get(platform)
+    return (
+        expected_platform is not None
+        and getattr(tag, "interpreter", None) == "cp314"
+        and getattr(tag, "abi", None) == "cp314"
+        and getattr(tag, "platform", None) == expected_platform
+    )
+
+
+def validate_native_wheel_policy(
+    value: object,
+    *,
+    owner: str,
+    name: str,
+    version: str,
+    platform: str,
+) -> tuple[Mapping[str, Any], bool]:
+    """Validate either one uv.lock wheel or one signed-wheelhouse wheel binding."""
+
+    if not isinstance(value, dict):
+        raise EvidenceError(f"native-component coverage {owner} has invalid wheel")
+    provider = value.get("provider")
+    if provider is None:
+        wheel = validate_pinned_artifact(
+            value,
+            f"native-component coverage {owner} wheel",
+        )
+        filename = safe_filename(str(wheel["url"]))
+        wheelhouse = False
+    else:
+        wheel = require_exact_fields(
+            value,
+            {"provider", "filename", "sha256", "size", "source"},
+            f"native-component coverage {owner} wheel",
+        )
+        filename = wheel["filename"]
+        digest = wheel["sha256"]
+        size = wheel["size"]
+        source = wheel["source"]
+        if (
+            provider != NATIVE_WHEELHOUSE_PROVIDER
+            or not isinstance(filename, str)
+            or PurePosixPath(filename).name != filename
+            or not isinstance(digest, str)
+            or LOWER_SHA256.fullmatch(digest) is None
+            or not isinstance(size, int)
+            or isinstance(size, bool)
+            or not 0 < size <= MAX_DOWNLOAD_BYTES
+            or not isinstance(source, str)
+            or re.fullmatch(r"[a-z][a-z0-9-]{0,63}", source) is None
+        ):
+            raise EvidenceError(f"native-component coverage {owner} has invalid wheel")
+        wheelhouse = True
+    try:
+        wheel_name, wheel_version, _build, tags = parse_wheel_filename(str(filename))
+        expected_version = Version(version)
+    except (InvalidVersion, InvalidWheelFilename) as exc:
+        raise EvidenceError(f"native-component coverage {owner} has invalid wheel") from exc
+    tag_matcher = (
+        wheel_tag_matches_native_wheelhouse_platform
+        if wheelhouse
+        else wheel_tag_matches_native_platform
+    )
+    if (
+        canonicalize_name(wheel_name) != name
+        or wheel_version != expected_version
+        or not tags
+        or not all(tag_matcher(tag, platform) for tag in tags)
+    ):
+        raise EvidenceError(f"native-component coverage {owner} wheel conflicts with {platform}")
+    return wheel, wheelhouse
+
+
+def validate_native_wheelhouse_build(
+    value: object,
+    *,
+    owner: str,
+    wheel: Mapping[str, Any],
+    sources: Mapping[str, Mapping[str, Any]],
+    used_sources: set[str],
+) -> Mapping[str, Any]:
+    """Validate policy describing inputs proven by the signed native wheelhouse."""
+
+    record = require_exact_fields(
+        value,
+        {
+            "cargo_source_ids",
+            "linked_libraries",
+            "local_cargo_packages",
+            "source",
+        },
+        f"native-component coverage {owner} wheelhouse build",
+    )
+    source = record["source"]
+    if (
+        not isinstance(source, str)
+        or source != wheel["source"]
+        or re.fullmatch(r"[a-z][a-z0-9-]{0,63}", source) is None
+    ):
+        raise EvidenceError(f"native-component coverage {owner} wheelhouse build source is invalid")
+
+    raw_source_ids = record["cargo_source_ids"]
+    if (
+        not isinstance(raw_source_ids, list)
+        or len(raw_source_ids) > MAX_CARGO_LOCK_PACKAGES
+        or not all(isinstance(source_id, str) for source_id in raw_source_ids)
+        or raw_source_ids != sorted(set(raw_source_ids))
+    ):
+        raise EvidenceError(
+            f"native-component coverage {owner} wheelhouse Cargo sources are invalid"
+        )
+    for source_id in raw_source_ids:
+        source_record = sources.get(source_id)
+        if source_record is None or source_record["kind"] != "crates-io":
+            raise EvidenceError(
+                f"native-component coverage {owner} wheelhouse build has an unknown Cargo source"
+            )
+        used_sources.add(source_id)
+
+    raw_locals = record["local_cargo_packages"]
+    if not isinstance(raw_locals, list) or len(raw_locals) > MAX_CARGO_LOCK_PACKAGES:
+        raise EvidenceError(
+            f"native-component coverage {owner} wheelhouse local Cargo packages are invalid"
+        )
+    locals_: list[tuple[str, str]] = []
+    for index, raw_local in enumerate(raw_locals):
+        local = require_exact_fields(
+            raw_local,
+            {"name", "version"},
+            f"native-component coverage {owner} wheelhouse local Cargo package {index}",
+        )
+        local_name = local["name"]
+        local_version = local["version"]
+        if (
+            not isinstance(local_name, str)
+            or CARGO_PACKAGE_NAME.fullmatch(local_name) is None
+            or not isinstance(local_version, str)
+            or checked_scalar(
+                local_version,
+                f"native-component coverage {owner} wheelhouse local Cargo version",
+            )
+            != local_version
+        ):
+            raise EvidenceError(
+                f"native-component coverage {owner} wheelhouse local Cargo package is invalid"
+            )
+        locals_.append((local_name, local_version))
+    if locals_ != sorted(set(locals_)):
+        raise EvidenceError(
+            f"native-component coverage {owner} wheelhouse local Cargo packages are not canonical"
+        )
+    if bool(raw_source_ids) != bool(locals_):
+        raise EvidenceError(
+            f"native-component coverage {owner} wheelhouse Cargo closure is inconsistent"
+        )
+
+    raw_libraries = record["linked_libraries"]
+    if (
+        not isinstance(raw_libraries, list)
+        or not raw_libraries
+        or len(raw_libraries) > MAX_COMPONENTS
+    ):
+        raise EvidenceError(
+            f"native-component coverage {owner} wheelhouse linked libraries are invalid"
+        )
+    libraries: list[tuple[str, str, str]] = []
+    for index, raw_library in enumerate(raw_libraries):
+        library = require_exact_fields(
+            raw_library,
+            {"name", "package"},
+            f"native-component coverage {owner} wheelhouse linked library {index}",
+        )
+        package = require_exact_fields(
+            library["package"],
+            {"name", "version"},
+            f"native-component coverage {owner} wheelhouse linked library package {index}",
+        )
+        library_name = library["name"]
+        package_name = package["name"]
+        package_version = package["version"]
+        if (
+            not isinstance(library_name, str)
+            or re.fullmatch(r"[A-Za-z0-9+_.-]+", library_name) is None
+            or not isinstance(package_name, str)
+            or re.fullmatch(r"\.?[a-z0-9][a-z0-9+_.-]*", package_name) is None
+            or not isinstance(package_version, str)
+            or checked_scalar(
+                package_version,
+                f"native-component coverage {owner} wheelhouse linked package version",
+            )
+            != package_version
+        ):
+            raise EvidenceError(
+                f"native-component coverage {owner} wheelhouse linked library is invalid"
+            )
+        libraries.append((library_name, package_name, package_version))
+    if libraries != sorted(set(libraries)):
+        raise EvidenceError(
+            f"native-component coverage {owner} wheelhouse linked libraries are not canonical"
+        )
+    return record
+
+
 def validate_native_owner_review(
     raw_owner: object,
     *,
@@ -6047,13 +6286,14 @@ def validate_native_owner_review(
     sources: Mapping[str, Mapping[str, Any]],
     used_sources: set[str],
 ) -> dict[str, Any]:
-    """Validate one v7 owner record without resolving cross-owner relationships."""
+    """Validate one v8 owner record without resolving cross-owner relationships."""
 
     owner_record = require_exact_fields(
         raw_owner,
         {
             "owner",
             "wheel",
+            "wheelhouse_build",
             "owner_source",
             "cargo_lock",
             "native_payloads",
@@ -6069,22 +6309,26 @@ def validate_native_owner_review(
     owner, name, version = parse_native_owner(
         owner_record["owner"], f"native-component coverage {platform}"
     )
-    wheel = validate_pinned_artifact(
-        owner_record["wheel"], f"native-component coverage {owner} wheel"
+    wheel, uses_wheelhouse = validate_native_wheel_policy(
+        owner_record["wheel"],
+        owner=owner,
+        name=name,
+        version=version,
+        platform=platform,
     )
-    filename = safe_filename(str(wheel["url"]))
-    try:
-        wheel_name, wheel_version, _build, tags = parse_wheel_filename(filename)
-        expected_version = Version(version)
-    except (InvalidVersion, InvalidWheelFilename) as exc:
-        raise EvidenceError(f"native-component coverage {owner} has invalid wheel") from exc
-    if (
-        canonicalize_name(wheel_name) != name
-        or wheel_version != expected_version
-        or not tags
-        or not all(wheel_tag_matches_native_platform(tag, platform) for tag in tags)
-    ):
-        raise EvidenceError(f"native-component coverage {owner} wheel conflicts with {platform}")
+    wheelhouse_build = owner_record["wheelhouse_build"]
+    if uses_wheelhouse:
+        wheelhouse_build = validate_native_wheelhouse_build(
+            wheelhouse_build,
+            owner=owner,
+            wheel=wheel,
+            sources=sources,
+            used_sources=used_sources,
+        )
+    elif wheelhouse_build is not None:
+        raise EvidenceError(
+            f"native-component coverage {owner} lock wheel has wheelhouse build policy"
+        )
     validate_pinned_artifact(
         owner_record["owner_source"],
         f"native-component coverage {owner} owner source",
@@ -6661,6 +6905,7 @@ def validate_native_owner_review(
         "owner": owner,
         "state": state,
         "cargo_lock": cargo_lock,
+        "wheelhouse_build": wheelhouse_build,
         "observations": observations,
         "owner_root_observations": owner_root_observations,
         "reviewed_observations": reviewed_observations,
@@ -6673,7 +6918,7 @@ def validate_native_owner_review(
 
 
 def validate_native_relationships(contexts: Mapping[str, Mapping[str, Any]], platform: str) -> None:
-    """Resolve v7 relationships in a second pass against closed reference owners."""
+    """Resolve relationships in a second pass against closed reference owners."""
 
     target_references: set[tuple[str, ObservationReferenceKey]] = set()
     relationship_sources = {
@@ -6984,6 +7229,7 @@ def native_owner_semantic_projection(
         "owner": record["owner"],
         "owner_source": record["owner_source"],
         "cargo_lock": record["cargo_lock"],
+        "wheelhouse_build": record["wheelhouse_build"],
         "native_payload_roles": [payload["role"] for payload in record["native_payloads"]],
         "sboms": sboms,
         "component_reviews": reviews,
@@ -6995,7 +7241,7 @@ def native_owner_semantic_projection(
 
 
 def validate_native_component_policy_schema(policy: Mapping[str, Any]) -> None:
-    """Validate the v7 observation, review-mapping, and closure policy."""
+    """Validate the observation, review-mapping, and closure policy."""
 
     sources = native_component_sources(policy)
     coverage = policy.get("native_component_coverage")
@@ -7017,6 +7263,23 @@ def validate_native_component_policy_schema(policy: Mapping[str, Any]) -> None:
             owner = context["owner"]
             if owner in contexts:
                 raise EvidenceError(f"native-component coverage for {platform} repeats {owner}")
+            wheelhouse_build = context["wheelhouse_build"]
+            if wheelhouse_build is not None:
+                platform_components = policy["platforms"][platform]
+                alpine_components = {
+                    (component["name"], component["version"])
+                    for component in platform_components
+                    if component["ecosystem"] == "alpine"
+                }
+                linked_packages = {
+                    (library["package"]["name"], library["package"]["version"])
+                    for library in wheelhouse_build["linked_libraries"]
+                }
+                if not linked_packages <= alpine_components:
+                    raise EvidenceError(
+                        f"native-component coverage {owner} wheelhouse libraries "
+                        f"are absent from {platform}"
+                    )
             contexts[owner] = context
         if [record["owner"] for record in raw_records] != sorted(contexts):
             raise EvidenceError(f"native-component coverage for {platform} is not canonical")
@@ -7145,14 +7408,14 @@ def verify_native_component_lock_bindings(
     locked_wheels: Sequence[Mapping[str, Any]],
     lock_sources: Mapping[tuple[str, str], Mapping[str, Any]],
 ) -> dict[str, Any]:
-    """Bind every native owner to the selected wheel and reviewed source pins."""
+    """Bind every native owner to its selected lock or wheelhouse artifact."""
 
     ledger = native_component_coverage_ledger(inventory, policy)
     selected: dict[str, Mapping[str, Any]] = {}
     for wheel in locked_wheels:
         owner = wheel.get("owner")
         if not isinstance(owner, str) or owner in selected:
-            raise EvidenceError("locked native wheels repeat an owner")
+            raise EvidenceError("selected native wheels repeat an owner")
         selected[owner] = wheel
     coverage = policy.get("native_component_coverage")
     platform = inventory.get("platform")
@@ -7162,6 +7425,20 @@ def verify_native_component_lock_bindings(
         owner = str(owner_record["owner"])
         selected_wheel = selected.get(owner)
         expected_wheel = owner_record["wheel"]
+        if expected_wheel.get("provider") == NATIVE_WHEELHOUSE_PROVIDER:
+            selected_projection = (
+                None
+                if selected_wheel is None
+                else {
+                    field: selected_wheel.get(field)
+                    for field in ("provider", "filename", "sha256", "size", "source")
+                }
+            )
+            if selected_projection != expected_wheel:
+                raise EvidenceError(
+                    f"native-component coverage wheel differs from wheelhouse for {owner}"
+                )
+            continue
         if (
             selected_wheel is None
             or {field: selected_wheel.get(field) for field in ("url", "sha256", "size")}
@@ -7179,6 +7456,8 @@ def verify_native_component_lock_bindings(
             raise EvidenceError(
                 f"native-component coverage owner source differs from {source_origin} for {owner}"
             )
+    if set(selected) != {str(record["owner"]) for record in coverage[platform]}:
+        raise EvidenceError("selected native wheels do not exactly cover policy owners")
     return ledger
 
 
@@ -7525,6 +7804,9 @@ def validate_component_inventory(inventory: Mapping[str, Any]) -> list[dict[str,
         "image_version",
         "application_wheel_sha256",
         "application_selection_record_sha256",
+        "native_wheelhouse_index_digest",
+        "native_wheelhouse_revision",
+        "native_wheelhouse_schema",
         "apk_database_sha256",
         "apk_database_occurrences",
         "components",
@@ -7556,6 +7838,14 @@ def validate_component_inventory(inventory: Mapping[str, Any]) -> list[dict[str,
         value = inventory.get(field)
         if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
             raise EvidenceError(f"component inventory has an invalid {field}")
+    if (
+        not isinstance(inventory.get("native_wheelhouse_index_digest"), str)
+        or SHA256.fullmatch(str(inventory["native_wheelhouse_index_digest"])) is None
+        or not isinstance(inventory.get("native_wheelhouse_revision"), str)
+        or re.fullmatch(r"[0-9a-f]{40}", str(inventory["native_wheelhouse_revision"])) is None
+        or inventory.get("native_wheelhouse_schema") != str(native_wheelhouse.SCHEMA_VERSION)
+    ):
+        raise EvidenceError("component inventory has invalid native wheelhouse labels")
     apk_digest = inventory.get("apk_database_sha256")
     if not isinstance(apk_digest, str) or re.fullmatch(r"[0-9a-f]{64}", apk_digest) is None:
         raise EvidenceError("component inventory has an invalid APK database digest")
@@ -7673,6 +7963,9 @@ def validate_standard_license_text_coverage(
     """Require the exact standard texts used by top-level and direct reviews."""
 
     reviewed_expressions = [resolved_license(component, policy) for component in components]
+    native_sources = policy.get("native_component_sources")
+    if not isinstance(native_sources, dict):
+        raise EvidenceError("policy has invalid native-component sources")
     raw_native_coverage = policy.get("native_component_coverage")
     if not isinstance(raw_native_coverage, dict):
         raise EvidenceError("policy has invalid native-component coverage")
@@ -7691,6 +7984,24 @@ def validate_standard_license_text_coverage(
                 ):
                     raise EvidenceError("policy has invalid native-component review license")
                 reviewed_expressions.append(component_review["reviewed_license"])
+            wheelhouse_build = owner_record.get("wheelhouse_build")
+            if wheelhouse_build is None:
+                continue
+            if not isinstance(wheelhouse_build, dict) or not isinstance(
+                wheelhouse_build.get("cargo_source_ids"), list
+            ):
+                raise EvidenceError("policy has invalid native wheelhouse build sources")
+            for source_id in wheelhouse_build["cargo_source_ids"]:
+                source_record = (
+                    native_sources.get(source_id) if isinstance(source_id, str) else None
+                )
+                if (
+                    not isinstance(source_record, dict)
+                    or source_record.get("kind") != "crates-io"
+                    or not isinstance(source_record.get("normalized_license"), str)
+                ):
+                    raise EvidenceError("policy has invalid native wheelhouse Cargo license source")
+                reviewed_expressions.append(source_record["normalized_license"])
 
     required_license_texts = {
         token
@@ -7801,6 +8112,22 @@ def verify_application_artifact_labels(
     for field, value in expected.items():
         if inventory.get(field) != value:
             raise EvidenceError(f"image {field} label does not match selected application proof")
+
+
+def verify_native_wheelhouse_labels(
+    inventory: Mapping[str, Any],
+    contract: Mapping[str, Any],
+) -> None:
+    """Bind the application image to the reviewed wheelhouse OCI identity."""
+
+    expected = {
+        "native_wheelhouse_index_digest": contract["index_digest"],
+        "native_wheelhouse_revision": contract["source_revision"],
+        "native_wheelhouse_schema": str(contract["manifest_schema_version"]),
+    }
+    for field, value in expected.items():
+        if inventory.get(field) != value:
+            raise EvidenceError(f"image {field} label differs from the wheelhouse contract")
 
 
 def validate_selected_installation_contract(value: object) -> list[dict[str, Any]]:
@@ -8292,8 +8619,14 @@ def validate_directory_effect_policy(value: object, platform: object) -> list[di
             )
         )
         validate_header_identity(record, f"post-base directory-effect policy for {platform!r}")
-        if record.get("uid") != 0 or record.get("gid") != 0 or record.get("mode") != 0o755:
-            raise EvidenceError("post-base directories must be root-owned with mode 0o0755")
+        if (
+            record.get("uid") != 0
+            or record.get("gid") != 0
+            or record.get("mode") not in {0o555, 0o755}
+        ):
+            raise EvidenceError(
+                "post-base directories must be root-owned with mode 0o0555 or 0o0755"
+            )
         identity = (layer, path)
         if identity in seen:
             raise EvidenceError(f"duplicate post-base directory-effect policy for {platform!r}")
@@ -8452,9 +8785,13 @@ def canonical_post_base_filesystem_changes(
                 "gid": record["gid"],
             }
             if layer_index >= base_layer_count and (
-                metadata["mode"] != 0o755 or metadata["uid"] != 0 or metadata["gid"] != 0
+                metadata["mode"] not in {0o555, 0o755}
+                or metadata["uid"] != 0
+                or metadata["gid"] != 0
             ):
-                raise EvidenceError("post-base directories must be root-owned with mode 0o0755")
+                raise EvidenceError(
+                    "post-base directories must be root-owned with mode 0o0555 or 0o0755"
+                )
             existing = state.get(path_text)
             is_noop = existing == {"kind": "directory", **metadata}
             if existing is not None and existing.get("kind") != "directory":
@@ -8600,6 +8937,14 @@ def verify_post_base_provenance(
                 )
             require_root_header(record, 0o444, "post-base build identity")
             continue
+        if path.startswith("usr/share/extra-codeowners/native-wheelhouse/"):
+            expected_mode = 0o444 if record["effective"] is True else 0o644
+            require_root_header(
+                record,
+                expected_mode,
+                f"post-base retained native wheelhouse file {path}",
+            )
+            continue
         raise EvidenceError(f"unclassified post-base regular file: {path}")
     if license_occurrences != 1:
         raise EvidenceError("image must contain one Git-bound post-base application LICENSE")
@@ -8635,6 +8980,9 @@ def validate_all_layer_inventory(files: Mapping[str, Any], inventory: Mapping[st
         "image_version",
         "application_wheel_sha256",
         "application_selection_record_sha256",
+        "native_wheelhouse_index_digest",
+        "native_wheelhouse_revision",
+        "native_wheelhouse_schema",
         "apk_database_sha256",
         "apk_database_occurrences",
         "components",
@@ -8667,6 +9015,14 @@ def validate_all_layer_inventory(files: Mapping[str, Any], inventory: Mapping[st
         value = inventory.get(field)
         if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
             raise EvidenceError(f"component inventory has an invalid {field}")
+    if (
+        not isinstance(inventory.get("native_wheelhouse_index_digest"), str)
+        or SHA256.fullmatch(str(inventory["native_wheelhouse_index_digest"])) is None
+        or not isinstance(inventory.get("native_wheelhouse_revision"), str)
+        or re.fullmatch(r"[0-9a-f]{40}", str(inventory["native_wheelhouse_revision"])) is None
+        or inventory.get("native_wheelhouse_schema") != str(native_wheelhouse.SCHEMA_VERSION)
+    ):
+        raise EvidenceError("component inventory has invalid native wheelhouse labels")
     components = validate_component_records(inventory.get("components"), "component inventory")
     validate_platform_component_invariants(components, str(platform), "component inventory")
     python_hashes = {
@@ -9719,6 +10075,7 @@ def _validate_verified_source_stores(
     *,
     policy_sha256: str,
     lock_sha256: str,
+    native_wheelhouse_contract_sha256: str,
     source_revision: str,
 ) -> None:
     """Bind both stores to this checkout and to each other through public APIs."""
@@ -9745,6 +10102,11 @@ def _validate_verified_source_stores(
         (direct_plan["source_revision"], alpine_plan["source_revision"], source_revision),
         (direct_plan["policy_sha256"], alpine_plan["policy_sha256"], policy_sha256),
         (direct_plan["uv_lock_sha256"], alpine_plan["uv_lock_sha256"], lock_sha256),
+        (
+            direct_plan["native_wheelhouse_contract_sha256"],
+            alpine_plan["native_wheelhouse_contract_sha256"],
+            native_wheelhouse_contract_sha256,
+        ),
     )
     for direct_value, alpine_value, expected in expected_bindings:
         if direct_value != expected:
@@ -10418,6 +10780,7 @@ def select_locked_native_wheels_bytes(
     content: bytes,
     source: str,
     inventory: Mapping[str, Any],
+    policy: Mapping[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Select native wheels from lock-file bytes that were read once."""
 
@@ -10432,9 +10795,27 @@ def select_locked_native_wheels_bytes(
     if not isinstance(packages, list) or len(packages) > MAX_COMPONENTS:
         raise EvidenceError("lock file has an invalid package list")
 
+    requested_owners = set(contexts)
+    if policy is not None:
+        coverage = policy.get("native_component_coverage")
+        platform = inventory.get("platform")
+        if not isinstance(coverage, dict) or platform not in coverage:
+            raise EvidenceError("native-wheel policy has no inventory platform")
+        requested_owners = {
+            str(record["owner"])
+            for record in coverage[platform]
+            if isinstance(record, dict)
+            and isinstance(record.get("wheel"), dict)
+            and record["wheel"].get("provider") is None
+        }
+        if not requested_owners <= set(contexts):
+            raise EvidenceError("native-wheel lock policy names an unobserved owner")
     requested = {
-        (str(context["component"]["name"]), str(context["component"]["version"])): owner
-        for owner, context in contexts.items()
+        (
+            str(contexts[owner]["component"]["name"]),
+            str(contexts[owner]["component"]["version"]),
+        ): owner
+        for owner in requested_owners
     }
     packages_by_key: dict[tuple[str, str], list[Mapping[str, Any]]] = {}
     for package in packages:
@@ -10538,13 +10919,15 @@ def select_locked_native_wheels_bytes(
                 f"found {len(candidates)}"
             )
         selected.append(candidates[0])
-    if {record["owner"] for record in selected} != set(contexts):
+    if {record["owner"] for record in selected} != requested_owners:
         raise EvidenceError("locked native wheels do not exactly cover structured payload owners")
     return selected
 
 
 def select_locked_native_wheels(
-    lock_path: Path, inventory: Mapping[str, Any]
+    lock_path: Path,
+    inventory: Mapping[str, Any],
+    policy: Mapping[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     return select_locked_native_wheels_bytes(
         read_stable_local_bytes(
@@ -10554,7 +10937,287 @@ def select_locked_native_wheels(
         ),
         str(lock_path),
         inventory,
+        policy,
     )
+
+
+def select_wheelhouse_native_wheels(
+    inventory: Mapping[str, Any],
+    policy: Mapping[str, Any],
+    manifest: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    """Bind policy-selected wheelhouse archives to the installed native owners."""
+
+    platform = inventory.get("platform")
+    if platform not in {"linux/amd64", "linux/arm64"} or manifest.get("platform") != platform:
+        raise EvidenceError("native wheelhouse manifest has the wrong inventory platform")
+    contexts = native_wheel_contexts(inventory)
+    coverage = policy.get("native_component_coverage")
+    if not isinstance(coverage, dict) or platform not in coverage:
+        raise EvidenceError("native wheelhouse policy has no inventory platform")
+    configured = [
+        record
+        for record in coverage[platform]
+        if isinstance(record, dict)
+        and isinstance(record.get("wheel"), dict)
+        and record["wheel"].get("provider") == NATIVE_WHEELHOUSE_PROVIDER
+    ]
+    configured_by_owner = {str(record["owner"]): record for record in configured}
+    if len(configured_by_owner) != len(configured) or not set(configured_by_owner) <= set(contexts):
+        raise EvidenceError("native wheelhouse policy repeats or invents an owner")
+
+    raw_manifest_wheels = manifest.get("wheels")
+    if not isinstance(raw_manifest_wheels, list):
+        raise EvidenceError("native wheelhouse manifest has no wheel inventory")
+    manifest_wheels = {
+        normalize_package_name(str(record["distribution"])): record
+        for record in raw_manifest_wheels
+        if isinstance(record, dict)
+    }
+    manifest_native_owners = {
+        f"python:{name}@{record['version']}"
+        for name, record in manifest_wheels.items()
+        if record.get("native_payloads")
+    }
+    if set(configured_by_owner) != manifest_native_owners:
+        raise EvidenceError(
+            "native wheelhouse policy does not exactly cover its native wheel inventory"
+        )
+    raw_manifest_sources = manifest.get("sources")
+    if not isinstance(raw_manifest_sources, list):
+        raise EvidenceError("native wheelhouse manifest has no source inventory")
+    manifest_sources = {
+        str(record["id"]): record for record in raw_manifest_sources if isinstance(record, dict)
+    }
+
+    builder = manifest.get("builder")
+    if not isinstance(builder, dict) or not isinstance(builder.get("alpine_packages"), list):
+        raise EvidenceError("native wheelhouse manifest has no builder package closure")
+    builder_packages = {
+        (str(package["name"]), str(package["version"]))
+        for package in builder["alpine_packages"]
+        if isinstance(package, dict)
+    }
+
+    selected: list[dict[str, Any]] = []
+    for owner, owner_record in sorted(configured_by_owner.items()):
+        _owner, name, version = parse_native_owner(owner, "native wheelhouse owner")
+        wheel = owner_record["wheel"]
+        build_policy = owner_record["wheelhouse_build"]
+        manifest_wheel = manifest_wheels.get(name)
+        if manifest_wheel is None:
+            raise EvidenceError(f"native wheelhouse omits policy owner {owner}")
+        expected_wheel = {
+            "provider": NATIVE_WHEELHOUSE_PROVIDER,
+            "filename": manifest_wheel["filename"],
+            "sha256": manifest_wheel["sha256"],
+            "size": manifest_wheel["size"],
+            "source": manifest_wheel["source"],
+        }
+        if wheel != expected_wheel or manifest_wheel.get("version") != version:
+            raise EvidenceError(f"native wheelhouse manifest differs from policy for {owner}")
+        manifest_source = manifest_sources.get(str(wheel["source"]))
+        if manifest_source is None or owner_record["owner_source"] != {
+            "url": manifest_source["url"],
+            "sha256": manifest_source["sha256"],
+            "size": manifest_source["size"],
+        }:
+            raise EvidenceError(f"native wheelhouse owner source differs from policy for {owner}")
+
+        filename = str(wheel["filename"])
+        try:
+            _wheel_name, _wheel_version, parsed_build, tags = parse_wheel_filename(filename)
+        except InvalidWheelFilename as exc:
+            raise EvidenceError(f"native wheelhouse has an invalid filename for {owner}") from exc
+        tag_strings = sorted(str(tag) for tag in tags)
+        build = raw_wheel_build_tag(filename, parsed_build)
+        installation = contexts[owner]["installation"]
+        if (
+            installation.get("tags") != tag_strings
+            or installation.get("build") != build
+            or not all(
+                wheel_tag_matches_native_wheelhouse_platform(tag, str(platform)) for tag in tags
+            )
+        ):
+            raise EvidenceError(
+                f"native wheelhouse archive differs from the installed wheel for {owner}"
+            )
+
+        manifest_libraries = {
+            str(library)
+            for payload in manifest_wheel["native_payloads"]
+            for library in payload["needed"]
+            if not str(library).startswith("libc.musl-")
+        }
+        policy_libraries = {str(library["name"]) for library in build_policy["linked_libraries"]}
+        if manifest_libraries != policy_libraries:
+            raise EvidenceError(
+                f"native wheelhouse linked libraries differ from policy for {owner}"
+            )
+        linked_packages = {
+            (str(library["package"]["name"]), str(library["package"]["version"]))
+            for library in build_policy["linked_libraries"]
+        }
+        if not linked_packages <= builder_packages:
+            raise EvidenceError(
+                f"native wheelhouse builder packages differ from policy for {owner}"
+            )
+        selected.append(
+            {
+                "owner": owner,
+                "platform": platform,
+                "provider": NATIVE_WHEELHOUSE_PROVIDER,
+                "filename": filename,
+                "sha256": wheel["sha256"],
+                "size": wheel["size"],
+                "source": wheel["source"],
+                "build": build,
+                "tags": tag_strings,
+            }
+        )
+
+    source_policies = native_component_sources(policy)
+    cargo = manifest.get("cargo")
+    if not isinstance(cargo, dict) or not isinstance(cargo.get("packages"), list):
+        raise EvidenceError("native wheelhouse manifest has no Cargo inventory")
+    manifest_cargo = {
+        f"crates-io:{package['name']}@{package['version']}": package
+        for package in cargo["packages"]
+        if isinstance(package, dict)
+    }
+    policy_cargo_ids = {
+        str(source_id)
+        for record in configured
+        for source_id in record["wheelhouse_build"]["cargo_source_ids"]
+    }
+    if set(manifest_cargo) != policy_cargo_ids:
+        raise EvidenceError("native wheelhouse Cargo inventory differs from policy")
+    for source_id, package in manifest_cargo.items():
+        source_policy = source_policies.get(source_id)
+        if (
+            source_policy is None
+            or source_policy["kind"] != "crates-io"
+            or source_policy["crate"]["sha256"] != package["checksum"]
+        ):
+            raise EvidenceError(
+                f"native wheelhouse Cargo checksum differs from policy for {source_id}"
+            )
+    for owner, record in configured_by_owner.items():
+        _owner, name, version = parse_native_owner(owner, "native wheelhouse owner")
+        build_policy = record["wheelhouse_build"]
+        local_packages = {
+            (str(package["name"]), str(package["version"]))
+            for package in build_policy["local_cargo_packages"]
+        }
+        expected_locals = {(name, version)} if build_policy["cargo_source_ids"] else set()
+        if local_packages != expected_locals:
+            raise EvidenceError(f"native wheelhouse local Cargo packages differ from owner {owner}")
+    return selected
+
+
+def verify_retained_native_wheelhouse(
+    files: Mapping[str, Any],
+    wheelhouse_directory: Path,
+) -> list[dict[str, object]]:
+    """Bind the runtime's retained wheelhouse files to the verified consumer store."""
+
+    try:
+        store_records = native_wheelhouse._consumer_file_records(wheelhouse_directory)
+    except native_wheelhouse.WheelhouseError as exc:
+        raise EvidenceError(f"cannot re-inventory verified native wheelhouse: {exc}") from exc
+    prefix = "usr/share/extra-codeowners/native-wheelhouse/"
+    expected = {f"{prefix}{record['path']}": record for record in store_records}
+    observed: dict[str, list[Mapping[str, Any]]] = {}
+    for record in files["regular_files"]:
+        path = str(record["path"])
+        if path.startswith(prefix):
+            observed.setdefault(path, []).append(record)
+    if set(observed) != set(expected):
+        raise EvidenceError("runtime retained wheelhouse inventory differs from its verified store")
+    for path, expected_record in expected.items():
+        occurrences = sorted(observed[path], key=lambda item: int(item["layer"]))
+        if (
+            len(occurrences) != 2
+            or [record["effective"] for record in occurrences] != [False, True]
+            or [record["mode"] for record in occurrences] != [0o644, 0o444]
+            or any(record["uid"] != 0 or record["gid"] != 0 for record in occurrences)
+            or any(
+                record["sha256"] != expected_record["sha256"]
+                or record["size"] != expected_record["size"]
+                for record in occurrences
+            )
+        ):
+            raise EvidenceError(f"runtime retained wheelhouse occurrence differs: {path}")
+
+    directory_path = prefix.removesuffix("/")
+    directories = [record for record in files["directories"] if record["path"] == directory_path]
+    directories.sort(key=lambda item: int(item["layer"]))
+    if (
+        len(directories) != 2
+        or [record["effective"] for record in directories] != [False, True]
+        or [record["mode"] for record in directories] != [0o755, 0o555]
+        or any(record["uid"] != 0 or record["gid"] != 0 for record in directories)
+    ):
+        raise EvidenceError("runtime retained wheelhouse directory differs from its contract")
+    return store_records
+
+
+def retain_native_wheelhouse_store(
+    root: Path,
+    *,
+    contract_bytes: bytes,
+    store_root: Path,
+    wheelhouse_directory: Path,
+    platform: str,
+    file_records: Sequence[Mapping[str, object]],
+    budget: BundleBudget,
+) -> dict[str, Any]:
+    """Retain the exact consumer-store metadata and selected OCI filesystem."""
+
+    try:
+        source_record_bytes = native_wheelhouse._read_stable_file(
+            store_root / native_wheelhouse.CONSUMER_STORE_FILENAME,
+            maximum=MAX_JSON_BYTES,
+        )
+    except native_wheelhouse.WheelhouseError as exc:
+        raise EvidenceError(f"cannot retain native wheelhouse store metadata: {exc}") from exc
+    contract_path = "policy/native-wheelhouse-consumer.json"
+    store_path = "artifacts/native-wheelhouse/source.json"
+    write_file(root, contract_path, contract_bytes, budget=budget)
+    budget.record_source(source_record_bytes)
+    write_file(root, store_path, source_record_bytes, budget=budget)
+
+    retained_files: list[dict[str, Any]] = []
+    platform_slug = platform.replace("/", "-")
+    for record in file_records:
+        filename = str(record["path"])
+        try:
+            content = native_wheelhouse._read_stable_file(
+                wheelhouse_directory / filename,
+                maximum=native_wheelhouse.MAX_WHEEL_BYTES,
+            )
+        except native_wheelhouse.WheelhouseError as exc:
+            raise EvidenceError(f"cannot retain native wheelhouse file {filename}: {exc}") from exc
+        if sha256_bytes(content) != record["sha256"] or len(content) != record["size"]:
+            raise EvidenceError(f"native wheelhouse file changed before retention: {filename}")
+        budget.record_source(content)
+        relative = f"artifacts/native-wheelhouse/{platform_slug}/{filename}"
+        write_file(root, relative, content, budget=budget)
+        retained_files.append({**record, "retained_path": relative})
+    return {
+        "contract": {
+            "path": contract_path,
+            "sha256": sha256_bytes(contract_bytes),
+            "size": len(contract_bytes),
+        },
+        "consumer_store": {
+            "path": store_path,
+            "sha256": sha256_bytes(source_record_bytes),
+            "size": len(source_record_bytes),
+        },
+        "platform": platform,
+        "files": retained_files,
+    }
 
 
 def source_filename_pattern(source: str, origin: str) -> re.Pattern[str]:
@@ -11764,7 +12427,7 @@ def verify_native_wheel_artifact(
 ) -> tuple[dict[str, Any], list[tuple[dict[str, Any], bytes]]]:
     """Bind one hostile locked wheel to its exact historical installation."""
 
-    expected_locked_fields = {
+    locked_fields = {
         "owner",
         "platform",
         "url",
@@ -11774,7 +12437,19 @@ def verify_native_wheel_artifact(
         "build",
         "tags",
     }
-    if set(locked) != expected_locked_fields:
+    wheelhouse_fields = {
+        "owner",
+        "platform",
+        "provider",
+        "filename",
+        "sha256",
+        "size",
+        "source",
+        "build",
+        "tags",
+    }
+    uses_wheelhouse = locked.get("provider") == NATIVE_WHEELHOUSE_PROVIDER
+    if set(locked) != (wheelhouse_fields if uses_wheelhouse else locked_fields):
         raise EvidenceError("selected native wheel has an invalid record")
     owner = locked.get("owner")
     platform = locked.get("platform")
@@ -11785,7 +12460,6 @@ def verify_native_wheel_artifact(
     if (
         not isinstance(owner, str)
         or platform != inventory.get("platform")
-        or not isinstance(url, str)
         or not isinstance(filename, str)
         or not isinstance(digest, str)
         or re.fullmatch(r"[0-9a-f]{64}", digest) is None
@@ -11793,9 +12467,16 @@ def verify_native_wheel_artifact(
         or isinstance(expected_size, bool)
         or expected_size != len(content)
         or sha256_bytes(content) != digest
-        or safe_filename(url) != filename
     ):
         raise EvidenceError(f"selected native wheel identity disagrees for {owner!r}")
+    if uses_wheelhouse:
+        if (
+            not isinstance(locked.get("source"), str)
+            or re.fullmatch(r"[a-z][a-z0-9-]{0,63}", str(locked["source"])) is None
+        ):
+            raise EvidenceError(f"selected native wheel source is invalid for {owner!r}")
+    elif not isinstance(url, str) or safe_filename(url) != filename:
+        raise EvidenceError(f"selected native wheel URL is invalid for {owner!r}")
 
     contexts = native_wheel_contexts(inventory)
     context = contexts.get(owner)
@@ -12043,7 +12724,14 @@ def verify_native_wheel_artifact(
                 {
                     "owner": owner,
                     "platform": platform,
-                    "url": url,
+                    **(
+                        {
+                            "provider": NATIVE_WHEELHOUSE_PROVIDER,
+                            "source": locked["source"],
+                        }
+                        if uses_wheelhouse
+                        else {"url": url}
+                    ),
                     "archive_path": archive_path,
                     "installed_occurrence": occurrence,
                     "size": len(payload),
@@ -12056,7 +12744,14 @@ def verify_native_wheel_artifact(
         {
             "owner": owner,
             "platform": platform,
-            "url": url,
+            **(
+                {
+                    "provider": NATIVE_WHEELHOUSE_PROVIDER,
+                    "source": locked["source"],
+                }
+                if uses_wheelhouse
+                else {"url": url}
+            ),
             "filename": filename,
             "size": len(content),
             "sha256": digest,
@@ -12080,11 +12775,20 @@ def retain_native_wheel_artifact(
     """Retain an exact native wheel and separately addressable raw SBOM bytes."""
 
     wheel_record, raw_sboms = verify_native_wheel_artifact(inventory, locked, content)
-    url_chain = tuple(urls) if urls is not None else (str(wheel_record["url"]),)
-    if not url_chain or len(url_chain) > MAX_REDIRECTS + 1 or url_chain[0] != wheel_record["url"]:
-        raise EvidenceError("native wheel has an invalid download URL chain")
-    for retained_url in url_chain:
-        require_https_source_url(retained_url)
+    if wheel_record.get("provider") == NATIVE_WHEELHOUSE_PROVIDER:
+        if urls is not None:
+            raise EvidenceError("native wheelhouse artifact cannot have a download URL chain")
+        url_chain: tuple[str, ...] = ()
+    else:
+        url_chain = tuple(urls) if urls is not None else (str(wheel_record["url"]),)
+        if (
+            not url_chain
+            or len(url_chain) > MAX_REDIRECTS + 1
+            or url_chain[0] != wheel_record["url"]
+        ):
+            raise EvidenceError("native wheel has an invalid download URL chain")
+        for retained_url in url_chain:
+            require_https_source_url(retained_url)
     wheel_record["urls"] = list(url_chain)
     owner = str(wheel_record["owner"])
     context = native_wheel_contexts(inventory)[owner]
@@ -12460,6 +13164,45 @@ def validate_application_source_binding(
     return expected_name, expected_version
 
 
+def load_native_wheelhouse_checkout_contract(
+    repo: Path,
+    *,
+    source_revision: str,
+    policy: Mapping[str, Any],
+) -> tuple[native_wheelhouse.Inputs, Mapping[str, Any], bytes]:
+    """Load wheelhouse inputs from exact tracked bytes and bind the policy digest."""
+
+    contract_path = repo / NATIVE_WHEELHOUSE_CONTRACT_PATH
+    inputs_path = repo / NATIVE_WHEELHOUSE_INPUTS_PATH
+    try:
+        contract_value, contract_bytes = native_wheelhouse._load_json(
+            contract_path,
+            "native wheelhouse consumer contract",
+            maximum=MAX_JSON_BYTES,
+        )
+        contract = native_wheelhouse._consumer_contract(contract_value)
+        if contract_bytes != native_wheelhouse.canonical_json(contract_value):
+            raise EvidenceError("native wheelhouse consumer contract is not canonical JSON")
+        inputs = native_wheelhouse.load_inputs(inputs_path)
+    except native_wheelhouse.WheelhouseError as exc:
+        raise EvidenceError(f"native wheelhouse checkout contract is invalid: {exc}") from exc
+    for relative, content in (
+        (NATIVE_WHEELHOUSE_CONTRACT_PATH, contract_bytes),
+        (NATIVE_WHEELHOUSE_INPUTS_PATH, inputs.raw),
+    ):
+        tracked = run(
+            ["git", "show", f"{source_revision}:{relative.as_posix()}"],
+            cwd=repo,
+            max_output_bytes=MAX_JSON_BYTES,
+        )
+        if tracked != content:
+            raise EvidenceError(f"native wheelhouse checkout file differs from Git: {relative}")
+    contract_sha256 = sha256_bytes(contract_bytes)
+    if policy.get("native_wheelhouse_contract_sha256") != contract_sha256:
+        raise EvidenceError("policy does not bind the native wheelhouse consumer contract")
+    return inputs, contract, contract_bytes
+
+
 def _build_bundle_with_boundary(
     *,
     path_boundary: BundlePathBoundary,
@@ -12473,6 +13216,7 @@ def _build_bundle_with_boundary(
     alpine_source_store_root: Path,
     alpine_source_plan_sha256: str,
     alpine_source_plan_size: int,
+    native_wheelhouse_store_root: Path,
     repo: Path,
     output: Path,
     predicate_output: Path,
@@ -12529,6 +13273,14 @@ def _build_bundle_with_boundary(
         wheel_sha256=application_wheel_sha256,
         selection_record_sha256=application_selection_record_sha256,
     )
+    wheelhouse_inputs, wheelhouse_contract, wheelhouse_contract_bytes = (
+        load_native_wheelhouse_checkout_contract(
+            repo,
+            source_revision=application_source_revision,
+            policy=policy,
+        )
+    )
+    verify_native_wheelhouse_labels(inventory, wheelhouse_contract)
     if require_image_revision:
         verify_image_revision(inventory, version=version, source_revision=head)
     verify_base_layer_binding(files, policy)
@@ -12544,9 +13296,7 @@ def _build_bundle_with_boundary(
         lock_bytes,
         str(lock_path),
         inventory,
-    )
-    native_coverage = verify_native_component_lock_bindings(
-        inventory, policy, locked_native_wheels, lock_sources
+        policy,
     )
     with (
         path_boundary,
@@ -12573,8 +13323,54 @@ def _build_bundle_with_boundary(
             alpine_source_reader,
             policy_sha256=hashlib.sha256(policy_bytes).hexdigest(),
             lock_sha256=hashlib.sha256(lock_bytes).hexdigest(),
+            native_wheelhouse_contract_sha256=sha256_bytes(wheelhouse_contract_bytes),
             source_revision=application_source_revision,
         )
+        try:
+            (
+                wheelhouse_store_record,
+                wheelhouse_manifest,
+                wheelhouse_directory,
+            ) = native_wheelhouse.verify_consumer_store(
+                wheelhouse_inputs,
+                native_wheelhouse_store_root,
+                wheelhouse_contract,
+                str(inventory["platform"]),
+                Path(temporary) / "native-wheelhouse-verification",
+            )
+        except native_wheelhouse.WheelhouseError as exc:
+            raise EvidenceError(f"native wheelhouse consumer store does not verify: {exc}") from exc
+        wheelhouse_native_wheels = select_wheelhouse_native_wheels(
+            inventory,
+            policy,
+            wheelhouse_manifest,
+        )
+        selected_native_wheels = [*locked_native_wheels, *wheelhouse_native_wheels]
+        selected_native_wheels.sort(key=lambda record: str(record["owner"]))
+        native_coverage = verify_native_component_lock_bindings(
+            inventory,
+            policy,
+            selected_native_wheels,
+            lock_sources,
+        )
+        retained_wheelhouse_files = verify_retained_native_wheelhouse(
+            files,
+            wheelhouse_directory,
+        )
+        native_wheelhouse_artifacts = retain_native_wheelhouse_store(
+            root,
+            contract_bytes=wheelhouse_contract_bytes,
+            store_root=native_wheelhouse_store_root,
+            wheelhouse_directory=wheelhouse_directory,
+            platform=str(inventory["platform"]),
+            file_records=retained_wheelhouse_files,
+            budget=budget,
+        )
+        native_wheelhouse_artifacts["index_digest"] = wheelhouse_contract["index_digest"]
+        native_wheelhouse_artifacts["source_revision"] = wheelhouse_contract["source_revision"]
+        native_wheelhouse_artifacts["store_schema_version"] = wheelhouse_store_record[
+            "schema_version"
+        ]
         (
             application_artifacts,
             installation_contract,
@@ -12620,25 +13416,40 @@ def _build_bundle_with_boundary(
             )
 
         native_wheel_artifacts: list[dict[str, Any]] = []
-        for locked_wheel in locked_native_wheels:
-            wheel_download = direct_source(
-                _python_wheel_request_id(
-                    str(locked_wheel["platform"]),
-                    locked_wheel["owner"],
-                ),
-                str(locked_wheel["url"]),
-                str(locked_wheel["sha256"]),
-            )
-            if len(wheel_download.content) != locked_wheel["size"]:
-                raise EvidenceError(f"size mismatch for native wheel {locked_wheel['owner']}")
+        for selected_wheel in selected_native_wheels:
+            if selected_wheel.get("provider") == NATIVE_WHEELHOUSE_PROVIDER:
+                try:
+                    wheel_content = native_wheelhouse._read_stable_file(
+                        wheelhouse_directory / str(selected_wheel["filename"]),
+                        maximum=native_wheelhouse.MAX_WHEEL_BYTES,
+                    )
+                except native_wheelhouse.WheelhouseError as exc:
+                    raise EvidenceError(
+                        f"cannot read selected native wheelhouse artifact: {exc}"
+                    ) from exc
+                budget.record_source(wheel_content)
+                wheel_urls = None
+            else:
+                wheel_download = direct_source(
+                    _python_wheel_request_id(
+                        str(selected_wheel["platform"]),
+                        selected_wheel["owner"],
+                    ),
+                    str(selected_wheel["url"]),
+                    str(selected_wheel["sha256"]),
+                )
+                wheel_content = wheel_download.content
+                wheel_urls = wheel_download.urls
+            if len(wheel_content) != selected_wheel["size"]:
+                raise EvidenceError(f"size mismatch for native wheel {selected_wheel['owner']}")
             native_wheel_artifacts.append(
                 retain_native_wheel_artifact(
                     root,
                     inventory,
-                    locked_wheel,
-                    wheel_download.content,
+                    selected_wheel,
+                    wheel_content,
                     budget=budget,
-                    urls=wheel_download.urls,
+                    urls=wheel_urls,
                 )
             )
 
@@ -12810,6 +13621,75 @@ def _build_bundle_with_boundary(
                 )
             license_records.extend({"component": component_id, "path": item} for item in found)
 
+        wheelhouse_source_archives: dict[str, tuple[bytes, Sequence[str], str]] = {}
+        raw_platform_coverage = policy["native_component_coverage"][inventory["platform"]]
+        for owner_record in raw_platform_coverage:
+            wheel = owner_record["wheel"]
+            if wheel.get("provider") != NATIVE_WHEELHOUSE_PROVIDER:
+                continue
+            owner, owner_name, owner_version = parse_native_owner(
+                owner_record["owner"],
+                "native wheelhouse source owner",
+            )
+            source_id = str(wheel["source"])
+            owner_source = owner_record["owner_source"]
+            cached_python_source = python_source_archives.get((owner_name, owner_version))
+            cached_lock_source = lock_sources.get((owner_name, owner_version))
+            expected_owner_source = {
+                field: owner_source[field] for field in ("url", "sha256", "size")
+            }
+            if cached_python_source is not None and cached_lock_source == expected_owner_source:
+                content, urls, relative = cached_python_source
+            else:
+                download = direct_source(
+                    f"native-wheelhouse-source:{source_id}",
+                    str(owner_source["url"]),
+                    str(owner_source["sha256"]),
+                    max_bytes=MAX_NATIVE_COMPONENT_SOURCE_BYTES,
+                )
+                content = download.content
+                urls = download.urls
+                if len(content) != owner_source["size"]:
+                    raise EvidenceError(f"size mismatch for native wheelhouse source {source_id}")
+                relative = (
+                    f"sources/native-wheelhouse/{source_id}/"
+                    f"{safe_filename(str(owner_source['url']))}"
+                )
+                write_file(root, relative, content, budget=budget)
+                component_id = f"native-wheelhouse-source-{source_id}"
+                found = extract_license_files(
+                    content,
+                    component_id,
+                    root,
+                    archive_name=relative,
+                    budget=budget,
+                    max_archive_bytes=MAX_NATIVE_COMPONENT_SOURCE_BYTES,
+                )
+                if not found:
+                    raise EvidenceError(
+                        f"native wheelhouse source contains no license or notice: {source_id}"
+                    )
+                license_records.extend({"component": component_id, "path": item} for item in found)
+            previous = wheelhouse_source_archives.get(source_id)
+            selected_source = (content, urls, relative)
+            if previous is not None and previous != selected_source:
+                raise EvidenceError(f"native wheelhouse source differs across owners: {source_id}")
+            wheelhouse_source_archives[source_id] = selected_source
+            source_records.append(
+                source_record(
+                    f"native-wheelhouse-owner:{owner}",
+                    urls,
+                    content,
+                    relative,
+                )
+            )
+        if set(wheelhouse_source_archives) != {
+            str(wheel["source"]) for wheel in wheelhouse_native_wheels
+        }:
+            raise EvidenceError(
+                "retained native wheelhouse sources do not exactly cover selected owners"
+            )
+
         source_policies = native_component_sources(policy)
         native_components_by_source: dict[str, set[str]] = {}
         native_reviewed_licenses_by_source: dict[str, set[str]] = {}
@@ -12854,6 +13734,11 @@ def _build_bundle_with_boundary(
                     budget=budget,
                     max_bytes=MAX_CARGO_LOCK_BYTES,
                 )
+            if context["wheelhouse_build"] is not None:
+                for source_id in context["wheelhouse_build"]["cargo_source_ids"]:
+                    native_components_by_source.setdefault(str(source_id), set()).add(
+                        f"wheelhouse-build:{owner_record['owner']}"
+                    )
             for component_review in owner_record["component_reviews"]:
                 source_id = str(component_review["source"])
                 native_reviewed_licenses_by_source.setdefault(source_id, set()).add(
@@ -13395,6 +14280,7 @@ def _build_bundle_with_boundary(
             "base_image_index_digest": policy["base_image_index_digest"],
             "policy_sha256": sha256_bytes(canonical_json(policy)),
             "application_artifacts": application_artifacts,
+            "native_wheelhouse_artifacts": native_wheelhouse_artifacts,
             "native_wheel_artifacts": native_wheel_artifacts,
             "native_component_coverage": native_coverage,
             "source_completeness": {
@@ -13463,6 +14349,7 @@ def build_bundle(
     alpine_source_store_root: Path,
     alpine_source_plan_sha256: str,
     alpine_source_plan_size: int,
+    native_wheelhouse_store_root: Path,
     bundle_work_root: Path,
     repo: Path,
     output: Path,
@@ -13487,6 +14374,7 @@ def build_bundle(
             lock_path,
             direct_source_store_root,
             alpine_source_store_root,
+            native_wheelhouse_store_root,
             repo,
             selected_python_directory,
         ),
@@ -13506,6 +14394,7 @@ def build_bundle(
             alpine_source_store_root=alpine_source_store_root,
             alpine_source_plan_sha256=alpine_source_plan_sha256,
             alpine_source_plan_size=alpine_source_plan_size,
+            native_wheelhouse_store_root=native_wheelhouse_store_root,
             repo=repo,
             output=output,
             predicate_output=predicate_output,
@@ -14170,6 +15059,7 @@ def command_bundle(args: argparse.Namespace) -> None:
         alpine_source_store_root=Path(args.alpine_source_store_root),
         alpine_source_plan_sha256=args.alpine_source_plan_sha256,
         alpine_source_plan_size=args.alpine_source_plan_size,
+        native_wheelhouse_store_root=Path(args.native_wheelhouse_store_root),
         bundle_work_root=Path(args.bundle_work_root),
         repo=Path(args.repo).resolve(),
         output=Path(args.output),
@@ -14402,6 +15292,7 @@ def parser() -> argparse.ArgumentParser:
     bundle.add_argument("--alpine-source-store-root", required=True)
     bundle.add_argument("--alpine-source-plan-sha256", required=True)
     bundle.add_argument("--alpine-source-plan-size", required=True, type=int)
+    bundle.add_argument("--native-wheelhouse-store-root", required=True)
     bundle.add_argument("--bundle-work-root", required=True)
     bundle.add_argument("--repo", default=".")
     bundle.add_argument("--output", required=True)

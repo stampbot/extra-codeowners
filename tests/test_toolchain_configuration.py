@@ -62,7 +62,11 @@ def test_uv_version_is_identical_locally_in_containers_and_in_workflows() -> Non
     assert image is not None, "Dockerfile must use a digest-pinned uv image"
     assert image.group("version") == reviewed_version
     assert "COPY pyproject.toml uv.lock README.md mise.toml requirements-build.txt ./" in dockerfile
-    assert "COPY .github/scripts/build_python_artifacts.py ./.github/scripts/" in dockerfile
+    assert (
+        "COPY .github/scripts/build_python_artifacts.py \\\n"
+        "     .github/scripts/native_wheelhouse.py \\\n"
+        "     ./.github/scripts/" in dockerfile
+    )
     test_stage = dockerfile.split("FROM builder AS test\n", 1)[1].split("\nFROM ", 1)[0]
     for script in (
         "build_release_spine.py",
@@ -103,6 +107,86 @@ def test_ci_checks_lockfile_freshness_outside_frozen_mode() -> None:
 
     assert 'UV_FROZEN: "false"' in lock_check
     assert "run: uv lock --check" in lock_check
+
+
+def test_runtime_selects_the_reviewed_psycopg_c_wheelhouse_distribution() -> None:
+    with (ROOT / "pyproject.toml").open("rb") as source:
+        project = tomllib.load(source)
+    with (ROOT / "uv.lock").open("rb") as source:
+        lock = tomllib.load(source)
+    native_inputs = json.loads(
+        (ROOT / "containers" / "native-wheelhouse" / "inputs.json").read_text(encoding="utf-8")
+    )
+    runtime_verifier = (ROOT / ".github" / "scripts" / "verify-container-runtime.py").read_text(
+        encoding="utf-8"
+    )
+
+    dependencies = cast(list[str], project["project"]["dependencies"])
+    assert "psycopg[c]>=3.2.0,<4" in dependencies
+    assert not any(dependency.startswith("psycopg[binary]") for dependency in dependencies)
+
+    packages = {package["name"]: package for package in lock["package"]}
+    assert "psycopg-binary" not in packages
+    psycopg = packages["psycopg"]
+    psycopg_c = packages["psycopg-c"]
+    assert psycopg["optional-dependencies"]["c"] == [
+        {
+            "name": "psycopg-c",
+            "marker": "implementation_name != 'pypy'",
+        }
+    ]
+    assert psycopg_c["version"] == psycopg["version"] == "3.3.4"
+    assert set(psycopg_c) == {"name", "version", "source", "sdist"}
+
+    expected_wheels = {wheel["distribution"]: wheel for wheel in native_inputs["expected_wheels"]}
+    assert expected_wheels["psycopg-c"]["version"] == psycopg_c["version"]
+    assert expected_wheels["psycopg-c"]["needed_libraries"] == ["libpq.so.5"]
+    assert '"psycopg-c": "psycopg_c"' in runtime_verifier
+    assert "psycopg-binary" not in runtime_verifier
+
+
+def test_dockerfile_consumes_the_immutable_verified_native_wheelhouse() -> None:
+    dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+    inputs = json.loads(
+        (ROOT / "containers" / "native-wheelhouse" / "inputs.json").read_text(encoding="utf-8")
+    )
+    revision = "0fd9ad42de969af08d2b7d2cb4fa8868fb2a4330"
+    digest = "sha256:49367c7f9ebf4983ecd452f7ae75cebada98561328f3b586f9289c32601e2e8c"
+    reference = (
+        "ghcr.io/stampbot/extra-codeowners-native-wheelhouse:"
+        f"sha-{revision}@{digest} AS native-wheelhouse"
+    )
+
+    assert f"FROM {reference}" in dockerfile
+    assert "ARG NATIVE_WHEELHOUSE" not in dockerfile
+    assert f'native-wheelhouse.index-digest="{digest}"' in dockerfile
+    assert f'native-wheelhouse.revision="{revision}"' in dockerfile
+    assert 'native-wheelhouse.schema="2"' in dockerfile
+    assert "COPY --from=native-wheelhouse /wheelhouse/ /native-wheelhouse/" in dockerfile
+    assert (
+        "COPY --from=native-wheelhouse --chown=0:0 /wheelhouse/ "
+        "/usr/share/extra-codeowners/native-wheelhouse/" in dockerfile
+    )
+    assert "native_wheelhouse.py verify" in dockerfile
+    assert '--platform "${TARGETPLATFORM}"' in dockerfile
+    assert dockerfile.count("binutils=2.45.1-r1") == 1
+    assert dockerfile.count("libgcc=15.2.0-r5") == 2
+    assert dockerfile.count("libpq=18.4-r0") == 2
+    assert dockerfile.count("--no-install-package cffi") == 2
+    assert dockerfile.count("--no-install-package psycopg-c") == 2
+    assert dockerfile.count("--no-install-package pydantic-core") == 2
+    assert dockerfile.count("native_wheelhouse.py verify-installed") == 2
+    assert dockerfile.count("build_python_artifacts.py verify-installed") == 2
+
+    runtime_wheels = {
+        wheel["distribution"]: wheel
+        for wheel in inputs["expected_wheels"]
+        if wheel["distribution"] != "setuptools"
+    }
+    for distribution, wheel in runtime_wheels.items():
+        filename_distribution = distribution.replace("-", "_")
+        version = wheel["version"]
+        assert f"/native-wheelhouse/{filename_distribution}-{version}-*.whl" in dockerfile
 
 
 def test_helm_chart_protects_startup_and_rejects_explicit_libpq_environment() -> None:
@@ -929,7 +1013,15 @@ def test_ci_fetches_one_shared_verified_source_boundary_for_both_architectures()
         assert forbidden_permission not in producer
     assert producer.count(".github/scripts/container_source_plan.py direct-plan") == 1
     assert producer.count(".github/scripts/fetch_verified_sources.py") == 2
-    assert producer.count("timeout --signal=TERM --kill-after=30s") == 3
+    assert producer.count("timeout --signal=TERM --kill-after=30s") == 5
+    assert producer.count("sigstore/cosign-installer@6f9f1778") == 1
+    assert producer.count(".github/scripts/fetch-native-wheelhouse.sh") == 1
+    assert producer.count(".github/scripts/verify-native-wheelhouse-index.sh") == 1
+    assert producer.count("native-wheelhouse-store") >= 3
+    assert "native-wheelhouse/signature-verification.json" in producer
+    assert producer.index("Verify the signed native wheelhouse before parser build") < (
+        producer.index("Build the current-commit offline parser")
+    )
     assert "--output /output/alpine-plan.json" in producer
     assert "materialize-source-plan" in producer
     assert 'sha256sum "$alpine_plan"' not in producer
@@ -975,7 +1067,7 @@ def test_ci_fetches_one_shared_verified_source_boundary_for_both_architectures()
 
     assert "      - verified-container-sources" in container
     source_download = container.split(
-        "      - name: Download both verified source stores by immutable ID\n", 1
+        "      - name: Download all verified source stores by immutable ID\n", 1
     )[1].split("      - name:", 1)[0]
     assert (
         "artifact-ids: ${{ needs.verified-container-sources.outputs.artifact-id }}"
@@ -1192,7 +1284,16 @@ def test_dockerfile_can_only_install_the_selected_application_wheel() -> None:
     assert "extra_codeowners" in dockerignore
     assert "uv build" not in dockerfile
     assert "reinstall-package extra-codeowners" not in dockerfile
-    assert "uv sync --frozen --no-dev --no-install-project --no-build" in builder
+    for runtime_flag in (
+        "--frozen",
+        "--no-dev",
+        "--no-install-project",
+        "--no-install-package cffi",
+        "--no-install-package psycopg-c",
+        "--no-install-package pydantic-core",
+        "--no-build",
+    ):
+        assert runtime_flag in builder
     assert "--mount=from=verified-python,target=/verified-python,ro" in builder
     assert "--network=none" in builder
     assert "verify-selection" in builder
@@ -1206,7 +1307,17 @@ def test_dockerfile_can_only_install_the_selected_application_wheel() -> None:
     assert "--no-build" in builder
     assert "--strict" in builder
     assert "verify-installed" in builder
-    assert "uv sync --frozen --group dev --no-install-project --inexact --no-build" in test_stage
+    for test_flag in (
+        "--frozen",
+        "--group dev",
+        "--no-install-project",
+        "--no-install-package cffi",
+        "--no-install-package psycopg-c",
+        "--no-install-package pydantic-core",
+        "--inexact",
+        "--no-build",
+    ):
+        assert test_flag in test_stage
     assert "verify-installed" in test_stage
     assert "COPY extra_codeowners/" not in test_stage
     assert "test ! -e /build/extra_codeowners" in test_stage
@@ -1230,7 +1341,11 @@ def test_container_smoke_binds_baked_identity_to_oci_labels_and_live_api() -> No
 
     assert "org.opencontainers.image.revision" in smoke
     assert "org.stampbot.extra-codeowners.application-wheel.sha256" in smoke
+    assert "org.stampbot.extra-codeowners.native-wheelhouse.index-digest" in smoke
+    assert "org.stampbot.extra-codeowners.native-wheelhouse.revision" in smoke
+    assert "org.stampbot.extra-codeowners.native-wheelhouse.schema" in smoke
     assert "org.stampbot.extra-codeowners.python-selection-record.sha256" in smoke
+    assert 'Path("/usr/share/extra-codeowners/native-wheelhouse")' in smoke
     assert "load_build_identity" in smoke
     assert "BUILD_IDENTITY_PATH.stat().st_mode) == 0o444" in smoke
     assert '"http://127.0.0.1:8000/api/runtime-identity"' in smoke

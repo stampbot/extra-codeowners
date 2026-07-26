@@ -47,6 +47,11 @@ PYVENV_CONFIG = (
     b"prompt = extra-codeowners\n"
 )
 CPYTHON_PATCHLEVEL_SHA256 = "1c61b149e1ce72a7f6328c58057970d37fcafb02bec805be071dc0ed4cf39a95"
+NATIVE_WHEELHOUSE_INDEX_DIGEST = (
+    "sha256:49367c7f9ebf4983ecd452f7ae75cebada98561328f3b586f9289c32601e2e8c"
+)
+NATIVE_WHEELHOUSE_REVISION = "0fd9ad42de969af08d2b7d2cb4fa8868fb2a4330"
+NATIVE_WHEELHOUSE_SCHEMA = "2"
 VENV_LINKS = {
     "opt/venv/bin/python": "/usr/local/bin/python3",
     "opt/venv/bin/python3": "python",
@@ -486,6 +491,9 @@ def standalone_inventory(component: dict[str, Any]) -> dict[str, Any]:
         "image_version": "1.0",
         "application_wheel_sha256": "e" * 64,
         "application_selection_record_sha256": "f" * 64,
+        "native_wheelhouse_index_digest": NATIVE_WHEELHOUSE_INDEX_DIGEST,
+        "native_wheelhouse_revision": NATIVE_WHEELHOUSE_REVISION,
+        "native_wheelhouse_schema": NATIVE_WHEELHOUSE_SCHEMA,
         "apk_database_sha256": "d" * 64,
         "components": [component, synthetic_runtime_component()],
         "embedded_sboms": [],
@@ -555,6 +563,9 @@ def saved_image_layers(path: Path, layers: list[bytes], *, architecture: str = "
                     "org.opencontainers.image.version": "1.0",
                     evidence.APPLICATION_WHEEL_LABEL: "e" * 64,
                     evidence.APPLICATION_SELECTION_LABEL: "f" * 64,
+                    evidence.NATIVE_WHEELHOUSE_INDEX_LABEL: (NATIVE_WHEELHOUSE_INDEX_DIGEST),
+                    evidence.NATIVE_WHEELHOUSE_REVISION_LABEL: (NATIVE_WHEELHOUSE_REVISION),
+                    evidence.NATIVE_WHEELHOUSE_SCHEMA_LABEL: (NATIVE_WHEELHOUSE_SCHEMA),
                 }
             },
             "os": "linux",
@@ -1031,7 +1042,7 @@ def _native_component_fixture_inputs() -> tuple[
 
 
 def native_component_v7_policy_case() -> dict[str, Any]:
-    """Return a minimal cross-platform v7 observation/review/closure policy."""
+    """Return a minimal cross-platform observation/review/closure policy."""
 
     inventories, _locked, fixture, _lock_sources = _native_component_fixture_inputs()
     source_id = "alpine:demo-native@1.2.3-r0"
@@ -1077,6 +1088,7 @@ def native_component_v7_policy_case() -> dict[str, Any]:
             {
                 "owner": fixture_owner["owner"],
                 "wheel": copy.deepcopy(fixture_owner["wheel"]),
+                "wheelhouse_build": None,
                 "owner_source": copy.deepcopy(fixture_owner["owner_source"]),
                 "cargo_lock": None,
                 "native_payloads": native_payloads,
@@ -1120,7 +1132,7 @@ def native_component_coverage_case() -> tuple[
     dict[str, Any],
     dict[tuple[str, str], dict[str, Any]],
 ]:
-    """Build exact inventories and their schema-v7 closed review policy."""
+    """Build exact inventories and their closed review policy."""
 
     inventories, locked, _fixture, lock_sources = _native_component_fixture_inputs()
     policy = native_component_v7_policy_case()
@@ -1418,13 +1430,13 @@ def test_strict_json_rejects_lone_unicode_surrogates() -> None:
         evidence.canonical_json({"value": "\ud800"})
 
 
-def test_schema_version_requires_exact_v7_integer_and_media_type() -> None:
-    evidence.require_schema({"schema_version": 7}, "test")
-    for unsupported in (True, 1, 2, 3, 4, 5, 6, 8):
+def test_schema_version_requires_exact_v8_integer_and_media_type() -> None:
+    evidence.require_schema({"schema_version": 8}, "test")
+    for unsupported in (True, 1, 2, 3, 4, 5, 6, 7, 9):
         with pytest.raises(evidence.EvidenceError, match="unsupported test schema"):
             evidence.require_schema({"schema_version": unsupported}, "test")
     assert evidence.EVIDENCE_MEDIA_TYPE == (
-        "application/vnd.stampbot.container-evidence.v7+tar+gzip"
+        "application/vnd.stampbot.container-evidence.v8+tar+gzip"
     )
 
 
@@ -2523,14 +2535,10 @@ def test_native_wheel_selection_and_verification_preserve_leading_zero_build(
     assert record["build"] == "001alpha"
 
 
-def test_committed_lock_selects_exact_seven_native_owner_wheels() -> None:
+def test_committed_lock_selects_exact_four_native_owner_wheels() -> None:
     policy = json.loads(Path(".compliance/container-policy.json").read_text())
     matrix = {
         "linux/amd64": {
-            "python:cffi@2.1.0": (
-                "cffi-2.1.0-cp314-cp314-musllinux_1_2_x86_64.whl",
-                "cp314-cp314-musllinux_1_2_x86_64",
-            ),
             "python:cryptography@48.0.1": (
                 "cryptography-48.0.1-cp311-abi3-musllinux_1_2_x86_64.whl",
                 "cp311-abi3-musllinux_1_2_x86_64",
@@ -2543,24 +2551,12 @@ def test_committed_lock_selects_exact_seven_native_owner_wheels() -> None:
                 "markupsafe-3.0.3-cp314-cp314-musllinux_1_2_x86_64.whl",
                 "cp314-cp314-musllinux_1_2_x86_64",
             ),
-            "python:psycopg-binary@3.3.4": (
-                "psycopg_binary-3.3.4-cp314-cp314-musllinux_1_2_x86_64.whl",
-                "cp314-cp314-musllinux_1_2_x86_64",
-            ),
-            "python:pydantic-core@2.46.4": (
-                "pydantic_core-2.46.4-cp314-cp314-musllinux_1_1_x86_64.whl",
-                "cp314-cp314-musllinux_1_1_x86_64",
-            ),
             "python:sqlalchemy@2.0.51": (
                 "sqlalchemy-2.0.51-cp314-cp314-musllinux_1_2_x86_64.whl",
                 "cp314-cp314-musllinux_1_2_x86_64",
             ),
         },
         "linux/arm64": {
-            "python:cffi@2.1.0": (
-                "cffi-2.1.0-cp314-cp314-musllinux_1_2_aarch64.whl",
-                "cp314-cp314-musllinux_1_2_aarch64",
-            ),
             "python:cryptography@48.0.1": (
                 "cryptography-48.0.1-cp311-abi3-musllinux_1_2_aarch64.whl",
                 "cp311-abi3-musllinux_1_2_aarch64",
@@ -2572,14 +2568,6 @@ def test_committed_lock_selects_exact_seven_native_owner_wheels() -> None:
             "python:markupsafe@3.0.3": (
                 "markupsafe-3.0.3-cp314-cp314-musllinux_1_2_aarch64.whl",
                 "cp314-cp314-musllinux_1_2_aarch64",
-            ),
-            "python:psycopg-binary@3.3.4": (
-                "psycopg_binary-3.3.4-cp314-cp314-musllinux_1_2_aarch64.whl",
-                "cp314-cp314-musllinux_1_2_aarch64",
-            ),
-            "python:pydantic-core@2.46.4": (
-                "pydantic_core-2.46.4-cp314-cp314-musllinux_1_1_aarch64.whl",
-                "cp314-cp314-musllinux_1_1_aarch64",
             ),
             "python:sqlalchemy@2.0.51": (
                 "sqlalchemy-2.0.51-cp314-cp314-musllinux_1_2_aarch64.whl",
@@ -5473,7 +5461,10 @@ def test_committed_policy_retains_pydantic_cargo_sources_and_stays_incomplete() 
     policy = cast(dict[str, Any], json.loads(Path(".compliance/container-policy.json").read_text()))
     evidence.validate_policy_schema(policy)
 
-    assert policy["schema_version"] == 7
+    assert policy["schema_version"] == 8
+    assert policy["native_wheelhouse_contract_sha256"] == (
+        "418c1f4a023d7d60af441f3d0b2be436898bef3bb7585e21b1371872c16bf0f3"
+    )
     assert policy["distribution_approval"]["approved"] is False
     source = policy["native_component_sources"]["alpine:gcc@14.2.0-r6"]
     assert source["allowed_recipe_links"] == []
@@ -5521,10 +5512,13 @@ def test_committed_policy_retains_pydantic_cargo_sources_and_stays_incomplete() 
         "crates-io:vcpkg@0.2.15",
     }
     assert cryptography_crate_source_ids <= all_crate_source_ids
+    assert {
+        source_id
+        for source_id in all_crate_source_ids
+        if not policy["native_component_sources"][source_id]["notices"]
+    } == {"crates-io:wit-bindgen-rt@0.39.0"}
     assert all(
-        source_record["notices"]
-        and source_record["crate"]["sha256"]
-        and source_record["manifest"]["sha256"]
+        source_record["crate"]["sha256"] and source_record["manifest"]["sha256"]
         for source_id, source_record in policy["native_component_sources"].items()
         if source_id in all_crate_source_ids
     )
@@ -5673,62 +5667,22 @@ def test_committed_policy_retains_pydantic_cargo_sources_and_stays_incomplete() 
         "version": "4.0.1",
     }
 
-    parsed_pydantic = evidence.parse_cyclonedx_sbom(
-        real_v7_fixture_bytes("pydantic_core-2.46.4.pydantic-core.cyclonedx.json"),
-        "committed Pydantic Core source policy",
+    amd64_pydantic = next(
+        record
+        for record in policy["native_component_coverage"]["linux/amd64"]
+        if record["owner"] == "python:pydantic-core@2.46.4"
     )
-    pydantic_crate_source_ids = {
-        f"crates-io:{identity[0]}@{identity[1]}"
-        for component in parsed_pydantic["components"]
-        if (identity := evidence.cargo_purl_identity(component["purl"], "Pydantic fixture"))
-        is not None
-        and "download_url=file:" not in component["purl"]
-    }
-    assert len(pydantic_crate_source_ids) == 87
+    pydantic_crate_source_ids = set(amd64_pydantic["wheelhouse_build"]["cargo_source_ids"])
+    assert len(pydantic_crate_source_ids) == 103
     assert all_crate_source_ids == (cryptography_crate_source_ids | pydantic_crate_source_ids)
-    pydantic_local_source_id = "owner-sdist:python:pydantic-core@2.46.4#."
-    pydantic_local_source = policy["native_component_sources"][pydantic_local_source_id]
-    assert {
-        key: value
-        for key, value in pydantic_local_source.items()
-        if key not in {"cargo_packages", "workspace_manifest"}
-    } == {
-        "expanded_size": 3031381,
-        "kind": "owner-sdist-subpath",
-        "member_count": 257,
-        "notices": [
-            {
-                "member": "pydantic_core-2.46.4/LICENSE",
-                "sha256": ("2afdd30d54b4d62b6f488a6bcc1546e84ec5061f13f4209c03d012348783795a"),
-                "size": 1080,
-            }
-        ],
-        "owner": "python:pydantic-core@2.46.4",
-        "path": ".",
-        "reviewed_license": "MIT",
-        "tree_sha256": "350aed81d517fedf586f95cc71bc45689a49a1cebbe2d2a39dbc490f2b556331",
-    }
-    pydantic_manifest = {
-        "member": "pydantic_core-2.46.4/Cargo.toml",
-        "sha256": "20fcd4066f125dec91012a0cdb7f7c901963226c98906a7e414210a64ac1fcc3",
-        "size": 2875,
-    }
-    assert pydantic_local_source["workspace_manifest"] == pydantic_manifest
-    assert pydantic_local_source["cargo_packages"] == [
-        {
-            "manifest": pydantic_manifest,
-            "name": "pydantic-core",
-            "path": ".",
-            "version": "2.46.4",
-        }
-    ]
+    assert "owner-sdist:python:pydantic-core@2.46.4#." not in (policy["native_component_sources"])
 
     expected_owners = [
         "python:cffi@2.1.0",
         "python:cryptography@48.0.1",
         "python:greenlet@3.5.3",
         "python:markupsafe@3.0.3",
-        "python:psycopg-binary@3.3.4",
+        "python:psycopg-c@3.3.4",
         "python:pydantic-core@2.46.4",
         "python:sqlalchemy@2.0.51",
     ]
@@ -5737,20 +5691,17 @@ def test_committed_policy_retains_pydantic_cargo_sources_and_stays_incomplete() 
         "python:cryptography@48.0.1": "closed",
         "python:greenlet@3.5.3": "closed",
         "python:markupsafe@3.0.3": "closed",
-        "python:psycopg-binary@3.3.4": "open",
+        "python:psycopg-c@3.3.4": "open",
         "python:pydantic-core@2.46.4": "open",
         "python:sqlalchemy@2.0.51": "closed",
     }
     expected_omissions = {
-        "python:cffi@2.1.0": ["unproven-libffi-build-input"],
+        "python:cffi@2.1.0": ["unproven-libffi-runtime-file"],
         "python:cryptography@48.0.1": [],
         "python:greenlet@3.5.3": [],
         "python:markupsafe@3.0.3": [],
-        "python:psycopg-binary@3.3.4": [
-            "missing-libpq-sbom",
-            "unreviewed-bundled-library-sources",
-        ],
-        "python:pydantic-core@2.46.4": ["missing-libgcc-sbom"],
+        "python:psycopg-c@3.3.4": ["unproven-libpq-runtime-file"],
+        "python:pydantic-core@2.46.4": ["unproven-libgcc-runtime-file"],
         "python:sqlalchemy@2.0.51": [],
     }
     for platform in ("linux/amd64", "linux/arm64"):
@@ -5804,55 +5755,27 @@ def test_committed_policy_retains_pydantic_cargo_sources_and_stays_incomplete() 
         pydantic = next(
             record for record in owners if record["owner"] == "python:pydantic-core@2.46.4"
         )
-        libgcc = next(
-            omission
-            for omission in pydantic["known_omissions"]
-            if omission["id"] == "missing-libgcc-sbom"
-        )
-        assert libgcc["component"]["version"] == "12.4.0"
-        assert {
-            key: value
-            for key, value in pydantic["cargo_lock"].items()
-            if key != "non_sbom_packages"
-        } == {
-            "member": "pydantic_core-2.46.4/Cargo.lock",
-            "sha256": "c3c27fc600d7dafd149229c6501271dbc5f6b4f7b1bfa116b32e77217c2b5038",
-            "size": 24727,
-            "source_ids": sorted(pydantic_crate_source_ids),
+        assert pydantic["wheel"]["provider"] == "native-wheelhouse"
+        assert pydantic["wheel"]["source"] == "pydantic-core"
+        assert pydantic["cargo_lock"] is None
+        assert pydantic["component_reviews"] == []
+        assert pydantic["wheelhouse_build"] == {
+            "cargo_source_ids": sorted(pydantic_crate_source_ids),
+            "linked_libraries": [
+                {
+                    "name": "libgcc_s.so.1",
+                    "package": {"name": "libgcc", "version": "15.2.0-r5"},
+                }
+            ],
+            "local_cargo_packages": [{"name": "pydantic-core", "version": "2.46.4"}],
+            "source": "pydantic-core",
         }
-        assert len(pydantic["cargo_lock"]["non_sbom_packages"]) == 16
-        assert {
-            review["source"] for review in pydantic["component_reviews"]
-        } == pydantic_crate_source_ids | {pydantic_local_source_id}
-        local_review = next(
-            review
-            for review in pydantic["component_reviews"]
-            if review["source"] == pydantic_local_source_id
-        )
-        assert local_review["reviewed_license"] == "MIT"
-        assert [reference["purl"] for reference in local_review["observations"]] == [
-            "pkg:cargo/pydantic-core@2.46.4?download_url=file://.#src/lib.rs"
-        ]
-        binary_payload = next(
-            disposition
-            for disposition in pydantic["payload_dispositions"]
-            if disposition["role"] == "pydantic_core/_pydantic_core.cpython-314.so"
-        )
-        assert binary_payload["kind"] == "sbom-components"
-        assert len(binary_payload["observations"]) == 89
         assert pydantic["review"] == {
-            "reason": "The bundled libgcc build input remains unproven.",
+            "reason": ("The exact runtime shared-library file relationship remains unproven."),
             "state": "open",
-            "unresolved_items": ["missing-libgcc-sbom"],
+            "unresolved_items": ["unproven-libgcc-runtime-file"],
         }
-        assert (
-            sum(
-                sbom["metadata_root"]["anomaly_review"] is not None
-                for owner in owners
-                for sbom in owner["sboms"]
-            )
-            == 3
-        )
+        assert pydantic["known_omissions"][0]["component"]["version"] == "15.2.0-r5"
 
         inventory = {
             "platform": platform,
@@ -5890,7 +5813,7 @@ def test_committed_policy_retains_pydantic_cargo_sources_and_stays_incomplete() 
         ]
         assert [record["owner"] for record in ledger["unresolved_owners"]] == [
             "python:cffi@2.1.0",
-            "python:psycopg-binary@3.3.4",
+            "python:psycopg-c@3.3.4",
             "python:pydantic-core@2.46.4",
         ]
         assert {
@@ -5902,7 +5825,7 @@ def test_committed_policy_retains_pydantic_cargo_sources_and_stays_incomplete() 
             "remaining_owner_count": 3,
             "remaining_owner_names": [
                 "python:cffi@2.1.0",
-                "python:psycopg-binary@3.3.4",
+                "python:psycopg-c@3.3.4",
                 "python:pydantic-core@2.46.4",
             ],
         }
@@ -6191,13 +6114,9 @@ def test_known_omission_dispositions_bind_the_named_omission(
                 "anomaly_review": anomaly_review,
             }
         else:
-            psycopg = owners["python:psycopg-binary@3.3.4"]
-            disposition = next(
-                record
-                for record in psycopg["payload_dispositions"]
-                if record["role"] == "psycopg_binary.libs/libpq.so.5.18"
-            )
-            disposition["omission"] = "unreviewed-bundled-library-sources"
+            psycopg = owners["python:psycopg-c@3.3.4"]
+            omission = psycopg["known_omissions"][0]
+            omission["payload_roles"] = ["psycopg_c/pq.cpython-314.so"]
 
     with pytest.raises(evidence.EvidenceError, match=message):
         evidence.validate_native_component_policy_schema(policy)
@@ -7211,6 +7130,7 @@ def test_bundle_request_id_mapping_matches_the_real_direct_planner() -> None:
         source_revision="a" * 40,
     )
     policy = json.loads(policy_path.read_text())
+    lock_sources = evidence.parse_lock_sources(Path("uv.lock"))
     expected_ids = {
         *evidence.BASE_SOURCE_REQUEST_IDS.values(),
         evidence.DOCKER_PYTHON_LICENSE_REQUEST_ID,
@@ -7235,7 +7155,12 @@ def test_bundle_request_id_mapping_matches_the_real_direct_planner() -> None:
                     )
                 )
         for owner in policy["native_component_coverage"][platform]:
-            expected_ids.add(evidence._python_wheel_request_id(platform, owner["owner"]))
+            if owner["wheel"].get("provider") == evidence.NATIVE_WHEELHOUSE_PROVIDER:
+                name, version = owner["owner"].removeprefix("python:").rsplit("@", maxsplit=1)
+                if owner["owner_source"] != lock_sources[(name, version)]:
+                    expected_ids.add(f"native-wheelhouse-source:{owner['wheel']['source']}")
+            else:
+                expected_ids.add(evidence._python_wheel_request_id(platform, owner["owner"]))
     for entry in policy["license_texts"]:
         expected_ids.add(evidence._license_text_request_id(entry["id"]))
     source_kinds = {source["kind"] for source in policy["native_component_sources"].values()}
@@ -7293,6 +7218,7 @@ def test_verified_source_store_pair_rejects_cross_store_binding_drift(
     revision = "a" * 40
     policy_sha256 = evidence.sha256_bytes(policy_path.read_bytes())
     lock_sha256 = evidence.sha256_bytes(lock_path.read_bytes())
+    wheelhouse_contract_sha256 = "9" * 64
     direct_plan_descriptor = {
         "algorithm": "sha256",
         "digest": "b" * 64,
@@ -7313,6 +7239,7 @@ def test_verified_source_store_pair_rejects_cross_store_binding_drift(
         "source_revision": revision,
         "policy_sha256": policy_sha256,
         "uv_lock_sha256": lock_sha256,
+        "native_wheelhouse_contract_sha256": wheelhouse_contract_sha256,
         "requests": direct_requests,
     }
     alpine_plan = {
@@ -7321,6 +7248,7 @@ def test_verified_source_store_pair_rejects_cross_store_binding_drift(
         "source_revision": revision,
         "policy_sha256": policy_sha256,
         "uv_lock_sha256": lock_sha256,
+        "native_wheelhouse_contract_sha256": wheelhouse_contract_sha256,
         "parent_plan": direct_plan_descriptor,
         "parent_manifest": direct_manifest_descriptor,
         "recipes": alpine_recipes,
@@ -7355,6 +7283,7 @@ def test_verified_source_store_pair_rejects_cross_store_binding_drift(
             alpine_reader,
             policy_sha256=policy_sha256,
             lock_sha256=lock_sha256,
+            native_wheelhouse_contract_sha256=wheelhouse_contract_sha256,
             source_revision=revision,
         )
 
@@ -8708,10 +8637,43 @@ def test_directory_effects_retain_real_transitions_and_reject_hostile_noops(
         }
     ]
     assert removals == []
+    readonly_image = tmp_path / "readonly-directory-effect.tar"
+    saved_image_layers(
+        readonly_image,
+        [
+            tar_bytes(
+                {"lib/apk/db/installed": apk_database()},
+                directories=["opt"],
+            ),
+            tar_bytes(
+                {},
+                directories=["opt/verified-inputs"],
+                headers={"opt/verified-inputs": {"mode": 0o555}},
+            ),
+        ],
+    )
+    _inventory, readonly_files = evidence._inventory_saved_image(
+        readonly_image, "linux/amd64", "sha256:" + "b" * 64
+    )
+    readonly_effects, readonly_removals = evidence.canonical_post_base_filesystem_changes(
+        readonly_files, 1, "linux/amd64"
+    )
+    assert readonly_effects == [
+        {
+            "layer": 1,
+            "path": "opt/verified-inputs",
+            "mode": 0o555,
+            "uid": 0,
+            "gid": 0,
+        }
+    ]
+    assert readonly_removals == []
     with pytest.raises(evidence.EvidenceError, match="invalid post-base directory-effect"):
         evidence.validate_directory_effect_policy(
             [{**effects[0], "effective": True}], "linux/amd64"
         )
+    with pytest.raises(evidence.EvidenceError, match="0o0555 or 0o0755"):
+        evidence.validate_directory_effect_policy([{**effects[0], "mode": 0o750}], "linux/amd64")
 
     policy = {
         "base_image_platforms": {
@@ -9533,7 +9495,7 @@ def test_real_cryptography_cargo_lock_and_openssl_observation_are_retained() -> 
     ]
 
 
-def test_real_cffi_libffi_candidate_cannot_replace_missing_build_provenance() -> None:
+def test_cffi_policy_uses_signed_build_provenance_and_keeps_runtime_gap_open() -> None:
     wheel = real_v7_fixture_bytes("cffi-2.1.0-cp314-musllinux-x86_64.whl")
     assert evidence.sha256_bytes(wheel) == (
         "dbf7c7a88e2bac086f06d14577332760bdeecc42bdec8ac4077f6260557d9326"
@@ -9573,21 +9535,28 @@ def test_real_cffi_libffi_candidate_cannot_replace_missing_build_provenance() ->
         )
         assert owner["sboms"] == []
         assert owner["review"]["state"] == "open"
+        assert owner["wheel"]["provider"] == "native-wheelhouse"
+        assert owner["wheelhouse_build"] == {
+            "cargo_source_ids": [],
+            "linked_libraries": [
+                {
+                    "name": "libffi.so.8",
+                    "package": {"name": "libffi", "version": "3.5.2-r1"},
+                }
+            ],
+            "local_cargo_packages": [],
+            "source": "cffi",
+        }
         assert owner["known_omissions"] == [
             {
                 "component": {
                     "name": "libffi",
-                    "purl": "",
+                    "purl": "pkg:apk/alpine/libffi@3.5.2-r1",
                     "type": "library",
-                    "version": "3.4.6",
+                    "version": "3.5.2-r1",
                 },
-                "id": "unproven-libffi-build-input",
-                "missing_evidence": [
-                    "build-material-attestation",
-                    "exact-source",
-                    "sbom-observation",
-                    "source-payload-relationship",
-                ],
+                "id": "unproven-libffi-runtime-file",
+                "missing_evidence": ["source-payload-relationship"],
                 "observations": [],
                 "payload_roles": ["_cffi_backend.cpython-314.so"],
                 "reason": owner["known_omissions"][0]["reason"],
@@ -12154,8 +12123,17 @@ def test_trusted_native_component_bundle_contract_is_internally_bound(
     cpython_license = b"trusted CPython license\n"
     docker_recipe_url = "https://example.com/docker-python-recipe.tar.gz"
     cpython_source_url = "https://example.com/Python-3.14.6.tgz"
+    wheelhouse_contract = {
+        "index_digest": NATIVE_WHEELHOUSE_INDEX_DIGEST,
+        "manifest_schema_version": 2,
+        "source_revision": NATIVE_WHEELHOUSE_REVISION,
+    }
+    wheelhouse_contract_bytes = evidence.canonical_json(wheelhouse_contract)
+    wheelhouse_contract_sha256 = evidence.sha256_bytes(wheelhouse_contract_bytes)
     policy = {
+        "schema_version": evidence.SCHEMA_VERSION,
         "base_image_index_digest": "sha256:" + "3" * 64,
+        "native_wheelhouse_contract_sha256": wheelhouse_contract_sha256,
         "distribution_approval": {
             "approved": False,
             "approved_by": "",
@@ -12231,6 +12209,16 @@ def test_trusted_native_component_bundle_contract_is_internally_bound(
     monkeypatch.setattr(
         evidence, "verify_application_artifact_labels", lambda *_args, **_kwargs: None
     )
+    monkeypatch.setattr(
+        evidence,
+        "load_native_wheelhouse_checkout_contract",
+        lambda *_args, **_kwargs: (
+            SimpleNamespace(),
+            copy.deepcopy(wheelhouse_contract),
+            wheelhouse_contract_bytes,
+        ),
+    )
+    monkeypatch.setattr(evidence, "verify_native_wheelhouse_labels", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(evidence, "verify_base_layer_binding", lambda *_args: None)
     monkeypatch.setattr(
         evidence,
@@ -12257,6 +12245,24 @@ def test_trusted_native_component_bundle_contract_is_internally_bound(
         evidence,
         "verify_native_component_lock_bindings",
         lambda *_args: copy.deepcopy(native_coverage),
+    )
+    wheelhouse_directory = tmp_path / "wheelhouse-directory"
+    wheelhouse_directory.mkdir()
+    monkeypatch.setattr(
+        evidence.native_wheelhouse,
+        "verify_consumer_store",
+        lambda *_args, **_kwargs: (
+            {"schema_version": evidence.native_wheelhouse.SCHEMA_VERSION},
+            {"wheels": []},
+            wheelhouse_directory,
+        ),
+    )
+    monkeypatch.setattr(evidence, "select_wheelhouse_native_wheels", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(evidence, "verify_retained_native_wheelhouse", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(
+        evidence,
+        "retain_native_wheelhouse_store",
+        lambda *_args, **_kwargs: {"files": []},
     )
 
     def fake_retain_selected_application_artifacts(
@@ -12326,11 +12332,13 @@ def test_trusted_native_component_bundle_contract_is_internally_bound(
     checksum_output = output.with_suffix(output.suffix + ".sha256")
     direct_store_root = tmp_path / "direct-source-store"
     alpine_store_root = tmp_path / "alpine-source-store"
+    wheelhouse_store_root = tmp_path / "native-wheelhouse-store"
     bundle_work_root = tmp_path / "bundle-work"
     repo_root = tmp_path / "repo"
     selected_python_directory = tmp_path / "selected-python"
     direct_store_root.mkdir()
     alpine_store_root.mkdir()
+    wheelhouse_store_root.mkdir()
     bundle_work_root.mkdir()
     repo_root.mkdir()
     selected_python_directory.mkdir()
@@ -12428,6 +12436,7 @@ def test_trusted_native_component_bundle_contract_is_internally_bound(
         "source_revision": revision,
         "policy_sha256": policy_sha256,
         "uv_lock_sha256": lock_sha256,
+        "native_wheelhouse_contract_sha256": wheelhouse_contract_sha256,
         "requests": direct_requests,
     }
     alpine_plan = {
@@ -12438,6 +12447,7 @@ def test_trusted_native_component_bundle_contract_is_internally_bound(
         "source_revision": revision,
         "policy_sha256": policy_sha256,
         "uv_lock_sha256": lock_sha256,
+        "native_wheelhouse_contract_sha256": wheelhouse_contract_sha256,
         "parent_plan": direct_plan_descriptor,
         "parent_manifest": direct_manifest_descriptor,
         "recipes": [
@@ -12601,6 +12611,7 @@ def test_trusted_native_component_bundle_contract_is_internally_bound(
         "alpine_source_store_root": alpine_store_root,
         "alpine_source_plan_sha256": alpine_plan_sha256,
         "alpine_source_plan_size": alpine_plan_size,
+        "native_wheelhouse_store_root": wheelhouse_store_root,
         "bundle_work_root": bundle_work_root,
         "repo": repo_root,
         "output": output,
@@ -12954,11 +12965,20 @@ def test_bundle_clears_stale_outputs_before_any_input_parse(
     lock.write_text("version = 1\n")
     direct_store = tmp_path / "direct-store"
     alpine_store = tmp_path / "alpine-store"
+    wheelhouse_store = tmp_path / "native-wheelhouse-store"
     repo = tmp_path / "repo"
     selected = tmp_path / "selected"
     work = tmp_path / "work"
     outputs = tmp_path / "outputs"
-    for directory in (direct_store, alpine_store, repo, selected, work, outputs):
+    for directory in (
+        direct_store,
+        alpine_store,
+        wheelhouse_store,
+        repo,
+        selected,
+        work,
+        outputs,
+    ):
         directory.mkdir()
     output = outputs / "evidence.tar.gz"
     checksum = output.with_suffix(output.suffix + ".sha256")
@@ -12978,6 +12998,7 @@ def test_bundle_clears_stale_outputs_before_any_input_parse(
             alpine_source_store_root=alpine_store,
             alpine_source_plan_sha256="b" * 64,
             alpine_source_plan_size=1,
+            native_wheelhouse_store_root=wheelhouse_store,
             bundle_work_root=work,
             repo=repo,
             output=output,
@@ -13451,6 +13472,7 @@ def test_bundle_command_forwards_image_revision_requirement(
         alpine_source_store_root="alpine-store",
         alpine_source_plan_sha256="e" * 64,
         alpine_source_plan_size=456,
+        native_wheelhouse_store_root="native-wheelhouse-store",
         bundle_work_root="bundle-work",
         repo=str(tmp_path),
         output="bundle.tar.gz",
@@ -13475,6 +13497,7 @@ def test_bundle_command_forwards_image_revision_requirement(
     assert observed["direct_source_plan_size"] == 123
     assert observed["alpine_source_store_root"] == Path("alpine-store")
     assert observed["alpine_source_plan_sha256"] == "e" * 64
+    assert observed["native_wheelhouse_store_root"] == Path("native-wheelhouse-store")
     assert observed["bundle_work_root"] == Path("bundle-work")
 
 
@@ -13541,6 +13564,8 @@ def test_evidence_cli_requires_both_verified_source_store_bindings() -> None:
             "e" * 64,
             "--alpine-source-plan-size",
             "456",
+            "--native-wheelhouse-store-root",
+            "native-wheelhouse-store",
             "--bundle-work-root",
             "bundle-work",
         ]
@@ -13549,4 +13574,5 @@ def test_evidence_cli_requires_both_verified_source_store_bindings() -> None:
     assert parsed.direct_source_plan_size == 123
     assert parsed.alpine_source_store_root == "alpine-store"
     assert parsed.alpine_source_plan_size == 456
+    assert parsed.native_wheelhouse_store_root == "native-wheelhouse-store"
     assert parsed.bundle_work_root == "bundle-work"

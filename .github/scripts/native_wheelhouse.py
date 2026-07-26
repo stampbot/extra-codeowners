@@ -31,8 +31,14 @@ SCHEMA_VERSION = 2
 INPUT_KIND = "extra-codeowners/native-wheelhouse-inputs"
 MANIFEST_KIND = "extra-codeowners/native-wheelhouse"
 CARGO_INVENTORY_KIND = "extra-codeowners/native-wheelhouse-cargo-inputs"
+CONSUMER_STORE_KIND = "extra-codeowners/native-wheelhouse-consumer-store"
+CONSUMER_STORE_SCHEMA_VERSION = 1
 CARGO_REGISTRY = "registry+https://github.com/rust-lang/crates.io-index"
 SBOM_FILENAME = "sbom.spdx.json"
+CONSUMER_STORE_FILENAME = "source.json"
+OCI_INDEX_MEDIA_TYPE = "application/vnd.oci.image.index.v1+json"
+OCI_MANIFEST_MEDIA_TYPE = "application/vnd.oci.image.manifest.v1+json"
+OCI_ATTESTATION_REFERENCE_TYPE = "attestation-manifest"
 SETUPTOOLS_RELEASE_CONFIG = b"[egg_info]\ntag_build = \ntag_date = 0\n"
 
 MAX_INPUT_BYTES = 1024 * 1024
@@ -50,6 +56,9 @@ MAX_PROCESS_SECONDS = 45 * 60
 MAX_PRODUCER_ARTIFACTS = 1000
 MAX_PRODUCER_ARTIFACT_BYTES = 1024 * 1024 * 1024
 MAX_PRODUCER_ARTIFACT_JSON_BYTES = 512 * 1024
+MAX_CONSUMER_STORE_BYTES = 512 * 1024 * 1024
+MAX_OCI_INDEX_BYTES = 1024 * 1024
+MAX_OCI_MANIFEST_BYTES = 1024 * 1024
 COPY_BYTES = 1024 * 1024
 
 LOWER_SHA256 = re.compile(r"[0-9a-f]{64}")
@@ -699,6 +708,69 @@ def _sha256_file(path: Path, *, maximum: int) -> tuple[str, int]:
             os.close(descriptor)
 
 
+def _read_stable_file(path: Path, *, maximum: int) -> bytes:
+    """Read one bounded, single-link regular file through a stable descriptor."""
+
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    cloexec = getattr(os, "O_CLOEXEC", 0)
+    if not nofollow or not cloexec:
+        raise WheelhouseError("secure descriptor flags are unavailable")
+    descriptor = -1
+    try:
+        metadata = path.stat(follow_symlinks=False)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_nlink != 1
+            or not 1 <= metadata.st_size <= maximum
+        ):
+            raise WheelhouseError(f"{path.name} is not one bounded single-link regular file")
+        descriptor = os.open(path, os.O_RDONLY | nofollow | cloexec)
+        opened = os.fstat(descriptor)
+        if (
+            opened.st_dev,
+            opened.st_ino,
+            opened.st_size,
+            opened.st_mtime_ns,
+            opened.st_ctime_ns,
+        ) != (
+            metadata.st_dev,
+            metadata.st_ino,
+            metadata.st_size,
+            metadata.st_mtime_ns,
+            metadata.st_ctime_ns,
+        ):
+            raise WheelhouseError(f"{path.name} changed before it was opened")
+        chunks: list[bytes] = []
+        received = 0
+        while received <= maximum:
+            chunk = os.read(descriptor, min(COPY_BYTES, maximum + 1 - received))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            received += len(chunk)
+        after = os.fstat(descriptor)
+        if received != metadata.st_size or (
+            after.st_dev,
+            after.st_ino,
+            after.st_size,
+            after.st_mtime_ns,
+            after.st_ctime_ns,
+        ) != (
+            opened.st_dev,
+            opened.st_ino,
+            opened.st_size,
+            opened.st_mtime_ns,
+            opened.st_ctime_ns,
+        ):
+            raise WheelhouseError(f"{path.name} changed while it was read")
+        return b"".join(chunks)
+    except OSError as exc:
+        raise WheelhouseError(f"cannot read {path.name}") from exc
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
 def verify_sources(inputs: Inputs, directory: Path) -> dict[str, Path]:
     """Verify every configured source artifact and reject extras."""
 
@@ -1298,6 +1370,7 @@ def inspect_wheel(
     *,
     machine: str,
     work: Path,
+    verified_python_abi: str | None = None,
 ) -> dict[str, object]:
     """Validate one wheel, including RECORD and exact native dependencies."""
 
@@ -1307,7 +1380,10 @@ def inspect_wheel(
     if distribution != expected.distribution or version != expected.version:
         raise WheelhouseError("wheel filename identity differs from reviewed inputs")
     if expected.native_payloads:
-        expected_tags = (_builder_python_abi(),) * 2 + (wheel_platform,)
+        python_abi = _builder_python_abi() if verified_python_abi is None else verified_python_abi
+        if python_abi != "cp314":
+            raise WheelhouseError("reviewed native wheel Python ABI is unsupported")
+        expected_tags = (python_abi,) * 2 + (wheel_platform,)
     else:
         expected_tags = ("py3", "none", "any")
     if (python_tag, abi_tag, platform_tag) != expected_tags:
@@ -1875,7 +1951,7 @@ def verify_wheelhouse(
     wheelhouse: Path,
     expected_platform: str,
     work: Path,
-) -> None:
+) -> Mapping[str, Any]:
     """Verify the published wheelhouse inventory and immutable content bindings."""
 
     if expected_platform not in {"linux/amd64", "linux/arm64"}:
@@ -1964,6 +2040,7 @@ def verify_wheelhouse(
             expectation,
             machine=machine,
             work=work,
+            verified_python_abi=str(inputs.python["abi"]),
         )
         if observed != wheel_record:
             raise WheelhouseError("native wheelhouse wheel differs from its manifest")
@@ -1983,6 +2060,458 @@ def verify_wheelhouse(
         expected_records
     ):
         raise WheelhouseError("native wheelhouse omits a reviewed wheel")
+    return record
+
+
+def _consumer_contract(value: object) -> Mapping[str, Any]:
+    """Validate the reviewed OCI identity used by application consumers."""
+
+    contract = _exact_fields(
+        value,
+        {
+            "image",
+            "index_digest",
+            "manifest_schema_version",
+            "platforms",
+            "signature",
+            "source_ref",
+            "source_revision",
+        },
+        "native wheelhouse consumer contract",
+    )
+    image = _text(contract["image"], "native wheelhouse consumer image")
+    if (
+        image != "ghcr.io/stampbot/extra-codeowners-native-wheelhouse"
+        or "@" in image
+        or ":" in image.removeprefix("ghcr.io/")
+    ):
+        raise WheelhouseError("native wheelhouse consumer image is invalid")
+    _text(
+        contract["index_digest"],
+        "native wheelhouse consumer index digest",
+        pattern=OCI_SHA256,
+    )
+    if contract["manifest_schema_version"] != SCHEMA_VERSION:
+        raise WheelhouseError("native wheelhouse consumer manifest schema is invalid")
+    revision = _text(
+        contract["source_revision"],
+        "native wheelhouse consumer source revision",
+        pattern=LOWER_COMMIT,
+    )
+    if contract["source_ref"] != "refs/heads/main" or type(contract["source_ref"]) is not str:
+        raise WheelhouseError("native wheelhouse consumer source ref is invalid")
+    signature = _exact_fields(
+        contract["signature"],
+        {"certificate_identity", "oidc_issuer"},
+        "native wheelhouse consumer signature",
+    )
+    expected_identity = (
+        "https://github.com/stampbot/extra-codeowners/"
+        ".github/workflows/native-wheelhouse.yml@refs/heads/main"
+    )
+    if (
+        signature["certificate_identity"] != expected_identity
+        or signature["oidc_issuer"] != "https://token.actions.githubusercontent.com"
+    ):
+        raise WheelhouseError("native wheelhouse consumer signature identity is invalid")
+    platforms = _exact_fields(
+        contract["platforms"],
+        {"linux/amd64", "linux/arm64"},
+        "native wheelhouse consumer platforms",
+    )
+    for platform_name, raw_platform in platforms.items():
+        platform_record = _exact_fields(
+            raw_platform,
+            {"manifest_digest"},
+            f"native wheelhouse consumer platform {platform_name}",
+        )
+        _text(
+            platform_record["manifest_digest"],
+            f"native wheelhouse consumer platform {platform_name} manifest digest",
+            pattern=OCI_SHA256,
+        )
+    if revision == "0" * 40:
+        raise WheelhouseError("native wheelhouse consumer source revision is invalid")
+    return contract
+
+
+def _consumer_platform_directory(platform_name: str) -> str:
+    return platform_name.replace("/", "-")
+
+
+def verify_consumer_oci_index(
+    contract_value: object,
+    index_value: object,
+) -> Mapping[str, str]:
+    """Bind one OCI index to the two reviewed manifests and their attestations."""
+
+    contract = _consumer_contract(contract_value)
+    index = _exact_fields(
+        index_value,
+        {"manifests", "mediaType", "schemaVersion"},
+        "native wheelhouse OCI index",
+    )
+    if index["schemaVersion"] != 2 or type(index["schemaVersion"]) is not int:
+        raise WheelhouseError("native wheelhouse OCI index schema is invalid")
+    if index["mediaType"] != OCI_INDEX_MEDIA_TYPE:
+        raise WheelhouseError("native wheelhouse OCI index media type is invalid")
+    raw_manifests = index["manifests"]
+    if not isinstance(raw_manifests, list) or len(raw_manifests) != 4:
+        raise WheelhouseError("native wheelhouse OCI index must contain four manifests")
+
+    reviewed = {
+        platform_name: _mapping(platform, "native wheelhouse consumer platform")["manifest_digest"]
+        for platform_name, platform in _mapping(
+            contract["platforms"],
+            "native wheelhouse consumer platforms",
+        ).items()
+    }
+    platform_digests: dict[str, str] = {}
+    attestation_references: list[str] = []
+    observed_digests: set[str] = set()
+    for index_number, raw_manifest in enumerate(raw_manifests):
+        manifest = _mapping(
+            raw_manifest,
+            f"native wheelhouse OCI manifest {index_number}",
+        )
+        platform = _mapping(
+            manifest.get("platform"),
+            f"native wheelhouse OCI manifest {index_number} platform",
+        )
+        platform_name = f"{platform.get('os')}/{platform.get('architecture')}"
+        if platform_name in reviewed:
+            _exact_fields(
+                manifest,
+                {"digest", "mediaType", "platform", "size"},
+                f"native wheelhouse OCI manifest {index_number}",
+            )
+            _exact_fields(
+                platform,
+                {"architecture", "os"},
+                f"native wheelhouse OCI manifest {index_number} platform",
+            )
+        elif platform_name == "unknown/unknown":
+            _exact_fields(
+                manifest,
+                {"annotations", "digest", "mediaType", "platform", "size"},
+                f"native wheelhouse OCI attestation manifest {index_number}",
+            )
+            _exact_fields(
+                platform,
+                {"architecture", "os"},
+                f"native wheelhouse OCI attestation manifest {index_number} platform",
+            )
+        else:
+            raise WheelhouseError("native wheelhouse OCI index has an unexpected platform")
+
+        digest = manifest.get("digest")
+        size = manifest.get("size")
+        if (
+            manifest.get("mediaType") != OCI_MANIFEST_MEDIA_TYPE
+            or not isinstance(digest, str)
+            or OCI_SHA256.fullmatch(digest) is None
+            or digest in observed_digests
+            or not isinstance(size, int)
+            or isinstance(size, bool)
+            or not 0 < size <= MAX_OCI_MANIFEST_BYTES
+        ):
+            raise WheelhouseError("native wheelhouse OCI index has an invalid manifest")
+        observed_digests.add(digest)
+
+        if platform_name in reviewed:
+            if digest != reviewed[platform_name] or platform_name in platform_digests:
+                raise WheelhouseError(
+                    "native wheelhouse OCI index differs from a reviewed platform manifest"
+                )
+            platform_digests[platform_name] = digest
+            continue
+
+        annotations = _exact_fields(
+            manifest["annotations"],
+            {"vnd.docker.reference.digest", "vnd.docker.reference.type"},
+            f"native wheelhouse OCI attestation manifest {index_number} annotations",
+        )
+        reference = annotations["vnd.docker.reference.digest"]
+        if (
+            annotations["vnd.docker.reference.type"] != OCI_ATTESTATION_REFERENCE_TYPE
+            or not isinstance(reference, str)
+            or OCI_SHA256.fullmatch(reference) is None
+        ):
+            raise WheelhouseError(
+                "native wheelhouse OCI index has an invalid attestation reference"
+            )
+        attestation_references.append(reference)
+
+    if platform_digests != reviewed:
+        raise WheelhouseError("native wheelhouse OCI index omits a reviewed platform manifest")
+    if sorted(attestation_references) != sorted(reviewed.values()):
+        raise WheelhouseError(
+            "native wheelhouse OCI index attestations do not exactly cover its platforms"
+        )
+    return platform_digests
+
+
+def _consumer_file_records(directory: Path) -> list[dict[str, object]]:
+    """Return the exact bounded regular-file inventory of one wheelhouse."""
+
+    try:
+        entries = sorted(directory.iterdir(), key=lambda item: item.name)
+    except OSError as exc:
+        raise WheelhouseError("cannot inventory native wheelhouse consumer directory") from exc
+    if not entries or len(entries) > MAX_WHEEL_MEMBERS:
+        raise WheelhouseError("native wheelhouse consumer directory has invalid bounds")
+    records: list[dict[str, object]] = []
+    total = 0
+    for entry in entries:
+        if PurePosixPath(entry.name).name != entry.name:
+            raise WheelhouseError("native wheelhouse consumer filename is invalid")
+        digest, size = _sha256_file(entry, maximum=MAX_WHEEL_BYTES)
+        total += size
+        if total > MAX_CONSUMER_STORE_BYTES:
+            raise WheelhouseError("native wheelhouse consumer store exceeds its byte limit")
+        records.append({"path": entry.name, "sha256": digest, "size": size})
+    return records
+
+
+def create_consumer_store(
+    inputs: Inputs,
+    wheelhouses: Mapping[str, Path],
+    contract_value: object,
+    output: Path,
+    work: Path,
+) -> None:
+    """Create one immutable, self-describing store from verified OCI payloads."""
+
+    contract = _consumer_contract(contract_value)
+    if set(wheelhouses) != {"linux/amd64", "linux/arm64"}:
+        raise WheelhouseError("consumer store requires both native wheelhouse platforms")
+    if output.exists():
+        raise WheelhouseError("refusing to replace an existing consumer store")
+    if work.exists():
+        raise WheelhouseError("refusing to reuse a consumer-store work directory")
+    work.mkdir(mode=0o700, parents=True)
+    staging = Path(
+        tempfile.mkdtemp(
+            prefix=f".{output.name}.",
+            dir=output.parent,
+        )
+    )
+    try:
+        platform_records: dict[str, dict[str, object]] = {}
+        for platform_name in ("linux/amd64", "linux/arm64"):
+            source = wheelhouses[platform_name]
+            verify_wheelhouse(
+                inputs,
+                source,
+                platform_name,
+                work / _consumer_platform_directory(platform_name),
+            )
+            directory_name = _consumer_platform_directory(platform_name)
+            destination = staging / directory_name
+            destination.mkdir(mode=0o755)
+            records = _consumer_file_records(source)
+            for record in records:
+                filename = cast(str, record["path"])
+                payload = _read_stable_file(source / filename, maximum=MAX_WHEEL_BYTES)
+                if (
+                    hashlib.sha256(payload).hexdigest() != record["sha256"]
+                    or len(payload) != record["size"]
+                ):
+                    raise WheelhouseError("native wheelhouse changed while creating consumer store")
+                target = destination / filename
+                target.write_bytes(payload)
+                target.chmod(0o444)
+            platform_records[platform_name] = {
+                "directory": directory_name,
+                "files": records,
+            }
+        store_record = {
+            "contract": contract,
+            "kind": CONSUMER_STORE_KIND,
+            "platforms": platform_records,
+            "schema_version": CONSUMER_STORE_SCHEMA_VERSION,
+        }
+        store_path = staging / CONSUMER_STORE_FILENAME
+        store_path.write_bytes(canonical_json(store_record))
+        store_path.chmod(0o444)
+        os.replace(staging, output)
+    except BaseException:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+
+
+def verify_consumer_store(
+    inputs: Inputs,
+    store: Path,
+    contract_value: object,
+    expected_platform: str,
+    work: Path,
+) -> tuple[Mapping[str, Any], Mapping[str, Any], Path]:
+    """Verify one transported consumer store and return its selected manifest."""
+
+    if expected_platform not in {"linux/amd64", "linux/arm64"}:
+        raise WheelhouseError("expected consumer-store platform is unsupported")
+    expected_contract = _consumer_contract(contract_value)
+    value, raw = _load_json(
+        store / CONSUMER_STORE_FILENAME,
+        "native wheelhouse consumer store",
+        maximum=8 * 1024 * 1024,
+    )
+    if raw != canonical_json(value):
+        raise WheelhouseError("native wheelhouse consumer store is not canonical JSON")
+    record = _exact_fields(
+        value,
+        {"contract", "kind", "platforms", "schema_version"},
+        "native wheelhouse consumer store",
+    )
+    if (
+        record["kind"] != CONSUMER_STORE_KIND
+        or record["schema_version"] != CONSUMER_STORE_SCHEMA_VERSION
+        or type(record["schema_version"]) is not int
+        or record["contract"] != expected_contract
+    ):
+        raise WheelhouseError("native wheelhouse consumer store identity is invalid")
+    platforms = _exact_fields(
+        record["platforms"],
+        {"linux/amd64", "linux/arm64"},
+        "native wheelhouse consumer-store platforms",
+    )
+    expected_root_entries = {
+        CONSUMER_STORE_FILENAME,
+        *(_consumer_platform_directory(item) for item in platforms),
+    }
+    try:
+        root_entries = {item.name for item in store.iterdir()}
+    except OSError as exc:
+        raise WheelhouseError("cannot inventory native wheelhouse consumer store") from exc
+    if root_entries != expected_root_entries:
+        raise WheelhouseError("native wheelhouse consumer store has unexpected files")
+
+    selected_manifest: Mapping[str, Any] | None = None
+    selected_directory: Path | None = None
+    for platform_name in ("linux/amd64", "linux/arm64"):
+        platform_record = _exact_fields(
+            platforms[platform_name],
+            {"directory", "files"},
+            f"native wheelhouse consumer-store platform {platform_name}",
+        )
+        expected_directory = _consumer_platform_directory(platform_name)
+        if platform_record["directory"] != expected_directory:
+            raise WheelhouseError("native wheelhouse consumer-store directory is invalid")
+        directory = store / expected_directory
+        observed_files = _consumer_file_records(directory)
+        if platform_record["files"] != observed_files:
+            raise WheelhouseError("native wheelhouse consumer-store files differ from its record")
+        if platform_name == expected_platform:
+            selected_manifest = verify_wheelhouse(
+                inputs,
+                directory,
+                platform_name,
+                work,
+            )
+            selected_directory = directory
+    assert selected_manifest is not None
+    assert selected_directory is not None
+    return record, selected_manifest, selected_directory
+
+
+def verify_installed_wheelhouse(
+    inputs: Inputs,
+    wheelhouse: Path,
+    expected_platform: str,
+    work: Path,
+    environment_root: Path,
+) -> None:
+    """Bind every installed native distribution back to its verified wheel."""
+
+    manifest = verify_wheelhouse(inputs, wheelhouse, expected_platform, work)
+    raw_wheels = cast(list[object], manifest["wheels"])
+    wheels = {
+        cast(str, _mapping(item, "native wheelhouse wheel record")["distribution"]): _mapping(
+            item,
+            "native wheelhouse wheel record",
+        )
+        for item in raw_wheels
+    }
+    runtime_expectations = tuple(item for item in inputs.expected_wheels if item.native_payloads)
+    if {item.distribution for item in runtime_expectations} != set(wheels) - {"setuptools"}:
+        raise WheelhouseError("installed native wheel selection is incomplete")
+
+    try:
+        import build_python_artifacts as python_artifacts
+    except ImportError as exc:
+        raise WheelhouseError("installed wheel verifier is unavailable") from exc
+
+    for expectation in runtime_expectations:
+        wheel_record = wheels[expectation.distribution]
+        filename = _text(
+            wheel_record.get("filename"),
+            f"installed {expectation.distribution} wheel filename",
+        )
+        wheel_path = wheelhouse / filename
+        before = _sha256_file(wheel_path, maximum=MAX_WHEEL_BYTES)
+        if before != (wheel_record["sha256"], wheel_record["size"]):
+            raise WheelhouseError(
+                f"installed {expectation.distribution} wheel differs from its manifest"
+            )
+
+        payloads: dict[str, bytes] = {}
+        dist_info_directories: set[str] = set()
+        try:
+            with zipfile.ZipFile(wheel_path) as archive:
+                for item in archive.infolist():
+                    name = _safe_member_name(item.filename.rstrip("/")).as_posix()
+                    if item.is_dir():
+                        continue
+                    payload = archive.read(item)
+                    if len(payload) != item.file_size:
+                        raise WheelhouseError(
+                            f"installed {expectation.distribution} wheel member changed"
+                        )
+                    payloads[name] = payload
+                    path = PurePosixPath(name)
+                    if (
+                        len(path.parts) == 2
+                        and path.parent.name.endswith(".dist-info")
+                        and path.name in {"METADATA", "RECORD", "WHEEL"}
+                    ):
+                        dist_info_directories.add(path.parent.as_posix())
+        except (OSError, RuntimeError, zipfile.BadZipFile) as exc:
+            raise WheelhouseError(
+                f"cannot reread installed {expectation.distribution} wheel"
+            ) from exc
+
+        after = _sha256_file(wheel_path, maximum=MAX_WHEEL_BYTES)
+        if after != before or len(dist_info_directories) != 1:
+            raise WheelhouseError(f"installed {expectation.distribution} wheel identity changed")
+        dist_info = dist_info_directories.pop()
+        try:
+            artifact = python_artifacts.ArtifactVerification(
+                record={
+                    "project": expectation.distribution,
+                    "sha256": before[0],
+                    "version": expectation.version,
+                },
+                semantic_identity=b"",
+                members=tuple(
+                    (name, hashlib.sha256(payload).hexdigest(), len(payload))
+                    for name, payload in sorted(payloads.items())
+                ),
+                scripts=python_artifacts.parse_script_entry_points(
+                    payloads,
+                    f"{dist_info}/",
+                ),
+                dist_info=dist_info,
+            )
+            python_artifacts.verify_installed_record(
+                environment_root / "lib/python3.14/site-packages" / dist_info / "RECORD",
+                environment_root,
+                artifact,
+            )
+        except python_artifacts.BuildError as exc:
+            raise WheelhouseError(
+                f"installed {expectation.distribution} differs from its verified wheel"
+            ) from exc
 
 
 def _positive_decimal(value: str, source: str) -> int:
@@ -2165,6 +2694,49 @@ def _parser() -> argparse.ArgumentParser:
     verify.add_argument("--wheelhouse", type=Path, required=True)
     verify.add_argument("--platform", choices=("linux/amd64", "linux/arm64"), required=True)
     verify.add_argument("--work", type=Path, required=True)
+    installed = commands.add_parser(
+        "verify-installed",
+        help="bind installed native distributions to a published wheelhouse",
+    )
+    installed.add_argument("--inputs", type=Path, required=True)
+    installed.add_argument("--wheelhouse", type=Path, required=True)
+    installed.add_argument("--platform", choices=("linux/amd64", "linux/arm64"), required=True)
+    installed.add_argument("--work", type=Path, required=True)
+    installed.add_argument("--environment-root", type=Path, required=True)
+    validate_contract = commands.add_parser(
+        "validate-consumer-contract",
+        help="validate the reviewed consumer contract",
+    )
+    validate_contract.add_argument("--contract", type=Path, required=True)
+    verify_index = commands.add_parser(
+        "verify-consumer-index",
+        help="bind a raw OCI index to the reviewed consumer contract",
+    )
+    verify_index.add_argument("--contract", type=Path, required=True)
+    verify_index.add_argument("--index", type=Path, required=True)
+    create_store = commands.add_parser(
+        "create-consumer-store",
+        help="create a bound store from both verified OCI wheelhouse payloads",
+    )
+    create_store.add_argument("--inputs", type=Path, required=True)
+    create_store.add_argument("--contract", type=Path, required=True)
+    create_store.add_argument("--amd64-wheelhouse", type=Path, required=True)
+    create_store.add_argument("--arm64-wheelhouse", type=Path, required=True)
+    create_store.add_argument("--output", type=Path, required=True)
+    create_store.add_argument("--work", type=Path, required=True)
+    verify_store = commands.add_parser(
+        "verify-consumer-store",
+        help="verify one transported wheelhouse store",
+    )
+    verify_store.add_argument("--inputs", type=Path, required=True)
+    verify_store.add_argument("--contract", type=Path, required=True)
+    verify_store.add_argument("--store", type=Path, required=True)
+    verify_store.add_argument(
+        "--platform",
+        choices=("linux/amd64", "linux/arm64"),
+        required=True,
+    )
+    verify_store.add_argument("--work", type=Path, required=True)
     return parser
 
 
@@ -2189,6 +2761,27 @@ def main(argv: Sequence[str] | None = None) -> int:
                     f"{architecture}-artifact-id={artifact.artifact_id}\n"
                     f"{architecture}-producer-attempt={artifact.producer_attempt}\n"
                 )
+            return 0
+        if args.command == "validate-consumer-contract":
+            contract_value, contract_raw = _load_json(
+                args.contract,
+                "native wheelhouse consumer contract",
+            )
+            _consumer_contract(contract_value)
+            if contract_raw != canonical_json(contract_value):
+                raise WheelhouseError("native wheelhouse consumer contract is not canonical JSON")
+            return 0
+        if args.command == "verify-consumer-index":
+            contract_value, _contract_raw = _load_json(
+                args.contract,
+                "native wheelhouse consumer contract",
+            )
+            index_value, _index_raw = _load_json(
+                args.index,
+                "native wheelhouse OCI index",
+                maximum=MAX_OCI_INDEX_BYTES,
+            )
+            verify_consumer_oci_index(contract_value, index_value)
             return 0
         inputs = load_inputs(args.inputs)
         if args.command == "validate-inputs":
@@ -2226,6 +2819,40 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
         if args.command == "verify":
             verify_wheelhouse(inputs, args.wheelhouse, args.platform, args.work)
+            return 0
+        if args.command == "verify-installed":
+            verify_installed_wheelhouse(
+                inputs,
+                args.wheelhouse,
+                args.platform,
+                args.work,
+                args.environment_root,
+            )
+            return 0
+        if args.command in {"create-consumer-store", "verify-consumer-store"}:
+            contract_value, _contract_raw = _load_json(
+                args.contract,
+                "native wheelhouse consumer contract",
+            )
+            if args.command == "create-consumer-store":
+                create_consumer_store(
+                    inputs,
+                    {
+                        "linux/amd64": args.amd64_wheelhouse,
+                        "linux/arm64": args.arm64_wheelhouse,
+                    },
+                    contract_value,
+                    args.output,
+                    args.work,
+                )
+            else:
+                verify_consumer_store(
+                    inputs,
+                    args.store,
+                    contract_value,
+                    args.platform,
+                    args.work,
+                )
             return 0
         raise WheelhouseError("unknown wheelhouse operation")
     except WheelhouseError as exc:

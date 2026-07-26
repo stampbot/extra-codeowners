@@ -27,7 +27,7 @@ PLAN_MEDIA_TYPE = "application/vnd.stampbot.container-source-plan.v1+json"
 STORE_MEDIA_TYPE = "application/vnd.stampbot.verified-source-store.v1+json"
 RESULT_KIND = "extra-codeowners/source-store-verification"
 SUPPORTED_PLAN_KINDS = frozenset({"alpine-distfiles", "direct"})
-SUPPORTED_EVIDENCE_SCHEMA_VERSION = 7
+SUPPORTED_EVIDENCE_SCHEMA_VERSION = 8
 
 PLAN_FILENAME = "SOURCE-PLAN.json"
 STORE_FILENAME = "SOURCE-STORE.json"
@@ -99,6 +99,7 @@ class SourcePlan(TypedDict):
     source_revision: str
     policy_sha256: str
     uv_lock_sha256: str
+    native_wheelhouse_contract_sha256: str
     requests: list[SourcePlanRequest]
     parent_plan: NotRequired[DigestDescriptor]
     parent_manifest: NotRequired[DigestDescriptor]
@@ -478,6 +479,7 @@ def validate_source_plan(value: object) -> SourcePlan:
         "source_revision",
         "policy_sha256",
         "uv_lock_sha256",
+        "native_wheelhouse_contract_sha256",
         "requests",
     }
     if kind == "alpine-distfiles":
@@ -525,6 +527,11 @@ def validate_source_plan(value: object) -> SourcePlan:
         record["uv_lock_sha256"],
         "sha256",
         "source plan uv_lock_sha256",
+    )
+    native_wheelhouse_contract_sha256 = _digest(
+        record["native_wheelhouse_contract_sha256"],
+        "sha256",
+        "source plan native_wheelhouse_contract_sha256",
     )
     raw_requests = record["requests"]
     if not isinstance(raw_requests, list) or not 1 <= len(raw_requests) <= MAX_REQUESTS:
@@ -623,6 +630,7 @@ def validate_source_plan(value: object) -> SourcePlan:
         "source_revision": source_revision,
         "policy_sha256": policy_sha256,
         "uv_lock_sha256": uv_lock_sha256,
+        "native_wheelhouse_contract_sha256": native_wheelhouse_contract_sha256,
         "requests": requests,
     }
     if kind == "alpine-distfiles":

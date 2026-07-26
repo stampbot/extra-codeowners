@@ -22,6 +22,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / ".github" / "scripts" / "native_wheelhouse.py"
 INPUTS = ROOT / "containers" / "native-wheelhouse" / "inputs.json"
+CONSUMER = ROOT / "containers" / "native-wheelhouse" / "consumer.json"
 DOCKERFILE = ROOT / "containers" / "native-wheelhouse" / "Dockerfile"
 PUBLISH_DOCKERFILE = ROOT / "containers" / "native-wheelhouse" / "Publish.Dockerfile"
 WORKFLOW = ROOT / ".github" / "workflows" / "native-wheelhouse.yml"
@@ -555,6 +556,210 @@ def synthetic_published_wheelhouse(tmp_path: Path) -> tuple[Any, Path]:
         wheelhouse._spdx_document(manifest, manifest_path.read_bytes()),
     )
     return inputs, published
+
+
+def synthetic_consumer_contract() -> dict[str, Any]:
+    return {
+        "image": "ghcr.io/stampbot/extra-codeowners-native-wheelhouse",
+        "index_digest": f"sha256:{'1' * 64}",
+        "manifest_schema_version": wheelhouse.SCHEMA_VERSION,
+        "platforms": {
+            "linux/amd64": {"manifest_digest": f"sha256:{'2' * 64}"},
+            "linux/arm64": {"manifest_digest": f"sha256:{'3' * 64}"},
+        },
+        "signature": {
+            "certificate_identity": (
+                "https://github.com/stampbot/extra-codeowners/"
+                ".github/workflows/native-wheelhouse.yml@refs/heads/main"
+            ),
+            "oidc_issuer": "https://token.actions.githubusercontent.com",
+        },
+        "source_ref": "refs/heads/main",
+        "source_revision": "4" * 40,
+    }
+
+
+def synthetic_consumer_index() -> dict[str, Any]:
+    contract = synthetic_consumer_contract()
+    amd64 = contract["platforms"]["linux/amd64"]["manifest_digest"]
+    arm64 = contract["platforms"]["linux/arm64"]["manifest_digest"]
+    return {
+        "manifests": [
+            {
+                "digest": amd64,
+                "mediaType": wheelhouse.OCI_MANIFEST_MEDIA_TYPE,
+                "platform": {"architecture": "amd64", "os": "linux"},
+                "size": 481,
+            },
+            {
+                "digest": arm64,
+                "mediaType": wheelhouse.OCI_MANIFEST_MEDIA_TYPE,
+                "platform": {"architecture": "arm64", "os": "linux"},
+                "size": 481,
+            },
+            {
+                "annotations": {
+                    "vnd.docker.reference.digest": amd64,
+                    "vnd.docker.reference.type": wheelhouse.OCI_ATTESTATION_REFERENCE_TYPE,
+                },
+                "digest": f"sha256:{'5' * 64}",
+                "mediaType": wheelhouse.OCI_MANIFEST_MEDIA_TYPE,
+                "platform": {"architecture": "unknown", "os": "unknown"},
+                "size": 565,
+            },
+            {
+                "annotations": {
+                    "vnd.docker.reference.digest": arm64,
+                    "vnd.docker.reference.type": wheelhouse.OCI_ATTESTATION_REFERENCE_TYPE,
+                },
+                "digest": f"sha256:{'6' * 64}",
+                "mediaType": wheelhouse.OCI_MANIFEST_MEDIA_TYPE,
+                "platform": {"architecture": "unknown", "os": "unknown"},
+                "size": 565,
+            },
+        ],
+        "mediaType": wheelhouse.OCI_INDEX_MEDIA_TYPE,
+        "schemaVersion": 2,
+    }
+
+
+def test_consumer_index_binds_exact_platforms_and_attestations() -> None:
+    contract = synthetic_consumer_contract()
+
+    assert wheelhouse.verify_consumer_oci_index(contract, synthetic_consumer_index()) == {
+        "linux/amd64": contract["platforms"]["linux/amd64"]["manifest_digest"],
+        "linux/arm64": contract["platforms"]["linux/arm64"]["manifest_digest"],
+    }
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        ("platform-digest", "differs from a reviewed platform manifest"),
+        ("duplicate-attestation", "attestations do not exactly cover"),
+        ("extra-field", "unexpected fields"),
+        ("extra-manifest", "must contain four manifests"),
+    ],
+)
+def test_consumer_index_rejects_unreviewed_shape(
+    mutation: str,
+    message: str,
+) -> None:
+    index = synthetic_consumer_index()
+    if mutation == "platform-digest":
+        index["manifests"][0]["digest"] = f"sha256:{'7' * 64}"
+    elif mutation == "duplicate-attestation":
+        index["manifests"][3]["annotations"]["vnd.docker.reference.digest"] = index["manifests"][0][
+            "digest"
+        ]
+    elif mutation == "extra-field":
+        index["manifests"][0]["annotations"] = {}
+    elif mutation == "extra-manifest":
+        index["manifests"].append(dict(index["manifests"][0]))
+    else:
+        raise AssertionError(f"unsupported mutation: {mutation}")
+
+    with pytest.raises(wheelhouse.WheelhouseError, match=message):
+        wheelhouse.verify_consumer_oci_index(synthetic_consumer_contract(), index)
+
+
+def synthetic_consumer_wheelhouses(tmp_path: Path) -> tuple[Any, dict[str, Path]]:
+    amd64_root = tmp_path / "amd64"
+    arm64_root = tmp_path / "arm64"
+    amd64_root.mkdir()
+    arm64_root.mkdir()
+    inputs, amd64 = synthetic_published_wheelhouse(amd64_root)
+    arm64_inputs, arm64 = synthetic_published_wheelhouse(arm64_root)
+    assert inputs == arm64_inputs
+    manifest_path = arm64 / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["platform"] = "linux/arm64"
+    manifest["builder"]["alpine_packages"] = [
+        {"name": item.split("=", 1)[0], "version": item.split("=", 1)[1]}
+        for item in wheelhouse._expected_builder_packages(inputs, "linux/arm64")
+    ]
+    write_json(manifest_path, manifest)
+    write_json(
+        arm64 / wheelhouse.SBOM_FILENAME,
+        wheelhouse._spdx_document(manifest, manifest_path.read_bytes()),
+    )
+    return inputs, {"linux/amd64": amd64, "linux/arm64": arm64}
+
+
+def test_consumer_store_binds_both_oci_platform_payloads(tmp_path: Path) -> None:
+    inputs, wheelhouses = synthetic_consumer_wheelhouses(tmp_path)
+    contract = synthetic_consumer_contract()
+    output = tmp_path / "consumer-store"
+
+    wheelhouse.create_consumer_store(
+        inputs,
+        wheelhouses,
+        contract,
+        output,
+        tmp_path / "create-work",
+    )
+    store, manifest, selected = wheelhouse.verify_consumer_store(
+        inputs,
+        output,
+        contract,
+        "linux/arm64",
+        tmp_path / "verify-work",
+    )
+
+    assert store["contract"] == contract
+    assert set(store["platforms"]) == {"linux/amd64", "linux/arm64"}
+    assert manifest["platform"] == "linux/arm64"
+    assert selected == output / "linux-arm64"
+    assert stat.S_IMODE((output / "source.json").stat().st_mode) == 0o444
+    assert all(
+        stat.S_IMODE(path.stat().st_mode) == 0o444 for path in selected.iterdir() if path.is_file()
+    )
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        ("wheel", "files differ from its record"),
+        ("contract", "identity is invalid"),
+        ("extra", "unexpected files"),
+    ],
+)
+def test_consumer_store_rejects_transport_and_contract_drift(
+    tmp_path: Path,
+    mutation: str,
+    message: str,
+) -> None:
+    inputs, wheelhouses = synthetic_consumer_wheelhouses(tmp_path)
+    contract = synthetic_consumer_contract()
+    output = tmp_path / "consumer-store"
+    wheelhouse.create_consumer_store(
+        inputs,
+        wheelhouses,
+        contract,
+        output,
+        tmp_path / "create-work",
+    )
+    if mutation == "wheel":
+        path = output / "linux-amd64" / "setuptools-80.3.1-py3-none-any.whl"
+        path.chmod(0o644)
+        path.write_bytes(path.read_bytes() + b"drift")
+    elif mutation == "contract":
+        record = json.loads((output / "source.json").read_text(encoding="utf-8"))
+        record["contract"]["index_digest"] = f"sha256:{'5' * 64}"
+        path = output / "source.json"
+        path.chmod(0o644)
+        write_json(path, record)
+    else:
+        (output / "unexpected").write_bytes(b"unexpected")
+
+    with pytest.raises(wheelhouse.WheelhouseError, match=message):
+        wheelhouse.verify_consumer_store(
+            inputs,
+            output,
+            contract,
+            "linux/amd64",
+            tmp_path / "verify-work",
+        )
 
 
 def test_published_verifier_uses_private_work_and_exact_inventory(tmp_path: Path) -> None:

@@ -25,8 +25,12 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / ".github" / "scripts" / "container_source_plan.py"
 POLICY = ROOT / ".compliance" / "container-policy.json"
 UV_LOCK = ROOT / "uv.lock"
+NATIVE_WHEELHOUSE_CONTRACT = ROOT / "containers" / "native-wheelhouse" / "consumer.json"
+NATIVE_WHEELHOUSE_CONTRACT_SHA256 = hashlib.sha256(
+    NATIVE_WHEELHOUSE_CONTRACT.read_bytes()
+).hexdigest()
 REVISION = "1" * 40
-REAL_PLAN_SHA256 = "0e323aa2c8c47348ab460d013c558991f9199967d6ba444319093a0cf4ac0c64"
+REAL_PLAN_SHA256 = "3b85ef6daa7a362f40188f929137b982119e77b873b54134a804904bf38bea1e"
 REQUEST_KEYS = {
     "id",
     "url",
@@ -137,7 +141,8 @@ def minimal_alpine_policy(
             for origin in selected[platform]
         ]
     return {
-        "schema_version": 7,
+        "schema_version": 8,
+        "native_wheelhouse_contract_sha256": NATIVE_WHEELHOUSE_CONTRACT_SHA256,
         "platforms": platforms,
         "native_component_coverage": {
             "linux/amd64": [],
@@ -197,10 +202,11 @@ def write_direct_store(
         "schema_version": 1,
         "media_type": "application/vnd.stampbot.container-source-plan.v1+json",
         "kind": "direct",
-        "evidence_schema_version": 7,
+        "evidence_schema_version": 8,
         "source_revision": REVISION,
         "policy_sha256": hashlib.sha256(policy_path.read_bytes()).hexdigest(),
         "uv_lock_sha256": "2" * 64,
+        "native_wheelhouse_contract_sha256": NATIVE_WHEELHOUSE_CONTRACT_SHA256,
         "requests": sorted(requests, key=lambda request: request["id"]),
     }
     plan_bytes = source_plan.canonical_json(plan)
@@ -327,7 +333,8 @@ def build_native_alpine_case(
         "linux/arm64": "musllinux_1_2_aarch64",
     }
     policy: dict[str, Any] = {
-        "schema_version": 7,
+        "schema_version": 8,
+        "native_wheelhouse_contract_sha256": NATIVE_WHEELHOUSE_CONTRACT_SHA256,
         "platforms": {
             platform: [
                 {
@@ -441,29 +448,32 @@ def test_real_policy_direct_plan_is_stable_and_complete() -> None:
         "source_revision",
         "policy_sha256",
         "uv_lock_sha256",
+        "native_wheelhouse_contract_sha256",
         "requests",
     }
     assert first["schema_version"] == 1
     assert first["media_type"] == "application/vnd.stampbot.container-source-plan.v1+json"
     assert first["kind"] == "direct"
-    assert first["evidence_schema_version"] == 7
+    assert first["evidence_schema_version"] == 8
     assert first["source_revision"] == REVISION
     assert first["policy_sha256"] == hashlib.sha256(POLICY.read_bytes()).hexdigest()
     assert first["uv_lock_sha256"] == hashlib.sha256(UV_LOCK.read_bytes()).hexdigest()
+    assert first["native_wheelhouse_contract_sha256"] == NATIVE_WHEELHOUSE_CONTRACT_SHA256
 
     requests = first["requests"]
     assert isinstance(requests, list)
-    assert len(requests) == 214
+    assert len(requests) == 229
     assert [request["id"] for request in requests] == sorted(request["id"] for request in requests)
     assert len({request["id"] for request in requests}) == len(requests)
     assert Counter(request["id"].split(":", maxsplit=1)[0] for request in requests) == {
-        "alpine-recipe": 20,
+        "alpine-recipe": 22,
         "cpython": 1,
         "docker-python": 2,
-        "license-text": 24,
-        "native-source": 115,
+        "license-text": 25,
+        "native-source": 131,
+        "native-wheelhouse-source": 2,
         "python-sdist": 38,
-        "python-wheel": 14,
+        "python-wheel": 8,
     }
     for request in requests:
         assert set(request) == REQUEST_KEYS
@@ -505,7 +515,7 @@ def test_real_policy_plan_covers_platform_wheels_and_reuses_owner_sdist() -> Non
             for request_id in requests
             if request_id.startswith(f"python-wheel:{platform}:")
         ]
-        assert len(wheel_ids) == 7
+        assert len(wheel_ids) == 4
 
     owner_request = requests["python-sdist:cryptography@48.0.1"]
     assert owner_request["consumers"] == [
@@ -521,6 +531,8 @@ def test_real_policy_plan_covers_platform_wheels_and_reuses_owner_sdist() -> Non
         "platform:linux/arm64:native-owner:python:pydantic-core@2.46.4",
         "platform:linux/arm64:python:pydantic-core@2.46.4",
     ]
+    assert "native-wheelhouse-source:cffi" in requests
+    assert "native-wheelhouse-source:psycopg" in requests
     assert not any(request_id.startswith("native-source:owner-sdist:") for request_id in requests)
 
 
@@ -543,7 +555,7 @@ def test_real_policy_missing_sizes_remain_bounded() -> None:
     requests = plan["requests"]
     unknown_size = [request for request in requests if request["expected_size"] is None]
 
-    assert len(unknown_size) == 46
+    assert len(unknown_size) == 49
     assert all(request["max_bytes"] > 0 for request in unknown_size)
     assert {request["id"].split(":", maxsplit=1)[0] for request in unknown_size} == {
         "alpine-recipe",
@@ -661,7 +673,12 @@ def test_direct_plan_cli_url_errors_disclose_only_the_origin(
 
 def test_direct_plan_rejects_native_wheel_policy_substitution(tmp_path: Path) -> None:
     policy = real_policy()
-    policy["native_component_coverage"]["linux/amd64"][0]["wheel"]["sha256"] = "0" * 64
+    owner = next(
+        record
+        for record in policy["native_component_coverage"]["linux/amd64"]
+        if record["owner"] == "python:cryptography@48.0.1"
+    )
+    owner["wheel"]["sha256"] = "0" * 64
 
     with pytest.raises(source_plan.PlanError, match="does not select one exact lock entry"):
         build_with_policy(tmp_path, policy)
@@ -829,7 +846,7 @@ def test_direct_plan_rejects_unknown_native_source_kind(tmp_path: Path) -> None:
 
 def test_direct_plan_rejects_duplicate_policy_keys(tmp_path: Path) -> None:
     duplicate = tmp_path / "container-policy.json"
-    duplicate.write_text('{"schema_version":7,"schema_version":7}', encoding="utf-8")
+    duplicate.write_text('{"schema_version":8,"schema_version":8}', encoding="utf-8")
 
     with pytest.raises(source_plan.PlanError, match="repeats key"):
         source_plan.build_direct_plan(
@@ -1294,6 +1311,7 @@ def test_alpine_distfile_plan_is_offline_canonical_and_parent_bound(
         "source_revision",
         "policy_sha256",
         "uv_lock_sha256",
+        "native_wheelhouse_contract_sha256",
         "parent_plan",
         "parent_manifest",
         "recipes",
@@ -1301,6 +1319,7 @@ def test_alpine_distfile_plan_is_offline_canonical_and_parent_bound(
     }
     assert first["kind"] == "alpine-distfiles"
     assert first["source_revision"] == REVISION
+    assert first["native_wheelhouse_contract_sha256"] == NATIVE_WHEELHOUSE_CONTRACT_SHA256
     assert first["parent_plan"]["algorithm"] == "sha256"
     assert first["parent_manifest"]["algorithm"] == "sha256"
     assert first["recipes"] == [
