@@ -8,6 +8,7 @@ import hashlib
 import importlib.util
 import io
 import json
+import stat
 import sys
 import tarfile
 import zipfile
@@ -185,6 +186,7 @@ def test_source_extraction_accepts_an_implicit_root_directory(tmp_path: Path) ->
 
     assert root == tmp_path / "output" / "project"
     assert (root / "file.txt").read_bytes() == b"content"
+    assert stat.S_IMODE(root.stat().st_mode) == 0o700
 
 
 @pytest.mark.parametrize(

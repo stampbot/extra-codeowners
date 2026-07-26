@@ -686,9 +686,11 @@ def _extract_source(archive_path: Path, destination: Path, expected_root: str) -
                 if folded in seen:
                     raise WheelhouseError("source archive repeats a member path")
                 seen[folded] = path.as_posix()
+                for depth in range(1, len(path.parts)):
+                    directories.add(PurePosixPath(*path.parts[:depth]))
                 if member.isdir():
                     directories.add(path)
-                    _safe_destination(destination, path).mkdir(mode=0o755, parents=True)
+                    _safe_destination(destination, path).mkdir(mode=0o700, parents=True)
                     continue
                 if member.isreg():
                     if member.size < 0 or member.size > MAX_SOURCE_MEMBER_BYTES:
@@ -697,7 +699,7 @@ def _extract_source(archive_path: Path, destination: Path, expected_root: str) -
                     if expanded > MAX_SOURCE_EXPANDED_BYTES:
                         raise WheelhouseError("source archive exceeds its expanded size limit")
                     target = _safe_destination(destination, path)
-                    target.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
+                    target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
                     stream = archive.extractfile(member)
                     if stream is None:
                         raise WheelhouseError("cannot read source archive member")
@@ -757,7 +759,7 @@ def _extract_source(archive_path: Path, destination: Path, expected_root: str) -
         if not resolved.exists() or resolved.is_symlink():
             raise WheelhouseError("source archive symlink does not resolve to a regular member")
         link = _safe_destination(destination, path)
-        link.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
+        link.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         try:
             os.symlink(raw_target, link)
         except OSError as exc:
@@ -765,7 +767,7 @@ def _extract_source(archive_path: Path, destination: Path, expected_root: str) -
     for directory in sorted(directories, key=lambda item: len(item.parts), reverse=True):
         os.chmod(
             _safe_destination(destination, directory),
-            0o755,  # noqa: S103 - fixed read/execute mode for extracted source directories.
+            0o700,
         )
     return root
 
