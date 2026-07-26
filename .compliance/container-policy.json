@@ -1980,13 +1980,23 @@
           "uid": 0
         },
         {
-          "effective": true,
+          "effective": false,
           "gid": 0,
           "layer": 2,
           "mode": 420,
           "path": "lib/apk/db/installed",
           "sha256": "c2f5d1ca9607edbced7929ae685921317ed940b5ab5a210c4f9db89db54bd084",
           "size": 59113,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 7,
+          "mode": 420,
+          "path": "lib/apk/db/installed",
+          "sha256": "59c6a156c4d58e2bae333b94a95dde72ba7f9c1861f7b710723399039e4cb2f6",
+          "size": 60009,
           "uid": 0
         }
       ],
@@ -15027,26 +15037,6 @@
           "sha256": "3adae2e69cbfa1547fec1c336a0a51b7ad5549fb0d321cae2d3afb43fc66d530",
           "size": 1695,
           "uid": 0
-        },
-        {
-          "effective": true,
-          "gid": 0,
-          "layer": 5,
-          "mode": 420,
-          "path": "opt/venv/lib/python3.14/site-packages/psycopg_binary-3.3.4.dist-info/sboms/auditwheel.cdx.json",
-          "sha256": "d4b27924b425127c33ddbc41f082abe2246bc1b25fc9b88716f889fb7686832e",
-          "size": 5700,
-          "uid": 0
-        },
-        {
-          "effective": true,
-          "gid": 0,
-          "layer": 5,
-          "mode": 420,
-          "path": "opt/venv/lib/python3.14/site-packages/pydantic_core-2.46.4.dist-info/sboms/pydantic-core.cyclonedx.json",
-          "sha256": "1fc40db0ee56a5fc8b5f09acc4fcca649910986d13cedd22732c40051ab76176",
-          "size": 105102,
-          "uid": 0
         }
       ],
       "native_payloads": [
@@ -15065,16 +15055,6 @@
           "gid": 0,
           "layer": 5,
           "mode": 420,
-          "path": "opt/venv/lib/python3.14/site-packages/cryptography.libs/libgcc_s-2d945d6c.so.1",
-          "sha256": "767fb99107fa5e41168413b1eed9d73191c94126c37526263e1af1f1f898788f",
-          "size": 201673,
-          "uid": 0
-        },
-        {
-          "effective": true,
-          "gid": 0,
-          "layer": 5,
-          "mode": 420,
           "path": "opt/venv/lib/python3.14/site-packages/cryptography/hazmat/bindings/_rust.abi3.so",
           "sha256": "0d5d08e576f7b94f2d80ec1867d492becf2facbfb55d6833af9900c04d23ffee",
           "size": 13243817,
@@ -15085,19 +15065,9 @@
           "gid": 0,
           "layer": 5,
           "mode": 420,
-          "path": "opt/venv/lib/python3.14/site-packages/greenlet.libs/libgcc_s-2d945d6c.so.1",
+          "path": "opt/venv/lib/python3.14/site-packages/cryptography.libs/libgcc_s-2d945d6c.so.1",
           "sha256": "767fb99107fa5e41168413b1eed9d73191c94126c37526263e1af1f1f898788f",
           "size": 201673,
-          "uid": 0
-        },
-        {
-          "effective": true,
-          "gid": 0,
-          "layer": 5,
-          "mode": 420,
-          "path": "opt/venv/lib/python3.14/site-packages/greenlet.libs/libstdc++-85f2cd6d.so.6.0.33",
-          "sha256": "74d419612500998317744231a2b322e296836f4a111fdb48196f136d17f0f030",
-          "size": 4043321,
           "uid": 0
         },
         {
@@ -15135,6 +15105,26 @@
           "gid": 0,
           "layer": 5,
           "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/greenlet.libs/libgcc_s-2d945d6c.so.1",
+          "sha256": "767fb99107fa5e41168413b1eed9d73191c94126c37526263e1af1f1f898788f",
+          "size": 201673,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
+          "path": "opt/venv/lib/python3.14/site-packages/greenlet.libs/libstdc++-85f2cd6d.so.6.0.33",
+          "sha256": "74d419612500998317744231a2b322e296836f4a111fdb48196f136d17f0f030",
+          "size": 4043321,
+          "uid": 0
+        },
+        {
+          "effective": true,
+          "gid": 0,
+          "layer": 5,
+          "mode": 420,
           "path": "opt/venv/lib/python3.14/site-packages/markupsafe/_speedups.cpython-314-aarch64-linux-musl.so",
           "sha256": "7f9bf0b4fc7f302e400d54b8a07d3b6923ffcd09e5cbc5e0aacdf273b50daebc",
           "size": 93024,
@@ -15158,16 +15148,6 @@
           "path": "opt/venv/lib/python3.14/site-packages/psycopg_c/pq.cpython-314-aarch64-linux-musl.so",
           "sha256": "e456632f4447ba839e3959364f0602334a3f2b3cac12b8d910d0479359c5ce30",
           "size": 2153712,
-          "uid": 0
-        },
-        {
-          "effective": true,
-          "gid": 0,
-          "layer": 5,
-          "mode": 420,
-          "path": "opt/venv/lib/python3.14/site-packages/pydantic_core.libs/libgcc_s-0bf60adc.so.1",
-          "sha256": "f5f857e58a62c2d1ddb222cc2f3efb3f0f638c8106ae2b5e57b50e52baf0be99",
-          "size": 527681,
           "uid": 0
         },
         {
@@ -15358,7 +15338,7 @@
           "layer": 5,
           "mode": 420,
           "path": "opt/venv/lib/python3.14/site-packages/cffi-2.1.0.dist-info/RECORD",
-          "sha256": "e1ce4cc2b7e22d8062262416532584752380d89345b916a14803796431e9012c",
+          "sha256": "a00ea674ae391c0ffdf91a55c0351b40550c6044c63edf1fd372dd829456df91",
           "size": 2465,
           "uid": 0
         },
@@ -15368,8 +15348,8 @@
           "layer": 5,
           "mode": 420,
           "path": "opt/venv/lib/python3.14/site-packages/cffi-2.1.0.dist-info/WHEEL",
-          "sha256": "7a7caeef912b086c0753ef844c48320370941b592f60c8fac5fb40413be691cd",
-          "size": 113,
+          "sha256": "1358b450a024c91229f671adbdd93066a242e8073d08fd86d768b251ccf3b2bd",
+          "size": 105,
           "uid": 0
         },
         {
@@ -15677,9 +15657,9 @@
           "gid": 0,
           "layer": 5,
           "mode": 420,
-          "path": "opt/venv/lib/python3.14/site-packages/psycopg_binary-3.3.4.dist-info/RECORD",
-          "sha256": "318725b421e16d8b75a7570fa485650837567828e5aafef5c3acbed073313330",
-          "size": 2688,
+          "path": "opt/venv/lib/python3.14/site-packages/psycopg_c-3.3.4.dist-info/RECORD",
+          "sha256": "2e8a31fbc14cf39239581b13e378dc24354f8eea4e724aa7e75cc32ada7ad937",
+          "size": 1734,
           "uid": 0
         },
         {
@@ -15687,9 +15667,9 @@
           "gid": 0,
           "layer": 5,
           "mode": 420,
-          "path": "opt/venv/lib/python3.14/site-packages/psycopg_binary-3.3.4.dist-info/WHEEL",
-          "sha256": "3a7ee59357449bcd9084f205f5139eff18199dbfb7d71c51dcdf8212c080210f",
-          "size": 113,
+          "path": "opt/venv/lib/python3.14/site-packages/psycopg_c-3.3.4.dist-info/WHEEL",
+          "sha256": "1358b450a024c91229f671adbdd93066a242e8073d08fd86d768b251ccf3b2bd",
+          "size": 105,
           "uid": 0
         },
         {
@@ -15738,8 +15718,8 @@
           "layer": 5,
           "mode": 420,
           "path": "opt/venv/lib/python3.14/site-packages/pydantic_core-2.46.4.dist-info/RECORD",
-          "sha256": "1a0aa429c8dffdf28d16c6b92fa2b303121f19a5f5d446b0b0f463104544c949",
-          "size": 1013,
+          "sha256": "c0a942785dfd7a41ee30f08351cc074900bc9b8534bb960c813e82ac037fffa9",
+          "size": 789,
           "uid": 0
         },
         {
@@ -15748,8 +15728,8 @@
           "layer": 5,
           "mode": 420,
           "path": "opt/venv/lib/python3.14/site-packages/pydantic_core-2.46.4.dist-info/WHEEL",
-          "sha256": "f0e576aad8b25b0dee836db0d15366a1c4ffd198c90c0f9b9fd91cc30ef99cdf",
-          "size": 109,
+          "sha256": "d71e54683396080900c4df2696ceb6a57e5732865e835b0620e6209e0bcd856d",
+          "size": 101,
           "uid": 0
         },
         {
