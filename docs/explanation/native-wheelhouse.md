@@ -18,8 +18,8 @@ application image.
 The reviewed inputs live in
 [`containers/native-wheelhouse/inputs.json`][inputs]. They pin the Python
 version, Alpine base digest, complete Alpine package closure for each
-architecture, source archives, expected wheel identities, and Cargo package
-count.
+architecture, source archives, expected wheel identities and licenses, the
+source record that owns each wheel, and the Cargo package count.
 
 The build then follows this sequence:
 
@@ -36,12 +36,15 @@ The build then follows this sequence:
    disabled and receive fresh copies of the same Cargo input directory.
 5. A third offline stage compares the two wheel sets byte for byte.
 6. The same stage checks each wheel's filename, `WHEEL` compatibility fields,
-   package metadata, `RECORD` hashes, native architecture, and shared-library
-   requirements. `Root-Is-Purelib` and `Tag` must agree with the filename and
-   the observed native payloads. Every file is checked for ELF content, so a
-   versioned library or executable cannot bypass inspection by avoiding a
-   `.so` suffix.
-7. The final scratch image contains the verified wheelhouse. The compiler
+   package identity and `License-Expression`, `RECORD` hashes, native
+   architecture, and shared-library requirements. `Root-Is-Purelib` and `Tag`
+   must agree with the filename and the observed native payloads. Every file is
+   checked for ELF content, so a versioned library or executable cannot bypass
+   inspection by avoiding a `.so` suffix.
+7. The assembler writes a deterministic SPDX 2.3 document from that verified
+   manifest. Each package record names one wheel archive and binds its SHA-256,
+   Python package URL, declared license, and reviewed source record.
+8. The final scratch image contains only the verified wheelhouse. The compiler
    toolchain and source trees don't cross that boundary.
 
 Running the two builds in separate stages matters. The second build can't
@@ -67,9 +70,12 @@ jobs and the two producers come from different attempts. It rejects expired,
 foreign, oversized, or ambiguous artifacts.
 
 The publication job wraps the already-built files in a multi-platform scratch
-image, generates software bills of materials (SBOMs), attaches provenance,
-and signs the image digest with GitHub Actions' keyless identity. It moves the
-commit tag and `latest` only after those steps pass.
+image. It does not regenerate or scan the software bill of materials (SBOM).
+Instead, it reverifies the assembler's exact SPDX bytes, attests each document
+to its platform manifest, uploads a separately signed copy for inspection,
+attaches provenance to the multi-platform image, and signs the image digest
+with GitHub Actions' keyless identity. It moves the commit tag and `latest`
+only after those steps pass.
 
 The commit tag is immutable. If a run creates that tag and then fails while
 updating `latest`, a retry doesn't replace it with a newly generated
@@ -93,6 +99,7 @@ Every platform directory contains:
 | `inputs.json` | The complete reviewed input contract used for this build. |
 | `cargo-inputs.json` | The exact Cargo registry closure from `Cargo.lock`. |
 | `manifest.json` | Builder inventory, source review records, wheel hashes, native linkage, and the hashes of the two input files. |
+| `sbom.spdx.json` | Deterministic SPDX 2.3 package records for the exact wheel archives in this platform directory. |
 | `cffi-*.whl` | CFFI built from its reviewed commit archive. |
 | `psycopg_c-*.whl` | Psycopg C built from its reviewed tag archive and linked to Alpine `libpq`. |
 | `pydantic_core-*.whl` | Pydantic Core built from its PyPI source distribution and locked crates. |
@@ -101,6 +108,13 @@ Every platform directory contains:
 The verifier rejects extra files. Consumers can therefore treat the directory
 inventory as a closed set, not a bag of wheels that happens to contain the
 expected names.
+
+The SPDX records set `filesAnalyzed` to `false`. They describe and hash each
+wheel archive; they do not pretend to enumerate every member inside it. The
+separate wheel verifier checks the archive's complete `RECORD`, native
+payloads, and package metadata before the SPDX document is created. The SPDX
+document is therefore an exact package inventory, while `manifest.json`
+retains the fuller source, toolchain, and binary inspection evidence.
 
 ## How the Setuptools bootstrap matches the release
 
@@ -127,6 +141,12 @@ The `signature_review` fields record a maintainer's upstream review. The
 container build doesn't import a maintainer keyring or repeat that review.
 Pydantic Core's selected tag is unsigned, so the wheelhouse deliberately uses
 the checksum-bound PyPI source distribution and says so.
+
+An SPDX package record is not a source-provenance claim or a legal conclusion.
+Its declared license comes from the verified wheel metadata. The reviewed
+source record and signed build provenance provide separate evidence, and a
+redistribution review still has to consider notices and corresponding-source
+obligations.
 
 Two identical builds in one pinned toolchain show deterministic output under
 those conditions. They are not independent, diverse rebuilds. The base image,

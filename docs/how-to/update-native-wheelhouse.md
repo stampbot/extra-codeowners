@@ -57,7 +57,8 @@ sorted and update all fields affected by the release:
   architecture-specific entries in `builder_platform_packages`
 - Python version and ABI
 - source URL, size, SHA-256, root directory, tag, commit, and signature review
-- expected wheel version, native payload count, and shared libraries
+- expected wheel version, declared license, owning source record, native
+  payload count, and shared libraries
 - Cargo registry package count
 - `SOURCE_DATE_EPOCH` only when the input review deliberately selects a new
   stable timestamp; record the reason in the pull request
@@ -128,9 +129,21 @@ docker buildx build \
   .
 jq -e '
   .kind == "extra-codeowners/native-wheelhouse"
+  and .schema_version == 2
   and .reproducible_builds == 2
   and (.wheels | length == 4)
 ' "${WHEELHOUSE_OUTPUT}/wheelhouse/manifest.json"
+jq -e '
+  .spdxVersion == "SPDX-2.3"
+  and (.packages | length == 4)
+  and ([.packages[].filesAnalyzed] | all(. == false))
+  and ([.packages[].checksums[] | select(.algorithm == "SHA256")] | length == 4)
+' "${WHEELHOUSE_OUTPUT}/wheelhouse/sbom.spdx.json"
+jq -r '
+  .packages[]
+  | [.name, .versionInfo, .licenseDeclared, .checksums[0].checksumValue]
+  | @tsv
+' "${WHEELHOUSE_OUTPUT}/wheelhouse/sbom.spdx.json"
 jq -r '
   .builder.alpine_packages[]
   | "\(.name)=\(.version)"
@@ -139,13 +152,14 @@ find "${WHEELHOUSE_OUTPUT}/wheelhouse" \
   -maxdepth 1 -type f -printf '%f\n' | sort
 ```
 
-The first `jq` command exits successfully only when the assembler recorded two
-matching builds and four wheels. Review the package list printed by the second
-command against the platform closure in `inputs.json`; don't accept additions
-or version changes merely because `apk` resolved them. The final command
-should list seven files: the four wheels plus `inputs.json`,
-`cargo-inputs.json`, and `manifest.json`. Remove the temporary output
-directory after you finish inspecting it.
+The first two `jq` commands exit successfully only when the assembler recorded
+two matching builds and produced four SPDX package records with archive
+SHA-256 checksums. Review the SPDX rows against the expected wheels in
+`inputs.json`. Then review the Alpine package list against the platform
+closure; don't accept additions or version changes merely because `apk`
+resolved them. The final command should list eight files: the four wheels plus
+`inputs.json`, `cargo-inputs.json`, `manifest.json`, and `sbom.spdx.json`.
+Remove the temporary output directory after you finish inspecting it.
 
 The first run can take several minutes because it installs the compiler
 toolchain and fetches the Cargo closure. Buildx reuses those layers while the
@@ -167,6 +181,8 @@ Review these items before merging:
 - wheel filenames, `WHEEL` compatibility metadata, native payload counts, and
   shared libraries match the expected platform; inspect every reported ELF
   payload, including versioned libraries and executables
+- each SPDX package has the same filename, SHA-256, version, license, and
+  source mapping as its verified manifest wheel
 - the Setuptools wheel still matches its published digest, or the pull request
   explains why a reviewed release changed it
 - no build stage gained network access
@@ -193,6 +209,54 @@ cosign verify \
 ```
 
 The command must report a valid signature for the workflow identity above.
+
+Verify the provenance attached to the multi-platform digest:
+
+```bash
+WORKFLOW='stampbot/extra-codeowners/.github/workflows/native-wheelhouse.yml'
+SOURCE_COMMIT='REPLACE_WITH_40_HEX_CHARACTERS'
+gh attestation verify "oci://${IMAGE}@${DIGEST}" \
+  --repo stampbot/extra-codeowners \
+  --bundle-from-oci \
+  --signer-workflow "$WORKFLOW" \
+  --source-digest "$SOURCE_COMMIT" \
+  --source-ref refs/heads/main
+```
+
+The command must find a valid SLSA provenance statement from the named
+workflow on `main`. Each platform manifest also has an SPDX attestation. Get
+the two platform digests from the signed index, then verify both:
+
+```bash
+RAW_INDEX="$(docker buildx imagetools inspect "${IMAGE}@${DIGEST}" --raw)"
+for ARCHITECTURE in amd64 arm64; do
+  PLATFORM_DIGEST="$(
+    jq -er --arg architecture "$ARCHITECTURE" '
+      [.manifests[]
+       | select(
+           .platform.os == "linux"
+           and .platform.architecture == $architecture
+         )]
+      | if length == 1
+        then .[0].digest
+        else error("expected exactly one platform manifest")
+        end
+    ' <<<"$RAW_INDEX"
+  )"
+  gh attestation verify "oci://${IMAGE}@${PLATFORM_DIGEST}" \
+    --repo stampbot/extra-codeowners \
+    --bundle-from-oci \
+    --signer-workflow "$WORKFLOW" \
+    --source-digest "$SOURCE_COMMIT" \
+    --source-ref refs/heads/main \
+    --predicate-type https://spdx.dev/Document/v2.3
+done
+```
+
+Both commands must report a verified SPDX statement. A successful attestation
+check proves who signed the statement and which platform digest it names; it
+does not replace reviewing the SPDX contents.
+
 Keep the full `IMAGE@DIGEST` value in the pull request that updates the
 application build. Never pin `latest`.
 
