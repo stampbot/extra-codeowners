@@ -109,11 +109,12 @@ for_owners = ["@example-org/platform"]
 required_labels = ["automation-approved"]
 ```
 
-The `app` value refers to an immutable identity enrolled by the organization.
-The names above are examples; use the validated files under
-[`examples/policy/`](examples/policy/) as your starting point. The
-[configuration guide](docs/how-to/configure.md) covers both scopes, path
-matching, labels, built-in protected files, and the insecure escape hatch.
+The `app` value is an alias from the organization policy's `[apps.<alias>]`
+table. That organization entry binds the alias to the App's immutable numeric
+ID, public slug, and bot-user ID. The names above are examples; use the
+validated files under [`examples/policy/`](examples/policy/) as your starting
+point. The [configuration guide](docs/how-to/configure.md) covers both scopes,
+path matching, labels, built-in protected files, and the insecure escape hatch.
 
 ## Evaluate the source
 
