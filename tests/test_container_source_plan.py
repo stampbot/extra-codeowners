@@ -30,7 +30,7 @@ NATIVE_WHEELHOUSE_CONTRACT_SHA256 = hashlib.sha256(
     NATIVE_WHEELHOUSE_CONTRACT.read_bytes()
 ).hexdigest()
 REVISION = "1" * 40
-REAL_PLAN_SHA256 = "cee205e3e5874e591a53c123bedd7e2df5a9a7e13d9d428bfafee93f12cf72b7"
+REAL_PLAN_SHA256 = "7ea8ceec3a4409fe233e41f63ac6f1ef1eded07d8e3502f71fe2ea922a6aad1b"
 REQUEST_KEYS = {
     "id",
     "url",
