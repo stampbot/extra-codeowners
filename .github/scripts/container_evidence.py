@@ -13213,8 +13213,8 @@ def extract_license_files(
             ) as tar_source:
                 count = 0
                 total = 0
-                regular_paths: set[str] = set()
-                symlink_targets: list[tuple[str, str]] = []
+                regular_path_identities: set[bytes] = set()
+                symlink_target_identities: set[bytes] = set()
                 for tar_member in tar_source:
                     count += 1
                     if count > MAX_ARCHIVE_MEMBERS:
@@ -13236,14 +13236,16 @@ def extract_license_files(
                             raise EvidenceError(
                                 f"source archive license entry is not regular: {component}"
                             )
-                        symlink_targets.append((str(path), str(target)))
+                        symlink_target_identities.add(
+                            hashlib.sha256(str(target).encode("utf-8")).digest()
+                        )
                         # Source archives are inspected in memory and never extracted. A
                         # bounded in-tree non-license symlink cannot influence which
                         # regular license bytes are retained.
                         continue
                     if not tar_member.isfile():
                         raise EvidenceError(f"source archive has an unsupported entry: {component}")
-                    regular_paths.add(str(path))
+                    regular_path_identities.add(hashlib.sha256(str(path).encode("utf-8")).digest())
                     total += tar_member.size
                     if total > MAX_ARCHIVE_TOTAL_BYTES:
                         raise EvidenceError(f"source archive is too large: {component}")
@@ -13251,15 +13253,10 @@ def extract_license_files(
                         continue
                     record_license_candidate(tar_member.name, tar_member.size)
                     retain(str(path), read_member(tar_source, tar_member))
-                unresolved = sorted(
-                    (path, target)
-                    for path, target in symlink_targets
-                    if target not in regular_paths
-                )
-                if unresolved:
+                if not symlink_target_identities <= regular_path_identities:
                     raise EvidenceError(
-                        f"unsafe archive link target: {unresolved[0][0]!r} "
-                        f"does not resolve to {unresolved[0][1]!r}"
+                        "unsafe archive link target: source symlink does not resolve "
+                        "directly to a regular file"
                     )
     except EvidenceError:
         raise
