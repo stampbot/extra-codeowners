@@ -19,16 +19,26 @@ Regular pull requests keep going to their human owners.
 
 ## Start with the decision
 
-Before you register anything, make sure this is the rule you want. The
-`Extra CODEOWNERS / approval` check succeeds when either:
+Before you register anything, make sure this is the rule you want. Extra
+CODEOWNERS evaluates each distinct effective owner set separately. For each
+owner set, the `Extra CODEOWNERS / approval` check accepts either:
 
 - an appropriate human CODEOWNER approves the current head
 - an enrolled App approves the current head and its delegation matches the
   changed paths and owners.
 
+Every owner set must pass. A pull request may use human evidence for one set
+and App evidence for another. Paths with no effective `CODEOWNERS` match create
+no code-owner requirement.
+
 The check is meant to replace GitHub's **Require review from Code Owners**
 switch. It doesn't replace your minimum approval count, stale-review setting,
 signed-commit policy, or other required checks.
+
+GitHub doesn't publicly promise that a third-party App review counts toward
+the ordinary approval minimum. A nonzero minimum may therefore keep a pull
+request blocked after the Extra CODEOWNERS check succeeds. Test that combination
+in a disposable repository before relying on it.
 
 Read the [native CODEOWNERS comparison](explanation/native-codeowners.md) for
 the full decision model. The [threat model](explanation/threat-model.md)
@@ -36,17 +46,21 @@ explains what the App trusts and where it fails closed.
 
 ## Try one check
 
-The [first-check tutorial](tutorials/development-installation.md) starts with a
-clean checkout and ends with a real Check Run in a disposable organization.
-It uses a human approval first, which separates App setup problems from
-delegation problems.
+Choose one setup path. The
+[first-check tutorial](tutorials/development-installation.md) manually creates
+the checker App, starts from a clean checkout, and ends with a real Check Run in
+a disposable organization. It uses a human approval first, which separates App
+setup problems from delegation problems.
 
-When that works, continue with the pieces you need:
+If you prefer GitHub's App Manifest flow, use the
+[setup URL registration guide](how-to/register-app.md) instead of the tutorial's
+manual registration steps.
 
-1. [Register the GitHub App](how-to/register-app.md).
-2. [Enroll an approving App and delegate paths](how-to/configure.md).
-3. [Run the live GitHub contract fixture](how-to/run-live-github-contract.md).
-4. [Exercise the replacement rule and its rollback](how-to/prepare-repository-rules.md).
+After the first check works, continue with the pieces you need:
+
+1. [Enroll an approving App and delegate paths](how-to/configure.md).
+2. [Run the live GitHub contract fixture](how-to/run-live-github-contract.md).
+3. [Exercise the replacement rule and its rollback](how-to/prepare-repository-rules.md).
 
 Keep GitHub's native code-owner rule enabled on production repositories. The
 [project status](reference/project-status.md) names the live contracts that

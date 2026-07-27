@@ -33,7 +33,8 @@ That becomes awkward when an App such as
 request is routine. Stampbot can approve a policy-compliant `uv.lock` update,
 for example, but GitHub still waits for a human code owner.
 
-Extra CODEOWNERS replaces that one decision with a check:
+Extra CODEOWNERS replaces that one decision with a check. It evaluates each
+distinct effective owner set separately:
 
 ```text
 appropriate human CODEOWNER approval
@@ -44,8 +45,9 @@ enrolled App approval + matching delegation
        Extra CODEOWNERS / approval
 ```
 
-A normal pull request still needs its human owners. An App approval qualifies
-only when all of these are true:
+Every owner set represented by an owned path must pass. One pull request may
+use a human approval for one owner set and an App approval for another. An App
+approval qualifies only when all of these are true:
 
 - the organization enrolled that exact App identity
 - the repository opted in
@@ -54,14 +56,23 @@ only when all of these are true:
 - the approval applies to the current pull-request head
 - no organization or built-in guardrail makes the path human-only
 
-A pull request that mixes delegated and undelegated files still needs human
-coverage for the undelegated files.
+A pull request that mixes delegated and undelegated owned paths still needs
+human coverage for each undelegated owner set. A path with no effective
+`CODEOWNERS` match creates no code-owner requirement, although the repository's
+ordinary approval count and other rules still apply.
 
 ## What stays in GitHub
 
 Keep your ordinary pull-request rules: minimum approval count, stale-review
 handling, signed commits, and unrelated required checks. Extra CODEOWNERS is
 intended to replace only **Require review from Code Owners**.
+
+GitHub's public contract doesn't say whether a third-party App review counts
+toward the ordinary approval minimum. Test that combination in a disposable
+repository before you rely on it. A nonzero minimum may still require a human
+even when the Extra CODEOWNERS check succeeds; the
+[native CODEOWNERS comparison](docs/explanation/native-codeowners.md#what-changes-in-repository-rules)
+explains the open contract and links to the live probe.
 
 The App doesn't submit reviews, merge pull requests, grant another App access,
 or edit `CODEOWNERS`. It reads GitHub evidence and publishes one Check Run.
