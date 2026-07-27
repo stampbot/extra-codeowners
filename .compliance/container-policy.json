@@ -223,8 +223,8 @@
           "layer": 7,
           "mode": 420,
           "path": "var/log/apk.log",
-          "sha256": "e9f52aec6c5dee8d848e16a515d2cc3c764fb744194fa1da704f16c2cf3081c0",
-          "size": 14503,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "size": 0,
           "uid": 0
         }
       ],
@@ -2145,8 +2145,8 @@
           "layer": 7,
           "mode": 420,
           "path": "var/log/apk.log",
-          "sha256": "1db12865a9b017a00625bd366cd679622f233782a19dbeeb4312f717e283a1b9",
-          "size": 14513,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "size": 0,
           "uid": 0
         }
       ],

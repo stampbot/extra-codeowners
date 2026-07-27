@@ -399,6 +399,12 @@ and runtime library links introduced above the base have their own exact
 platform baselines. Those baselines classify accepted image changes; they do
 not turn file co-presence into build provenance.
 
+`apk.log` is not package identity evidence, and its normal contents include
+wall-clock build times. The runtime build truncates it in the package-install
+layer. Policy therefore binds the same empty, root-owned file on both
+architectures while retaining the APK database and APK world records that
+describe installed and selected packages.
+
 ### Artifact names expose the workflow identity
 
 The two artifact names expose architecture, synthetic merge SHA, and run

@@ -255,9 +255,12 @@ WORKDIR /app
 COPY --from=builder /opt/venv /opt/venv
 COPY --from=native-wheelhouse --chown=0:0 /wheelhouse/ /usr/share/extra-codeowners/native-wheelhouse/
 
+# The APK database is retained as evidence. Its log contains wall-clock build
+# times, so normalize that non-authoritative file before policy binds the layer.
 RUN apk add --no-cache \
     libgcc=15.2.0-r5 \
     libpq=18.4-r0 && \
+    : > /var/log/apk.log && \
     chmod 0444 /usr/share/extra-codeowners/native-wheelhouse/* && \
     chmod 0555 /usr/share/extra-codeowners/native-wheelhouse
 

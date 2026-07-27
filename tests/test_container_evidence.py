@@ -2464,7 +2464,7 @@ def test_post_base_system_files_and_links_require_exact_reviewed_occurrences(
         "lib/apk/db/triggers": b"triggers",
         "usr/lib/libgcc_s.so.1": b"libgcc",
         "usr/lib/libpq.so.5.18": b"libpq",
-        "var/log/apk.log": b"log",
+        "var/log/apk.log": b"",
     }
     clean_image = tmp_path / "clean-system-files.tar"
     saved_image_layers(
@@ -11157,6 +11157,7 @@ def test_runtime_identity_expectations_match_dockerfile_and_mise() -> None:
     mise = evidence.tomllib.loads(Path("mise.toml").read_text())
     builder_stage = dockerfile.split(" AS builder\n", 1)[1].split("\nFROM builder AS test", 1)[0]
     test_stage = dockerfile.split("FROM builder AS test\n", 1)[1].split("\nFROM python:", 1)[0]
+    runtime_stage = dockerfile.rsplit("\nFROM python:", 1)[1]
     assert mise["tools"]["uv"] == evidence.EXPECTED_UV_VERSION
     assert f"ghcr.io/astral-sh/uv:{evidence.EXPECTED_UV_VERSION}@sha256:" in dockerfile
     assert (
@@ -11173,6 +11174,7 @@ def test_runtime_identity_expectations_match_dockerfile_and_mise() -> None:
     assert "openssh-keygen=10.3_p1-r0" in test_stage
     assert ".github/scripts/smoke-container.sh \\" in test_stage
     assert "COPY charts/ ./charts/" in test_stage
+    assert runtime_stage.index("apk add --no-cache") < runtime_stage.index(": > /var/log/apk.log")
     assert "!.github/scripts/smoke-container.sh" in dockerignore
     assert "charts" not in dockerignore
 
