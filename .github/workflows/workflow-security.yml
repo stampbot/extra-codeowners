@@ -42,7 +42,7 @@ jobs:
           persist-credentials: false
 
       - name: Verify immutable action references
-        uses: zgosalvez/github-actions-ensure-sha-pinned-actions@fc87bb5b5a97953d987372e74478de634726b3e5 # v3.0.25
+        uses: zgosalvez/github-actions-ensure-sha-pinned-actions@3db98c0363e2fa5df3e1c4c471777a7c10b24cc9 # v5.0.5
 
   zizmor:
     name: zizmor
