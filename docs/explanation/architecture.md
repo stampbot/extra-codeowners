@@ -472,9 +472,13 @@ wheel reproducibility or build provenance.
 
 The [native wheelhouse](native-wheelhouse.md) has its own build and publication
 path for reproducible CFFI, Psycopg C, Pydantic Core, and Setuptools wheels.
-That path is deliberately separate from the application build. The application
-does not consume it yet, so current container candidates and their evidence are
-unchanged.
+That path stays separate from the application build. A signed, digest-pinned
+consumer contract selects its source revision and both platform manifests.
+The application build verifies that contract before parsing or downloading
+wheelhouse data, installs the runtime wheels offline, and retains their bytes
+in the final image. Three evidence records remain open because the current
+collector has not bound each linked-library name to one exact APK-owned runtime
+file.
 
 The tagged workflow contains intended image, chart, Python, SBOM, provenance,
 signature, and GitHub-release jobs. An unconditional blocker keeps every

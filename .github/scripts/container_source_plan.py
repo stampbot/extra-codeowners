@@ -34,13 +34,14 @@ SCHEMA_VERSION = 1
 MEDIA_TYPE = "application/vnd.stampbot.container-source-plan.v1+json"
 KIND = "direct"
 ALPINE_DISTFILES_KIND = "alpine-distfiles"
-SUPPORTED_EVIDENCE_SCHEMA_VERSION = 7
+SUPPORTED_EVIDENCE_SCHEMA_VERSION = 8
 
 PLATFORMS = ("linux/amd64", "linux/arm64")
 APPLICATION_NAME = "extra-codeowners"
 
 MAX_POLICY_BYTES = 8 * 1024 * 1024
 MAX_UV_LOCK_BYTES = 4 * 1024 * 1024
+MAX_WHEELHOUSE_CONTRACT_BYTES = 64 * 1024
 MAX_PLAN_BYTES = 4 * 1024 * 1024
 MAX_DOWNLOAD_BYTES = 64 * 1024 * 1024
 MAX_NATIVE_SOURCE_BYTES = 128 * 1024 * 1024
@@ -88,6 +89,11 @@ WHEEL_PLATFORM = {
     "linux/amd64": re.compile(r"^musllinux_[0-9]+_[0-9]+_x86_64$"),
     "linux/arm64": re.compile(r"^musllinux_[0-9]+_[0-9]+_aarch64$"),
 }
+WHEELHOUSE_PLATFORM = {
+    "linux/amd64": "linux_x86_64",
+    "linux/arm64": "linux_aarch64",
+}
+WHEELHOUSE_PROVIDER = "native-wheelhouse"
 
 
 class PlanError(ValueError):
@@ -119,6 +125,22 @@ class WheelNeed:
     owner: str
     package: tuple[str, str]
     artifact: Artifact
+    consumer: str
+
+
+@dataclass(frozen=True)
+class WheelhouseNeed:
+    """One reviewed wheel and source supplied by the signed native wheelhouse."""
+
+    platform: str
+    owner: str
+    package: tuple[str, str]
+    filename: str
+    digest: str
+    size: int
+    source_id: str
+    source_artifact: Artifact
+    cargo_source_ids: tuple[str, ...]
     consumer: str
 
 
@@ -500,6 +522,20 @@ def _source_store_contract() -> ModuleType:
     return module
 
 
+def _native_wheelhouse_contract() -> ModuleType:
+    path = Path(__file__).with_name("native_wheelhouse.py")
+    spec = importlib.util.spec_from_file_location("_native_wheelhouse_contract", path)
+    if spec is None or spec.loader is None:
+        raise PlanError(f"cannot load native-wheelhouse contract: {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    try:
+        spec.loader.exec_module(module)
+    except (OSError, ImportError, SyntaxError) as exc:
+        raise PlanError(f"cannot load native-wheelhouse contract {path}: {exc}") from exc
+    return module
+
+
 def _self_validate_plan(plan: dict[str, Any], encoded: bytes) -> None:
     contract = _source_store_contract()
     if getattr(contract, "MAX_TOTAL_OBJECT_BYTES", None) != MAX_TOTAL_OBJECT_BYTES:
@@ -836,6 +872,37 @@ def _load_lock(path: Path) -> tuple[Mapping[str, Any], bytes]:
     return _mapping(value, "uv lock"), content
 
 
+def _load_wheelhouse_contract(path: Path) -> tuple[Mapping[str, Any], bytes]:
+    content = _read_regular_file(
+        path,
+        "native wheelhouse consumer contract",
+        max_bytes=MAX_WHEELHOUSE_CONTRACT_BYTES,
+    )
+    try:
+        value = json.loads(
+            content.decode("ascii"),
+            object_pairs_hook=_reject_duplicate_keys,
+            parse_constant=_reject_json_constant,
+        )
+    except PlanError:
+        raise
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
+        raise PlanError(f"cannot parse native wheelhouse consumer contract {path}: {exc}") from exc
+    _validate_container_shape(value, "native wheelhouse consumer contract")
+    module = _native_wheelhouse_contract()
+    try:
+        validated = module._consumer_contract(value)
+        canonical = module.canonical_json(value)
+    except Exception as exc:
+        error_type = getattr(module, "WheelhouseError", ())
+        if error_type and isinstance(exc, error_type):
+            raise PlanError(f"invalid native wheelhouse consumer contract: {exc}") from exc
+        raise
+    if content != canonical or dict(validated) != value:
+        raise PlanError("native wheelhouse consumer contract is not canonical")
+    return cast(Mapping[str, Any], value), content
+
+
 def _sha256_artifact(
     value: object,
     description: str,
@@ -943,17 +1010,18 @@ def _wheel_filename_component(value: str) -> str:
     return re.sub(r"[^A-Za-z0-9.]+", "_", value)
 
 
-def _validate_wheel_binding(need: WheelNeed) -> None:
-    """Bind a reviewed wheel filename to its owner, version, tags, and platform."""
+def _validate_wheel_filename(
+    *,
+    platform: str,
+    owner: str,
+    package: tuple[str, str],
+    filename: str,
+    wheelhouse: bool,
+) -> None:
+    """Bind one reviewed filename to its owner, tags, and platform."""
 
-    _host, parsed = _validate_url(need.artifact.url)
-    if parsed.query or "%" in parsed.path:
-        raise PlanError(
-            f"native wheel URL is not a canonical filename URL: {need.platform}/{need.owner}"
-        )
-    filename = parsed.path.rsplit("/", maxsplit=1)[-1]
     if not filename.endswith(".whl") or not filename.isascii():
-        raise PlanError(f"native wheel URL does not name a wheel: {need.platform}/{need.owner}")
+        raise PlanError(f"native wheel does not have a valid filename: {platform}/{owner}")
     fields = filename.removesuffix(".whl").split("-")
     if len(fields) == 5:
         distribution, version, python_tag, abi_tag, platform_tag = fields
@@ -961,36 +1029,156 @@ def _validate_wheel_binding(need: WheelNeed) -> None:
     elif len(fields) == 6:
         distribution, version, build_tag, python_tag, abi_tag, platform_tag = fields
     else:
-        raise PlanError(
-            f"native wheel filename has an invalid field count: {need.platform}/{need.owner}"
-        )
+        raise PlanError(f"native wheel filename has an invalid field count: {platform}/{owner}")
 
-    expected_distribution = re.sub(r"[-_.]+", "_", need.package[0])
-    expected_version = _wheel_filename_component(need.package[1])
+    expected_distribution = re.sub(r"[-_.]+", "_", package[0])
+    expected_version = _wheel_filename_component(package[1])
     if (
         WHEEL_PART.fullmatch(distribution) is None
         or distribution != expected_distribution
         or WHEEL_PART.fullmatch(version) is None
         or version != expected_version
     ):
-        raise PlanError(
-            f"native wheel filename differs from its owner: {need.platform}/{need.owner}"
-        )
+        raise PlanError(f"native wheel filename differs from its owner: {platform}/{owner}")
     if build_tag is not None and WHEEL_BUILD.fullmatch(build_tag) is None:
-        raise PlanError(
-            f"native wheel filename has an invalid build tag: {need.platform}/{need.owner}"
-        )
+        raise PlanError(f"native wheel filename has an invalid build tag: {platform}/{owner}")
     if WHEEL_PYTHON_TAG.fullmatch(python_tag) is None or (
         abi_tag != "abi3" and abi_tag != python_tag
     ):
+        raise PlanError(f"native wheel filename has invalid compatibility tags: {platform}/{owner}")
+    expected_wheelhouse_platform = WHEELHOUSE_PLATFORM.get(platform)
+    platform_pattern = WHEEL_PLATFORM.get(platform)
+    platform_matches = (
+        platform_tag == expected_wheelhouse_platform
+        if wheelhouse
+        else platform_pattern is not None and platform_pattern.fullmatch(platform_tag) is not None
+    )
+    if not platform_matches:
+        raise PlanError(f"native wheel filename targets the wrong platform: {platform}/{owner}")
+
+
+def _validate_wheel_binding(need: WheelNeed) -> None:
+    """Bind a reviewed lock wheel URL to its owner, version, tags, and platform."""
+
+    _host, parsed = _validate_url(need.artifact.url)
+    if parsed.query or "%" in parsed.path:
         raise PlanError(
-            f"native wheel filename has invalid compatibility tags: {need.platform}/{need.owner}"
+            f"native wheel URL is not a canonical filename URL: {need.platform}/{need.owner}"
         )
-    platform_pattern = WHEEL_PLATFORM.get(need.platform)
-    if platform_pattern is None or platform_pattern.fullmatch(platform_tag) is None:
+    _validate_wheel_filename(
+        platform=need.platform,
+        owner=need.owner,
+        package=need.package,
+        filename=parsed.path.rsplit("/", maxsplit=1)[-1],
+        wheelhouse=False,
+    )
+
+
+def _wheelhouse_build_source_ids(
+    value: object,
+    *,
+    platform: str,
+    owner: str,
+    source: str,
+    native_source_ids: set[str],
+) -> tuple[str, ...]:
+    record = _mapping(value, f"native wheelhouse build for {platform}/{owner}")
+    if set(record) != {
+        "cargo_source_ids",
+        "linked_libraries",
+        "local_cargo_packages",
+        "source",
+    }:
+        raise PlanError(f"native wheelhouse build has invalid fields: {platform}/{owner}")
+    if _required_string(record, "source", "native wheelhouse build") != source:
         raise PlanError(
-            f"native wheel filename targets the wrong platform: {need.platform}/{need.owner}"
+            f"native wheelhouse build source differs from its wheel: {platform}/{owner}"
         )
+
+    raw_source_ids = _sequence(
+        record.get("cargo_source_ids"),
+        f"native wheelhouse Cargo sources for {platform}/{owner}",
+        limit=MAX_REQUESTS,
+    )
+    source_ids = tuple(
+        _checked_string(item, f"native wheelhouse Cargo source for {platform}/{owner}")
+        for item in raw_source_ids
+    )
+    if source_ids != tuple(sorted(set(source_ids))):
+        raise PlanError(f"native wheelhouse Cargo sources are not canonical: {platform}/{owner}")
+    unknown = sorted(set(source_ids) - native_source_ids)
+    if unknown:
+        raise PlanError(
+            f"native wheelhouse build names unknown Cargo sources: {platform}/{owner}: {unknown!r}"
+        )
+
+    raw_locals = _sequence(
+        record.get("local_cargo_packages"),
+        f"native wheelhouse local Cargo packages for {platform}/{owner}",
+        limit=MAX_REQUESTS,
+    )
+    local_identities: list[tuple[str, str]] = []
+    for index, raw_local in enumerate(raw_locals):
+        local = _mapping(
+            raw_local,
+            f"native wheelhouse local Cargo package {index} for {platform}/{owner}",
+        )
+        if set(local) != {"name", "version"}:
+            raise PlanError(
+                f"native wheelhouse local Cargo package has invalid fields: {platform}/{owner}"
+            )
+        local_identities.append(
+            (
+                _required_string(local, "name", "native wheelhouse local Cargo package"),
+                _required_string(local, "version", "native wheelhouse local Cargo package"),
+            )
+        )
+    if local_identities != sorted(set(local_identities)):
+        raise PlanError(
+            f"native wheelhouse local Cargo packages are not canonical: {platform}/{owner}"
+        )
+
+    raw_libraries = _sequence(
+        record.get("linked_libraries"),
+        f"native wheelhouse linked libraries for {platform}/{owner}",
+        limit=MAX_REQUESTS,
+    )
+    library_identities: list[tuple[str, str, str]] = []
+    for index, raw_library in enumerate(raw_libraries):
+        library = _mapping(
+            raw_library,
+            f"native wheelhouse linked library {index} for {platform}/{owner}",
+        )
+        if set(library) != {"name", "package"}:
+            raise PlanError(
+                f"native wheelhouse linked library has invalid fields: {platform}/{owner}"
+            )
+        package_record = _mapping(
+            library.get("package"),
+            f"native wheelhouse linked library package for {platform}/{owner}",
+        )
+        if set(package_record) != {"name", "version"}:
+            raise PlanError(
+                f"native wheelhouse linked library package has invalid fields: {platform}/{owner}"
+            )
+        library_identities.append(
+            (
+                _required_string(library, "name", "native wheelhouse linked library"),
+                _required_string(
+                    package_record,
+                    "name",
+                    "native wheelhouse linked library package",
+                ),
+                _required_string(
+                    package_record,
+                    "version",
+                    "native wheelhouse linked library package",
+                ),
+            )
+        )
+    if library_identities != sorted(set(library_identities)):
+        raise PlanError(f"native wheelhouse linked libraries are not canonical: {platform}/{owner}")
+    return source_ids
 
 
 def _collect_native_coverage(
@@ -1000,6 +1188,7 @@ def _collect_native_coverage(
     native_source_ids: set[str],
 ) -> tuple[
     list[WheelNeed],
+    list[WheelhouseNeed],
     dict[tuple[str, str], Artifact],
     dict[tuple[str, str], set[str]],
     dict[str, set[str]],
@@ -1009,9 +1198,11 @@ def _collect_native_coverage(
         raise PlanError("native coverage must contain exactly the two supported platforms")
 
     wheel_needs: list[WheelNeed] = []
+    wheelhouse_needs: list[WheelhouseNeed] = []
     owner_sources: dict[tuple[str, str], Artifact] = {}
     owner_consumers: dict[tuple[str, str], set[str]] = {}
     source_consumers: dict[str, set[str]] = {}
+    wheelhouse_sources: dict[str, Artifact] = {}
     for platform in PLATFORMS:
         owners = _sequence(
             raw_coverage.get(platform), f"native coverage for {platform}", limit=MAX_REQUESTS
@@ -1038,23 +1229,100 @@ def _collect_native_coverage(
             previous_source = owner_sources.get(package)
             if previous_source is not None and previous_source != owner_source:
                 raise PlanError(f"native owner has conflicting source bindings: {owner}")
-            owner_sources[package] = owner_source
-            owner_consumers.setdefault(package, set()).add(consumer)
-
-            wheel = _sha256_artifact(
-                owner_record.get("wheel"),
-                f"wheel for {platform}/{owner}",
-                size_required=True,
-            )
-            wheel_needs.append(
-                WheelNeed(
+            raw_wheel = _mapping(owner_record.get("wheel"), f"wheel for {platform}/{owner}")
+            provider = raw_wheel.get("provider")
+            if provider is None:
+                if owner_record.get("wheelhouse_build") is not None:
+                    raise PlanError(
+                        f"locked native wheel has a wheelhouse build: {platform}/{owner}"
+                    )
+                wheel = _sha256_artifact(
+                    raw_wheel,
+                    f"wheel for {platform}/{owner}",
+                    size_required=True,
+                )
+                owner_sources[package] = owner_source
+                owner_consumers.setdefault(package, set()).add(consumer)
+                wheel_needs.append(
+                    WheelNeed(
+                        platform=platform,
+                        owner=owner,
+                        package=package,
+                        artifact=wheel,
+                        consumer=consumer,
+                    )
+                )
+            else:
+                if (
+                    set(raw_wheel)
+                    != {
+                        "filename",
+                        "provider",
+                        "sha256",
+                        "size",
+                        "source",
+                    }
+                    or provider != WHEELHOUSE_PROVIDER
+                ):
+                    raise PlanError(
+                        f"native wheelhouse wheel has invalid fields: {platform}/{owner}"
+                    )
+                filename = _required_string(raw_wheel, "filename", "native wheelhouse wheel")
+                digest = _checked_digest(
+                    "sha256",
+                    raw_wheel.get("sha256"),
+                    f"native wheelhouse wheel SHA-256 for {platform}/{owner}",
+                )
+                size = _checked_optional_size(
+                    raw_wheel.get("size"),
+                    f"native wheelhouse wheel size for {platform}/{owner}",
+                )
+                if size is None:
+                    raise PlanError(f"native wheelhouse wheel has no size: {platform}/{owner}")
+                source_id = _required_string(raw_wheel, "source", "native wheelhouse wheel")
+                if PACKAGE_NAME.fullmatch(source_id) is None:
+                    raise PlanError(
+                        f"native wheelhouse wheel has an invalid source: {platform}/{owner}"
+                    )
+                _validate_wheel_filename(
                     platform=platform,
                     owner=owner,
                     package=package,
-                    artifact=wheel,
-                    consumer=consumer,
+                    filename=filename,
+                    wheelhouse=True,
                 )
-            )
+                cargo_source_ids = _wheelhouse_build_source_ids(
+                    owner_record.get("wheelhouse_build"),
+                    platform=platform,
+                    owner=owner,
+                    source=source_id,
+                    native_source_ids=native_source_ids,
+                )
+                previous_wheelhouse_source = wheelhouse_sources.get(source_id)
+                if (
+                    previous_wheelhouse_source is not None
+                    and previous_wheelhouse_source != owner_source
+                ):
+                    raise PlanError(
+                        f"native wheelhouse source has conflicting artifacts: {source_id}"
+                    )
+                wheelhouse_sources[source_id] = owner_source
+                wheelhouse_needs.append(
+                    WheelhouseNeed(
+                        platform=platform,
+                        owner=owner,
+                        package=package,
+                        filename=filename,
+                        digest=digest,
+                        size=size,
+                        source_id=source_id,
+                        source_artifact=owner_source,
+                        cargo_source_ids=cargo_source_ids,
+                        consumer=consumer,
+                    )
+                )
+                for cargo_source_id in cargo_source_ids:
+                    source_consumers.setdefault(cargo_source_id, set()).add(consumer)
 
             reviews = _sequence(
                 owner_record.get("component_reviews"),
@@ -1099,7 +1367,13 @@ def _collect_native_coverage(
             "native source consumers do not exactly cover policy sources; "
             f"missing={missing!r}, stale={stale!r}"
         )
-    return wheel_needs, owner_sources, owner_consumers, source_consumers
+    return (
+        wheel_needs,
+        wheelhouse_needs,
+        owner_sources,
+        owner_consumers,
+        source_consumers,
+    )
 
 
 def _load_selected_lock_packages(
@@ -1281,6 +1555,40 @@ def _add_native_wheels(
             need.artifact,
             max_bytes=MAX_DOWNLOAD_BYTES,
             consumers={need.consumer},
+        )
+
+
+def _add_native_wheelhouse_sources(
+    builder: _PlanBuilder,
+    wheelhouse_needs: Sequence[WheelhouseNeed],
+    *,
+    selected_python_sources: Mapping[tuple[str, str], Artifact],
+) -> None:
+    """Fetch each wheelhouse build source, reusing the Python sdist when identical."""
+
+    grouped: dict[str, list[WheelhouseNeed]] = {}
+    for need in wheelhouse_needs:
+        grouped.setdefault(need.source_id, []).append(need)
+    for source_id in sorted(grouped):
+        needs = grouped[source_id]
+        artifacts = {need.source_artifact for need in needs}
+        packages = {need.package for need in needs}
+        if len(artifacts) != 1 or len(packages) != 1:
+            raise PlanError(f"native wheelhouse source has conflicting owners: {source_id}")
+        artifact = artifacts.pop()
+        package = packages.pop()
+        selected_python_source = selected_python_sources.get(package)
+        reuses_python_source = selected_python_source == artifact
+        request_id = (
+            f"python-sdist:{package[0]}@{package[1]}"
+            if reuses_python_source
+            else f"native-wheelhouse-source:{source_id}"
+        )
+        builder.add(
+            request_id,
+            artifact,
+            max_bytes=(MAX_DOWNLOAD_BYTES if reuses_python_source else MAX_NATIVE_SOURCE_BYTES),
+            consumers={need.consumer for need in needs},
         )
 
 
@@ -2068,7 +2376,13 @@ def _expected_recipe_needs(
     python_needs, alpine_needs, python_by_platform = _collect_platform_needs(policy)
     del python_needs
     native_sources = _mapping(policy.get("native_component_sources"), "native component sources")
-    _wheels, _owners, _owner_consumers, source_consumers = _collect_native_coverage(
+    (
+        _wheels,
+        _wheelhouse,
+        _owners,
+        _owner_consumers,
+        source_consumers,
+    ) = _collect_native_coverage(
         policy,
         python_needs_by_platform=python_by_platform,
         native_source_ids=set(native_sources),
@@ -2306,6 +2620,9 @@ def build_alpine_distfile_plan(
                 "source_revision": parent_plan["source_revision"],
                 "policy_sha256": policy_sha256,
                 "uv_lock_sha256": parent_plan["uv_lock_sha256"],
+                "native_wheelhouse_contract_sha256": parent_plan[
+                    "native_wheelhouse_contract_sha256"
+                ],
                 "parent_plan": parent_plan_descriptor,
                 "parent_manifest": parent_manifest_descriptor,
                 "recipes": recipe_records,
@@ -2332,6 +2649,7 @@ def build_alpine_distfile_plan(
 def build_direct_plan(
     policy_path: Path,
     uv_lock_path: Path,
+    native_wheelhouse_contract_path: Path = Path("containers/native-wheelhouse/consumer.json"),
     *,
     source_revision: str,
 ) -> dict[str, Any]:
@@ -2341,6 +2659,10 @@ def build_direct_plan(
         raise PlanError("source revision must be a lowercase 40-character Git object id")
     policy, policy_bytes = _load_policy(policy_path)
     lock, lock_bytes = _load_lock(uv_lock_path)
+    _wheelhouse_contract, wheelhouse_contract_bytes = _load_wheelhouse_contract(
+        native_wheelhouse_contract_path
+    )
+    wheelhouse_contract_sha256 = hashlib.sha256(wheelhouse_contract_bytes).hexdigest()
 
     evidence_schema = policy.get("schema_version")
     if isinstance(evidence_schema, bool) or evidence_schema != SUPPORTED_EVIDENCE_SCHEMA_VERSION:
@@ -2350,11 +2672,21 @@ def build_direct_plan(
 
     native_sources = _mapping(policy.get("native_component_sources"), "native component sources")
     python_needs, alpine_needs, python_needs_by_platform = _collect_platform_needs(policy)
-    wheel_needs, owner_sources, owner_consumers, source_consumers = _collect_native_coverage(
+    (
+        wheel_needs,
+        wheelhouse_needs,
+        owner_sources,
+        owner_consumers,
+        source_consumers,
+    ) = _collect_native_coverage(
         policy,
         python_needs_by_platform=python_needs_by_platform,
         native_source_ids=set(native_sources),
     )
+    if policy.get("native_wheelhouse_contract_sha256") != wheelhouse_contract_sha256:
+        raise PlanError(
+            "container policy does not bind the exact native wheelhouse consumer contract"
+        )
     wheel_packages = {need.package for need in wheel_needs}
     lock_packages = _load_selected_lock_packages(
         lock,
@@ -2373,6 +2705,11 @@ def build_direct_plan(
         lock_packages=lock_packages,
     )
     _add_native_wheels(builder, wheel_needs, lock_packages)
+    _add_native_wheelhouse_sources(
+        builder,
+        wheelhouse_needs,
+        selected_python_sources=selected_python_sources,
+    )
     _add_alpine_recipes(builder, policy, alpine_needs=alpine_needs)
     _add_license_texts(builder, policy)
     _add_native_sources(
@@ -2392,6 +2729,7 @@ def build_direct_plan(
         # manifest's canonical policy hash remains a separate downstream field.
         "policy_sha256": hashlib.sha256(policy_bytes).hexdigest(),
         "uv_lock_sha256": hashlib.sha256(lock_bytes).hexdigest(),
+        "native_wheelhouse_contract_sha256": wheelhouse_contract_sha256,
         "requests": builder.requests(),
     }
     encoded = canonical_json(plan)
@@ -2416,6 +2754,11 @@ def _parser() -> argparse.ArgumentParser:
         default=Path(".compliance/container-policy.json"),
     )
     direct.add_argument("--uv-lock", type=Path, default=Path("uv.lock"))
+    direct.add_argument(
+        "--native-wheelhouse-contract",
+        type=Path,
+        default=Path("containers/native-wheelhouse/consumer.json"),
+    )
     direct.add_argument("--source-revision", required=True)
     direct.add_argument("--output", type=Path)
     distfiles = commands.add_parser(
@@ -2441,6 +2784,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             plan = build_direct_plan(
                 args.policy,
                 args.uv_lock,
+                args.native_wheelhouse_contract,
                 source_revision=args.source_revision,
             )
         elif args.command == "alpine-distfile-plan":

@@ -149,8 +149,8 @@ The canonical JSON predicate has exactly these fields:
 
 | Field | Type | Requirement |
 | --- | --- | --- |
-| `schema_version` | integer | Exactly `7`. |
-| `media_type` | string | Exactly `application/vnd.stampbot.container-evidence.v7+tar+gzip`. |
+| `schema_version` | integer | Exactly `8`. |
+| `media_type` | string | Exactly `application/vnd.stampbot.container-evidence.v8+tar+gzip`. |
 | `platform` | string | `linux/amd64` or `linux/arm64`; it must match the selected manifest. |
 | `subject_digest` | string | Lowercase `sha256:` digest of the published platform manifest, never a local image configuration digest. |
 | `artifact` | object | Exactly `filename` and `sha256`. |
@@ -205,8 +205,10 @@ The archive must contain at least these entry points:
 | `inventory/all-layer-files.json` | Every regular, directory, non-regular, and whiteout occurrence in every distributed layer, including security metadata; regular and directory records also carry effective state. |
 | `inventory/native-component-coverage.json` | Derived per-owner ledger containing full closed and open review records, reviewed SBOM anomalies, and the exact remaining owner count and names. |
 | `policy/container-policy.json` | The exact reviewed policy used to accept the candidate. |
+| `policy/native-wheelhouse-consumer.json` | The exact reviewed consumer contract whose digest is bound by policy, source plans, and image labels. |
 | `artifacts/application/` | The exact selected wheel, sdist, both native build records, and cross-architecture selection record; every file is hash-bound by `MANIFEST.json`. |
-| `artifacts/native-wheels/` | One exact locked platform wheel for every owner in the union of `native_payloads` and `embedded_sboms`, plus separately retained raw embedded-SBOM bytes. `MANIFEST.json` binds each owner, platform, exact requested URL, credential-safe redirect origins, path, size, and SHA-256. |
+| `artifacts/native-wheelhouse/` | The verified consumer-store record and selected platform files retained from the signed wheelhouse image. |
+| `artifacts/native-wheels/` | One exact platform wheel for every owner in the union of `native_payloads` and `embedded_sboms`, plus separately retained raw embedded-SBOM bytes. Lock wheels retain the requested URL and credential-safe redirect origins. Wheelhouse wheels retain their provider and source identity without inventing a download URL. `MANIFEST.json` binds every path, size, and SHA-256. |
 | `licenses/standard/` | Hash-pinned standard license texts required by reviewed expressions. |
 | `licenses/from-source/` | Hash-pinned notices retained from exact source archives. |
 | `sources/application/` | Exact tracked Extra CODEOWNERS source blobs and Git modes at the image revision. |
@@ -218,20 +220,21 @@ The archive must contain at least these entry points:
 
 ### Current native-wheel manifest records
 
-Until issue #28 freezes the recipient schema, this is the exact schema-v7
+Until issue #28 freezes the recipient schema, this is the exact schema-v8
 collector format for `MANIFEST.json.native_wheel_artifacts`. It is an inspection
 reference, not a promise that the unfinished release wire format will remain
 unchanged.
 
-Each wheel record has exactly these fields:
+Each wheel record has common identity fields plus one provider-specific source:
 
 | Field | Requirement |
 | --- | --- |
 | `owner` | Canonical `python:NAME@VERSION` owner derived from the inventory. |
 | `platform` | Exact inventory platform. |
-| `url` | Requested lock-file URL. |
-| `urls` | The exact requested URL followed by the canonical HTTPS origin of each redirect destination. Redirected paths and queries are not persisted. |
-| `filename` | Basename selected from the lock-file URL. |
+| `url` | Requested lock-file URL; absent for a wheelhouse wheel. |
+| `provider` and `source` | Exactly `native-wheelhouse` and its contract source name; absent for a lock wheel. |
+| `urls` | For a lock wheel, the exact requested URL followed by the canonical HTTPS origin of each redirect destination. Redirected paths and queries are not persisted. Empty for a wheelhouse wheel. |
+| `filename` | Basename selected from the lock-file URL or signed wheelhouse manifest. |
 | `path` | `artifacts/native-wheels/NAME/VERSION/FILENAME`. |
 | `size`, `sha256` | Size and lowercase SHA-256 of the retained wheel bytes. |
 | `build`, `tags` | Exact WHEEL build value and sorted tag list used for selection. |
@@ -243,9 +246,9 @@ Each `generated_files` item has exactly `name`, `kind`, `module`, `callable`,
 occurrence has exactly `effective`, `layer`, `path`, `sha256`, `size`, `mode`,
 `uid`, and `gid`.
 
-Each `embedded_sboms` item has exactly `owner`, `platform`, `url`, `urls`,
-`archive_path`, `installed_occurrence`, `path`, `size`, and `sha256`. Its `path`
-is
+Each `embedded_sboms` item uses the same lock URL or wheelhouse provider/source
+union and also has `owner`, `platform`, `urls`, `archive_path`,
+`installed_occurrence`, `path`, `size`, and `sha256`. Its `path` is
 `artifacts/native-wheels/NAME/VERSION/embedded-sboms/ARCHIVE_PATH`, and its
 occurrence uses the same exact field set described above. `SHA256SUMS` binds the
 wheel, raw SBOM, and manifest bytes independently of these records.
@@ -257,7 +260,7 @@ wheel, raw SBOM, and manifest bytes independently of these records.
 
 | Field | Requirement |
 | --- | --- |
-| `schema_version` | Exactly `7`. |
+| `schema_version` | Exactly `8`. |
 | `platform` | Exact inventory platform. |
 | `complete` | Derived boolean; true only when every observed native/SBOM owner has a closed review. |
 | `resolved_owners` | Sorted, full policy records whose review state is `closed`. |
@@ -266,16 +269,15 @@ wheel, raw SBOM, and manifest bytes independently of these records.
 | `remaining_owner_count` | Number of open owner records. |
 | `remaining_owner_names` | Sorted owner names derived from the open records. |
 
-Schema 7 keeps each CycloneDX occurrence distinct. A nonempty `bom-ref` is the
+Schema 8 keeps each CycloneDX occurrence distinct. A nonempty `bom-ref` is the
 document-local identity; PURL is the fallback only when `bom-ref` is empty.
 Repeated PURLs are allowed only when every occurrence has a unique, nonempty
-`bom-ref`. The ledger therefore retains all four krb5 and both libldap
-occurrences reported by Psycopg.
+`bom-ref`.
 
 An accepted auditwheel metadata-root echo appears in both the observation and
 `observed_sbom_anomalies`. It must be canonically identical to the metadata
-component and have an explicit `metadata-root-echo` review. Cryptography,
-Greenlet, and Psycopg each have one such reviewed anomaly on each platform.
+component and have an explicit `metadata-root-echo` review. Cryptography and
+Greenlet each have one such reviewed anomaly on each platform.
 
 Closed records hold direct component reviews, source IDs, reviewed license
 expressions, payload dispositions, and any narrowly validated cross-owner
@@ -286,9 +288,9 @@ not reduced to path/hash summaries. The current open records are:
 
 | Owner | Omission IDs |
 | --- | --- |
-| `python:cffi@2.1.0` | `unproven-libffi-build-input` |
-| `python:psycopg-binary@3.3.4` | `missing-libpq-sbom`, `unreviewed-bundled-library-sources` |
-| `python:pydantic-core@2.46.4` | `missing-libgcc-sbom` |
+| `python:cffi@2.1.0` | `unproven-libffi-runtime-file` |
+| `python:psycopg-c@3.3.4` | `unproven-libpq-runtime-file` |
+| `python:pydantic-core@2.46.4` | `unproven-libgcc-runtime-file` |
 
 Cryptography, Greenlet, MarkupSafe, and SQLAlchemy are closed. The resulting
 ledger has `complete: false`, `remaining_owner_count: 3`, and the three sorted

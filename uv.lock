@@ -426,6 +426,9 @@ docs = [
     { name = "mkdocs" },
     { name = "mkdocs-material" },
 ]
+evidence = [
+    { name = "packaging" },
+]
 
 [package.metadata]
 requires-dist = [
@@ -461,6 +464,7 @@ docs = [
     { name = "mkdocs", specifier = ">=1.6.0,<2" },
     { name = "mkdocs-material", specifier = ">=9.5.0,<10" },
 ]
+evidence = [{ name = "packaging", specifier = ">=26.0,<27" }]
 
 [[package]]
 name = "fastapi"

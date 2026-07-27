@@ -34,7 +34,7 @@ run = [
 [tasks."lint:workflows"]
 run = [
   "actionlint",
-  "shellcheck .github/scripts/smoke-container.sh",
+  "shellcheck .github/scripts/fetch-native-wheelhouse.sh .github/scripts/smoke-container.sh .github/scripts/verify-native-wheelhouse-index.sh",
   "jq -e -f .github/scripts/validate-openvex.jq .openvex.json > /dev/null",
 ]
 

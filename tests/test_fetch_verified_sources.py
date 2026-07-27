@@ -32,6 +32,7 @@ PUBLIC_IP = "93.184.216.34"
 SOURCE_REVISION = "1" * 40
 POLICY_SHA256 = "2" * 64
 UV_LOCK_SHA256 = "3" * 64
+NATIVE_WHEELHOUSE_CONTRACT_SHA256 = "4" * 64
 
 
 def load_script(path: Path, name: str) -> ModuleType:
@@ -80,6 +81,7 @@ def plan_record(specs: tuple[RequestSpec, ...]) -> dict[str, Any]:
         "source_revision": SOURCE_REVISION,
         "policy_sha256": POLICY_SHA256,
         "uv_lock_sha256": UV_LOCK_SHA256,
+        "native_wheelhouse_contract_sha256": NATIVE_WHEELHOUSE_CONTRACT_SHA256,
         "requests": [
             request_record(spec) for spec in sorted(specs, key=lambda item: item.identifier)
         ],

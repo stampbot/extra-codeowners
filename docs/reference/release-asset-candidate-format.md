@@ -93,7 +93,7 @@ That count is no longer a final policy:
 
 Adding the three records to the old 26-file design would produce at least 29
 assets if every old assumption remained valid. Do not turn that arithmetic
-into a new expected count. Schema 7 evidence delivery and the recipient
+into a new expected count. Schema 8 evidence delivery and the recipient
 verification contract are not frozen yet, so issues #18, #25, and #28 must set
 the actual final policy together.
 
@@ -214,7 +214,7 @@ workflow identities agree. The explicit
 
 It also does not:
 
-- consume schema 7 container evidence or prove `source_completeness: true`
+- consume schema 8 container evidence or prove `source_completeness: true`
 - create the recipient evidence archives required by issue #18
 - create checksums or a final release manifest
 - run archive parsing in the offline, rootless sandbox required by issue #28
@@ -222,7 +222,7 @@ It also does not:
 - call the release controller or GitHub API adapter
 - grant release, package, registry, signing, tagging, or attestation authority.
 
-The next release-assembler tranche must consume only complete schema 7
+The next release-assembler tranche must consume only complete schema 8
 evidence, freeze the final asset policy, and satisfy the recipient verification
 contract. Only then should a separate reviewed transformation create the
 controller manifest accepted by issue #25's privileged publisher.

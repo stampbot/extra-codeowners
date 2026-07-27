@@ -41,8 +41,32 @@ expected_selection_record_sha256="$(
       '{{ index .Config.Labels "org.stampbot.extra-codeowners.python-selection-record.sha256" }}' \
     "$image"
 )"
+expected_wheelhouse_digest="$(
+  docker image inspect \
+    --format \
+      '{{ index .Config.Labels "org.stampbot.extra-codeowners.native-wheelhouse.index-digest" }}' \
+    "$image"
+)"
+expected_wheelhouse_revision="$(
+  docker image inspect \
+    --format \
+      '{{ index .Config.Labels "org.stampbot.extra-codeowners.native-wheelhouse.revision" }}' \
+    "$image"
+)"
+expected_wheelhouse_schema="$(
+  docker image inspect \
+    --format \
+      '{{ index .Config.Labels "org.stampbot.extra-codeowners.native-wheelhouse.schema" }}' \
+    "$image"
+)"
 if ! [[ "$expected_build_revision" =~ ^[0-9a-f]{40}$ ]]; then
   printf 'Container image has an invalid source-revision label.\n' >&2
+  exit 1
+fi
+if ! [[ "$expected_wheelhouse_revision" =~ ^[0-9a-f]{40}$ ]] ||
+   ! [[ "$expected_wheelhouse_digest" =~ ^sha256:[0-9a-f]{64}$ ]] ||
+   [[ "$expected_wheelhouse_schema" != 2 ]]; then
+  printf 'Container image has invalid native-wheelhouse labels.\n' >&2
   exit 1
 fi
 for digest in "$expected_wheel_sha256" "$expected_selection_record_sha256"; do
@@ -100,10 +124,16 @@ docker run --detach \
   "$image" >/dev/null
 
 docker exec \
+  --env "EXPECTED_ARCHITECTURE=$expected_architecture" \
   --env "EXPECTED_BUILD_REVISION=$expected_build_revision" \
   --env "EXPECTED_SELECTION_RECORD_SHA256=$expected_selection_record_sha256" \
   --env "EXPECTED_WHEEL_SHA256=$expected_wheel_sha256" \
+  --env "EXPECTED_WHEELHOUSE_DIGEST=$expected_wheelhouse_digest" \
+  --env "EXPECTED_WHEELHOUSE_REVISION=$expected_wheelhouse_revision" \
+  --env "EXPECTED_WHEELHOUSE_SCHEMA=$expected_wheelhouse_schema" \
   "$container_name" /opt/venv/bin/python -c '
+import hashlib
+import json
 import os
 import stat
 from pathlib import Path
@@ -130,6 +160,53 @@ assert not Path("/opt/venv/lib/python3.14/site-packages/_virtualenv.py").exists(
 assert not Path("/opt/venv/lib/python3.14/site-packages/_virtualenv.pth").exists()
 assert not Path("/opt/venv/bin/activate").exists()
 assert not Path("/opt/venv/.lock").exists()
+
+wheelhouse = Path("/usr/share/extra-codeowners/native-wheelhouse")
+assert wheelhouse.is_dir(), "official image must retain its native wheelhouse"
+assert wheelhouse.stat().st_uid == wheelhouse.stat().st_gid == 0
+assert stat.S_IMODE(wheelhouse.stat().st_mode) == 0o555
+assert not os.access(wheelhouse, os.W_OK), "runtime UID must not rewrite the wheelhouse"
+files = {path.name: path for path in wheelhouse.iterdir()}
+assert files and all(path.is_file() and not path.is_symlink() for path in files.values())
+for retained in files.values():
+    metadata = retained.stat()
+    assert metadata.st_uid == metadata.st_gid == 0
+    assert stat.S_IMODE(metadata.st_mode) == 0o444
+    assert not os.access(retained, os.W_OK)
+
+manifest_raw = files["manifest.json"].read_bytes()
+manifest = json.loads(manifest_raw)
+assert manifest["kind"] == "extra-codeowners/native-wheelhouse"
+assert manifest["schema_version"] == int(os.environ["EXPECTED_WHEELHOUSE_SCHEMA"])
+assert manifest["platform"] == "linux/" + os.environ["EXPECTED_ARCHITECTURE"]
+assert manifest["python"] == {
+    "abi": "cp314",
+    "implementation": "cpython",
+    "version": "3.14.6",
+}
+inputs_raw = files["inputs.json"].read_bytes()
+assert manifest["inputs"] == {
+    "sha256": hashlib.sha256(inputs_raw).hexdigest(),
+    "size": len(inputs_raw),
+}
+expected_files = {"cargo-inputs.json", "inputs.json", "manifest.json", "sbom.spdx.json"}
+for wheel in manifest["wheels"]:
+    retained = files[wheel["filename"]]
+    payload = retained.read_bytes()
+    assert len(payload) == wheel["size"]
+    assert hashlib.sha256(payload).hexdigest() == wheel["sha256"]
+    expected_files.add(wheel["filename"])
+assert set(files) == expected_files
+
+sbom = json.loads(files["sbom.spdx.json"].read_bytes())
+sbom_packages = {
+    package["name"]: package["checksums"][0]["checksumValue"]
+    for package in sbom["packages"]
+}
+assert sbom_packages == {
+    wheel["distribution"]: wheel["sha256"]
+    for wheel in manifest["wheels"]
+}
 
 license_path = Path("/usr/share/licenses/extra-codeowners/LICENSE")
 assert "Apache License" in license_path.read_text(encoding="utf-8")

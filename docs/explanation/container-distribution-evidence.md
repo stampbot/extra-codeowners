@@ -93,10 +93,11 @@ candidate. Issue #28 independently blocks tagged publication. Passing CI does
 not override either condition.
 
 The separate [native wheelhouse build](native-wheelhouse.md) creates
-reproducible replacements for CFFI, Psycopg C, and Pydantic Core. The current
-application image still installs the upstream wheels reviewed on this page.
-Until a digest-pinned integration updates the application and its evidence,
-the three owner records remain open.
+reproducible replacements for CFFI, Psycopg C, and Pydantic Core. The
+application image selects the signed wheelhouse by immutable digest, verifies
+it before use, installs those wheels offline, and retains their bytes. The
+three owner records remain open only at the boundary between each recorded
+shared-library name and one exact APK-owned runtime file occurrence.
 
 ## How the CI collector builds the evidence
 
@@ -124,12 +125,13 @@ every layer against the bytes it received. It then:
    runtime file (including the installer-generated `RECORD` and reviewed
    launcher aliases) to match one complete selected-wheel layout, and retains
    all five proof files under `artifacts/application/`
-8. selects one hash-locked platform wheel for each native or SBOM owner,
-   verifies its complete archive `RECORD` against the historical installation,
-   and retains the wheel and raw SBOM bytes under `artifacts/native-wheels/`
-9. validates every schema-7 owner observation, disposition, review, omission,
-   and cross-owner relationship; writes the derived coverage ledger; and binds
-   each closed owner to its exact locked source
+8. selects one hash-locked platform wheel from either the Python lock or signed
+   wheelhouse contract for each native or SBOM owner, verifies its complete
+   archive `RECORD` against the historical installation, and retains the wheel
+   and raw SBOM bytes under `artifacts/native-wheels/`
+9. validates every schema-8 owner observation, wheelhouse build record,
+   disposition, review, omission, and cross-owner relationship; writes the
+   derived coverage ledger; and binds each owner to its exact reviewed source
 10. reads the hash-pinned source and license material from verified source
     stores, including the Greenlet/GCC component source and notices, and
     produces a deterministic review archive whose manifest derives the current
@@ -216,7 +218,7 @@ approve distribution.
 
 Path and hash baselines tell us that a file changed. They don't tell us what
 the file contains, and an SBOM doesn't necessarily tell us which component
-produced a file. Schema 7 keeps those facts separate.
+produced a file. Schema 8 keeps those facts separate.
 
 The collector parses every CycloneDX JSON document below a wheel's
 `.dist-info/sboms/` directory. It accepts specification versions 1.4 through
@@ -239,15 +241,11 @@ can't drift to a similar component in another document.
 #### Repeated PURLs are occurrences, not aliases
 
 A PURL describes a package identity. It doesn't always identify one occurrence
-inside a document. The Psycopg auditwheel SBOM demonstrates the difference: it
-contains four `krb5` occurrences and two `libldap` occurrences. Each group
-shares a PURL, but every occurrence has its own `bom-ref`.
-
-Schema 7 uses a nonempty `bom-ref` as the document-local occurrence identity.
+inside a document. Schema 8 uses a nonempty `bom-ref` as the document-local
+occurrence identity.
 It falls back to the PURL only when `bom-ref` is empty. A document may repeat a
 PURL only when every repetition has a unique, nonempty `bom-ref`; duplicate
-`bom-ref` values and mixed fallback identities fail. This preserves the six
-Psycopg observations instead of silently collapsing them into two packages.
+`bom-ref` values and mixed fallback identities fail.
 
 PURLs and `bom-ref` values remain scoped to their source document. Independent
 builders can use different namespaces or build paths for the same component.
@@ -260,11 +258,11 @@ An SBOM metadata component can describe the wheel owner, an embedded component,
 or a known omission. It can also be absent. Policy records that decision for
 each document.
 
-Auditwheel currently emits one narrow anomaly for the Cryptography, Greenlet,
-and Psycopg wheels: the document repeats its metadata root as a canonically
-identical top-level component with the same `bom-ref`. The parser accepts only
-that exact echo. Policy must add a `metadata-root-echo` anomaly review with a
-reason, and the coverage ledger reports it in
+Auditwheel emits one narrow anomaly for the current Cryptography and Greenlet
+wheels: the document repeats its metadata root as a canonically identical
+top-level component with the same `bom-ref`. The parser accepts only that exact
+echo. Policy must add a `metadata-root-echo` anomaly review with a reason, and
+the coverage ledger reports it in
 `observed_sbom_anomalies`. A changed or unreviewed echo fails.
 
 #### Observation, review, and payload claims stay separate
@@ -292,7 +290,7 @@ or SONAME. A payload disposition can say which observations are relevant to
 the payload, but the retained SBOM still shows the limits of the upstream
 claim.
 
-Schema 7 has one deliberately narrow relationship for evidence shared between
+Schema 8 has one deliberately narrow relationship for evidence shared between
 owners. `same-component-by-payload-equivalence` requires the source and target
 payloads to be byte-identical. Each named payload disposition must cite its
 corresponding observation, and the target observation must have a direct
@@ -349,22 +347,17 @@ retained inputs built either wheel.
 MarkupSafe and SQLAlchemy have no embedded SBOM, so their SBOM and
 component-review arrays are empty while their native payload sets remain exact.
 
-Pydantic Core retains and verifies all 87 crates.io sources named by its SBOM,
-the root Cargo package from its sdist, and the exact lockfile with 16 additional
-registry entries. Its extension payload is covered by those observations. The
-owner stays open because its separate bundled `libgcc` payload has no SBOM
-observation or proven build input. Source retention still does not prove that
-the retained inputs built the wheel.
+The signed wheelhouse gives CFFI, Psycopg C, and Pydantic Core exact source,
+wheel, and build records. Pydantic Core's record also binds its local Cargo
+package and locked crates.io inputs. The three owners remain open for narrower
+reasons:
 
-Three owners are still open:
-
-- CFFI has no embedded native-component inventory, and its upstream build did
-  not record the digest of the libffi 3.4.6 source it downloaded.
-- Psycopg still lacks a `libpq` SBOM observation and reviewed source closure
-  for its bundled libraries.
-- Pydantic Core still lacks a `libgcc` observation and source-to-payload
-  relationship. Its bundled `libgcc` identifies GCC 12.4.0, not the reviewed
-  Alpine GCC 14.2 payload used by other owners.
+- CFFI records `libffi.so.8` and Alpine `libffi`, but not the exact
+  APK-owned runtime file that satisfies that name.
+- Psycopg C records `libpq.so.5` and Alpine `libpq`, but not the exact
+  APK-owned runtime file that satisfies that name.
+- Pydantic Core records `libgcc_s.so.1` and Alpine `libgcc`, but not the exact
+  APK-owned runtime file that satisfies that name.
 
 `inventory/native-component-coverage.json` copies closed records into
 `resolved_owners` and open records into `unresolved_owners`. It also names the
@@ -399,7 +392,18 @@ This distinction does not discard evidence. Raw headers and layer digests stay
 in `all-layer-files.json`, and every post-base directory header must still be
 root-owned with mode `0755`. The canonical replay only removes differences that
 produce the same validated filesystem state across trusted Docker/OCI
-exporters.
+exporters. Regular-file policy stays byte-exact: every post-base
+`/etc/apk/world` occurrence is bound to its layer, digest, size, mode, owner,
+group, and final-effect status. Package-manager state, runtime library files,
+and runtime library links introduced above the base have their own exact
+platform baselines. Those baselines classify accepted image changes; they do
+not turn file co-presence into build provenance.
+
+`apk.log` is not package identity evidence, and its normal contents include
+wall-clock build times. The runtime build truncates it in the package-install
+layer. Policy therefore binds the same empty, root-owned file on both
+architectures while retaining the APK database and APK world records that
+describe installed and selected packages.
 
 ### Artifact names expose the workflow identity
 
@@ -505,7 +509,7 @@ change breaks the policy comparison.
 A top-level `LicenseRef-*` resolution requires an exact component set, a
 nonempty rationale, and one source-carried notice path and SHA-256 for every
 covered component. An unrelated file with a plausible name cannot satisfy the
-pin. Schema 7 rejects `LicenseRef-*` in native-component expressions
+pin. Schema 8 rejects `LicenseRef-*` in native-component expressions
 because those components do not use the top-level custom-license evidence
 ledger. The current public-domain resolutions bind these exact records:
 

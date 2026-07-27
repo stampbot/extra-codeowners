@@ -5,12 +5,12 @@ evidence. It isn't runtime configuration. If a package, source archive, license,
 base layer, native payload, or embedded software bill of materials (SBOM)
 changes, the policy must change with it.
 
-The current policy schema is `7`. Evidence predicates use
-`application/vnd.stampbot.container-evidence.v7+tar+gzip`. The collector
-rejects schema 6 and every other version; there is no compatibility reader or
+The current policy schema is `8`. Evidence predicates use
+`application/vnd.stampbot.container-evidence.v8+tar+gzip`. The collector
+rejects schema 7 and every other version; there is no compatibility reader or
 automatic migration.
 
-## What schema 7 records
+## What schema 8 records
 
 The collector inventories every distributed image layer, including bytes that
 a later whiteout hides. It binds CPython to the installed runtime, the pinned
@@ -18,7 +18,7 @@ Docker Official Python recipe, the exact source archive, and its license. For
 each Python wheel with native code or an embedded SBOM, it also retains the
 locked wheel, native payloads, and raw SBOM bytes.
 
-Schema 7 keeps observation separate from review:
+Schema 8 keeps observation separate from review:
 
 - An SBOM observation preserves the document path and digest plus each exact
   component occurrence: type, name, version, package URL (PURL), `bom-ref`,
@@ -37,11 +37,8 @@ exact omission that lists its observation or role. A reference listed under a
 different omission does not satisfy that claim.
 
 `bom-ref` is the occurrence identity when it is present. A PURL is only the
-fallback when `bom-ref` is empty. This matters for the Psycopg wheel: its SBOM
-contains four distinct `krb5` occurrences and two distinct `libldap`
-occurrences with repeated PURLs. Schema 7 keeps all six because their
-`bom-ref` values are unique. It rejects repeated PURLs when any occurrence
-lacks a unique, nonempty `bom-ref`.
+fallback when `bom-ref` is empty. Schema 8 rejects repeated PURLs when any
+occurrence lacks a unique, nonempty `bom-ref`.
 
 Some auditwheel documents repeat their metadata root as a canonically identical
 top-level component, including the same `bom-ref`. The collector accepts only
@@ -62,6 +59,13 @@ generation reparses that lockfile and rejects a missing package, an unexpected
 package, a foreign registry, or a checksum mismatch. Owners without a crate
 review use `cargo_lock: null`.
 
+Schema 8 also binds the application image to one signed native-wheelhouse
+consumer contract. A wheelhouse owner records its exact wheel, reviewed source,
+locked Cargo inputs where applicable, and linked runtime libraries. Those
+records prove which reviewed build supplied the installed extension. They do
+not yet prove which exact APK-owned runtime file satisfied each linked-library
+name.
+
 ## Current closure
 
 Every observed native-wheel owner has a policy record on both architectures.
@@ -70,12 +74,12 @@ verification instead of becoming an inferred gap.
 
 | Owner | State | Evidence still missing |
 | --- | --- | --- |
-| `python:cffi@2.1.0` | Open | `unproven-libffi-build-input` |
+| `python:cffi@2.1.0` | Open | `unproven-libffi-runtime-file` |
 | `python:cryptography@48.0.1` | Closed | None |
 | `python:greenlet@3.5.3` | Closed | None |
 | `python:markupsafe@3.0.3` | Closed | None |
-| `python:psycopg-binary@3.3.4` | Open | `missing-libpq-sbom`, `unreviewed-bundled-library-sources` |
-| `python:pydantic-core@2.46.4` | Open | `missing-libgcc-sbom` |
+| `python:psycopg-c@3.3.4` | Open | `unproven-libpq-runtime-file` |
+| `python:pydantic-core@2.46.4` | Open | `unproven-libgcc-runtime-file` |
 | `python:sqlalchemy@2.0.51` | Closed | None |
 
 Cryptography binds all 32 registry components to their exact crates.io
@@ -87,15 +91,12 @@ auditwheel PURL remains `NotpineForGHA`. A relationship links that `libgcc`
 occurrence to Greenlet's closed Alpine GCC evidence because the payload bytes
 match exactly.
 
-Pydantic Core binds all 87 registry components from its SBOM to exact crates.io
-archives, manifests, checksums, licenses, and notices. Its retained sdist
-supplies the root Cargo package and exact `Cargo.lock`; the lock records 16
-additional registry packages that are not SBOM components. The compiled
-library target comes from the pinned manifest; bundle generation checks it
-before associating the `src/lib.rs` observation with the extension payload.
-Pydantic Core remains open because the wheel's bundled GCC 12.4 `libgcc` has
-no SBOM observation or proven source-to-payload relationship. The retained
-sources do not prove which build produced the wheel.
+The signed wheelhouse binds Pydantic Core to its retained source distribution,
+local package, locked crates.io inputs, and `libgcc_s.so.1`. It binds CFFI to
+its reviewed source and `libffi.so.8`, and Psycopg C to its reviewed source and
+`libpq.so.5`. Each owner remains open because current image evidence stops at
+the shared-library name and Alpine package identity; it does not bind that name
+to one exact APK-owned runtime file occurrence.
 
 Greenlet's reviewed components use the commit-pinned Alpine GCC recipe and
 source archive. MarkupSafe and SQLAlchemy have no embedded SBOM, so their
@@ -118,10 +119,9 @@ Three owners remain open, so `source_completeness.complete` is `false`.
 `distribution_approval.approved` also remains `false`. The ledger records
 progress. It does not grant permission to distribute the image.
 
-The repository retains one CFFI wheel as a hostile test fixture. Its adjacent
-libffi 3.4.6 license preserves the notice required for that copy, but it does
-not identify the exact libffi archive used to build the wheel. The
-`unproven-libffi-build-input` omission therefore stays open.
+The wheelhouse closes the earlier upstream-wheel source gaps. The three
+runtime-file relationships above remain explicit omissions until image
+evidence proves them.
 
 ## Raw OCI release spine
 

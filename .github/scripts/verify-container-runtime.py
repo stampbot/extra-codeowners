@@ -31,7 +31,7 @@ EXPECTED_MODULES = {
     "mdurl": "mdurl",
     "prometheus-client": "prometheus_client",
     "psycopg": "psycopg",
-    "psycopg-binary": "psycopg_binary",
+    "psycopg-c": "psycopg_c",
     "pycparser": "pycparser",
     "pydantic": "pydantic",
     "pydantic-settings": "pydantic_settings",

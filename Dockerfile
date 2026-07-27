@@ -2,7 +2,11 @@
 
 FROM ghcr.io/astral-sh/uv:0.11.28@sha256:0f36cb9361a3346885ca3677e3767016687b5a170c1a6b88465ec14aefec90aa AS uv
 
+FROM ghcr.io/stampbot/extra-codeowners-native-wheelhouse:sha-0fd9ad42de969af08d2b7d2cb4fa8868fb2a4330@sha256:49367c7f9ebf4983ecd452f7ae75cebada98561328f3b586f9289c32601e2e8c AS native-wheelhouse
+
 FROM python:3.14.6-alpine3.24@sha256:26730869004e2b9c4b9ad09cab8625e81d256d1ce97e72df5520e806b1709f92 AS builder
+
+ARG TARGETPLATFORM
 
 ENV UV_COMPILE_BYTECODE=0 \
     UV_LINK_MODE=copy \
@@ -13,7 +17,6 @@ WORKDIR /build
 
 COPY --from=uv /uv /uvx /bin/
 COPY pyproject.toml uv.lock README.md mise.toml requirements-build.txt ./
-COPY .github/scripts/build_python_artifacts.py ./.github/scripts/
 
 # Bind the reviewed version to the executable selected by the immutable image digest.
 RUN python - <<'PY'
@@ -31,9 +34,58 @@ PY
 RUN python -c 'import sys; assert sys.version_info[:3] == (3, 14, 6), sys.version'
 
 # Resolve only the reviewed runtime graph. The application itself must come from
-# the cross-architecture artifact proof, never from this ambient build context.
+# the cross-architecture artifact proof, and the three native distributions must
+# come from the separately reviewed wheelhouse.
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev --no-install-project --no-build
+    uv sync \
+      --frozen \
+      --no-dev \
+      --no-install-project \
+      --no-install-package cffi \
+      --no-install-package psycopg-binary \
+      --no-install-package psycopg-c \
+      --no-install-package pydantic-core \
+      --no-build
+
+RUN apk add --no-cache \
+    binutils=2.45.1-r1 \
+    libgcc=15.2.0-r5 \
+    libpq=18.4-r0
+
+COPY .github/scripts/build_python_artifacts.py \
+     .github/scripts/native_wheelhouse.py \
+     ./.github/scripts/
+COPY containers/native-wheelhouse/inputs.json ./containers/native-wheelhouse/inputs.json
+COPY --from=native-wheelhouse /wheelhouse/ /native-wheelhouse/
+
+# Reverify the digest-selected wheelhouse against this checkout's reviewed
+# inputs, then install only its three runtime distributions without network
+# access. Each installed RECORD is bound back to the exact retained wheel.
+RUN --network=none \
+    python .github/scripts/native_wheelhouse.py verify \
+      --inputs containers/native-wheelhouse/inputs.json \
+      --wheelhouse /native-wheelhouse \
+      --platform "${TARGETPLATFORM}" \
+      --work /tmp/native-wheelhouse-verify && \
+    uv pip install \
+      --python /opt/venv \
+      --offline \
+      --no-index \
+      --no-deps \
+      --no-build \
+      --strict \
+      /native-wheelhouse/cffi-2.1.0-*.whl \
+      /native-wheelhouse/psycopg_c-3.3.4-*.whl \
+      /native-wheelhouse/pydantic_core-2.46.4-*.whl && \
+    python .github/scripts/native_wheelhouse.py verify-installed \
+      --inputs containers/native-wheelhouse/inputs.json \
+      --wheelhouse /native-wheelhouse \
+      --platform "${TARGETPLATFORM}" \
+      --work /tmp/native-wheelhouse-installed-verify \
+      --environment-root /opt/venv && \
+    rm -r \
+      /tmp/native-wheelhouse-installed-verify \
+      /tmp/native-wheelhouse-verify
 
 ARG APPLICATION_SOURCE_REVISION
 ARG APPLICATION_WHEEL_SHA256
@@ -117,6 +169,7 @@ COPY .github/scripts/build_python_distribution_spine.py \
      .github/scripts/release_spine.py \
      .github/scripts/run_evidence_parser.py \
      .github/scripts/smoke-container.sh \
+     .github/scripts/verify-container-runtime.py \
      .github/scripts/verified_source_store.py \
      ./.github/scripts/
 COPY .github/workflows/ ./.github/workflows/
@@ -128,9 +181,18 @@ COPY examples/ ./examples/
 COPY .dockerignore Dockerfile mise.toml mise.tutorial.toml renovate.json ./
 
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --group dev --no-install-project --inexact --no-build
+    uv sync \
+      --frozen \
+      --group dev \
+      --no-install-project \
+      --no-install-package cffi \
+      --no-install-package psycopg-binary \
+      --no-install-package psycopg-c \
+      --no-install-package pydantic-core \
+      --inexact \
+      --no-build
 
-# Adding development tools must not replace or mutate the selected wheel.
+# Adding development tools must not replace or mutate any selected wheel.
 RUN --mount=from=verified-python,target=/verified-python,ro \
     --network=none \
     wheel="$(find /verified-python -maxdepth 1 -type f -name 'extra_codeowners-*.whl' -print)" && \
@@ -144,6 +206,15 @@ RUN --mount=from=verified-python,target=/verified-python,ro \
       --wheel "$wheel" \
       --project-name extra-codeowners \
       --project-version "$version" >/dev/null
+
+RUN --network=none \
+    python .github/scripts/native_wheelhouse.py verify-installed \
+      --inputs containers/native-wheelhouse/inputs.json \
+      --wheelhouse /native-wheelhouse \
+      --platform "${TARGETPLATFORM}" \
+      --work /tmp/native-wheelhouse-test-installed-verify \
+      --environment-root /opt/venv && \
+    rm -r /tmp/native-wheelhouse-test-installed-verify
 
 RUN test ! -e /build/extra_codeowners && \
     /opt/venv/bin/python -c \
@@ -168,6 +239,9 @@ LABEL org.opencontainers.image.title="Extra CODEOWNERS" \
       org.opencontainers.image.revision="${APPLICATION_SOURCE_REVISION}" \
       org.opencontainers.image.version="${VERSION}" \
       org.stampbot.extra-codeowners.application-wheel.sha256="${APPLICATION_WHEEL_SHA256}" \
+      org.stampbot.extra-codeowners.native-wheelhouse.index-digest="sha256:49367c7f9ebf4983ecd452f7ae75cebada98561328f3b586f9289c32601e2e8c" \
+      org.stampbot.extra-codeowners.native-wheelhouse.revision="0fd9ad42de969af08d2b7d2cb4fa8868fb2a4330" \
+      org.stampbot.extra-codeowners.native-wheelhouse.schema="2" \
       org.stampbot.extra-codeowners.python-selection-record.sha256="${APPLICATION_SELECTION_RECORD_SHA256}"
 
 ENV PATH="/opt/venv/bin:${PATH}" \
@@ -179,6 +253,16 @@ ENV PATH="/opt/venv/bin:${PATH}" \
 WORKDIR /app
 
 COPY --from=builder /opt/venv /opt/venv
+COPY --from=native-wheelhouse --chown=0:0 /wheelhouse/ /usr/share/extra-codeowners/native-wheelhouse/
+
+# The APK database is retained as evidence. Its log contains wall-clock build
+# times, so normalize that non-authoritative file before policy binds the layer.
+RUN apk add --no-cache \
+    libgcc=15.2.0-r5 \
+    libpq=18.4-r0 && \
+    : > /var/log/apk.log && \
+    chmod 0444 /usr/share/extra-codeowners/native-wheelhouse/* && \
+    chmod 0555 /usr/share/extra-codeowners/native-wheelhouse
 
 # Keep Alpine's installed-package database for SBOM and vulnerability scanners,
 # but remove package installers from the immutable application runtime. Create

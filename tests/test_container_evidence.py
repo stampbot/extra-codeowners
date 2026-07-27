@@ -47,6 +47,11 @@ PYVENV_CONFIG = (
     b"prompt = extra-codeowners\n"
 )
 CPYTHON_PATCHLEVEL_SHA256 = "1c61b149e1ce72a7f6328c58057970d37fcafb02bec805be071dc0ed4cf39a95"
+NATIVE_WHEELHOUSE_INDEX_DIGEST = (
+    "sha256:49367c7f9ebf4983ecd452f7ae75cebada98561328f3b586f9289c32601e2e8c"
+)
+NATIVE_WHEELHOUSE_REVISION = "0fd9ad42de969af08d2b7d2cb4fa8868fb2a4330"
+NATIVE_WHEELHOUSE_SCHEMA = "2"
 VENV_LINKS = {
     "opt/venv/bin/python": "/usr/local/bin/python3",
     "opt/venv/bin/python3": "python",
@@ -404,8 +409,11 @@ def empty_filesystem_baselines() -> dict[str, dict[str, list[dict[str, Any]]]]:
     return {
         platform: {
             "apk_database_occurrences": [],
+            "post_base_apk_world_occurrences": [],
             "post_base_directory_effects": [],
             "post_base_removals": [],
+            "post_base_system_links": [],
+            "post_base_system_regular_occurrences": [],
         }
         for platform in ("linux/amd64", "linux/arm64")
     }
@@ -486,6 +494,9 @@ def standalone_inventory(component: dict[str, Any]) -> dict[str, Any]:
         "image_version": "1.0",
         "application_wheel_sha256": "e" * 64,
         "application_selection_record_sha256": "f" * 64,
+        "native_wheelhouse_index_digest": NATIVE_WHEELHOUSE_INDEX_DIGEST,
+        "native_wheelhouse_revision": NATIVE_WHEELHOUSE_REVISION,
+        "native_wheelhouse_schema": NATIVE_WHEELHOUSE_SCHEMA,
         "apk_database_sha256": "d" * 64,
         "components": [component, synthetic_runtime_component()],
         "embedded_sboms": [],
@@ -555,6 +566,9 @@ def saved_image_layers(path: Path, layers: list[bytes], *, architecture: str = "
                     "org.opencontainers.image.version": "1.0",
                     evidence.APPLICATION_WHEEL_LABEL: "e" * 64,
                     evidence.APPLICATION_SELECTION_LABEL: "f" * 64,
+                    evidence.NATIVE_WHEELHOUSE_INDEX_LABEL: (NATIVE_WHEELHOUSE_INDEX_DIGEST),
+                    evidence.NATIVE_WHEELHOUSE_REVISION_LABEL: (NATIVE_WHEELHOUSE_REVISION),
+                    evidence.NATIVE_WHEELHOUSE_SCHEMA_LABEL: (NATIVE_WHEELHOUSE_SCHEMA),
                 }
             },
             "os": "linux",
@@ -1031,7 +1045,7 @@ def _native_component_fixture_inputs() -> tuple[
 
 
 def native_component_v7_policy_case() -> dict[str, Any]:
-    """Return a minimal cross-platform v7 observation/review/closure policy."""
+    """Return a minimal cross-platform observation/review/closure policy."""
 
     inventories, _locked, fixture, _lock_sources = _native_component_fixture_inputs()
     source_id = "alpine:demo-native@1.2.3-r0"
@@ -1077,6 +1091,7 @@ def native_component_v7_policy_case() -> dict[str, Any]:
             {
                 "owner": fixture_owner["owner"],
                 "wheel": copy.deepcopy(fixture_owner["wheel"]),
+                "wheelhouse_build": None,
                 "owner_source": copy.deepcopy(fixture_owner["owner_source"]),
                 "cargo_lock": None,
                 "native_payloads": native_payloads,
@@ -1120,7 +1135,7 @@ def native_component_coverage_case() -> tuple[
     dict[str, Any],
     dict[tuple[str, str], dict[str, Any]],
 ]:
-    """Build exact inventories and their schema-v7 closed review policy."""
+    """Build exact inventories and their closed review policy."""
 
     inventories, locked, _fixture, lock_sources = _native_component_fixture_inputs()
     policy = native_component_v7_policy_case()
@@ -1418,13 +1433,13 @@ def test_strict_json_rejects_lone_unicode_surrogates() -> None:
         evidence.canonical_json({"value": "\ud800"})
 
 
-def test_schema_version_requires_exact_v7_integer_and_media_type() -> None:
-    evidence.require_schema({"schema_version": 7}, "test")
-    for unsupported in (True, 1, 2, 3, 4, 5, 6, 8):
+def test_schema_version_requires_exact_v8_integer_and_media_type() -> None:
+    evidence.require_schema({"schema_version": 8}, "test")
+    for unsupported in (True, 1, 2, 3, 4, 5, 6, 7, 9):
         with pytest.raises(evidence.EvidenceError, match="unsupported test schema"):
             evidence.require_schema({"schema_version": unsupported}, "test")
     assert evidence.EVIDENCE_MEDIA_TYPE == (
-        "application/vnd.stampbot.container-evidence.v7+tar+gzip"
+        "application/vnd.stampbot.container-evidence.v8+tar+gzip"
     )
 
 
@@ -2318,13 +2333,19 @@ def test_exact_apk_database_baseline_covers_virtual_records(tmp_path: Path) -> N
         "filesystem_baselines": {
             "linux/amd64": {
                 "apk_database_occurrences": clean_inventory["apk_database_occurrences"],
+                "post_base_apk_world_occurrences": [],
                 "post_base_directory_effects": [],
                 "post_base_removals": [],
+                "post_base_system_links": [],
+                "post_base_system_regular_occurrences": [],
             },
             "linux/arm64": {
                 "apk_database_occurrences": [],
+                "post_base_apk_world_occurrences": [],
                 "post_base_directory_effects": [],
                 "post_base_removals": [],
+                "post_base_system_links": [],
+                "post_base_system_regular_occurrences": [],
             },
         }
     }
@@ -2344,6 +2365,195 @@ def test_exact_apk_database_baseline_covers_virtual_records(tmp_path: Path) -> N
     )
     with pytest.raises(evidence.EvidenceError, match="APK databases differ"):
         evidence.verify_apk_database_baseline(hostile_inventory, policy)
+
+
+def test_post_base_apk_world_requires_exact_reviewed_occurrences(tmp_path: Path) -> None:
+    clean_image = tmp_path / "clean-apk-world.tar"
+    saved_image_layers(
+        clean_image,
+        [
+            tar_bytes(
+                {
+                    "etc/apk/world": b"python3\n",
+                    "lib/apk/db/installed": apk_database(),
+                }
+            ),
+            tar_bytes({"etc/apk/world": b"libffi\nlibpq\npython3\n"}),
+        ],
+    )
+    _inventory, clean_files = evidence._inventory_saved_image(
+        clean_image, "linux/amd64", "sha256:" + "a" * 64
+    )
+    base_digest = clean_files["layers"][0]["digest"]
+    occurrences = evidence.post_base_apk_world_occurrences(clean_files, 1, "linux/amd64")
+    policy = {
+        "base_image_platforms": {
+            "linux/amd64": {"layer_diff_ids": [base_digest]},
+            "linux/arm64": {"layer_diff_ids": ["sha256:" + "b" * 64]},
+        },
+        "filesystem_baselines": {
+            "linux/amd64": {
+                "apk_database_occurrences": [],
+                "post_base_apk_world_occurrences": occurrences,
+                "post_base_directory_effects": [],
+                "post_base_removals": [],
+                "post_base_system_links": [],
+                "post_base_system_regular_occurrences": [],
+            },
+            "linux/arm64": {
+                "apk_database_occurrences": [],
+                "post_base_apk_world_occurrences": [],
+                "post_base_directory_effects": [],
+                "post_base_removals": [],
+                "post_base_system_links": [],
+                "post_base_system_regular_occurrences": [],
+            },
+        },
+    }
+
+    evidence.verify_post_base_apk_world_baseline(clean_files, policy)
+
+    changed_image = tmp_path / "changed-apk-world.tar"
+    saved_image_layers(
+        changed_image,
+        [
+            tar_bytes(
+                {
+                    "etc/apk/world": b"python3\n",
+                    "lib/apk/db/installed": apk_database(),
+                }
+            ),
+            tar_bytes({"etc/apk/world": b"libffi\nlibpq\npython3\nunexpected\n"}),
+        ],
+    )
+    _inventory, changed_files = evidence._inventory_saved_image(
+        changed_image, "linux/amd64", "sha256:" + "a" * 64
+    )
+    with pytest.raises(evidence.EvidenceError, match="APK world occurrences differ"):
+        evidence.verify_post_base_apk_world_baseline(changed_files, policy)
+
+    invalid_layer = copy.deepcopy(clean_files)
+    next(
+        record
+        for record in invalid_layer["regular_files"]
+        if record["path"] == "etc/apk/world" and record["layer"] == 1
+    )["layer"] = True
+    with pytest.raises(evidence.EvidenceError, match="invalid post-base APK world layer"):
+        evidence.post_base_apk_world_occurrences(invalid_layer, 1, "linux/amd64")
+
+    invalid_path = copy.deepcopy(policy)
+    invalid_path["filesystem_baselines"]["linux/amd64"]["post_base_apk_world_occurrences"][0][
+        "path"
+    ] = "etc/apk/repositories"
+    with pytest.raises(evidence.EvidenceError, match="APK world policy has an invalid path"):
+        evidence.verify_post_base_apk_world_baseline(clean_files, invalid_path)
+
+    insecure_mode = copy.deepcopy(policy)
+    insecure_mode["filesystem_baselines"]["linux/amd64"]["post_base_apk_world_occurrences"][0][
+        "mode"
+    ] = 0o666
+    with pytest.raises(evidence.EvidenceError, match="must be root-owned with mode 0o0644"):
+        evidence.verify_post_base_apk_world_baseline(clean_files, insecure_mode)
+
+
+def test_post_base_system_files_and_links_require_exact_reviewed_occurrences(
+    tmp_path: Path,
+) -> None:
+    system_files = {
+        "lib/apk/db/scripts.tar.gz": b"scripts",
+        "lib/apk/db/triggers": b"triggers",
+        "usr/lib/libgcc_s.so.1": b"libgcc",
+        "usr/lib/libpq.so.5.18": b"libpq",
+        "var/log/apk.log": b"",
+    }
+    clean_image = tmp_path / "clean-system-files.tar"
+    saved_image_layers(
+        clean_image,
+        [
+            tar_bytes({"lib/apk/db/installed": apk_database()}),
+            tar_bytes(
+                system_files,
+                links={"usr/lib/libpq.so.5": "libpq.so.5.18"},
+                headers={"usr/lib/libpq.so.5.18": {"mode": 0o755}},
+            ),
+        ],
+    )
+    _inventory, clean_files = evidence._inventory_saved_image(
+        clean_image, "linux/amd64", "sha256:" + "a" * 64
+    )
+    base_digest = clean_files["layers"][0]["digest"]
+    regular = evidence.post_base_system_regular_occurrences(clean_files, 1, "linux/amd64")
+    links = evidence.post_base_system_links(clean_files, 1, "linux/amd64")
+    policy = {
+        "base_image_platforms": {
+            "linux/amd64": {"layer_diff_ids": [base_digest]},
+            "linux/arm64": {"layer_diff_ids": ["sha256:" + "b" * 64]},
+        },
+        "filesystem_baselines": {
+            "linux/amd64": {
+                "apk_database_occurrences": [],
+                "post_base_apk_world_occurrences": [],
+                "post_base_directory_effects": [],
+                "post_base_removals": [],
+                "post_base_system_links": links,
+                "post_base_system_regular_occurrences": regular,
+            },
+            "linux/arm64": {
+                "apk_database_occurrences": [],
+                "post_base_apk_world_occurrences": [],
+                "post_base_directory_effects": [],
+                "post_base_removals": [],
+                "post_base_system_links": [],
+                "post_base_system_regular_occurrences": [],
+            },
+        },
+    }
+
+    evidence.verify_post_base_system_baselines(clean_files, policy)
+
+    changed_image = tmp_path / "changed-system-files.tar"
+    changed_files = {**system_files, "usr/lib/libpq.so.5.18": b"changed"}
+    saved_image_layers(
+        changed_image,
+        [
+            tar_bytes({"lib/apk/db/installed": apk_database()}),
+            tar_bytes(
+                changed_files,
+                links={"usr/lib/libpq.so.5": "libpq.so.5.18"},
+                headers={"usr/lib/libpq.so.5.18": {"mode": 0o755}},
+            ),
+        ],
+    )
+    _inventory, changed_inventory = evidence._inventory_saved_image(
+        changed_image, "linux/amd64", "sha256:" + "a" * 64
+    )
+    with pytest.raises(evidence.EvidenceError, match="system files differ"):
+        evidence.verify_post_base_system_baselines(changed_inventory, policy)
+
+    changed_link_image = tmp_path / "changed-system-link.tar"
+    saved_image_layers(
+        changed_link_image,
+        [
+            tar_bytes({"lib/apk/db/installed": apk_database()}),
+            tar_bytes(
+                system_files,
+                links={"usr/lib/libpq.so.5": "libpq.so.5.17"},
+                headers={"usr/lib/libpq.so.5.18": {"mode": 0o755}},
+            ),
+        ],
+    )
+    _inventory, changed_link_inventory = evidence._inventory_saved_image(
+        changed_link_image, "linux/amd64", "sha256:" + "a" * 64
+    )
+    with pytest.raises(evidence.EvidenceError, match="system links differ"):
+        evidence.verify_post_base_system_baselines(changed_link_inventory, policy)
+
+    insecure_link = copy.deepcopy(policy)
+    insecure_link["filesystem_baselines"]["linux/amd64"]["post_base_system_links"][0]["mode"] = (
+        0o755
+    )
+    with pytest.raises(evidence.EvidenceError, match="system-link policy is invalid"):
+        evidence.verify_post_base_system_baselines(clean_files, insecure_link)
 
 
 @pytest.mark.parametrize("field", ["P", "V", "A", "L", "o", "c"])
@@ -2523,14 +2733,10 @@ def test_native_wheel_selection_and_verification_preserve_leading_zero_build(
     assert record["build"] == "001alpha"
 
 
-def test_committed_lock_selects_exact_seven_native_owner_wheels() -> None:
+def test_committed_lock_selects_exact_four_native_owner_wheels() -> None:
     policy = json.loads(Path(".compliance/container-policy.json").read_text())
     matrix = {
         "linux/amd64": {
-            "python:cffi@2.1.0": (
-                "cffi-2.1.0-cp314-cp314-musllinux_1_2_x86_64.whl",
-                "cp314-cp314-musllinux_1_2_x86_64",
-            ),
             "python:cryptography@48.0.1": (
                 "cryptography-48.0.1-cp311-abi3-musllinux_1_2_x86_64.whl",
                 "cp311-abi3-musllinux_1_2_x86_64",
@@ -2543,24 +2749,12 @@ def test_committed_lock_selects_exact_seven_native_owner_wheels() -> None:
                 "markupsafe-3.0.3-cp314-cp314-musllinux_1_2_x86_64.whl",
                 "cp314-cp314-musllinux_1_2_x86_64",
             ),
-            "python:psycopg-binary@3.3.4": (
-                "psycopg_binary-3.3.4-cp314-cp314-musllinux_1_2_x86_64.whl",
-                "cp314-cp314-musllinux_1_2_x86_64",
-            ),
-            "python:pydantic-core@2.46.4": (
-                "pydantic_core-2.46.4-cp314-cp314-musllinux_1_1_x86_64.whl",
-                "cp314-cp314-musllinux_1_1_x86_64",
-            ),
             "python:sqlalchemy@2.0.51": (
                 "sqlalchemy-2.0.51-cp314-cp314-musllinux_1_2_x86_64.whl",
                 "cp314-cp314-musllinux_1_2_x86_64",
             ),
         },
         "linux/arm64": {
-            "python:cffi@2.1.0": (
-                "cffi-2.1.0-cp314-cp314-musllinux_1_2_aarch64.whl",
-                "cp314-cp314-musllinux_1_2_aarch64",
-            ),
             "python:cryptography@48.0.1": (
                 "cryptography-48.0.1-cp311-abi3-musllinux_1_2_aarch64.whl",
                 "cp311-abi3-musllinux_1_2_aarch64",
@@ -2572,14 +2766,6 @@ def test_committed_lock_selects_exact_seven_native_owner_wheels() -> None:
             "python:markupsafe@3.0.3": (
                 "markupsafe-3.0.3-cp314-cp314-musllinux_1_2_aarch64.whl",
                 "cp314-cp314-musllinux_1_2_aarch64",
-            ),
-            "python:psycopg-binary@3.3.4": (
-                "psycopg_binary-3.3.4-cp314-cp314-musllinux_1_2_aarch64.whl",
-                "cp314-cp314-musllinux_1_2_aarch64",
-            ),
-            "python:pydantic-core@2.46.4": (
-                "pydantic_core-2.46.4-cp314-cp314-musllinux_1_1_aarch64.whl",
-                "cp314-cp314-musllinux_1_1_aarch64",
             ),
             "python:sqlalchemy@2.0.51": (
                 "sqlalchemy-2.0.51-cp314-cp314-musllinux_1_2_aarch64.whl",
@@ -5473,7 +5659,10 @@ def test_committed_policy_retains_pydantic_cargo_sources_and_stays_incomplete() 
     policy = cast(dict[str, Any], json.loads(Path(".compliance/container-policy.json").read_text()))
     evidence.validate_policy_schema(policy)
 
-    assert policy["schema_version"] == 7
+    assert policy["schema_version"] == 8
+    assert policy["native_wheelhouse_contract_sha256"] == (
+        "418c1f4a023d7d60af441f3d0b2be436898bef3bb7585e21b1371872c16bf0f3"
+    )
     assert policy["distribution_approval"]["approved"] is False
     source = policy["native_component_sources"]["alpine:gcc@14.2.0-r6"]
     assert source["allowed_recipe_links"] == []
@@ -5521,10 +5710,13 @@ def test_committed_policy_retains_pydantic_cargo_sources_and_stays_incomplete() 
         "crates-io:vcpkg@0.2.15",
     }
     assert cryptography_crate_source_ids <= all_crate_source_ids
+    assert {
+        source_id
+        for source_id in all_crate_source_ids
+        if not policy["native_component_sources"][source_id]["notices"]
+    } == {"crates-io:wit-bindgen-rt@0.39.0"}
     assert all(
-        source_record["notices"]
-        and source_record["crate"]["sha256"]
-        and source_record["manifest"]["sha256"]
+        source_record["crate"]["sha256"] and source_record["manifest"]["sha256"]
         for source_id, source_record in policy["native_component_sources"].items()
         if source_id in all_crate_source_ids
     )
@@ -5673,62 +5865,22 @@ def test_committed_policy_retains_pydantic_cargo_sources_and_stays_incomplete() 
         "version": "4.0.1",
     }
 
-    parsed_pydantic = evidence.parse_cyclonedx_sbom(
-        real_v7_fixture_bytes("pydantic_core-2.46.4.pydantic-core.cyclonedx.json"),
-        "committed Pydantic Core source policy",
+    amd64_pydantic = next(
+        record
+        for record in policy["native_component_coverage"]["linux/amd64"]
+        if record["owner"] == "python:pydantic-core@2.46.4"
     )
-    pydantic_crate_source_ids = {
-        f"crates-io:{identity[0]}@{identity[1]}"
-        for component in parsed_pydantic["components"]
-        if (identity := evidence.cargo_purl_identity(component["purl"], "Pydantic fixture"))
-        is not None
-        and "download_url=file:" not in component["purl"]
-    }
-    assert len(pydantic_crate_source_ids) == 87
+    pydantic_crate_source_ids = set(amd64_pydantic["wheelhouse_build"]["cargo_source_ids"])
+    assert len(pydantic_crate_source_ids) == 103
     assert all_crate_source_ids == (cryptography_crate_source_ids | pydantic_crate_source_ids)
-    pydantic_local_source_id = "owner-sdist:python:pydantic-core@2.46.4#."
-    pydantic_local_source = policy["native_component_sources"][pydantic_local_source_id]
-    assert {
-        key: value
-        for key, value in pydantic_local_source.items()
-        if key not in {"cargo_packages", "workspace_manifest"}
-    } == {
-        "expanded_size": 3031381,
-        "kind": "owner-sdist-subpath",
-        "member_count": 257,
-        "notices": [
-            {
-                "member": "pydantic_core-2.46.4/LICENSE",
-                "sha256": ("2afdd30d54b4d62b6f488a6bcc1546e84ec5061f13f4209c03d012348783795a"),
-                "size": 1080,
-            }
-        ],
-        "owner": "python:pydantic-core@2.46.4",
-        "path": ".",
-        "reviewed_license": "MIT",
-        "tree_sha256": "350aed81d517fedf586f95cc71bc45689a49a1cebbe2d2a39dbc490f2b556331",
-    }
-    pydantic_manifest = {
-        "member": "pydantic_core-2.46.4/Cargo.toml",
-        "sha256": "20fcd4066f125dec91012a0cdb7f7c901963226c98906a7e414210a64ac1fcc3",
-        "size": 2875,
-    }
-    assert pydantic_local_source["workspace_manifest"] == pydantic_manifest
-    assert pydantic_local_source["cargo_packages"] == [
-        {
-            "manifest": pydantic_manifest,
-            "name": "pydantic-core",
-            "path": ".",
-            "version": "2.46.4",
-        }
-    ]
+    assert "owner-sdist:python:pydantic-core@2.46.4#." not in (policy["native_component_sources"])
 
     expected_owners = [
         "python:cffi@2.1.0",
         "python:cryptography@48.0.1",
         "python:greenlet@3.5.3",
         "python:markupsafe@3.0.3",
-        "python:psycopg-binary@3.3.4",
+        "python:psycopg-c@3.3.4",
         "python:pydantic-core@2.46.4",
         "python:sqlalchemy@2.0.51",
     ]
@@ -5737,20 +5889,17 @@ def test_committed_policy_retains_pydantic_cargo_sources_and_stays_incomplete() 
         "python:cryptography@48.0.1": "closed",
         "python:greenlet@3.5.3": "closed",
         "python:markupsafe@3.0.3": "closed",
-        "python:psycopg-binary@3.3.4": "open",
+        "python:psycopg-c@3.3.4": "open",
         "python:pydantic-core@2.46.4": "open",
         "python:sqlalchemy@2.0.51": "closed",
     }
     expected_omissions = {
-        "python:cffi@2.1.0": ["unproven-libffi-build-input"],
+        "python:cffi@2.1.0": ["unproven-libffi-runtime-file"],
         "python:cryptography@48.0.1": [],
         "python:greenlet@3.5.3": [],
         "python:markupsafe@3.0.3": [],
-        "python:psycopg-binary@3.3.4": [
-            "missing-libpq-sbom",
-            "unreviewed-bundled-library-sources",
-        ],
-        "python:pydantic-core@2.46.4": ["missing-libgcc-sbom"],
+        "python:psycopg-c@3.3.4": ["unproven-libpq-runtime-file"],
+        "python:pydantic-core@2.46.4": ["unproven-libgcc-runtime-file"],
         "python:sqlalchemy@2.0.51": [],
     }
     for platform in ("linux/amd64", "linux/arm64"):
@@ -5804,55 +5953,27 @@ def test_committed_policy_retains_pydantic_cargo_sources_and_stays_incomplete() 
         pydantic = next(
             record for record in owners if record["owner"] == "python:pydantic-core@2.46.4"
         )
-        libgcc = next(
-            omission
-            for omission in pydantic["known_omissions"]
-            if omission["id"] == "missing-libgcc-sbom"
-        )
-        assert libgcc["component"]["version"] == "12.4.0"
-        assert {
-            key: value
-            for key, value in pydantic["cargo_lock"].items()
-            if key != "non_sbom_packages"
-        } == {
-            "member": "pydantic_core-2.46.4/Cargo.lock",
-            "sha256": "c3c27fc600d7dafd149229c6501271dbc5f6b4f7b1bfa116b32e77217c2b5038",
-            "size": 24727,
-            "source_ids": sorted(pydantic_crate_source_ids),
+        assert pydantic["wheel"]["provider"] == "native-wheelhouse"
+        assert pydantic["wheel"]["source"] == "pydantic-core"
+        assert pydantic["cargo_lock"] is None
+        assert pydantic["component_reviews"] == []
+        assert pydantic["wheelhouse_build"] == {
+            "cargo_source_ids": sorted(pydantic_crate_source_ids),
+            "linked_libraries": [
+                {
+                    "name": "libgcc_s.so.1",
+                    "package": {"name": "libgcc", "version": "15.2.0-r5"},
+                }
+            ],
+            "local_cargo_packages": [{"name": "pydantic-core", "version": "2.46.4"}],
+            "source": "pydantic-core",
         }
-        assert len(pydantic["cargo_lock"]["non_sbom_packages"]) == 16
-        assert {
-            review["source"] for review in pydantic["component_reviews"]
-        } == pydantic_crate_source_ids | {pydantic_local_source_id}
-        local_review = next(
-            review
-            for review in pydantic["component_reviews"]
-            if review["source"] == pydantic_local_source_id
-        )
-        assert local_review["reviewed_license"] == "MIT"
-        assert [reference["purl"] for reference in local_review["observations"]] == [
-            "pkg:cargo/pydantic-core@2.46.4?download_url=file://.#src/lib.rs"
-        ]
-        binary_payload = next(
-            disposition
-            for disposition in pydantic["payload_dispositions"]
-            if disposition["role"] == "pydantic_core/_pydantic_core.cpython-314.so"
-        )
-        assert binary_payload["kind"] == "sbom-components"
-        assert len(binary_payload["observations"]) == 89
         assert pydantic["review"] == {
-            "reason": "The bundled libgcc build input remains unproven.",
+            "reason": ("The exact runtime shared-library file relationship remains unproven."),
             "state": "open",
-            "unresolved_items": ["missing-libgcc-sbom"],
+            "unresolved_items": ["unproven-libgcc-runtime-file"],
         }
-        assert (
-            sum(
-                sbom["metadata_root"]["anomaly_review"] is not None
-                for owner in owners
-                for sbom in owner["sboms"]
-            )
-            == 3
-        )
+        assert pydantic["known_omissions"][0]["component"]["version"] == "15.2.0-r5"
 
         inventory = {
             "platform": platform,
@@ -5890,7 +6011,7 @@ def test_committed_policy_retains_pydantic_cargo_sources_and_stays_incomplete() 
         ]
         assert [record["owner"] for record in ledger["unresolved_owners"]] == [
             "python:cffi@2.1.0",
-            "python:psycopg-binary@3.3.4",
+            "python:psycopg-c@3.3.4",
             "python:pydantic-core@2.46.4",
         ]
         assert {
@@ -5902,7 +6023,7 @@ def test_committed_policy_retains_pydantic_cargo_sources_and_stays_incomplete() 
             "remaining_owner_count": 3,
             "remaining_owner_names": [
                 "python:cffi@2.1.0",
-                "python:psycopg-binary@3.3.4",
+                "python:psycopg-c@3.3.4",
                 "python:pydantic-core@2.46.4",
             ],
         }
@@ -6191,13 +6312,9 @@ def test_known_omission_dispositions_bind_the_named_omission(
                 "anomaly_review": anomaly_review,
             }
         else:
-            psycopg = owners["python:psycopg-binary@3.3.4"]
-            disposition = next(
-                record
-                for record in psycopg["payload_dispositions"]
-                if record["role"] == "psycopg_binary.libs/libpq.so.5.18"
-            )
-            disposition["omission"] = "unreviewed-bundled-library-sources"
+            psycopg = owners["python:psycopg-c@3.3.4"]
+            omission = psycopg["known_omissions"][0]
+            omission["payload_roles"] = ["psycopg_c/pq.cpython-314.so"]
 
     with pytest.raises(evidence.EvidenceError, match=message):
         evidence.validate_native_component_policy_schema(policy)
@@ -7211,6 +7328,13 @@ def test_bundle_request_id_mapping_matches_the_real_direct_planner() -> None:
         source_revision="a" * 40,
     )
     policy = json.loads(policy_path.read_text())
+    lock_sources = evidence.parse_lock_sources(Path("uv.lock"))
+    source_fallbacks = {
+        (entry["name"], entry["version"]): {
+            field: entry[field] for field in ("url", "sha256", "size")
+        }
+        for entry in policy["python_sources"]
+    }
     expected_ids = {
         *evidence.BASE_SOURCE_REQUEST_IDS.values(),
         evidence.DOCKER_PYTHON_LICENSE_REQUEST_ID,
@@ -7235,7 +7359,15 @@ def test_bundle_request_id_mapping_matches_the_real_direct_planner() -> None:
                     )
                 )
         for owner in policy["native_component_coverage"][platform]:
-            expected_ids.add(evidence._python_wheel_request_id(platform, owner["owner"]))
+            if owner["wheel"].get("provider") == evidence.NATIVE_WHEELHOUSE_PROVIDER:
+                name, version = owner["owner"].removeprefix("python:").rsplit("@", maxsplit=1)
+                selected_source = lock_sources.get((name, version))
+                if selected_source is None:
+                    selected_source = source_fallbacks[(name, version)]
+                if owner["owner_source"] != selected_source:
+                    expected_ids.add(f"native-wheelhouse-source:{owner['wheel']['source']}")
+            else:
+                expected_ids.add(evidence._python_wheel_request_id(platform, owner["owner"]))
     for entry in policy["license_texts"]:
         expected_ids.add(evidence._license_text_request_id(entry["id"]))
     source_kinds = {source["kind"] for source in policy["native_component_sources"].values()}
@@ -7293,6 +7425,7 @@ def test_verified_source_store_pair_rejects_cross_store_binding_drift(
     revision = "a" * 40
     policy_sha256 = evidence.sha256_bytes(policy_path.read_bytes())
     lock_sha256 = evidence.sha256_bytes(lock_path.read_bytes())
+    wheelhouse_contract_sha256 = "9" * 64
     direct_plan_descriptor = {
         "algorithm": "sha256",
         "digest": "b" * 64,
@@ -7313,6 +7446,7 @@ def test_verified_source_store_pair_rejects_cross_store_binding_drift(
         "source_revision": revision,
         "policy_sha256": policy_sha256,
         "uv_lock_sha256": lock_sha256,
+        "native_wheelhouse_contract_sha256": wheelhouse_contract_sha256,
         "requests": direct_requests,
     }
     alpine_plan = {
@@ -7321,6 +7455,7 @@ def test_verified_source_store_pair_rejects_cross_store_binding_drift(
         "source_revision": revision,
         "policy_sha256": policy_sha256,
         "uv_lock_sha256": lock_sha256,
+        "native_wheelhouse_contract_sha256": wheelhouse_contract_sha256,
         "parent_plan": direct_plan_descriptor,
         "parent_manifest": direct_manifest_descriptor,
         "recipes": alpine_recipes,
@@ -7355,6 +7490,7 @@ def test_verified_source_store_pair_rejects_cross_store_binding_drift(
             alpine_reader,
             policy_sha256=policy_sha256,
             lock_sha256=lock_sha256,
+            native_wheelhouse_contract_sha256=wheelhouse_contract_sha256,
             source_revision=revision,
         )
 
@@ -7821,7 +7957,10 @@ def test_license_extraction_ignores_safe_non_license_tar_symlinks(tmp_path: Path
             "demo/LICENSE": b"license text\n",
             "demo/src/tool.c": b"int main(void) { return 0; }\n",
         },
-        links={"demo/src/tool-static.c": "tool.c"},
+        links={
+            "demo/src/tool-static.c": "tool.c",
+            "demo/src/subdir/tool-parent.c": "../tool.c",
+        },
     )
 
     retained = evidence.extract_license_files(archive, "demo", tmp_path)
@@ -7891,6 +8030,22 @@ def test_tar_extension_payload_is_bounded_before_materialization(
     monkeypatch.setattr(evidence, "MAX_TAR_EXTENSION_BYTES", 1024)
 
     with pytest.raises(evidence.EvidenceError, match="extension header"):
+        evidence.extract_license_files(archive_bytes.getvalue(), "demo", tmp_path)
+
+
+def test_tar_extension_payload_has_a_cumulative_bound(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    archive_bytes = io.BytesIO()
+    with tarfile.open(fileobj=archive_bytes, mode="w", format=tarfile.PAX_FORMAT) as archive:
+        for name in ("LICENSE", "NOTICE"):
+            member = tarfile.TarInfo(name)
+            member.size = 4
+            member.pax_headers = {"comment": "x" * 600}
+            archive.addfile(member, io.BytesIO(b"text"))
+    monkeypatch.setattr(evidence, "MAX_TAR_EXTENSIONS_TOTAL_BYTES", 1_000)
+
+    with pytest.raises(evidence.EvidenceError, match="cumulative size limit"):
         evidence.extract_license_files(archive_bytes.getvalue(), "demo", tmp_path)
 
 
@@ -8476,6 +8631,8 @@ def test_post_base_provenance_rejects_unclassified_regular_files(
     installed["demo-1.0.dist-info/RECORD"] = wheel_record(installed, "demo-1.0.dist-info/RECORD")
     base = tar_bytes({"lib/apk/db/installed": apk_database()})
     application_files = {
+        "etc/apk/world": b"libpq\npython3\n",
+        "lib/apk/db/installed": apk_database(),
         "opt/venv/pyvenv.cfg": PYVENV_CONFIG,
         "usr/share/licenses/extra-codeowners/LICENSE": license_content,
         **{f"{site}/{path}": content for path, content in installed.items()},
@@ -8494,6 +8651,7 @@ def test_post_base_provenance_rejects_unclassified_regular_files(
     clean_directory_effects, _clean_removals = evidence.canonical_post_base_filesystem_changes(
         clean_files, 1, "linux/amd64"
     )
+    clean_apk_world = evidence.post_base_apk_world_occurrences(clean_files, 1, "linux/amd64")
     policy = {
         "base_image_platforms": {
             "linux/amd64": {
@@ -8506,13 +8664,19 @@ def test_post_base_provenance_rejects_unclassified_regular_files(
         "filesystem_baselines": {
             "linux/amd64": {
                 "apk_database_occurrences": clean_inventory["apk_database_occurrences"],
+                "post_base_apk_world_occurrences": clean_apk_world,
                 "post_base_directory_effects": clean_directory_effects,
                 "post_base_removals": [],
+                "post_base_system_links": [],
+                "post_base_system_regular_occurrences": [],
             },
             "linux/arm64": {
                 "apk_database_occurrences": [],
+                "post_base_apk_world_occurrences": [],
                 "post_base_directory_effects": [],
                 "post_base_removals": [],
+                "post_base_system_links": [],
+                "post_base_system_regular_occurrences": [],
             },
         },
     }
@@ -8708,10 +8872,43 @@ def test_directory_effects_retain_real_transitions_and_reject_hostile_noops(
         }
     ]
     assert removals == []
+    readonly_image = tmp_path / "readonly-directory-effect.tar"
+    saved_image_layers(
+        readonly_image,
+        [
+            tar_bytes(
+                {"lib/apk/db/installed": apk_database()},
+                directories=["opt"],
+            ),
+            tar_bytes(
+                {},
+                directories=["opt/verified-inputs"],
+                headers={"opt/verified-inputs": {"mode": 0o555}},
+            ),
+        ],
+    )
+    _inventory, readonly_files = evidence._inventory_saved_image(
+        readonly_image, "linux/amd64", "sha256:" + "b" * 64
+    )
+    readonly_effects, readonly_removals = evidence.canonical_post_base_filesystem_changes(
+        readonly_files, 1, "linux/amd64"
+    )
+    assert readonly_effects == [
+        {
+            "layer": 1,
+            "path": "opt/verified-inputs",
+            "mode": 0o555,
+            "uid": 0,
+            "gid": 0,
+        }
+    ]
+    assert readonly_removals == []
     with pytest.raises(evidence.EvidenceError, match="invalid post-base directory-effect"):
         evidence.validate_directory_effect_policy(
             [{**effects[0], "effective": True}], "linux/amd64"
         )
+    with pytest.raises(evidence.EvidenceError, match="0o0555 or 0o0755"):
+        evidence.validate_directory_effect_policy([{**effects[0], "mode": 0o750}], "linux/amd64")
 
     policy = {
         "base_image_platforms": {
@@ -8721,13 +8918,19 @@ def test_directory_effects_retain_real_transitions_and_reject_hostile_noops(
         "filesystem_baselines": {
             "linux/amd64": {
                 "apk_database_occurrences": [],
+                "post_base_apk_world_occurrences": [],
                 "post_base_directory_effects": effects,
                 "post_base_removals": [],
+                "post_base_system_links": [],
+                "post_base_system_regular_occurrences": [],
             },
             "linux/arm64": {
                 "apk_database_occurrences": [],
+                "post_base_apk_world_occurrences": [],
                 "post_base_directory_effects": [],
                 "post_base_removals": [],
+                "post_base_system_links": [],
+                "post_base_system_regular_occurrences": [],
             },
         },
     }
@@ -8798,13 +9001,19 @@ def test_removal_policy_ignores_whiteout_marker_header_metadata(tmp_path: Path) 
         "filesystem_baselines": {
             "linux/amd64": {
                 "apk_database_occurrences": [],
+                "post_base_apk_world_occurrences": [],
                 "post_base_directory_effects": [],
                 "post_base_removals": expected,
+                "post_base_system_links": [],
+                "post_base_system_regular_occurrences": [],
             },
             "linux/arm64": {
                 "apk_database_occurrences": [],
+                "post_base_apk_world_occurrences": [],
                 "post_base_directory_effects": [],
                 "post_base_removals": [],
+                "post_base_system_links": [],
+                "post_base_system_regular_occurrences": [],
             },
         },
     }
@@ -8881,13 +9090,19 @@ def test_post_base_provenance_rejects_hostile_tar_security_metadata(
         "filesystem_baselines": {
             "linux/amd64": {
                 "apk_database_occurrences": clean_inventory["apk_database_occurrences"],
+                "post_base_apk_world_occurrences": [],
                 "post_base_directory_effects": clean_directory_effects,
                 "post_base_removals": [],
+                "post_base_system_links": [],
+                "post_base_system_regular_occurrences": [],
             },
             "linux/arm64": {
                 "apk_database_occurrences": [],
+                "post_base_apk_world_occurrences": [],
                 "post_base_directory_effects": [],
                 "post_base_removals": [],
+                "post_base_system_links": [],
+                "post_base_system_regular_occurrences": [],
             },
         },
     }
@@ -9533,7 +9748,7 @@ def test_real_cryptography_cargo_lock_and_openssl_observation_are_retained() -> 
     ]
 
 
-def test_real_cffi_libffi_candidate_cannot_replace_missing_build_provenance() -> None:
+def test_cffi_policy_uses_signed_build_provenance_and_keeps_runtime_gap_open() -> None:
     wheel = real_v7_fixture_bytes("cffi-2.1.0-cp314-musllinux-x86_64.whl")
     assert evidence.sha256_bytes(wheel) == (
         "dbf7c7a88e2bac086f06d14577332760bdeecc42bdec8ac4077f6260557d9326"
@@ -9573,21 +9788,28 @@ def test_real_cffi_libffi_candidate_cannot_replace_missing_build_provenance() ->
         )
         assert owner["sboms"] == []
         assert owner["review"]["state"] == "open"
+        assert owner["wheel"]["provider"] == "native-wheelhouse"
+        assert owner["wheelhouse_build"] == {
+            "cargo_source_ids": [],
+            "linked_libraries": [
+                {
+                    "name": "libffi.so.8",
+                    "package": {"name": "libffi", "version": "3.5.2-r1"},
+                }
+            ],
+            "local_cargo_packages": [],
+            "source": "cffi",
+        }
         assert owner["known_omissions"] == [
             {
                 "component": {
                     "name": "libffi",
-                    "purl": "",
+                    "purl": "pkg:apk/alpine/libffi@3.5.2-r1",
                     "type": "library",
-                    "version": "3.4.6",
+                    "version": "3.5.2-r1",
                 },
-                "id": "unproven-libffi-build-input",
-                "missing_evidence": [
-                    "build-material-attestation",
-                    "exact-source",
-                    "sbom-observation",
-                    "source-payload-relationship",
-                ],
+                "id": "unproven-libffi-runtime-file",
+                "missing_evidence": ["source-payload-relationship"],
                 "observations": [],
                 "payload_roles": ["_cffi_backend.cpython-314.so"],
                 "reason": owner["known_omissions"][0]["reason"],
@@ -10935,6 +11157,7 @@ def test_runtime_identity_expectations_match_dockerfile_and_mise() -> None:
     mise = evidence.tomllib.loads(Path("mise.toml").read_text())
     builder_stage = dockerfile.split(" AS builder\n", 1)[1].split("\nFROM builder AS test", 1)[0]
     test_stage = dockerfile.split("FROM builder AS test\n", 1)[1].split("\nFROM python:", 1)[0]
+    runtime_stage = dockerfile.rsplit("\nFROM python:", 1)[1]
     assert mise["tools"]["uv"] == evidence.EXPECTED_UV_VERSION
     assert f"ghcr.io/astral-sh/uv:{evidence.EXPECTED_UV_VERSION}@sha256:" in dockerfile
     assert (
@@ -10951,19 +11174,28 @@ def test_runtime_identity_expectations_match_dockerfile_and_mise() -> None:
     assert "openssh-keygen=10.3_p1-r0" in test_stage
     assert ".github/scripts/smoke-container.sh \\" in test_stage
     assert "COPY charts/ ./charts/" in test_stage
+    assert runtime_stage.index("apk add --no-cache") < runtime_stage.index(": > /var/log/apk.log")
     assert "!.github/scripts/smoke-container.sh" in dockerignore
     assert "charts" not in dockerignore
 
 
 def test_container_job_uses_the_locked_evidence_environment() -> None:
     workflow = Path(".github/workflows/ci.yml").read_text()
+    project = evidence.tomllib.loads(Path("pyproject.toml").read_text())
     container_job = workflow.split("  container:\n", 1)[1]
     evidence_step = container_job.split(
         "      - name: Export container bytes without parsing image layers\n", 1
     )[1].split("      - name: Upload container distribution evidence\n", 1)[0]
     assert "astral-sh/setup-uv@" in container_job
-    assert "uv sync --all-groups --frozen" in container_job
-    assert container_job.count("uv run --frozen python .github/scripts/container_evidence.py") == 2
+    assert project["dependency-groups"]["evidence"] == ["packaging>=26.0,<27"]
+    assert "uv sync --only-group evidence --frozen" in container_job
+    assert "uv sync --all-groups --frozen" not in container_job
+    assert (
+        container_job.count(
+            "uv run --frozen --no-sync python .github/scripts/container_evidence.py"
+        )
+        == 2
+    )
     assert "python .github/scripts/container_evidence.py bundle" not in workflow
     assert "--parser image-inventory" in evidence_step
     assert "--parser evidence" in evidence_step
@@ -11792,11 +12024,23 @@ def test_policy_schema_rejects_noncanonical_retained_paths() -> None:
     unexpanded_record["path"] += "/"
     variants.append(unexpanded)
 
-    for category in ("apk_database_occurrences", "post_base_directory_effects"):
+    for category in (
+        "apk_database_occurrences",
+        "post_base_apk_world_occurrences",
+        "post_base_directory_effects",
+        "post_base_system_regular_occurrences",
+    ):
         filesystem = copy.deepcopy(policy)
         record = filesystem["filesystem_baselines"]["linux/amd64"][category][0]
         record["path"] = "./" + record["path"]
         variants.append(filesystem)
+
+    system_link = copy.deepcopy(policy)
+    system_link_record = system_link["filesystem_baselines"]["linux/amd64"][
+        "post_base_system_links"
+    ][0]
+    system_link_record["path"] = "./" + system_link_record["path"]
+    variants.append(system_link)
 
     whiteout = copy.deepcopy(policy)
     whiteout_record = whiteout["filesystem_baselines"]["linux/amd64"]["post_base_removals"][0]
@@ -12154,8 +12398,17 @@ def test_trusted_native_component_bundle_contract_is_internally_bound(
     cpython_license = b"trusted CPython license\n"
     docker_recipe_url = "https://example.com/docker-python-recipe.tar.gz"
     cpython_source_url = "https://example.com/Python-3.14.6.tgz"
+    wheelhouse_contract = {
+        "index_digest": NATIVE_WHEELHOUSE_INDEX_DIGEST,
+        "manifest_schema_version": 2,
+        "source_revision": NATIVE_WHEELHOUSE_REVISION,
+    }
+    wheelhouse_contract_bytes = evidence.canonical_json(wheelhouse_contract)
+    wheelhouse_contract_sha256 = evidence.sha256_bytes(wheelhouse_contract_bytes)
     policy = {
+        "schema_version": evidence.SCHEMA_VERSION,
         "base_image_index_digest": "sha256:" + "3" * 64,
+        "native_wheelhouse_contract_sha256": wheelhouse_contract_sha256,
         "distribution_approval": {
             "approved": False,
             "approved_by": "",
@@ -12231,6 +12484,16 @@ def test_trusted_native_component_bundle_contract_is_internally_bound(
     monkeypatch.setattr(
         evidence, "verify_application_artifact_labels", lambda *_args, **_kwargs: None
     )
+    monkeypatch.setattr(
+        evidence,
+        "load_native_wheelhouse_checkout_contract",
+        lambda *_args, **_kwargs: (
+            SimpleNamespace(),
+            copy.deepcopy(wheelhouse_contract),
+            wheelhouse_contract_bytes,
+        ),
+    )
+    monkeypatch.setattr(evidence, "verify_native_wheelhouse_labels", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(evidence, "verify_base_layer_binding", lambda *_args: None)
     monkeypatch.setattr(
         evidence,
@@ -12257,6 +12520,24 @@ def test_trusted_native_component_bundle_contract_is_internally_bound(
         evidence,
         "verify_native_component_lock_bindings",
         lambda *_args: copy.deepcopy(native_coverage),
+    )
+    wheelhouse_directory = tmp_path / "wheelhouse-directory"
+    wheelhouse_directory.mkdir()
+    monkeypatch.setattr(
+        evidence.native_wheelhouse,
+        "verify_consumer_store",
+        lambda *_args, **_kwargs: (
+            {"schema_version": evidence.native_wheelhouse.SCHEMA_VERSION},
+            {"wheels": []},
+            wheelhouse_directory,
+        ),
+    )
+    monkeypatch.setattr(evidence, "select_wheelhouse_native_wheels", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(evidence, "verify_retained_native_wheelhouse", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(
+        evidence,
+        "retain_native_wheelhouse_store",
+        lambda *_args, **_kwargs: {"files": []},
     )
 
     def fake_retain_selected_application_artifacts(
@@ -12326,11 +12607,13 @@ def test_trusted_native_component_bundle_contract_is_internally_bound(
     checksum_output = output.with_suffix(output.suffix + ".sha256")
     direct_store_root = tmp_path / "direct-source-store"
     alpine_store_root = tmp_path / "alpine-source-store"
+    wheelhouse_store_root = tmp_path / "native-wheelhouse-store"
     bundle_work_root = tmp_path / "bundle-work"
     repo_root = tmp_path / "repo"
     selected_python_directory = tmp_path / "selected-python"
     direct_store_root.mkdir()
     alpine_store_root.mkdir()
+    wheelhouse_store_root.mkdir()
     bundle_work_root.mkdir()
     repo_root.mkdir()
     selected_python_directory.mkdir()
@@ -12428,6 +12711,7 @@ def test_trusted_native_component_bundle_contract_is_internally_bound(
         "source_revision": revision,
         "policy_sha256": policy_sha256,
         "uv_lock_sha256": lock_sha256,
+        "native_wheelhouse_contract_sha256": wheelhouse_contract_sha256,
         "requests": direct_requests,
     }
     alpine_plan = {
@@ -12438,6 +12722,7 @@ def test_trusted_native_component_bundle_contract_is_internally_bound(
         "source_revision": revision,
         "policy_sha256": policy_sha256,
         "uv_lock_sha256": lock_sha256,
+        "native_wheelhouse_contract_sha256": wheelhouse_contract_sha256,
         "parent_plan": direct_plan_descriptor,
         "parent_manifest": direct_manifest_descriptor,
         "recipes": [
@@ -12601,6 +12886,7 @@ def test_trusted_native_component_bundle_contract_is_internally_bound(
         "alpine_source_store_root": alpine_store_root,
         "alpine_source_plan_sha256": alpine_plan_sha256,
         "alpine_source_plan_size": alpine_plan_size,
+        "native_wheelhouse_store_root": wheelhouse_store_root,
         "bundle_work_root": bundle_work_root,
         "repo": repo_root,
         "output": output,
@@ -12954,11 +13240,20 @@ def test_bundle_clears_stale_outputs_before_any_input_parse(
     lock.write_text("version = 1\n")
     direct_store = tmp_path / "direct-store"
     alpine_store = tmp_path / "alpine-store"
+    wheelhouse_store = tmp_path / "native-wheelhouse-store"
     repo = tmp_path / "repo"
     selected = tmp_path / "selected"
     work = tmp_path / "work"
     outputs = tmp_path / "outputs"
-    for directory in (direct_store, alpine_store, repo, selected, work, outputs):
+    for directory in (
+        direct_store,
+        alpine_store,
+        wheelhouse_store,
+        repo,
+        selected,
+        work,
+        outputs,
+    ):
         directory.mkdir()
     output = outputs / "evidence.tar.gz"
     checksum = output.with_suffix(output.suffix + ".sha256")
@@ -12978,6 +13273,7 @@ def test_bundle_clears_stale_outputs_before_any_input_parse(
             alpine_source_store_root=alpine_store,
             alpine_source_plan_sha256="b" * 64,
             alpine_source_plan_size=1,
+            native_wheelhouse_store_root=wheelhouse_store,
             bundle_work_root=work,
             repo=repo,
             output=output,
@@ -13363,6 +13659,7 @@ def test_filesystem_policy_view_emits_validated_semantic_projection(tmp_path: Pa
     assert output.read_bytes() == evidence.canonical_json(
         {
             "platform": "linux/amd64",
+            "post_base_apk_world_occurrences": [],
             "post_base_directory_effects": [
                 {
                     "layer": 1,
@@ -13379,6 +13676,8 @@ def test_filesystem_policy_view_emits_validated_semantic_projection(tmp_path: Pa
                     "target": "removed",
                 }
             ],
+            "post_base_system_links": [],
+            "post_base_system_regular_occurrences": [],
         }
     )
 
@@ -13451,6 +13750,7 @@ def test_bundle_command_forwards_image_revision_requirement(
         alpine_source_store_root="alpine-store",
         alpine_source_plan_sha256="e" * 64,
         alpine_source_plan_size=456,
+        native_wheelhouse_store_root="native-wheelhouse-store",
         bundle_work_root="bundle-work",
         repo=str(tmp_path),
         output="bundle.tar.gz",
@@ -13475,6 +13775,7 @@ def test_bundle_command_forwards_image_revision_requirement(
     assert observed["direct_source_plan_size"] == 123
     assert observed["alpine_source_store_root"] == Path("alpine-store")
     assert observed["alpine_source_plan_sha256"] == "e" * 64
+    assert observed["native_wheelhouse_store_root"] == Path("native-wheelhouse-store")
     assert observed["bundle_work_root"] == Path("bundle-work")
 
 
@@ -13541,6 +13842,8 @@ def test_evidence_cli_requires_both_verified_source_store_bindings() -> None:
             "e" * 64,
             "--alpine-source-plan-size",
             "456",
+            "--native-wheelhouse-store-root",
+            "native-wheelhouse-store",
             "--bundle-work-root",
             "bundle-work",
         ]
@@ -13549,4 +13852,5 @@ def test_evidence_cli_requires_both_verified_source_store_bindings() -> None:
     assert parsed.direct_source_plan_size == 123
     assert parsed.alpine_source_store_root == "alpine-store"
     assert parsed.alpine_source_plan_size == 456
+    assert parsed.native_wheelhouse_store_root == "native-wheelhouse-store"
     assert parsed.bundle_work_root == "bundle-work"
