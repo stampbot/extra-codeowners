@@ -69,6 +69,23 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Rel
   real two-platform BuildKit directory export, a rerun-safe two-file
   `archive: false` CI transport proof, immutable pre-exposure object
   verification, and no publication authority.
+- A standard-library schema-9 recipient content verifier. It parses the
+  required single-member gzip framing and pax-tar envelope without generic
+  archive extraction. Before writing output, it bounds path use and the
+  per-document and aggregate JSON workload, then applies no-follow file
+  handling. It checks every checksum, all-layer occurrence, component-evidence
+  collection, reviewed policy and license decision, source pin, deterministic
+  notice, application source and artifact path, native-wheel launcher,
+  native-wheelhouse store record, and selected artifact binding. It derives
+  effective files and every filesystem baseline by replaying the layer
+  operations, parses reviewed license decisions as bounded canonical SPDX 2.3
+  expressions against a frozen SPDX identifier list, reparses retained Cargo
+  lockfiles, binds application and native-wheel launcher metadata to validated
+  installations, and requires the application source archive to carry the
+  same license bytes retained for recipients. TOML inputs now have explicit
+  structural bounds and fail closed on parser recursion.
+  Signature, attestation, and immutable-release authentication remain blocked
+  release work.
 - An offline-tested immutable-release controller core with exact draft
   ownership, retained asset descriptors, response-loss reconciliation, and no
   deletion or replacement authority.

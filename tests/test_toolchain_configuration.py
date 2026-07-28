@@ -1374,6 +1374,21 @@ def test_release_spine_scripts_are_in_every_python_type_check_entrypoint() -> No
             assert path in source, f"{source_name} does not type-check {path}"
 
 
+def test_recipient_verifier_is_type_checked_and_available_to_container_tests() -> None:
+    path = ".github/scripts/recipient_evidence.py"
+    sources = {
+        "mise": (ROOT / "mise.toml").read_text(encoding="utf-8"),
+        "CI": (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8"),
+        "release": (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8"),
+    }
+    for source_name, source in sources.items():
+        assert path in source, f"{source_name} does not type-check {path}"
+    dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+    test_stage = dockerfile.split("FROM builder AS test\n", 1)[1].split("\nFROM ", 1)[0]
+    assert path in test_stage
+    assert f"!{path}" in (ROOT / ".dockerignore").read_text(encoding="utf-8")
+
+
 def test_source_store_scripts_are_type_checked_and_available_to_container_tests() -> None:
     required = {
         ".github/scripts/container_source_plan.py",

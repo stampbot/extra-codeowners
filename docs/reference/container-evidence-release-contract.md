@@ -28,11 +28,12 @@ either output.
     not substitute pull-request artifacts, manual-run artifacts, or the old
     unsupported `main` image.
 
-Issue [#28](https://github.com/stampbot/extra-codeowners/issues/28) must still
-freeze the complete wire format: canonical JSON, the gzip and tar envelope and
-member order, `MANIFEST.json` and source-record schemas, Sigstore issuer and
-transparency-log requirements, and the SBOM and provenance predicate
-contracts.
+Issue [#28](https://github.com/stampbot/extra-codeowners/issues/28) still owns
+the complete release wire format. The repository now has a bounded verifier
+for the schema-9 predicate, gzip and tar envelope, `MANIFEST.json`, checksums,
+and retained files. The remaining format work covers Sigstore identity and
+transparency requirements, OCI attestations, and the SBOM and provenance
+predicate contracts.
 
 CI now gives image and source parsing separate rootless, networkless
 boundaries. A Docker-only process exports the local candidate without opening
@@ -44,8 +45,9 @@ offline.
 
 That is substantial #28 groundwork, not a supported release path. The tagged
 workflow does not yet transport and attest the image-export handoff, run the
-recipient procedure against exact candidate assets, or grant isolated signing
-and publication authority. A supported recipient verifier does not exist yet.
+complete recipient procedure against exact candidate assets, or grant isolated
+signing and publication authority. The current verifier checks unsigned
+content; it does not authenticate a producer.
 
 Three open security gates separate today's CI evidence from this release
 contract:
@@ -53,13 +55,14 @@ contract:
 | Issue | Work still required |
 | --- | --- |
 | [#18](https://github.com/stampbot/extra-codeowners/issues/18) | Deliver the complete notices and corresponding-source evidence against the exact platform digests, and document how recipients obtain it. |
-| [#28](https://github.com/stampbot/extra-codeowners/issues/28) | Carry the isolated CI handoffs into the tagged candidate pipeline, freeze the wire format, and ship an adversarially tested recipient verifier, signing and publication path, and how-to. |
+| [#28](https://github.com/stampbot/extra-codeowners/issues/28) | Carry the isolated CI handoffs into the tagged candidate pipeline, connect the content verifier to exact candidate assets and authenticated signatures and attestations, and finish the signing and publication path. |
 | [#32](https://github.com/stampbot/extra-codeowners/issues/32) | Bind the retained Python selection records and exact wheel digest into the complete release evidence, then bind the installed runtime to that same wheel. |
 
-The raw spine includes an adversarially tested transport verifier. It does not
-finish [#28](https://github.com/stampbot/extra-codeowners/issues/28), which
-still requires a separate recipient verifier and a runnable how-to for the
-final release assets.
+The raw spine includes an adversarially tested transport verifier. The
+schema-9 evidence archive now has a separate content verifier. Neither one
+finishes [#28](https://github.com/stampbot/extra-codeowners/issues/28): the
+release workflow still has to authenticate the final assets and exercise the
+complete recipient procedure before publication.
 
 The collector has completed CPython identity and source accounting and closes
 all seven observed native owners on both platforms. It retains the exact
@@ -167,8 +170,18 @@ valid predicates for one platform digest are an integrity failure.
 
 ## Archive envelope
 
-The archive is a deterministic gzip-compressed POSIX tar. Every retained
-member is a regular file with:
+The archive is one deterministic gzip member containing a POSIX pax tar. Its
+gzip header has no optional fields, timestamp `0`, maximum-compression marker
+`2`, and operating-system byte `255`. The verifier requires the exact CRC-32
+and input-size trailer and rejects concatenated members or any trailing byte.
+
+Tar members are sorted by their UTF-8 path bytes. A path longer than the
+100-byte name field, or containing non-ASCII text, uses one canonical
+path-only pax header immediately before the file. Short ASCII paths do not use
+pax. The stream ends with two zero blocks and only the zero padding needed to
+reach the next 10,240-byte tar record boundary.
+
+Every retained member is a regular file with:
 
 - a normalized relative POSIX path
 - no duplicate path
@@ -178,22 +191,127 @@ member is a regular file with:
 - the source commit's committer timestamp as whole Unix seconds, exactly the
   value produced by `git show -s --format=%ct SOURCE_REVISION`
 - an uncompressed size no greater than 64 MiB, except a member below
-  `sources/native-components/`, which may be no greater than 128 MiB.
+  `sources/native-components/` or an Alpine distfile at
+  `sources/alpine/ORIGIN/COMMIT/distfiles/FILENAME`, which may be no greater
+  than 128 MiB.
 
 Links, devices, FIFOs, sparse files, unknown member types, absolute or
 traversing paths, control characters, unsupported PAX fields, negative sizes,
-and partial archive iteration are invalid. The archive is limited to 100,000
-retained files and 1 GiB of retained and compressed output. A conforming
-verifier must enforce its own bounded compressed input, expansion, path,
-member-count, PAX/GNU extension, JSON-size, and JSON-depth limits before
-creating output.
+and partial archive iteration are invalid.
+
+The recipient verifier enforces these resource limits. Envelope and path
+limits apply before file creation, JSON limits apply before decoding, and the
+semantic limits apply during SPDX parsing and filesystem replay:
+
+| Input | Limit |
+| --- | --- |
+| Compressed archive | 1 GiB |
+| Expanded tar stream | 2 GiB |
+| Retained member bytes | 1 GiB |
+| Retained files | 100,000 |
+| One path | 4,096 UTF-8 bytes and 32 components |
+| All path bytes | 32 MiB |
+| All parent-path components | 500,000, including repeated components |
+| One pax record | 1 MiB |
+| All pax records | 16 MiB |
+| One JSON document | 64 MiB |
+| All parsed archive JSON | 64 MiB |
+| JSON nesting | 64 levels |
+| One JSON structure | 250,000 values and object keys |
+| All parsed archive JSON structures | 300,000 values and object keys |
+| One SPDX expression | 1,024 tokens and 64 levels of parentheses |
+| One TOML document | 64 structural levels and 250,000 values |
+| Replayed filesystem state | 200,000 paths |
+| Filesystem replay state scans | 10,000,000 path inspections |
+
+The JSON preflight reads the byte grammar and counts nesting and structure
+before `json.loads` can allocate the object graph. UTF-8 decoding, duplicate-key
+checks, integer-only parsing, canonical encoding, and a second bounded walk
+follow that preflight. The verifier reads these documents one at a time and
+charges both bytes and structure to one archive-wide budget before it loads the
+next object graph.
 
 Generic `tar` extraction and ordinary iteration with Python's `tarfile` module
 are not conforming verification procedures. Some malformed extension headers
-can terminate iteration without a complete-member signal. The verifier added
-by issue #28 must reject malformed headers, premature termination, and archive
-trailing-data cases in its test corpus and must create output with no-follow,
+can terminate iteration without a complete-member signal. The repository's
+recipient verifier parses the raw block stream, rejects malformed headers,
+premature termination, and trailing data, and creates files with no-follow,
 exclusive-create semantics.
+
+## Current content verifier
+
+`.github/scripts/recipient_evidence.py` accepts trusted release identity values
+and three untrusted files: the evidence archive, its checksum sidecar, and its
+predicate. It requires Linux-style no-follow descriptor support and writes
+only to a new output directory with permissions no broader than `0700`.
+Materialized files are no broader than mode `0600`. On failure, it removes the
+incomplete output when it can prove that the original directory still occupies
+the output path. It refuses to delete a replacement.
+
+The verifier checks:
+
+- one stable, bounded regular file for each input
+- the exact schema-9 predicate, archive filename, release URL, platform
+  manifest digest, and archive SHA-256
+- the required single-member gzip framing and canonical raw tar structure
+  described above
+- safe, unique, case-folding-distinct paths and exact member metadata
+- complete one-to-one `SHA256SUMS` coverage
+- canonical JSON, shared release identity across the manifest and inventories,
+  and exact native-component coverage agreement between the manifest,
+  inventory, and policy
+- the complete all-layer schema: sequential layer identities, every regular,
+  directory, link, special-file, and whiteout occurrence, per-layer counts,
+  security metadata, and cumulative limits; the verifier replays the layer
+  operations to derive each regular file's and directory's effective state
+- all six selected-platform filesystem baselines reconstructed from that same
+  replay and occurrence history: APK database and world files, reviewed system
+  files and links, directory effects, and removals
+- every component-evidence collection, including APK databases and shared
+  libraries, wheel identities and historical installations, effective RECORD
+  ownership, native payloads, and embedded SBOMs; each occurrence must match
+  the all-layer inventory and the selected policy coverage
+- every schema-9 policy field and nested record, including the selected
+  platform's exact component inventory, license resolutions and text pins,
+  custom-license evidence, native-component review references, Cargo closure,
+  and retained source pins; every reviewed license expression must use the
+  bounded canonical SPDX 2.3 grammar, and every standard license or exception
+  identifier must exist in license-list-data version `3dfd9aa` at revision
+  `421fbabbe80c94c58c12316af1bc6a2dca2362bc`
+- explicit distribution approval and a closed source-completeness assertion;
+  URL-fetched sources are manifest-bound, while derived subtree manifests and
+  Cargo lockfiles are bound by their reviewed policy records; retained
+  lockfile bytes are reparsed and reconciled with every reviewed registry
+  checksum, lock-only package, and local Cargo package
+- the five application artifacts at their canonical flat paths, the
+  deterministic application source tar and project identity, installed
+  application package bytes, the source tar's exact match to the retained
+  application license, the application launcher's exact active-installation
+  bytes, every other retained license, and every native-wheel artifact binding
+- installer-generated launchers down to their exact RECORD occurrence and
+  deterministic launcher bytes; each native artifact's build and tag fields
+  must also match its unique historical WHEEL installation
+- the complete deterministic `THIRD_PARTY_NOTICES.md` reconstructed from the
+  validated inventory, license policy, native review records, omissions, and
+  SBOM anomaly ledger
+- the exact native-wheelhouse consumer contract, the store's embedded copy of
+  that contract, both platform inventories, and the selected platform's
+  retained files.
+
+The command emits a canonical JSON summary only after it has consumed the
+complete gzip and tar streams, rechecked the stable archive descriptor, and
+confirmed that the materialized directory still occupies its original path.
+
+This is an unsigned-content verifier. It does **not** select a platform from an
+OCI index, verify a Git tag or immutable GitHub release, run
+`gh release verify`, validate a Sigstore bundle or transparency-log entry, or
+verify OCI SBOM, provenance, or evidence attestations. Those steps must supply
+the trusted command arguments and authenticate the exact files before a
+recipient relies on the summary. The tagged workflow does not perform those
+steps yet. In particular, the application source tar must name the trusted
+revision, match the expected project version, and reproduce the installed
+package bytes. That is an internal content binding, not proof that GitHub
+served the named commit.
 
 ## Required archive records
 
@@ -219,7 +337,7 @@ The archive must contain at least these entry points:
 | `sources/python/` | Locked and reviewed-fallback top-level Python sources. |
 | `sources/alpine/` | Commit-pinned recipe subtrees and every local or downloaded source named by their verified checksums. |
 | `sources/native-components/` | Hash-addressed native-source artifacts or verified subtree manifests for directly reviewed components nested inside wheels. An owner-sdist source reuses the exact archive under `sources/python/`. |
-| `sources/cargo-locks/` | Exact `Cargo.lock` bytes verified from retained owner sdists for owners with crates.io reviews. The policy binds the original member path, digest, size, reviewed source IDs, and complete lock-only registry remainder. |
+| `sources/cargo-locks/` | Exact `Cargo.lock` bytes verified from retained owner sdists for owners with crates.io reviews. The policy binds the original member path, digest, size, reviewed source IDs, and complete lock-only registry remainder. The recipient reparses these bytes and reconciles registry checksums and local packages before accepting them. |
 
 ### Current native-wheel manifest records
 
@@ -240,7 +358,7 @@ Each wheel record has common identity fields plus one provider-specific source:
 | `filename` | Basename selected from the lock-file URL or signed wheelhouse manifest. |
 | `path` | `artifacts/native-wheels/NAME/VERSION/FILENAME`. |
 | `size`, `sha256` | Size and lowercase SHA-256 of the retained wheel bytes. |
-| `build`, `tags` | Exact WHEEL build value and sorted tag list used for selection. |
+| `build`, `tags` | Exact WHEEL build value and sorted tag list used for selection. The recipient requires both to match the unique validated historical installation. |
 | `generated_files` | Sorted records for reviewed installer-generated launchers. |
 | `embedded_sboms` | Sorted records for separately retained raw SBOM bytes. |
 
@@ -352,10 +470,12 @@ Linux capabilities, or privilege escalation. It uses a read-only image and
 inputs, bounded `tmpfs` scratch, work, and output mounts, and explicit memory,
 CPU, process, file-descriptor, byte, and inode limits.
 
-Issue #28 still needs to put image and layer inventory parsing behind that
-boundary. It must also add the recipient verifier and a short-lived isolated
-signing and publication path. That privileged phase may accept only bounded,
-schema-validated, digest-addressed outputs from the parser.
+Issue #28 still needs to carry the image-export handoff and these parser
+boundaries into the tagged candidate path. It must run the content verifier
+against the exact candidate assets, authenticate those assets, and add a
+short-lived isolated signing and publication path. That privileged phase may
+accept only bounded, schema-validated, digest-addressed outputs from the
+parser.
 
 The raw spine can carry OCI objects across the unprivileged-to-privileged
 boundary, but it does not complete the boundary by itself. The root OCI index

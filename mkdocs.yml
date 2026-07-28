@@ -63,6 +63,7 @@ nav:
       - Update the tutorial webhook relay: maintainers/update-tutorial-relay.md
       - Update the native wheelhouse: how-to/update-native-wheelhouse.md
       - Review CI container evidence: how-to/review-container-evidence.md
+      - Verify container release evidence: how-to/verify-container-release-evidence.md
       - DCO evidence contract: reference/dco-evidence.md
       - Runtime base image decision: explanation/runtime-base.md
       - Native dependency wheelhouse: explanation/native-wheelhouse.md

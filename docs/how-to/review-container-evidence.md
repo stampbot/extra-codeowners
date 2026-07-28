@@ -76,7 +76,9 @@ reason to fall back to a generic extractor.
 - Do not use `gh run download`, `unzip`, or an archive GUI. They extract before
   this project's bounds and envelope checks run.
 - Do not open the nested evidence tar with `tar` or Python's ordinary
-  `tarfile` iteration. Issue #28 must ship the bounded recipient verifier.
+  `tarfile` iteration. Use the exact CI ZIP verifier in this guide. The
+  release-content verifier rejects current CI-only names, subjects, and
+  distribution approval.
 - Do not execute, import, or source anything retained from an artifact.
 - Use a disposable VM when the contributor or input is not already trusted. A
   container shares its host kernel and is not the same isolation boundary.
@@ -1054,9 +1056,10 @@ before privileged jobs, there is no `main` publication job to enable, and issue
 A future supported release must satisfy the
 [container evidence release contract](../reference/container-evidence-release-contract.md),
 including both platform manifest subjects, signed predicates and attestations,
-complete sources, the bounded recipient verifier, and isolated short-lived
-publication authority. Qualified legal review for a paid hosted distribution
-is a separate launch decision; collector success does not provide it.
+complete sources, an authenticated recipient-verifier run against the final
+assets, and isolated short-lived publication authority. Qualified legal review
+for a paid hosted distribution is a separate launch decision; collector
+success does not provide it.
 
 Destroy the no-secret VM and review inputs after retaining only the approved
 audit record your project requires. The evidence can contain private
