@@ -1,6 +1,6 @@
 # Project status
 
-Last verified: 2026-07-26.
+Last verified: 2026-07-28.
 
 Extra CODEOWNERS is ready for source review and disposable testing. It is not
 ready to enforce production merges, and it has no supported release artifact.
@@ -20,6 +20,7 @@ Use a source checkout to evaluate the project today:
 | Packaged Helm chart | Not available; a chart exists in source only |
 | Public GitHub Container Registry (GHCR) package | A pre-compliance preview is public, but it is unsupported |
 | Native dependency wheelhouse | Signed build and publication path implemented; application images consume its immutable contract |
+| Container evidence verifier | Unsigned schema-9 content verification is implemented in source; release authentication and workflow integration remain blocked |
 | Hosted service | Not available |
 | `extra-codeowners-action` Marketplace Action | Not available |
 
@@ -93,6 +94,8 @@ still modify the workflow that checks that same pull request. Read the
 
 There are also parts of a future privileged release path:
 
+- a bounded schema-9
+  [container evidence verifier](container-evidence-release-contract.md#current-content-verifier)
 - an offline [release controller](immutable-release-controller.md)
 - a [GitHub release API adapter](github-release-api-adapter.md)
 - a read-only [immutable-release preflight](immutable-release-preflight.md)

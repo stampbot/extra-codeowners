@@ -17,6 +17,7 @@ publish a supported container image yet.
 | Public `main` image | Disabled; the publication job has been removed. |
 | Tagged release | Blocked before any job can publish an image, chart, Python package, or GitHub release. |
 | Source closure | Every current native-wheel owner is closed on both platforms. The derived source-completeness ledger is complete, but distribution approval remains false. |
+| Recipient verification | A bounded schema-9 content verifier is implemented in source. Signature, attestation, immutable-release, and exact-candidate integration are not. |
 
 The release workflow can still validate source, build proof, and scan a
 candidate with repository-read permission. A separate job then fails before
@@ -91,6 +92,24 @@ This does not approve distribution. Issue
 recipient delivery of notices and corresponding source. Issue #28 independently
 blocks tagged publication, and `distribution_approval.approved` remains
 `false`. Passing CI does not override either condition.
+
+The recipient verifier parses one deterministic gzip and raw pax-tar stream
+without using a generic archive extractor. It checks complete iteration,
+resource limits, member metadata, safe materialization, checksums, complete
+all-layer and component-evidence records, deterministic notices, application
+source-to-image bindings, and the schema-9 manifest and policy relationships.
+It reconstructs the effective filesystem and all six policy baselines from the
+layer operations instead of accepting recorded `effective` values or baseline
+lists on trust. It also parses each reviewed license decision as a bounded,
+canonical SPDX 2.3 expression. Standard license and exception names must exist
+in the frozen SPDX license list already pinned by policy; project-specific
+terms must use `LicenseRef-*`. The verifier also checks that the application
+source tar contains the license bytes retained in the archive.
+
+The verifier deliberately stops before producer authentication. A later #28
+tranche must verify the exact release workflow identity, Sigstore and
+transparency evidence, OCI attestations, and immutable release state before
+passing trusted identity values to the content verifier.
 
 The separate [native wheelhouse build](native-wheelhouse.md) creates
 reproducible replacements for CFFI, Psycopg C, and Pydantic Core. The
@@ -358,6 +377,9 @@ manifests or lockfile. A local package does not need its own upstream SBOM
 observation. It must still be reachable from the selected root or workspace,
 listed in the reviewed source record, and present in `Cargo.lock`.
 
+The recipient performs the same lockfile reconciliation on the exact bytes in
+`sources/cargo-locks/`. A matching digest alone is not enough.
+
 This proves agreement among the SBOM, lockfile, registry archive, manifest,
 license, and notices. It does not prove that those sources built the wheel.
 
@@ -558,8 +580,10 @@ reviewed policy, retained top-level source, notices, and license material. Its
 manifest records the derived source-coverage status and embeds the same ledger
 written to `inventory/native-component-coverage.json`. Its
 `application_artifacts` record binds the source, selected wheel, selection
-record, accepted launcher form, and SHA-256 and size of every one of the five
-files retained under `artifacts/application/`.
+record, accepted launcher interpreter, and SHA-256 and size of every one of the
+five files retained under `artifacts/application/`. The recipient regenerates
+the expected launcher bytes for that interpreter and matches them to the one
+active application installation.
 
 ## Why release collection needs a different boundary
 
@@ -608,16 +632,18 @@ descriptors, bytes, and inode counts.
 This implements CI's source-store, image-inventory, and final-bundle parser
 boundaries from issue
 [#28](https://github.com/stampbot/extra-codeowners/issues/28). It does not wire
-those dormant materials into a supported release. A frozen recipient wire
-format, bounded recipient verifier, runnable release-candidate verification,
-and isolated signing and publication path remain outstanding. The current
-collector has no publication authority, and the release workflow still blocks
-every supported publication.
+those dormant materials into a supported release. The unsigned schema-9
+content format and verifier now exist, but authenticated release-asset and
+attestation contracts, runnable release-candidate verification, and the
+isolated signing and publication path remain outstanding. The current collector
+has no publication authority, and the release workflow still blocks every
+supported publication.
 
 The native-owner ledger is now complete. Before any release may publish, the
 project must still deliver the retained notices and corresponding source to
-recipients, bind them to each platform digest, finish the bounded recipient
-verifier, and record explicit distribution approval.
+recipients, bind them to each platform digest, authenticate and exercise the
+recipient verifier against final candidate assets, and record explicit
+distribution approval.
 
 The future recipient contract also requires a platform digest, archive digest,
 signed predicate, and OCI attestation to agree. Identical attestations produced
@@ -642,5 +668,6 @@ Maintainers use the
 [CI evidence review procedure](../how-to/review-container-evidence.md). The
 [container evidence release contract](../reference/container-evidence-release-contract.md)
 documents the artifacts and trust statements a future supported release must
-satisfy. A runnable recipient procedure does not exist until issue #28 ships
-the bounded verifier.
+satisfy. The bounded content-verification procedure is runnable today, but it
+is not a supported release procedure until issue #28 adds the authenticated
+identity and asset-selection steps.
