@@ -92,8 +92,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Rel
   filenames, SHA-256 checksums, Python package URLs, declared licenses, and
   reviewed source records. Publication reverifies those bytes, attests them to
   their platform manifests, and uploads separately signed copies instead of
-  relying on an empty scratch-image scan. The application image does not
-  consume the wheelhouse yet.
+  relying on an empty scratch-image scan.
+- Schema-v9 container evidence for native wheelhouse runtime dependencies. The
+  application image consumes the signed wheelhouse by immutable digest and
+  binds each recorded ELF shared-library name to exact effective APK-owned
+  runtime and resolved files, package version, APK checksum, and all-layer
+  occurrence. The evidence rejects ELF search-path overrides, unsafe or
+  chained links, cross-package substitutions, and checksum drift. The current
+  CFFI, Psycopg C, and Pydantic Core owner records are closed, making the
+  derived native source-accounting ledger complete while distribution approval
+  remains false.
 - A Docker-only, bounded image exporter and a separate rootless, networkless
   layer parser. Their create-once handoff binds the saved archive to its exact
   hash, size, configuration digest, subject, and platform; only two bounded
@@ -117,8 +125,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Rel
   empty SBOM and component sets. SQLAlchemy binds its exact wheels,
   9,912,201-byte sdist, five native roles, and the same explicit empty sets.
   These records do not claim the sdists explain every binary byte or prove
-  reproducible builds. The other three native-wheel owners and overall source
-  completeness remain explicitly unresolved.
+  reproducible builds.
 - A closed Cryptography 48.0.1 native-owner record that binds all 32 crates.io
   components to exact archives, manifests, checksums, licenses, and notices.
   It also retains the sdist's local Rust subtree, pins its Cargo workspace and
@@ -138,8 +145,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Rel
   lockfile. Library-target verification binds `_pydantic_core` and `src/lib.rs`
   to the pinned manifest before the extension payload can cite those
   observations. Build-directory prefixes remain opaque rather than being
-  mistaken for Python project names. The owner remains open because its bundled
-  GCC 12.4 `libgcc` has no SBOM observation or proven build input.
+  mistaken for Python project names.
 - Diátaxis documentation, a threat model, operating guides, and Read the Docs configuration.
 - Bounded pull-request and scheduled property tests for untrusted parsing and policy inputs.
 - Machine-readable live GitHub evidence completeness that distinguishes false,

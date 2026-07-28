@@ -73,6 +73,7 @@ WHEEL_COMPONENT = re.compile(r"[A-Za-z0-9_.]+")
 LIBRARY_NAME = re.compile(r"[A-Za-z0-9+_.-]+")
 SPDX_LICENSE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9.+-]{0,127}")
 NEEDED_LIBRARY = re.compile(r"Shared library: \[([A-Za-z0-9+_.-]+)\]")
+ELF_SEARCH_PATH = re.compile(r"\((?:RPATH|RUNPATH)\)")
 URLSAFE_SHA256 = re.compile(r"sha256=([A-Za-z0-9_-]{43})")
 CARGO_CACHE = re.compile(r"index\.crates\.io-[0-9a-f]{16}")
 ELF_MAGIC = b"\x7fELF"
@@ -1371,14 +1372,22 @@ def _elf_record(
         )
     machine = ""
     needed: list[str] = []
+    has_search_path = False
     for line in output.splitlines():
         stripped = line.strip()
         if stripped.startswith("Machine:"):
             machine = stripped.partition(":")[2].strip()
+        if ELF_SEARCH_PATH.search(stripped) is not None:
+            has_search_path = True
         match = NEEDED_LIBRARY.search(stripped)
         if match is not None:
             needed.append(match.group(1))
-    if machine != expected_machine or not needed or len(needed) != len(set(needed)):
+    if (
+        machine != expected_machine
+        or not needed
+        or len(needed) != len(set(needed))
+        or has_search_path
+    ):
         raise WheelhouseError(f"native wheel payload has unexpected ELF metadata: {name}")
     return {
         "machine": machine,

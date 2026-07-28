@@ -138,7 +138,7 @@ def plan_record(specs: tuple[RequestSpec, ...]) -> dict[str, Any]:
         "schema_version": 1,
         "media_type": "application/vnd.stampbot.container-source-plan.v1+json",
         "kind": "direct",
-        "evidence_schema_version": 8,
+        "evidence_schema_version": 9,
         "source_revision": SOURCE_REVISION,
         "policy_sha256": POLICY_SHA256,
         "uv_lock_sha256": UV_LOCK_SHA256,

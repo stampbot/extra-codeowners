@@ -27,7 +27,7 @@ PLAN_MEDIA_TYPE = "application/vnd.stampbot.container-source-plan.v1+json"
 STORE_MEDIA_TYPE = "application/vnd.stampbot.verified-source-store.v1+json"
 RESULT_KIND = "extra-codeowners/source-store-verification"
 SUPPORTED_PLAN_KINDS = frozenset({"alpine-distfiles", "direct"})
-SUPPORTED_EVIDENCE_SCHEMA_VERSION = 8
+SUPPORTED_EVIDENCE_SCHEMA_VERSION = 9
 
 PLAN_FILENAME = "SOURCE-PLAN.json"
 STORE_FILENAME = "SOURCE-STORE.json"

@@ -465,10 +465,7 @@ components, local Rust subtree, and OpenSSL 4.0.1 release to the literal SBOM
 observations while reusing Greenlet's closed `libgcc` evidence only when the
 platform payload bytes match. MarkupSafe and SQLAlchemy also bind their exact
 wheels and sdists to complete native-payload sets. Both have no embedded SBOM
-and explicitly treat their payloads as owner code. Three other native-wheel
-owners retain structured open omissions for the surfaces that still lack
-complete evidence. These records retain sources and notices; they do not claim
-wheel reproducibility or build provenance.
+and explicitly treat their payloads as owner code.
 
 The [native wheelhouse](native-wheelhouse.md) has its own build and publication
 path for reproducible CFFI, Psycopg C, Pydantic Core, and Setuptools wheels.
@@ -476,9 +473,11 @@ That path stays separate from the application build. A signed, digest-pinned
 consumer contract selects its source revision and both platform manifests.
 The application build verifies that contract before parsing or downloading
 wheelhouse data, installs the runtime wheels offline, and retains their bytes
-in the final image. Three evidence records remain open because the current
-collector has not bound each linked-library name to one exact APK-owned runtime
-file.
+in the final image. Schema 9 binds CFFI's `libffi.so.8`, Psycopg C's
+`libpq.so.5`, and Pydantic Core's `libgcc_s.so.1` requirements to exact
+APK-owned effective files. The binding checks the package, version, APK
+checksum, runtime path, resolved regular-file path, and effective all-layer
+topology.
 
 The tagged workflow contains intended image, chart, Python, SBOM, provenance,
 signature, and GitHub-release jobs. An unconditional blocker keeps every
@@ -490,8 +489,8 @@ Six issues define the first supported release boundary:
 
 - [#1](https://github.com/stampbot/extra-codeowners/issues/1): live Check Run
   invalidation and App-review contract
-- [#18](https://github.com/stampbot/extra-codeowners/issues/18): source and
-  notice completeness
+- [#18](https://github.com/stampbot/extra-codeowners/issues/18): recipient
+  delivery of complete source and notice evidence
 - [#25](https://github.com/stampbot/extra-codeowners/issues/25): first
   immutable release publication
 - [#28](https://github.com/stampbot/extra-codeowners/issues/28): privilege

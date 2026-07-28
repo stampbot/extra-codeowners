@@ -177,10 +177,19 @@ the installed database, so repository drift fails the build instead of
 silently changing it. The workflow also records that closure and publishes
 signed provenance.
 
-Container evidence still leaves three exact runtime file relationships open:
-CFFI to `libffi`, Psycopg C to `libpq`, and Pydantic Core to `libgcc`.
-[Issue #18](https://github.com/stampbot/extra-codeowners/issues/18) remains
-open, and distribution approval remains false.
+Schema 9 closes the runtime-file accounting for CFFI's `libffi`, Psycopg C's
+`libpq`, and Pydantic Core's `libgcc`. It binds each SONAME to exact effective
+runtime and resolved paths, the owning APK package and version, the APK
+checksum, and the all-layer occurrence. Wheelhouse inspection rejects ELF
+`RPATH` and `RUNPATH`; runtime binding rejects absolute or chained links and
+cross-package targets.
+
+This proves the reviewed runtime dependency resolves to APK-owned bytes. It does
+not turn two same-toolchain builds into independent reproduction or make the
+evidence a supported release.
+[Issue #18](https://github.com/stampbot/extra-codeowners/issues/18) remains open for
+recipient delivery and platform-digest binding, and distribution approval
+remains false.
 
 See [Update the native wheelhouse](../how-to/update-native-wheelhouse.md) for
 the maintainer procedure.

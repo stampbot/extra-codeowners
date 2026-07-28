@@ -89,10 +89,12 @@ in the raw inventory.
 Current evidence normalizes CPython as a top-level runtime component. It binds
 that record to the interpreter's exact identity files and retains the pinned
 build recipe, source archive, and source-carried license. It also replays
-historical wheel `RECORD` ownership across distributed layers. This is not yet
-complete corresponding-source evidence: native wheel payloads and embedded
-SBOMs still need exact component, notice, and source coverage under
-[#18](https://github.com/stampbot/extra-codeowners/issues/18).
+historical wheel `RECORD` ownership across distributed layers. All seven
+current native-owner records are closed, including exact APK ownership and
+runtime-path binding for wheelhouse-linked libraries. Issue
+[#18](https://github.com/stampbot/extra-codeowners/issues/18) remains open for
+recipient delivery and platform-digest binding; source-accounting success is
+not distribution approval.
 
 The application package follows a separate build proof:
 

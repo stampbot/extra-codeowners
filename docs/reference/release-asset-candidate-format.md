@@ -86,14 +86,14 @@ That count is no longer a final policy:
   assets
 - the current 15-file candidate contains the 12 files already named by the
   blocked release jobs plus those three records
-- it deliberately omits the unresolved container evidence and
-  corresponding-source deliverables from
+- it deliberately omits the container evidence and recipient-facing
+  corresponding-source deliverables tracked by
   [issue #18](https://github.com/stampbot/extra-codeowners/issues/18)
 - it does not create `release-manifest.json` or `SHA256SUMS`.
 
 Adding the three records to the old 26-file design would produce at least 29
 assets if every old assumption remained valid. Do not turn that arithmetic
-into a new expected count. Schema 8 evidence delivery and the recipient
+into a new expected count. Schema 9 evidence delivery and the recipient
 verification contract are not frozen yet, so issues #18, #25, and #28 must set
 the actual final policy together.
 
@@ -143,6 +143,10 @@ manifest:
 Those issue numbers are the six open issues in the **First supported release**
 milestone at the commit that introduced this format. The release-readiness
 milestone remains the authoritative live gate.
+
+The candidate's `source_completeness: false` describes this deliberately narrow
+15-file scope: the assembler does not consume container evidence. It does not
+override or contradict a complete schema-9 native-component coverage ledger.
 
 Changing any false value to true, removing a blocker, changing the media type,
 or reshaping the record makes it invalid. The immutable release controller also
@@ -214,7 +218,7 @@ workflow identities agree. The explicit
 
 It also does not:
 
-- consume schema 8 container evidence or prove `source_completeness: true`
+- consume schema 9 container evidence or prove `source_completeness: true`
 - create the recipient evidence archives required by issue #18
 - create checksums or a final release manifest
 - run archive parsing in the offline, rootless sandbox required by issue #28
@@ -222,7 +226,7 @@ It also does not:
 - call the release controller or GitHub API adapter
 - grant release, package, registry, signing, tagging, or attestation authority.
 
-The next release-assembler tranche must consume only complete schema 8
+The next release-assembler tranche must consume only complete schema 9
 evidence, freeze the final asset policy, and satisfy the recipient verification
 contract. Only then should a separate reviewed transformation create the
 controller manifest accepted by issue #25's privileged publisher.

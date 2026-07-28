@@ -250,16 +250,29 @@ def apk_database(
     *,
     name: str = "busybox",
     origin: str | None = None,
+    owned_files: dict[str, bytes] | None = None,
 ) -> bytes:
     selected_origin = name if origin is None else origin
-    return (
-        f"P:{name}\n"
-        f"V:{version}\n"
-        f"A:{architecture}\n"
-        "L:GPL-2.0-only\n"
-        f"o:{selected_origin}\n"
-        "c:1111111111111111111111111111111111111111\n\n"
-    ).encode()
+    lines = [
+        f"P:{name}",
+        f"V:{version}",
+        f"A:{architecture}",
+        "L:GPL-2.0-only",
+        f"o:{selected_origin}",
+        "c:1111111111111111111111111111111111111111",
+    ]
+    current_directory = None
+    for path_value, content in sorted((owned_files or {}).items()):
+        path = PurePosixPath(path_value)
+        directory = str(path.parent)
+        if directory != current_directory:
+            lines.append(f"F:{directory}")
+            current_directory = directory
+        checksum = base64.b64encode(
+            evidence.hashlib.sha1(content, usedforsecurity=False).digest()
+        ).decode()
+        lines.extend((f"R:{path.name}", f"Z:Q1{checksum}"))
+    return ("\n".join(lines) + "\n\n").encode()
 
 
 def metadata(name: str, version: str, license_value: str = "MIT") -> bytes:
@@ -498,6 +511,7 @@ def standalone_inventory(component: dict[str, Any]) -> dict[str, Any]:
         "native_wheelhouse_revision": NATIVE_WHEELHOUSE_REVISION,
         "native_wheelhouse_schema": NATIVE_WHEELHOUSE_SCHEMA,
         "apk_database_sha256": "d" * 64,
+        "apk_shared_libraries": [],
         "components": [component, synthetic_runtime_component()],
         "embedded_sboms": [],
         "native_payloads": [],
@@ -506,6 +520,71 @@ def standalone_inventory(component: dict[str, Any]) -> dict[str, Any]:
         "wheel_installations": [],
         "python_record_ownership": [],
     }
+
+
+def synthetic_apk_shared_libraries(platform: str) -> list[dict[str, Any]]:
+    """Return the three policy-linked APK library bindings used by unit fixtures."""
+
+    regular_sha1 = {
+        "linux/amd64": {
+            "usr/lib/libffi.so.8.2.0": "e1cc9148cee691e9d9e2f8153891e3921ddd02da",
+            "usr/lib/libgcc_s.so.1": "621323c540a5b5a8dec023cd17509ee67e6b178e",
+            "usr/lib/libpq.so.5.18": "44be0aa05ba14fc66dec0cfc7f1da54d166f6d22",
+        },
+        "linux/arm64": {
+            "usr/lib/libffi.so.8.2.0": "dd625b8f0764148a0b373c4aff98456c352bd380",
+            "usr/lib/libgcc_s.so.1": "a0b12349ed65dd93cf357dfa03aec4eb4b8f463c",
+            "usr/lib/libpq.so.5.18": "a72068f23b51b68eea3bd66948cba65e0eaaa093",
+        },
+    }[platform]
+    packages = {
+        "usr/lib/libffi.so.8": {"name": "libffi", "version": "3.5.2-r1"},
+        "usr/lib/libffi.so.8.2.0": {"name": "libffi", "version": "3.5.2-r1"},
+        "usr/lib/libgcc_s.so.1": {"name": "libgcc", "version": "15.2.0-r5"},
+        "usr/lib/libpq.so.5": {"name": "libpq", "version": "18.4-r0"},
+        "usr/lib/libpq.so.5.18": {"name": "libpq", "version": "18.4-r0"},
+    }
+    targets = {
+        "usr/lib/libffi.so.8": "libffi.so.8.2.0",
+        "usr/lib/libpq.so.5": "libpq.so.5.18",
+    }
+    result = []
+    for index, (path, package) in enumerate(sorted(packages.items())):
+        if path in targets:
+            target = targets[path]
+            occurrence = {
+                "kind": "symlink",
+                "effective": True,
+                "layer": 0,
+                "path": path,
+                "target": target,
+                "mode": 0o777,
+                "uid": 0,
+                "gid": 0,
+            }
+            apk_sha1 = evidence.hashlib.sha1(target.encode(), usedforsecurity=False).hexdigest()
+        else:
+            occurrence = {
+                "kind": "regular",
+                "effective": True,
+                "layer": 0,
+                "path": path,
+                "sha256": f"{index + 1:064x}",
+                "size": index + 1,
+                "mode": 0o755,
+                "uid": 0,
+                "gid": 0,
+            }
+            apk_sha1 = regular_sha1[path]
+        result.append(
+            {
+                "package": package,
+                "path": path,
+                "apk_sha1": apk_sha1,
+                "occurrence": occurrence,
+            }
+        )
+    return result
 
 
 def standalone_policy(
@@ -1433,13 +1512,13 @@ def test_strict_json_rejects_lone_unicode_surrogates() -> None:
         evidence.canonical_json({"value": "\ud800"})
 
 
-def test_schema_version_requires_exact_v8_integer_and_media_type() -> None:
-    evidence.require_schema({"schema_version": 8}, "test")
-    for unsupported in (True, 1, 2, 3, 4, 5, 6, 7, 9):
+def test_schema_version_requires_exact_v9_integer_and_media_type() -> None:
+    evidence.require_schema({"schema_version": 9}, "test")
+    for unsupported in (True, 1, 2, 3, 4, 5, 6, 7, 8, 10):
         with pytest.raises(evidence.EvidenceError, match="unsupported test schema"):
             evidence.require_schema({"schema_version": unsupported}, "test")
     assert evidence.EVIDENCE_MEDIA_TYPE == (
-        "application/vnd.stampbot.container-evidence.v8+tar+gzip"
+        "application/vnd.stampbot.container-evidence.v9+tar+gzip"
     )
 
 
@@ -2317,6 +2396,243 @@ def test_apk_database_requires_commit_provenance() -> None:
     broken = apk_database().replace(b"c:" + b"1" * 40 + b"\n", b"")
     with pytest.raises(evidence.EvidenceError, match="immutable source provenance"):
         evidence.parse_apk_database(broken)
+
+
+def test_apk_database_retains_checksummed_file_ownership() -> None:
+    content = b"shared library bytes"
+    database = apk_database(
+        name="libdemo",
+        version="1.2.3-r0",
+        owned_files={"usr/lib/libdemo.so.1": content},
+    )
+
+    packages, files = evidence.parse_apk_database_inventory(database)
+
+    assert [(package["name"], package["version"]) for package in packages] == [
+        ("libdemo", "1.2.3-r0")
+    ]
+    assert files == [
+        {
+            "package": {"name": "libdemo", "version": "1.2.3-r0"},
+            "path": "usr/lib/libdemo.so.1",
+            "sha1": evidence.hashlib.sha1(content, usedforsecurity=False).hexdigest(),
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    (
+        ("unsafe-directory", "unsafe archive path"),
+        ("unsafe-filename", "unsafe archive path"),
+        ("nested-filename", "not a basename"),
+        ("missing-directory", "has no directory"),
+        ("missing-checksum", "lacks exactly one checksum"),
+        ("second-file-before-checksum", "lacks exactly one checksum"),
+        ("checksum-without-file", "invalid file checksum"),
+        ("duplicate-checksum", "invalid file checksum"),
+        ("wrong-checksum-kind", "invalid file checksum"),
+        ("invalid-checksum-base64", "invalid file checksum"),
+    ),
+)
+def test_apk_database_rejects_malformed_file_ownership(
+    mutation: str,
+    message: str,
+) -> None:
+    database = apk_database(
+        name="libdemo",
+        owned_files={"usr/lib/libdemo.so.1": b"library"},
+    )
+    checksum_line = next(
+        line for line in database.splitlines(keepends=True) if line.startswith(b"Z:")
+    )
+    mutations = {
+        "unsafe-directory": database.replace(b"F:usr/lib\n", b"F:../usr/lib\n"),
+        "unsafe-filename": database.replace(b"R:libdemo.so.1\n", b"R:../libdemo.so.1\n"),
+        "nested-filename": database.replace(b"R:libdemo.so.1\n", b"R:nested/libdemo.so.1\n"),
+        "missing-directory": database.replace(b"F:usr/lib\n", b""),
+        "missing-checksum": database.replace(checksum_line, b""),
+        "second-file-before-checksum": database.replace(
+            checksum_line, b"R:libdemo.so.2\n" + checksum_line
+        ),
+        "checksum-without-file": database.replace(b"R:libdemo.so.1\n", b""),
+        "duplicate-checksum": database.replace(checksum_line, checksum_line * 2),
+        "wrong-checksum-kind": database.replace(b"Z:Q1", b"Z:Q2"),
+        "invalid-checksum-base64": database.replace(
+            checksum_line, b"Z:Q1!!!!!!!!!!!!!!!!!!!!!!!!!!!=\n"
+        ),
+    }
+
+    with pytest.raises(evidence.EvidenceError, match=message):
+        evidence.parse_apk_database_inventory(mutations[mutation])
+
+
+def test_apk_database_rejects_duplicate_file_ownership() -> None:
+    first = apk_database(
+        name="libdemo",
+        owned_files={"usr/lib/libdemo.so.1": b"first"},
+    )
+    second = apk_database(
+        name="libother",
+        owned_files={"usr/lib/libdemo.so.1": b"second"},
+    )
+
+    with pytest.raises(evidence.EvidenceError, match="repeats file ownership"):
+        evidence.parse_apk_database_inventory(first + second)
+
+
+def test_collector_binds_apk_shared_library_files_and_symlinks(tmp_path: Path) -> None:
+    resolved_path = "usr/lib/libdemo.so.1.2.3"
+    runtime_path = "usr/lib/libdemo.so.1"
+    content = b"exact shared library"
+    target = PurePosixPath(resolved_path).name
+    database = apk_database(
+        name="libdemo",
+        version="1.2.3-r0",
+        owned_files={
+            runtime_path: target.encode(),
+            resolved_path: content,
+        },
+    )
+    image = tmp_path / "image.tar"
+    saved_image_layers(
+        image,
+        [
+            tar_bytes(
+                {
+                    "lib/apk/db/installed": database,
+                    resolved_path: content,
+                },
+                links={runtime_path: target},
+            )
+        ],
+    )
+
+    inventory, files = evidence._inventory_saved_image(
+        image,
+        "linux/amd64",
+        "sha256:" + "a" * 64,
+    )
+
+    assert [
+        (
+            record["path"],
+            record["package"],
+            record["occurrence"]["kind"],
+        )
+        for record in inventory["apk_shared_libraries"]
+    ] == [
+        (
+            runtime_path,
+            {"name": "libdemo", "version": "1.2.3-r0"},
+            "symlink",
+        ),
+        (
+            resolved_path,
+            {"name": "libdemo", "version": "1.2.3-r0"},
+            "regular",
+        ),
+    ]
+    evidence.validate_component_inventory(inventory)
+    evidence.validate_all_layer_inventory(files, inventory)
+
+
+@pytest.mark.parametrize("mutation", ("regular-digest", "symlink-target"))
+def test_all_layer_validation_rejects_tampered_apk_library_occurrence(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    resolved_path = "usr/lib/libdemo.so.1.2.3"
+    runtime_path = "usr/lib/libdemo.so.1"
+    content = b"exact shared library"
+    target = PurePosixPath(resolved_path).name
+    database = apk_database(
+        name="libdemo",
+        version="1.2.3-r0",
+        owned_files={
+            runtime_path: target.encode(),
+            resolved_path: content,
+        },
+    )
+    image = tmp_path / "image.tar"
+    saved_image_layers(
+        image,
+        [
+            tar_bytes(
+                {
+                    "lib/apk/db/installed": database,
+                    resolved_path: content,
+                },
+                links={runtime_path: target},
+            )
+        ],
+    )
+    inventory, files = evidence._inventory_saved_image(
+        image,
+        "linux/amd64",
+        "sha256:" + "a" * 64,
+    )
+    by_path = {record["path"]: record for record in inventory["apk_shared_libraries"]}
+    if mutation == "regular-digest":
+        by_path[resolved_path]["occurrence"]["sha256"] = "f" * 64
+    else:
+        changed_target = "libdemo.so.9"
+        by_path[runtime_path]["occurrence"]["target"] = changed_target
+        by_path[runtime_path]["apk_sha1"] = evidence.hashlib.sha1(
+            changed_target.encode(), usedforsecurity=False
+        ).hexdigest()
+
+    evidence.validate_component_inventory(inventory)
+    with pytest.raises(evidence.EvidenceError, match="differs from all layers"):
+        evidence.validate_all_layer_inventory(files, inventory)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ("changed-regular", "changed-link", "removed", "hardlink"),
+)
+def test_collector_rejects_apk_shared_library_files_that_differ_from_database(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    resolved_path = "usr/lib/libdemo.so.1.2.3"
+    runtime_path = "usr/lib/libdemo.so.1"
+    content = b"exact shared library"
+    target = PurePosixPath(resolved_path).name
+    database = apk_database(
+        name="libdemo",
+        version="1.2.3-r0",
+        owned_files={
+            runtime_path: target.encode(),
+            resolved_path: content,
+        },
+    )
+    files = {
+        "lib/apk/db/installed": database,
+        resolved_path: b"changed" if mutation == "changed-regular" else content,
+    }
+    links = {runtime_path: "libdemo.so.9"} if mutation == "changed-link" else {runtime_path: target}
+    hardlinks = None
+    if mutation == "removed":
+        files.pop(resolved_path)
+    elif mutation == "hardlink":
+        links = {}
+        hardlinks = {runtime_path: resolved_path}
+    image = tmp_path / "image.tar"
+    saved_image_layers(
+        image,
+        [tar_bytes(files, links=links, hardlinks=hardlinks)],
+    )
+
+    with pytest.raises(
+        evidence.EvidenceError,
+        match=r"differs from its package checksum|absent or not a regular file/symlink",
+    ):
+        evidence._inventory_saved_image(
+            image,
+            "linux/amd64",
+            "sha256:" + "a" * 64,
+        )
 
 
 def test_exact_apk_database_baseline_covers_virtual_records(tmp_path: Path) -> None:
@@ -5655,11 +5971,11 @@ def test_native_component_lock_binding_accepts_exact_reviewed_source_fallback() 
         )
 
 
-def test_committed_policy_retains_pydantic_cargo_sources_and_stays_incomplete() -> None:
+def test_committed_policy_retains_pydantic_cargo_sources_and_closes_runtime_bindings() -> None:
     policy = cast(dict[str, Any], json.loads(Path(".compliance/container-policy.json").read_text()))
     evidence.validate_policy_schema(policy)
 
-    assert policy["schema_version"] == 8
+    assert policy["schema_version"] == 9
     assert policy["native_wheelhouse_contract_sha256"] == (
         "418c1f4a023d7d60af441f3d0b2be436898bef3bb7585e21b1371872c16bf0f3"
     )
@@ -5885,23 +6201,15 @@ def test_committed_policy_retains_pydantic_cargo_sources_and_stays_incomplete() 
         "python:sqlalchemy@2.0.51",
     ]
     expected_states = {
-        "python:cffi@2.1.0": "open",
+        "python:cffi@2.1.0": "closed",
         "python:cryptography@48.0.1": "closed",
         "python:greenlet@3.5.3": "closed",
         "python:markupsafe@3.0.3": "closed",
-        "python:psycopg-c@3.3.4": "open",
-        "python:pydantic-core@2.46.4": "open",
+        "python:psycopg-c@3.3.4": "closed",
+        "python:pydantic-core@2.46.4": "closed",
         "python:sqlalchemy@2.0.51": "closed",
     }
-    expected_omissions = {
-        "python:cffi@2.1.0": ["unproven-libffi-runtime-file"],
-        "python:cryptography@48.0.1": [],
-        "python:greenlet@3.5.3": [],
-        "python:markupsafe@3.0.3": [],
-        "python:psycopg-c@3.3.4": ["unproven-libpq-runtime-file"],
-        "python:pydantic-core@2.46.4": ["unproven-libgcc-runtime-file"],
-        "python:sqlalchemy@2.0.51": [],
-    }
+    expected_omissions: dict[str, list[str]] = {owner: [] for owner in expected_owners}
     for platform in ("linux/amd64", "linux/arm64"):
         owners = policy["native_component_coverage"][platform]
         assert [record["owner"] for record in owners] == expected_owners
@@ -5963,17 +6271,19 @@ def test_committed_policy_retains_pydantic_cargo_sources_and_stays_incomplete() 
                 {
                     "name": "libgcc_s.so.1",
                     "package": {"name": "libgcc", "version": "15.2.0-r5"},
+                    "resolved_path": "usr/lib/libgcc_s.so.1",
+                    "runtime_path": "usr/lib/libgcc_s.so.1",
                 }
             ],
             "local_cargo_packages": [{"name": "pydantic-core", "version": "2.46.4"}],
             "source": "pydantic-core",
         }
         assert pydantic["review"] == {
-            "reason": ("The exact runtime shared-library file relationship remains unproven."),
-            "state": "open",
-            "unresolved_items": ["unproven-libgcc-runtime-file"],
+            "reason": "",
+            "state": "closed",
+            "unresolved_items": [],
         }
-        assert pydantic["known_omissions"][0]["component"]["version"] == "15.2.0-r5"
+        assert pydantic["known_omissions"] == []
 
         inventory = {
             "platform": platform,
@@ -6001,32 +6311,135 @@ def test_committed_policy_retains_pydantic_cargo_sources_and_stays_incomplete() 
                 for record in owners
                 for sbom in record["sboms"]
             ],
+            "apk_shared_libraries": synthetic_apk_shared_libraries(platform),
         }
         ledger = evidence.native_component_coverage_ledger(inventory, policy)
         assert [record["owner"] for record in ledger["resolved_owners"]] == [
+            "python:cffi@2.1.0",
             "python:cryptography@48.0.1",
             "python:greenlet@3.5.3",
             "python:markupsafe@3.0.3",
-            "python:sqlalchemy@2.0.51",
-        ]
-        assert [record["owner"] for record in ledger["unresolved_owners"]] == [
-            "python:cffi@2.1.0",
             "python:psycopg-c@3.3.4",
             "python:pydantic-core@2.46.4",
+            "python:sqlalchemy@2.0.51",
         ]
+        assert ledger["unresolved_owners"] == []
         assert {
             "complete": ledger["complete"],
             "remaining_owner_count": ledger["remaining_owner_count"],
             "remaining_owner_names": ledger["remaining_owner_names"],
         } == {
-            "complete": False,
-            "remaining_owner_count": 3,
-            "remaining_owner_names": [
-                "python:cffi@2.1.0",
-                "python:psycopg-c@3.3.4",
-                "python:pydantic-core@2.46.4",
-            ],
+            "complete": True,
+            "remaining_owner_count": 0,
+            "remaining_owner_names": [],
         }
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "unsafe-runtime-path",
+        "unsupported-runtime-directory",
+        "wrong-soname-basename",
+        "cross-directory-resolution",
+        "non-library-resolution",
+    ),
+)
+def test_native_library_policy_rejects_unsafe_loader_bindings(mutation: str) -> None:
+    policy = cast(
+        dict[str, Any],
+        json.loads(Path(".compliance/container-policy.json").read_text()),
+    )
+    for records in policy["native_component_coverage"].values():
+        cffi = next(record for record in records if record["owner"] == "python:cffi@2.1.0")
+        library = cffi["wheelhouse_build"]["linked_libraries"][0]
+        if mutation == "unsafe-runtime-path":
+            library["runtime_path"] = "../usr/lib/libffi.so.8"
+        elif mutation == "unsupported-runtime-directory":
+            library["runtime_path"] = "opt/lib/libffi.so.8"
+        elif mutation == "wrong-soname-basename":
+            library["runtime_path"] = "usr/lib/libffi.so.7"
+        elif mutation == "cross-directory-resolution":
+            library["resolved_path"] = "lib/libffi.so.8.2.0"
+        else:
+            library["resolved_path"] = "usr/lib/libffi.bin"
+
+    with pytest.raises(
+        evidence.EvidenceError,
+        match=r"linked library is invalid|unsafe archive path",
+    ):
+        evidence.validate_native_component_policy_schema(policy)
+
+
+def test_committed_native_library_policy_binds_all_three_runtime_dependencies() -> None:
+    policy = cast(
+        dict[str, Any],
+        json.loads(Path(".compliance/container-policy.json").read_text()),
+    )
+    for platform in ("linux/amd64", "linux/arm64"):
+        inventory = {"apk_shared_libraries": synthetic_apk_shared_libraries(platform)}
+        evidence.verify_native_runtime_library_bindings(
+            inventory,
+            policy["native_component_coverage"][platform],
+        )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "missing-runtime",
+        "wrong-runtime-package",
+        "wrong-resolved-package",
+        "symlink-chain",
+        "absolute-symlink",
+        "resolved-is-symlink",
+    ),
+)
+def test_native_library_binding_rejects_runtime_substitution(mutation: str) -> None:
+    policy = cast(
+        dict[str, Any],
+        json.loads(Path(".compliance/container-policy.json").read_text()),
+    )
+    libraries = synthetic_apk_shared_libraries("linux/amd64")
+    by_path = {record["path"]: record for record in libraries}
+    runtime = by_path["usr/lib/libffi.so.8"]
+    resolved = by_path["usr/lib/libffi.so.8.2.0"]
+    if mutation == "missing-runtime":
+        libraries.remove(runtime)
+    elif mutation == "wrong-runtime-package":
+        runtime["package"] = {"name": "libother", "version": "1-r0"}
+    elif mutation == "wrong-resolved-package":
+        resolved["package"] = {"name": "libother", "version": "1-r0"}
+    elif mutation in {"symlink-chain", "absolute-symlink"}:
+        target = "libffi.so.7" if mutation == "symlink-chain" else "/usr/lib/libffi.so.8.2.0"
+        runtime["occurrence"]["target"] = target
+        runtime["apk_sha1"] = evidence.hashlib.sha1(
+            target.encode(), usedforsecurity=False
+        ).hexdigest()
+    else:
+        target = "libffi.so.8.2.0.real"
+        resolved["occurrence"] = {
+            "kind": "symlink",
+            "effective": True,
+            "layer": 0,
+            "path": resolved["path"],
+            "target": target,
+            "mode": 0o777,
+            "uid": 0,
+            "gid": 0,
+        }
+        resolved["apk_sha1"] = evidence.hashlib.sha1(
+            target.encode(), usedforsecurity=False
+        ).hexdigest()
+
+    with pytest.raises(
+        evidence.EvidenceError,
+        match=r"unbound runtime library|not a direct same-directory symlink",
+    ):
+        evidence.verify_native_runtime_library_bindings(
+            {"apk_shared_libraries": libraries},
+            policy["native_component_coverage"]["linux/amd64"],
+        )
 
 
 @pytest.mark.parametrize(
@@ -6313,7 +6726,38 @@ def test_known_omission_dispositions_bind_the_named_omission(
             }
         else:
             psycopg = owners["python:psycopg-c@3.3.4"]
-            omission = psycopg["known_omissions"][0]
+            omission = {
+                "id": "adversarial-runtime-omission",
+                "component": {
+                    "type": "library",
+                    "name": "libpq",
+                    "version": "18.4-r0",
+                    "purl": "pkg:apk/alpine/libpq@18.4-r0",
+                },
+                "observations": [],
+                "payload_roles": ["psycopg_c/_psycopg.cpython-314.so"],
+                "missing_evidence": ["source-payload-relationship"],
+                "reason": "Adversarial fixture assigns the payload to another role.",
+            }
+            psycopg["known_omissions"] = [omission]
+            psycopg["review"] = {
+                "state": "open",
+                "reason": "Adversarial fixture reopens one payload review.",
+                "unresolved_items": ["adversarial-runtime-omission"],
+            }
+            disposition = next(
+                record
+                for record in psycopg["payload_dispositions"]
+                if record["role"] == "psycopg_c/_psycopg.cpython-314.so"
+            )
+            disposition.clear()
+            disposition.update(
+                {
+                    "kind": "known-omission",
+                    "omission": "adversarial-runtime-omission",
+                    "role": "psycopg_c/_psycopg.cpython-314.so",
+                }
+            )
             omission["payload_roles"] = ["psycopg_c/pq.cpython-314.so"]
 
     with pytest.raises(evidence.EvidenceError, match=message):
@@ -8122,6 +8566,35 @@ def test_incomplete_native_coverage_cannot_claim_distribution_approval(
     committed_policy = cast(
         dict[str, Any], json.loads(Path(".compliance/container-policy.json").read_text())
     )
+    for records in committed_policy["native_component_coverage"].values():
+        cffi = next(record for record in records if record["owner"] == "python:cffi@2.1.0")
+        cffi["known_omissions"] = [
+            {
+                "id": "test-unresolved-runtime-binding",
+                "component": {
+                    "type": "library",
+                    "name": "libffi",
+                    "version": "3.5.2-r1",
+                    "purl": "pkg:apk/alpine/libffi@3.5.2-r1",
+                },
+                "observations": [],
+                "payload_roles": ["_cffi_backend.cpython-314.so"],
+                "missing_evidence": ["source-payload-relationship"],
+                "reason": "Test fixture deliberately reopens the runtime binding.",
+            }
+        ]
+        cffi["payload_dispositions"] = [
+            {
+                "kind": "known-omission",
+                "omission": "test-unresolved-runtime-binding",
+                "role": "_cffi_backend.cpython-314.so",
+            }
+        ]
+        cffi["review"] = {
+            "state": "open",
+            "reason": "Test fixture deliberately reopens the runtime binding.",
+            "unresolved_items": ["test-unresolved-runtime-binding"],
+        }
     committed_policy["distribution_approval"] = {
         "approved": True,
         "approved_by": "maintainer",
@@ -9748,7 +10221,7 @@ def test_real_cryptography_cargo_lock_and_openssl_observation_are_retained() -> 
     ]
 
 
-def test_cffi_policy_uses_signed_build_provenance_and_keeps_runtime_gap_open() -> None:
+def test_cffi_policy_uses_signed_build_provenance_and_runtime_file_binding() -> None:
     wheel = real_v7_fixture_bytes("cffi-2.1.0-cp314-musllinux-x86_64.whl")
     assert evidence.sha256_bytes(wheel) == (
         "dbf7c7a88e2bac086f06d14577332760bdeecc42bdec8ac4077f6260557d9326"
@@ -9787,7 +10260,11 @@ def test_cffi_policy_uses_signed_build_provenance_and_keeps_runtime_gap_open() -
             if record["owner"] == "python:cffi@2.1.0"
         )
         assert owner["sboms"] == []
-        assert owner["review"]["state"] == "open"
+        assert owner["review"] == {
+            "reason": "",
+            "state": "closed",
+            "unresolved_items": [],
+        }
         assert owner["wheel"]["provider"] == "native-wheelhouse"
         assert owner["wheelhouse_build"] == {
             "cargo_source_ids": [],
@@ -9795,25 +10272,16 @@ def test_cffi_policy_uses_signed_build_provenance_and_keeps_runtime_gap_open() -
                 {
                     "name": "libffi.so.8",
                     "package": {"name": "libffi", "version": "3.5.2-r1"},
+                    "resolved_path": "usr/lib/libffi.so.8.2.0",
+                    "runtime_path": "usr/lib/libffi.so.8",
                 }
             ],
             "local_cargo_packages": [],
             "source": "cffi",
         }
-        assert owner["known_omissions"] == [
-            {
-                "component": {
-                    "name": "libffi",
-                    "purl": "pkg:apk/alpine/libffi@3.5.2-r1",
-                    "type": "library",
-                    "version": "3.5.2-r1",
-                },
-                "id": "unproven-libffi-runtime-file",
-                "missing_evidence": ["source-payload-relationship"],
-                "observations": [],
-                "payload_roles": ["_cffi_backend.cpython-314.so"],
-                "reason": owner["known_omissions"][0]["reason"],
-            }
+        assert owner["known_omissions"] == []
+        assert owner["payload_dispositions"] == [
+            {"kind": "owner", "role": "_cffi_backend.cpython-314.so"}
         ]
 
     candidate = copy.deepcopy(policy)

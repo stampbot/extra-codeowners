@@ -25,7 +25,7 @@ The enforcement code is in `.github/scripts/container_evidence.py`, especially
 
 ## Common types and limits
 
-The current schema version is integer `8`. JSON must be UTF-8, no larger than
+The current schema version is integer `9`. JSON must be UTF-8, no larger than
 64 MiB, no deeper than 64 containers, and must not contain duplicate object
 keys, floating-point values, non-finite numbers, or invalid Unicode. Unless a
 field says otherwise, every object has exactly the listed keys.
@@ -54,7 +54,7 @@ The policy has exactly these fields:
 
 | Field | Type | Meaning | Consuming gate |
 | --- | --- | --- | --- |
-| `schema_version` | integer | Policy schema; exactly `8`. | Every command through `validate_policy_schema`. |
+| `schema_version` | integer | Policy schema; exactly `9`. | Every command through `validate_policy_schema`. |
 | `base_image` | string | Nonempty bounded Dockerfile base reference; the schema rejects whitespace and `@`. The checked-in value is a tagged Docker Official Python reference. | Exact Dockerfile binding during `bundle` and `verify-ci-policy`. |
 | `base_image_index_digest` | `qualified_sha256` | Reviewed multi-platform base index. | Schema validation during `verify`; exact Dockerfile/index binding during `bundle` and `verify-ci-policy`. |
 | `base_image_platforms` | platform object | Exact ordered base layer diff IDs for both platforms. | Base-prefix and post-base provenance gates. |
@@ -171,10 +171,10 @@ Approval is necessary but not sufficient. The collector also requires the
 derived ledger's exact complete-source status. Normal verification rejects
 `approved: true` while that ledger is incomplete; the
 `--require-distribution-approval` gate additionally requires a complete,
-attributed approval. Three native-wheel owners remain open under issue #18, so
-that gate cannot pass. Issue #28 independently keeps publication authority out
-of the collector. Issue #32 still requires the selected application proof to
-reach release evidence and the future publication jobs.
+attributed approval. The current native-owner ledger is complete, but approval
+remains false while issue #18 finishes recipient delivery and release binding,
+issue #32 retains the selected application proof in durable release evidence,
+and issue #28 separates parsing from publication authority.
 
 ## License policy
 
@@ -206,7 +206,7 @@ The ID set must equal every non-operator, non-`LicenseRef-*` token required by
 the reviewed top-level expressions and every direct native-component review,
 including reviews in open owner records. Extra, missing, and duplicate text
 IDs fail both standalone verification and bundle source-policy verification
-with the same exact reviewed-identifier check. Schema 8
+with the same exact reviewed-identifier check. Schema 9
 does not allow `LicenseRef-*` in a nested native-component expression. The
 Greenlet closure therefore adds the pinned SPDX `GCC-exception-3.1` text
 alongside the existing `GPL-3.0-or-later` text.
@@ -282,15 +282,35 @@ semantic projections, while both APK files retain exact layer, digest, size,
 mode, owner, group, and final-effect status. Post-base occurrences of both
 files must also be root-owned with mode `0644`. The system-file and link arrays
 classify the exact package-manager state and runtime library bytes accepted by
-the provenance gate. They do not, by themselves, prove that a library file came
-from a named package or that its source built a native wheel.
+the provenance gate.
+
+Schema 9 adds `apk_shared_libraries` to the component inventory. The collector
+derives this sorted array from the effective APK database's `F`, `R`, and `Z`
+records. The all-layer validator binds every projected occurrence back to
+`inventory/all-layer-files.json`. Each item has exactly:
+
+| Field | Contract |
+| --- | --- |
+| `package` | Exact effective APK `name` and `version` that owns the path. |
+| `path` | Canonical shared-library path directly under `lib` or `usr/lib`; unique across the array. |
+| `apk_sha1` | Lowercase SHA-1 decoded from the APK database's `Q1` checksum. |
+| `occurrence` | Exact effective regular-file or symbolic-link occurrence at `path`. |
+
+A regular occurrence carries `kind: regular` plus the regular-file occurrence
+fields above. A symbolic-link occurrence carries `kind: symlink`, effective
+state, layer, path, target, mode, UID, and GID. The collector recomputes the APK
+SHA-1 over regular-file bytes or the symbolic-link target. A missing, replaced,
+hard-linked, multiply owned, malformed, or checksum-mismatched library fails
+collection. The all-layer validator then binds each library back to the exact
+occurrence and effective filesystem topology. This proves package ownership of
+the runtime bytes; it does not prove that those bytes built a native wheel.
 
 ## Native-component closure
 
 `native_component_coverage` is a closed-world review ledger, not a list of
 components inferred from package names. Both platforms must contain the same
 sorted owner set, and that set must exactly match every wheel owner with a
-native payload or embedded SBOM in the inventory. Schema 8 is the only accepted
+native payload or embedded SBOM in the inventory. Schema 9 is the only accepted
 version. Older owner-level `components` records are rejected.
 
 Each owner record has exactly these fields:
@@ -299,7 +319,7 @@ Each owner record has exactly these fields:
 | --- | --- |
 | `owner` | Canonical `python:NAME@VERSION`, unique on the platform. |
 | `wheel` | Either an exact HTTPS lock-file artifact or an exact `native-wheelhouse` provider record. A lock wheel must match the supported CPython 3.14 musllinux platform. A wheelhouse wheel must match the contract's native CPython 3.14 platform and bind its filename, source name, SHA-256, and positive size. |
-| `wheelhouse_build` | `null` for a lock wheel. A wheelhouse wheel must record the matching source name, sorted crates.io source IDs, local Cargo package identities, and at least one linked library with its exact Alpine package identity. |
+| `wheelhouse_build` | `null` for a lock wheel. A wheelhouse wheel must record the matching source name, sorted crates.io source IDs, local Cargo package identities, and at least one linked library with its SONAME, exact Alpine package identity, runtime path, and resolved path. |
 | `owner_source` | Exact HTTPS URL, SHA-256, and size for the owner source. Lock wheels bind this to the lock or reviewed fallback. Wheelhouse wheels bind it to the signed build manifest. |
 | `cargo_lock` | `null` unless the owner directly reviews a crates.io source; otherwise, the exact retained owner-sdist lockfile context described below. |
 | `native_payloads` | Sorted records with derived `role`, installed `path`, SHA-256, and positive `size`. |
@@ -316,6 +336,18 @@ platform CPython ABI suffix, and removes only a valid eight-lowercase-hex
 auditwheel filename segment. Paths and roles are unique. Both platforms must
 have the same role set, although paths, wheel bytes, and payload digests may
 differ.
+
+Each `wheelhouse_build.linked_libraries` item has exactly `name`, `package`,
+`runtime_path`, and `resolved_path`. `name` is the ELF SONAME and must equal the
+basename of `runtime_path`. Both paths are canonical and directly under `lib` or
+`usr/lib`; both must use the same directory. `resolved_path` must name a shared
+library. Both inventory entries must belong to the exact named APK package and
+version. The resolved occurrence must be a regular file. The runtime occurrence
+must either be that same regular file or one direct, same-directory symbolic
+link to its basename. Absolute links, link chains, cross-directory targets, and
+cross-package bindings fail. Native wheelhouse inspection also rejects ELF
+`RPATH` and `RUNPATH`, so a wheel cannot redirect these reviewed SONAMEs to an
+unreviewed directory.
 
 ### SBOM observations and occurrence identity
 
@@ -493,25 +525,19 @@ platform-specific identifiers from creating false review drift.
 owners are copied in full to `unresolved_owners`. The count and names are
 derived from that open list.
 
-The current ledger closes Cryptography 48.0.1, Greenlet 3.5.3, MarkupSafe
-3.0.3, and SQLAlchemy 2.0.51. These three owners remain deliberately open:
-
-| Owner | Open omission IDs |
-| --- | --- |
-| `python:cffi@2.1.0` | `unproven-libffi-runtime-file` |
-| `python:psycopg-c@3.3.4` | `unproven-libpq-runtime-file` |
-| `python:pydantic-core@2.46.4` | `unproven-libgcc-runtime-file` |
-
-The signed wheelhouse records Pydantic Core's source, local Cargo package,
-locked crates.io inputs, and `libgcc_s.so.1` link. Its remaining omission is
-the unproven relationship between that name and one exact APK-owned runtime
-file.
+The current ledger closes all seven observed native owners: CFFI 2.1.0,
+Cryptography 48.0.1, Greenlet 3.5.3, MarkupSafe 3.0.3, Psycopg C 3.3.4,
+Pydantic Core 2.46.4, and SQLAlchemy 2.0.51. CFFI's `libffi.so.8`, Psycopg C's
+`libpq.so.5`, and Pydantic Core's `libgcc_s.so.1` are bound to the exact
+APK-owned runtime and resolved paths through the schema-9 rules above.
 
 Each platform also reports two reviewed metadata-root-echo anomalies: the
-Cryptography and Greenlet auditwheel documents. The ledger therefore
-reports `complete: false`, `remaining_owner_count: 3`, and the three sorted
-owner names. `MANIFEST.json.source_completeness` is derived from this ledger;
-the raw component inventory has no caller-controlled completeness field.
+Cryptography and Greenlet auditwheel documents. The ledger reports
+`complete: true`, an empty `unresolved_owners` array,
+`remaining_owner_count: 0`, and an empty `remaining_owner_names` array.
+`MANIFEST.json.source_completeness` is derived from this ledger; the raw
+component inventory has no caller-controlled completeness field. This source
+accounting result is not distribution approval.
 
 ## Source records
 
