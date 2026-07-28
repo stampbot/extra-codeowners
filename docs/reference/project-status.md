@@ -2,18 +2,19 @@
 
 Last verified: 2026-07-26.
 
-Extra CODEOWNERS is pre-release. The source can publish a check in a disposable
-development environment, but there is no supported production enforcement or
-deployable release.
+Extra CODEOWNERS is ready for source review and disposable testing. It is not
+ready to enforce production merges, and it has no supported release artifact.
 
-## Availability
+## What is available
+
+Use a source checkout to evaluate the project today:
 
 | Surface | Status |
 | --- | --- |
-| Source checkout for development and evaluation | Available |
-| App Manifest registration flow | Implemented for development testing |
-| Disposable evaluation-beta preflight | Available from source; verifies prerequisites but does not run the beta |
-| Production code-owner enforcement | Not supported; the live GitHub contract remains open in [issue #1][issue-1] |
+| Source checkout | Available for development and evaluation |
+| App Manifest registration | Implemented for development testing |
+| Evaluation-beta preflight | Available from source; checks prerequisites but does not run the beta |
+| Production code-owner enforcement | Not supported; live GitHub contracts remain open in [issue #1][issue-1] |
 | Supported GitHub release | Not available |
 | Supported container image | Not available |
 | Packaged Helm chart | Not available; a chart exists in source only |
@@ -22,110 +23,93 @@ deployable release.
 | Hosted service | Not available |
 | `extra-codeowners-action` Marketplace Action | Not available |
 
-Anonymous registry inspection on 2026-07-23 confirmed that the public
-`ghcr.io/stampbot/extra-codeowners:main` tag still resolves. That image
-predates the current release controls. Its native dependency inventory and
-corresponding-source closure are incomplete under [issue #18][issue-18], so it
-is not approved distribution evidence. Don't deploy, mirror, or redistribute
-it. [Issue #30][issue-30] tracks its complete inventory and final disposition.
+The source contains the GitHub App, policy evaluator, App Manifest flow, local
+SQLite support, PostgreSQL support for future deployments, a Helm chart, and
+the test and evidence pipelines. You can use those pieces to study the policy
+model or run a disposable live test. They don't add up to a release.
 
-## What you can evaluate from source
+Anonymous registry inspection on 2026-07-23 confirmed that
+`ghcr.io/stampbot/extra-codeowners:main` still resolves. That image predates
+the current release controls. Its exact component and source evidence is
+incomplete under [issue #18][issue-18], so it is not an approved distribution.
+Don't deploy, mirror, or redistribute it. [Issue #30][issue-30] tracks its
+inventory and final disposition.
 
-The repository contains:
+## Why production enforcement is blocked {#production-enforcement-blocker}
 
-- the GitHub App service and policy evaluator
-- an App Manifest registration flow
-- SQLite support for local development and PostgreSQL support for a future
-  deployment
-- a Helm chart in source form
-- unit, integration, property, workflow, and container tests
-- a [read-only preflight](../how-to/preflight-evaluation-beta.md) for the
-  disposable, non-required evaluation beta
-- CI-built container candidates and review evidence.
+GitHub attaches a Check Run to a commit, but Extra CODEOWNERS evaluates one
+pull request: its base, changed paths, labels, and reviews. Two open pull
+requests can share a head commit. In that case, a successful result from the
+first pull request can appear on the second before Extra CODEOWNERS receives
+the event that should revoke it.
 
-Use these parts to review the policy model or run a disposable live test. They
-don't add up to a supported release.
+The service now resets its managed check to `in_progress`, asks GitHub for
+every current pull request using that commit, and reevaluates each one.
+Generation guards stop an older worker from overwriting newer evidence. Those
+controls start only after GitHub delivers an event.
 
-## Production enforcement blocker
+GitHub's commit-to-pull-requests endpoint creates a second limit: the response
+doesn't say whether the list is complete. The service can't revoke a check for
+a pull request GitHub omitted.
 
-GitHub attaches a Check Run to a commit. Extra CODEOWNERS evaluates evidence
-for one pull request: its base, changed paths, labels, and reviews. If two open
-pull requests use the same head commit, a successful result from the first can
-appear on the second before Extra CODEOWNERS receives and processes the event
-that should revoke it.
+[Issue #1][issue-1] owns the remaining provider tests:
 
-The service now records durable exact-head invalidation, resets an existing
-managed check to `in_progress`, reevaluates every current pull request GitHub
-reports for that commit, and uses generation guards to stop older workers from
-publishing over newer evidence. Those controls reduce the window after event
-acceptance. They can't protect the time before GitHub delivers the event.
-
-There is another provider boundary: GitHub's commit-to-pull-requests endpoint
-doesn't mark its response as complete. If GitHub omits a pull request, the
-service can't discover it from that response.
-
-[Issue #1][issue-1] tracks the remaining live tests, including:
-
-- required-check behavior while a completed Check Run returns to
-  `in_progress`
-- shared-head opening and retargeting under delayed or lost delivery
+- required-check behavior when a completed Check Run returns to `in_progress`
+- shared-head opening and retargeting with delayed or lost webhooks
 - expected-source selection in repository and organization rulesets
-- whether a third-party App approval satisfies GitHub's ordinary numeric
-  approval count
-- installation lifecycle, repository transfer, and access-loss behavior.
+- the way third-party App reviews interact with the ordinary approval count
+- installation lifecycle, repository transfer, and access loss.
 
-No dated live execution has been recorded. Until the issue closes, keep
-GitHub's native **Require review from Code Owners** rule on production
-repositories.
+No dated live execution has proved the whole contract. Keep GitHub's native
+**Require review from Code Owners** rule on production repositories until
+issue #1 closes.
 
-## Distribution blockers
+## Why distribution is blocked {#distribution-blockers}
 
-Tagged publication is disabled. Six issues define the first supported release
-boundary:
+Tagged publication is disabled. These issues define the first supported
+release boundary:
 
 | Issue | Required outcome |
 | --- | --- |
-| [#1][issue-1] | Prove the live Check Run, App-review, and authority-loss contracts. |
-| [#18][issue-18] | Complete notices and corresponding-source evidence. |
-| [#25][issue-25] | Publish the first release as an immutable GitHub release. |
-| [#28][issue-28] | Separate archive parsing from publication authority and finish the recipient verification contract. |
-| [#30][issue-30] | Inventory and decide the disposition of the public preview package. |
-| [#32][issue-32] | Retain and bind the selected Python build proof. |
+| [#1][issue-1] | Prove the live Check Run, App-review, and authority-loss contracts |
+| [#18][issue-18] | Complete notices and corresponding-source evidence |
+| [#25][issue-25] | Publish the first release as an immutable GitHub release |
+| [#28][issue-28] | Separate archive parsing from publication authority and finish recipient verification |
+| [#30][issue-30] | Inventory the public preview and decide its disposition |
+| [#32][issue-32] | Retain and bind the selected Python build proof |
 
-CI records substantial Python and container evidence. That work exposes what
-is still missing; it doesn't approve an artifact for distribution.
+CI produces detailed Python and container evidence. That evidence tells a
+reviewer exactly what is missing; it does not approve an artifact for
+distribution.
 
-## Hardening code that is not active yet
+## Inactive hardening work
 
-The source includes a bounded Developer Certificate of Origin (DCO) evaluator
-and read-only GitHub methods. The evaluator binds its decision to a repository,
-pull request, and exact base and head commits, but no independent service or
-workflow calls it. The checked-in DCO workflow can still change in the same
-pull request it evaluates. The [DCO evidence contract](dco-evidence.md) records
-the boundary, and [issue #40][issue-40] tracks independent execution and
-publication.
+The source includes a bounded Developer Certificate of Origin (DCO) evaluator.
+It binds a decision to one repository, pull request, and exact base and head
+commit. No independent service or workflow calls it yet, so a pull request can
+still modify the workflow that checks that same pull request. Read the
+[DCO evidence contract](dco-evidence.md) for the implemented boundary.
+[Issue #40][issue-40] tracks independent execution.
 
-The source also contains parts of a future privileged release path:
+There are also parts of a future privileged release path:
 
 - an offline [release controller](immutable-release-controller.md)
 - a [GitHub release API adapter](github-release-api-adapter.md)
 - a read-only [immutable-release preflight](immutable-release-preflight.md)
 - a [blocked release candidate assembler](release-asset-candidate-format.md).
 
-No workflow connects the controller, adapter, and preflight or gives that path
-a privileged token. The workflow places the candidate assembler downstream of
-the failing publication block, so it skips that job. The assembler's record
-forbids publication when the script is exercised independently. These are
-reviewable contracts, not a working release process.
+No workflow gives that path publication authority. The candidate assembler is
+downstream of an intentional failure and is skipped in normal release runs. If
+someone invokes it independently, its record still forbids publication.
+These are reviewable contracts, not a working release process.
 
 ## Planned distributions
 
-The self-hosted GitHub App is the first planned distribution. A packaged
-Marketplace Action and a hosted service are separate roadmap items. Neither
-has an availability date.
+The self-hosted GitHub App comes first. A packaged Marketplace Action and a
+hosted service are separate roadmap items, with no availability date.
 
-Follow the linked issues for current evidence and decisions. Update this page
-whenever an availability or safety claim changes.
+Follow the linked issues for current evidence and decisions. This page should
+change whenever an availability or safety claim changes.
 
 [issue-1]: https://github.com/stampbot/extra-codeowners/issues/1
 [issue-18]: https://github.com/stampbot/extra-codeowners/issues/18
