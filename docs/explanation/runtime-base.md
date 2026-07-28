@@ -144,8 +144,8 @@ digests must match.
 
 ### Native-owner evidence coverage
 
-Cryptography, Greenlet, MarkupSafe, and SQLAlchemy have closed-world coverage
-on both architectures.
+All seven observed native owners have closed-world coverage on both
+architectures.
 Greenlet binds the exact wheel and sdist, accounts for every native payload,
 and reproduces the component identities observed in its embedded SBOM. The
 bundle separately retains the Alpine GCC recipe, source archive, and notices
@@ -172,19 +172,16 @@ The Cryptography closure also stops short of reproducibility or build
 provenance: retained source agreement does not prove that those inputs produced
 either wheel.
 
-Three other native-wheel owners retain explicit, structured omissions. Their
-open review state is why
-[issue #18](https://github.com/stampbot/extra-codeowners/issues/18) still blocks
-distribution.
-
 A separate [native wheelhouse build](native-wheelhouse.md) now produces
 reproducible CFFI, Psycopg C, and Pydantic Core wheels from reviewed inputs.
 The application image selects that wheelhouse by signed contract and immutable
 digest, verifies it before use, installs those wheels offline, and retains the
 wheel bytes for recipient inspection. The build closes the earlier
-upstream-wheel input gaps. Distribution approval remains false because image
-evidence has not yet bound the wheelhouse's `libffi`, `libpq`, and `libgcc`
-link requirements to exact APK-owned runtime file occurrences.
+upstream-wheel input gaps. Schema 9 also binds the wheelhouse's `libffi`,
+`libpq`, and `libgcc` link requirements to exact APK-owned runtime and resolved
+file occurrences. Distribution approval remains false while
+[issue #18](https://github.com/stampbot/extra-codeowners/issues/18) finishes
+recipient delivery and release binding.
 
 ### Vulnerability handling
 

@@ -30,7 +30,7 @@ NATIVE_WHEELHOUSE_CONTRACT_SHA256 = hashlib.sha256(
     NATIVE_WHEELHOUSE_CONTRACT.read_bytes()
 ).hexdigest()
 REVISION = "1" * 40
-REAL_PLAN_SHA256 = "e4a248d0de333ffa603276f49138039316f69775c4e804ca09579497588ae219"
+REAL_PLAN_SHA256 = "7a706a3fbc2f0ff6fc058942f702beb036a5da43e0b96f00b8189dfdec82b3b8"
 REQUEST_KEYS = {
     "id",
     "url",
@@ -141,7 +141,7 @@ def minimal_alpine_policy(
             for origin in selected[platform]
         ]
     return {
-        "schema_version": 8,
+        "schema_version": 9,
         "native_wheelhouse_contract_sha256": NATIVE_WHEELHOUSE_CONTRACT_SHA256,
         "platforms": platforms,
         "native_component_coverage": {
@@ -202,7 +202,7 @@ def write_direct_store(
         "schema_version": 1,
         "media_type": "application/vnd.stampbot.container-source-plan.v1+json",
         "kind": "direct",
-        "evidence_schema_version": 8,
+        "evidence_schema_version": 9,
         "source_revision": REVISION,
         "policy_sha256": hashlib.sha256(policy_path.read_bytes()).hexdigest(),
         "uv_lock_sha256": "2" * 64,
@@ -333,7 +333,7 @@ def build_native_alpine_case(
         "linux/arm64": "musllinux_1_2_aarch64",
     }
     policy: dict[str, Any] = {
-        "schema_version": 8,
+        "schema_version": 9,
         "native_wheelhouse_contract_sha256": NATIVE_WHEELHOUSE_CONTRACT_SHA256,
         "platforms": {
             platform: [
@@ -454,7 +454,7 @@ def test_real_policy_direct_plan_is_stable_and_complete() -> None:
     assert first["schema_version"] == 1
     assert first["media_type"] == "application/vnd.stampbot.container-source-plan.v1+json"
     assert first["kind"] == "direct"
-    assert first["evidence_schema_version"] == 8
+    assert first["evidence_schema_version"] == 9
     assert first["source_revision"] == REVISION
     assert first["policy_sha256"] == hashlib.sha256(POLICY.read_bytes()).hexdigest()
     assert first["uv_lock_sha256"] == hashlib.sha256(UV_LOCK.read_bytes()).hexdigest()
@@ -503,6 +503,18 @@ def test_real_policy_direct_plan_is_stable_and_complete() -> None:
         maximum=source_plan.MAX_PLAN_BYTES,
     )
     assert contract.validate_source_plan(parsed) == first
+
+
+def test_direct_plan_rejects_non_library_wheelhouse_soname(tmp_path: Path) -> None:
+    policy = real_policy()
+    for records in policy["native_component_coverage"].values():
+        cffi = next(record for record in records if record["owner"] == "python:cffi@2.1.0")
+        linked = cffi["wheelhouse_build"]["linked_libraries"][0]
+        linked["name"] = "libffi"
+        linked["runtime_path"] = "usr/lib/libffi"
+
+    with pytest.raises(source_plan.PlanError, match="linked library has invalid paths"):
+        build_with_policy(tmp_path, policy)
 
 
 def test_real_policy_plan_covers_platform_wheels_and_reuses_owner_sdist() -> None:

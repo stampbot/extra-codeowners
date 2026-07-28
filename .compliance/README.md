@@ -1,155 +1,144 @@
 # Container distribution evidence
 
-This directory holds the reviewed allowlist for Extra CODEOWNERS container
-evidence. It isn't runtime configuration. If a package, source archive, license,
-base layer, native payload, or embedded software bill of materials (SBOM)
-changes, the policy must change with it.
+This directory holds the reviewed policy for Extra CODEOWNERS container
+evidence. It is not application configuration. A change to a package, source
+archive, license, base layer, native payload, or embedded software bill of
+materials (SBOM) must come with a matching policy review.
 
-The current policy schema is `8`. Evidence predicates use
-`application/vnd.stampbot.container-evidence.v8+tar+gzip`. The collector
-rejects schema 7 and every other version; there is no compatibility reader or
+The current policy uses schema `9`. Evidence predicates use
+`application/vnd.stampbot.container-evidence.v9+tar+gzip`. The collector
+rejects every other schema version; there is no compatibility reader or
 automatic migration.
 
-## What schema 8 records
+## What the collector proves
 
-The collector inventories every distributed image layer, including bytes that
-a later whiteout hides. It binds CPython to the installed runtime, the pinned
-Docker Official Python recipe, the exact source archive, and its license. For
-each Python wheel with native code or an embedded SBOM, it also retains the
-locked wheel, native payloads, and raw SBOM bytes.
+The collector inventories every image layer, including files that a later OCI
+whiteout hides. It binds the installed CPython runtime to the pinned Docker
+Official Python recipe, source archive, and license. For each Python wheel with
+native code or an embedded SBOM, it retains the selected wheel, installed
+payloads, raw SBOM bytes, and the wheel's historical `RECORD` ownership.
 
-Schema 8 keeps observation separate from review:
+Schema 9 keeps observation and review separate:
 
-- An SBOM observation preserves the document path and digest plus each exact
-  component occurrence: type, name, version, package URL (PURL), `bom-ref`,
-  hashes, and declared licenses.
-- A review cites an occurrence by SBOM path, observation digest, PURL, and
-  `bom-ref` when one exists. The review then names the source and the project's
-  reviewed license expression.
+- An SBOM observation preserves the document path and digest plus every exact
+  component occurrence.
+- A review cites an occurrence, then names its immutable source and reviewed
+  license expression.
 - A payload disposition says whether a native file belongs to the wheel owner,
-  corresponds to reviewed SBOM occurrences, or remains part of a known
-  omission.
-- A known omission records the affected observations and payload roles, the
-  missing evidence, and the exact reason the owner remains open.
+  maps to reviewed SBOM occurrences, or remains a known omission.
+- A known omission names the affected observations or payload roles and the
+  evidence still missing.
 
-Each `known-omission` metadata root or payload disposition must point to the
-exact omission that lists its observation or role. A reference listed under a
-different omission does not satisfy that claim.
+When `bom-ref` is present, it identifies the occurrence within that document.
+The package URL (PURL) is the fallback only when `bom-ref` is empty. Repeated
+PURLs need unique, nonempty `bom-ref` values.
 
-`bom-ref` is the occurrence identity when it is present. A PURL is only the
-fallback when `bom-ref` is empty. Schema 8 rejects repeated PURLs when any
-occurrence lacks a unique, nonempty `bom-ref`.
-
-Some auditwheel documents repeat their metadata root as a canonically identical
-top-level component, including the same `bom-ref`. The collector accepts only
-that narrow upstream anomaly. The policy must classify the root and carry a
-`metadata-root-echo` review with a reason. The coverage ledger reports the
-reviewed anomaly; it never silently removes it.
+Some auditwheel SBOMs repeat their metadata root as an identical top-level
+component. The parser accepts only that narrow case. Policy must record a
+`metadata-root-echo` review, and the coverage ledger reports the anomaly rather
+than hiding it.
 
 The only cross-owner relationship is
 `same-component-by-payload-equivalence`. It requires byte-identical payloads,
-matching component identity, a directly reviewed target in a closed owner, and
-source and target payload dispositions that cite the exact observations being
-related.
+matching component identities, and a directly reviewed target in a closed
+owner. Relationships cannot chain.
 
-Crate reviews also carry an exact `Cargo.lock` context from the retained owner
-sdist. The context names every reviewed crates.io source and every registry
-package that is present in the lockfile but absent from the SBOM. Bundle
-generation reparses that lockfile and rejects a missing package, an unexpected
-package, a foreign registry, or a checksum mismatch. Owners without a crate
-review use `cargo_lock: null`.
+Rust reviews also carry the exact `Cargo.lock` from the retained owner source
+distribution. Bundle generation reparses the lock and rejects missing
+packages, foreign registries, or checksum drift.
 
-Schema 8 also binds the application image to one signed native-wheelhouse
-consumer contract. A wheelhouse owner records its exact wheel, reviewed source,
-locked Cargo inputs where applicable, and linked runtime libraries. Those
-records prove which reviewed build supplied the installed extension. They do
-not yet prove which exact APK-owned runtime file satisfied each linked-library
-name.
+## APK runtime-library binding
 
-## Current closure
+Schema 9 closes the gap between a wheel's recorded ELF dependency and the file
+that the final image would load.
 
-Every observed native-wheel owner has a policy record on both architectures.
-The record is either `closed` or `open`; an unconfigured owner fails
-verification instead of becoming an inferred gap.
+The collector parses Alpine's `F`, `R`, and `Z` ownership records. For every
+package-owned shared library under `/lib` or `/usr/lib`, it records the package,
+APK SHA-1, and effective layer occurrence. A regular file must match APK's
+checksum over its bytes. A symbolic link must match APK's checksum over its
+target text. Missing, replaced, duplicated, malformed, or checksum-drifted
+records fail collection.
 
-| Owner | State | Evidence still missing |
-| --- | --- | --- |
-| `python:cffi@2.1.0` | Open | `unproven-libffi-runtime-file` |
-| `python:cryptography@48.0.1` | Closed | None |
-| `python:greenlet@3.5.3` | Closed | None |
-| `python:markupsafe@3.0.3` | Closed | None |
-| `python:psycopg-c@3.3.4` | Open | `unproven-libpq-runtime-file` |
-| `python:pydantic-core@2.46.4` | Open | `unproven-libgcc-runtime-file` |
-| `python:sqlalchemy@2.0.51` | Closed | None |
+Wheelhouse policy then binds each ELF shared-library name to a runtime path and
+one final regular file:
 
-Cryptography binds all 32 registry components to their exact crates.io
-archives, manifests, checksums, licenses, and notices. Its retained sdist
-supplies the exact local Rust subtree and `Cargo.lock`. The source record pins
-the workspace manifest and all eight package manifests. The OpenSSL 4.0.1
-record supplies the official archive, checksum document, and license. The arm64
-auditwheel PURL remains `NotpineForGHA`. A relationship links that `libgcc`
-occurrence to Greenlet's closed Alpine GCC evidence because the payload bytes
-match exactly.
+| Owner | ELF name | Runtime path | Final file | Alpine package |
+| --- | --- | --- | --- | --- |
+| `python:cffi@2.1.0` | `libffi.so.8` | `usr/lib/libffi.so.8` | `usr/lib/libffi.so.8.2.0` | `libffi@3.5.2-r1` |
+| `python:psycopg-c@3.3.4` | `libpq.so.5` | `usr/lib/libpq.so.5` | `usr/lib/libpq.so.5.18` | `libpq@18.4-r0` |
+| `python:pydantic-core@2.46.4` | `libgcc_s.so.1` | `usr/lib/libgcc_s.so.1` | same path | `libgcc@15.2.0-r5` |
 
-The signed wheelhouse binds Pydantic Core to its retained source distribution,
-local package, locked crates.io inputs, and `libgcc_s.so.1`. It binds CFFI to
-its reviewed source and `libffi.so.8`, and Psycopg C to its reviewed source and
-`libpq.so.5`. Each owner remains open because current image evidence stops at
-the shared-library name and Alpine package identity; it does not bind that name
-to one exact APK-owned runtime file occurrence.
+Only the default Alpine loader directories are accepted. When the runtime path
+is a link, it must point directly to the final file in the same directory and
+both paths must belong to the same package. Native wheel inspection also
+rejects ELF `RPATH` and `RUNPATH`, so a wheel cannot redirect lookup to an
+unreviewed directory.
 
-Greenlet's reviewed components use the commit-pinned Alpine GCC recipe and
-source archive. MarkupSafe and SQLAlchemy have no embedded SBOM, so their
-closed records contain empty SBOM and component-review arrays. Their native
-payloads are still exact. None of these records claims that a wheel is
-reproducible from the retained sources or proves which build produced it.
+## Native-owner closure
 
-The policy can describe four immutable native-source forms: an Alpine aports
-recipe and distfiles, a crates.io archive, a verified subtree of the owner's
-source distribution, or an upstream archive accompanied by a pinned checksum
-document. The bundle retains the exact reviewed notices for every used source.
+Every observed native-wheel owner now has a closed policy record on both
+architectures.
+
+| Owner | State |
+| --- | --- |
+| `python:cffi@2.1.0` | Closed |
+| `python:cryptography@48.0.1` | Closed |
+| `python:greenlet@3.5.3` | Closed |
+| `python:markupsafe@3.0.3` | Closed |
+| `python:psycopg-c@3.3.4` | Closed |
+| `python:pydantic-core@2.46.4` | Closed |
+| `python:sqlalchemy@2.0.51` | Closed |
+
+Cryptography binds its registry components to exact crates.io archives,
+manifests, checksums, licenses, and notices. Its retained source distribution
+supplies the local Rust workspace and lockfile. The policy also pins the
+official OpenSSL release and its checksum document.
+
+Greenlet uses the commit-pinned Alpine GCC recipe and source archive. A narrow
+payload-equivalence relationship lets Cryptography reuse Greenlet's reviewed
+`libgcc` evidence where the bundled bytes match. MarkupSafe and SQLAlchemy have
+no embedded SBOMs, but their native payload sets remain exact.
+
+The signed wheelhouse supplies reviewed builds for CFFI, Psycopg C, and
+Pydantic Core. The bindings above connect their recorded ELF dependencies to
+the final APK-owned runtime files.
 
 `inventory/native-component-coverage.json` derives the result from policy and
-the observed image. Closed records appear in `resolved_owners`; open records
-appear in `unresolved_owners` with their full evidence and omissions.
-`source_completeness` is derived in `MANIFEST.json`; it is not trusted as an
-input from `inventory/components.json`.
+the observed image. All seven records appear in `resolved_owners`;
+`unresolved_owners` is empty. `MANIFEST.json` therefore records
+`source_completeness.complete: true`.
 
-Three owners remain open, so `source_completeness.complete` is `false`.
-`distribution_approval.approved` also remains `false`. The ledger records
-progress. It does not grant permission to distribute the image.
+That is source-evidence closure for the current candidate. It is not permission
+to distribute the image.
 
-The wheelhouse closes the earlier upstream-wheel source gaps. The three
-runtime-file relationships above remain explicit omissions until image
-evidence proves them.
+## What still blocks a supported release
 
-## Raw OCI release spine
+`distribution_approval.approved` remains `false`, and the workflow has no
+reachable publication job. Collector success is neither a legal conclusion nor
+publication authority.
 
-CI also checks the [raw OCI release-spine format](../docs/reference/release-spine-format.md).
-That check is an internal transport proof, not compliance evidence. It builds a
-real two-platform candidate with pinned BuildKit, then packs its reachable OCI
-objects into two unarchived workflow artifacts.
+The remaining release work is tracked in:
 
-The spine holds opaque OCI object bytes and a canonical range record. It neither
-inspects layers nor proves component, notice, source, SBOM, signature,
-attestation, or publication completeness. A future release consumer must get
-the root index digest directly from the pinned build action, outside the spine
-record. It must also consume only the authenticated chunks that the verifier
-copied from its open file descriptor, without reopening the path.
-
-## Release guardrails
-
-Collector success is neither a legal determination nor publication authority.
-The repository has no `main` publication job, and tagged publication remains
-blocked by:
-
-- [source completeness #18](https://github.com/stampbot/extra-codeowners/issues/18)
-- [publication privilege separation #28](https://github.com/stampbot/extra-codeowners/issues/28)
-- [selected build-proof handoff #32](https://github.com/stampbot/extra-codeowners/issues/32)
+- [issue #18](https://github.com/stampbot/extra-codeowners/issues/18), which
+  covers recipient delivery of notices and corresponding source bound to each
+  platform digest
+- [issue #28](https://github.com/stampbot/extra-codeowners/issues/28), which
+  covers the bounded recipient format and isolated signing and publication
+  path
+- [issue #32](https://github.com/stampbot/extra-codeowners/issues/32), which
+  covers retaining the selected Python build proof in release evidence.
 
 An [older GHCR preview](https://github.com/stampbot/extra-codeowners/issues/30)
 is unsupported and incomplete. Do not deploy or mirror it. Pull-request CI
 artifacts are short-lived, unsigned review inputs rather than release assets.
+
+## Raw OCI release spine
+
+CI also checks the
+[raw OCI release-spine format](../docs/reference/release-spine-format.md). The
+spine is an internal transport proof. It holds opaque OCI objects and a
+canonical range record, but it does not inspect layers or prove notice, source,
+signature, attestation, or publication completeness.
 
 Follow [Review container evidence](../docs/how-to/review-container-evidence.md)
 to inspect both platform artifacts and the policy that accepted them.

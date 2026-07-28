@@ -52,7 +52,7 @@ contract:
 
 | Issue | Work still required |
 | --- | --- |
-| [#18](https://github.com/stampbot/extra-codeowners/issues/18) | Prove CFFI's libffi build input, close Psycopg's bundled-library sources, and bind Pydantic Core's bundled `libgcc` to an exact source. |
+| [#18](https://github.com/stampbot/extra-codeowners/issues/18) | Deliver the complete notices and corresponding-source evidence against the exact platform digests, and document how recipients obtain it. |
 | [#28](https://github.com/stampbot/extra-codeowners/issues/28) | Carry the isolated CI handoffs into the tagged candidate pipeline, freeze the wire format, and ship an adversarially tested recipient verifier, signing and publication path, and how-to. |
 | [#32](https://github.com/stampbot/extra-codeowners/issues/32) | Bind the retained Python selection records and exact wheel digest into the complete release evidence, then bind the installed runtime to that same wheel. |
 
@@ -61,15 +61,15 @@ finish [#28](https://github.com/stampbot/extra-codeowners/issues/28), which
 still requires a separate recipient verifier and a runnable how-to for the
 final release assets.
 
-The collector has completed the CPython identity and source portion of #18 and
-the Cryptography, Greenlet, MarkupSafe, and SQLAlchemy native-owner portions on
-both platforms. It retains the exact locked platform wheel for every
-native-payload or embedded-SBOM owner and a separately addressed copy of each
-raw SBOM. For Greenlet, it also binds the owner sdist, the complete five-file
-native set, each embedded component, the exact Alpine GCC recipe and distfile,
-and reviewed source notices. These exact sets prove co-membership in the
-wheel. The SBOM has no component-to-file map, so the evidence does not assign
-an individual native file to the owner source or a nested component.
+The collector has completed CPython identity and source accounting and closes
+all seven observed native owners on both platforms. It retains the exact
+platform wheel for every native-payload or embedded-SBOM owner and a separately
+addressed copy of each raw SBOM. For Greenlet, it also binds the owner sdist,
+the complete five-file native set, each embedded component, the exact Alpine
+GCC recipe and distfile, and reviewed source notices. These exact sets prove
+co-membership in the wheel. The SBOM has no component-to-file map, so the
+evidence does not assign an individual native file to the owner source or a
+nested component.
 
 Cryptography adds exact archives, checksums, manifests, licenses, and notices
 for 32 crates.io components. Its record also retains the sdist's local Rust
@@ -82,16 +82,19 @@ Pydantic Core adds exact archives, manifests, checksums, licenses, and notices
 for all 87 crates.io components in its SBOM. The retained sdist supplies its
 root Cargo package and exact lockfile, including 16 registry packages that the
 SBOM does not claim as components. The extension payload cites the complete
-reviewed observation set. Its separate bundled `libgcc` payload remains
-unresolved.
+reviewed observation set.
 
 MarkupSafe adds one exact native payload, no SBOM observations, and an owner
 payload disposition. SQLAlchemy adds five exact native payloads with the same
 review shape. Each record binds the exact owner sdist as source evidence, not
 proof that every binary byte came from that archive. The Cryptography record
-also does not claim wheel reproducibility or build provenance. Three owners
-remain open; their full review records make each gap inspectable without
-pretending to close it.
+also does not claim wheel reproducibility or build provenance.
+
+The signed wheelhouse records CFFI's `libffi.so.8`, Psycopg C's `libpq.so.5`,
+and Pydantic Core's `libgcc_s.so.1` dependencies. Schema 9 binds each SONAME to
+an exact effective runtime path, resolved regular-file path, APK package and
+version, and APK checksum. It rejects search-path overrides, absolute or chained
+links, cross-directory targets, and cross-package substitutions.
 
 The collector also replays wheel `RECORD` ownership for historical Python
 installations whose bytes remain in lower layers. A release inventory must keep
@@ -149,8 +152,8 @@ The canonical JSON predicate has exactly these fields:
 
 | Field | Type | Requirement |
 | --- | --- | --- |
-| `schema_version` | integer | Exactly `8`. |
-| `media_type` | string | Exactly `application/vnd.stampbot.container-evidence.v8+tar+gzip`. |
+| `schema_version` | integer | Exactly `9`. |
+| `media_type` | string | Exactly `application/vnd.stampbot.container-evidence.v9+tar+gzip`. |
 | `platform` | string | `linux/amd64` or `linux/arm64`; it must match the selected manifest. |
 | `subject_digest` | string | Lowercase `sha256:` digest of the published platform manifest, never a local image configuration digest. |
 | `artifact` | object | Exactly `filename` and `sha256`. |
@@ -201,8 +204,8 @@ The archive must contain at least these entry points:
 | `MANIFEST.json` | Canonical archive identity, platform subject, reviewed policy digest, complete source status, and every retained source and license record. |
 | `SHA256SUMS` | SHA-256 for every other retained member, with exact one-to-one path coverage. |
 | `THIRD_PARTY_NOTICES.md` | Human-readable observed and reviewed license expressions for every effective and lower-layer component. |
-| `inventory/components.json` | Exact normalized component inventory, including the CPython runtime and its identity files, package records, structured native payloads, structured SBOMs, raw wheel identities, historical wheel installations, and effective RECORD ownership. |
-| `inventory/all-layer-files.json` | Every regular, directory, non-regular, and whiteout occurrence in every distributed layer, including security metadata; regular and directory records also carry effective state. |
+| `inventory/components.json` | Exact normalized component inventory, including the CPython runtime and its identity files, package records, APK-owned shared libraries, structured native payloads, structured SBOMs, raw wheel identities, historical wheel installations, and effective RECORD ownership. |
+| `inventory/all-layer-files.json` | Every regular, directory, non-regular, and whiteout occurrence in every distributed layer, including security metadata; regular and directory records also carry effective state, and the APK-owned shared-library projection is bound back to these occurrences. |
 | `inventory/native-component-coverage.json` | Derived per-owner ledger containing full closed and open review records, reviewed SBOM anomalies, and the exact remaining owner count and names. |
 | `policy/container-policy.json` | The exact reviewed policy used to accept the candidate. |
 | `policy/native-wheelhouse-consumer.json` | The exact reviewed consumer contract whose digest is bound by policy, source plans, and image labels. |
@@ -220,7 +223,7 @@ The archive must contain at least these entry points:
 
 ### Current native-wheel manifest records
 
-Until issue #28 freezes the recipient schema, this is the exact schema-v8
+Until issue #28 freezes the recipient schema, this is the exact schema-v9
 collector format for `MANIFEST.json.native_wheel_artifacts`. It is an inspection
 reference, not a promise that the unfinished release wire format will remain
 unchanged.
@@ -260,7 +263,7 @@ wheel, raw SBOM, and manifest bytes independently of these records.
 
 | Field | Requirement |
 | --- | --- |
-| `schema_version` | Exactly `8`. |
+| `schema_version` | Exactly `9`. |
 | `platform` | Exact inventory platform. |
 | `complete` | Derived boolean; true only when every observed native/SBOM owner has a closed review. |
 | `resolved_owners` | Sorted, full policy records whose review state is `closed`. |
@@ -269,7 +272,7 @@ wheel, raw SBOM, and manifest bytes independently of these records.
 | `remaining_owner_count` | Number of open owner records. |
 | `remaining_owner_names` | Sorted owner names derived from the open records. |
 
-Schema 8 keeps each CycloneDX occurrence distinct. A nonempty `bom-ref` is the
+Schema 9 keeps each CycloneDX occurrence distinct. A nonempty `bom-ref` is the
 document-local identity; PURL is the fallback only when `bom-ref` is empty.
 Repeated PURLs are allowed only when every occurrence has a unique, nonempty
 `bom-ref`.
@@ -284,17 +287,13 @@ expressions, payload dispositions, and any narrowly validated cross-owner
 relationship. Such a relationship binds byte-identical payloads and requires
 both named payload dispositions to cite the corresponding observations. Open
 records retain those same fields plus structured `known_omissions`; they are
-not reduced to path/hash summaries. The current open records are:
+not reduced to path/hash summaries.
 
-| Owner | Omission IDs |
-| --- | --- |
-| `python:cffi@2.1.0` | `unproven-libffi-runtime-file` |
-| `python:psycopg-c@3.3.4` | `unproven-libpq-runtime-file` |
-| `python:pydantic-core@2.46.4` | `unproven-libgcc-runtime-file` |
-
-Cryptography, Greenlet, MarkupSafe, and SQLAlchemy are closed. The resulting
-ledger has `complete: false`, `remaining_owner_count: 3`, and the three sorted
-owner names.
+All seven current owner records are closed. The resulting ledger has
+`complete: true`, `remaining_owner_count: 0`, and empty `unresolved_owners` and
+`remaining_owner_names` arrays. This closes the current source-accounting
+ledger. It does not approve distribution or finish the recipient-facing release
+path.
 
 Native sources use a four-way tagged union: commit-pinned Alpine aports
 sources, canonical crates.io archives, canonical subtrees of the locked owner

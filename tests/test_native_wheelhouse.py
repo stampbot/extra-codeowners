@@ -462,6 +462,31 @@ def test_elf_inspection_inherits_retained_work_descriptor(tmp_path: Path) -> Non
     assert record["path"] == "bin/true"
 
 
+@pytest.mark.parametrize("tag", ("RPATH", "RUNPATH"))
+def test_elf_inspection_rejects_embedded_library_search_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tag: str,
+) -> None:
+    monkeypatch.setattr(
+        wheelhouse,
+        "_run",
+        lambda *_args, **_kwargs: (
+            "Machine:                           Advanced Micro Devices X86-64\n"
+            " 0x0000000000000001 (NEEDED)             Shared library: [libdemo.so.1]\n"
+            f" 0x000000000000001d ({tag})              Library path: [/tmp/host-libs]\n"
+        ),
+    )
+
+    with pytest.raises(wheelhouse.WheelhouseError, match="unexpected ELF metadata"):
+        wheelhouse._elf_record(
+            b"synthetic ELF bytes",
+            "demo/native.so",
+            "Advanced Micro Devices X86-64",
+            tmp_path,
+        )
+
+
 @pytest.mark.parametrize(
     "descriptors",
     [(-1,), (True,), (3, 3), tuple(range(17))],

@@ -14,7 +14,7 @@ The current Check Run design has a documented commit-to-pull-request
 inheritance window, tracked in
 [issue #1](https://github.com/stampbot/extra-codeowners/issues/1). The release
 pipeline is also blocked by
-[source-completeness issue #18](https://github.com/stampbot/extra-codeowners/issues/18),
+[evidence-delivery issue #18](https://github.com/stampbot/extra-codeowners/issues/18),
 [immutable-release issue #25](https://github.com/stampbot/extra-codeowners/issues/25),
 [publication-isolation issue #28](https://github.com/stampbot/extra-codeowners/issues/28),
 and [application build-proof issue #32](https://github.com/stampbot/extra-codeowners/issues/32).

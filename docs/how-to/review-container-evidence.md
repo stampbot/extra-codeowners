@@ -8,8 +8,8 @@ is understood.
 
 !!! danger "This review does not approve distribution"
     Extra CODEOWNERS has no supported container release. A successful review
-    does not make the evidence source-complete and does not authorize an image,
-    chart, package, or GitHub release.
+    can confirm the current source-accounting result, but it does not authorize
+    an image, chart, package, or GitHub release.
 
 The `main` publication job has been removed. A tag run can validate source,
 build proof, and scan a candidate with repository-read permission, but a
@@ -19,8 +19,9 @@ or release authority from running.
 Four open issues define the evidence and publication path covered by this
 guide:
 
-- [#18](https://github.com/stampbot/extra-codeowners/issues/18) covers CFFI and
-  Psycopg source closure plus Pydantic Core's unresolved GCC payload.
+- [#18](https://github.com/stampbot/extra-codeowners/issues/18) covers delivery
+  of the complete notices and corresponding-source evidence against the exact
+  platform digests.
 - [#28](https://github.com/stampbot/extra-codeowners/issues/28) covers the
   privilege-separated release pipeline and bounded recipient verifier.
 - [#32](https://github.com/stampbot/extra-codeowners/issues/32) covers retaining
@@ -690,45 +691,57 @@ for architecture in amd64 arm64; do
     --policy "$POLICY" \
     --output "$DIFF_ROOT/${architecture}-native-component-coverage.json"
   jq -e --arg platform "$platform" '
-      .schema_version == 8
+      .schema_version == 9
       and .platform == $platform
-      and .complete == false
+      and .complete == true
       and ([.resolved_owners[].owner] == [
+        "python:cffi@2.1.0",
         "python:cryptography@48.0.1",
         "python:greenlet@3.5.3",
         "python:markupsafe@3.0.3",
+        "python:psycopg-c@3.3.4",
+        "python:pydantic-core@2.46.4",
         "python:sqlalchemy@2.0.51"
       ])
-      and ([.unresolved_owners[] | {
-        owner,
-        omissions: [.known_omissions[].id]
-      }] == [
-        {
-          "owner": "python:cffi@2.1.0",
-          "omissions": ["unproven-libffi-runtime-file"]
-        },
-        {
-          "owner": "python:psycopg-c@3.3.4",
-          "omissions": ["unproven-libpq-runtime-file"]
-        },
-        {
-          "owner": "python:pydantic-core@2.46.4",
-          "omissions": ["unproven-libgcc-runtime-file"]
-        }
-      ])
+      and .unresolved_owners == []
       and ([.observed_sbom_anomalies[].owner] == [
         "python:cryptography@48.0.1",
         "python:greenlet@3.5.3"
       ])
-      and .remaining_owner_count == 3
-      and (.remaining_owner_names == [
-        "python:cffi@2.1.0",
-        "python:psycopg-c@3.3.4",
-        "python:pydantic-core@2.46.4"
-      ])
+      and .remaining_owner_count == 0
+      and .remaining_owner_names == []
     ' "$DIFF_ROOT/${architecture}-native-component-coverage.json" >/dev/null
   LC_ALL=C sed -n 'l' \
     "$DIFF_ROOT/${architecture}-native-component-coverage.json"
+
+  jq -e --ascii-output --sort-keys '
+      .apk_shared_libraries as $libraries
+      | [
+        $libraries[]
+        | select(.path == "usr/lib/libffi.so.8"
+            or .path == "usr/lib/libffi.so.8.2.0"
+            or .path == "usr/lib/libgcc_s.so.1"
+            or .path == "usr/lib/libpq.so.5"
+            or .path == "usr/lib/libpq.so.5.18")
+        | {package, path, apk_sha1, occurrence}
+      ] as $selected
+      | if (
+          ($libraries | type == "array" and length > 0)
+          and all($libraries[];
+            (.path | type == "string")
+            and .occurrence.path == .path
+            and .occurrence.effective == true
+            and (.occurrence.kind == "regular" or .occurrence.kind == "symlink")
+          )
+          and ($selected | length == 5)
+        )
+        then $selected
+        else error("invalid APK-owned runtime-library inventory")
+        end
+    ' "$inventory" \
+    > "$DIFF_ROOT/${architecture}-native-runtime-libraries.json"
+  LC_ALL=C sed -n 'l' \
+    "$DIFF_ROOT/${architecture}-native-runtime-libraries.json"
 
   jq -e --ascii-output --sort-keys --arg platform "$platform" \
     '.filesystem_baselines[$platform].apk_database_occurrences' "$POLICY" \
@@ -789,7 +802,8 @@ exporter-specific directory re-emissions and whiteout marker attributes that do
 not change filesystem state. Raw records and layer digests remain in
 `all-layer-files.json` for review. No diff does not mean the policy is correct.
 An exact runtime-library file in the system baseline is not proof that its
-source built or corresponds to a native wheel payload.
+source built a native wheel. Schema 9 separately binds wheelhouse SONAMEs to
+APK-owned effective runtime files and their exact package identities.
 The manual diff does not independently re-run the post-base regular-file or
 link provenance gates, application source binding, or exact source-policy
 coverage; those still depend on the independently reviewed CI collector,
@@ -821,6 +835,13 @@ Review source policy with these precise boundaries:
   exact omissions and cannot appear in `resolved_owners`. The wheel still binds
   to `uv.lock`. The owner source must bind to the locked sdist when one exists,
   or to the exact reviewed `python_sources` fallback for a wheel-only owner
+- every wheelhouse linked-library record must name the ELF SONAME, exact APK
+  package and version, runtime path, and resolved path. Confirm that both paths
+  are directly under `lib` or `usr/lib`, share a directory, and bind to the
+  same package in `apk_shared_libraries`. The resolved occurrence must be a
+  regular file. A distinct runtime path must be one direct relative symlink to
+  that file. Reject absolute links, link chains, search-path overrides,
+  cross-directory targets, and cross-package substitutions
 - native-component sources are a tagged union. Review commit-pinned Alpine
   recipe and distfile records, canonical crates.io archives and manifests,
   canonical owner-sdist subtrees, and upstream archives bound by strict
@@ -845,7 +866,7 @@ Review source policy with these precise boundaries:
   executable mode at `HEAD`, using recursive `git ls-tree -rz` and `git show`;
   it is not a mutable working-tree copy and is not described as `git archive`
 - every top-level `LicenseRef-*` must name exactly the covered components and
-  pin the source-carried notice path and digest for each one; schema 8 rejects
+  pin the source-carried notice path and digest for each one; schema 9 rejects
   `LicenseRef-*` in nested native-component expressions.
 
 The nested evidence tar is checksum-bound by the predicate and sidecar, but the
@@ -855,7 +876,7 @@ inventories, collector change, and workflow logs; keep release publication
 blocked until issue #28 supplies the tested tar verifier and runnable recipient
 procedure.
 
-## 5. Confirm the remaining source-completeness gap stays explicit
+## 5. Confirm source completeness without treating it as approval
 
 The raw component inventory no longer accepts a `source_completeness` field.
 The trusted helper derives the decision from
@@ -863,35 +884,22 @@ The trusted helper derives the decision from
 `MANIFEST.json.source_completeness`. Confirm the ledger, not a caller-supplied
 inventory assertion.
 
-On both platforms, the ledger must contain these closed owners:
+On both platforms, the ledger must contain these seven closed owners:
 
+- `python:cffi@2.1.0`
 - `python:cryptography@48.0.1`
 - `python:greenlet@3.5.3`
 - `python:markupsafe@3.0.3`
+- `python:psycopg-c@3.3.4`
+- `python:pydantic-core@2.46.4`
 - `python:sqlalchemy@2.0.51`.
-
-It must retain these open records and exact omission IDs:
-
-| Owner | Omission IDs |
-| --- | --- |
-| `python:cffi@2.1.0` | `unproven-libffi-runtime-file` |
-| `python:psycopg-c@3.3.4` | `unproven-libpq-runtime-file` |
-| `python:pydantic-core@2.46.4` | `unproven-libgcc-runtime-file` |
-
-Do not accept a shortened unresolved summary. Each open ledger entry is the
-full policy record, including observations, dispositions, source decisions,
-structured omissions, and the open review reason. Its
-`review.unresolved_items` list must exactly equal its omission IDs.
-
-For every `known-omission` metadata root or payload disposition, confirm that
-the specifically named omission lists the observation reference or payload
-role. A matching reference in a different omission does not close the gap.
 
 The ledger must also report:
 
-- `complete: false`
-- `remaining_owner_count: 3`
-- the same three owner names in `remaining_owner_names`
+- `complete: true`
+- an empty `unresolved_owners` array
+- `remaining_owner_count: 0`
+- an empty `remaining_owner_names` array
 - one reviewed `metadata-root-echo` anomaly for each Cryptography and Greenlet
   auditwheel document.
 
@@ -923,16 +931,30 @@ five `cyextension` roles with no embedded SBOM. Those owner dispositions prove
 wheel ownership; they do not prove reproducibility or infer unobserved
 toolchain components.
 
+CFFI, Psycopg C, and Pydantic Core close only after their wheelhouse dependency
+records bind the named SONAMEs to effective APK-owned runtime files:
+
+| Owner | SONAME | Runtime path | Resolved path | APK package |
+| --- | --- | --- | --- | --- |
+| CFFI | `libffi.so.8` | `usr/lib/libffi.so.8` | `usr/lib/libffi.so.8.2.0` | `libffi` `3.5.2-r1` |
+| Psycopg C | `libpq.so.5` | `usr/lib/libpq.so.5` | `usr/lib/libpq.so.5.18` | `libpq` `18.4-r0` |
+| Pydantic Core | `libgcc_s.so.1` | `usr/lib/libgcc_s.so.1` | `usr/lib/libgcc_s.so.1` | `libgcc` `15.2.0-r5` |
+
+Inspect both the component and all-layer inventories. Each record must carry
+the APK checksum and exact effective occurrence, and the all-layer record must
+bind back to the effective filesystem topology.
+
 `wheel_installations` remains separate attribution evidence. The helper binds
 each historical installation to its METADATA, WHEEL, RECORD, tags, purelib
 state, and normalized owned occurrences, then derives the effective-only
 `python_record_ownership` projection. Do not treat this as component expansion
 or corresponding-source delivery.
 
-Raw path/hash baselines make each surface visible. Only a closed review with
-the required exact sources, notices, and relationships can make the derived
-ledger complete. Issue #18 must close the remaining three records before a
-supported release can pass this gate.
+Raw path/hash baselines make each surface visible. Closed reviews with the
+required exact sources, notices, and relationships make the current derived
+ledger complete. Issue #18 remains open for recipient delivery and
+platform-digest binding. Issues #28 and #32 still block the release pipeline,
+and `distribution_approval.approved` remains false.
 
 ## 6. Run the repository gates
 
@@ -1024,10 +1046,10 @@ GitHub CLI, bind that operation to the same head with
 ## 8. Keep distribution denied
 
 Keep `distribution_approval.approved` set to `false`. The current executable
-schema derives an incomplete native-owner ledger and therefore rejects the
-approval-required gate. The tag workflow independently stops before privileged
-jobs, there is no `main` publication job to enable, and issue #32's
-release-evidence and publication handoff remains a separate requirement.
+schema derives a complete native-owner ledger, but the approval-required gate
+still rejects the explicit false approval. The tag workflow independently stops
+before privileged jobs, there is no `main` publication job to enable, and issue
+32's release-evidence and publication handoff remains a separate requirement.
 
 A future supported release must satisfy the
 [container evidence release contract](../reference/container-evidence-release-contract.md),

@@ -56,7 +56,7 @@ if str(SCRIPT_DIRECTORY) not in sys.path:
 import native_wheelhouse  # noqa: E402
 import verified_source_store  # noqa: E402
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 EVIDENCE_MEDIA_TYPE = f"application/vnd.stampbot.container-evidence.v{SCHEMA_VERSION}+tar+gzip"
 APPLICATION_NAME = "extra-codeowners"
 EXPECTED_RUNTIME_PYTHON = "3.14.6"
@@ -168,6 +168,7 @@ LICENSE_NAME = re.compile(
 )
 SHA256 = re.compile(r"^sha256:[0-9a-f]{64}$")
 LOWER_SHA256 = re.compile(r"^[0-9a-f]{64}$")
+LOWER_SHA1 = re.compile(r"^[0-9a-f]{40}$")
 SHA512_LINE = re.compile(r"^([0-9a-f]{128})  (\S.*)$")
 SHELL_VARIABLE = re.compile(r"\$[A-Za-z_][A-Za-z0-9_]*|\$\{[^{}]+\}")
 DIST_INFO = re.compile(r"(?:^|/)site-packages/([^/]+)\.dist-info/METADATA$")
@@ -185,6 +186,7 @@ ENTRY_POINT = re.compile(
 )
 SCRIPT_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 NATIVE_LIBRARY = re.compile(r"(?:\.so(?:\.[0-9]+)*|\.dylib|\.dll)$", re.IGNORECASE)
+ALPINE_SHARED_LIBRARY = re.compile(r"^[A-Za-z0-9+_.-]+\.so(?:\.[0-9]+)*$")
 CYCLONEDX_SERIAL_NUMBER = re.compile(
     r"^urn:uuid:[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
     re.IGNORECASE,
@@ -200,6 +202,8 @@ APK_PACKAGE_NAME = re.compile(r"^(?:[a-z0-9]|\.[a-z0-9])[a-z0-9+_.-]{0,199}$")
 APK_ORIGIN = re.compile(r"^[a-z0-9][a-z0-9+_.-]{0,199}$")
 APK_VERSION = re.compile(r"^[A-Za-z0-9][A-Za-z0-9+_.:~-]{0,199}$")
 APK_ARCHITECTURE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9+_.-]{0,63}$")
+APK_FILE_CHECKSUM = re.compile(r"^Q1[A-Za-z0-9+/]{27}=$")
+APK_LIBRARY_DIRECTORIES = {"lib", "usr/lib"}
 ZIP_SIGNATURES = (b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08")
 VENV_LINKS = {
     "opt/venv/bin/python": "/usr/local/bin/python3",
@@ -2541,6 +2545,7 @@ def _inventory_saved_image(
     whiteout_occurrences: list[dict[str, Any]] = []
     metadata_occurrences: list[dict[str, Any]] = []
     apk_database_contents: dict[tuple[int, str], bytes] = {}
+    regular_sha1: dict[tuple[int, str, str], str] = {}
     identity_contents: dict[tuple[int, str, str], bytes] = {}
     metadata_contents: dict[tuple[int, str, str], bytes] = {}
     wheel_installations: list[PythonRecordInstallation] = []
@@ -2885,6 +2890,9 @@ def _inventory_saved_image(
                         **header,
                     }
                     occurrences.append(record)
+                    regular_sha1[(layer_index, path_text, record["sha256"])] = hashlib.sha1(
+                        content, usedforsecurity=False
+                    ).hexdigest()
                     current_layer_regular[path_text] = record
                     effective[path_text] = record
                     effective_types[path_text] = {
@@ -3002,7 +3010,7 @@ def _inventory_saved_image(
     latest_apk = apk_database_contents.get((apk_record["layer"], apk_record["sha256"]))
     if latest_apk is None:
         raise EvidenceError("cannot bind the effective Alpine package database content")
-    effective_alpine = parse_apk_database(latest_apk)
+    effective_alpine, effective_apk_files = parse_apk_database_inventory(latest_apk)
     effective_alpine_keys = {(package["name"], package["version"]) for package in effective_alpine}
     alpine_by_key: dict[tuple[str, str], dict[str, Any]] = {}
     for _database_identity, database_content in sorted(apk_database_contents.items()):
@@ -3032,6 +3040,92 @@ def _inventory_saved_image(
         raise EvidenceError(
             f"Alpine package architecture does not match {platform}: "
             f"{', '.join(wrong_architectures)}"
+        )
+
+    effective_non_regular = {
+        (int(record["layer"]), str(record["path"])): record
+        for record in non_regular_occurrences
+        if (
+            (current := effective_types.get(str(record["path"]))) is not None
+            and current.get("kind") == record.get("kind")
+            and current.get("layer") == record.get("layer")
+            and current.get("target") == record.get("target")
+        )
+    }
+    apk_shared_libraries: list[dict[str, Any]] = []
+    for apk_file in effective_apk_files:
+        path = PurePosixPath(str(apk_file["path"]))
+        if (
+            str(path.parent) not in APK_LIBRARY_DIRECTORIES
+            or ALPINE_SHARED_LIBRARY.fullmatch(path.name) is None
+        ):
+            continue
+        path_text = str(path)
+        expected_sha1 = str(apk_file["sha1"])
+        regular = effective.get(path_text)
+        effective_type = effective_types.get(path_text)
+        if regular is not None and effective_type == {
+            "kind": "regular",
+            "layer": regular["layer"],
+        }:
+            observed_sha1 = regular_sha1.get(
+                (int(regular["layer"]), path_text, str(regular["sha256"]))
+            )
+            occurrence = {
+                "kind": "regular",
+                "effective": True,
+                **{
+                    field: regular[field]
+                    for field in (
+                        "layer",
+                        "path",
+                        "sha256",
+                        "size",
+                        "mode",
+                        "uid",
+                        "gid",
+                    )
+                },
+            }
+        elif (
+            regular is None
+            and effective_type is not None
+            and effective_type.get("kind") == "symlink"
+        ):
+            layer_index = int(effective_type["layer"])
+            link = effective_non_regular.get((layer_index, path_text))
+            if link is None or link.get("kind") != "symlink":
+                raise EvidenceError(
+                    f"cannot bind APK-owned shared-library symlink occurrence: {path_text}"
+                )
+            target = str(link["target"])
+            observed_sha1 = hashlib.sha1(target.encode("utf-8"), usedforsecurity=False).hexdigest()
+            occurrence = {
+                "kind": "symlink",
+                "effective": True,
+                **{
+                    field: link[field]
+                    for field in ("layer", "path", "target", "mode", "uid", "gid")
+                },
+            }
+        else:
+            raise EvidenceError(
+                f"APK-owned shared library is absent or not a regular file/symlink: {path_text}"
+            )
+        if observed_sha1 != expected_sha1:
+            raise EvidenceError(
+                f"APK-owned shared library differs from its package checksum: {path_text}"
+            )
+        apk_shared_libraries.append(
+            {
+                "package": {
+                    "name": apk_file["package"]["name"],
+                    "version": apk_file["package"]["version"],
+                },
+                "path": path_text,
+                "apk_sha1": expected_sha1,
+                "occurrence": occurrence,
+            }
         )
 
     python_by_key: dict[tuple[str, str], dict[str, Any]] = {}
@@ -3240,6 +3334,7 @@ def _inventory_saved_image(
         "native_wheelhouse_schema": labels.get(NATIVE_WHEELHOUSE_SCHEMA_LABEL, ""),
         "apk_database_sha256": apk_record["sha256"],
         "apk_database_occurrences": apk_database_occurrences,
+        "apk_shared_libraries": apk_shared_libraries,
         "components": sorted(components, key=component_sort_key),
         "embedded_sboms": embedded_sboms,
         "native_payloads": native_payloads,
@@ -3306,12 +3401,18 @@ def parse_python_metadata(content: bytes, path: str) -> dict[str, Any]:
     }
 
 
-def parse_apk_database(content: bytes) -> list[dict[str, Any]]:
+def parse_apk_database_inventory(
+    content: bytes,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Parse Alpine package identities and their checksummed file ownership."""
+
     try:
         text = content.decode("utf-8")
     except UnicodeDecodeError as exc:
         raise EvidenceError("Alpine package database is not UTF-8") from exc
     packages: list[dict[str, Any]] = []
+    files: list[dict[str, Any]] = []
+    file_owners: set[str] = set()
     package_names: set[str] = set()
     authoritative = {"P", "V", "A", "L", "o", "c"}
     for paragraph in text.split("\n\n"):
@@ -3375,7 +3476,70 @@ def parse_apk_database(content: bytes) -> list[dict[str, Any]]:
         packages.append(package)
         if len(packages) > MAX_COMPONENTS:
             raise EvidenceError("Alpine installed-package database has too many records")
-    return sorted(packages, key=lambda item: (item["name"], item["version"]))
+
+        current_directory: str | None = None
+        pending_file: str | None = None
+        for line in paragraph.splitlines():
+            if len(line) < 2 or line[1] != ":":
+                continue
+            key = line[0]
+            value = line[2:]
+            if key in {"F", "R"} and pending_file is not None:
+                raise EvidenceError(
+                    f"Alpine package file lacks exactly one checksum: {pending_file}"
+                )
+            if key == "F":
+                directory = checked_canonical_path(value, f"Alpine package directory for {name}")
+                current_directory = str(directory)
+            elif key == "R":
+                if current_directory is None:
+                    raise EvidenceError(f"Alpine package file has no directory: {name}")
+                filename = checked_canonical_path(value, f"Alpine package filename for {name}")
+                if len(filename.parts) != 1:
+                    raise EvidenceError(f"Alpine package filename is not a basename: {value!r}")
+                file_path = str(PurePosixPath(current_directory) / filename)
+                if file_path in file_owners:
+                    raise EvidenceError(
+                        f"Alpine installed-package database repeats file ownership: {file_path}"
+                    )
+                pending_file = file_path
+            elif key == "Z":
+                if pending_file is None or APK_FILE_CHECKSUM.fullmatch(value) is None:
+                    raise EvidenceError(f"Alpine package has an invalid file checksum: {name}")
+                try:
+                    digest = base64.b64decode(value[2:], validate=True)
+                except (binascii.Error, ValueError) as exc:
+                    raise EvidenceError(
+                        f"Alpine package has an invalid file checksum: {name}"
+                    ) from exc
+                if len(digest) != hashlib.sha1(usedforsecurity=False).digest_size:
+                    raise EvidenceError(f"Alpine package has an invalid file checksum: {name}")
+                file_owners.add(pending_file)
+                files.append(
+                    {
+                        "package": {"name": name, "version": version},
+                        "path": pending_file,
+                        "sha1": digest.hex(),
+                    }
+                )
+                if len(files) > MAX_IMAGE_MEMBERS:
+                    raise EvidenceError(
+                        "Alpine installed-package database has too many file records"
+                    )
+                pending_file = None
+        if pending_file is not None:
+            raise EvidenceError(f"Alpine package file lacks exactly one checksum: {pending_file}")
+    return (
+        sorted(packages, key=lambda item: (item["name"], item["version"])),
+        sorted(files, key=lambda item: item["path"]),
+    )
+
+
+def parse_apk_database(content: bytes) -> list[dict[str, Any]]:
+    """Parse Alpine package identities while retaining the legacy call contract."""
+
+    packages, _files = parse_apk_database_inventory(content)
+    return packages
 
 
 def component_sort_key(component: Mapping[str, Any]) -> tuple[str, str, str]:
@@ -3913,6 +4077,113 @@ def validate_payload_records(value: object, source: str) -> list[dict[str, Any]]
         seen.add(occurrence)
         records.append(record)
     return records
+
+
+def validate_apk_shared_libraries(
+    value: object,
+    source: str,
+    *,
+    components: Sequence[Mapping[str, Any]] | None = None,
+) -> dict[str, Mapping[str, Any]]:
+    """Validate effective shared-library files bound to APK ownership records."""
+
+    if not isinstance(value, list) or len(value) > MAX_IMAGE_MEMBERS:
+        raise EvidenceError(f"{source} has an invalid APK shared-library inventory")
+    effective_packages = (
+        {
+            (str(component["name"]), str(component["version"]))
+            for component in components
+            if component.get("ecosystem") == "alpine" and component.get("effective") is True
+        }
+        if components is not None
+        else None
+    )
+    libraries: dict[str, Mapping[str, Any]] = {}
+    for index, raw_library in enumerate(value):
+        library = require_exact_fields(
+            raw_library,
+            {"package", "path", "apk_sha1", "occurrence"},
+            f"{source} APK shared library {index}",
+        )
+        package = require_exact_fields(
+            library["package"],
+            {"name", "version"},
+            f"{source} APK shared-library package {index}",
+        )
+        package_name = package["name"]
+        package_version = package["version"]
+        if (
+            not isinstance(package_name, str)
+            or APK_PACKAGE_NAME.fullmatch(package_name) is None
+            or package_name.startswith(".")
+            or not isinstance(package_version, str)
+            or APK_VERSION.fullmatch(package_version) is None
+            or (
+                effective_packages is not None
+                and (package_name, package_version) not in effective_packages
+            )
+        ):
+            raise EvidenceError(f"{source} APK shared library has an invalid package")
+        path_value = library["path"]
+        if not isinstance(path_value, str):
+            raise EvidenceError(f"{source} APK shared library has an invalid path")
+        path = checked_canonical_path(path_value, f"{source} APK shared-library path")
+        if (
+            str(path.parent) not in APK_LIBRARY_DIRECTORIES
+            or ALPINE_SHARED_LIBRARY.fullmatch(path.name) is None
+            or path_value in libraries
+        ):
+            raise EvidenceError(f"{source} APK shared library has an invalid path")
+        apk_sha1 = library["apk_sha1"]
+        if not isinstance(apk_sha1, str) or LOWER_SHA1.fullmatch(apk_sha1) is None:
+            raise EvidenceError(f"{source} APK shared library has an invalid APK checksum")
+        occurrence = library["occurrence"]
+        if not isinstance(occurrence, dict):
+            raise EvidenceError(f"{source} APK shared library has an invalid occurrence")
+        kind = occurrence.get("kind")
+        if kind == "regular":
+            if set(occurrence) != {"kind", *PAYLOAD_RECORD_FIELDS}:
+                raise EvidenceError(f"{source} APK shared library has an invalid occurrence")
+            validate_payload_records(
+                [{field: occurrence[field] for field in PAYLOAD_RECORD_FIELDS}],
+                f"{source} APK shared library",
+            )
+        elif kind == "symlink":
+            if set(occurrence) != {
+                "kind",
+                "effective",
+                "layer",
+                "path",
+                "target",
+                "mode",
+                "uid",
+                "gid",
+            }:
+                raise EvidenceError(f"{source} APK shared library has an invalid occurrence")
+            layer = occurrence.get("layer")
+            target = occurrence.get("target")
+            if (
+                occurrence.get("effective") is not True
+                or not isinstance(layer, int)
+                or isinstance(layer, bool)
+                or layer < 0
+                or not isinstance(target, str)
+            ):
+                raise EvidenceError(f"{source} APK shared library has an invalid occurrence")
+            checked_image_link_target(target)
+            validate_header_identity(occurrence, f"{source} APK shared-library symlink")
+            if hashlib.sha1(target.encode("utf-8"), usedforsecurity=False).hexdigest() != apk_sha1:
+                raise EvidenceError(
+                    f"{source} APK shared-library symlink differs from its APK checksum"
+                )
+        else:
+            raise EvidenceError(f"{source} APK shared library has an invalid occurrence")
+        if occurrence.get("path") != path_value or occurrence.get("effective") is not True:
+            raise EvidenceError(f"{source} APK shared library has an invalid occurrence")
+        libraries[path_value] = library
+    if list(libraries) != sorted(libraries):
+        raise EvidenceError(f"{source} APK shared-library inventory is not canonical")
+    return libraries
 
 
 PAYLOAD_RECORD_FIELDS = {
@@ -6281,11 +6552,11 @@ def validate_native_wheelhouse_build(
         raise EvidenceError(
             f"native-component coverage {owner} wheelhouse linked libraries are invalid"
         )
-    libraries: list[tuple[str, str, str]] = []
+    libraries: list[tuple[str, str, str, str, str]] = []
     for index, raw_library in enumerate(raw_libraries):
         library = require_exact_fields(
             raw_library,
-            {"name", "package"},
+            {"name", "package", "runtime_path", "resolved_path"},
             f"native-component coverage {owner} wheelhouse linked library {index}",
         )
         package = require_exact_fields(
@@ -6294,11 +6565,29 @@ def validate_native_wheelhouse_build(
             f"native-component coverage {owner} wheelhouse linked library package {index}",
         )
         library_name = library["name"]
+        runtime_path_value = library["runtime_path"]
+        resolved_path_value = library["resolved_path"]
         package_name = package["name"]
         package_version = package["version"]
+        if not isinstance(runtime_path_value, str) or not isinstance(resolved_path_value, str):
+            raise EvidenceError(
+                f"native-component coverage {owner} wheelhouse linked library is invalid"
+            )
+        runtime_path = checked_canonical_path(
+            runtime_path_value,
+            f"native-component coverage {owner} wheelhouse runtime library path",
+        )
+        resolved_path = checked_canonical_path(
+            resolved_path_value,
+            f"native-component coverage {owner} wheelhouse resolved library path",
+        )
         if (
             not isinstance(library_name, str)
-            or re.fullmatch(r"[A-Za-z0-9+_.-]+", library_name) is None
+            or ALPINE_SHARED_LIBRARY.fullmatch(library_name) is None
+            or runtime_path.name != library_name
+            or str(runtime_path.parent) not in APK_LIBRARY_DIRECTORIES
+            or runtime_path.parent != resolved_path.parent
+            or ALPINE_SHARED_LIBRARY.fullmatch(resolved_path.name) is None
             or not isinstance(package_name, str)
             or re.fullmatch(r"\.?[a-z0-9][a-z0-9+_.-]*", package_name) is None
             or not isinstance(package_version, str)
@@ -6311,7 +6600,15 @@ def validate_native_wheelhouse_build(
             raise EvidenceError(
                 f"native-component coverage {owner} wheelhouse linked library is invalid"
             )
-        libraries.append((library_name, package_name, package_version))
+        libraries.append(
+            (
+                library_name,
+                package_name,
+                package_version,
+                str(runtime_path),
+                str(resolved_path),
+            )
+        )
     if libraries != sorted(set(libraries)):
         raise EvidenceError(
             f"native-component coverage {owner} wheelhouse linked libraries are not canonical"
@@ -7352,6 +7649,63 @@ def validate_native_component_policy_schema(policy: Mapping[str, Any]) -> None:
         raise EvidenceError("native-component sources are missing, extra, or unused")
 
 
+def verify_native_runtime_library_bindings(
+    inventory: Mapping[str, Any],
+    configured: Sequence[Mapping[str, Any]],
+) -> None:
+    """Bind every wheelhouse SONAME to one effective APK-owned runtime file."""
+
+    wheelhouse_records = [
+        record for record in configured if record.get("wheelhouse_build") is not None
+    ]
+    if not wheelhouse_records:
+        return
+    libraries = validate_apk_shared_libraries(
+        inventory.get("apk_shared_libraries"),
+        "component inventory",
+    )
+    for owner_record in wheelhouse_records:
+        owner = str(owner_record["owner"])
+        for linked in owner_record["wheelhouse_build"]["linked_libraries"]:
+            package = linked["package"]
+            expected_package = {
+                "name": str(package["name"]),
+                "version": str(package["version"]),
+            }
+            runtime_path = str(linked["runtime_path"])
+            resolved_path = str(linked["resolved_path"])
+            runtime = libraries.get(runtime_path)
+            resolved = libraries.get(resolved_path)
+            if (
+                runtime is None
+                or resolved is None
+                or runtime["package"] != expected_package
+                or resolved["package"] != expected_package
+                or resolved["occurrence"]["kind"] != "regular"
+            ):
+                raise EvidenceError(
+                    f"native-component coverage {owner} has an unbound runtime library"
+                )
+            runtime_occurrence = runtime["occurrence"]
+            if runtime_path == resolved_path:
+                if runtime_occurrence["kind"] != "regular":
+                    raise EvidenceError(
+                        f"native-component coverage {owner} runtime library is not regular"
+                    )
+                continue
+            target = runtime_occurrence.get("target")
+            if (
+                runtime_occurrence["kind"] != "symlink"
+                or not isinstance(target, str)
+                or target != PurePosixPath(resolved_path).name
+                or len(PurePosixPath(target).parts) != 1
+            ):
+                raise EvidenceError(
+                    f"native-component coverage {owner} runtime library is not a direct "
+                    "same-directory symlink"
+                )
+
+
 def native_component_coverage_ledger(
     inventory: Mapping[str, Any], policy: Mapping[str, Any]
 ) -> dict[str, Any]:
@@ -7363,6 +7717,7 @@ def native_component_coverage_ledger(
     if platform not in {"linux/amd64", "linux/arm64"} or not isinstance(coverage, dict):
         raise EvidenceError("component inventory has an unsupported native-component platform")
     configured = coverage[platform]
+    verify_native_runtime_library_bindings(inventory, configured)
     contexts = native_wheel_contexts(inventory)
     configured_owners = {
         str(record["owner"]): record
@@ -8091,6 +8446,7 @@ def validate_component_inventory(inventory: Mapping[str, Any]) -> list[dict[str,
         "native_wheelhouse_schema",
         "apk_database_sha256",
         "apk_database_occurrences",
+        "apk_shared_libraries",
         "components",
         "embedded_sboms",
         "native_payloads",
@@ -8133,6 +8489,11 @@ def validate_component_inventory(inventory: Mapping[str, Any]) -> list[dict[str,
         raise EvidenceError("component inventory has an invalid APK database digest")
     components = validate_component_records(inventory.get("components"), "component inventory")
     validate_platform_component_invariants(components, str(platform), "component inventory")
+    validate_apk_shared_libraries(
+        inventory.get("apk_shared_libraries"),
+        "component inventory",
+        components=components,
+    )
     for category in ("apk_database_occurrences", "wheel_identity_files"):
         validate_payload_records(inventory.get(category), f"component inventory {category}")
     historical_occurrences, effective_historical_occurrences = validate_wheel_installations(
@@ -9303,6 +9664,7 @@ def validate_all_layer_inventory(files: Mapping[str, Any], inventory: Mapping[st
         "native_wheelhouse_schema",
         "apk_database_sha256",
         "apk_database_occurrences",
+        "apk_shared_libraries",
         "components",
         "embedded_sboms",
         "native_payloads",
@@ -9343,6 +9705,11 @@ def validate_all_layer_inventory(files: Mapping[str, Any], inventory: Mapping[st
         raise EvidenceError("component inventory has invalid native wheelhouse labels")
     components = validate_component_records(inventory.get("components"), "component inventory")
     validate_platform_component_invariants(components, str(platform), "component inventory")
+    apk_shared_libraries = validate_apk_shared_libraries(
+        inventory.get("apk_shared_libraries"),
+        "component inventory",
+        components=components,
+    )
     python_hashes = {
         str(component["metadata_sha256"]): component
         for component in components
@@ -9613,6 +9980,63 @@ def validate_all_layer_inventory(files: Mapping[str, Any], inventory: Mapping[st
         raise EvidenceError("all-layer inventory whiteout counts do not match its records")
     if len(records) + len(directories) + len(non_regular) + len(whiteouts) > MAX_IMAGE_MEMBERS:
         raise EvidenceError("all-layer inventory exceeds the cumulative entry-count limit")
+
+    def occurrence_remains_effective(layer: int, path: str) -> bool:
+        ancestors = {str(parent) for parent in PurePosixPath(path).parents if str(parent) != "."}
+        if any(
+            record.get("layer", -1) > layer and record.get("path") == path
+            for record in (*records, *directories, *non_regular)
+        ):
+            return False
+        if any(
+            record.get("layer", -1) >= layer and record.get("path") in ancestors
+            for record in (*records, *non_regular)
+        ):
+            return False
+        hidden_paths = {path, *ancestors}
+        return not any(
+            record.get("layer", -1) > layer
+            and record.get("target") in hidden_paths
+            and record.get("kind") in {"whiteout", "opaque"}
+            for record in whiteouts
+        )
+
+    regular_by_occurrence = {
+        (int(record["layer"]), str(record["path"])): record for record in records
+    }
+    non_regular_by_occurrence = {
+        (int(record["layer"]), str(record["path"])): record for record in non_regular
+    }
+    for path, library in apk_shared_libraries.items():
+        occurrence = library["occurrence"]
+        layer = int(occurrence["layer"])
+        if not 0 <= layer < len(layers) or not occurrence_remains_effective(layer, path):
+            raise EvidenceError(
+                "component inventory APK shared library is not effective in all layers"
+            )
+        if occurrence["kind"] == "regular":
+            raw_record = regular_by_occurrence.get((layer, path))
+            expected_library_record = {field: occurrence[field] for field in PAYLOAD_RECORD_FIELDS}
+            if (
+                raw_record is None
+                or {field: raw_record[field] for field in PAYLOAD_RECORD_FIELDS}
+                != expected_library_record
+            ):
+                raise EvidenceError(
+                    "component inventory APK shared library differs from all layers"
+                )
+        else:
+            raw_record = non_regular_by_occurrence.get((layer, path))
+            if raw_record is None or {
+                field: raw_record[field]
+                for field in ("kind", "layer", "path", "target", "mode", "uid", "gid")
+            } != {
+                field: occurrence[field]
+                for field in ("kind", "layer", "path", "target", "mode", "uid", "gid")
+            }:
+                raise EvidenceError(
+                    "component inventory APK shared library differs from all layers"
+                )
 
     def expected_payload(record: Mapping[str, Any]) -> dict[str, Any]:
         return {

@@ -439,7 +439,9 @@ Those remain separate gates. Issue
 [#32](https://github.com/stampbot/extra-codeowners/issues/32) still tracks the
 retained release/evidence binding and future consumer handoff. The tagged
 release workflow remains structurally blocked by issue
-[#28](https://github.com/stampbot/extra-codeowners/issues/28). Container-evidence
-source completeness remains false while issue
-[#18](https://github.com/stampbot/extra-codeowners/issues/18) is open, and
-`distribution_approval.approved` must remain false.
+[#28](https://github.com/stampbot/extra-codeowners/issues/28). The current
+container-evidence ledger is source-complete, but the spine cannot prove that
+result. Issue
+[#18](https://github.com/stampbot/extra-codeowners/issues/18) still tracks
+recipient delivery and platform-digest binding, and
+`distribution_approval.approved` remains false.

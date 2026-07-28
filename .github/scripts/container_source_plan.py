@@ -34,7 +34,7 @@ SCHEMA_VERSION = 1
 MEDIA_TYPE = "application/vnd.stampbot.container-source-plan.v1+json"
 KIND = "direct"
 ALPINE_DISTFILES_KIND = "alpine-distfiles"
-SUPPORTED_EVIDENCE_SCHEMA_VERSION = 8
+SUPPORTED_EVIDENCE_SCHEMA_VERSION = 9
 
 PLATFORMS = ("linux/amd64", "linux/arm64")
 APPLICATION_NAME = "extra-codeowners"
@@ -1143,13 +1143,18 @@ def _wheelhouse_build_source_ids(
         f"native wheelhouse linked libraries for {platform}/{owner}",
         limit=MAX_REQUESTS,
     )
-    library_identities: list[tuple[str, str, str]] = []
+    library_identities: list[tuple[str, str, str, str, str]] = []
     for index, raw_library in enumerate(raw_libraries):
         library = _mapping(
             raw_library,
             f"native wheelhouse linked library {index} for {platform}/{owner}",
         )
-        if set(library) != {"name", "package"}:
+        if set(library) != {
+            "name",
+            "package",
+            "runtime_path",
+            "resolved_path",
+        }:
             raise PlanError(
                 f"native wheelhouse linked library has invalid fields: {platform}/{owner}"
             )
@@ -1161,9 +1166,34 @@ def _wheelhouse_build_source_ids(
             raise PlanError(
                 f"native wheelhouse linked library package has invalid fields: {platform}/{owner}"
             )
+        library_name = _required_string(library, "name", "native wheelhouse linked library")
+        runtime_path_value = _required_string(
+            library, "runtime_path", "native wheelhouse linked library"
+        )
+        resolved_path_value = _required_string(
+            library, "resolved_path", "native wheelhouse linked library"
+        )
+        runtime_path = _checked_archive_path(
+            runtime_path_value, "native wheelhouse runtime library path"
+        )
+        resolved_path = _checked_archive_path(
+            resolved_path_value, "native wheelhouse resolved library path"
+        )
+        if (
+            str(runtime_path) != runtime_path_value
+            or str(resolved_path) != resolved_path_value
+            or re.fullmatch(r"[A-Za-z0-9+_.-]+\.so(?:\.[0-9]+)*", library_name) is None
+            or runtime_path.name != library_name
+            or str(runtime_path.parent) not in {"lib", "usr/lib"}
+            or runtime_path.parent != resolved_path.parent
+            or re.fullmatch(r"[A-Za-z0-9+_.-]+\.so(?:\.[0-9]+)*", resolved_path.name) is None
+        ):
+            raise PlanError(
+                f"native wheelhouse linked library has invalid paths: {platform}/{owner}"
+            )
         library_identities.append(
             (
-                _required_string(library, "name", "native wheelhouse linked library"),
+                library_name,
                 _required_string(
                     package_record,
                     "name",
@@ -1174,6 +1204,8 @@ def _wheelhouse_build_source_ids(
                     "version",
                     "native wheelhouse linked library package",
                 ),
+                runtime_path_value,
+                resolved_path_value,
             )
         )
     if library_identities != sorted(set(library_identities)):

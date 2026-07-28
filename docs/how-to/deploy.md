@@ -26,9 +26,9 @@ remaining boundary:
 
 - [#1](https://github.com/stampbot/extra-codeowners/issues/1) proves the live
   Check Run invalidation and GitHub App review contracts.
-- [#18](https://github.com/stampbot/extra-codeowners/issues/18) expands native
-  wheel and embedded software bill of materials (SBOM) components into the
-  notice, license, and corresponding-source evidence delivered to recipients.
+- [#18](https://github.com/stampbot/extra-codeowners/issues/18) delivers the
+  complete notice, license, and corresponding-source evidence against the exact
+  platform digests.
 - [#28](https://github.com/stampbot/extra-codeowners/issues/28) separates
   untrusted archive parsing from publication credentials and signing
   authority.
@@ -84,8 +84,10 @@ no embedded SBOM and owner payload dispositions. Cryptography binds its exact
 Rust and OpenSSL sources to their retained observations. The arm64 `libgcc`
 observation keeps its literal `NotpineForGHA` PURL. Its payload bytes match
 Greenlet's, so the policy links that occurrence to Greenlet's closed Alpine GCC
-evidence. Three other native-wheel owners retain structured open omissions, so
-an SBOM and provenance alone do not satisfy the release contract.
+evidence. CFFI, Psycopg C, and Pydantic Core use the signed native wheelhouse;
+schema 9 binds each linked SONAME to exact APK-owned runtime bytes and package
+identity. All seven current native-owner records are closed, but the
+recipient-facing delivery and publication controls are not.
 
 A future deployment procedure must name all of these values before the steps
 below become runnable:

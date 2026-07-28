@@ -16,7 +16,7 @@ publish a supported container image yet.
 | Evidence subject | Each CI archive names its local image configuration digest because CI does not publish a platform manifest. |
 | Public `main` image | Disabled; the publication job has been removed. |
 | Tagged release | Blocked before any job can publish an image, chart, Python package, or GitHub release. |
-| Source closure | CPython, Cryptography, Greenlet, MarkupSafe, and SQLAlchemy are resolved on both platforms; three native-wheel owners remain incomplete. |
+| Source closure | Every current native-wheel owner is closed on both platforms. The derived source-completeness ledger is complete, but distribution approval remains false. |
 
 The release workflow can still validate source, build proof, and scan a
 candidate with repository-read permission. A separate job then fails before
@@ -82,22 +82,22 @@ of that proof in release evidence and its handoff to the future isolated
 publication path.
 
 CPython has a normalized top-level component record with exact runtime
-identity, recipe, source, and license evidence. Cryptography, Greenlet,
-MarkupSafe, and SQLAlchemy have closed native-owner reviews on both platforms.
-Three other owners have exact observations and explicit omissions, but their
-reviews remain open.
-Issue [#18](https://github.com/stampbot/extra-codeowners/issues/18) tracks that
-work. Until it closes, the derived ledger keeps
-`source_completeness.complete` false and the approval-required gate rejects the
-candidate. Issue #28 independently blocks tagged publication. Passing CI does
-not override either condition.
+identity, recipe, source, and license evidence. All seven native-wheel owners
+are closed on both platforms. The derived ledger now records
+`source_completeness.complete: true`.
+
+This does not approve distribution. Issue
+[#18](https://github.com/stampbot/extra-codeowners/issues/18) still covers
+recipient delivery of notices and corresponding source. Issue #28 independently
+blocks tagged publication, and `distribution_approval.approved` remains
+`false`. Passing CI does not override either condition.
 
 The separate [native wheelhouse build](native-wheelhouse.md) creates
 reproducible replacements for CFFI, Psycopg C, and Pydantic Core. The
 application image selects the signed wheelhouse by immutable digest, verifies
-it before use, installs those wheels offline, and retains their bytes. The
-three owner records remain open only at the boundary between each recorded
-shared-library name and one exact APK-owned runtime file occurrence.
+it before use, installs those wheels offline, and retains their bytes. Schema 9
+binds each recorded shared-library name to the effective APK-owned runtime file
+that the final image would load.
 
 ## How the CI collector builds the evidence
 
@@ -109,13 +109,16 @@ every layer against the bytes it received. It then:
    order remove files created in the same layer
 2. inventories the union of package records in every distributed Alpine
    database and all Python `METADATA`, marking whether each record remains
-   effective
+   effective; the effective Alpine database also supplies checksummed file
+   ownership
 3. records every regular-file, directory, non-regular, and whiteout occurrence,
-   plus embedded wheel SBOMs, native Python payloads, installed wheel identity
-   files, effective Python `RECORD` ownership, and historical RECORD replay
+   plus APK-owned shared libraries, embedded wheel SBOMs, native Python
+   payloads, installed wheel identity files, effective Python `RECORD`
+   ownership, and historical RECORD replay
 4. rejects duplicate paths, malformed whiteouts, unsafe ancestor topology,
-   conflicting authoritative metadata, and an APK architecture that does not
-   match the requested platform
+   conflicting authoritative metadata, malformed APK file ownership, APK file
+   checksum drift, and an APK architecture that does not match the requested
+   platform
 5. requires the saved configuration's ordered rootfs diff IDs to match every
    layer and requires the initial diff IDs to match the reviewed
    platform-specific Docker Official Python base
@@ -129,13 +132,14 @@ every layer against the bytes it received. It then:
    wheelhouse contract for each native or SBOM owner, verifies its complete
    archive `RECORD` against the historical installation, and retains the wheel
    and raw SBOM bytes under `artifacts/native-wheels/`
-9. validates every schema-8 owner observation, wheelhouse build record,
-   disposition, review, omission, and cross-owner relationship; writes the
-   derived coverage ledger; and binds each owner to its exact reviewed source
+9. validates every schema-9 owner observation, wheelhouse build record,
+   disposition, review, omission, and cross-owner relationship; binds every
+   wheelhouse ELF dependency to one effective APK-owned runtime file; writes
+   the derived coverage ledger; and binds each owner to its reviewed source
 10. reads the hash-pinned source and license material from verified source
     stores, including the Greenlet/GCC component source and notices, and
     produces a deterministic review archive whose manifest derives the current
-    incomplete state.
+    complete source-coverage state.
 
 ### Historical Python installation replay
 
@@ -176,9 +180,38 @@ occurrence identities fail collection. Every `.pyc` or `.pyo` occurrence under
 This replay establishes which wheel owns each file occurrence and whether the
 installed executable bytes match the wheel. The native-component ledger uses
 that ownership to review one complete wheel at a time. It does not infer which
-source or nested SBOM component produced an individual file. Cryptography,
-Greenlet, MarkupSafe, and SQLAlchemy are resolved; three other owners still lack
-corresponding-source closure, so overall source completeness remains false.
+source or nested SBOM component produced an individual file. The separate APK
+library inventory handles the runtime libraries used by wheelhouse-built
+extensions. All current owners have closed source reviews.
+
+### APK-owned runtime libraries
+
+An ELF `NEEDED` entry gives the loader a name such as `libpq.so.5`. The Alpine
+package list tells us that `libpq` is installed. Neither fact, by itself, proves
+which file satisfies the lookup.
+
+Schema 9 joins those facts. The collector parses Alpine's `F`, `R`, and `Z`
+records, then inventories every package-owned shared library under `/lib` and
+`/usr/lib`. A regular file must match APK's SHA-1 over its bytes. A symbolic
+link must match APK's SHA-1 over the link target. The recorded occurrence must
+still be effective after every layer and whiteout has been applied.
+
+Policy names the runtime path and its final regular file. A runtime link must be
+direct, stay in the same loader directory, and share one package owner with the
+target. The final file cannot be another link. Wheel inspection rejects
+`RPATH` and `RUNPATH`, so the extension cannot send the loader to an unreviewed
+directory.
+
+The current bindings are:
+
+| Wheel owner | Runtime path | Final regular file | Package |
+| --- | --- | --- | --- |
+| CFFI | `usr/lib/libffi.so.8` | `usr/lib/libffi.so.8.2.0` | `libffi@3.5.2-r1` |
+| Psycopg C | `usr/lib/libpq.so.5` | `usr/lib/libpq.so.5.18` | `libpq@18.4-r0` |
+| Pydantic Core | `usr/lib/libgcc_s.so.1` | same path | `libgcc@15.2.0-r5` |
+
+This is why those owner reviews can close. The proof no longer stops at a
+shared-library name and package version.
 
 ### CPython runtime identity and source binding
 
@@ -218,7 +251,7 @@ approve distribution.
 
 Path and hash baselines tell us that a file changed. They don't tell us what
 the file contains, and an SBOM doesn't necessarily tell us which component
-produced a file. Schema 8 keeps those facts separate.
+produced a file. Schema 9 keeps those facts separate.
 
 The collector parses every CycloneDX JSON document below a wheel's
 `.dist-info/sboms/` directory. It accepts specification versions 1.4 through
@@ -241,7 +274,7 @@ can't drift to a similar component in another document.
 #### Repeated PURLs are occurrences, not aliases
 
 A PURL describes a package identity. It doesn't always identify one occurrence
-inside a document. Schema 8 uses a nonempty `bom-ref` as the document-local
+inside a document. Schema 9 uses a nonempty `bom-ref` as the document-local
 occurrence identity.
 It falls back to the PURL only when `bom-ref` is empty. A document may repeat a
 PURL only when every repetition has a unique, nonempty `bom-ref`; duplicate
@@ -290,7 +323,7 @@ or SONAME. A payload disposition can say which observations are relevant to
 the payload, but the retained SBOM still shows the limits of the upstream
 claim.
 
-Schema 8 has one deliberately narrow relationship for evidence shared between
+Schema 9 has one deliberately narrow relationship for evidence shared between
 owners. `same-component-by-payload-equivalence` requires the source and target
 payloads to be byte-identical. Each named payload disposition must cite its
 corresponding observation, and the target observation must have a direct
@@ -336,35 +369,27 @@ owner with complete dispositions and source evidence can be `closed`. An
 `review.unresolved_items`. Removing an owner from policy fails exact coverage;
 it does not turn the owner into an inferred unresolved record.
 
-The current closed owners are Cryptography, Greenlet, MarkupSafe, and
-SQLAlchemy. Cryptography directly reviews 32 crates.io archives, the local Rust
-subtree in its exact sdist, and the official checksummed OpenSSL 4.0.1 release.
-Its arm64 `NotpineForGHA` PURL remains literal. A relationship links that exact
-`libgcc` occurrence to Greenlet's closed Alpine GCC evidence because the
-payload bytes match. This is source-retention closure, not proof that the
-retained inputs built either wheel.
+All seven current owners are closed. Cryptography directly reviews 32
+crates.io archives, the local Rust subtree in its exact source distribution,
+and the official checksummed OpenSSL 4.0.1 release. Its arm64
+`NotpineForGHA` PURL remains literal. A relationship links that exact `libgcc`
+occurrence to Greenlet's closed Alpine GCC evidence because the payload bytes
+match. This is source-retention closure, not proof that the retained inputs
+built either wheel.
 
 MarkupSafe and SQLAlchemy have no embedded SBOM, so their SBOM and
 component-review arrays are empty while their native payload sets remain exact.
 
 The signed wheelhouse gives CFFI, Psycopg C, and Pydantic Core exact source,
 wheel, and build records. Pydantic Core's record also binds its local Cargo
-package and locked crates.io inputs. The three owners remain open for narrower
-reasons:
+package and locked crates.io inputs. Schema 9 completes each record with the
+APK-owned runtime path described above.
 
-- CFFI records `libffi.so.8` and Alpine `libffi`, but not the exact
-  APK-owned runtime file that satisfies that name.
-- Psycopg C records `libpq.so.5` and Alpine `libpq`, but not the exact
-  APK-owned runtime file that satisfies that name.
-- Pydantic Core records `libgcc_s.so.1` and Alpine `libgcc`, but not the exact
-  APK-owned runtime file that satisfies that name.
-
-`inventory/native-component-coverage.json` copies closed records into
-`resolved_owners` and open records into `unresolved_owners`. It also names the
-remaining owners and reports reviewed upstream SBOM anomalies.
-`MANIFEST.json` derives `source_completeness` from that ledger. The component
-inventory no longer supplies a completeness assertion that policy could
-accidentally trust.
+`inventory/native-component-coverage.json` copies all seven records into
+`resolved_owners`; `unresolved_owners` is empty. It also reports reviewed
+upstream SBOM anomalies. `MANIFEST.json` derives `source_completeness` from
+that ledger. The component inventory does not supply a completeness assertion
+that policy could accidentally trust.
 
 ### Failed jobs can still leave diagnostics
 
@@ -509,7 +534,7 @@ change breaks the policy comparison.
 A top-level `LicenseRef-*` resolution requires an exact component set, a
 nonempty rationale, and one source-carried notice path and SHA-256 for every
 covered component. An unrelated file with a plausible name cannot satisfy the
-pin. Schema 8 rejects `LicenseRef-*` in native-component expressions
+pin. Schema 9 rejects `LicenseRef-*` in native-component expressions
 because those components do not use the top-level custom-license evidence
 ledger. The current public-domain resolutions bind these exact records:
 
@@ -530,8 +555,8 @@ license while the project review selected an expression.
 The deterministic review archive normalizes member order, ownership, mode, and
 timestamps. It includes checksums, canonical manifests, raw inventories, the
 reviewed policy, retained top-level source, notices, and license material. Its
-manifest preserves the incomplete source-coverage status and embeds the same
-ledger written to `inventory/native-component-coverage.json`. Its
+manifest records the derived source-coverage status and embeds the same ledger
+written to `inventory/native-component-coverage.json`. Its
 `application_artifacts` record binds the source, selected wheel, selection
 record, accepted launcher form, and SHA-256 and size of every one of the five
 files retained under `artifacts/application/`.
@@ -589,9 +614,10 @@ and isolated signing and publication path remain outstanding. The current
 collector has no publication authority, and the release workflow still blocks
 every supported publication.
 
-Before any release may publish, the remaining three native-wheel owners must
-move from `open` to `closed`, or those wheels must be replaced with builds
-linked against separately inventoried packages.
+The native-owner ledger is now complete. Before any release may publish, the
+project must still deliver the retained notices and corresponding source to
+recipients, bind them to each platform digest, finish the bounded recipient
+verifier, and record explicit distribution approval.
 
 The future recipient contract also requires a platform digest, archive digest,
 signed predicate, and OCI attestation to agree. Identical attestations produced
@@ -601,12 +627,11 @@ must fail verification.
 ## Trust boundary and residual risk
 
 The review archive records what the collector observed and fetched under
-reviewed policy. Cryptography, Greenlet, MarkupSafe, and SQLAlchemy are closed,
-but three native-wheel owners are not, so the archive is not component/source
-complete today. Even a future complete archive would not prove upstream
-metadata is correct, identify every copyright holder, or decide whether a
-delivery mechanism satisfies every jurisdiction. Hashes protect reviewed bytes
-from silent mutation; they do not make the original source trustworthy.
+reviewed policy. Its current native-owner ledger is component/source complete.
+That still does not prove upstream metadata is correct, identify every
+copyright holder, or decide whether a delivery mechanism satisfies every
+jurisdiction. Hashes protect reviewed bytes from silent mutation; they do not
+make the original source trustworthy.
 
 A maintainer must review both platforms and separately approve recipient
 delivery. Qualified legal review remains necessary before a paid hosted

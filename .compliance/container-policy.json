@@ -101,7 +101,7 @@
     "approved": false,
     "approved_by": "",
     "approved_on": "",
-    "rationale": "Distribution is denied: component/source completeness remains open in issue #18, and privilege separation remains open in issue #28."
+    "rationale": "Distribution is denied: recipient delivery and release binding remain open in issue #18, durable application build-proof retention remains open in issue #32, and privilege separation remains open in issue #28."
   },
   "docker_python_recipe": {
     "license_sha256": "0a3ffdfc4f368b76ae1140b5fbe2f2f69ee76ee00a3024e8a09ca9b2e265186f",
@@ -4374,25 +4374,7 @@
         "canonical_relationships": [],
         "cargo_lock": null,
         "component_reviews": [],
-        "known_omissions": [
-          {
-            "component": {
-              "name": "libffi",
-              "purl": "pkg:apk/alpine/libffi@3.5.2-r1",
-              "type": "library",
-              "version": "3.5.2-r1"
-            },
-            "id": "unproven-libffi-runtime-file",
-            "missing_evidence": [
-              "source-payload-relationship"
-            ],
-            "observations": [],
-            "payload_roles": [
-              "_cffi_backend.cpython-314.so"
-            ],
-            "reason": "The signed wheelhouse binds this wheel to libffi.so.8 and its Alpine package identity, but current image evidence does not bind that SONAME to one exact runtime APK-owned file occurrence."
-          }
-        ],
+        "known_omissions": [],
         "native_payloads": [
           {
             "path": "opt/venv/lib/python3.14/site-packages/_cffi_backend.cpython-314-x86_64-linux-musl.so",
@@ -4409,17 +4391,14 @@
         },
         "payload_dispositions": [
           {
-            "kind": "known-omission",
-            "omission": "unproven-libffi-runtime-file",
+            "kind": "owner",
             "role": "_cffi_backend.cpython-314.so"
           }
         ],
         "review": {
-          "reason": "The exact runtime shared-library file relationship remains unproven.",
-          "state": "open",
-          "unresolved_items": [
-            "unproven-libffi-runtime-file"
-          ]
+          "reason": "",
+          "state": "closed",
+          "unresolved_items": []
         },
         "sboms": [],
         "wheel": {
@@ -4437,7 +4416,9 @@
               "package": {
                 "name": "libffi",
                 "version": "3.5.2-r1"
-              }
+              },
+              "resolved_path": "usr/lib/libffi.so.8.2.0",
+              "runtime_path": "usr/lib/libffi.so.8"
             }
           ],
           "local_cargo_packages": [],
@@ -6354,26 +6335,7 @@
         "canonical_relationships": [],
         "cargo_lock": null,
         "component_reviews": [],
-        "known_omissions": [
-          {
-            "component": {
-              "name": "libpq",
-              "purl": "pkg:apk/alpine/libpq@18.4-r0",
-              "type": "library",
-              "version": "18.4-r0"
-            },
-            "id": "unproven-libpq-runtime-file",
-            "missing_evidence": [
-              "source-payload-relationship"
-            ],
-            "observations": [],
-            "payload_roles": [
-              "psycopg_c/_psycopg.cpython-314.so",
-              "psycopg_c/pq.cpython-314.so"
-            ],
-            "reason": "The signed wheelhouse binds this wheel to libpq.so.5 and its Alpine package identity, but current image evidence does not bind that SONAME to one exact runtime APK-owned file occurrence."
-          }
-        ],
+        "known_omissions": [],
         "native_payloads": [
           {
             "path": "opt/venv/lib/python3.14/site-packages/psycopg_c/_psycopg.cpython-314-x86_64-linux-musl.so",
@@ -6396,22 +6358,18 @@
         },
         "payload_dispositions": [
           {
-            "kind": "known-omission",
-            "omission": "unproven-libpq-runtime-file",
+            "kind": "owner",
             "role": "psycopg_c/_psycopg.cpython-314.so"
           },
           {
-            "kind": "known-omission",
-            "omission": "unproven-libpq-runtime-file",
+            "kind": "owner",
             "role": "psycopg_c/pq.cpython-314.so"
           }
         ],
         "review": {
-          "reason": "The exact runtime shared-library file relationship remains unproven.",
-          "state": "open",
-          "unresolved_items": [
-            "unproven-libpq-runtime-file"
-          ]
+          "reason": "",
+          "state": "closed",
+          "unresolved_items": []
         },
         "sboms": [],
         "wheel": {
@@ -6429,7 +6387,9 @@
               "package": {
                 "name": "libpq",
                 "version": "18.4-r0"
-              }
+              },
+              "resolved_path": "usr/lib/libpq.so.5.18",
+              "runtime_path": "usr/lib/libpq.so.5"
             }
           ],
           "local_cargo_packages": [],
@@ -6440,25 +6400,7 @@
         "canonical_relationships": [],
         "cargo_lock": null,
         "component_reviews": [],
-        "known_omissions": [
-          {
-            "component": {
-              "name": "libgcc",
-              "purl": "pkg:apk/alpine/libgcc@15.2.0-r5",
-              "type": "library",
-              "version": "15.2.0-r5"
-            },
-            "id": "unproven-libgcc-runtime-file",
-            "missing_evidence": [
-              "source-payload-relationship"
-            ],
-            "observations": [],
-            "payload_roles": [
-              "pydantic_core/_pydantic_core.cpython-314.so"
-            ],
-            "reason": "The signed wheelhouse binds this wheel to libgcc_s.so.1 and its Alpine package identity, but current image evidence does not bind that SONAME to one exact runtime APK-owned file occurrence."
-          }
-        ],
+        "known_omissions": [],
         "native_payloads": [
           {
             "path": "opt/venv/lib/python3.14/site-packages/pydantic_core/_pydantic_core.cpython-314-x86_64-linux-musl.so",
@@ -6475,17 +6417,14 @@
         },
         "payload_dispositions": [
           {
-            "kind": "known-omission",
-            "omission": "unproven-libgcc-runtime-file",
+            "kind": "owner",
             "role": "pydantic_core/_pydantic_core.cpython-314.so"
           }
         ],
         "review": {
-          "reason": "The exact runtime shared-library file relationship remains unproven.",
-          "state": "open",
-          "unresolved_items": [
-            "unproven-libgcc-runtime-file"
-          ]
+          "reason": "",
+          "state": "closed",
+          "unresolved_items": []
         },
         "sboms": [],
         "wheel": {
@@ -6607,7 +6546,9 @@
               "package": {
                 "name": "libgcc",
                 "version": "15.2.0-r5"
-              }
+              },
+              "resolved_path": "usr/lib/libgcc_s.so.1",
+              "runtime_path": "usr/lib/libgcc_s.so.1"
             }
           ],
           "local_cargo_packages": [
@@ -6703,25 +6644,7 @@
         "canonical_relationships": [],
         "cargo_lock": null,
         "component_reviews": [],
-        "known_omissions": [
-          {
-            "component": {
-              "name": "libffi",
-              "purl": "pkg:apk/alpine/libffi@3.5.2-r1",
-              "type": "library",
-              "version": "3.5.2-r1"
-            },
-            "id": "unproven-libffi-runtime-file",
-            "missing_evidence": [
-              "source-payload-relationship"
-            ],
-            "observations": [],
-            "payload_roles": [
-              "_cffi_backend.cpython-314.so"
-            ],
-            "reason": "The signed wheelhouse binds this wheel to libffi.so.8 and its Alpine package identity, but current image evidence does not bind that SONAME to one exact runtime APK-owned file occurrence."
-          }
-        ],
+        "known_omissions": [],
         "native_payloads": [
           {
             "path": "opt/venv/lib/python3.14/site-packages/_cffi_backend.cpython-314-aarch64-linux-musl.so",
@@ -6738,17 +6661,14 @@
         },
         "payload_dispositions": [
           {
-            "kind": "known-omission",
-            "omission": "unproven-libffi-runtime-file",
+            "kind": "owner",
             "role": "_cffi_backend.cpython-314.so"
           }
         ],
         "review": {
-          "reason": "The exact runtime shared-library file relationship remains unproven.",
-          "state": "open",
-          "unresolved_items": [
-            "unproven-libffi-runtime-file"
-          ]
+          "reason": "",
+          "state": "closed",
+          "unresolved_items": []
         },
         "sboms": [],
         "wheel": {
@@ -6766,7 +6686,9 @@
               "package": {
                 "name": "libffi",
                 "version": "3.5.2-r1"
-              }
+              },
+              "resolved_path": "usr/lib/libffi.so.8.2.0",
+              "runtime_path": "usr/lib/libffi.so.8"
             }
           ],
           "local_cargo_packages": [],
@@ -8683,26 +8605,7 @@
         "canonical_relationships": [],
         "cargo_lock": null,
         "component_reviews": [],
-        "known_omissions": [
-          {
-            "component": {
-              "name": "libpq",
-              "purl": "pkg:apk/alpine/libpq@18.4-r0",
-              "type": "library",
-              "version": "18.4-r0"
-            },
-            "id": "unproven-libpq-runtime-file",
-            "missing_evidence": [
-              "source-payload-relationship"
-            ],
-            "observations": [],
-            "payload_roles": [
-              "psycopg_c/_psycopg.cpython-314.so",
-              "psycopg_c/pq.cpython-314.so"
-            ],
-            "reason": "The signed wheelhouse binds this wheel to libpq.so.5 and its Alpine package identity, but current image evidence does not bind that SONAME to one exact runtime APK-owned file occurrence."
-          }
-        ],
+        "known_omissions": [],
         "native_payloads": [
           {
             "path": "opt/venv/lib/python3.14/site-packages/psycopg_c/_psycopg.cpython-314-aarch64-linux-musl.so",
@@ -8725,22 +8628,18 @@
         },
         "payload_dispositions": [
           {
-            "kind": "known-omission",
-            "omission": "unproven-libpq-runtime-file",
+            "kind": "owner",
             "role": "psycopg_c/_psycopg.cpython-314.so"
           },
           {
-            "kind": "known-omission",
-            "omission": "unproven-libpq-runtime-file",
+            "kind": "owner",
             "role": "psycopg_c/pq.cpython-314.so"
           }
         ],
         "review": {
-          "reason": "The exact runtime shared-library file relationship remains unproven.",
-          "state": "open",
-          "unresolved_items": [
-            "unproven-libpq-runtime-file"
-          ]
+          "reason": "",
+          "state": "closed",
+          "unresolved_items": []
         },
         "sboms": [],
         "wheel": {
@@ -8758,7 +8657,9 @@
               "package": {
                 "name": "libpq",
                 "version": "18.4-r0"
-              }
+              },
+              "resolved_path": "usr/lib/libpq.so.5.18",
+              "runtime_path": "usr/lib/libpq.so.5"
             }
           ],
           "local_cargo_packages": [],
@@ -8769,25 +8670,7 @@
         "canonical_relationships": [],
         "cargo_lock": null,
         "component_reviews": [],
-        "known_omissions": [
-          {
-            "component": {
-              "name": "libgcc",
-              "purl": "pkg:apk/alpine/libgcc@15.2.0-r5",
-              "type": "library",
-              "version": "15.2.0-r5"
-            },
-            "id": "unproven-libgcc-runtime-file",
-            "missing_evidence": [
-              "source-payload-relationship"
-            ],
-            "observations": [],
-            "payload_roles": [
-              "pydantic_core/_pydantic_core.cpython-314.so"
-            ],
-            "reason": "The signed wheelhouse binds this wheel to libgcc_s.so.1 and its Alpine package identity, but current image evidence does not bind that SONAME to one exact runtime APK-owned file occurrence."
-          }
-        ],
+        "known_omissions": [],
         "native_payloads": [
           {
             "path": "opt/venv/lib/python3.14/site-packages/pydantic_core/_pydantic_core.cpython-314-aarch64-linux-musl.so",
@@ -8804,17 +8687,14 @@
         },
         "payload_dispositions": [
           {
-            "kind": "known-omission",
-            "omission": "unproven-libgcc-runtime-file",
+            "kind": "owner",
             "role": "pydantic_core/_pydantic_core.cpython-314.so"
           }
         ],
         "review": {
-          "reason": "The exact runtime shared-library file relationship remains unproven.",
-          "state": "open",
-          "unresolved_items": [
-            "unproven-libgcc-runtime-file"
-          ]
+          "reason": "",
+          "state": "closed",
+          "unresolved_items": []
         },
         "sboms": [],
         "wheel": {
@@ -8936,7 +8816,9 @@
               "package": {
                 "name": "libgcc",
                 "version": "15.2.0-r5"
-              }
+              },
+              "resolved_path": "usr/lib/libgcc_s.so.1",
+              "runtime_path": "usr/lib/libgcc_s.so.1"
             }
           ],
           "local_cargo_packages": [
@@ -14153,7 +14035,7 @@
       "version": "3.3.4"
     }
   ],
-  "schema_version": 8,
+  "schema_version": 9,
   "unexpanded_python_payloads": {
     "linux/amd64": {
       "embedded_sboms": [
