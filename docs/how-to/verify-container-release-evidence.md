@@ -24,6 +24,12 @@ Run it as a dedicated unprivileged user on a volume with at least 2 GiB free
 and a filesystem quota. Disable network access before parsing. Keep the
 reviewed verifier checkout read-only.
 
+Producer authentication will eventually use the `gh` and `cosign` versions
+pinned in that checkout's `mise.toml`. Do not substitute GitHub CLI 2.92.0 or
+older: [GHSA-8xvp-7hj6-mcj9][gh-cli-advisory] affects attestation and release
+verification and can expose the CLI token. The current content-only command
+below does not invoke either tool.
+
 Put these files in a read-only input directory:
 
 - `extra-codeowners-VERSION-linux-ARCHITECTURE-evidence.tar.gz`
@@ -125,3 +131,5 @@ summary according to that policy.
 Read the
 [container evidence release contract](../reference/container-evidence-release-contract.md)
 for the exact envelope, resource limits, and remaining authentication work.
+
+[gh-cli-advisory]: https://github.com/cli/cli/security/advisories/GHSA-8xvp-7hj6-mcj9
