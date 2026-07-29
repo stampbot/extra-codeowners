@@ -29,11 +29,12 @@ either output.
     unsupported `main` image.
 
 Issue [#28](https://github.com/stampbot/extra-codeowners/issues/28) still owns
-the complete release wire format. The repository now has a bounded verifier
-for the schema-9 predicate, gzip and tar envelope, `MANIFEST.json`, checksums,
-and retained files. The remaining format work covers Sigstore identity and
-transparency requirements, OCI attestations, and the SBOM and provenance
-predicate contracts.
+the complete release wire format. The repository has a bounded verifier for
+the schema-9 predicate, gzip and tar envelope, `MANIFEST.json`, checksums, and
+retained files. A separate read-only verifier authenticates an immutable
+GitHub release and its exact asset set. The remaining format work covers the
+release-workflow identity, local asset bytes, OCI attestations, and the SBOM
+and provenance predicate contracts.
 
 CI now gives image and source parsing separate rootless, networkless
 boundaries. A Docker-only process exports the local candidate without opening
@@ -303,22 +304,39 @@ complete gzip and tar streams, rechecked the stable archive descriptor, and
 confirmed that the materialized directory still occupies its original path.
 
 This is an unsigned-content verifier. It does **not** select a platform from an
-OCI index, verify a Git tag or immutable GitHub release, run
-`gh release verify`, validate a Sigstore bundle or transparency-log entry, or
-verify OCI SBOM, provenance, or evidence attestations. Those steps must supply
-the trusted command arguments and authenticate the exact files before a
-recipient relies on the summary. The tagged workflow does not perform those
-steps yet. In particular, the application source tar must name the trusted
-revision, match the expected project version, and reproduce the installed
-package bytes. That is an internal content binding, not proof that GitHub
-served the named commit.
+OCI index, call the separate GitHub release verifier, validate a Sigstore
+bundle or transparency-log entry, or verify OCI SBOM, provenance, or evidence
+attestations. Those steps must supply the trusted command arguments and
+authenticate the exact files before a recipient relies on the summary. The
+tagged workflow does not perform those steps yet. In particular, the
+application source tar must name the trusted revision, match the expected
+project version, and reproduce the installed package bytes. That is an
+internal content binding, not proof that GitHub served the named commit.
 
-The eventual recipient procedure must use GitHub CLI 2.93.0 or newer.
+## Current GitHub release verifier
+
+`.github/scripts/verify_github_release.py` accepts a canonical release-controller
+manifest and its independently trusted SHA-256. It requires GitHub CLI 2.93.0
+or newer before any authenticated operation. The repository pins 2.96.0 in
+`mise.toml`.
+
+The verifier reads the live repository, tag, immutable release, and exact
+asset set. It then runs `gh release verify`, checks the GitHub release
+v0.2 predicate and every attested asset digest, and requires the Sigstore
+verification result to contain the same DSSE statement. A final reread catches
+state changes during the run.
+
+Success emits a small canonical
+[authenticated GitHub release record](authenticated-github-release-record.md).
+The command does not download assets, authenticate the release workflow,
+select an OCI platform, or call the schema-9 content verifier. No workflow
+invokes it.
+
 Versions through 2.92.0 are affected by
 [GHSA-8xvp-7hj6-mcj9](https://github.com/cli/cli/security/advisories/GHSA-8xvp-7hj6-mcj9),
-which can expose a CLI token while these verification commands fetch trust
-material. The repository pins a patched CLI in `mise.toml`; a future verifier
-must reject an affected executable before giving it a token.
+which can expose a CLI token while verification commands fetch trust material.
+The verifier checks the client version without token environment variables and
+stops before the first GitHub API request when the executable is affected.
 
 ## Required archive records
 

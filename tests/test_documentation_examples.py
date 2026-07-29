@@ -44,7 +44,8 @@ def test_container_test_stage_carries_documentation_test_inputs() -> None:
     assert "COPY docs/ ./docs/" in dockerfile
     assert "COPY examples/ ./examples/" in dockerfile
     assert (
-        "COPY .dockerignore Dockerfile mise.toml mise.tutorial.toml renovate.json ./" in dockerfile
+        "COPY .dockerignore Dockerfile mise.toml mise.tutorial.toml mkdocs.yml renovate.json ./"
+        in dockerfile
     )
     for included in ("!docs/**", "!examples/**", "!mise.tutorial.toml"):
         assert included in dockerignore

@@ -166,6 +166,7 @@ COPY .github/scripts/build_python_distribution_spine.py \
      .github/scripts/release_asset_assembler.py \
      .github/scripts/release_controller.py \
      .github/scripts/recipient_evidence.py \
+     .github/scripts/verify_github_release.py \
      .github/scripts/release_readiness.py \
      .github/scripts/release_spine.py \
      .github/scripts/run_evidence_parser.py \
@@ -179,7 +180,7 @@ COPY charts/ ./charts/
 COPY containers/native-wheelhouse/ ./containers/native-wheelhouse/
 COPY docs/ ./docs/
 COPY examples/ ./examples/
-COPY .dockerignore Dockerfile mise.toml mise.tutorial.toml renovate.json ./
+COPY .dockerignore Dockerfile mise.toml mise.tutorial.toml mkdocs.yml renovate.json ./
 
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync \

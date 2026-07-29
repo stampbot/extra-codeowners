@@ -20,7 +20,7 @@ Use a source checkout to evaluate the project today:
 | Packaged Helm chart | Not available; a chart exists in source only |
 | Public GitHub Container Registry (GHCR) package | A pre-compliance preview is public, but it is unsupported |
 | Native dependency wheelhouse | Signed build and publication path implemented; application images consume its immutable contract |
-| Container evidence verifier | Unsigned schema-9 content verification is implemented in source; release authentication and workflow integration remain blocked |
+| Container evidence verifier | Schema-9 content verification and immutable GitHub release authentication are implemented in source; they are not connected, and workflow and OCI authentication remain blocked |
 | Hosted service | Not available |
 | `extra-codeowners-action` Marketplace Action | Not available |
 
@@ -96,6 +96,8 @@ There are also parts of a future privileged release path:
 
 - a bounded schema-9
   [container evidence verifier](container-evidence-release-contract.md#current-content-verifier)
+- a read-only
+  [authenticated GitHub release verifier](authenticated-github-release-record.md)
 - an offline [release controller](immutable-release-controller.md)
 - a [GitHub release API adapter](github-release-api-adapter.md)
 - a read-only [immutable-release preflight](immutable-release-preflight.md)
