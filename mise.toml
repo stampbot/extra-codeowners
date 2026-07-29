@@ -1,5 +1,7 @@
 [tools]
 actionlint = "1.7.12"
+"aqua:cli/cli" = "2.96.0"
+"aqua:sigstore/cosign" = "3.0.6"
 helm = "3.19.0"
 jq = "1.8.1"
 node = "24"

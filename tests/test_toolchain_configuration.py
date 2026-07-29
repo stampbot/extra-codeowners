@@ -20,6 +20,10 @@ from tools import evaluation_beta_bootstrap as beta_bootstrap
 
 ROOT = Path(__file__).resolve().parents[1]
 SETUP_UV = re.compile(r"^(?P<indent>\s*)uses: astral-sh/setup-uv@(?P<sha>[0-9a-f]{40})(?:\s+#.*)?$")
+SETUP_COSIGN = re.compile(
+    r"^(?P<indent>\s*)uses: sigstore/cosign-installer@"
+    r"(?P<sha>[0-9a-f]{40})(?:\s+#.*)?$"
+)
 
 
 def _mise_uv_version() -> str:
@@ -46,6 +50,28 @@ def _workflow_uv_versions() -> list[tuple[Path, str]]:
                 if candidate.startswith(input_prefix) and candidate.endswith('" # uv runtime'):
                     version = candidate.removeprefix(input_prefix).removesuffix('" # uv runtime')
             assert version is not None, f"{path}: setup-uv must pin the reviewed uv version"
+            versions.append((path.relative_to(ROOT), version))
+    return versions
+
+
+def _workflow_cosign_versions() -> list[tuple[Path, str]]:
+    versions: list[tuple[Path, str]] = []
+    for path in sorted((ROOT / ".github" / "workflows").glob("*.y*ml")):
+        lines = path.read_text(encoding="utf-8").splitlines()
+        for index, line in enumerate(lines):
+            action = SETUP_COSIGN.fullmatch(line)
+            if action is None:
+                continue
+            action_indent = len(action.group("indent"))
+            step_prefix = " " * (action_indent - 2) + "- "
+            input_prefix = " " * (action_indent + 2) + "cosign-release: v"
+            version: str | None = None
+            for candidate in lines[index + 1 :]:
+                if candidate.startswith(step_prefix):
+                    break
+                if candidate.startswith(input_prefix):
+                    version = candidate.removeprefix(input_prefix)
+            assert version is not None, f"{path}: cosign-installer must pin the reviewed version"
             versions.append((path.relative_to(ROOT), version))
     return versions
 
@@ -88,6 +114,33 @@ def test_uv_version_is_identical_locally_in_containers_and_in_workflows() -> Non
     workflow_versions = _workflow_uv_versions()
     assert workflow_versions, "at least one setup-uv invocation is required"
     assert {version for _, version in workflow_versions} == {reviewed_version}
+
+
+def test_release_verification_clis_are_patched_and_pinned() -> None:
+    with (ROOT / "mise.toml").open("rb") as source:
+        tools = cast(dict[str, str], tomllib.load(source)["tools"])
+
+    gh_version = tools["aqua:cli/cli"]
+    cosign_version = tools["aqua:sigstore/cosign"]
+    assert tuple(map(int, gh_version.split("."))) >= (2, 93, 0)
+    assert tuple(map(int, cosign_version.split("."))) >= (3, 0, 6)
+
+    workflow_versions = _workflow_cosign_versions()
+    assert workflow_versions, "at least one cosign-installer invocation is required"
+    assert {version for _, version in workflow_versions} == {cosign_version}
+
+    advisory = "GHSA-8xvp-7hj6-mcj9"
+    wheelhouse_guide = (ROOT / "docs" / "how-to" / "update-native-wheelhouse.md").read_text(
+        encoding="utf-8"
+    )
+    recipient_guide = (ROOT / "docs" / "how-to" / "verify-container-release-evidence.md").read_text(
+        encoding="utf-8"
+    )
+    assert advisory in wheelhouse_guide
+    assert re.search(r"GitHub CLI\s+2\.93\.0 or newer", wheelhouse_guide)
+    assert "mise exec -- cosign verify" in wheelhouse_guide
+    assert wheelhouse_guide.count("mise exec -- gh attestation verify") == 2
+    assert advisory in recipient_guide
 
 
 def test_dependency_audit_uses_locked_mode_without_frozen_mode() -> None:

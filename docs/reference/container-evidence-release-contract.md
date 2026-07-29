@@ -313,6 +313,13 @@ revision, match the expected project version, and reproduce the installed
 package bytes. That is an internal content binding, not proof that GitHub
 served the named commit.
 
+The eventual recipient procedure must use GitHub CLI 2.93.0 or newer.
+Versions through 2.92.0 are affected by
+[GHSA-8xvp-7hj6-mcj9](https://github.com/cli/cli/security/advisories/GHSA-8xvp-7hj6-mcj9),
+which can expose a CLI token while these verification commands fetch trust
+material. The repository pins a patched CLI in `mise.toml`; a future verifier
+must reject an affected executable before giving it a token.
+
 ## Required archive records
 
 The archive must contain at least these entry points:

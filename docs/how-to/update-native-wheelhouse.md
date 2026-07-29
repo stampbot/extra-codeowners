@@ -196,12 +196,26 @@ After the change reaches `main`, the trusted publication job verifies both
 transported artifacts again. It publishes and signs one multi-platform digest,
 then writes that digest to the workflow summary.
 
+Use the `gh` and `cosign` versions pinned in `mise.toml` for the checks below:
+
+```bash
+mise install
+mise exec -- gh --version
+mise exec -- cosign version
+```
+
+Do not run an attestation or release-verification command with GitHub CLI
+2.92.0 or older. [GHSA-8xvp-7hj6-mcj9][gh-cli-advisory] affects those commands
+and can send the CLI token to hosts that are not GitHub API endpoints. The
+project pins a patched version. If you cannot use mise, install GitHub CLI
+2.93.0 or newer before authenticating.
+
 Set `DIGEST` to that value and verify the keyless signature:
 
 ```bash
 IMAGE='ghcr.io/stampbot/extra-codeowners-native-wheelhouse'
 DIGEST='sha256:REPLACE_WITH_64_HEX_CHARACTERS'
-cosign verify \
+mise exec -- cosign verify \
   --certificate-identity \
     'https://github.com/stampbot/extra-codeowners/.github/workflows/native-wheelhouse.yml@refs/heads/main' \
   --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
@@ -215,7 +229,7 @@ Verify the provenance attached to the multi-platform digest:
 ```bash
 WORKFLOW='stampbot/extra-codeowners/.github/workflows/native-wheelhouse.yml'
 SOURCE_COMMIT='REPLACE_WITH_40_HEX_CHARACTERS'
-gh attestation verify "oci://${IMAGE}@${DIGEST}" \
+mise exec -- gh attestation verify "oci://${IMAGE}@${DIGEST}" \
   --repo stampbot/extra-codeowners \
   --bundle-from-oci \
   --signer-workflow "$WORKFLOW" \
@@ -243,7 +257,7 @@ for ARCHITECTURE in amd64 arm64; do
         end
     ' <<<"$RAW_INDEX"
   )"
-  gh attestation verify "oci://${IMAGE}@${PLATFORM_DIGEST}" \
+  mise exec -- gh attestation verify "oci://${IMAGE}@${PLATFORM_DIGEST}" \
     --repo stampbot/extra-codeowners \
     --bundle-from-oci \
     --signer-workflow "$WORKFLOW" \
@@ -276,4 +290,5 @@ publish a new digest, and revert any consuming application to its last known
 good digest while the replacement builds.
 
 [dockerfile]: https://github.com/stampbot/extra-codeowners/blob/main/containers/native-wheelhouse/Dockerfile
+[gh-cli-advisory]: https://github.com/cli/cli/security/advisories/GHSA-8xvp-7hj6-mcj9
 [inputs]: https://github.com/stampbot/extra-codeowners/blob/main/containers/native-wheelhouse/inputs.json
