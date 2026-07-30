@@ -11,7 +11,7 @@ import os
 import stat
 import subprocess
 import sys
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
@@ -28,6 +28,16 @@ def load_script(name: str) -> ModuleType:
     sys.modules[name] = module
     spec.loader.exec_module(module)
     return module
+
+
+@contextlib.contextmanager
+def open_descriptor(path: Path, flags: int) -> Iterator[int]:
+    """Open a descriptor and close it on every exit path."""
+    descriptor = os.open(path, flags)
+    try:
+        yield descriptor
+    finally:
+        os.close(descriptor)
 
 
 controller: Any = load_script("release_controller")
@@ -566,8 +576,7 @@ def test_unexpected_local_entry_and_special_file_are_rejected(tmp_path: Path) ->
             path = root / asset.name
             path.write_bytes(ASSET_CONTENT[asset.name])
             path.chmod(0o600)
-            descriptor = os.open(path, os.O_RDONLY)
-            descriptors.callback(os.close, descriptor)
+            descriptor = descriptors.enter_context(open_descriptor(path, os.O_RDONLY))
             retained.append(
                 acquirer.RetainedAsset(
                     asset,
@@ -575,8 +584,9 @@ def test_unexpected_local_entry_and_special_file_are_rejected(tmp_path: Path) ->
                     acquirer._file_identity(os.fstat(descriptor)),
                 )
             )
-        root_descriptor = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
-        descriptors.callback(os.close, root_descriptor)
+        root_descriptor = descriptors.enter_context(
+            open_descriptor(root, os.O_RDONLY | os.O_DIRECTORY)
+        )
 
         (root / "unexpected").write_text("no", encoding="utf-8")
         with pytest.raises(acquirer.AcquisitionError, match="unexpected inventory"):
