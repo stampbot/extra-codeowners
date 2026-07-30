@@ -870,6 +870,162 @@ print("{{}}")
     assert not marker.exists()
 
 
+def test_github_cli_streams_one_asset_by_id_with_a_strict_byte_bound(
+    tmp_path: Path,
+) -> None:
+    capture = tmp_path / "capture.json"
+    payload = b"authenticated-release-asset"
+    executable = write_executable(
+        tmp_path / "fake-gh",
+        f"""
+import json
+import os
+import sys
+from pathlib import Path
+
+Path({str(capture)!r}).write_text(
+    json.dumps({{
+        "argv": sys.argv[1:],
+        "gh_token": os.environ.get("GH_TOKEN"),
+        "oidc": "ACTIONS_ID_TOKEN_REQUEST_TOKEN" in os.environ,
+    }}),
+    encoding="utf-8",
+)
+sys.stdout.buffer.write({payload!r})
+""",
+    )
+    destination = tmp_path / "asset"
+    descriptor = os.open(destination, os.O_RDWR | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        client = verifier.GitHubCLI(
+            executable=str(executable),
+            timeout=5,
+            environment={
+                "ACTIONS_ID_TOKEN_REQUEST_TOKEN": "must-not-pass",
+                "GH_TOKEN": "read-only-token",
+                "HOME": str(tmp_path),
+                "PATH": os.environ["PATH"],
+            },
+        )
+
+        size, digest = client.download_asset(
+            REPOSITORY,
+            80_001,
+            descriptor,
+            len(payload),
+        )
+    finally:
+        os.close(descriptor)
+
+    assert size == len(payload)
+    assert digest == hashlib.sha256(payload).hexdigest()
+    assert destination.read_bytes() == payload
+    record = json.loads(capture.read_text(encoding="utf-8"))
+    assert record == {
+        "argv": [
+            "api",
+            "--hostname",
+            "github.com",
+            "--method",
+            "GET",
+            "-H",
+            "Accept: application/octet-stream",
+            "-H",
+            f"X-GitHub-Api-Version: {verifier.API_VERSION}",
+            f"repos/{REPOSITORY}/releases/assets/80001",
+        ],
+        "gh_token": "read-only-token",
+        "oidc": False,
+    }
+
+
+def test_asset_stream_rejects_excess_bytes_and_untrusted_diagnostics(
+    tmp_path: Path,
+) -> None:
+    secret = "release-download-token"
+    executable = write_executable(
+        tmp_path / "fake-gh",
+        """
+import os
+import sys
+
+sys.stdout.buffer.write(b"x" * 65)
+sys.stderr.write(os.environ.get("GH_TOKEN", ""))
+""",
+    )
+    destination = tmp_path / "asset"
+    descriptor = os.open(destination, os.O_RDWR | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        client = verifier.GitHubCLI(
+            executable=str(executable),
+            timeout=5,
+            environment={
+                "GH_TOKEN": secret,
+                "HOME": str(tmp_path),
+                "PATH": os.environ["PATH"],
+            },
+        )
+
+        with pytest.raises(verifier.VerificationError) as error:
+            client.download_asset(REPOSITORY, 80_001, descriptor, 64)
+    finally:
+        os.close(descriptor)
+
+    assert "exceeds its byte bound" in str(error.value)
+    assert secret not in str(error.value)
+    assert destination.stat().st_size <= 64
+
+
+def test_asset_stream_timeout_stops_the_process_group(tmp_path: Path) -> None:
+    executable = write_executable(
+        tmp_path / "slow-gh",
+        """
+import time
+time.sleep(60)
+""",
+    )
+    destination = tmp_path / "asset"
+    descriptor = os.open(destination, os.O_RDWR | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        client = verifier.GitHubCLI(
+            executable=str(executable),
+            timeout=0.05,
+            environment={"HOME": str(tmp_path), "PATH": os.environ["PATH"]},
+        )
+
+        with pytest.raises(verifier.VerificationError, match="timed out"):
+            client.download_asset(REPOSITORY, 80_001, descriptor, 64)
+    finally:
+        os.close(descriptor)
+
+
+@pytest.mark.parametrize("kind", ["directory", "nonempty", "hardlink"])
+def test_asset_stream_requires_one_empty_regular_destination(
+    tmp_path: Path,
+    kind: str,
+) -> None:
+    executable = write_executable(tmp_path / "fake-gh", "print('unused')")
+    client = verifier.GitHubCLI(
+        executable=str(executable),
+        timeout=5,
+        environment={"HOME": str(tmp_path), "PATH": os.environ["PATH"]},
+    )
+    path = tmp_path / "asset"
+    if kind == "directory":
+        path.mkdir()
+        descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+    else:
+        path.write_bytes(b"x" if kind == "nonempty" else b"")
+        if kind == "hardlink":
+            os.link(path, tmp_path / "other")
+        descriptor = os.open(path, os.O_RDWR)
+    try:
+        with pytest.raises(verifier.VerificationError, match="empty regular file"):
+            client.download_asset(REPOSITORY, 80_001, descriptor, 64)
+    finally:
+        os.close(descriptor)
+
+
 def test_bounded_runner_rejects_output_bombs_and_timeouts(tmp_path: Path) -> None:
     output_bomb = write_executable(
         tmp_path / "output-bomb",

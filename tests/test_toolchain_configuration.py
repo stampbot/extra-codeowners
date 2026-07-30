@@ -1429,6 +1429,7 @@ def test_release_spine_scripts_are_in_every_python_type_check_entrypoint() -> No
 
 def test_recipient_verifiers_are_type_checked_and_available_to_container_tests() -> None:
     paths = {
+        ".github/scripts/acquire_github_release_assets.py",
         ".github/scripts/recipient_evidence.py",
         ".github/scripts/verify_github_release.py",
     }

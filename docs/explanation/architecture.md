@@ -482,8 +482,9 @@ topology.
 The tagged workflow contains intended image, chart, Python, SBOM, provenance,
 signature, and GitHub-release jobs. An unconditional blocker keeps every
 privileged job unreachable. The repository also contains a dormant release
-controller, publication API adapter, and read-only immutable-release preflight.
-No workflow connects them or supplies their tokens.
+controller and publication API adapter. Its GitHub-read-only pieces include an
+immutable-release preflight, authenticated GitHub release verifier, and
+release asset acquirer. No workflow connects them or supplies their tokens.
 
 Six issues define the first supported release boundary:
 

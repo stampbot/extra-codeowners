@@ -32,7 +32,9 @@ if str(SCRIPT_DIRECTORY) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIRECTORY))
 
 from release_controller import (  # noqa: E402
+    MAX_ASSET_BYTES,
     MAX_ID,
+    REPOSITORY,
     Asset,
     ControllerError,
     ReleasePlan,
@@ -358,6 +360,101 @@ def _run_bounded(
     return bytes(output)
 
 
+def _run_download(
+    command: Sequence[str],
+    *,
+    environment: Mapping[str, str],
+    timeout: float,
+    destination: int,
+    maximum_bytes: int,
+) -> tuple[int, str]:
+    """Stream one fixed-argv command into a retained descriptor."""
+
+    if not 1 <= maximum_bytes <= MAX_ASSET_BYTES:
+        raise VerificationError("GitHub release asset byte bound is invalid")
+    try:
+        metadata = os.fstat(destination)
+    except OSError as exc:
+        raise VerificationError("cannot inspect the release asset destination") from exc
+    if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1 or metadata.st_size != 0:
+        raise VerificationError("release asset destination is not one empty regular file")
+
+    try:
+        process = subprocess.Popen(  # noqa: S603 - argv and executable are validated by caller
+            tuple(command),
+            close_fds=True,
+            env=dict(environment),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
+        )
+    except OSError as exc:
+        raise VerificationError("cannot start the GitHub CLI") from exc
+    if process.stdout is None or process.stderr is None:
+        _stop_process(process)
+        raise VerificationError("cannot capture GitHub CLI output")
+
+    digest = hashlib.sha256()
+    received = 0
+    errors = bytearray()
+    deadline = time.monotonic() + timeout
+    selector = selectors.DefaultSelector()
+    selector.register(process.stdout, selectors.EVENT_READ, "stdout")
+    selector.register(process.stderr, selectors.EVENT_READ, "stderr")
+    try:
+        while selector.get_map():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                _stop_process(process)
+                raise VerificationError("GitHub CLI command timed out")
+            for key, _events in selector.select(min(remaining, 0.5)):
+                chunk = os.read(key.fd, READ_CHUNK_BYTES)
+                if not chunk:
+                    selector.unregister(key.fileobj)
+                    continue
+                if key.data == "stderr":
+                    if len(errors) + len(chunk) > MAX_COMMAND_ERROR_BYTES:
+                        _stop_process(process)
+                        raise VerificationError("GitHub CLI diagnostics exceeds its byte bound")
+                    errors.extend(chunk)
+                    continue
+                if len(chunk) > maximum_bytes - received:
+                    _stop_process(process)
+                    raise VerificationError("GitHub release asset exceeds its byte bound")
+                view = memoryview(chunk)
+                while view:
+                    written = os.write(destination, view)
+                    if written <= 0:
+                        raise OSError("short write")
+                    view = view[written:]
+                digest.update(chunk)
+                received += len(chunk)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            _stop_process(process)
+            raise VerificationError("GitHub CLI command timed out")
+        try:
+            return_code = process.wait(timeout=remaining)
+        except subprocess.TimeoutExpired:
+            _stop_process(process)
+            raise VerificationError("GitHub CLI command timed out") from None
+    except OSError as exc:
+        _stop_process(process)
+        raise VerificationError("cannot retain GitHub release asset bytes") from exc
+    except BaseException:
+        if process.poll() is None:
+            _stop_process(process)
+        raise
+    finally:
+        selector.close()
+        process.stdout.close()
+        process.stderr.close()
+    if return_code != 0:
+        raise VerificationError(f"GitHub CLI command failed with exit status {return_code}")
+    return received, digest.hexdigest()
+
+
 class GitHubCLI:
     """Bounded, token-minimizing access to the pinned GitHub CLI."""
 
@@ -453,6 +550,39 @@ class GitHubCLI:
             authenticated=True,
         )
         return strict_json(raw, "GitHub release-verification response")
+
+    def download_asset(
+        self,
+        repository: str,
+        asset_id: int,
+        destination: int,
+        maximum_bytes: int,
+    ) -> tuple[int, str]:
+        """Download one immutable release asset by database ID."""
+
+        if REPOSITORY.fullmatch(repository) is None:
+            raise VerificationError("GitHub release repository is invalid")
+        _positive_id(asset_id, "GitHub release asset ID")
+        endpoint = f"repos/{urllib.parse.quote(repository, safe='/')}/releases/assets/{asset_id}"
+        return _run_download(
+            (
+                self._executable,
+                "api",
+                "--hostname",
+                "github.com",
+                "--method",
+                "GET",
+                "-H",
+                "Accept: application/octet-stream",
+                "-H",
+                f"X-GitHub-Api-Version: {API_VERSION}",
+                endpoint,
+            ),
+            environment=_command_environment(self._environment, authenticated=True),
+            timeout=self._timeout,
+            destination=destination,
+            maximum_bytes=maximum_bytes,
+        )
 
 
 def _repository_endpoint(repository: str) -> str:

@@ -98,6 +98,8 @@ There are also parts of a future privileged release path:
   [container evidence verifier](container-evidence-release-contract.md#current-content-verifier)
 - a read-only
   [authenticated GitHub release verifier](authenticated-github-release-record.md)
+- a GitHub-read-only
+  [authenticated asset acquirer](authenticated-release-asset-acquisition.md)
 - an offline [release controller](immutable-release-controller.md)
 - a [GitHub release API adapter](github-release-api-adapter.md)
 - a read-only [immutable-release preflight](immutable-release-preflight.md)
