@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import copy
 import hashlib
 import importlib.util
@@ -560,20 +561,23 @@ def test_unexpected_local_entry_and_special_file_are_rejected(tmp_path: Path) ->
     root = tmp_path / "root"
     root.mkdir(mode=0o700)
     retained = []
-    for asset in plan.assets:
-        path = root / asset.name
-        path.write_bytes(ASSET_CONTENT[asset.name])
-        path.chmod(0o600)
-        descriptor = os.open(path, os.O_RDONLY)
-        retained.append(
-            acquirer.RetainedAsset(
-                asset,
-                descriptor,
-                acquirer._file_identity(os.fstat(descriptor)),
+    with contextlib.ExitStack() as descriptors:
+        for asset in plan.assets:
+            path = root / asset.name
+            path.write_bytes(ASSET_CONTENT[asset.name])
+            path.chmod(0o600)
+            descriptor = os.open(path, os.O_RDONLY)
+            descriptors.callback(os.close, descriptor)
+            retained.append(
+                acquirer.RetainedAsset(
+                    asset,
+                    descriptor,
+                    acquirer._file_identity(os.fstat(descriptor)),
+                )
             )
-        )
-    root_descriptor = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
-    try:
+        root_descriptor = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+        descriptors.callback(os.close, root_descriptor)
+
         (root / "unexpected").write_text("no", encoding="utf-8")
         with pytest.raises(acquirer.AcquisitionError, match="unexpected inventory"):
             acquirer._require_tree_matches(root_descriptor, plan, retained)
@@ -583,10 +587,6 @@ def test_unexpected_local_entry_and_special_file_are_rejected(tmp_path: Path) ->
         os.mkfifo(fifo)
         with pytest.raises(acquirer.AcquisitionError, match="non-regular"):
             acquirer._require_tree_matches(root_descriptor, plan, retained)
-    finally:
-        os.close(root_descriptor)
-        for item in retained:
-            os.close(item.descriptor)
 
 
 def test_acquirer_remains_unwired_and_publication_disabled() -> None:
