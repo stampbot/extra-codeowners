@@ -359,8 +359,9 @@ record](authenticated-release-workflow-record.md) with
 
 This authenticates the reported run and exact workflow source. It does not
 prove that the run produced a particular release asset, verify an Actions
-build-provenance statement, or authenticate a Sigstore signer. No workflow
-invokes it.
+build-provenance statement, or authenticate a Sigstore signer by itself. The
+separate per-asset verifier described below consumes its record. No workflow
+invokes either command.
 
 ## Current release asset acquirer
 
@@ -380,6 +381,27 @@ workflow record, select an OCI platform, verify OCI signatures or attestations,
 or call the schema-9 content verifier. No workflow invokes it. GitHub CLI also
 does not expose the temporary asset-download redirect to this command, so
 issue #28's redirect-audit criterion remains open.
+
+## Current Actions build-provenance verifier
+
+`.github/scripts/verify_actions_build_provenance.py` accepts the trusted
+manifest, a hash-bound workflow record, a hash-bound acquisition record, and
+one selected file from the acquirer's private directory. It requires both
+records to name the same authenticated release and owner.
+
+The command runs GitHub CLI with the exact certificate identity, OpenID Connect
+issuer, tagged source ref, source and signer commit, GitHub-hosted runner, and
+SLSA provenance predicate. It independently decodes the verified DSSE payload,
+matches the certificate and SLSA workflow build definition to the authenticated
+run attempt, and requires the selected name and SHA-256 exactly once. It then
+rehashes the retained local file.
+
+Success emits an [authenticated Actions provenance
+record](authenticated-actions-build-provenance.md) with
+`publication_allowed: false`. The command verifies one file; it does not decide
+which assets require provenance, check Cosign blob signatures, or authenticate
+an OCI index, platform, signature, or registry attestation. No workflow invokes
+it.
 
 ## Required archive records
 

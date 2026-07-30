@@ -30,7 +30,9 @@ The separate
 [release workflow verifier](authenticated-release-workflow-record.md) checks
 the run and exact workflow file named by the same manifest. The acquirer does
 not consume that record because a matching run alone does not prove which
-assets it produced.
+assets it produced. After both commands succeed, the
+[Actions provenance verifier](authenticated-actions-build-provenance.md) can
+bind one acquired asset to the exact tagged run.
 
 ## Command
 
@@ -150,7 +152,8 @@ This command does not:
 - expose or record GitHub CLI's temporary asset-download redirect
 - authenticate the release workflow; use the separate workflow verifier
 - prove which workflow produced a release asset
-- verify an Actions build-provenance attestation
+- verify an Actions build-provenance attestation; use the separate Actions
+  provenance verifier
 - select or verify an Open Container Initiative (OCI) index or platform
 - verify image signatures, software bills of materials, provenance, or
   evidence attestations
@@ -159,5 +162,5 @@ This command does not:
 - publish, sign, attest, repair, delete, or resume a release.
 
 Issue [#28](https://github.com/stampbot/extra-codeowners/issues/28) tracks the
-missing redirect audit, per-asset provenance, OCI, signature, attestation, and
+remaining asset policy, redirect audit, blob signatures, OCI verification, and
 offline-parser handoffs.
