@@ -17,6 +17,7 @@ distribution.
 - [Container evidence policy](../reference/container-evidence-policy.md)
 - [Container evidence release contract](../reference/container-evidence-release-contract.md)
 - [Verify a container evidence archive](../how-to/verify-container-release-evidence.md)
+- [Authenticated OCI index](../reference/authenticated-oci-index.md)
 - [Runtime base image decision](../explanation/runtime-base.md)
 - [Why native dependencies have their own build](../explanation/native-wheelhouse.md)
 

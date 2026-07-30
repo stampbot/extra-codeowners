@@ -169,6 +169,8 @@ This command does not:
 - verify a Sigstore blob signature; use the separate
   [blob-signature verifier](authenticated-blob-signature.md) after asset
   acquisition
+- acquire or authenticate an OCI index; use the separate [OCI index
+  command](authenticated-oci-index.md) when its trusted digest is available
 - verify a software bill of materials (SBOM), provenance, or evidence
   attestation for an OCI digest
 - download or parse a release asset

@@ -64,6 +64,7 @@ jobs:
           uv run mypy extra_codeowners tests tools/evaluation_beta.py
           tools/evaluation_beta_bootstrap.py
           .github/scripts/acquire_github_release_assets.py
+          .github/scripts/acquire_oci_index.py
           .github/scripts/build_python_artifacts.py
           .github/scripts/build_python_distribution_spine.py
           .github/scripts/build_release_spine.py

@@ -1,11 +1,11 @@
 # Verify container release evidence
 
-Use this procedure to exercise six non-publishing boundaries against a future
+Use this procedure to exercise seven non-publishing boundaries against a future
 release candidate. The commands authenticate GitHub's immutable release, check
 the successful tagged workflow and its exact source, acquire the release
 assets, bind one selected file to that workflow's SLSA provenance and Sigstore
-signature, and inspect one evidence archive. None of these steps authorizes
-publication or deployment.
+signature, authenticate one signed GHCR root index, and inspect one evidence
+archive. None of these steps authorizes publication or deployment.
 
 !!! danger "There is no supported container release yet"
     Current pull-request artifacts use CI-only names and local image
@@ -14,9 +14,9 @@ publication or deployment.
 
 !!! warning "The complete producer path is unfinished"
     The Actions provenance and blob-signature commands check one selected file;
-    the project has not frozen which files must pass them. Neither command
-    authenticates an OCI platform, signature, or registry attestation. The
-    remaining policy and OCI checks are tracked in
+    the project has not frozen which files must pass them. The index command
+    doesn't select a platform or verify a registry attestation. The remaining
+    policy and OCI checks are tracked in
     [issue #28](https://github.com/stampbot/extra-codeowners/issues/28). Do not
     deploy, mirror, or redistribute an image from these partial results.
 
@@ -58,6 +58,10 @@ independent trusted path. The project does not produce that final manifest
 yet. Using a manifest and digest copied from the release under test does not
 establish the expected asset policy.
 
+Obtain the root OCI index digest through the same kind of independent path.
+The current project doesn't produce that trusted handoff either. Don't copy
+the digest from GHCR or a signature bundle and pass it back to the verifier.
+
 GitHub CLI 2.96.0 requires an authenticated session even when the release is
 public. Set `GH_TOKEN` to the least-privileged token that can read the target
 repository. For a private repository, limit it to that repository with
@@ -81,7 +85,7 @@ The current project does not yet provide that authenticated path. Do not copy
 these values out of the untrusted predicate and pass them back as trusted
 arguments.
 
-## Authenticate and acquire the GitHub release
+## Authenticate the release and root index
 
 Use Bash from the reviewed checkout. `RELEASE_MANIFEST` is the canonical
 controller manifest obtained through the trusted handoff.
@@ -107,6 +111,10 @@ PROVENANCE_SUMMARY="${AUTH_WORK}/authenticated-actions-provenance.json"
 PROVENANCE_SUMMARY_TMP="${PROVENANCE_SUMMARY}.tmp"
 SIGNATURE_SUMMARY="${AUTH_WORK}/authenticated-blob-signature.json"
 SIGNATURE_SUMMARY_TMP="${SIGNATURE_SUMMARY}.tmp"
+OCI_ROOT="${AUTH_WORK}/oci-index"
+OCI_SUMMARY="${AUTH_WORK}/authenticated-oci-index.json"
+OCI_SUMMARY_TMP="${OCI_SUMMARY}.tmp"
+OCI_INDEX_DIGEST='sha256:REPLACE_WITH_64_LOWERCASE_HEX_CHARACTERS'
 VERIFIED_ASSET_NAME='REPLACE_WITH_ONE_ATTESTED_AND_SIGNED_ASSET_NAME'
 
 test ! -e "$AUTH_WORK"
@@ -119,7 +127,9 @@ test ! -e "$ASSET_ROOT"
 test ! -e "$ACQUISITION_SUMMARY"
 test ! -e "$PROVENANCE_SUMMARY"
 test ! -e "$SIGNATURE_SUMMARY"
-trap 'rm -f -- "$AUTH_SUMMARY_TMP" "$WORKFLOW_SUMMARY_TMP" "$ACQUISITION_SUMMARY_TMP" "$PROVENANCE_SUMMARY_TMP" "$SIGNATURE_SUMMARY_TMP"; unset GH_TOKEN GITHUB_TOKEN' EXIT
+test ! -e "$OCI_ROOT"
+test ! -e "$OCI_SUMMARY"
+trap 'rm -f -- "$AUTH_SUMMARY_TMP" "$WORKFLOW_SUMMARY_TMP" "$ACQUISITION_SUMMARY_TMP" "$PROVENANCE_SUMMARY_TMP" "$SIGNATURE_SUMMARY_TMP" "$OCI_SUMMARY_TMP"; unset GH_TOKEN GITHUB_TOKEN' EXIT
 
 cd -- "$VERIFIER_CHECKOUT"
 XDG_CACHE_HOME="$AUTH_CACHE" \
@@ -182,6 +192,18 @@ mise exec -- python -I -B .github/scripts/verify_blob_signature.py \
   > "$SIGNATURE_SUMMARY_TMP"
 
 mv -- "$SIGNATURE_SUMMARY_TMP" "$SIGNATURE_SUMMARY"
+
+mise exec -- python -I -B .github/scripts/acquire_oci_index.py \
+  --manifest "$RELEASE_MANIFEST" \
+  --manifest-sha256 "$RELEASE_MANIFEST_SHA256" \
+  --authenticated-workflow-record "$WORKFLOW_SUMMARY" \
+  --authenticated-workflow-record-sha256 "$WORKFLOW_SUMMARY_SHA256" \
+  --index-digest "$OCI_INDEX_DIGEST" \
+  --output-dir "$OCI_ROOT" \
+  --cosign-home "$COSIGN_HOME" \
+  > "$OCI_SUMMARY_TMP"
+
+mv -- "$OCI_SUMMARY_TMP" "$OCI_SUMMARY"
 trap - EXIT
 ```
 
@@ -213,6 +235,12 @@ Sigstore trust chain and transparency proof. The Python verifier separately
 matched the certificate's repository IDs and run-attempt URL, then checked the
 canonical Rekor body.
 
+The OCI command fetched the GHCR root index by the independently supplied
+digest. It kept the exact signature bundle from the authenticated run and
+verified that local bundle with Cosign. The retained `index.json` and
+`signature.sigstore.json` files are private inputs for the unfinished platform
+and attestation checks.
+
 The final release policy has not decided which files are mandatory. Run both
 commands once for each file your reviewed test policy selects, using separate
 output records.
@@ -232,13 +260,14 @@ record](../reference/authenticated-release-asset-acquisition.md),
 [authenticated Actions provenance
 record](../reference/authenticated-actions-build-provenance.md), and
 [authenticated blob-signature
-record](../reference/authenticated-blob-signature.md) for the output fields,
+record](../reference/authenticated-blob-signature.md), and [authenticated OCI
+index](../reference/authenticated-oci-index.md) for the output fields,
 permissions, limits, and non-claims.
 
 The example removes `GH_TOKEN` and `GITHUB_TOKEN` before it exits. The
-remaining OCI, final asset-policy, and trusted-handoff checks do not exist yet.
-Stop here unless you already have the other trusted identity values from a
-separately reviewed test fixture.
+remaining platform, registry-attestation, final asset-policy, and
+trusted-handoff checks do not exist yet. Stop here unless you already have the
+other trusted identity values from a separately reviewed test fixture.
 
 ## Verify the archive content
 
