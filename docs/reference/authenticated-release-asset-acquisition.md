@@ -26,6 +26,12 @@ canonical, bounded, single-link regular files.
 Don't copy either digest from an untrusted release asset. A future workflow must
 carry them across reviewed handoffs.
 
+The separate
+[release workflow verifier](authenticated-release-workflow-record.md) checks
+the run and exact workflow file named by the same manifest. The acquirer does
+not consume that record because a matching run alone does not prove which
+assets it produced.
+
 ## Command
 
 The command accepts these options:
@@ -142,6 +148,7 @@ This command does not:
 
 - rerun or replace the authenticated GitHub release verifier
 - expose or record GitHub CLI's temporary asset-download redirect
+- authenticate the release workflow; use the separate workflow verifier
 - prove which workflow produced a release asset
 - verify an Actions build-provenance attestation
 - select or verify an Open Container Initiative (OCI) index or platform
@@ -152,5 +159,5 @@ This command does not:
 - publish, sign, attest, repair, delete, or resume a release.
 
 Issue [#28](https://github.com/stampbot/extra-codeowners/issues/28) tracks the
-missing redirect audit, workflow, OCI, signature, attestation, and
+missing redirect audit, per-asset provenance, OCI, signature, attestation, and
 offline-parser handoffs.

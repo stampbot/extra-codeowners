@@ -1432,6 +1432,7 @@ def test_recipient_verifiers_are_type_checked_and_available_to_container_tests()
         ".github/scripts/acquire_github_release_assets.py",
         ".github/scripts/recipient_evidence.py",
         ".github/scripts/verify_github_release.py",
+        ".github/scripts/verify_release_workflow.py",
     }
     sources = {
         "mise": (ROOT / "mise.toml").read_text(encoding="utf-8"),

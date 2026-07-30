@@ -106,10 +106,12 @@ in the frozen SPDX license list already pinned by policy; project-specific
 terms must use `LicenseRef-*`. The verifier also checks that the application
 source tar contains the license bytes retained in the archive.
 
-The verifier deliberately stops before producer authentication. A later #28
-tranche must verify the exact release workflow identity, Sigstore and
-transparency evidence, OCI attestations, and immutable release state before
-passing trusted identity values to the content verifier.
+The content verifier deliberately stops before producer authentication. A
+separate read-only command now checks GitHub's successful tagged run and exact
+workflow bytes, but those facts are not yet bound to an asset. A later #28
+tranche must verify per-asset producer identity, Sigstore and transparency
+evidence, OCI attestations, and immutable release state before passing trusted
+identity values to the content verifier.
 
 The separate [native wheelhouse build](native-wheelhouse.md) creates
 reproducible replacements for CFFI, Psycopg C, and Pydantic Core. The
