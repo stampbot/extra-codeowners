@@ -32,7 +32,9 @@ the run and exact workflow file named by the same manifest. The acquirer does
 not consume that record because a matching run alone does not prove which
 assets it produced. After both commands succeed, the
 [Actions provenance verifier](authenticated-actions-build-provenance.md) can
-bind one acquired asset to the exact tagged run.
+bind one acquired asset to the exact tagged run, and the
+[blob-signature verifier](authenticated-blob-signature.md) can authenticate
+that asset's exact Sigstore bundle.
 
 ## Command
 
@@ -154,6 +156,7 @@ This command does not:
 - prove which workflow produced a release asset
 - verify an Actions build-provenance attestation; use the separate Actions
   provenance verifier
+- verify a Sigstore blob signature; use the separate blob-signature verifier
 - select or verify an Open Container Initiative (OCI) index or platform
 - verify image signatures, software bills of materials, provenance, or
   evidence attestations
@@ -162,5 +165,5 @@ This command does not:
 - publish, sign, attest, repair, delete, or resume a release.
 
 Issue [#28](https://github.com/stampbot/extra-codeowners/issues/28) tracks the
-remaining asset policy, redirect audit, blob signatures, OCI verification, and
-offline-parser handoffs.
+remaining asset policy, redirect audit, OCI verification, and offline-parser
+handoffs.

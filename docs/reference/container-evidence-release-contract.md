@@ -399,9 +399,29 @@ rehashes the retained local file.
 Success emits an [authenticated Actions provenance
 record](authenticated-actions-build-provenance.md) with
 `publication_allowed: false`. The command verifies one file; it does not decide
-which assets require provenance, check Cosign blob signatures, or authenticate
-an OCI index, platform, signature, or registry attestation. No workflow invokes
-it.
+which assets require provenance or authenticate an OCI index, platform,
+signature, or registry attestation. No workflow invokes it.
+
+## Current blob-signature verifier
+
+`.github/scripts/verify_blob_signature.py` accepts the trusted manifest, the
+same workflow and acquisition records, one selected file, and that file's
+exact `.sigstore.json` companion. Both release assets must appear exactly once
+in the authenticated inventory and remain unchanged in the acquirer's private
+directory.
+
+The command uses a patched Cosign 3 release to verify the keyless signature,
+Fulcio chain and signed certificate timestamp, and Rekor inclusion material.
+It also parses the bounded v0.3 message-signature bundle itself. The
+independent checks bind the message digest, certificate, canonical Rekor body,
+tagged workflow identity, repository and owner IDs, source revision, and run
+attempt to the authenticated records.
+
+Success emits an [authenticated blob-signature
+record](authenticated-blob-signature.md) with
+`publication_allowed: false`. The command verifies one file; it does not decide
+which assets must be signed, authenticate an OCI index or platform, or verify
+registry signatures and attestations. No workflow invokes it.
 
 ## Required archive records
 

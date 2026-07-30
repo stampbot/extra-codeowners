@@ -1,10 +1,11 @@
 # Verify container release evidence
 
-Use this procedure to exercise five non-publishing boundaries against a future
+Use this procedure to exercise six non-publishing boundaries against a future
 release candidate. The commands authenticate GitHub's immutable release, check
 the successful tagged workflow and its exact source, acquire the release
-assets, bind one selected file to that workflow's SLSA provenance, and inspect
-one evidence archive. None of these steps authorizes publication or deployment.
+assets, bind one selected file to that workflow's SLSA provenance and Sigstore
+signature, and inspect one evidence archive. None of these steps authorizes
+publication or deployment.
 
 !!! danger "There is no supported container release yet"
     Current pull-request artifacts use CI-only names and local image
@@ -12,10 +13,10 @@ one evidence archive. None of these steps authorizes publication or deployment.
     recipient verifier rejects those artifacts by design.
 
 !!! warning "The complete producer path is unfinished"
-    The Actions provenance command checks one selected file; the project has
-    not frozen which files must pass it. Local file provenance does not verify
-    a Cosign blob signature or authenticate an OCI platform, signature, or
-    registry attestation. The remaining policy and OCI checks are tracked in
+    The Actions provenance and blob-signature commands check one selected file;
+    the project has not frozen which files must pass them. Neither command
+    authenticates an OCI platform, signature, or registry attestation. The
+    remaining policy and OCI checks are tracked in
     [issue #28](https://github.com/stampbot/extra-codeowners/issues/28). Do not
     deploy, mirror, or redistribute an image from these partial results.
 
@@ -25,15 +26,20 @@ Run these commands on Linux from a previously reviewed checkout. Don't use code
 from the candidate you are inspecting. The commands need Python 3.12 or newer;
 the content verifier uses no third-party Python packages.
 
-Keep the reviewed checkout read-only. Run the networked release commands with
-only a GitHub read token. Then remove that token and disable network access
-before you run the archive parser as a dedicated unprivileged user. Give the
-parser a volume with at least 2 GiB free and a filesystem quota.
+Keep the reviewed checkout read-only. Run the networked release commands as a
+dedicated verifier user with a private workspace and only a GitHub read token.
+Do not run untrusted processes under that operating-system identity. Then
+remove the token and disable network access before you run the archive parser.
+Give the parser a volume with at least 2 GiB free and a filesystem quota.
 
-The repository pins GitHub CLI 2.96.0 in `mise.toml`. Do not substitute GitHub
-CLI 2.92.0 or older:
+The repository pins GitHub CLI 2.96.0 and Cosign 3.0.6 in `mise.toml`. Do not
+substitute GitHub CLI 2.92.0 or older:
 [GHSA-8xvp-7hj6-mcj9][gh-cli-advisory] affects attestation and release
 verification and can expose the CLI token.
+
+Do not substitute Cosign 3.0.3 or older. Those releases are affected by
+[GHSA-whqx-f9j3-ch6m][cosign-advisory], which can accept a Rekor entry that
+doesn't describe the artifact under some trust-root configurations.
 
 Before you remove write access from the checkout, install its reviewed tools
 from that directory:
@@ -42,9 +48,10 @@ from that directory:
 cd -- /opt/extra-codeowners-verifier
 mise install
 mise exec -- gh version
+mise exec -- cosign version
 ```
 
-The version command must report GitHub CLI 2.96.0.
+The commands must report GitHub CLI 2.96.0 and Cosign 3.0.6.
 
 Obtain the canonical release-controller manifest and its SHA-256 through an
 independent trusted path. The project does not produce that final manifest
@@ -88,6 +95,7 @@ RELEASE_MANIFEST='/mnt/trusted-release/release-manifest.json'
 RELEASE_MANIFEST_SHA256='REPLACE_WITH_64_LOWERCASE_HEX_CHARACTERS'
 AUTH_WORK="${HOME}/extra-codeowners-release-authentication"
 AUTH_CACHE="${AUTH_WORK}/cache"
+COSIGN_HOME="${AUTH_WORK}/cosign-home"
 AUTH_SUMMARY="${AUTH_WORK}/authenticated-github-release.json"
 AUTH_SUMMARY_TMP="${AUTH_SUMMARY}.tmp"
 WORKFLOW_SUMMARY="${AUTH_WORK}/authenticated-release-workflow.json"
@@ -97,17 +105,21 @@ ACQUISITION_SUMMARY="${AUTH_WORK}/asset-acquisition.json"
 ACQUISITION_SUMMARY_TMP="${ACQUISITION_SUMMARY}.tmp"
 PROVENANCE_SUMMARY="${AUTH_WORK}/authenticated-actions-provenance.json"
 PROVENANCE_SUMMARY_TMP="${PROVENANCE_SUMMARY}.tmp"
-PROVENANCE_ASSET_NAME='REPLACE_WITH_ONE_ATTESTED_ASSET_NAME'
+SIGNATURE_SUMMARY="${AUTH_WORK}/authenticated-blob-signature.json"
+SIGNATURE_SUMMARY_TMP="${SIGNATURE_SUMMARY}.tmp"
+VERIFIED_ASSET_NAME='REPLACE_WITH_ONE_ATTESTED_AND_SIGNED_ASSET_NAME'
 
 test ! -e "$AUTH_WORK"
 mkdir -m 0700 -- "$AUTH_WORK"
 mkdir -m 0700 -- "$AUTH_CACHE"
+mkdir -m 0700 -- "$COSIGN_HOME"
 test ! -e "$AUTH_SUMMARY"
 test ! -e "$WORKFLOW_SUMMARY"
 test ! -e "$ASSET_ROOT"
 test ! -e "$ACQUISITION_SUMMARY"
 test ! -e "$PROVENANCE_SUMMARY"
-trap 'rm -f -- "$AUTH_SUMMARY_TMP" "$WORKFLOW_SUMMARY_TMP" "$ACQUISITION_SUMMARY_TMP" "$PROVENANCE_SUMMARY_TMP"; unset GH_TOKEN GITHUB_TOKEN' EXIT
+test ! -e "$SIGNATURE_SUMMARY"
+trap 'rm -f -- "$AUTH_SUMMARY_TMP" "$WORKFLOW_SUMMARY_TMP" "$ACQUISITION_SUMMARY_TMP" "$PROVENANCE_SUMMARY_TMP" "$SIGNATURE_SUMMARY_TMP"; unset GH_TOKEN GITHUB_TOKEN' EXIT
 
 cd -- "$VERIFIER_CHECKOUT"
 XDG_CACHE_HOME="$AUTH_CACHE" \
@@ -151,11 +163,25 @@ XDG_CACHE_HOME="$AUTH_CACHE" \
   --acquisition-record "$ACQUISITION_SUMMARY" \
   --acquisition-record-sha256 "$ACQUISITION_SUMMARY_SHA256" \
   --asset-root "$ASSET_ROOT" \
-  --asset-name "$PROVENANCE_ASSET_NAME" \
+  --asset-name "$VERIFIED_ASSET_NAME" \
   > "$PROVENANCE_SUMMARY_TMP"
 
 mv -- "$PROVENANCE_SUMMARY_TMP" "$PROVENANCE_SUMMARY"
 unset GH_TOKEN GITHUB_TOKEN
+
+mise exec -- python -I -B .github/scripts/verify_blob_signature.py \
+  --manifest "$RELEASE_MANIFEST" \
+  --manifest-sha256 "$RELEASE_MANIFEST_SHA256" \
+  --authenticated-workflow-record "$WORKFLOW_SUMMARY" \
+  --authenticated-workflow-record-sha256 "$WORKFLOW_SUMMARY_SHA256" \
+  --acquisition-record "$ACQUISITION_SUMMARY" \
+  --acquisition-record-sha256 "$ACQUISITION_SUMMARY_SHA256" \
+  --asset-root "$ASSET_ROOT" \
+  --asset-name "$VERIFIED_ASSET_NAME" \
+  --cosign-home "$COSIGN_HOME" \
+  > "$SIGNATURE_SUMMARY_TMP"
+
+mv -- "$SIGNATURE_SUMMARY_TMP" "$SIGNATURE_SUMMARY"
 trap - EXIT
 ```
 
@@ -174,33 +200,45 @@ The acquisition command then rechecked the release identity, downloaded every
 asset by database ID, and matched each local file's size and SHA-256 before it
 exposed `ASSET_ROOT`.
 
-The provenance command finally required the selected file in a
+The provenance command required the selected file in a
 GitHub-verified SLSA statement signed by the exact tagged workflow, source
 commit, run ID, and run attempt. Choose an asset that the release workflow
-passes to `actions/attest-build-provenance`; the current workflow attests its
-wheel, source distribution, and chart package. The final release policy has
-not decided which of those files are mandatory. Run the command once for each
-file your reviewed test policy selects, using a separate output record.
+passes to both `actions/attest-build-provenance` and `cosign sign-blob`; the
+current workflow does that for its wheel, source distribution, and chart
+package.
 
-The private cache keeps Sigstore trust metadata managed through The Update
-Framework (TUF) separate from other `gh` commands. A stale or invalid cache
-makes verification fail; don't bypass that failure by supplying an unreviewed
-trust root.
+The blob-signature command then verified the selected bytes against the exact
+`VERIFIED_ASSET_NAME.sigstore.json` companion. Cosign checked the public
+Sigstore trust chain and transparency proof. The Python verifier separately
+matched the certificate's repository IDs and run-attempt URL, then checked the
+canonical Rekor body.
 
-Read the
-[authenticated GitHub release
-record](../reference/authenticated-github-release-record.md),
-[authenticated release workflow
-record](../reference/authenticated-release-workflow-record.md), and
-[asset acquisition record](../reference/authenticated-release-asset-acquisition.md),
-and [authenticated Actions provenance
-record](../reference/authenticated-actions-build-provenance.md)
-for the output fields, permissions, limits, and non-claims.
+The final release policy has not decided which files are mandatory. Run both
+commands once for each file your reviewed test policy selects, using separate
+output records.
+
+`AUTH_CACHE` keeps GitHub CLI's verification cache private. `COSIGN_HOME` keeps
+Sigstore trust metadata managed through The Update Framework (TUF) separate
+from the operator's normal home directory. A stale or invalid cache makes
+verification fail; don't bypass that failure with an unreviewed trust root or
+an insecure Cosign flag.
+
+Read the [authenticated GitHub release
+record](../reference/authenticated-github-release-record.md), [authenticated
+release workflow
+record](../reference/authenticated-release-workflow-record.md), [asset
+acquisition
+record](../reference/authenticated-release-asset-acquisition.md),
+[authenticated Actions provenance
+record](../reference/authenticated-actions-build-provenance.md), and
+[authenticated blob-signature
+record](../reference/authenticated-blob-signature.md) for the output fields,
+permissions, limits, and non-claims.
 
 The example removes `GH_TOKEN` and `GITHUB_TOKEN` before it exits. The
-remaining blob-signature, OCI, final asset-policy, and trusted-handoff checks
-do not exist yet. Stop here unless you already have the other trusted identity
-values from a separately reviewed test fixture.
+remaining OCI, final asset-policy, and trusted-handoff checks do not exist yet.
+Stop here unless you already have the other trusted identity values from a
+separately reviewed test fixture.
 
 ## Verify the archive content
 
@@ -289,3 +327,4 @@ Read the
 for the exact envelope, resource limits, and remaining authentication work.
 
 [gh-cli-advisory]: https://github.com/cli/cli/security/advisories/GHSA-8xvp-7hj6-mcj9
+[cosign-advisory]: https://github.com/sigstore/cosign/security/advisories/GHSA-whqx-f9j3-ch6m

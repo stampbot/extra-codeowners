@@ -168,6 +168,7 @@ COPY .github/scripts/acquire_github_release_assets.py \
      .github/scripts/release_controller.py \
      .github/scripts/recipient_evidence.py \
      .github/scripts/verify_actions_build_provenance.py \
+     .github/scripts/verify_blob_signature.py \
      .github/scripts/verify_github_release.py \
      .github/scripts/verify_release_workflow.py \
      .github/scripts/release_readiness.py \

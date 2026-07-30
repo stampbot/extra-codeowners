@@ -485,10 +485,11 @@ privileged job unreachable. The repository also contains a dormant release
 controller and publication API adapter. Its GitHub-read-only pieces include an
 immutable-release preflight, authenticated GitHub release verifier, tagged
 workflow verifier, release asset acquirer, and single-file Actions provenance
-verifier. The provenance verifier joins an acquired file's exact digest to the
-tagged workflow's certificate, SLSA statement, and run attempt. It does not
-choose the final asset policy or verify blob signatures or OCI evidence. No
-workflow connects these commands or supplies their tokens.
+and Sigstore signature verifiers. The per-file verifiers join an acquired
+file's exact digest to the tagged workflow's certificate, run attempt, SLSA
+statement, and Sigstore bundle. Neither chooses the final asset policy or
+verifies OCI evidence. No workflow connects these commands or supplies their
+tokens.
 
 Six issues define the first supported release boundary:
 
