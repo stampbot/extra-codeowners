@@ -551,6 +551,79 @@ class GitHubCLI:
         )
         return strict_json(raw, "GitHub release-verification response")
 
+    def verify_attestation(
+        self,
+        artifact: Path,
+        *,
+        repository: str,
+        certificate_identity: str,
+        signer_digest: str,
+        source_digest: str,
+        source_ref: str,
+        predicate_type: str,
+        limit: int,
+    ) -> object:
+        """Verify bounded GitHub-hosted provenance for one local artifact."""
+
+        if not artifact.is_absolute():
+            raise VerificationError("GitHub attestation artifact path must be absolute")
+        if REPOSITORY.fullmatch(repository) is None:
+            raise VerificationError("GitHub attestation repository is invalid")
+        if (
+            not isinstance(certificate_identity, str)
+            or not certificate_identity.startswith(f"https://github.com/{repository}/")
+            or len(certificate_identity.encode("utf-8")) > 1024
+        ):
+            raise VerificationError("GitHub attestation certificate identity is invalid")
+        if HEX40.fullmatch(signer_digest) is None or HEX40.fullmatch(source_digest) is None:
+            raise VerificationError("GitHub attestation source digest is invalid")
+        if (
+            not isinstance(source_ref, str)
+            or not source_ref.startswith("refs/")
+            or len(source_ref.encode("utf-8")) > 1024
+        ):
+            raise VerificationError("GitHub attestation source reference is invalid")
+        if (
+            not isinstance(predicate_type, str)
+            or not predicate_type.startswith("https://")
+            or len(predicate_type.encode("utf-8")) > 1024
+        ):
+            raise VerificationError("GitHub attestation predicate type is invalid")
+        if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 30:
+            raise VerificationError("GitHub attestation result limit is invalid")
+        raw = self._run(
+            (
+                "attestation",
+                "verify",
+                str(artifact),
+                "--hostname",
+                "github.com",
+                "--repo",
+                repository,
+                "--cert-identity",
+                certificate_identity,
+                "--cert-oidc-issuer",
+                "https://token.actions.githubusercontent.com",
+                "--deny-self-hosted-runners",
+                "--digest-alg",
+                "sha256",
+                "--limit",
+                str(limit),
+                "--predicate-type",
+                predicate_type,
+                "--signer-digest",
+                signer_digest,
+                "--source-digest",
+                source_digest,
+                "--source-ref",
+                source_ref,
+                "--format",
+                "json",
+            ),
+            authenticated=True,
+        )
+        return strict_json(raw, "GitHub attestation-verification response")
+
     def download_asset(
         self,
         repository: str,

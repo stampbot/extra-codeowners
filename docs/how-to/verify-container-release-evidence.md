@@ -1,10 +1,10 @@
 # Verify container release evidence
 
-Use this procedure to exercise four non-publishing boundaries against a future
+Use this procedure to exercise five non-publishing boundaries against a future
 release candidate. The commands authenticate GitHub's immutable release, check
-the successful tagged workflow and its exact source, acquire the attested
-asset bytes, and inspect one evidence archive. None of these steps authorizes
-publication or deployment.
+the successful tagged workflow and its exact source, acquire the release
+assets, bind one selected file to that workflow's SLSA provenance, and inspect
+one evidence archive. None of these steps authorizes publication or deployment.
 
 !!! danger "There is no supported container release yet"
     Current pull-request artifacts use CI-only names and local image
@@ -12,10 +12,10 @@ publication or deployment.
     recipient verifier rejects those artifacts by design.
 
 !!! warning "The complete producer path is unfinished"
-    A matching successful workflow run does not prove that the workflow
-    produced a particular asset. Local byte binding does not authenticate an
-    OCI platform, signature, or build-provenance statement. The remaining
-    per-asset and OCI checks are tracked in
+    The Actions provenance command checks one selected file; the project has
+    not frozen which files must pass it. Local file provenance does not verify
+    a Cosign blob signature or authenticate an OCI platform, signature, or
+    registry attestation. The remaining policy and OCI checks are tracked in
     [issue #28](https://github.com/stampbot/extra-codeowners/issues/28). Do not
     deploy, mirror, or redistribute an image from these partial results.
 
@@ -95,6 +95,9 @@ WORKFLOW_SUMMARY_TMP="${WORKFLOW_SUMMARY}.tmp"
 ASSET_ROOT="${AUTH_WORK}/assets"
 ACQUISITION_SUMMARY="${AUTH_WORK}/asset-acquisition.json"
 ACQUISITION_SUMMARY_TMP="${ACQUISITION_SUMMARY}.tmp"
+PROVENANCE_SUMMARY="${AUTH_WORK}/authenticated-actions-provenance.json"
+PROVENANCE_SUMMARY_TMP="${PROVENANCE_SUMMARY}.tmp"
+PROVENANCE_ASSET_NAME='REPLACE_WITH_ONE_ATTESTED_ASSET_NAME'
 
 test ! -e "$AUTH_WORK"
 mkdir -m 0700 -- "$AUTH_WORK"
@@ -103,7 +106,8 @@ test ! -e "$AUTH_SUMMARY"
 test ! -e "$WORKFLOW_SUMMARY"
 test ! -e "$ASSET_ROOT"
 test ! -e "$ACQUISITION_SUMMARY"
-trap 'rm -f -- "$AUTH_SUMMARY_TMP" "$WORKFLOW_SUMMARY_TMP" "$ACQUISITION_SUMMARY_TMP"; unset GH_TOKEN GITHUB_TOKEN' EXIT
+test ! -e "$PROVENANCE_SUMMARY"
+trap 'rm -f -- "$AUTH_SUMMARY_TMP" "$WORKFLOW_SUMMARY_TMP" "$ACQUISITION_SUMMARY_TMP" "$PROVENANCE_SUMMARY_TMP"; unset GH_TOKEN GITHUB_TOKEN' EXIT
 
 cd -- "$VERIFIER_CHECKOUT"
 XDG_CACHE_HOME="$AUTH_CACHE" \
@@ -124,6 +128,7 @@ XDG_CACHE_HOME="$AUTH_CACHE" \
   > "$WORKFLOW_SUMMARY_TMP"
 
 mv -- "$WORKFLOW_SUMMARY_TMP" "$WORKFLOW_SUMMARY"
+WORKFLOW_SUMMARY_SHA256="$(sha256sum -- "$WORKFLOW_SUMMARY" | cut -d ' ' -f 1)"
 
 XDG_CACHE_HOME="$AUTH_CACHE" \
   mise exec -- python -I -B .github/scripts/acquire_github_release_assets.py \
@@ -135,6 +140,21 @@ XDG_CACHE_HOME="$AUTH_CACHE" \
   > "$ACQUISITION_SUMMARY_TMP"
 
 mv -- "$ACQUISITION_SUMMARY_TMP" "$ACQUISITION_SUMMARY"
+ACQUISITION_SUMMARY_SHA256="$(sha256sum -- "$ACQUISITION_SUMMARY" | cut -d ' ' -f 1)"
+
+XDG_CACHE_HOME="$AUTH_CACHE" \
+  mise exec -- python -I -B .github/scripts/verify_actions_build_provenance.py \
+  --manifest "$RELEASE_MANIFEST" \
+  --manifest-sha256 "$RELEASE_MANIFEST_SHA256" \
+  --authenticated-workflow-record "$WORKFLOW_SUMMARY" \
+  --authenticated-workflow-record-sha256 "$WORKFLOW_SUMMARY_SHA256" \
+  --acquisition-record "$ACQUISITION_SUMMARY" \
+  --acquisition-record-sha256 "$ACQUISITION_SUMMARY_SHA256" \
+  --asset-root "$ASSET_ROOT" \
+  --asset-name "$PROVENANCE_ASSET_NAME" \
+  > "$PROVENANCE_SUMMARY_TMP"
+
+mv -- "$PROVENANCE_SUMMARY_TMP" "$PROVENANCE_SUMMARY"
 unset GH_TOKEN GITHUB_TOKEN
 trap - EXIT
 ```
@@ -154,6 +174,14 @@ The acquisition command then rechecked the release identity, downloaded every
 asset by database ID, and matched each local file's size and SHA-256 before it
 exposed `ASSET_ROOT`.
 
+The provenance command finally required the selected file in a
+GitHub-verified SLSA statement signed by the exact tagged workflow, source
+commit, run ID, and run attempt. Choose an asset that the release workflow
+passes to `actions/attest-build-provenance`; the current workflow attests its
+wheel, source distribution, and chart package. The final release policy has
+not decided which of those files are mandatory. Run the command once for each
+file your reviewed test policy selects, using a separate output record.
+
 The private cache keeps Sigstore trust metadata managed through The Update
 Framework (TUF) separate from other `gh` commands. A stale or invalid cache
 makes verification fail; don't bypass that failure by supplying an unreviewed
@@ -164,13 +192,15 @@ Read the
 record](../reference/authenticated-github-release-record.md),
 [authenticated release workflow
 record](../reference/authenticated-release-workflow-record.md), and
-[asset acquisition record](../reference/authenticated-release-asset-acquisition.md)
+[asset acquisition record](../reference/authenticated-release-asset-acquisition.md),
+and [authenticated Actions provenance
+record](../reference/authenticated-actions-build-provenance.md)
 for the output fields, permissions, limits, and non-claims.
 
 The example removes `GH_TOKEN` and `GITHUB_TOKEN` before it exits. The
-remaining per-asset provenance, signer, and OCI checks do not exist yet. Stop
-here unless you already have the other trusted identity values from a
-separately reviewed test fixture.
+remaining blob-signature, OCI, final asset-policy, and trusted-handoff checks
+do not exist yet. Stop here unless you already have the other trusted identity
+values from a separately reviewed test fixture.
 
 ## Verify the archive content
 

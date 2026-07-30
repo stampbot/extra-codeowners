@@ -484,10 +484,11 @@ signature, and GitHub-release jobs. An unconditional blocker keeps every
 privileged job unreachable. The repository also contains a dormant release
 controller and publication API adapter. Its GitHub-read-only pieces include an
 immutable-release preflight, authenticated GitHub release verifier, tagged
-workflow verifier, and release asset acquirer. The workflow verifier binds a
-successful tag-triggered run to the exact workflow bytes at its target commit;
-it does not prove that the run produced an asset. No workflow connects these
-commands or supplies their tokens.
+workflow verifier, release asset acquirer, and single-file Actions provenance
+verifier. The provenance verifier joins an acquired file's exact digest to the
+tagged workflow's certificate, SLSA statement, and run attempt. It does not
+choose the final asset policy or verify blob signatures or OCI evidence. No
+workflow connects these commands or supplies their tokens.
 
 Six issues define the first supported release boundary:
 

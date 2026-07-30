@@ -76,6 +76,7 @@ nav:
       - Authenticated GitHub release record: reference/authenticated-github-release-record.md
       - Authenticated release workflow record: reference/authenticated-release-workflow-record.md
       - Authenticated release asset acquisition: reference/authenticated-release-asset-acquisition.md
+      - Authenticated Actions build provenance: reference/authenticated-actions-build-provenance.md
       - Immutable release controller contract: reference/immutable-release-controller.md
       - GitHub release API adapter contract: reference/github-release-api-adapter.md
       - Immutable-release preflight contract: reference/immutable-release-preflight.md

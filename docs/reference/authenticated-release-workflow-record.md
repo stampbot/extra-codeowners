@@ -163,7 +163,9 @@ failure.
 This command does not:
 
 - prove that the checked workflow produced a release asset
-- verify an Actions build-provenance attestation or its signer
+- verify an Actions build-provenance attestation or its signer; use the
+  separate [Actions provenance
+  verifier](authenticated-actions-build-provenance.md) after asset acquisition
 - verify a Sigstore signature, software bill of materials (SBOM), provenance,
   or evidence attestation for an asset or OCI digest
 - download or parse a release asset
