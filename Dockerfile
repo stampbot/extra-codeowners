@@ -168,6 +168,7 @@ COPY .github/scripts/acquire_github_release_assets.py \
      .github/scripts/release_controller.py \
      .github/scripts/recipient_evidence.py \
      .github/scripts/verify_github_release.py \
+     .github/scripts/verify_release_workflow.py \
      .github/scripts/release_readiness.py \
      .github/scripts/release_spine.py \
      .github/scripts/run_evidence_parser.py \

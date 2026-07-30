@@ -1,11 +1,10 @@
 # Verify container release evidence
 
-Use this procedure to exercise three non-publishing boundaries against a
-future release candidate. The first command authenticates GitHub's immutable
-release.
-The second downloads the exact attested asset bytes. The last command proves
-that one evidence archive is structurally complete and internally consistent
-with identity values you obtained elsewhere.
+Use this procedure to exercise four non-publishing boundaries against a future
+release candidate. The commands authenticate GitHub's immutable release, check
+the successful tagged workflow and its exact source, acquire the attested
+asset bytes, and inspect one evidence archive. None of these steps authorizes
+publication or deployment.
 
 !!! danger "There is no supported container release yet"
     Current pull-request artifacts use CI-only names and local image
@@ -13,9 +12,10 @@ with identity values you obtained elsewhere.
     recipient verifier rejects those artifacts by design.
 
 !!! warning "The complete producer path is unfinished"
-    GitHub release authentication does not prove which workflow built an
-    asset. Local byte binding does not authenticate an OCI platform, signature,
-    or build provenance. The remaining workflow and OCI checks are tracked in
+    A matching successful workflow run does not prove that the workflow
+    produced a particular asset. Local byte binding does not authenticate an
+    OCI platform, signature, or build-provenance statement. The remaining
+    per-asset and OCI checks are tracked in
     [issue #28](https://github.com/stampbot/extra-codeowners/issues/28). Do not
     deploy, mirror, or redistribute an image from these partial results.
 
@@ -54,8 +54,8 @@ establish the expected asset policy.
 GitHub CLI 2.96.0 requires an authenticated session even when the release is
 public. Set `GH_TOKEN` to the least-privileged token that can read the target
 repository. For a private repository, limit it to that repository with
-**Contents: read** and **Attestations: read**. Don't put the token in a command
-argument.
+**Actions: read**, **Contents: read**, and **Attestations: read**. Don't put the
+token in a command argument.
 
 The acquisition command creates a flat, mode-`0700` asset directory beneath
 the private authentication workspace. Each file uses its GitHub release asset
@@ -90,6 +90,8 @@ AUTH_WORK="${HOME}/extra-codeowners-release-authentication"
 AUTH_CACHE="${AUTH_WORK}/cache"
 AUTH_SUMMARY="${AUTH_WORK}/authenticated-github-release.json"
 AUTH_SUMMARY_TMP="${AUTH_SUMMARY}.tmp"
+WORKFLOW_SUMMARY="${AUTH_WORK}/authenticated-release-workflow.json"
+WORKFLOW_SUMMARY_TMP="${WORKFLOW_SUMMARY}.tmp"
 ASSET_ROOT="${AUTH_WORK}/assets"
 ACQUISITION_SUMMARY="${AUTH_WORK}/asset-acquisition.json"
 ACQUISITION_SUMMARY_TMP="${ACQUISITION_SUMMARY}.tmp"
@@ -98,9 +100,10 @@ test ! -e "$AUTH_WORK"
 mkdir -m 0700 -- "$AUTH_WORK"
 mkdir -m 0700 -- "$AUTH_CACHE"
 test ! -e "$AUTH_SUMMARY"
+test ! -e "$WORKFLOW_SUMMARY"
 test ! -e "$ASSET_ROOT"
 test ! -e "$ACQUISITION_SUMMARY"
-trap 'rm -f -- "$AUTH_SUMMARY_TMP" "$ACQUISITION_SUMMARY_TMP"; unset GH_TOKEN GITHUB_TOKEN' EXIT
+trap 'rm -f -- "$AUTH_SUMMARY_TMP" "$WORKFLOW_SUMMARY_TMP" "$ACQUISITION_SUMMARY_TMP"; unset GH_TOKEN GITHUB_TOKEN' EXIT
 
 cd -- "$VERIFIER_CHECKOUT"
 XDG_CACHE_HOME="$AUTH_CACHE" \
@@ -111,6 +114,16 @@ XDG_CACHE_HOME="$AUTH_CACHE" \
 
 mv -- "$AUTH_SUMMARY_TMP" "$AUTH_SUMMARY"
 AUTH_SUMMARY_SHA256="$(sha256sum -- "$AUTH_SUMMARY" | cut -d ' ' -f 1)"
+
+XDG_CACHE_HOME="$AUTH_CACHE" \
+  mise exec -- python -I -B .github/scripts/verify_release_workflow.py \
+  --manifest "$RELEASE_MANIFEST" \
+  --manifest-sha256 "$RELEASE_MANIFEST_SHA256" \
+  --authenticated-release-record "$AUTH_SUMMARY" \
+  --authenticated-release-record-sha256 "$AUTH_SUMMARY_SHA256" \
+  > "$WORKFLOW_SUMMARY_TMP"
+
+mv -- "$WORKFLOW_SUMMARY_TMP" "$WORKFLOW_SUMMARY"
 
 XDG_CACHE_HOME="$AUTH_CACHE" \
   mise exec -- python -I -B .github/scripts/acquire_github_release_assets.py \
@@ -129,9 +142,17 @@ trap - EXIT
 Exit status `0` means GitHub reports the exact repository ID, tag target,
 immutable release, and remote asset set from the reviewed manifest. It also
 means GitHub CLI cryptographically verified the release attestation and the
-verifier matched its statement to that same tag and asset set. The acquisition
-command then rechecked that identity, downloaded every asset by database ID,
-and matched each local file's size and SHA-256 before it exposed `ASSET_ROOT`.
+verifier matched its statement to that same tag and asset set.
+
+The workflow command also confirmed that GitHub reports the manifest's run as
+a successful tag-triggered run at the target commit. It read the workflow file
+at that immutable commit and recorded the file's Git blob SHA-1 and independent
+SHA-256. This establishes the run and workflow-file identity; it does not prove
+that the workflow produced any listed asset.
+
+The acquisition command then rechecked the release identity, downloaded every
+asset by database ID, and matched each local file's size and SHA-256 before it
+exposed `ASSET_ROOT`.
 
 The private cache keeps Sigstore trust metadata managed through The Update
 Framework (TUF) separate from other `gh` commands. A stale or invalid cache
@@ -139,15 +160,17 @@ makes verification fail; don't bypass that failure by supplying an unreviewed
 trust root.
 
 Read the
-[authenticated GitHub release record](../reference/authenticated-github-release-record.md)
-and
+[authenticated GitHub release
+record](../reference/authenticated-github-release-record.md),
+[authenticated release workflow
+record](../reference/authenticated-release-workflow-record.md), and
 [asset acquisition record](../reference/authenticated-release-asset-acquisition.md)
 for the output fields, permissions, limits, and non-claims.
 
 The example removes `GH_TOKEN` and `GITHUB_TOKEN` before it exits. The
-remaining OCI and workflow checks do not exist yet. Stop here unless you
-already have the other trusted identity values from a separately reviewed test
-fixture.
+remaining per-asset provenance, signer, and OCI checks do not exist yet. Stop
+here unless you already have the other trusted identity values from a
+separately reviewed test fixture.
 
 ## Verify the archive content
 

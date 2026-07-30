@@ -33,9 +33,11 @@ the complete release wire format. The repository has a bounded verifier for
 the schema-9 predicate, gzip and tar envelope, `MANIFEST.json`, checksums, and
 retained files. A separate read-only verifier authenticates an immutable
 GitHub release and its exact asset set. Another command downloads those assets
-and binds their local bytes to that authenticated inventory. Neither command
-runs in a workflow. The remaining format work covers the release-workflow
-identity, OCI attestations, and the SBOM and provenance predicate contracts.
+and binds their local bytes to that authenticated inventory. A third verifier
+checks GitHub's successful tag-triggered run and hashes the exact workflow file
+at the tagged commit. None of these commands runs in a workflow. The remaining
+format work must bind individual assets to an authenticated producer and finish
+the OCI, SBOM, and provenance predicate contracts.
 
 CI now gives image and source parsing separate rootless, networkless
 boundaries. A Docker-only process exports the local candidate without opening
@@ -48,8 +50,9 @@ offline.
 That is substantial #28 groundwork, not a supported release path. The tagged
 workflow does not yet transport and attest the image-export handoff, run the
 complete recipient procedure against exact candidate assets, or grant isolated
-signing and publication authority. The current verifier checks unsigned
-content; it does not authenticate a producer.
+signing and publication authority. The workflow verifier authenticates one
+successful run and its workflow bytes, but no current verifier binds those
+facts to an asset producer.
 
 Three open security gates separate today's CI evidence from this release
 contract:
@@ -339,6 +342,26 @@ which can expose a CLI token while verification commands fetch trust material.
 The verifier checks the client version without token environment variables and
 stops before the first GitHub API request when the executable is affected.
 
+## Current release workflow verifier
+
+`.github/scripts/verify_release_workflow.py` accepts the trusted controller
+manifest plus a hash-bound authenticated GitHub release record. It requires the
+manifest's workflow revision to equal the tagged target commit. It then checks
+GitHub's live workflow-run record for the exact repository, owner, run ID,
+successful `push` event, semantic tag, target commit, and workflow path.
+
+The command reads the workflow file at that immutable commit, checks its Git
+blob identity and size, and records an independent SHA-256. It rereads the run
+and file before emitting an
+[authenticated release workflow
+record](authenticated-release-workflow-record.md) with
+`publication_allowed: false`.
+
+This authenticates the reported run and exact workflow source. It does not
+prove that the run produced a particular release asset, verify an Actions
+build-provenance statement, or authenticate a Sigstore signer. No workflow
+invokes it.
+
 ## Current release asset acquirer
 
 `.github/scripts/acquire_github_release_assets.py` accepts the same trusted
@@ -352,11 +375,11 @@ atomically exposes one flat directory. Its
 [acquisition record](authenticated-release-asset-acquisition.md) names every
 local file and states `publication_allowed: false`.
 
-The acquirer treats asset contents as opaque bytes. It does not authenticate
-the release workflow, select an OCI platform, verify OCI signatures or
-attestations, or call the schema-9 content verifier. No workflow invokes it.
-GitHub CLI also does not expose the temporary asset-download redirect to this
-command, so issue #28's redirect-audit criterion remains open.
+The acquirer treats asset contents as opaque bytes. It does not consume the
+workflow record, select an OCI platform, verify OCI signatures or attestations,
+or call the schema-9 content verifier. No workflow invokes it. GitHub CLI also
+does not expose the temporary asset-download redirect to this command, so
+issue #28's redirect-audit criterion remains open.
 
 ## Required archive records
 

@@ -483,8 +483,11 @@ The tagged workflow contains intended image, chart, Python, SBOM, provenance,
 signature, and GitHub-release jobs. An unconditional blocker keeps every
 privileged job unreachable. The repository also contains a dormant release
 controller and publication API adapter. Its GitHub-read-only pieces include an
-immutable-release preflight, authenticated GitHub release verifier, and
-release asset acquirer. No workflow connects them or supplies their tokens.
+immutable-release preflight, authenticated GitHub release verifier, tagged
+workflow verifier, and release asset acquirer. The workflow verifier binds a
+successful tag-triggered run to the exact workflow bytes at its target commit;
+it does not prove that the run produced an asset. No workflow connects these
+commands or supplies their tokens.
 
 Six issues define the first supported release boundary:
 

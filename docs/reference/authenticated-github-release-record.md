@@ -12,7 +12,10 @@ OpenID Connect authority.
 A separate
 [asset acquisition command](authenticated-release-asset-acquisition.md)
 consumes this record and binds downloaded local bytes to the authenticated
-inventory. That command is also unwired from workflows.
+inventory. The
+[release workflow verifier](authenticated-release-workflow-record.md) consumes
+the same record and checks the run and exact workflow file named by the
+manifest. Both commands are unwired from workflows.
 
 ## Trust input
 
@@ -29,8 +32,9 @@ unprivileged verification handoff.
 
 The manifest fixes the repository ID and name, semantic tag, target commit,
 workflow metadata, run ID, and complete asset inventory. This verifier
-authenticates the repository, tag, release, and assets. It does not
-authenticate the manifest's workflow metadata.
+authenticates the repository, tag, release, and assets. The separate workflow
+verifier authenticates the manifest's workflow metadata against live GitHub
+state.
 
 ## Command
 
@@ -181,7 +185,8 @@ This verifier does not:
 
 - download a release asset or compare local bytes with the authenticated
   digest
-- prove which workflow produced an asset
+- authenticate the release workflow; use the separate workflow verifier
+- prove that the checked workflow produced an asset
 - verify an Actions build-provenance attestation
 - verify an Open Container Initiative (OCI) index, platform manifest,
   signature, software bill of materials (SBOM), provenance, or evidence
@@ -191,7 +196,7 @@ This verifier does not:
 - publish, repair, delete, or resume a release.
 
 Issue [#28](https://github.com/stampbot/extra-codeowners/issues/28) tracks the
-missing workflow and OCI authentication steps. Issue
+missing per-asset provenance, signer, and OCI authentication steps. Issue
 [#25](https://github.com/stampbot/extra-codeowners/issues/25) tracks the
 draft-first publication path and repository immutability.
 
