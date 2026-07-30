@@ -570,23 +570,30 @@ def test_unexpected_local_entry_and_special_file_are_rejected(tmp_path: Path) ->
     plan = release_plan()
     root = tmp_path / "root"
     root.mkdir(mode=0o700)
-    retained = []
-    with contextlib.ExitStack() as descriptors:
-        for asset in plan.assets:
-            path = root / asset.name
-            path.write_bytes(ASSET_CONTENT[asset.name])
-            path.chmod(0o600)
-            descriptor = descriptors.enter_context(open_descriptor(path, os.O_RDONLY))
-            retained.append(
-                acquirer.RetainedAsset(
-                    asset,
-                    descriptor,
-                    acquirer._file_identity(os.fstat(descriptor)),
-                )
-            )
-        root_descriptor = descriptors.enter_context(
-            open_descriptor(root, os.O_RDONLY | os.O_DIRECTORY)
-        )
+    for asset in plan.assets:
+        path = root / asset.name
+        path.write_bytes(ASSET_CONTENT[asset.name])
+        path.chmod(0o600)
+
+    assert len(plan.assets) == 2
+    first_asset, second_asset = plan.assets
+    with (
+        open_descriptor(root / first_asset.name, os.O_RDONLY) as first_descriptor,
+        open_descriptor(root / second_asset.name, os.O_RDONLY) as second_descriptor,
+        open_descriptor(root, os.O_RDONLY | os.O_DIRECTORY) as root_descriptor,
+    ):
+        retained = [
+            acquirer.RetainedAsset(
+                first_asset,
+                first_descriptor,
+                acquirer._file_identity(os.fstat(first_descriptor)),
+            ),
+            acquirer.RetainedAsset(
+                second_asset,
+                second_descriptor,
+                acquirer._file_identity(os.fstat(second_descriptor)),
+            ),
+        ]
 
         (root / "unexpected").write_text("no", encoding="utf-8")
         with pytest.raises(acquirer.AcquisitionError, match="unexpected inventory"):
