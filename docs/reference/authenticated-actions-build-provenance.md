@@ -139,7 +139,8 @@ must carry Actions provenance, and it does not:
 - verify a Cosign blob signature or its bundle; use the separate
   [blob-signature verifier](authenticated-blob-signature.md)
 - verify an Open Container Initiative (OCI) index, platform, signature, or
-  registry attestation
+  registry attestation; the separate [OCI index
+  command](authenticated-oci-index.md) authenticates only the signed root index
 - authenticate distribution of the controller manifest or its trusted digest
 - parse a chart, wheel, source distribution, archive, SBOM, or evidence
   predicate

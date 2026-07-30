@@ -35,9 +35,11 @@ retained files. A separate read-only verifier authenticates an immutable
 GitHub release and its exact asset set. Another command downloads those assets
 and binds their local bytes to that authenticated inventory. A third verifier
 checks GitHub's successful tag-triggered run and hashes the exact workflow file
-at the tagged commit. None of these commands runs in a workflow. The remaining
-format work must bind individual assets to an authenticated producer and finish
-the OCI, SBOM, and provenance predicate contracts.
+at the tagged commit. A fourth downloads one digest-addressed GHCR root index
+and locally verifies the current run's exact Cosign signature bundle. None of
+these commands runs in a workflow. The remaining work must bind the trusted
+index digest, select and authenticate both platforms, and finish the OCI SBOM,
+provenance, OpenVEX, and evidence attestation contracts.
 
 CI now gives image and source parsing separate rootless, networkless
 boundaries. A Docker-only process exports the local candidate without opening
@@ -60,7 +62,7 @@ contract:
 | Issue | Work still required |
 | --- | --- |
 | [#18](https://github.com/stampbot/extra-codeowners/issues/18) | Deliver the complete notices and corresponding-source evidence against the exact platform digests, and document how recipients obtain it. |
-| [#28](https://github.com/stampbot/extra-codeowners/issues/28) | Carry the isolated CI handoffs into the tagged candidate pipeline, connect the content verifier to exact candidate assets and authenticated signatures and attestations, and finish the signing and publication path. |
+| [#28](https://github.com/stampbot/extra-codeowners/issues/28) | Carry the isolated CI handoffs into the tagged candidate pipeline, bind the trusted index digest, authenticate both platform manifests and their attestations, connect the content verifier, and finish the signing and publication path. |
 | [#32](https://github.com/stampbot/extra-codeowners/issues/32) | Bind the retained Python selection records and exact wheel digest into the complete release evidence, then bind the installed runtime to that same wheel. |
 
 The raw spine includes an adversarially tested transport verifier. The
@@ -420,8 +422,33 @@ attempt to the authenticated records.
 Success emits an [authenticated blob-signature
 record](authenticated-blob-signature.md) with
 `publication_allowed: false`. The command verifies one file; it does not decide
-which assets must be signed, authenticate an OCI index or platform, or verify
-registry signatures and attestations. No workflow invokes it.
+which assets must be signed or authenticate an OCI platform. The separate
+index command described below handles only the signed root index. No workflow
+invokes either command.
+
+## Current OCI index acquirer
+
+`.github/scripts/acquire_oci_index.py` accepts the trusted manifest, a
+hash-bound workflow record, and an independently trusted root index digest. It
+fetches that exact index from the project's public GHCR repository and checks
+the response media type, length, digest header, and bytes. The client refuses
+redirects and uses only an anonymous pull token.
+
+Cosign downloads the bundles attached to the digest-addressed image. The
+command ignores other predicate types and prior workflow attempts, then
+requires exactly one image-signature bundle from the authenticated attempt. It
+checks the DSSE statement, Fulcio extensions, canonical Rekor body, inclusion
+bounds, and integrated time before Cosign verifies that same local bundle
+against the public Sigstore trust root.
+
+Success atomically retains `index.json` and `signature.sigstore.json` in a
+private directory. It also emits an [authenticated OCI index
+record](authenticated-oci-index.md) with `publication_allowed: false`.
+
+This command doesn't establish where the trusted index digest came from. It
+also doesn't choose a platform, validate the index descriptors, fetch an image
+configuration or layer, or verify any registry attestation. No workflow invokes
+it.
 
 ## Required archive records
 

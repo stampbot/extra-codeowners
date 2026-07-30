@@ -154,6 +154,7 @@ RUN apk add --no-cache \
 
 COPY .github/dependabot.yml ./.github/dependabot.yml
 COPY .github/scripts/acquire_github_release_assets.py \
+     .github/scripts/acquire_oci_index.py \
      .github/scripts/build_python_distribution_spine.py \
      .github/scripts/build_release_spine.py \
      .github/scripts/container_evidence.py \

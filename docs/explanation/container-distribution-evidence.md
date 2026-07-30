@@ -110,10 +110,11 @@ The content verifier deliberately stops before producer authentication.
 Separate read-only commands now authenticate GitHub's immutable release, check
 the successful tagged run and exact workflow bytes, acquire the release files,
 bind one selected file to GitHub-verified Actions provenance from that run
-attempt, and verify its exact Sigstore signature bundle. The final asset set
-still needs a reviewed policy. OCI platform selection, OCI signatures and
-attestations, and the handoff into the content verifier remain open under
-issue #28.
+attempt, verify its exact Sigstore signature bundle, and authenticate one
+digest-addressed GHCR root index plus the current run's image signature. The
+final asset set still needs a reviewed policy. The trusted index-digest handoff,
+platform selection, registry attestations, and handoff into the content
+verifier remain open under issue #28.
 
 The separate [native wheelhouse build](native-wheelhouse.md) creates
 reproducible replacements for CFFI, Psycopg C, and Pydantic Core. The
