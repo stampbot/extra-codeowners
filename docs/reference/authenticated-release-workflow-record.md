@@ -166,15 +166,18 @@ This command does not:
 - verify an Actions build-provenance attestation or its signer; use the
   separate [Actions provenance
   verifier](authenticated-actions-build-provenance.md) after asset acquisition
-- verify a Sigstore signature, software bill of materials (SBOM), provenance,
-  or evidence attestation for an asset or OCI digest
+- verify a Sigstore blob signature; use the separate
+  [blob-signature verifier](authenticated-blob-signature.md) after asset
+  acquisition
+- verify a software bill of materials (SBOM), provenance, or evidence
+  attestation for an OCI digest
 - download or parse a release asset
 - authenticate a trusted distribution path for the controller manifest
 - make a workflow rerun impossible after verification
 - publish, sign, attest, repair, delete, dispatch, cancel, or rerun anything.
 
 Issue [#28](https://github.com/stampbot/extra-codeowners/issues/28) tracks the
-remaining per-asset provenance, signer, OCI, and privileged handoff work.
+remaining per-asset policy, OCI, and privileged handoff work.
 
 [contents-api]: https://docs.github.com/en/rest/repos/contents#get-repository-content
 [workflow-run-api]: https://docs.github.com/en/rest/actions/workflow-runs#get-a-workflow-run

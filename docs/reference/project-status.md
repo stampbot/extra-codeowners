@@ -102,6 +102,10 @@ There are also parts of a future privileged release path:
   [tagged release workflow verifier](authenticated-release-workflow-record.md)
 - a GitHub-read-only
   [authenticated asset acquirer](authenticated-release-asset-acquisition.md)
+- a read-only
+  [Actions provenance verifier](authenticated-actions-build-provenance.md)
+- a read-only
+  [Sigstore blob-signature verifier](authenticated-blob-signature.md)
 - an offline [release controller](immutable-release-controller.md)
 - a [GitHub release API adapter](github-release-api-adapter.md)
 - a read-only [immutable-release preflight](immutable-release-preflight.md)

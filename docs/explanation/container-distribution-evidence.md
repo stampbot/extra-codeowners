@@ -17,7 +17,7 @@ publish a supported container image yet.
 | Public `main` image | Disabled; the publication job has been removed. |
 | Tagged release | Blocked before any job can publish an image, chart, Python package, or GitHub release. |
 | Source closure | Every current native-wheel owner is closed on both platforms. The derived source-completeness ledger is complete, but distribution approval remains false. |
-| Recipient verification | Source contains a bounded schema-9 content verifier, an authenticated immutable-release verifier, an exact-byte asset acquirer, and a single-file Actions provenance verifier. No workflow connects them. Final asset policy, blob signatures, OCI verification, and exact-candidate integration remain unfinished. |
+| Recipient verification | Source contains a bounded schema-9 content verifier, an authenticated immutable-release verifier, an exact-byte asset acquirer, a single-file Actions provenance verifier, and a single-file Sigstore signature verifier. No workflow connects them. Final asset policy, OCI verification, and exact-candidate integration remain unfinished. |
 
 The release workflow can still validate source, build proof, and scan a
 candidate with repository-read permission. A separate job then fails before
@@ -109,10 +109,11 @@ source tar contains the license bytes retained in the archive.
 The content verifier deliberately stops before producer authentication.
 Separate read-only commands now authenticate GitHub's immutable release, check
 the successful tagged run and exact workflow bytes, acquire the release files,
-and bind one selected file to GitHub-verified Actions provenance from that run
-attempt. The final asset set still needs a reviewed policy. Blob signatures,
-OCI platform selection, OCI signatures and attestations, and the handoff into
-the content verifier also remain open under issue #28.
+bind one selected file to GitHub-verified Actions provenance from that run
+attempt, and verify its exact Sigstore signature bundle. The final asset set
+still needs a reviewed policy. OCI platform selection, OCI signatures and
+attestations, and the handoff into the content verifier remain open under
+issue #28.
 
 The separate [native wheelhouse build](native-wheelhouse.md) creates
 reproducible replacements for CFFI, Psycopg C, and Pydantic Core. The
@@ -637,8 +638,8 @@ boundaries from issue
 [#28](https://github.com/stampbot/extra-codeowners/issues/28). It does not wire
 those dormant materials into a supported release. The unsigned schema-9
 content format, immutable-release verifier, exact-byte asset acquirer, and
-single-file Actions provenance verifier now exist. Their workflow handoffs,
-final asset policy, blob-signature and OCI contracts, runnable
+single-file Actions provenance and Sigstore signature verifiers now exist.
+Their workflow handoffs, final asset policy, OCI contracts, runnable
 release-candidate verification, and isolated signing and publication path
 remain outstanding. The current collector has no publication authority, and
 the release workflow still blocks every supported publication.

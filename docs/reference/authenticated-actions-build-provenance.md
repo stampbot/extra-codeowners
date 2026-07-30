@@ -136,7 +136,8 @@ changes are hard failures. The command writes no partial success record.
 This verifier checks one selected file. It does not decide which release assets
 must carry Actions provenance, and it does not:
 
-- verify a Cosign blob signature or its bundle
+- verify a Cosign blob signature or its bundle; use the separate
+  [blob-signature verifier](authenticated-blob-signature.md)
 - verify an Open Container Initiative (OCI) index, platform, signature, or
   registry attestation
 - authenticate distribution of the controller manifest or its trusted digest
@@ -147,4 +148,4 @@ must carry Actions provenance, and it does not:
 - publish, sign, attest, dispatch, cancel, rerun, repair, or delete anything.
 
 Issue [#28](https://github.com/stampbot/extra-codeowners/issues/28) tracks the
-remaining asset-policy, blob-signature, OCI, and trusted-handoff work.
+remaining asset-policy, OCI, and trusted-handoff work.
