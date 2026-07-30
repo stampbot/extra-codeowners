@@ -153,7 +153,8 @@ RUN apk add --no-cache \
     openssh-keygen=10.3_p1-r0
 
 COPY .github/dependabot.yml ./.github/dependabot.yml
-COPY .github/scripts/build_python_distribution_spine.py \
+COPY .github/scripts/acquire_github_release_assets.py \
+     .github/scripts/build_python_distribution_spine.py \
      .github/scripts/build_release_spine.py \
      .github/scripts/container_evidence.py \
      .github/scripts/container_source_plan.py \

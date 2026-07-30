@@ -5,6 +5,7 @@
 !.github/dependabot.yml
 !.github/scripts/
 .github/scripts/*
+!.github/scripts/acquire_github_release_assets.py
 !.github/scripts/build_python_artifacts.py
 !.github/scripts/build_python_distribution_spine.py
 !.github/scripts/build_release_spine.py

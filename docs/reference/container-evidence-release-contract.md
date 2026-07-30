@@ -32,9 +32,10 @@ Issue [#28](https://github.com/stampbot/extra-codeowners/issues/28) still owns
 the complete release wire format. The repository has a bounded verifier for
 the schema-9 predicate, gzip and tar envelope, `MANIFEST.json`, checksums, and
 retained files. A separate read-only verifier authenticates an immutable
-GitHub release and its exact asset set. The remaining format work covers the
-release-workflow identity, local asset bytes, OCI attestations, and the SBOM
-and provenance predicate contracts.
+GitHub release and its exact asset set. Another command downloads those assets
+and binds their local bytes to that authenticated inventory. Neither command
+runs in a workflow. The remaining format work covers the release-workflow
+identity, OCI attestations, and the SBOM and provenance predicate contracts.
 
 CI now gives image and source parsing separate rootless, networkless
 boundaries. A Docker-only process exports the local candidate without opening
@@ -337,6 +338,25 @@ Versions through 2.92.0 are affected by
 which can expose a CLI token while verification commands fetch trust material.
 The verifier checks the client version without token environment variables and
 stops before the first GitHub API request when the executable is affected.
+
+## Current release asset acquirer
+
+`.github/scripts/acquire_github_release_assets.py` accepts the same trusted
+manifest plus a hash-bound authenticated release record. It rechecks the live
+repository, tag, release ID, and asset set. It then downloads each asset by
+database ID into a create-once private file, enforces the manifest's byte
+limit, and checks the exact size and SHA-256.
+
+After a final GitHub reread, the command rehashes every retained descriptor and
+atomically exposes one flat directory. Its
+[acquisition record](authenticated-release-asset-acquisition.md) names every
+local file and states `publication_allowed: false`.
+
+The acquirer treats asset contents as opaque bytes. It does not authenticate
+the release workflow, select an OCI platform, verify OCI signatures or
+attestations, or call the schema-9 content verifier. No workflow invokes it.
+GitHub CLI also does not expose the temporary asset-download redirect to this
+command, so issue #28's redirect-audit criterion remains open.
 
 ## Required archive records
 

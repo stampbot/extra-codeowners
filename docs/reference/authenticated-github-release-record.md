@@ -9,6 +9,11 @@ The verifier emits one deterministic JSON record after every check succeeds.
 It writes nothing to GitHub and never receives release, package, signing, or
 OpenID Connect authority.
 
+A separate
+[asset acquisition command](authenticated-release-asset-acquisition.md)
+consumes this record and binds downloaded local bytes to the authenticated
+inventory. That command is also unwired from workflows.
+
 ## Trust input
 
 The command requires two inputs:

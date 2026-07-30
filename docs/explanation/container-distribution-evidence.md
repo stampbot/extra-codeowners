@@ -17,7 +17,7 @@ publish a supported container image yet.
 | Public `main` image | Disabled; the publication job has been removed. |
 | Tagged release | Blocked before any job can publish an image, chart, Python package, or GitHub release. |
 | Source closure | Every current native-wheel owner is closed on both platforms. The derived source-completeness ledger is complete, but distribution approval remains false. |
-| Recipient verification | A bounded schema-9 content verifier is implemented in source. Signature, attestation, immutable-release, and exact-candidate integration are not. |
+| Recipient verification | Source contains a bounded schema-9 content verifier, an authenticated immutable-release verifier, and an exact-byte asset acquirer. No workflow connects them, and OCI signature, attestation, platform selection, and exact-candidate integration remain unfinished. |
 
 The release workflow can still validate source, build proof, and scan a
 candidate with repository-read permission. A separate job then fails before
@@ -633,11 +633,11 @@ This implements CI's source-store, image-inventory, and final-bundle parser
 boundaries from issue
 [#28](https://github.com/stampbot/extra-codeowners/issues/28). It does not wire
 those dormant materials into a supported release. The unsigned schema-9
-content format and verifier now exist, but authenticated release-asset and
-attestation contracts, runnable release-candidate verification, and the
-isolated signing and publication path remain outstanding. The current collector
-has no publication authority, and the release workflow still blocks every
-supported publication.
+content format, immutable-release verifier, and exact-byte asset acquirer now
+exist. Their workflow handoffs, OCI attestation contracts, runnable
+release-candidate verification, and the isolated signing and publication path
+remain outstanding. The current collector has no publication authority, and
+the release workflow still blocks every supported publication.
 
 The native-owner ledger is now complete. Before any release may publish, the
 project must still deliver the retained notices and corresponding source to

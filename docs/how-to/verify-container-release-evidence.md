@@ -1,10 +1,11 @@
 # Verify container release evidence
 
-Use this procedure to exercise the read-only release and schema-9 content
-verifiers against a future release candidate. The first command authenticates
-GitHub's immutable release and remote asset inventory. The second proves that
-one evidence archive is structurally complete and internally consistent with
-the identity values you supplied.
+Use this procedure to exercise three non-publishing boundaries against a
+future release candidate. The first command authenticates GitHub's immutable
+release.
+The second downloads the exact attested asset bytes. The last command proves
+that one evidence archive is structurally complete and internally consistent
+with identity values you obtained elsewhere.
 
 !!! danger "There is no supported container release yet"
     Current pull-request artifacts use CI-only names and local image
@@ -13,19 +14,19 @@ the identity values you supplied.
 
 !!! warning "The complete producer path is unfinished"
     GitHub release authentication does not prove which workflow built an
-    asset. Content verification does not authenticate its inputs. The
-    remaining workflow, local-asset, and OCI checks are tracked in
+    asset. Local byte binding does not authenticate an OCI platform, signature,
+    or build provenance. The remaining workflow and OCI checks are tracked in
     [issue #28](https://github.com/stampbot/extra-codeowners/issues/28). Do not
     deploy, mirror, or redistribute an image from these partial results.
 
 ## Prepare an isolated verifier
 
-Run both verifiers on Linux from a previously reviewed checkout. Don't use code
+Run these commands on Linux from a previously reviewed checkout. Don't use code
 from the candidate you are inspecting. The commands need Python 3.12 or newer;
 the content verifier uses no third-party Python packages.
 
-Keep the reviewed checkout read-only. Run the networked release verifier with
-only its GitHub read token. Then remove that token and disable network access
+Keep the reviewed checkout read-only. Run the networked release commands with
+only a GitHub read token. Then remove that token and disable network access
 before you run the archive parser as a dedicated unprivileged user. Give the
 parser a volume with at least 2 GiB free and a filesystem quota.
 
@@ -56,11 +57,9 @@ repository. For a private repository, limit it to that repository with
 **Contents: read** and **Attestations: read**. Don't put the token in a command
 argument.
 
-Put the future release assets in a read-only input directory:
-
-- `extra-codeowners-VERSION-linux-ARCHITECTURE-evidence.tar.gz`
-- its `.sha256` sidecar
-- the platform's canonical evidence predicate.
+The acquisition command creates a flat, mode-`0700` asset directory beneath
+the private authentication workspace. Each file uses its GitHub release asset
+name and mode `0600`.
 
 Obtain the following values through an independently authenticated release
 path:
@@ -75,7 +74,7 @@ The current project does not yet provide that authenticated path. Do not copy
 these values out of the untrusted predicate and pass them back as trusted
 arguments.
 
-## Authenticate the GitHub release
+## Authenticate and acquire the GitHub release
 
 Use Bash from the reviewed checkout. `RELEASE_MANIFEST` is the canonical
 controller manifest obtained through the trusted handoff.
@@ -91,12 +90,17 @@ AUTH_WORK="${HOME}/extra-codeowners-release-authentication"
 AUTH_CACHE="${AUTH_WORK}/cache"
 AUTH_SUMMARY="${AUTH_WORK}/authenticated-github-release.json"
 AUTH_SUMMARY_TMP="${AUTH_SUMMARY}.tmp"
+ASSET_ROOT="${AUTH_WORK}/assets"
+ACQUISITION_SUMMARY="${AUTH_WORK}/asset-acquisition.json"
+ACQUISITION_SUMMARY_TMP="${ACQUISITION_SUMMARY}.tmp"
 
 test ! -e "$AUTH_WORK"
 mkdir -m 0700 -- "$AUTH_WORK"
 mkdir -m 0700 -- "$AUTH_CACHE"
 test ! -e "$AUTH_SUMMARY"
-trap 'rm -f -- "$AUTH_SUMMARY_TMP"; unset GH_TOKEN GITHUB_TOKEN' EXIT
+test ! -e "$ASSET_ROOT"
+test ! -e "$ACQUISITION_SUMMARY"
+trap 'rm -f -- "$AUTH_SUMMARY_TMP" "$ACQUISITION_SUMMARY_TMP"; unset GH_TOKEN GITHUB_TOKEN' EXIT
 
 cd -- "$VERIFIER_CHECKOUT"
 XDG_CACHE_HOME="$AUTH_CACHE" \
@@ -106,6 +110,18 @@ XDG_CACHE_HOME="$AUTH_CACHE" \
   > "$AUTH_SUMMARY_TMP"
 
 mv -- "$AUTH_SUMMARY_TMP" "$AUTH_SUMMARY"
+AUTH_SUMMARY_SHA256="$(sha256sum -- "$AUTH_SUMMARY" | cut -d ' ' -f 1)"
+
+XDG_CACHE_HOME="$AUTH_CACHE" \
+  mise exec -- python -I -B .github/scripts/acquire_github_release_assets.py \
+  --manifest "$RELEASE_MANIFEST" \
+  --manifest-sha256 "$RELEASE_MANIFEST_SHA256" \
+  --authenticated-release-record "$AUTH_SUMMARY" \
+  --authenticated-release-record-sha256 "$AUTH_SUMMARY_SHA256" \
+  --output-dir "$ASSET_ROOT" \
+  > "$ACQUISITION_SUMMARY_TMP"
+
+mv -- "$ACQUISITION_SUMMARY_TMP" "$ACQUISITION_SUMMARY"
 unset GH_TOKEN GITHUB_TOKEN
 trap - EXIT
 ```
@@ -113,7 +129,9 @@ trap - EXIT
 Exit status `0` means GitHub reports the exact repository ID, tag target,
 immutable release, and remote asset set from the reviewed manifest. It also
 means GitHub CLI cryptographically verified the release attestation and the
-verifier matched its statement to that same tag and asset set.
+verifier matched its statement to that same tag and asset set. The acquisition
+command then rechecked that identity, downloaded every asset by database ID,
+and matched each local file's size and SHA-256 before it exposed `ASSET_ROOT`.
 
 The private cache keeps Sigstore trust metadata managed through The Update
 Framework (TUF) separate from other `gh` commands. A stale or invalid cache
@@ -122,10 +140,12 @@ trust root.
 
 Read the
 [authenticated GitHub release record](../reference/authenticated-github-release-record.md)
+and
+[asset acquisition record](../reference/authenticated-release-asset-acquisition.md)
 for the output fields, permissions, limits, and non-claims.
 
 The example removes `GH_TOKEN` and `GITHUB_TOKEN` before it exits. The
-remaining OCI and workflow checks do not exist yet, so stop here unless you
+remaining OCI and workflow checks do not exist yet. Stop here unless you
 already have the other trusted identity values from a separately reviewed test
 fixture.
 
@@ -142,7 +162,7 @@ set -euo pipefail
 umask 077
 
 VERIFIER_CHECKOUT='/opt/extra-codeowners-verifier'
-INPUT='/mnt/extra-codeowners-release'
+INPUT="${HOME}/extra-codeowners-release-authentication/assets"
 WORK="${HOME}/extra-codeowners-verification"
 VERSION='0.1.0'
 PLATFORM='linux/amd64'
