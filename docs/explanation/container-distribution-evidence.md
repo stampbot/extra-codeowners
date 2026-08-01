@@ -17,7 +17,7 @@ publish a supported container image yet.
 | Public `main` image | Disabled; the publication job has been removed. |
 | Tagged release | Blocked before any job can publish an image, chart, Python package, or GitHub release. |
 | Source closure | Every current native-wheel owner is closed on both platforms. The derived source-completeness ledger is complete, but distribution approval remains false. |
-| Recipient verification | Source contains a bounded schema-9 content verifier, an authenticated immutable-release verifier, an exact-byte asset acquirer, a single-file Actions provenance verifier, and a single-file Sigstore signature verifier. No workflow connects them. Final asset policy, OCI verification, and exact-candidate integration remain unfinished. |
+| Recipient verification | Source contains a bounded schema-9 content verifier, an authenticated immutable-release verifier, an exact-byte asset acquirer, single-file Actions provenance and Sigstore signature verifiers, a signed-root OCI acquirer, and an offline platform selector. No workflow connects them. Final asset policy, child-manifest and registry-attestation verification, and exact-candidate integration remain unfinished. |
 
 The release workflow can still validate source, build proof, and scan a
 candidate with repository-read permission. A separate job then fails before
@@ -111,10 +111,12 @@ Separate read-only commands now authenticate GitHub's immutable release, check
 the successful tagged run and exact workflow bytes, acquire the release files,
 bind one selected file to GitHub-verified Actions provenance from that run
 attempt, verify its exact Sigstore signature bundle, and authenticate one
-digest-addressed GHCR root index plus the current run's image signature. The
-final asset set still needs a reviewed policy. The trusted index-digest handoff,
-platform selection, registry attestations, and handoff into the content
-verifier remain open under issue #28.
+digest-addressed GHCR root index plus the current run's image signature. An
+offline selector then requires exactly the amd64 and arm64 image descriptors
+and their linked BuildKit attestation manifests. The final asset set still
+needs a reviewed policy. The trusted index-digest handoff, child-manifest
+content, registry attestations, and handoff into the content verifier remain
+open under issue #28.
 
 The separate [native wheelhouse build](native-wheelhouse.md) creates
 reproducible replacements for CFFI, Psycopg C, and Pydantic Core. The

@@ -1,11 +1,12 @@
 # Verify container release evidence
 
-Use this procedure to exercise seven non-publishing boundaries against a future
+Use this procedure to exercise eight non-publishing boundaries against a future
 release candidate. The commands authenticate GitHub's immutable release, check
 the successful tagged workflow and its exact source, acquire the release
 assets, bind one selected file to that workflow's SLSA provenance and Sigstore
-signature, authenticate one signed GHCR root index, and inspect one evidence
-archive. None of these steps authorizes publication or deployment.
+signature, authenticate one signed GHCR root index, select its required
+platform descriptors, and inspect one evidence archive. None of these steps
+authorizes publication or deployment.
 
 !!! danger "There is no supported container release yet"
     Current pull-request artifacts use CI-only names and local image
@@ -14,9 +15,9 @@ archive. None of these steps authorizes publication or deployment.
 
 !!! warning "The complete producer path is unfinished"
     The Actions provenance and blob-signature commands check one selected file;
-    the project has not frozen which files must pass them. The index command
-    doesn't select a platform or verify a registry attestation. The remaining
-    policy and OCI checks are tracked in
+    the project has not frozen which files must pass them. The platform command
+    doesn't fetch either selected manifest or verify a registry attestation.
+    The remaining policy and OCI checks are tracked in
     [issue #28](https://github.com/stampbot/extra-codeowners/issues/28). Do not
     deploy, mirror, or redistribute an image from these partial results.
 
@@ -76,16 +77,16 @@ Obtain the following values through an independently authenticated release
 path:
 
 - the exact semantic version
-- `linux/amd64` or `linux/arm64`
-- the selected platform manifest digest
 - the 40-character source revision
 - the source commit's committer timestamp.
 
-The current project does not yet provide that authenticated path. Do not copy
-these values out of the untrusted predicate and pass them back as trusted
-arguments.
+Choose either `linux/amd64` or `linux/arm64` after the selector succeeds. The
+selected record provides that platform's manifest digest from the signed root
+index. The current project does not yet provide the other authenticated
+values. Do not copy them out of the untrusted evidence predicate and pass them
+back as trusted arguments.
 
-## Authenticate the release and root index
+## Authenticate the release and select OCI platforms
 
 Use Bash from the reviewed checkout. `RELEASE_MANIFEST` is the canonical
 controller manifest obtained through the trusted handoff.
@@ -114,6 +115,8 @@ SIGNATURE_SUMMARY_TMP="${SIGNATURE_SUMMARY}.tmp"
 OCI_ROOT="${AUTH_WORK}/oci-index"
 OCI_SUMMARY="${AUTH_WORK}/authenticated-oci-index.json"
 OCI_SUMMARY_TMP="${OCI_SUMMARY}.tmp"
+PLATFORM_SUMMARY="${AUTH_WORK}/selected-oci-platforms.json"
+PLATFORM_SUMMARY_TMP="${PLATFORM_SUMMARY}.tmp"
 OCI_INDEX_DIGEST='sha256:REPLACE_WITH_64_LOWERCASE_HEX_CHARACTERS'
 VERIFIED_ASSET_NAME='REPLACE_WITH_ONE_ATTESTED_AND_SIGNED_ASSET_NAME'
 
@@ -129,7 +132,8 @@ test ! -e "$PROVENANCE_SUMMARY"
 test ! -e "$SIGNATURE_SUMMARY"
 test ! -e "$OCI_ROOT"
 test ! -e "$OCI_SUMMARY"
-trap 'rm -f -- "$AUTH_SUMMARY_TMP" "$WORKFLOW_SUMMARY_TMP" "$ACQUISITION_SUMMARY_TMP" "$PROVENANCE_SUMMARY_TMP" "$SIGNATURE_SUMMARY_TMP" "$OCI_SUMMARY_TMP"; unset GH_TOKEN GITHUB_TOKEN' EXIT
+test ! -e "$PLATFORM_SUMMARY"
+trap 'rm -f -- "$AUTH_SUMMARY_TMP" "$WORKFLOW_SUMMARY_TMP" "$ACQUISITION_SUMMARY_TMP" "$PROVENANCE_SUMMARY_TMP" "$SIGNATURE_SUMMARY_TMP" "$OCI_SUMMARY_TMP" "$PLATFORM_SUMMARY_TMP"; unset GH_TOKEN GITHUB_TOKEN' EXIT
 
 cd -- "$VERIFIER_CHECKOUT"
 XDG_CACHE_HOME="$AUTH_CACHE" \
@@ -204,6 +208,15 @@ mise exec -- python -I -B .github/scripts/acquire_oci_index.py \
   > "$OCI_SUMMARY_TMP"
 
 mv -- "$OCI_SUMMARY_TMP" "$OCI_SUMMARY"
+OCI_SUMMARY_SHA256="$(sha256sum -- "$OCI_SUMMARY" | cut -d ' ' -f 1)"
+
+mise exec -- python -I -B .github/scripts/select_oci_platforms.py \
+  --authenticated-index-record "$OCI_SUMMARY" \
+  --authenticated-index-record-sha256 "$OCI_SUMMARY_SHA256" \
+  --authenticated-index-directory "$OCI_ROOT" \
+  > "$PLATFORM_SUMMARY_TMP"
+
+mv -- "$PLATFORM_SUMMARY_TMP" "$PLATFORM_SUMMARY"
 trap - EXIT
 ```
 
@@ -238,8 +251,13 @@ canonical Rekor body.
 The OCI command fetched the GHCR root index by the independently supplied
 digest. It kept the exact signature bundle from the authenticated run and
 verified that local bundle with Cosign. The retained `index.json` and
-`signature.sigstore.json` files are private inputs for the unfinished platform
-and attestation checks.
+`signature.sigstore.json` files are private inputs for the next checks.
+
+The platform command then applied the tagged release's four-descriptor policy
+without network access. It selected exactly one `linux/amd64` and one
+`linux/arm64` image manifest, plus one linked BuildKit attestation manifest for
+each. `PLATFORM_SUMMARY` records their digest, size, media type, and position.
+It does not fetch those child manifests or inspect an attestation.
 
 The final release policy has not decided which files are mandatory. Run both
 commands once for each file your reviewed test policy selects, using separate
@@ -260,12 +278,13 @@ record](../reference/authenticated-release-asset-acquisition.md),
 [authenticated Actions provenance
 record](../reference/authenticated-actions-build-provenance.md), and
 [authenticated blob-signature
-record](../reference/authenticated-blob-signature.md), and [authenticated OCI
-index](../reference/authenticated-oci-index.md) for the output fields,
+record](../reference/authenticated-blob-signature.md), [authenticated OCI
+index](../reference/authenticated-oci-index.md), and [selected OCI
+platforms](../reference/selected-oci-platforms.md) for the output fields,
 permissions, limits, and non-claims.
 
 The example removes `GH_TOKEN` and `GITHUB_TOKEN` before it exits. The
-remaining platform, registry-attestation, final asset-policy, and
+remaining child-manifest, registry-attestation, final asset-policy, and
 trusted-handoff checks do not exist yet. Stop here unless you already have the
 other trusted identity values from a separately reviewed test fixture.
 
@@ -326,7 +345,10 @@ trap - EXIT
 The placeholders are intentional: the missing authenticated release path is
 still tracked in
 [#28](https://github.com/stampbot/extra-codeowners/issues/28). Stop if you
-cannot obtain every value independently.
+cannot obtain every value from an authenticated record or another independent
+path. `PLATFORM_DIGEST` must equal
+`image.platforms[PLATFORM].image_manifest.digest` in the selected-platform
+record.
 
 ## Check the content result
 

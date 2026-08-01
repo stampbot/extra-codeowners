@@ -37,9 +37,11 @@ and binds their local bytes to that authenticated inventory. A third verifier
 checks GitHub's successful tag-triggered run and hashes the exact workflow file
 at the tagged commit. A fourth downloads one digest-addressed GHCR root index
 and locally verifies the current run's exact Cosign signature bundle. None of
-these commands runs in a workflow. The remaining work must bind the trusted
-index digest, select and authenticate both platforms, and finish the OCI SBOM,
-provenance, OpenVEX, and evidence attestation contracts.
+these commands runs in a workflow. A fifth offline command applies the exact
+four-descriptor release policy and selects both runnable platforms and their
+linked BuildKit attestation manifests. The remaining work must bind the trusted
+index digest, fetch and authenticate the selected child manifests, and finish
+the OCI SBOM, provenance, OpenVEX, and evidence attestation contracts.
 
 CI now gives image and source parsing separate rootless, networkless
 boundaries. A Docker-only process exports the local candidate without opening
@@ -147,6 +149,11 @@ The OCI index must have exactly one `linux/amd64` and one `linux/arm64`
 manifest. Each platform manifest must have its own signed SPDX SBOM and
 evidence attestation. The multi-platform index must have separate provenance
 and a signature.
+
+The root index also contains exactly two BuildKit attestation-manifest
+descriptors. Each one uses platform `unknown/unknown` and links to one runnable
+manifest through `vnd.docker.reference.digest`. These are required metadata
+descriptors, not supported runtime platforms.
 
 For selected version `VERSION`, the release workflow identity used for every
 keyless signature and attestation must be exactly
@@ -449,6 +456,29 @@ This command doesn't establish where the trusted index digest came from. It
 also doesn't choose a platform, validate the index descriptors, fetch an image
 configuration or layer, or verify any registry attestation. No workflow invokes
 it.
+
+## Current OCI platform selector
+
+`.github/scripts/select_oci_platforms.py` consumes the authenticated-index
+record, an independently retained hash of that record, and the private
+two-file index directory. It revalidates the complete record and local file
+identities, then parses `index.json` without network access.
+
+The selector requires this exact order:
+
+1. `linux/amd64` image manifest
+2. `linux/arm64` image manifest
+3. `unknown/unknown` BuildKit attestation manifest linked to amd64
+4. `unknown/unknown` BuildKit attestation manifest linked to arm64.
+
+It rejects extra fields, descriptors, platforms, annotations, media types,
+variants, links, reordered entries, duplicate digests, and oversized child
+manifests. Success emits a [selected OCI platforms
+record](selected-oci-platforms.md) with `publication_allowed: false`.
+
+The selected digests are authenticated children of the signed root. The
+command does not fetch those child manifests, validate their configuration or
+layers, or inspect the BuildKit attestations. No workflow invokes it.
 
 ## Required archive records
 

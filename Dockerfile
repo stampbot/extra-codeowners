@@ -175,6 +175,7 @@ COPY .github/scripts/acquire_github_release_assets.py \
      .github/scripts/release_readiness.py \
      .github/scripts/release_spine.py \
      .github/scripts/run_evidence_parser.py \
+     .github/scripts/select_oci_platforms.py \
      .github/scripts/smoke-container.sh \
      .github/scripts/verify-container-runtime.py \
      .github/scripts/verified_source_store.py \

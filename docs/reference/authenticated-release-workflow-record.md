@@ -170,7 +170,8 @@ This command does not:
   [blob-signature verifier](authenticated-blob-signature.md) after asset
   acquisition
 - acquire or authenticate an OCI index; use the separate [OCI index
-  command](authenticated-oci-index.md) when its trusted digest is available
+  command](authenticated-oci-index.md) when its trusted digest is available,
+  then apply the [platform selector](selected-oci-platforms.md)
 - verify a software bill of materials (SBOM), provenance, or evidence
   attestation for an OCI digest
 - download or parse a release asset
