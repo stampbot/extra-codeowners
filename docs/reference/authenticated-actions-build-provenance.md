@@ -140,7 +140,8 @@ must carry Actions provenance, and it does not:
   [blob-signature verifier](authenticated-blob-signature.md)
 - verify an Open Container Initiative (OCI) index, platform, signature, or
   registry attestation; the separate [OCI index
-  command](authenticated-oci-index.md) authenticates only the signed root index
+  command](authenticated-oci-index.md) authenticates the signed root, and the
+  [platform selector](selected-oci-platforms.md) checks its descriptor policy
 - authenticate distribution of the controller manifest or its trusted digest
 - parse a chart, wheel, source distribution, archive, SBOM, or evidence
   predicate

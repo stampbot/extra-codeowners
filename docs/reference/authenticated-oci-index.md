@@ -165,6 +165,19 @@ fields are:
 The index section records the root descriptor count for audit work. It does
 not validate descriptor media types, platforms, annotations, or relationships.
 
+## Downstream platform selection
+
+Pass this record, its independently retained SHA-256, and the private output
+directory to
+[`select_oci_platforms.py`](selected-oci-platforms.md). That offline command
+requires the tagged release's exact four-descriptor policy and emits the two
+runnable platform identities plus their linked BuildKit attestation-manifest
+identities.
+
+The selector does not repeat Cosign verification. It relies on the
+authenticated-index record hash and rechecks both retained files before and
+after parsing `index.json`.
+
 ## Resource and failure behavior
 
 - the OCI index is at most 4 MiB and contains at most 128 descriptor objects
@@ -203,7 +216,8 @@ does not:
 
 No workflow calls this command. Issue
 [#28](https://github.com/stampbot/extra-codeowners/issues/28) tracks the
-remaining platform, attestation, recipient, and privileged publication work.
+remaining child-manifest, attestation, recipient, and privileged publication
+work.
 
 ## Upstream contracts
 

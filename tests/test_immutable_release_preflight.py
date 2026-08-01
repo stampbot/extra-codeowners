@@ -1290,6 +1290,7 @@ def test_workflows_only_type_check_the_preflight_module() -> None:
             ".github/scripts/release_spine.py",
             ".github/scripts/release_readiness.py",
             ".github/scripts/run_evidence_parser.py",
+            ".github/scripts/select_oci_platforms.py",
             ".github/scripts/verified_source_store.py",
         ),
         ("release.yml", "quality", "Verify Python source"): (
@@ -1323,6 +1324,7 @@ def test_workflows_only_type_check_the_preflight_module() -> None:
             ".github/scripts/release_spine.py",
             ".github/scripts/release_readiness.py",
             ".github/scripts/run_evidence_parser.py",
+            ".github/scripts/select_oci_platforms.py",
             ".github/scripts/verified_source_store.py",
         ),
     }

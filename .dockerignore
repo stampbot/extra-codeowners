@@ -28,6 +28,7 @@
 !.github/scripts/python_distribution_spine.py
 !.github/scripts/release_asset_assembler.py
 !.github/scripts/run_evidence_parser.py
+!.github/scripts/select_oci_platforms.py
 !.github/scripts/smoke-container.sh
 !.github/scripts/verify-container-runtime.py
 !.github/scripts/verified_source_store.py

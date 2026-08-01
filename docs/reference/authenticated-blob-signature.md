@@ -186,8 +186,9 @@ This verifier checks one selected blob and its companion bundle. It does not:
 - decide which release assets must be signed
 - prove Actions build provenance; use the separate provenance verifier
 - authenticate the controller manifest's trusted handoff
-- select or authenticate an OCI platform; the separate [OCI index
-  command](authenticated-oci-index.md) authenticates only the signed root index
+- fetch or authenticate an OCI child manifest; the separate [OCI index
+  command](authenticated-oci-index.md) authenticates the signed root, and the
+  [platform selector](selected-oci-platforms.md) checks its descriptor policy
 - verify OCI signatures, Software Bill of Materials (SBOM), provenance,
   OpenVEX, or evidence attestations in the registry
 - inspect the signed blob's internal content
