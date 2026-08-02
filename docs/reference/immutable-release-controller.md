@@ -208,6 +208,7 @@ It does not yet:
 - invoke `gh release verify`
 - make tagged publication reachable.
 
-The repository must keep publication blocked until the privilege-separated
-evidence path, final asset policy, operator recovery procedure, workflow
-handoff, and live immutable-release verification are complete.
+The repository must keep supported publication blocked until the
+privilege-separated evidence path, final asset policy, operator recovery
+procedure, workflow handoff, and live immutable-release verification are
+complete. An alpha prerelease is outside this controller's contract.

@@ -7,6 +7,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -117,6 +118,27 @@ def real_selected_files(tmp_path: Path) -> tuple[Path, dict[str, object]]:
     try:
         sys.modules[helper_name] = helper
         spec.loader.exec_module(helper)
+        project = tmp_path / "stable-project"
+        project.mkdir()
+        pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+        (project / "pyproject.toml").write_text(
+            re.sub(
+                r'^version = ".*"$',
+                f'version = "{VERSION}"',
+                pyproject,
+                count=1,
+                flags=re.MULTILINE,
+            ),
+            encoding="utf-8",
+        )
+        (project / "requirements-build.txt").write_bytes(
+            (ROOT / "requirements-build.txt").read_bytes()
+        )
+        dynamic_helper = cast(Any, helper)
+        dynamic_helper.ROOT = project
+        dynamic_helper.PROJECT_VERSION = VERSION
+        dynamic_helper.WHEEL_NAME = WHEEL_NAME
+        dynamic_helper.DIST_INFO = f"extra_codeowners-{VERSION}.dist-info"
         amd64 = tmp_path / "real-amd64"
         arm64 = tmp_path / "real-arm64"
         helper.write_distribution_proof(amd64, "amd64")
@@ -175,7 +197,7 @@ def make_fixture(
         source_revision=REVISION,
         workflow_path=".github/workflows/python-distribution.yml",
         workflow_ref=(
-            "stampbot/extra-codeowners/.github/workflows/python-distribution.yml@refs/tags/v0.1.0"
+            f"stampbot/extra-codeowners/.github/workflows/python-distribution.yml@refs/tags/v{VERSION}"
         ),
         workflow_sha=REVISION,
         selected_artifact_id="888888",

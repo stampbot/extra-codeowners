@@ -12,8 +12,8 @@ comparison; the schema rejects it.
 
 !!! warning "Policy approval cannot enable publication"
     Setting `distribution_approval.approved` to `true` does not make the
-    current evidence source-complete and does not bypass the release workflow's
-    structural publication block.
+    current evidence source-complete and does not bypass the stable-release
+    publication block. Alpha publication does not change this policy value.
 
 The enforcement code is in `.github/scripts/container_evidence.py`, especially
 `validate_policy_schema`, `verify_inventory`,

@@ -401,18 +401,37 @@ class Settings(BaseSettings):
             and bool(self.webhook_secret_value)
         )
 
+    @property
+    def setup_bootstrap_mode(self) -> bool:
+        """Whether the manifest setup service is starting before App credentials exist.
+
+        This is deliberately narrower than ``not github_ready``. A partial
+        credential configuration is an operator error and must still prevent a
+        production process from starting. Only the manifest setup flow, with
+        *all* three GitHub credential inputs absent, may make the service
+        reachable long enough to create its App.
+        """
+        return (
+            self.setup_enabled
+            and self.github_app_id is None
+            and self.private_key_value is None
+            and self.webhook_secret_value is None
+        )
+
     def validate_for_service(self) -> None:
         """Fail startup when a production service lacks GitHub credentials."""
-        if self.environment == "production" and not self.github_ready:
+        if self.environment == "production" and not (
+            self.github_ready or self.setup_bootstrap_mode
+        ):
             msg = "production requires GitHub App ID, private key, and webhook secret"
             raise ValueError(msg)
-        if self.environment == "production":
+        if self.environment == "production" and self.github_api_url.scheme != "https":
+            msg = "production requires an HTTPS GitHub API URL"
+            raise ValueError(msg)
+        if self.environment == "production" and not self.setup_bootstrap_mode:
             assert self.webhook_secret_value is not None
             if len(self.webhook_secret_value.encode()) < 32:
                 msg = "production requires a webhook secret containing at least 32 bytes"
-                raise ValueError(msg)
-            if self.github_api_url.scheme != "https":
-                msg = "production requires an HTTPS GitHub API URL"
                 raise ValueError(msg)
         self.validate_database()
 

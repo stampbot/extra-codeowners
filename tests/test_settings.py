@@ -20,6 +20,7 @@ def test_defaults_keep_insecure_escape_hatch_disabled() -> None:
 
     assert settings.allow_insecure_changes is False
     assert settings.github_ready is False
+    assert settings.setup_bootstrap_mode is False
     assert settings.check_name == "Extra CODEOWNERS / approval"
     assert settings.worker_retry_max_seconds == 60
     assert settings.github_identity_probe_interval_seconds == 30
@@ -195,6 +196,73 @@ def test_ambiguous_secret_sources_are_rejected(tmp_path: Path) -> None:
 def test_production_requires_github_credentials() -> None:
     settings = Settings(_env_file=None, environment="production")
 
+    with pytest.raises(ValueError, match="production requires"):
+        settings.validate_for_service()
+
+
+def test_production_manifest_setup_can_bootstrap_without_github_credentials() -> None:
+    settings = Settings(
+        _env_file=None,
+        environment="production",
+        database_url=(
+            "postgresql+psycopg://user:password@db.example.test/database?sslmode=verify-full"
+        ),
+        setup_enabled=True,
+        setup_state_secret="s" * 32,
+        public_url="https://extra-codeowners.example.test",
+    )
+
+    assert settings.github_ready is False
+    assert settings.setup_bootstrap_mode is True
+    settings.validate_for_service()
+
+
+def test_production_manifest_setup_requires_an_https_github_api() -> None:
+    settings = Settings(
+        _env_file=None,
+        environment="production",
+        database_url=(
+            "postgresql+psycopg://user:password@db.example.test/database?sslmode=verify-full"
+        ),
+        setup_enabled=True,
+        setup_state_secret="s" * 32,
+        public_url="https://extra-codeowners.example.test",
+        github_api_url="http://github.example.test/api/v3",
+    )
+
+    assert settings.setup_bootstrap_mode is True
+    with pytest.raises(ValueError, match="HTTPS GitHub API URL"):
+        settings.validate_for_service()
+
+
+@pytest.mark.parametrize(
+    ("github_app_id", "github_private_key", "github_webhook_secret"),
+    [
+        (123, None, None),
+        (None, "private-key", None),
+        (None, None, "s" * 32),
+    ],
+)
+def test_production_manifest_setup_rejects_partial_github_credentials(
+    github_app_id: int | None,
+    github_private_key: str | None,
+    github_webhook_secret: str | None,
+) -> None:
+    settings = Settings(
+        _env_file=None,
+        environment="production",
+        database_url=(
+            "postgresql+psycopg://user:password@db.example.test/database?sslmode=verify-full"
+        ),
+        setup_enabled=True,
+        setup_state_secret="s" * 32,
+        public_url="https://extra-codeowners.example.test",
+        github_app_id=github_app_id,
+        github_private_key=github_private_key,
+        github_webhook_secret=github_webhook_secret,
+    )
+
+    assert settings.setup_bootstrap_mode is False
     with pytest.raises(ValueError, match="production requires"):
         settings.validate_for_service()
 

@@ -144,17 +144,18 @@ query, status, and a bounded GitHub request ID. They never include the
 Authorization header, token, response body, transport exception text, or asset
 contents.
 
-## Publication remains blocked
+## Supported publication remains blocked
 
-No workflow imports the adapter or controller. The release workflow's jobs with
-write authority still depend directly on the unconditional
-`publication-block` job, and that job exits unsuccessfully without permissions.
-Adding this adapter does not supply a token, grant a permission, invoke a
-mutation, or make tagged publication reachable.
+No workflow imports the adapter or controller. An alpha tag can publish through
+the simpler prerelease workflow, but it does not call this code or meet the
+supported-release contract. The stable release jobs still depend on the
+`publication-block` job, which exits unsuccessfully without permissions. Adding
+this adapter does not supply a token, grant a permission, invoke a mutation, or
+make a supported release reachable.
 
 Future wiring must consume the repository-ID-bound record produced by the
 [immutable-release preflight](immutable-release-preflight.md) before it invokes
 the controller. That endpoint requires the **Administration: read** repository
 permission, so it belongs in a separate job. The **Contents: write**
-publication token must not perform the check itself. Publication stays blocked
-until that evidence handoff and its live contract test exist.
+publication token must not perform the check itself. Supported publication
+stays blocked until that evidence handoff and its live contract test exist.

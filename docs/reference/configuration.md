@@ -281,11 +281,17 @@ does not depend on this probe.
 
 | Environment variable | Type | Default | Constraints and effect |
 | --- | --- | --- | --- |
-| `EXTRA_CODEOWNERS_SETUP_ENABLED` | boolean | `false` | Enables the GitHub App Manifest setup routes. Keep disabled after registration when they are not needed. |
+| `EXTRA_CODEOWNERS_SETUP_ENABLED` | boolean | `false` | Enables the GitHub App Manifest setup routes. Keep disabled after registration when they are not needed. In production, it may temporarily run without all three App credentials only when all three are absent; partial credentials still fail closed. |
 | `EXTRA_CODEOWNERS_SETUP_STATE_SECRET` | secret string or null | null | HMAC key for short-lived setup state. Setup-mode startup requires at least 32 UTF-8 bytes. Use a value distinct from the webhook secret. |
 | `EXTRA_CODEOWNERS_SETUP_STATE_TTL_SECONDS` | integer | `600` | Setup state lifetime in seconds; inclusive range `60` through `3600`. |
 
 Do not place App private keys or webhook secrets in TOML committed to a repository. Runtime secrets belong in the deployment's secret manager.
+
+During that credential-free bootstrap state, `/health/ready` reports
+`setup_bootstrap: true` and admits the pod only to serve the setup routes. It
+does not authenticate GitHub, accept webhooks, or evaluate pull requests.
+After GitHub returns the credentials, disable setup, inject the complete
+credential set, and restart the workload.
 
 ## Loading and failure behavior
 
@@ -296,7 +302,7 @@ Do not place App private keys or webhook secrets in TOML committed to a reposito
 - Invalid TOML, an unsupported schema version, or ambiguous policy fails evaluation and produces a diagnostic check result. An enrolled App identity mismatch makes that App's review ineligible and emits a sanitized warning; independent appropriate human or application evidence can still satisfy the owner set.
 - A repository with no policy and no managed Extra CODEOWNERS check is not enrolled: the service publishes no check and does not load organization policy for it. Organization configuration alone never opts repositories in.
 - An explicitly disabled repository policy produces a failing check and never causes an application approval to count. If policy disappears after the App has already created its named check on the current head, a later evaluation updates that managed check to failure instead of leaving a stale success.
-- Production service startup requires complete GitHub credentials, a webhook secret of at least 32 bytes, an HTTPS GitHub API URL, and PostgreSQL using `sslmode=verify-full` over every non-local connection or an operator-controlled loopback or Unix-socket transport.
+- Production service startup requires an HTTPS GitHub API URL, including during the credential-free setup flow. Outside that flow it also requires complete GitHub credentials and a webhook secret of at least 32 bytes. Every non-local PostgreSQL connection must use `sslmode=verify-full`; an operator-controlled loopback or Unix-socket transport is also allowed.
 - Setup-mode startup requires an HTTPS public URL and a setup-state secret of at least 32 bytes.
 
 Safe disablement has this order:

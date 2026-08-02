@@ -802,7 +802,9 @@ def test_postgres_migration_lock_timeout_is_bounded() -> None:
     engine.dispose()
 
 
-def test_postgres_pre_alembic_schema_adoption_is_strict_and_usable() -> None:
+def test_postgres_pre_alembic_schema_adoption_is_strict_and_usable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     url = postgres_url()
     store = QueueStore(url)
     Base.metadata.drop_all(store.engine)
@@ -812,6 +814,7 @@ def test_postgres_pre_alembic_schema_adoption_is_strict_and_usable() -> None:
     with store.engine.begin() as connection:
         connection.execute(text("DROP TABLE alembic_version"))
 
+    monkeypatch.setattr(migrations, "__version__", migrations.PRE_ALEMBIC_ADOPTION_RELEASE)
     upgrade_database(url, adopt_pre_alembic_schema=True)
 
     store.initialize()
@@ -822,7 +825,9 @@ def test_postgres_pre_alembic_schema_adoption_is_strict_and_usable() -> None:
     store.close()
 
 
-def test_postgres_revision_0001_matches_immutable_adoption_contract() -> None:
+def test_postgres_revision_0001_matches_immutable_adoption_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     url = postgres_url()
     store = QueueStore(url)
     Base.metadata.drop_all(store.engine)
@@ -848,6 +853,7 @@ def test_postgres_revision_0001_matches_immutable_adoption_contract() -> None:
         with store.engine.begin() as connection:
             connection.execute(text("DROP TABLE alembic_version"))
 
+        monkeypatch.setattr(migrations, "__version__", migrations.PRE_ALEMBIC_ADOPTION_RELEASE)
         upgrade_database(url, adopt_pre_alembic_schema=True)
 
         store.initialize()
@@ -1000,7 +1006,7 @@ def test_postgres_runtime_schema_validation_rejects_behavior_changes(
     ids=("missing-serial-default", "timestamp-without-timezone", "partial-index"),
 )
 def test_postgres_pre_alembic_adoption_rejects_behavior_changes(
-    alter_statements: tuple[str, ...], error_match: str
+    alter_statements: tuple[str, ...], error_match: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     url = postgres_url()
     store = QueueStore(url)
@@ -1014,6 +1020,7 @@ def test_postgres_pre_alembic_adoption_rejects_behavior_changes(
             for statement in alter_statements:
                 connection.execute(text(statement))
 
+        monkeypatch.setattr(migrations, "__version__", migrations.PRE_ALEMBIC_ADOPTION_RELEASE)
         with pytest.raises(RuntimeError, match=error_match):
             upgrade_database(url, adopt_pre_alembic_schema=True)
     finally:

@@ -209,6 +209,38 @@ def test_build_and_verify_complete_two_platform_spine(built_spine: BuiltSpine) -
             verified.object_chunks(f"sha256:{'f' * 64}")
 
 
+def test_build_and_verify_alpha_project_version(tmp_path: Path) -> None:
+    provisional = release_spine.dataclasses.replace(expected_identity(), version="0.1.0a1")
+    layout = tmp_path / "layout"
+    index_digest = make_layout(layout, provisional)
+    expected = release_spine.dataclasses.replace(provisional, index_digest=index_digest)
+    spine = tmp_path / release_spine.expected_spine_filename(
+        REVISION,
+        expected.python_artifact_id,
+        expected.run_id,
+        expected.run_attempt,
+    )
+    record = tmp_path / release_spine.expected_record_filename(
+        REVISION,
+        expected.python_artifact_id,
+        expected.run_id,
+        expected.run_attempt,
+    )
+
+    builder.build(layout, spine, record, index_digest, expected)
+
+    assert (
+        release_spine.verify(
+            record,
+            spine,
+            expected,
+            record_artifact_sha256=sha256(record),
+            spine_artifact_sha256=sha256(spine),
+        )["source"]["version"]
+        == "0.1.0a1"
+    )
+
+
 def test_build_is_deterministic_across_layout_metadata(tmp_path: Path) -> None:
     provisional = expected_identity()
     outputs: list[tuple[bytes, bytes]] = []

@@ -260,8 +260,9 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "enabled",
-        "lockTimeoutSeconds",
+    "enabled",
+    "asHelmHook",
+    "lockTimeoutSeconds",
         "activeDeadlineSeconds",
         "backoffLimit",
         "ttlSecondsAfterFinished",
@@ -274,10 +275,13 @@
         "extraVolumeMounts"
       ],
       "properties": {
-        "enabled": {
-          "type": "boolean"
-        },
-        "lockTimeoutSeconds": {
+    "enabled": {
+      "type": "boolean"
+    },
+    "asHelmHook": {
+      "type": "boolean"
+    },
+    "lockTimeoutSeconds": {
           "type": "number",
           "exclusiveMinimum": 0,
           "maximum": 300

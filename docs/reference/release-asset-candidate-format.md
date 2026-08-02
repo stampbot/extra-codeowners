@@ -1,9 +1,10 @@
 # Blocked release asset candidate
 
-The tagged workflow now contains a job that can assemble one exact set of
+The stable-tag workflow contains a job that can assemble one exact set of
 current candidate files. It still cannot publish them. The assembler runs only
-after the unconditional `publication-block` job, so GitHub skips it while
-supported distribution is disabled.
+after the stable `publication-block` job, so GitHub skips it while supported
+distribution is disabled. Alpha tags skip this job because their artifact set
+is not the controller's candidate inventory.
 
 This boundary exists to exercise the Python proof handoff without pretending
 that the container evidence or final release policy is complete. Maintainers
@@ -14,7 +15,7 @@ use this page as the contract.
 ## Current boundary
 
 ```text
-Current tagged workflow:
+Current stable-tag workflow:
 
 publication-block fails
           |
@@ -41,16 +42,15 @@ call the GitHub release adapter or controller, and the existing release job
 does not download its output.
 
 The job is configured to upload a seven-day Actions artifact named
-`blocked-release-asset-candidate`. Today the failed block prevents that
+`blocked-release-asset-candidate`. Today the failed stable block prevents that
 artifact from being created. Seven-day retention would help inspect a future
 workflow test, but it would not be durable release storage.
 
-!!! danger "Do not bypass the publication block to test this job"
-    The same block also stops the existing Python signing, image publication,
-    chart publication, and GitHub release jobs. Making it succeed would enable
-    those privileged paths before the candidate runs. Issue #28 must first
-    split out unprivileged producers that a hosted candidate test can depend on
-    safely.
+!!! danger "Do not use an alpha tag to test this job"
+    An alpha tag enables Python signing, image publication, chart publication,
+    and GitHub prerelease creation, but it skips this candidate job. Issue #28
+    must first split out unprivileged producers that a hosted candidate test can
+    depend on safely.
 
 ## The 15-file scope
 

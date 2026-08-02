@@ -274,6 +274,7 @@ class FakeService:
             return {
                 "status": "ready",
                 "github_credentials": True,
+                "setup_bootstrap": False,
                 "database": True,
                 "worker_enabled": self.worker_enabled,
                 "reconciler_enabled": True,

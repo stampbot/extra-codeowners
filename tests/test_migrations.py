@@ -292,13 +292,16 @@ def test_failed_migration_releases_guard_and_can_be_retried(
     assert current_revision(url) == DATABASE_MIGRATION_HEAD
 
 
-def test_pre_alembic_schema_requires_explicit_strict_adoption(tmp_path: Path) -> None:
+def test_pre_alembic_schema_requires_explicit_strict_adoption(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     url = database_url(tmp_path)
     upgrade_database(url, revision=BASELINE_REVISION)
     engine = create_engine(url)
     with engine.begin() as connection:
         connection.execute(text("DROP TABLE alembic_version"))
     engine.dispose()
+    monkeypatch.setattr(migrations, "__version__", migrations.PRE_ALEMBIC_ADOPTION_RELEASE)
 
     with pytest.raises(RuntimeError, match="--adopt-pre-alembic-schema"):
         upgrade_database(url)
@@ -307,20 +310,25 @@ def test_pre_alembic_schema_requires_explicit_strict_adoption(tmp_path: Path) ->
     assert current_revision(url) == DATABASE_MIGRATION_HEAD
 
 
-def test_immutable_adoption_contract_matches_revision_0001(tmp_path: Path) -> None:
+def test_immutable_adoption_contract_matches_revision_0001(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     url = database_url(tmp_path)
     upgrade_database(url, revision=BASELINE_REVISION)
     engine = create_engine(url)
     with engine.begin() as connection:
         connection.execute(text("DROP TABLE alembic_version"))
     engine.dispose()
+    monkeypatch.setattr(migrations, "__version__", migrations.PRE_ALEMBIC_ADOPTION_RELEASE)
 
     upgrade_database(url, adopt_pre_alembic_schema=True)
 
     assert current_revision(url) == DATABASE_MIGRATION_HEAD
 
 
-def test_partial_pre_alembic_schema_is_never_adopted(tmp_path: Path) -> None:
+def test_partial_pre_alembic_schema_is_never_adopted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     url = database_url(tmp_path)
     engine = create_engine(url)
     with engine.begin() as connection:
@@ -329,12 +337,15 @@ def test_partial_pre_alembic_schema_is_never_adopted(tmp_path: Path) -> None:
         )
         connection.execute(text("INSERT INTO schema_metadata VALUES (1, 1)"))
     engine.dispose()
+    monkeypatch.setattr(migrations, "__version__", migrations.PRE_ALEMBIC_ADOPTION_RELEASE)
 
     with pytest.raises(RuntimeError, match="non-baseline pre-Alembic schema"):
         upgrade_database(url, adopt_pre_alembic_schema=True)
 
 
-def test_modified_pre_alembic_contract_is_never_adopted(tmp_path: Path) -> None:
+def test_modified_pre_alembic_contract_is_never_adopted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     url = database_url(tmp_path)
     upgrade_database(url, revision=BASELINE_REVISION)
     engine = create_engine(url)
@@ -342,6 +353,7 @@ def test_modified_pre_alembic_contract_is_never_adopted(tmp_path: Path) -> None:
         connection.execute(text("DROP TABLE alembic_version"))
         connection.execute(text("CREATE INDEX unexpected_index ON service_leases (owner)"))
     engine.dispose()
+    monkeypatch.setattr(migrations, "__version__", migrations.PRE_ALEMBIC_ADOPTION_RELEASE)
 
     with pytest.raises(RuntimeError, match="expected indexes"):
         upgrade_database(url, adopt_pre_alembic_schema=True)

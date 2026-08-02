@@ -15,16 +15,17 @@ publish a supported container image yet.
 | Pull-request candidates | CI builds separate `linux/amd64` and `linux/arm64` images and uploads one short-lived, unsigned evidence archive for each. |
 | Evidence subject | Each CI archive names its local image configuration digest because CI does not publish a platform manifest. |
 | Public `main` image | Disabled; the publication job has been removed. |
-| Tagged release | Blocked before any job can publish an image, chart, Python package, or GitHub release. |
+| Alpha tag | Runs the image, chart, Python, signing, and GitHub prerelease jobs. The output is for shadow-mode evaluation, not supported distribution. |
+| Stable tag | Blocked before any job can publish an image, chart, Python package, or GitHub release. |
 | Source closure | Every current native-wheel owner is closed on both platforms. The derived source-completeness ledger is complete, but distribution approval remains false. |
 | Recipient verification | Source contains a bounded schema-9 content verifier, an authenticated immutable-release verifier, an exact-byte asset acquirer, single-file Actions provenance and Sigstore signature verifiers, a signed-root OCI acquirer, and an offline platform selector. No workflow connects them. Final asset policy, child-manifest and registry-attestation verification, and exact-candidate integration remain unfinished. |
 
-The release workflow can still validate source, build proof, and scan a
-candidate with repository-read permission. A separate job then fails before
-the privileged publication jobs can run. Changing
-`distribution_approval.approved` to `true` cannot bypass that structural stop.
-Issue [#28](https://github.com/stampbot/extra-codeowners/issues/28) tracks the
-privilege-separated release implementation.
+An exact `vMAJOR.MINOR.PATCH-alpha.N` tag runs the existing source, proof,
+scan, signing, and publication jobs. The GitHub release is marked as a
+prerelease. It does not make `distribution_approval.approved` true or bypass
+the supported-release work in issue
+[#28](https://github.com/stampbot/extra-codeowners/issues/28). A stable tag
+still stops before privileged publication jobs run.
 
 CI also exercises a
 [raw OCI release-spine transport](../reference/release-spine-format.md). Its
@@ -66,11 +67,11 @@ record. A separate read-only job downloads both raw artifacts by immutable ID,
 then verifies and atomically materializes the five files without opening the
 wheel or source-distribution archives.
 
-The tagged workflow defines a privileged consumer that would attest and sign
-the materialized distributions and retain the three selection records. The
-unconditional publication blocker keeps that job unreachable. Its record
-artifact is not an input to the GitHub release job, so the pair remains an
-internal transport rather than supported release evidence.
+An alpha tag lets the privileged consumer attest and sign the materialized
+distributions and retain the three selection records. Those records are not an
+input to the GitHub release job, so the alpha remains an internal transport
+rather than supported release evidence. The stable publication block keeps the
+same consumer unreachable for a supported release.
 
 Stable OCI labels bind the source revision, wheel SHA-256, and selection-record
 SHA-256. Run metadata separately binds the GitHub Actions artifact ID and
@@ -87,10 +88,10 @@ identity, recipe, source, and license evidence. All seven native-wheel owners
 are closed on both platforms. The derived ledger now records
 `source_completeness.complete: true`.
 
-This does not approve distribution. Issue
+This does not approve supported distribution. Issue
 [#18](https://github.com/stampbot/extra-codeowners/issues/18) still covers
 recipient delivery of notices and corresponding source. Issue #28 independently
-blocks tagged publication, and `distribution_approval.approved` remains
+blocks stable publication, and `distribution_approval.approved` remains
 `false`. Passing CI does not override either condition.
 
 The recipient verifier parses one deterministic gzip and raw pax-tar stream
@@ -644,14 +645,14 @@ content format, immutable-release verifier, exact-byte asset acquirer, and
 single-file Actions provenance and Sigstore signature verifiers now exist.
 Their workflow handoffs, final asset policy, OCI contracts, runnable
 release-candidate verification, and isolated signing and publication path
-remain outstanding. The current collector has no publication authority, and
-the release workflow still blocks every supported publication.
+remain outstanding. The collector has no publication authority, and the
+release workflow still blocks every supported publication.
 
-The native-owner ledger is now complete. Before any release may publish, the
-project must still deliver the retained notices and corresponding source to
-recipients, bind them to each platform digest, authenticate and exercise the
-recipient verifier against final candidate assets, and record explicit
-distribution approval.
+The native-owner ledger is now complete. Before a supported release may
+publish, the project must still deliver the retained notices and corresponding
+source to recipients, bind them to each platform digest, authenticate and
+exercise the recipient verifier against final candidate assets, and record
+explicit distribution approval.
 
 The future recipient contract also requires a platform digest, archive digest,
 signed predicate, and OCI attestation to agree. Identical attestations produced

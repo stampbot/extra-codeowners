@@ -257,10 +257,19 @@ def test_helm_chart_protects_startup_and_rejects_explicit_libpq_environment() ->
         "failureThreshold": 60,
     }
 
+    image = cast(dict[str, Any], values["image"])
+    assert image["tag"] == "0.1.0-alpha.1"
+
     schema = json.loads((ROOT / "charts" / "extra-codeowners" / "values.schema.json").read_text())
     probes = schema["properties"]["probes"]
     assert "startup" in probes["required"]
     assert probes["properties"]["startup"] == {"$ref": "#/definitions/probe"}
+
+    migrations = cast(dict[str, Any], values["migrations"])
+    assert migrations["asHelmHook"] is True
+    migration_schema = schema["properties"]["migrations"]
+    assert "asHelmHook" in migration_schema["required"]
+    assert migration_schema["properties"]["asHelmHook"] == {"type": "boolean"}
 
     deployment = (
         ROOT / "charts" / "extra-codeowners" / "templates" / "deployment.yaml"
@@ -275,9 +284,20 @@ def test_helm_chart_protects_startup_and_rejects_explicit_libpq_environment() ->
     ):
         assert f".Values.probes.startup.{field}" in deployment
 
+    migration_template = (
+        ROOT / "charts" / "extra-codeowners" / "templates" / "migration-job.yaml"
+    ).read_text()
+    assert "{{- if .Values.migrations.asHelmHook }}" in migration_template
+    assert '"argocd.argoproj.io/hook": Sync' in migration_template
+    assert '"argocd.argoproj.io/hook-delete-policy": BeforeHookCreation,HookSucceeded' in (
+        migration_template
+    )
+
     helpers = (ROOT / "charts" / "extra-codeowners" / "templates" / "_helpers.tpl").read_text()
     assert helpers.count('hasPrefix "PG" .name') == 2
     assert helpers.count("must not set ambient libpq variable") == 2
+    assert 'eq $name "argocd.argoproj.io/hook"' in helpers
+    assert 'eq $name "argocd.argoproj.io/hook-delete-policy"' in helpers
 
 
 def test_pinned_uv_exposes_the_scheduled_audit_interface_without_network() -> None:

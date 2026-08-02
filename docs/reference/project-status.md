@@ -1,8 +1,8 @@
 # Project status
 
-Last verified: 2026-07-29.
+Last verified: 2026-08-01.
 
-Extra CODEOWNERS is ready for source review and disposable testing. It is not
+Extra CODEOWNERS is ready for source review and shadow-mode testing. It is not
 ready to enforce production merges, and it has no supported release artifact.
 
 ## What is available
@@ -17,8 +17,8 @@ Use a source checkout to evaluate the project today:
 | Production code-owner enforcement | Not supported; live GitHub contracts remain open in [issue #1][issue-1] |
 | Supported GitHub release | Not available |
 | Supported container image | Not available |
-| Packaged Helm chart | Not available; a chart exists in source only |
-| Public GitHub Container Registry (GHCR) package | A pre-compliance preview is public, but it is unsupported |
+| Packaged Helm chart | An alpha prerelease path is available for shadow-mode testing; no chart is supported |
+| Public GitHub Container Registry (GHCR) package | The alpha path can publish images for shadow-mode testing; neither they nor the older `:main` preview are supported |
 | Native dependency wheelhouse | Signed build and publication path implemented; application images consume its immutable contract |
 | Container evidence verifier | Schema-9 content, immutable GitHub release, and tagged workflow identity verification are implemented in source; they are not connected, and per-asset producer and OCI authentication remain blocked |
 | Hosted service | Not available |
@@ -29,10 +29,14 @@ SQLite support, PostgreSQL support for future deployments, a Helm chart, and
 the test and evidence pipelines. You can use those pieces to study the policy
 model or run a disposable live test. They don't add up to a release.
 
-Anonymous registry inspection on 2026-07-23 confirmed that
-`ghcr.io/stampbot/extra-codeowners:main` still resolves. That image predates
-the current release controls. Its exact component and source evidence is
-incomplete under [issue #18][issue-18], so it is not an approved distribution.
+The alpha pipeline accepts tags in the exact
+`vMAJOR.MINOR.PATCH-alpha.N` form. Use an alpha only for a non-required,
+shadow-mode evaluation, record its immutable digest, and leave native review
+enforcement in place. Alpha artifacts do not close the evidence gaps below and
+are not an approved distribution.
+
+`ghcr.io/stampbot/extra-codeowners:main` predates the current release controls.
+Its exact component and source evidence is incomplete under [issue #18][issue-18].
 Don't deploy, mirror, or redistribute it. [Issue #30][issue-30] tracks its
 inventory and final disposition.
 
@@ -65,10 +69,11 @@ No dated live execution has proved the whole contract. Keep GitHub's native
 **Require review from Code Owners** rule on production repositories until
 issue #1 closes.
 
-## Why distribution is blocked {#distribution-blockers}
+## Why supported distribution is blocked {#distribution-blockers}
 
-Tagged publication is disabled. These issues define the first supported
-release boundary:
+Stable tagged publication is disabled. Alpha publication does not remove any
+of these requirements; these issues define the first supported release
+boundary:
 
 | Issue | Required outcome |
 | --- | --- |
@@ -80,8 +85,8 @@ release boundary:
 | [#32][issue-32] | Retain and bind the selected Python build proof |
 
 CI produces detailed Python and container evidence. That evidence tells a
-reviewer exactly what is missing; it does not approve an artifact for
-distribution.
+reviewer what remains incomplete; it does not make an alpha artifact suitable
+for production use or supported distribution.
 
 ## Inactive hardening work
 
@@ -111,10 +116,11 @@ There are also parts of a future privileged release path:
 - a read-only [immutable-release preflight](immutable-release-preflight.md)
 - a [blocked release candidate assembler](release-asset-candidate-format.md).
 
-No workflow gives that path publication authority. The candidate assembler is
-downstream of an intentional failure and is skipped in normal release runs. If
-someone invokes it independently, its record still forbids publication.
-These are reviewable contracts, not a working release process.
+No workflow gives the controller path publication authority. The candidate
+assembler is downstream of the stable publication block and is skipped for an
+alpha tag. If someone invokes it independently, its record still forbids
+publication. These are reviewable contracts, not a working supported-release
+process.
 
 ## Planned distributions
 

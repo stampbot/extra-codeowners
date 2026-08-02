@@ -2,6 +2,11 @@ name: Python distribution proof
 
 on:
   workflow_call:
+    inputs:
+      project-version:
+        description: Expected PEP 440 project version for a tagged release
+        required: false
+        type: string
     outputs:
       artifact-id:
         description: Immutable GitHub Actions ID of the selected five-file proof
@@ -77,6 +82,18 @@ jobs:
         with:
           version: "0.11.28" # uv runtime
           enable-cache: false
+
+      - name: Bind the requested release version
+        if: ${{ inputs.project-version != '' }}
+        env:
+          EXPECTED_PROJECT_VERSION: ${{ inputs.project-version }}
+        run: |
+          set -euo pipefail
+          actual_project_version="$(uv version --short)"
+          if [[ "$actual_project_version" != "$EXPECTED_PROJECT_VERSION" ]]; then
+            echo "Requested project version does not match pyproject.toml." >&2
+            exit 1
+          fi
 
       - name: Build two clean verified distributions
         env:

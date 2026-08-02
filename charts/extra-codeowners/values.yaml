@@ -14,8 +14,8 @@ image:
   repository: example.invalid/stampbot/extra-codeowners
   # image.pullPolicy controls when Kubernetes pulls the image.
   pullPolicy: IfNotPresent
-  # image.tag defaults to the chart appVersion when empty.
-  tag: ""
+  # image.tag is the SemVer container tag for this chart release.
+  tag: "0.1.0-alpha.1"
   # image.digest, when set, takes precedence over image.tag.
   digest: ""
 
@@ -95,6 +95,10 @@ extraArgs: []
 migrations:
   # migrations.enabled runs the explicit Alembic upgrade before application pods change.
   enabled: true
+  # migrations.asHelmHook runs the migration as a Helm pre-install and pre-upgrade hook.
+  # Set it false for Argo CD; the chart then emits a disposable Sync hook. Use
+  # migrations.annotations only for the Argo sync wave that orders its database inputs.
+  asHelmHook: true
   # migrations.lockTimeoutSeconds bounds the PostgreSQL advisory-lock wait.
   lockTimeoutSeconds: 60
   # migrations.activeDeadlineSeconds bounds the complete Kubernetes Job.
@@ -103,7 +107,8 @@ migrations:
   backoffLimit: 0
   # migrations.ttlSecondsAfterFinished bounds retention of the completed hook Job.
   ttlSecondsAfterFinished: 3600
-  # migrations.annotations adds non-hook annotations to the migration Job.
+  # migrations.annotations adds annotations to the migration Job. Helm and Argo hook
+  # lifecycle annotations are chart-managed and cannot be overridden.
   annotations: {}
   # migrations.serviceAccountName selects a pre-existing identity for database access.
   serviceAccountName: ""

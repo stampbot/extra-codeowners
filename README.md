@@ -18,10 +18,12 @@ People and teams stay in GitHub's standard `CODEOWNERS` file. A separate
 policy says which Apps may cover which owners and paths.
 
 > [!WARNING]
-> Extra CODEOWNERS is pre-release software. Don't use it to enforce production
-> merges yet. The public container preview is also unsupported; don't deploy,
-> mirror, or redistribute it. The [project status](docs/reference/project-status.md)
-> lists the remaining enforcement and release blockers.
+> Extra CODEOWNERS is pre-release software. Alpha images and charts are for
+> non-required, shadow-mode testing only. They are not supported releases or
+> complete compliance evidence, and they must not enforce production merges.
+> Don't deploy, mirror, or redistribute the older `:main` preview. The
+> [project status](docs/reference/project-status.md) lists the remaining
+> enforcement and release blockers.
 
 ## Why this exists
 

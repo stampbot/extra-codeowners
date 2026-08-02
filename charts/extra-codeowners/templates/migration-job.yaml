@@ -8,9 +8,14 @@ metadata:
     {{- include "extra-codeowners.labels" . | nindent 4 }}
     app.kubernetes.io/component: database-migration
   annotations:
+    {{- if .Values.migrations.asHelmHook }}
     "helm.sh/hook": pre-install,pre-upgrade
     "helm.sh/hook-weight": "-5"
     "helm.sh/hook-delete-policy": before-hook-creation
+    {{- else }}
+    "argocd.argoproj.io/hook": Sync
+    "argocd.argoproj.io/hook-delete-policy": BeforeHookCreation,HookSucceeded
+    {{- end }}
     {{- with .Values.migrations.annotations }}
     {{- toYaml . | nindent 4 }}
     {{- end }}

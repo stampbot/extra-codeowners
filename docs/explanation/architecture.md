@@ -413,8 +413,8 @@ replace native code-owner enforcement in production.
 ## Distribution boundaries
 
 The repository contains the App, evaluator, migrations, and Helm chart source.
-CI builds multi-platform candidates but does not publish a supported image or
-chart.
+CI can publish multi-platform alpha artifacts for shadow-mode evaluation. It
+does not publish a supported image or chart.
 
 CI, manual proof runs, and the tagged read-only scan call one reusable Python
 proof workflow. Each caller builds its own proof inside its own run; no caller
@@ -423,7 +423,7 @@ trusts artifacts from a different workflow run.
 ```text
 pull request or main CI --+
 manual dispatch ----------+--> reusable Python proof
-validated tag ------------+            |
+validated alpha tag ------+            |
                            +------------+-------------+
                            |                          |
                            v                          v
@@ -431,11 +431,10 @@ validated tag ------------+            |
                     artifact                    and record
                     |      |                    |       |
                     v      v                    v       v
-             CI containers  read-only        read-only  configured sign and
-              and evidence  tag scan       materialize  attest consumer
+             CI containers  read-only        read-only  sign, attest, and
+              and evidence  tag scan       materialize  publish alpha
 
-unconditional publication blocker -X-> configured sign and attest consumer
-unconditional publication blocker -X-> privileged release jobs
+stable-tag blocker -X-> sign, attest, and publish jobs
 ```
 
 Each caller gets a separate proof in its own run. CI keeps its required-check
@@ -446,10 +445,11 @@ spine](../reference/python-distribution-spine-format.md). A separate read-only
 job verifies the spine and atomically materializes its five files without
 opening the wheel or source-distribution archives.
 
-The tagged workflow also defines a privileged Python job that would materialize
-the same files, attest and sign the two distributions, and retain the three
-selection records. The unconditional publication blocker makes that job
-unreachable. A separate blocked, read-only
+An alpha tag runs the privileged Python, image, chart, and GitHub-release jobs
+after the same source, proof, and vulnerability checks. It is a public
+evaluation artifact, not a supported release. A stable tag remains blocked.
+The alpha path does not complete the missing recipient evidence or the
+privilege-separated release controller. A separate blocked, read-only
 [candidate assembler](../reference/release-asset-candidate-format.md) would
 revalidate the raw pair and inventory the three records beside the current
 candidate files. Its output explicitly forbids publication and does not flow
@@ -479,10 +479,11 @@ APK-owned effective files. The binding checks the package, version, APK
 checksum, runtime path, resolved regular-file path, and effective all-layer
 topology.
 
-The tagged workflow contains intended image, chart, Python, SBOM, provenance,
-signature, and GitHub-release jobs. An unconditional blocker keeps every
-privileged job unreachable. The repository also contains a dormant release
-controller and publication API adapter. Its GitHub-read-only pieces include an
+The tagged workflow contains image, chart, Python, SBOM, provenance, signature,
+and GitHub-release jobs. It permits only tags in the exact
+`vMAJOR.MINOR.PATCH-alpha.N` form. Stable tags remain blocked until the
+release-controller work is complete. The repository also contains a dormant
+release controller and publication API adapter. Its GitHub-read-only pieces include an
 immutable-release preflight, authenticated GitHub release verifier, tagged
 workflow verifier, release asset acquirer, and single-file Actions provenance
 and Sigstore signature verifiers. The per-file verifiers join an acquired
