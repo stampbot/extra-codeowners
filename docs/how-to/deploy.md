@@ -20,9 +20,11 @@ cannot complete a supported installation yet.
 
 The main-branch publication job has been removed. An exact
 `vMAJOR.MINOR.PATCH-alpha.N` tag can publish an image, chart, signed assets,
-and a GitHub prerelease after the existing proof and scan jobs pass. That path
-is for evaluation only. Stable publication is stopped before any job with
-package, signing, attestation, or release authority can run.
+and a GitHub prerelease after the existing proof and scan jobs pass. Its Python
+distribution uses the matching PEP 440 version, for example
+`v0.1.0-alpha.1` produces `0.1.0a1`. That path is for evaluation only. Stable
+publication is stopped before any job with package, signing, attestation, or
+release authority can run.
 
 Six open issues in the **First supported release** milestone define the
 remaining boundary:

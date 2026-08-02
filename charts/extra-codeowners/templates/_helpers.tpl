@@ -122,7 +122,7 @@ app.kubernetes.io/component: application
 {{- end -}}
 {{- end -}}
 {{- range $name, $_ := .Values.migrations.annotations -}}
-{{- if or (eq $name "helm.sh/hook") (eq $name "helm.sh/hook-weight") (eq $name "helm.sh/hook-delete-policy") -}}
+{{- if or (eq $name "helm.sh/hook") (eq $name "helm.sh/hook-weight") (eq $name "helm.sh/hook-delete-policy") (eq $name "argocd.argoproj.io/hook") (eq $name "argocd.argoproj.io/hook-delete-policy") -}}
 {{- fail (printf "migrations.annotations must not override chart-managed annotation %s" $name) -}}
 {{- end -}}
 {{- end -}}

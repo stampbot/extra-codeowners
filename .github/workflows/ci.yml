@@ -285,8 +285,12 @@ jobs:
             | awk '$1 == "version:" {print $2}')"
           app_version="$(helm show chart charts/extra-codeowners \
             | awk '$1 == "appVersion:" {gsub(/"/, "", $2); print $2}')"
-          if [[ "$chart_version" != "$project_version" || "$app_version" != "$project_version" ]]; then
-            echo "Chart version, appVersion, and project version must match." >&2
+          expected_chart_version="$project_version"
+          if [[ "$project_version" =~ ^([0-9]+\.[0-9]+\.[0-9]+)a([1-9][0-9]*)$ ]]; then
+            expected_chart_version="${BASH_REMATCH[1]}-alpha.${BASH_REMATCH[2]}"
+          fi
+          if [[ "$chart_version" != "$expected_chart_version" || "$app_version" != "$project_version" ]]; then
+            echo "Chart version must map the project version; appVersion must equal it." >&2
             exit 1
           fi
 
@@ -400,6 +404,9 @@ jobs:
             --set-json 'migrations.annotations={"argocd.argoproj.io/sync-wave":"-1"}' \
             --show-only templates/migration-job.yaml > rendered-controller-migration-job.yaml
           grep -Fq 'argocd.argoproj.io/sync-wave: "-1"' rendered-controller-migration-job.yaml
+          grep -Fq '"argocd.argoproj.io/hook": Sync' rendered-controller-migration-job.yaml
+          grep -Fq '"argocd.argoproj.io/hook-delete-policy": BeforeHookCreation,HookSucceeded' \
+            rendered-controller-migration-job.yaml
           if grep -Fq 'helm.sh/hook:' rendered-controller-migration-job.yaml; then
             echo 'Controller-ordered migration unexpectedly retained Helm hook annotations.' >&2
             exit 1

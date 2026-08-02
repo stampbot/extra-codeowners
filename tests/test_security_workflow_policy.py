@@ -355,6 +355,12 @@ def test_release_publication_authority_is_limited_to_explicit_alpha_tags() -> No
     assert (
         "Release tag must be vMAJOR.MINOR.PATCH or vMAJOR.MINOR.PATCH-alpha.N" in jobs["validate"]
     )
+    assert 'expected_project_version="${BASH_REMATCH[1]}a${BASH_REMATCH[2]}"' in jobs["validate"]
+    assert "python_version: ${{ steps.version.outputs.python_version }}" in jobs["validate"]
+    assert (
+        "project-version: ${{ needs.validate.outputs.python_version }}"
+        in jobs["python-distribution-proof"]
+    )
     assert "Require an empty release-readiness milestone for a stable tag" in jobs["validate"]
 
     privileged_jobs = {

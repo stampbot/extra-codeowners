@@ -217,6 +217,24 @@ def test_production_manifest_setup_can_bootstrap_without_github_credentials() ->
     settings.validate_for_service()
 
 
+def test_production_manifest_setup_requires_an_https_github_api() -> None:
+    settings = Settings(
+        _env_file=None,
+        environment="production",
+        database_url=(
+            "postgresql+psycopg://user:password@db.example.test/database?sslmode=verify-full"
+        ),
+        setup_enabled=True,
+        setup_state_secret="s" * 32,
+        public_url="https://extra-codeowners.example.test",
+        github_api_url="http://github.example.test/api/v3",
+    )
+
+    assert settings.setup_bootstrap_mode is True
+    with pytest.raises(ValueError, match="HTTPS GitHub API URL"):
+        settings.validate_for_service()
+
+
 @pytest.mark.parametrize(
     ("github_app_id", "github_private_key", "github_webhook_secret"),
     [

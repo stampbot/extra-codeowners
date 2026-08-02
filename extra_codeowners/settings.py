@@ -425,13 +425,13 @@ class Settings(BaseSettings):
         ):
             msg = "production requires GitHub App ID, private key, and webhook secret"
             raise ValueError(msg)
+        if self.environment == "production" and self.github_api_url.scheme != "https":
+            msg = "production requires an HTTPS GitHub API URL"
+            raise ValueError(msg)
         if self.environment == "production" and not self.setup_bootstrap_mode:
             assert self.webhook_secret_value is not None
             if len(self.webhook_secret_value.encode()) < 32:
                 msg = "production requires a webhook secret containing at least 32 bytes"
-                raise ValueError(msg)
-            if self.github_api_url.scheme != "https":
-                msg = "production requires an HTTPS GitHub API URL"
                 raise ValueError(msg)
         self.validate_database()
 

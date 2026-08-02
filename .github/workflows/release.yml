@@ -21,6 +21,7 @@ jobs:
       issues: read
     outputs:
       version: ${{ steps.version.outputs.version }}
+      python_version: ${{ steps.version.outputs.python_version }}
       prerelease: ${{ steps.version.outputs.prerelease }}
     steps:
       - name: Check out repository
@@ -52,7 +53,7 @@ jobs:
           expected_project_version="$version"
           if [[ "$version" =~ ^([0-9]+\.[0-9]+\.[0-9]+)-alpha\.([1-9][0-9]*)$ ]]; then
             prerelease=true
-            expected_project_version="${BASH_REMATCH[1]}"
+            expected_project_version="${BASH_REMATCH[1]}a${BASH_REMATCH[2]}"
           elif ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "::error::Release tag must be vMAJOR.MINOR.PATCH or vMAJOR.MINOR.PATCH-alpha.N"
             exit 1
@@ -62,7 +63,8 @@ jobs:
             echo "::error::Tag version $version does not match project version $project_version"
             exit 1
           fi
-          printf 'version=%s\nprerelease=%s\n' "$version" "$prerelease" >> "$GITHUB_OUTPUT"
+          printf 'version=%s\npython_version=%s\nprerelease=%s\n' \
+            "$version" "$project_version" "$prerelease" >> "$GITHUB_OUTPUT"
 
       - name: Require an empty release-readiness milestone for a stable tag
         if: ${{ steps.version.outputs.prerelease != 'true' }}
@@ -81,6 +83,8 @@ jobs:
     permissions:
       contents: read
     uses: ./.github/workflows/python-distribution.yml
+    with:
+      project-version: ${{ needs.validate.outputs.python_version }}
 
   quality:
     name: Verify release source

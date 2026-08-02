@@ -366,12 +366,12 @@ By default, the migration hook must complete before Helm creates the
 Deployment. The application then remains unready until its GitHub and database
 settings are valid and a fresh authenticated App identity probe succeeds.
 
-Argo CD and other GitOps controllers can instead run the migration as an
-ordinary Job by setting `migrations.asHelmHook: false`. Use that mode only when
-the controller orders the database Secret before the Job and waits for the Job
-to succeed before applying the Deployment. Add the controller's ordering
-annotation through `migrations.annotations`; the Helm hook annotations remain
-reserved in every mode.
+For Argo CD, set `migrations.asHelmHook: false`. The chart then creates an Argo
+CD `Sync` hook and deletes a successful Job before the next hook is created.
+Set `argocd.argoproj.io/sync-wave` through `migrations.annotations` so the
+database Secret is available first. Argo waits for this hook to succeed before
+it applies the Deployment. The chart owns the hook and hook-delete annotations,
+so values cannot weaken that lifecycle.
 
 The default startup probe calls `/health/live` every five seconds, gives each
 request three seconds, and allows 60 failures. That gives initialization five
@@ -731,12 +731,12 @@ descriptions.
 | `extraVolumeMounts` | array | `[]` | Read-only mounts at or below `/run/secrets/extra-codeowners`; other paths are rejected. |
 | `extraArgs` | string array | `[]` | Replaces image arguments without replacing its entrypoint. |
 | `migrations.enabled` | boolean | `true` | Runs the pre-install and pre-upgrade Alembic Job. |
-| `migrations.asHelmHook` | boolean | `true` | Runs the migration as a Helm pre-install and pre-upgrade hook. Set false only when a GitOps controller orders the database Secret, migration Job, and application resources itself. |
+| `migrations.asHelmHook` | boolean | `true` | Runs the migration as a Helm pre-install and pre-upgrade hook. Set false for an Argo CD Sync hook; use `migrations.annotations` to set its sync wave. |
 | `migrations.lockTimeoutSeconds` | number | `60` | Greater than 0 and at most 300 seconds. |
 | `migrations.activeDeadlineSeconds` | integer | `180` | 1 through 3600 seconds. |
 | `migrations.backoffLimit` | integer | `0` | 0 through 10 Kubernetes retries. |
 | `migrations.ttlSecondsAfterFinished` | integer | `3600` | 60 through 604800 seconds. |
-| `migrations.annotations` | string map | `{}` | Additional annotations; hook, weight, and delete-policy annotations are reserved. |
+| `migrations.annotations` | string map | `{}` | Additional annotations. Helm hook and Argo hook lifecycle annotations are reserved. |
 | `migrations.serviceAccountName` | string | empty | Existing migration identity; empty uses the namespace's default account. |
 | `migrations.existingSecret` | string | empty | Opaque, trusted migration-only Secret exposed with `envFrom`; its keys are not validated by the chart. It must not contain a recognized libpq `PG*` variable; migrator validation fails closed if it does. |
 | `migrations.extraEnvFrom` | array | `[]` | Reserved. Any nonempty value is rejected; use explicit `migrations.extraEnv` entries. |

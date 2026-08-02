@@ -302,7 +302,7 @@ credential set, and restart the workload.
 - Invalid TOML, an unsupported schema version, or ambiguous policy fails evaluation and produces a diagnostic check result. An enrolled App identity mismatch makes that App's review ineligible and emits a sanitized warning; independent appropriate human or application evidence can still satisfy the owner set.
 - A repository with no policy and no managed Extra CODEOWNERS check is not enrolled: the service publishes no check and does not load organization policy for it. Organization configuration alone never opts repositories in.
 - An explicitly disabled repository policy produces a failing check and never causes an application approval to count. If policy disappears after the App has already created its named check on the current head, a later evaluation updates that managed check to failure instead of leaving a stale success.
-- Production service startup requires complete GitHub credentials, a webhook secret of at least 32 bytes, an HTTPS GitHub API URL, and PostgreSQL using `sslmode=verify-full` over every non-local connection or an operator-controlled loopback or Unix-socket transport.
+- Production service startup requires an HTTPS GitHub API URL, including during the credential-free setup flow. Outside that flow it also requires complete GitHub credentials and a webhook secret of at least 32 bytes. Every non-local PostgreSQL connection must use `sslmode=verify-full`; an operator-controlled loopback or Unix-socket transport is also allowed.
 - Setup-mode startup requires an HTTPS public URL and a setup-state secret of at least 32 bytes.
 
 Safe disablement has this order:
