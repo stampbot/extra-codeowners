@@ -362,9 +362,16 @@ helm install extra-codeowners \
   --timeout=10m
 ```
 
-The migration hook must complete before Helm creates the Deployment. The
-application then remains unready until its GitHub and database settings are
-valid and a fresh authenticated App identity probe succeeds.
+By default, the migration hook must complete before Helm creates the
+Deployment. The application then remains unready until its GitHub and database
+settings are valid and a fresh authenticated App identity probe succeeds.
+
+Argo CD and other GitOps controllers can instead run the migration as an
+ordinary Job by setting `migrations.asHelmHook: false`. Use that mode only when
+the controller orders the database Secret before the Job and waits for the Job
+to succeed before applying the Deployment. Add the controller's ordering
+annotation through `migrations.annotations`; the Helm hook annotations remain
+reserved in every mode.
 
 The default startup probe calls `/health/live` every five seconds, gives each
 request three seconds, and allows 60 failures. That gives initialization five
@@ -724,6 +731,7 @@ descriptions.
 | `extraVolumeMounts` | array | `[]` | Read-only mounts at or below `/run/secrets/extra-codeowners`; other paths are rejected. |
 | `extraArgs` | string array | `[]` | Replaces image arguments without replacing its entrypoint. |
 | `migrations.enabled` | boolean | `true` | Runs the pre-install and pre-upgrade Alembic Job. |
+| `migrations.asHelmHook` | boolean | `true` | Runs the migration as a Helm pre-install and pre-upgrade hook. Set false only when a GitOps controller orders the database Secret, migration Job, and application resources itself. |
 | `migrations.lockTimeoutSeconds` | number | `60` | Greater than 0 and at most 300 seconds. |
 | `migrations.activeDeadlineSeconds` | integer | `180` | 1 through 3600 seconds. |
 | `migrations.backoffLimit` | integer | `0` | 0 through 10 Kubernetes retries. |

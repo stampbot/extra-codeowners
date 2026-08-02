@@ -368,6 +368,7 @@ jobs:
           grep -Fq 'name: database-ca' rendered-migration-job.yaml
           grep -Fq 'name: LD_LIBRARY_PATH' rendered-migration-job.yaml
           grep -Fq 'name: OPENSSL_CONF' rendered-migration-job.yaml
+          grep -Fq 'helm.sh/hook: pre-install,pre-upgrade' rendered-migration-job.yaml
           grep -Fq 'app.kubernetes.io/component: application' rendered-service.yaml
           grep -Fq 'app.kubernetes.io/name: extra-codeowners' <<< "$deployment_selector"
           grep -Fq 'app.kubernetes.io/instance: extra-codeowners' <<< "$deployment_selector"
@@ -389,6 +390,18 @@ jobs:
           if grep -Eq 'extra-codeowners-(runtime|github)|github-credentials' \
             rendered-migration-job.yaml; then
             echo 'Migration Job inherited runtime GitHub credentials.' >&2
+            exit 1
+          fi
+
+      - name: Render controller-ordered migration
+        run: |
+          helm template extra-codeowners charts/extra-codeowners \
+            --set migrations.asHelmHook=false \
+            --set-string 'migrations.annotations.argocd\\.argoproj\\.io/sync-wave=-1' \
+            --show-only templates/migration-job.yaml > rendered-controller-migration-job.yaml
+          grep -Fq 'argocd.argoproj.io/sync-wave: "-1"' rendered-controller-migration-job.yaml
+          if grep -Fq 'helm.sh/hook:' rendered-controller-migration-job.yaml; then
+            echo 'Controller-ordered migration unexpectedly retained Helm hook annotations.' >&2
             exit 1
           fi
 

@@ -95,6 +95,10 @@ extraArgs: []
 migrations:
   # migrations.enabled runs the explicit Alembic upgrade before application pods change.
   enabled: true
+  # migrations.asHelmHook runs the migration as a Helm pre-install and pre-upgrade hook.
+  # Set it false only when a GitOps controller orders the database Secret, migration Job,
+  # and application resources with its own sync waves.
+  asHelmHook: true
   # migrations.lockTimeoutSeconds bounds the PostgreSQL advisory-lock wait.
   lockTimeoutSeconds: 60
   # migrations.activeDeadlineSeconds bounds the complete Kubernetes Job.
