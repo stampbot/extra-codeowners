@@ -218,15 +218,17 @@ def test_production_manifest_setup_can_bootstrap_without_github_credentials() ->
 
 
 @pytest.mark.parametrize(
-    "overrides",
+    ("github_app_id", "github_private_key", "github_webhook_secret"),
     [
-        {"github_app_id": 123},
-        {"github_private_key": "private-key"},
-        {"github_webhook_secret": "s" * 32},
+        (123, None, None),
+        (None, "private-key", None),
+        (None, None, "s" * 32),
     ],
 )
 def test_production_manifest_setup_rejects_partial_github_credentials(
-    overrides: dict[str, object],
+    github_app_id: int | None,
+    github_private_key: str | None,
+    github_webhook_secret: str | None,
 ) -> None:
     settings = Settings(
         _env_file=None,
@@ -237,7 +239,9 @@ def test_production_manifest_setup_rejects_partial_github_credentials(
         setup_enabled=True,
         setup_state_secret="s" * 32,
         public_url="https://extra-codeowners.example.test",
-        **overrides,
+        github_app_id=github_app_id,
+        github_private_key=github_private_key,
+        github_webhook_secret=github_webhook_secret,
     )
 
     assert settings.setup_bootstrap_mode is False
