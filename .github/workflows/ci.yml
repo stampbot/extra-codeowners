@@ -368,7 +368,7 @@ jobs:
           grep -Fq 'name: database-ca' rendered-migration-job.yaml
           grep -Fq 'name: LD_LIBRARY_PATH' rendered-migration-job.yaml
           grep -Fq 'name: OPENSSL_CONF' rendered-migration-job.yaml
-          grep -Fq 'helm.sh/hook: pre-install,pre-upgrade' rendered-migration-job.yaml
+          grep -Fq '"helm.sh/hook": pre-install,pre-upgrade' rendered-migration-job.yaml
           grep -Fq 'app.kubernetes.io/component: application' rendered-service.yaml
           grep -Fq 'app.kubernetes.io/name: extra-codeowners' <<< "$deployment_selector"
           grep -Fq 'app.kubernetes.io/instance: extra-codeowners' <<< "$deployment_selector"
