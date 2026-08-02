@@ -4,11 +4,12 @@ This chart deploys the self-hosted Extra CODEOWNERS GitHub App service. The
 repository contains chart source only.
 
 > [!CAUTION]
-> There is no supported image, OCI chart, production release, hosted service,
-> or Marketplace Action. Do not install the old
-> `ghcr.io/stampbot/extra-codeowners:main` image or use this chart to
-> authorize production merges. Keep GitHub's native **Require review from Code
-> Owners** rule in place.
+> The alpha release path publishes images and OCI charts for non-required,
+> shadow-mode testing. They are not supported releases and do not provide
+> complete recipient compliance evidence. Do not install the older
+> `ghcr.io/stampbot/extra-codeowners:main` image. Never use an alpha artifact
+> to authorize production merges; keep GitHub's native **Require review from
+> Code Owners** rule in place.
 
 The current Check Run design has a documented commit-to-pull-request
 inheritance window, tracked in
@@ -33,7 +34,7 @@ and [upgrade procedure][upgrade] before evaluating the chart.
 | --- | --- |
 | Kubernetes | 1.27 or later, enforced by `Chart.yaml` |
 | Helm | 3.19.0, the version pinned and tested by this repository |
-| Application image | A future supported image pinned by platform digest |
+| Application image | A supported image, or an alpha image pinned by digest for shadow-mode testing only |
 | Database | PostgreSQL through the exact `postgresql+psycopg` driver, configured under the application's production transport rules |
 | GitHub | An installed Extra CODEOWNERS App |
 | Ingress | Public HTTPS access to only the webhook endpoint |
@@ -96,7 +97,7 @@ select the runtime-default seccomp profile. The Deployment uses
 `Recreate`, the insecure override is off, and credential inputs remain
 outside chart-managed resources.
 
-## Obtain an image (currently blocked)
+## Use an alpha image only for shadow-mode testing
 
 The Dockerfile does not build the application from its ambient source tree. It
 requires a read-only `verified-python` context containing the exact
@@ -109,12 +110,12 @@ does. Do not replace the proof with a generic artifact extractor, an
 unverified wheel, empty build arguments, or a build from the ambient Docker
 context.
 
-Until the project publishes an image-verification procedure, treat the
-remaining sections as the chart's future operator contract, not as a current
-installation path. That procedure must identify the repository, platform
-digest, source revision, wheel digest, selection-record digest, signature,
-provenance, notices, and corresponding source. When a supported image exists,
-use the central
+An alpha release carries the image and chart needed for evaluation, but it
+doesn't satisfy the project’s supported-distribution requirements. Record the
+exact image digest, source revision, wheel digest, selection-record digest,
+signature, provenance, notices, and corresponding-source evidence before you
+run it. Keep native review enforcement intact throughout the test. When a
+supported image exists, use the central
 [deployment guide](https://extra-codeowners.readthedocs.io/en/latest/how-to/deploy/)
 and [upgrade procedure][upgrade] for task steps; use this README for
 chart-specific inputs, defaults, and review constraints.

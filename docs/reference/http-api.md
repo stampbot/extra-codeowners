@@ -119,6 +119,7 @@ The response is `200` when ready and `503` otherwise:
 {
   "status": "ready",
   "github_credentials": true,
+  "setup_bootstrap": false,
   "database": true,
   "worker_enabled": true,
   "reconciler_enabled": true,
@@ -132,6 +133,14 @@ The response is `200` when ready and `503` otherwise:
 existing `worker` and `reconciler` fields report whether each task is ready. A
 disabled task reports `false` in its `*_enabled` field and `true` in its
 readiness field.
+
+When built-in App setup is enabled and all three GitHub credential inputs are
+absent, `setup_bootstrap` is `true`. A healthy PostgreSQL connection then makes
+the setup routes reachable even though `github_credentials` is `false`. This
+is a short-lived registration state: the service cannot process webhooks or
+evaluate pull requests. Disable setup and restart with the complete App ID,
+private key, and webhook secret as soon as GitHub returns them. A partial
+credential configuration is not bootstrap mode and remains not ready.
 
 `status` becomes `not_ready` if credentials or the database are unavailable,
 or if an enabled local worker or reconciler task has stopped. This endpoint
@@ -306,7 +315,12 @@ Setup mode requires all three settings:
 - an HTTPS `EXTRA_CODEOWNERS_PUBLIC_URL` that contains only an origin
 - `EXTRA_CODEOWNERS_SETUP_STATE_SECRET` containing at least 32 bytes.
 
-When setup is disabled, all three setup routes return `404` and the other two settings are optional. When setup is enabled, missing or invalid setup settings prevent configuration from loading. The setup-state secret signs the short-lived setup exchange and is separate from the webhook secret.
+When setup is disabled, all three setup routes return `404` and the other two
+settings are optional. When setup is enabled, missing or invalid setup settings
+prevent configuration from loading. A production setup deployment may omit all
+three App credentials only while it is in bootstrap mode; a partial credential
+configuration still fails closed. The setup-state secret signs the short-lived
+setup exchange and is separate from the webhook secret.
 
 ### `GET /setup`
 

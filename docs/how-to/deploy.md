@@ -1,9 +1,10 @@
 # Prepare a future deployment
 
 Use this guide to design the database, secrets, network boundary, probes, and
-rollback plan for a future Extra CODEOWNERS deployment. The project does not
-have a supported production release, public image, OCI chart, hosted service,
-or Marketplace Action, so you cannot complete a supported installation yet.
+rollback plan for an Extra CODEOWNERS deployment. The project has no supported
+production release, hosted service, or Marketplace Action. Alpha images and
+OCI charts are available only for non-required, shadow-mode evaluation, so you
+cannot complete a supported installation yet.
 
 !!! danger
     Do not deploy the old `ghcr.io/stampbot/extra-codeowners:main` image,
@@ -15,11 +16,13 @@ or Marketplace Action, so you cannot complete a supported installation yet.
     [issue #30](https://github.com/stampbot/extra-codeowners/issues/30) tracks
     the old image.
 
-## Understand the current release block
+## Understand the release boundary
 
-The main-branch publication job has been removed. Tagged publication is also
-stopped before any job with package, signing, attestation, or release
-authority can run.
+The main-branch publication job has been removed. An exact
+`vMAJOR.MINOR.PATCH-alpha.N` tag can publish an image, chart, signed assets,
+and a GitHub prerelease after the existing proof and scan jobs pass. That path
+is for evaluation only. Stable publication is stopped before any job with
+package, signing, attestation, or release authority can run.
 
 Six open issues in the **First supported release** milestone define the
 remaining boundary:
@@ -51,17 +54,16 @@ fails when any input is missing or changed.
 The manual **Python distribution proof** workflow can create that proof for the
 commit resolved from a chosen ref. It has repository-read permission only. The
 tagged candidate scan creates and verifies a fresh proof in the same workflow
-run. Neither path publishes an image or gives an operator a supported way to
-build one.
+run. Neither path provides a supported way to build or deploy an image.
 
 The reusable workflow also emits a [raw spine and canonical
 record](../reference/python-distribution-spine-format.md). A read-only job
 verifies that pair and atomically materializes its five files without opening
 the wheel or source-distribution archives.
 
-The tagged workflow defines a privileged consumer for the same pair, but the
-unconditional publication blocker keeps it unreachable. That job would retain
-the three selection records separately from the signed distributions.
+An alpha tag runs the privileged consumer for the same pair and retains the
+three selection records beside the signed distributions. The stable publication
+block keeps that consumer unreachable for a supported release.
 
 A second blocked, read-only job would revalidate the raw pair and build a
 [15-file candidate inventory](../reference/release-asset-candidate-format.md)

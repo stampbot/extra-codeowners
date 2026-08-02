@@ -12,10 +12,11 @@ Regular pull requests keep going to their human owners.
 
 !!! warning "Use a disposable environment"
 
-    Extra CODEOWNERS is pre-release software. It isn't ready to enforce
-    production merges, and the public container preview isn't a supported
-    artifact. Don't deploy, mirror, or redistribute that preview. Read the
-    [project status](reference/project-status.md) before testing the App.
+    Extra CODEOWNERS is pre-release software. An alpha artifact is for
+    non-required, shadow-mode testing, not production enforcement or supported
+    distribution. Don't deploy, mirror, or redistribute the older `:main`
+    preview. Read the [project status](reference/project-status.md) before
+    testing the App.
 
 ## Start with the decision
 
@@ -93,8 +94,8 @@ The repository also contains deployment and operations contracts for review:
 - [review the architecture](explanation/architecture.md).
 
 There is no supported image, chart package, or production deployment yet.
-Those pages describe the current source and intended operating boundary; they
-aren't a production-readiness claim.
+Those pages describe the current source, alpha evaluation path, and intended
+operating boundary; they aren't a production-readiness claim.
 
 ## Look up exact behavior
 

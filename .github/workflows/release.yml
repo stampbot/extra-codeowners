@@ -21,6 +21,7 @@ jobs:
       issues: read
     outputs:
       version: ${{ steps.version.outputs.version }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
     steps:
       - name: Check out repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -47,18 +48,24 @@ jobs:
             exit 1
           fi
           version="${REF_NAME#v}"
-          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::Release tag must have the form vMAJOR.MINOR.PATCH"
+          prerelease=false
+          expected_project_version="$version"
+          if [[ "$version" =~ ^([0-9]+\.[0-9]+\.[0-9]+)-alpha\.([1-9][0-9]*)$ ]]; then
+            prerelease=true
+            expected_project_version="${BASH_REMATCH[1]}"
+          elif ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Release tag must be vMAJOR.MINOR.PATCH or vMAJOR.MINOR.PATCH-alpha.N"
             exit 1
           fi
           project_version="$(uv version --short)"
-          if [[ "$project_version" != "$version" ]]; then
+          if [[ "$project_version" != "$expected_project_version" ]]; then
             echo "::error::Tag version $version does not match project version $project_version"
             exit 1
           fi
-          echo "version=$version" >> "$GITHUB_OUTPUT"
+          printf 'version=%s\nprerelease=%s\n' "$version" "$prerelease" >> "$GITHUB_OUTPUT"
 
-      - name: Require an empty release-readiness milestone
+      - name: Require an empty release-readiness milestone for a stable tag
+        if: ${{ steps.version.outputs.prerelease != 'true' }}
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: >-
@@ -314,15 +321,22 @@ jobs:
           vex: .openvex.json
 
   publication-block:
-    name: Keep tagged publication disabled
+    name: Allow alpha publication or block stable publication
     needs: validate
     permissions: {}
     runs-on: ubuntu-latest
     timeout-minutes: 1
     steps:
-      - name: Keep tagged publication disabled pending isolated evidence collection
+      - name: Limit publication to explicitly tagged alpha builds
+        env:
+          PRERELEASE: ${{ needs.validate.outputs.prerelease }}
         run: |
-          echo "::error::Tagged publication is blocked by https://github.com/stampbot/extra-codeowners/issues/28"
+          if [[ "$PRERELEASE" == true ]]; then
+            echo "::warning::Publishing an alpha evaluation artifact. It is not a supported release."
+            echo "::warning::See issues #1, #18, #25, #28, #30, and #32."
+            exit 0
+          fi
+          echo "::error::Stable tagged publication is blocked by https://github.com/stampbot/extra-codeowners/issues/28"
           exit 1
 
   python:
@@ -567,7 +581,7 @@ jobs:
           images: ${{ env.IMAGE }}
           tags: |
             type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}.{{minor}},enable=${{ needs.validate.outputs.prerelease != 'true' }}
           labels: |
             org.opencontainers.image.title=Extra CODEOWNERS
             org.opencontainers.image.description=Delegated GitHub App approvals for CODEOWNERS policy
@@ -897,6 +911,7 @@ jobs:
       - image
       - chart
       - publication-block
+    if: ${{ needs.validate.outputs.prerelease != 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -1013,6 +1028,7 @@ jobs:
   release:
     name: Create GitHub release
     needs:
+      - validate
       - python
       - image
       - chart
@@ -1042,6 +1058,7 @@ jobs:
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
+          PRERELEASE: ${{ needs.validate.outputs.prerelease }}
         run: |
           set -euo pipefail
           artifacts=()
@@ -1052,6 +1069,8 @@ jobs:
             echo "No release artifacts were downloaded." >&2
             exit 1
           fi
-          gh release create "$GITHUB_REF_NAME" "${artifacts[@]}" \
-            --generate-notes \
-            --verify-tag
+          arguments=(--generate-notes --verify-tag)
+          if [[ "$PRERELEASE" == true ]]; then
+            arguments+=(--prerelease)
+          fi
+          gh release create "$GITHUB_REF_NAME" "${artifacts[@]}" "${arguments[@]}"

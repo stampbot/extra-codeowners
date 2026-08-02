@@ -332,7 +332,7 @@ def test_reusable_python_distribution_workflow_has_only_read_authority() -> None
             assert FULL_SHA_ACTION.search(line.strip()), f"mutable action reference: {line}"
 
 
-def test_release_publication_authority_is_directly_blocked() -> None:
+def test_release_publication_authority_is_limited_to_explicit_alpha_tags() -> None:
     source = (WORKFLOWS / "release.yml").read_text(encoding="utf-8")
     jobs = _workflow_jobs(source)
     blocker = jobs["publication-block"]
@@ -342,16 +342,20 @@ def test_release_publication_authority_is_directly_blocked() -> None:
     assert "    timeout-minutes: 1\n" in blocker
     assert blocker.count("      - name:") == 1
     assert "uses:" not in blocker
-    assert "${{" not in blocker
+    assert "PRERELEASE: ${{ needs.validate.outputs.prerelease }}" in blocker
     assert "secrets." not in blocker
     assert "continue-on-error:" not in blocker
     assert not re.search(r"(?m)^    if:|^        if:", blocker)
+    assert "Publishing an alpha evaluation artifact" in blocker
     assert (
-        "Tagged publication is blocked by "
+        "Stable tagged publication is blocked by "
         "https://github.com/stampbot/extra-codeowners/issues/28" in blocker
     )
     assert "exit 1" in blocker
-    assert "Keep tagged publication disabled" not in jobs["validate"]
+    assert (
+        "Release tag must be vMAJOR.MINOR.PATCH or vMAJOR.MINOR.PATCH-alpha.N" in jobs["validate"]
+    )
+    assert "Require an empty release-readiness milestone for a stable tag" in jobs["validate"]
 
     privileged_jobs = {
         name for name, body in jobs.items() if re.search(r"(?m)^      [a-z-]+: write$", body)
@@ -360,32 +364,44 @@ def test_release_publication_authority_is_directly_blocked() -> None:
     for name in privileged_jobs:
         assert "      - publication-block\n" in jobs[name]
         assert not re.search(r"(?m)^    if:", jobs[name])
+    assert "PRERELEASE: ${{ needs.validate.outputs.prerelease }}" in jobs["release"]
+    assert "arguments+=(--prerelease)" in jobs["release"]
+    assert "      - validate\n" in jobs["release"]
+    assert (
+        "if: ${{ needs.validate.outputs.prerelease != 'true' }}" in jobs["release-asset-candidate"]
+    )
+    assert (
+        "type=semver,pattern={{major}}.{{minor}},"
+        "enable=${{ needs.validate.outputs.prerelease != 'true' }}" in jobs["image"]
+    )
 
     for name in ("validate", "quality", "python-distribution-proof", "security-scan"):
         assert not re.search(r"(?m)^      [a-z-]+: write$", jobs[name])
 
 
 @pytest.mark.skipif(BASH is None, reason="the hardened runtime intentionally contains no shell")
-def test_release_publication_blocker_exits_nonzero() -> None:
+def test_release_publication_blocker_allows_only_alpha() -> None:
     source = (WORKFLOWS / "release.yml").read_text(encoding="utf-8")
-    script = _run_script(
-        source, "Keep tagged publication disabled pending isolated evidence collection"
-    )
+    script = _run_script(source, "Limit publication to explicitly tagged alpha builds")
 
     assert BASH is not None
-    result = subprocess.run(  # noqa: S603 - deliberately exercises the reviewed workflow script
-        [BASH, "-c", script],
-        cwd=ROOT,
-        env=os.environ,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-
-    assert result.returncode != 0
-    assert "https://github.com/stampbot/extra-codeowners/issues/28" in (
-        result.stdout + result.stderr
-    )
+    for prerelease, expected_returncode in (("true", 0), ("false", 1)):
+        environment = os.environ | {"PRERELEASE": prerelease}
+        result = subprocess.run(  # noqa: S603 - deliberately exercises the reviewed workflow script
+            [BASH, "-c", script],
+            cwd=ROOT,
+            env=environment,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == expected_returncode
+        if prerelease == "true":
+            assert "not a supported release" in (result.stdout + result.stderr)
+        else:
+            assert "https://github.com/stampbot/extra-codeowners/issues/28" in (
+                result.stdout + result.stderr
+            )
 
 
 def test_python_proof_handoffs_never_query_mutable_workflow_artifacts() -> None:

@@ -281,11 +281,17 @@ does not depend on this probe.
 
 | Environment variable | Type | Default | Constraints and effect |
 | --- | --- | --- | --- |
-| `EXTRA_CODEOWNERS_SETUP_ENABLED` | boolean | `false` | Enables the GitHub App Manifest setup routes. Keep disabled after registration when they are not needed. |
+| `EXTRA_CODEOWNERS_SETUP_ENABLED` | boolean | `false` | Enables the GitHub App Manifest setup routes. Keep disabled after registration when they are not needed. In production, it may temporarily run without all three App credentials only when all three are absent; partial credentials still fail closed. |
 | `EXTRA_CODEOWNERS_SETUP_STATE_SECRET` | secret string or null | null | HMAC key for short-lived setup state. Setup-mode startup requires at least 32 UTF-8 bytes. Use a value distinct from the webhook secret. |
 | `EXTRA_CODEOWNERS_SETUP_STATE_TTL_SECONDS` | integer | `600` | Setup state lifetime in seconds; inclusive range `60` through `3600`. |
 
 Do not place App private keys or webhook secrets in TOML committed to a repository. Runtime secrets belong in the deployment's secret manager.
+
+During that credential-free bootstrap state, `/health/ready` reports
+`setup_bootstrap: true` and admits the pod only to serve the setup routes. It
+does not authenticate GitHub, accept webhooks, or evaluate pull requests.
+After GitHub returns the credentials, disable setup, inject the complete
+credential set, and restart the workload.
 
 ## Loading and failure behavior
 

@@ -26,7 +26,7 @@ proxy, or allow any proxy to record callback query strings.
 
 ## 1. Start an isolated setup process
 
-Configure a short-lived development process:
+Configure a short-lived setup process:
 
 ```text
 EXTRA_CODEOWNERS_ENVIRONMENT=development
@@ -54,9 +54,13 @@ The first command must report the bundled migration head after validating the
 artifact's `required-release-contract`. The second keeps running and serves the
 setup page.
 
-This process does not need App credentials, so `/health/live` returns
-HTTP 200 while `/health/ready` returns HTTP 503. Don't route ordinary
-webhook traffic to it.
+This process does not need App credentials. Its ready response reports
+`setup_bootstrap: true`, so a Kubernetes Service can route the setup page while
+the credentials do not yet exist. It cannot authenticate GitHub, process
+webhooks, or evaluate pull requests. Don't route ordinary webhook traffic to
+it. In a production deployment, this exception applies only when all three App
+credential inputs are absent; a partial credential configuration still fails
+closed.
 
 ## 2. Open the registration page
 

@@ -236,8 +236,8 @@ versions.
 
 The main-branch image publication job is gone. Current CI does not push, sign,
 or attest a development image, and it does not verify an upstream signature for
-the Docker Official Image. Tagged publication is structurally disabled while
-the [First supported release
+the Docker Official Image. An exact alpha tag can publish a shadow-mode image;
+stable publication remains disabled while the [First supported release
 milestone](../reference/project-status.md#distribution-blockers) has open
 issues. The reviewed digest prevents substitution after review; Renovate and
 review of the new build are the trust path for changed base content.

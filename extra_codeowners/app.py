@@ -89,6 +89,12 @@ class ReadinessResponse(BaseModel):
             "Whether the credentials recently authenticated as the configured GitHub App ID."
         ),
     )
+    setup_bootstrap: bool = Field(
+        description=(
+            "Whether the service is intentionally reachable only to complete built-in "
+            "App setup before GitHub credentials are configured."
+        )
+    )
     database: bool = Field(description="Whether the service can query its database.")
     worker_enabled: bool = Field(
         description="Whether the evaluation worker is enabled in this process's configuration."
@@ -399,23 +405,34 @@ def create_app(
         },
     )
     async def ready(request: Request) -> JSONResponse:
-        """Return readiness only when identity, database, and worker are usable."""
+        """Return readiness when normal dependencies or setup bootstrap are usable."""
         queue_store: QueueStore = request.app.state.store
         database_ready = await asyncio.to_thread(queue_store.database_available)
         identity_probe: GitHubIdentityProbe | None = request.app.state.github_identity_probe
         github_ready = runtime.github_ready and identity_probe is not None and identity_probe.fresh
+        setup_bootstrap = runtime.setup_bootstrap_mode
         worker_task: asyncio.Task[None] | None = request.app.state.worker_task
-        worker_ready = not runtime.worker_enabled or (
-            worker_task is not None and not worker_task.done()
+        worker_ready = (
+            setup_bootstrap
+            or not runtime.worker_enabled
+            or (worker_task is not None and not worker_task.done())
         )
         reconciler_task: asyncio.Task[None] | None = request.app.state.reconciler_task
-        reconciler_ready = not runtime.reconcile_enabled or (
-            reconciler_task is not None and not reconciler_task.done()
+        reconciler_ready = (
+            setup_bootstrap
+            or not runtime.reconcile_enabled
+            or (reconciler_task is not None and not reconciler_task.done())
         )
-        ready_state = bool(github_ready and database_ready and worker_ready and reconciler_ready)
+        ready_state = bool(
+            (github_ready or setup_bootstrap)
+            and database_ready
+            and worker_ready
+            and reconciler_ready
+        )
         payload = ReadinessResponse(
             status="ready" if ready_state else "not_ready",
             github_credentials=github_ready,
+            setup_bootstrap=setup_bootstrap,
             database=database_ready,
             worker_enabled=runtime.worker_enabled,
             reconciler_enabled=runtime.reconcile_enabled,

@@ -309,6 +309,7 @@ def test_health_and_signed_webhook_ingestion(tmp_path: Path) -> None:
     assert ready.json() == {
         "status": "ready",
         "github_credentials": True,
+        "setup_bootstrap": False,
         "database": True,
         "worker_enabled": False,
         "reconciler_enabled": False,
@@ -342,6 +343,7 @@ def test_health_openapi_publishes_success_and_failure_response_contracts() -> No
             {
                 "status",
                 "github_credentials",
+                "setup_bootstrap",
                 "database",
                 "worker_enabled",
                 "reconciler_enabled",
@@ -625,6 +627,7 @@ def test_readiness_reports_enabled_background_tasks(tmp_path: Path) -> None:
     assert response.json() == {
         "status": "ready",
         "github_credentials": True,
+        "setup_bootstrap": False,
         "database": True,
         "worker_enabled": True,
         "reconciler_enabled": True,
@@ -981,12 +984,42 @@ def test_readiness_fails_without_github_credentials(tmp_path: Path) -> None:
     assert ready.json() == {
         "status": "not_ready",
         "github_credentials": False,
+        "setup_bootstrap": False,
         "database": True,
         "worker_enabled": True,
         "reconciler_enabled": True,
         "worker": False,
         "reconciler": False,
     }
+
+
+def test_setup_bootstrap_is_ready_without_github_credentials(tmp_path: Path) -> None:
+    store = migrated_store(f"sqlite:///{tmp_path / 'setup-bootstrap.db'}")
+    settings = Settings(
+        _env_file=None,
+        environment="test",
+        setup_enabled=True,
+        setup_state_secret="setup-state-secret-at-least-32-bytes-long",
+        public_url="https://extra-codeowners.example.com",
+    )
+    app = app_module.create_app(settings, store=store)
+
+    with TestClient(app) as client:
+        ready = client.get("/health/ready")
+        setup = client.get("/setup?organization=example")
+
+    assert ready.status_code == 200
+    assert ready.json() == {
+        "status": "ready",
+        "github_credentials": False,
+        "setup_bootstrap": True,
+        "database": True,
+        "worker_enabled": True,
+        "reconciler_enabled": True,
+        "worker": True,
+        "reconciler": True,
+    }
+    assert setup.status_code == 200
 
 
 def test_authenticated_client_does_not_replace_missing_webhook_credentials(

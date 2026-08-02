@@ -13977,20 +13977,25 @@ def test_blocked_release_still_writes_the_workflow_summary(
     assert "Open issues: **5**" in summary.read_text()
 
 
-def test_workflows_keep_release_blocked_and_collect_review_evidence_in_ci() -> None:
+def test_workflows_limit_publication_to_alpha_and_collect_review_evidence_in_ci() -> None:
     release = Path(".github/workflows/release.yml").read_text()
     ci = Path(".github/workflows/ci.yml").read_text()
     mise = Path("mise.toml").read_text()
 
     assert "issues: read" in release
     assert "release_readiness.py" in release
-    release_block = "Keep tagged publication disabled pending isolated evidence collection"
+    release_block = "Allow alpha publication or block stable publication"
     assert release_block in release
     assert "https://github.com/stampbot/extra-codeowners/issues/28" in release
     assert release.index(release_block) < release.index("Publish release image")
     publication_block = release.split("  publication-block:\n", 1)[1].split("  python:\n", 1)[0]
     assert "permissions: {}" in publication_block
+    assert "PRERELEASE: ${{ needs.validate.outputs.prerelease }}" in publication_block
+    assert "Publishing an alpha evaluation artifact" in publication_block
+    assert "Stable tagged publication is blocked" in publication_block
     assert "exit 1" in publication_block
+    assert "vMAJOR.MINOR.PATCH-alpha.N" in release
+    assert "Require an empty release-readiness milestone for a stable tag" in release
     assert '--summary "${GITHUB_STEP_SUMMARY}"' in release
     assert "Build digest-bound distribution evidence" not in release
     assert "--require-distribution-approval" not in release
