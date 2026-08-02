@@ -397,7 +397,7 @@ jobs:
         run: |
           helm template extra-codeowners charts/extra-codeowners \
             --set migrations.asHelmHook=false \
-            --set-string 'migrations.annotations.argocd\\.argoproj\\.io/sync-wave=-1' \
+            --set-json 'migrations.annotations={"argocd.argoproj.io/sync-wave":"-1"}' \
             --show-only templates/migration-job.yaml > rendered-controller-migration-job.yaml
           grep -Fq 'argocd.argoproj.io/sync-wave: "-1"' rendered-controller-migration-job.yaml
           if grep -Fq 'helm.sh/hook:' rendered-controller-migration-job.yaml; then
