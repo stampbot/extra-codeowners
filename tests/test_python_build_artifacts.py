@@ -15,6 +15,7 @@ import stat
 import subprocess
 import sys
 import tarfile
+import tomllib
 import zipfile
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -25,9 +26,10 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 PROJECT_NAME = "extra-codeowners"
-PROJECT_VERSION = "0.1.0"
-WHEEL_NAME = "extra_codeowners-0.1.0-py3-none-any.whl"
-DIST_INFO = "extra_codeowners-0.1.0.dist-info"
+with (ROOT / "pyproject.toml").open("rb") as source:
+    PROJECT_VERSION = cast(str, tomllib.load(source)["project"]["version"])
+WHEEL_NAME = f"extra_codeowners-{PROJECT_VERSION}-py3-none-any.whl"
+DIST_INFO = f"extra_codeowners-{PROJECT_VERSION}.dist-info"
 SDIST_POLICY = {
     "pyproject.toml": b"[build-system]\nrequires = ['hatchling==1.31.0']\n",
     "requirements-build.txt": b"hatchling==1.31.0\n",
@@ -89,9 +91,11 @@ def write_wheel(
     duplicate: str | None = None,
 ) -> None:
     files = {
-        "extra_codeowners/__init__.py": b'__version__ = "0.1.0"\n',
+        "extra_codeowners/__init__.py": f'__version__ = "{PROJECT_VERSION}"\n'.encode(),
         f"{DIST_INFO}/METADATA": (
-            b"Metadata-Version: 2.4\nName: extra-codeowners\nVersion: 0.1.0\n\n"
+            (
+                f"Metadata-Version: 2.4\nName: extra-codeowners\nVersion: {PROJECT_VERSION}\n\n"
+            ).encode()
         ),
         f"{DIST_INFO}/WHEEL": wheel_metadata
         or (
@@ -127,10 +131,14 @@ def write_wheel(
 
 
 def sdist_files() -> dict[str, bytes]:
-    root = "extra_codeowners-0.1.0"
+    root = f"extra_codeowners-{PROJECT_VERSION}"
     return {
         f"{root}/LICENSE": b"Apache-2.0\n",
-        f"{root}/PKG-INFO": (b"Metadata-Version: 2.4\nName: extra-codeowners\nVersion: 0.1.0\n\n"),
+        f"{root}/PKG-INFO": (
+            (
+                f"Metadata-Version: 2.4\nName: extra-codeowners\nVersion: {PROJECT_VERSION}\n\n"
+            ).encode()
+        ),
         f"{root}/README.md": b"# Extra CODEOWNERS\n",
         f"{root}/pyproject.toml": SDIST_POLICY["pyproject.toml"],
         f"{root}/requirements-build.txt": SDIST_POLICY["requirements-build.txt"],
@@ -260,10 +268,10 @@ def write_distribution_proof(
         "requirements-build.txt": (ROOT / "requirements-build.txt").read_bytes(),
     }
     files = sdist_files()
-    root = "extra_codeowners-0.1.0"
+    root = f"extra_codeowners-{PROJECT_VERSION}"
     files[f"{root}/pyproject.toml"] = policy["pyproject.toml"]
     files[f"{root}/requirements-build.txt"] = policy["requirements-build.txt"]
-    sdist_path = directory / "extra_codeowners-0.1.0.tar.gz"
+    sdist_path = directory / f"extra_codeowners-{PROJECT_VERSION}.tar.gz"
     write_sdist(sdist_path, files=files)
 
     requirements = build.parse_build_constraints(ROOT / "requirements-build.txt")
@@ -453,11 +461,11 @@ def test_selects_and_reverifies_exact_native_distribution_proofs(
         build.SELECTED_BUILD_RECORD_NAMES["arm64"],
         build.SELECTION_RECORD_NAME,
         WHEEL_NAME,
-        "extra_codeowners-0.1.0.tar.gz",
+        f"extra_codeowners-{PROJECT_VERSION}.tar.gz",
     }
     assert (output / WHEEL_NAME).read_bytes() == (amd64 / WHEEL_NAME).read_bytes()
-    assert (output / "extra_codeowners-0.1.0.tar.gz").read_bytes() == (
-        amd64 / "extra_codeowners-0.1.0.tar.gz"
+    assert (output / f"extra_codeowners-{PROJECT_VERSION}.tar.gz").read_bytes() == (
+        amd64 / f"extra_codeowners-{PROJECT_VERSION}.tar.gz"
     ).read_bytes()
     selection_path = output / build.SELECTION_RECORD_NAME
     selection = json.loads(selection_path.read_text(encoding="utf-8"))
@@ -601,7 +609,7 @@ def test_select_rejects_unreviewed_toolchain_and_source_tree_differences(
         )
 
 
-@pytest.mark.parametrize("archive_name", [WHEEL_NAME, "extra_codeowners-0.1.0.tar.gz"])
+@pytest.mark.parametrize("archive_name", [WHEEL_NAME, f"extra_codeowners-{PROJECT_VERSION}.tar.gz"])
 def test_select_rejects_altered_archives(tmp_path: Path, archive_name: str) -> None:
     amd64 = tmp_path / "amd64"
     arm64 = tmp_path / "arm64"
@@ -712,7 +720,7 @@ def test_retains_exact_selection_and_emits_installed_wheel_contract(tmp_path: Pa
         build.SELECTED_BUILD_RECORD_NAMES["arm64"],
         build.SELECTION_RECORD_NAME,
         WHEEL_NAME,
-        "extra_codeowners-0.1.0.tar.gz",
+        f"extra_codeowners-{PROJECT_VERSION}.tar.gz",
     }
     assert retained_result["files"] == build.selected_file_records(retained)
     assert all(stat.S_IMODE(path.stat().st_mode) == 0o600 for path in retained.iterdir())
@@ -730,7 +738,7 @@ def test_retains_exact_selection_and_emits_installed_wheel_contract(tmp_path: Pa
     )
     assert all(
         any(
-            file["path"].endswith("extra_codeowners-0.1.0.dist-info/RECORD")
+            file["path"].endswith(f"extra_codeowners-{PROJECT_VERSION}.dist-info/RECORD")
             for file in item["files"]
         )
         for item in alternatives
@@ -908,7 +916,10 @@ def test_valid_wheel_has_verified_identity_and_exact_record(tmp_path: Path) -> N
             {"additions": {"foreign-9.0.dist-info/METADATA": b"Name: foreign\nVersion: 9\n\n"}},
             "dist-info identity",
         ),
-        ({"additions": {"extra_codeowners-0.1.0.data/data/file": b"data"}}, "data directory"),
+        (
+            {"additions": {f"extra_codeowners-{PROJECT_VERSION}.data/data/file": b"data"}},
+            "data directory",
+        ),
         ({"omit_record": True}, "filename-bound WHEEL and RECORD"),
     ],
 )
@@ -1004,8 +1015,8 @@ def test_reproducibility_diagnoses_archive_metadata_and_content_drift(tmp_path: 
 
 
 def test_valid_sdist_and_archive_metadata_drift(tmp_path: Path) -> None:
-    first = tmp_path / "first" / "extra_codeowners-0.1.0.tar.gz"
-    second = tmp_path / "second" / "extra_codeowners-0.1.0.tar.gz"
+    first = tmp_path / "first" / f"extra_codeowners-{PROJECT_VERSION}.tar.gz"
+    second = tmp_path / "second" / f"extra_codeowners-{PROJECT_VERSION}.tar.gz"
     first.parent.mkdir()
     second.parent.mkdir()
     write_sdist(first, member_mtime=10, gzip_mtime=10)
@@ -1031,9 +1042,9 @@ def test_valid_sdist_and_archive_metadata_drift(tmp_path: Path) -> None:
 
 
 def test_sdist_rejects_escapes_links_and_missing_build_policy(tmp_path: Path) -> None:
-    sdist = tmp_path / "extra_codeowners-0.1.0.tar.gz"
+    sdist = tmp_path / f"extra_codeowners-{PROJECT_VERSION}.tar.gz"
     files = sdist_files()
-    files["extra_codeowners-0.1.0/../escape"] = b"bad"
+    files[f"extra_codeowners-{PROJECT_VERSION}/../escape"] = b"bad"
     write_sdist(sdist, files=files)
     with pytest.raises(build.BuildError, match="unsafe member"):
         build.verify_sdist(
@@ -1043,7 +1054,7 @@ def test_sdist_rejects_escapes_links_and_missing_build_policy(tmp_path: Path) ->
             expected_policy=SDIST_POLICY,
         )
 
-    write_sdist(sdist, links={"extra_codeowners-0.1.0/link": "README.md"})
+    write_sdist(sdist, links={f"extra_codeowners-{PROJECT_VERSION}/link": "README.md"})
     with pytest.raises(build.BuildError, match="special member"):
         build.verify_sdist(
             sdist,
@@ -1053,7 +1064,7 @@ def test_sdist_rejects_escapes_links_and_missing_build_policy(tmp_path: Path) ->
         )
 
     files = sdist_files()
-    del files["extra_codeowners-0.1.0/requirements-build.txt"]
+    del files[f"extra_codeowners-{PROJECT_VERSION}/requirements-build.txt"]
     write_sdist(sdist, files=files)
     with pytest.raises(build.BuildError, match="omits required"):
         build.verify_sdist(
@@ -1064,7 +1075,7 @@ def test_sdist_rejects_escapes_links_and_missing_build_policy(tmp_path: Path) ->
         )
 
     files = sdist_files()
-    files["extra_codeowners-0.1.0/requirements-build.txt"] = b"hatchling==9.9.9\n"
+    files[f"extra_codeowners-{PROJECT_VERSION}/requirements-build.txt"] = b"hatchling==9.9.9\n"
     write_sdist(sdist, files=files)
     with pytest.raises(build.BuildError, match=r"changes reviewed requirements-build\.txt"):
         build.verify_sdist(

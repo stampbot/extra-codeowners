@@ -12,6 +12,7 @@ import os
 import subprocess
 import sys
 import tarfile
+import tomllib
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,6 +24,8 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / ".github" / "scripts" / "recipient_evidence.py"
 VERSION = "0.1.0"
+with (ROOT / "pyproject.toml").open("rb") as source:
+    PROJECT_VERSION = cast(str, tomllib.load(source)["project"]["version"])
 PLATFORM = "linux/amd64"
 SUBJECT = f"sha256:{'1' * 64}"
 INDEX = f"sha256:{'2' * 64}"
@@ -1302,7 +1305,7 @@ def test_checked_in_source_tree_uses_the_recipient_tar_contract() -> None:
     assert "extra_codeowners/__init__.py" in records
     assert any(len(path.encode()) > 100 for path in records)
     assert project["name"] == "extra-codeowners"
-    assert project["version"] == VERSION
+    assert project["version"] == PROJECT_VERSION
 
 
 def test_retained_cargo_lock_is_reconciled_with_reviewed_packages() -> None:
