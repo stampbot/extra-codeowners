@@ -134,10 +134,11 @@ def real_selected_files(tmp_path: Path) -> tuple[Path, dict[str, object]]:
         (project / "requirements-build.txt").write_bytes(
             (ROOT / "requirements-build.txt").read_bytes()
         )
-        helper.ROOT = project
-        helper.PROJECT_VERSION = VERSION
-        helper.WHEEL_NAME = WHEEL_NAME
-        helper.DIST_INFO = f"extra_codeowners-{VERSION}.dist-info"
+        dynamic_helper = cast(Any, helper)
+        dynamic_helper.ROOT = project
+        dynamic_helper.PROJECT_VERSION = VERSION
+        dynamic_helper.WHEEL_NAME = WHEEL_NAME
+        dynamic_helper.DIST_INFO = f"extra_codeowners-{VERSION}.dist-info"
         amd64 = tmp_path / "real-amd64"
         arm64 = tmp_path / "real-arm64"
         helper.write_distribution_proof(amd64, "amd64")
