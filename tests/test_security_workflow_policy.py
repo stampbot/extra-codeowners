@@ -373,6 +373,12 @@ def test_release_publication_authority_is_limited_to_explicit_alpha_tags() -> No
     assert "PRERELEASE: ${{ needs.validate.outputs.prerelease }}" in jobs["release"]
     assert "arguments+=(--prerelease)" in jobs["release"]
     assert "      - validate\n" in jobs["release"]
+    release_checkout = _named_step(jobs["release"], "Check out tagged release")
+    assert "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0" in release_checkout
+    assert "persist-credentials: false" in release_checkout
+    assert jobs["release"].index("Check out tagged release") < jobs["release"].index(
+        "Download Python artifacts"
+    )
     assert (
         "if: ${{ needs.validate.outputs.prerelease != 'true' }}" in jobs["release-asset-candidate"]
     )
