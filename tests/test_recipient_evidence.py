@@ -1237,7 +1237,7 @@ def test_checked_in_policy_passes_recipient_schema_before_retained_binding() -> 
         "embedded_sboms": [],
         "image_config_digest": f"sha256:{'4' * 64}",
         "image_revision": REVISION,
-        "image_version": VERSION,
+        "image_version": PROJECT_VERSION,
         "native_payloads": [],
         "native_wheelhouse_index_digest": f"sha256:{'5' * 64}",
         "native_wheelhouse_revision": "6" * 40,
@@ -1283,7 +1283,7 @@ def test_checked_in_policy_passes_recipient_schema_before_retained_binding() -> 
             [],
             {},
             verifier.ExpectedIdentity(
-                version=VERSION,
+                version=PROJECT_VERSION,
                 platform=PLATFORM,
                 subject_digest=SUBJECT,
                 source_revision=REVISION,
