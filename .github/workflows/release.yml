@@ -857,9 +857,9 @@ jobs:
         env:
           VERSION: ${{ needs.validate.outputs.version }}
         run: |
-          old_image='image: ghcr.io/stampbot/extra-codeowners:[^[:space:]]*'
-          new_image="image: ghcr.io/stampbot/extra-codeowners:${VERSION}"
-          sed -i "s#${old_image}#${new_image}#" charts/extra-codeowners/Chart.yaml
+          sed -i \
+            "s/^  tag: \".*\"$/  tag: \"${VERSION}\"/" \
+            charts/extra-codeowners/values.yaml
           sed -i \
             "s/--version 0\.1\.0/--version ${VERSION}/g" \
             charts/extra-codeowners/README.md

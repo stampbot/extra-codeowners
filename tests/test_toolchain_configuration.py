@@ -257,6 +257,9 @@ def test_helm_chart_protects_startup_and_rejects_explicit_libpq_environment() ->
         "failureThreshold": 60,
     }
 
+    image = cast(dict[str, Any], values["image"])
+    assert image["tag"] == "0.1.0-alpha.1"
+
     schema = json.loads((ROOT / "charts" / "extra-codeowners" / "values.schema.json").read_text())
     probes = schema["properties"]["probes"]
     assert "startup" in probes["required"]
