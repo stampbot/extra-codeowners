@@ -669,8 +669,8 @@ jobs:
           print(project["project"]["version"])
           PY
           )"
-          if ! [[ "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
-            echo "Project version is not an exact three-part release version." >&2
+          if ! [[ "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(a[1-9][0-9]*)?$ ]]; then
+            echo "Project version is not a supported stable or alpha version." >&2
             exit 1
           fi
           basename="extra-codeowners-image-${GITHUB_SHA}"
