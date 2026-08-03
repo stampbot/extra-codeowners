@@ -88,6 +88,11 @@ extraVolumes: []
 # /run/secrets/extra-codeowners. Other mount paths are rejected.
 extraVolumeMounts: []
 
+# extraManifests renders trusted companion objects with this Helm release. Each
+# object needs apiVersion, kind, and metadata.name. Helm writes it without
+# evaluating template expressions in the object.
+extraManifests: []
+
 # extraArgs overrides the image's default command arguments but not its entrypoint.
 extraArgs: []
 

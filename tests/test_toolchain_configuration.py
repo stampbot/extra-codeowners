@@ -260,6 +260,8 @@ def test_helm_chart_protects_startup_and_rejects_explicit_libpq_environment() ->
     image = cast(dict[str, Any], values["image"])
     assert image["tag"] == "0.1.0-alpha.1"
 
+    assert values["extraManifests"] == []
+
     schema = json.loads((ROOT / "charts" / "extra-codeowners" / "values.schema.json").read_text())
     probes = schema["properties"]["probes"]
     assert "startup" in probes["required"]
@@ -270,6 +272,11 @@ def test_helm_chart_protects_startup_and_rejects_explicit_libpq_environment() ->
     migration_schema = schema["properties"]["migrations"]
     assert "asHelmHook" in migration_schema["required"]
     assert migration_schema["properties"]["asHelmHook"] == {"type": "boolean"}
+
+    extra_manifests_schema = schema["properties"]["extraManifests"]
+    assert "extraManifests" in schema["required"]
+    assert extra_manifests_schema["items"]["required"] == ["apiVersion", "kind", "metadata"]
+    assert extra_manifests_schema["items"]["properties"]["metadata"]["required"] == ["name"]
 
     deployment = (
         ROOT / "charts" / "extra-codeowners" / "templates" / "deployment.yaml"
@@ -298,6 +305,15 @@ def test_helm_chart_protects_startup_and_rejects_explicit_libpq_environment() ->
     assert helpers.count("must not set ambient libpq variable") == 2
     assert 'eq $name "argocd.argoproj.io/hook"' in helpers
     assert 'eq $name "argocd.argoproj.io/hook-delete-policy"' in helpers
+    assert 'define "extra-codeowners.validateExtraManifest"' in helpers
+    assert 'include "extra-codeowners.validateExtraManifest" .' in helpers
+    assert "extraManifests must not contain Secret objects" in helpers
+
+    extra_manifests_template = (
+        ROOT / "charts" / "extra-codeowners" / "templates" / "extra-manifests.yaml"
+    ).read_text()
+    assert "{{ toYaml . }}" in extra_manifests_template
+    assert "tpl" not in extra_manifests_template
 
 
 def test_pinned_uv_exposes_the_scheduled_audit_interface_without_network() -> None:

@@ -1,0 +1,29 @@
+extraManifests:
+  - apiVersion: generators.external-secrets.io/v1alpha1
+    kind: Password
+    metadata:
+      name: extra-codeowners-setup-state
+    spec:
+      length: 43
+      digits: 6
+      symbols: 0
+      symbolCharacters: ""
+      noUpper: false
+      allowRepeat: false
+  - apiVersion: external-secrets.io/v1
+    kind: ExternalSecret
+    metadata:
+      name: extra-codeowners-setup-state
+    spec:
+      target:
+        name: extra-codeowners-setup-state
+        template:
+          engineVersion: v2
+          data:
+            EXTRA_CODEOWNERS_SETUP_STATE_SECRET: "{{ .password }}"
+      dataFrom:
+        - sourceRef:
+            generatorRef:
+              apiVersion: generators.external-secrets.io/v1alpha1
+              kind: Password
+              name: extra-codeowners-setup-state
