@@ -283,6 +283,24 @@ remain empty. Keep recognized libpq `PG*` variables out of both existing
 Secrets; the chart cannot inspect those keys, and the runtime and migrator
 reject them.
 
+## Add companion objects
+
+`extraManifests` can add non-Secret Kubernetes objects to the same Helm release.
+Use it for a companion object whose lifecycle needs to follow this release, such
+as an External Secrets `Password` generator and its `ExternalSecret`. Every
+object needs `apiVersion`, `kind`, and `metadata.name`.
+
+Helm renders each object as supplied. It does not evaluate template expressions
+inside `extraManifests`, so a controller expression such as `{{ .password }}`
+reaches that controller unchanged. If another renderer, such as an Argo CD
+ApplicationSet, prepares the Helm values, escape the expression for that outer
+renderer first.
+
+The chart rejects `Secret` objects in `extraManifests`, including one nested in
+a Kubernetes `List`. Helm records rendered manifests in release metadata;
+create credentials through External Secrets or another dedicated
+secret-management path instead.
+
 ## Configure and preflight the release
 
 Save this non-secret configuration as `deployment-values.yaml`:
@@ -729,6 +747,7 @@ descriptions.
 | `extraEnv` | array | `[]` | `EnvVar` objects with `name` and exactly one of `value` or `valueFrom`. Cannot override chart-managed variables or set a name beginning with `PG`, `PATH`, `PYTHON*`, `LD_*`, `DYLD_*`, `GCONV_PATH`, `LOCPATH`, `OPENSSL_*`, or `SSLKEYLOGFILE`. |
 | `extraVolumes` | array | `[]` | Volume objects with `name`; `tmp` is reserved. |
 | `extraVolumeMounts` | array | `[]` | Read-only mounts at or below `/run/secrets/extra-codeowners`; other paths are rejected. |
+| `extraManifests` | object array | `[]` | Trusted companion objects, each with `apiVersion`, `kind`, and `metadata.name`. Helm renders them without evaluating their template expressions. `Secret` objects, including ones nested in a Kubernetes `List`, are rejected because release metadata would contain their data. |
 | `extraArgs` | string array | `[]` | Replaces image arguments without replacing its entrypoint. |
 | `migrations.enabled` | boolean | `true` | Runs the pre-install and pre-upgrade Alembic Job. |
 | `migrations.asHelmHook` | boolean | `true` | Runs the migration as a Helm pre-install and pre-upgrade hook. Set false for an Argo CD Sync hook; use `migrations.annotations` to set its sync wave. |

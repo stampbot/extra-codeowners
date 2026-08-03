@@ -412,6 +412,28 @@ jobs:
             exit 1
           fi
 
+      - name: Render trusted supplementary manifests without templating them
+        run: |
+          helm template extra-codeowners charts/extra-codeowners \
+            --values tests/fixtures/helm-extra-manifests.yaml \
+            --show-only templates/extra-manifests.yaml > rendered-extra-manifests.yaml
+          yq eval 'select(.kind == "Password") | .metadata.name' \
+            rendered-extra-manifests.yaml | grep -Fx 'extra-codeowners-setup-state'
+          yq eval 'select(.kind == "ExternalSecret") | .spec.target.template.data.EXTRA_CODEOWNERS_SETUP_STATE_SECRET' \
+            rendered-extra-manifests.yaml | grep -Fx '{{ .password }}'
+          if helm template extra-codeowners charts/extra-codeowners \
+            --set-json 'extraManifests=[{"apiVersion":"v1","kind":"Secret","metadata":{"name":"must-not-render"}}]' \
+            >/dev/null 2>&1; then
+            echo 'Chart accepted a Secret through extraManifests.' >&2
+            exit 1
+          fi
+          if helm template extra-codeowners charts/extra-codeowners \
+            --set-json 'extraManifests=[{"apiVersion":"v1","kind":"List","metadata":{"name":"must-not-render"},"items":[{"apiVersion":"v1","kind":"Secret","metadata":{"name":"must-not-render"}}]}]' \
+            >/dev/null 2>&1; then
+            echo 'Chart accepted a Secret nested in a List through extraManifests.' >&2
+            exit 1
+          fi
+
       - name: Render rolling-update opt-in
         run: >-
           helm template extra-codeowners charts/extra-codeowners

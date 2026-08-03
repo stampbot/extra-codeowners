@@ -1,0 +1,5 @@
+{{- include "extra-codeowners.validateValues" . }}
+{{- range .Values.extraManifests }}
+---
+{{ toYaml . }}
+{{- end }}

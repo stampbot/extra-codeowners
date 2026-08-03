@@ -22,6 +22,7 @@
     "extraEnv",
     "extraVolumes",
     "extraVolumeMounts",
+    "extraManifests",
     "extraArgs",
     "migrations",
     "service",
@@ -248,6 +249,41 @@
           "name",
           "mountPath"
         ]
+      }
+    },
+    "extraManifests": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": [
+          "apiVersion",
+          "kind",
+          "metadata"
+        ],
+        "properties": {
+          "apiVersion": {
+            "type": "string",
+            "minLength": 1
+          },
+          "kind": {
+            "type": "string",
+            "minLength": 1
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": true,
+            "required": [
+              "name"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        }
       }
     },
     "extraArgs": {

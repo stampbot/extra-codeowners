@@ -60,6 +60,21 @@ app.kubernetes.io/component: application
 {{- end }}
 {{- end }}
 
+{{/* Reject a Secret anywhere in a user-supplied manifest or Kubernetes List. */}}
+{{- define "extra-codeowners.validateExtraManifest" -}}
+{{- $manifest := . -}}
+{{- if kindIs "map" $manifest -}}
+{{- if eq (default "" $manifest.kind) "Secret" -}}
+{{- fail "extraManifests must not contain Secret objects; Helm stores rendered manifests in release metadata" -}}
+{{- end -}}
+{{- if and (hasKey $manifest "items") (kindIs "slice" $manifest.items) -}}
+{{- range $manifest.items -}}
+{{- include "extra-codeowners.validateExtraManifest" . -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
 {{/* Reject extension values that shadow chart-owned security contracts. */}}
 {{- define "extra-codeowners.validateValues" -}}
 {{- if or (hasKey .Values.podLabels "app.kubernetes.io/name") (hasKey .Values.podLabels "app.kubernetes.io/instance") (hasKey .Values.podLabels "app.kubernetes.io/component") -}}
@@ -92,6 +107,9 @@ app.kubernetes.io/component: application
 {{- if not (default false .readOnly) -}}
 {{- fail "extraVolumeMounts must be read-only" -}}
 {{- end -}}
+{{- end -}}
+{{- range .Values.extraManifests -}}
+{{- include "extra-codeowners.validateExtraManifest" . -}}
 {{- end -}}
 {{- if .Values.migrations.extraEnvFrom -}}
 {{- fail "migrations.extraEnvFrom is unsupported because EnvFromSource keys cannot be validated; use migrations.extraEnv with explicit names and valueFrom references" -}}
