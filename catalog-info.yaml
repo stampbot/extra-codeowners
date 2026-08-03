@@ -1,0 +1,22 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: extra-codeowners
+  title: Extra CODEOWNERS
+  description: GitHub App that accepts narrowly delegated App approvals for
+    selected CODEOWNERS paths.
+  annotations:
+    github.com/project-slug: stampbot/extra-codeowners
+  links:
+    - url: https://extra-codeowners.readthedocs.io/
+      title: Public documentation
+      icon: docs
+  tags:
+    - github-app
+    - pull-requests
+    - security
+spec:
+  type: service
+  lifecycle: experimental
+  owner: group:default/infrastructure
+  system: argo-apps

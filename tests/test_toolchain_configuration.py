@@ -258,7 +258,7 @@ def test_helm_chart_protects_startup_and_rejects_explicit_libpq_environment() ->
     }
 
     image = cast(dict[str, Any], values["image"])
-    assert image["tag"] == "0.1.0-alpha.1"
+    assert image["tag"] == "0.1.0-alpha.2"
 
     assert values["extraManifests"] == []
 
