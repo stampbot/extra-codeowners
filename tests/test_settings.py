@@ -205,7 +205,7 @@ def test_production_manifest_setup_can_bootstrap_without_github_credentials() ->
         _env_file=None,
         environment="production",
         database_url=(
-            "postgresql+psycopg://user:password@db.example.test/database?sslmode=verify-full"
+            "postgresql+psycopg://user:password@db.example.test/database?sslmode=require"
         ),
         setup_enabled=True,
         setup_state_secret="s" * 32,
@@ -222,7 +222,7 @@ def test_production_manifest_setup_requires_an_https_github_api() -> None:
         _env_file=None,
         environment="production",
         database_url=(
-            "postgresql+psycopg://user:password@db.example.test/database?sslmode=verify-full"
+            "postgresql+psycopg://user:password@db.example.test/database?sslmode=require"
         ),
         setup_enabled=True,
         setup_state_secret="s" * 32,
@@ -252,7 +252,7 @@ def test_production_manifest_setup_rejects_partial_github_credentials(
         _env_file=None,
         environment="production",
         database_url=(
-            "postgresql+psycopg://user:password@db.example.test/database?sslmode=verify-full"
+            "postgresql+psycopg://user:password@db.example.test/database?sslmode=require"
         ),
         setup_enabled=True,
         setup_state_secret="s" * 32,
@@ -283,18 +283,14 @@ def test_production_requires_postgresql() -> None:
 @pytest.mark.parametrize(
     "database_url",
     [
-        "postgresql+psycopg://user:password@db.example.test/database?sslmode=verify-full",
+        "postgresql+psycopg://user:password@db.example.test/database?sslmode=require",
         "postgresql+psycopg://user:password@localhost/database",
         "postgresql+psycopg://user:password@127.0.0.1/database",
         "postgresql+psycopg://user:password@[::1]/database",
         "postgresql+psycopg://user:password@/database?host=%2Frun%2Fpostgresql",
         (
             "postgresql+psycopg://user:password@db.example.test/database?"
-            "hostaddr=203.0.113.1&sslmode=verify-full"
-        ),
-        (
-            "postgresql+psycopg://user:password@db.example.test/database?"
-            "sslmode=verify-full&sslrootcert=%2Frun%2Fsecrets%2Fdatabase-ca%2Froot.pem"
+            "hostaddr=203.0.113.1&sslmode=require"
         ),
     ],
 )
@@ -311,40 +307,40 @@ def test_production_database_transport_validator_accepts_safe_routes(
         "postgresql://user:password@localhost/database",
         "postgresql+psycopg2://user:password@localhost/database",
         "postgresql+psycopg://user:password@db.example.test/database",
-        ("postgresql+psycopg://user:password@db.example.test:0/database?sslmode=verify-full"),
-        ("postgresql+psycopg://user:password@db.example.test:-1/database?sslmode=verify-full"),
-        ("postgresql+psycopg://user:password@db.example.test:65536/database?sslmode=verify-full"),
+        ("postgresql+psycopg://user:password@db.example.test:0/database?sslmode=require"),
+        ("postgresql+psycopg://user:password@db.example.test:-1/database?sslmode=require"),
+        ("postgresql+psycopg://user:password@db.example.test:65536/database?sslmode=require"),
         "postgresql+psycopg://user:password@/database",
         "postgresql+psycopg://user:@localhost/database",
         "postgresql+psycopg://user:password@localhost/database?hostaddr=203.0.113.1",
         "postgresql+psycopg://user:password@/database?service=remote-database",
         (
             "postgresql+psycopg://user:password@db.example.test/database?"
-            "sslmode=verify-full&options=-csearch_path%3Dunsafe"
+            "sslmode=require&options=-csearch_path%3Dunsafe"
         ),
         (
             "postgresql+psycopg://user:password@db.example.test/database?"
-            "sslmode=verify-full&sslrootcert=relative.pem"
+            "sslmode=require&sslrootcert=relative.pem"
         ),
         (
             "postgresql+psycopg://user:password@db-1.example.test,"
-            "db-2.example.test/database?sslmode=verify-full"
+            "db-2.example.test/database?sslmode=require"
         ),
         (
             "postgresql+psycopg://user:password@/database?"
-            "host=%2Frun%2Fpostgresql%2Cdb.example.test&sslmode=verify-full"
+            "host=%2Frun%2Fpostgresql%2Cdb.example.test&sslmode=require"
         ),
     ],
 )
 def test_production_database_transport_validator_rejects_unsafe_routes(
     database_url: str,
 ) -> None:
-    with pytest.raises(ValueError, match=r"PostgreSQL|sslmode=verify-full"):
+    with pytest.raises(ValueError, match=r"PostgreSQL|sslmode=require"):
         validate_production_database_transport(database_url)
 
 
-@pytest.mark.parametrize("ssl_mode", [None, "require", "verify-ca"])
-def test_remote_production_postgresql_requires_hostname_verification(
+@pytest.mark.parametrize("ssl_mode", [None, "verify-ca", "verify-full"])
+def test_remote_production_postgresql_requires_encrypted_transport(
     ssl_mode: str | None,
 ) -> None:
     suffix = "" if ssl_mode is None else f"?sslmode={ssl_mode}"
@@ -357,19 +353,19 @@ def test_remote_production_postgresql_requires_hostname_verification(
         database_url=f"postgresql+psycopg://user:password@db.example.test/database{suffix}",
     )
 
-    with pytest.raises(ValueError, match="sslmode=verify-full"):
+    with pytest.raises(ValueError, match="sslmode=require"):
         settings.validate_for_service()
 
 
-def test_production_postgresql_accepts_verified_remote_or_local_proxy() -> None:
-    verified = Settings(
+def test_production_postgresql_accepts_required_remote_or_local_proxy() -> None:
+    required = Settings(
         _env_file=None,
         environment="production",
         github_app_id=123,
         github_private_key="key",
         github_webhook_secret="s" * 32,
         database_url=(
-            "postgresql+psycopg://user:password@db.example.test/database?sslmode=verify-full"
+            "postgresql+psycopg://user:password@db.example.test/database?sslmode=require"
         ),
     )
     local_proxy = Settings(
@@ -391,7 +387,7 @@ def test_production_postgresql_accepts_verified_remote_or_local_proxy() -> None:
         ),
     )
 
-    verified.validate_for_service()
+    required.validate_for_service()
     local_proxy.validate_for_service()
     local_socket.validate_for_service()
 
@@ -421,7 +417,7 @@ def test_production_postgresql_does_not_misclassify_routed_remote_hosts(
 
     with pytest.raises(
         ValueError,
-        match=r"one explicit host|one unambiguous explicit route|sslmode=verify-full",
+        match=r"one explicit host|one unambiguous explicit route|sslmode=require",
     ):
         settings.validate_for_service()
 

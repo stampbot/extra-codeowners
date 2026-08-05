@@ -46,23 +46,23 @@ In production mode, startup rejects:
 - a database URL that does not use the exact `postgresql+psycopg` driver
 - a PostgreSQL URL without one explicit host, database, username, and nonempty
   password
-- a remote PostgreSQL URL that does not use `sslmode=verify-full`
+- a remote PostgreSQL URL that does not use `sslmode=require`
 - any ambient libpq connection variable.
 
-The weaker `require` and `verify-ca` modes are rejected because they do not
-verify the database hostname. Every production URL must name exactly one
-nonempty host or Unix-socket path; hostless and comma-separated multi-host URLs
-are rejected. TLS may be omitted only for `localhost`, `127.0.0.1`, `::1`, a
-Unix-socket path, or a local-proxy path. A query-string `host` overrides the
-URL authority only when the authority omits its host. A `hostaddr` is allowed
-only with that explicit host and `sslmode=verify-full`.
+Every remote production URL must use `sslmode=require`. This encrypts the
+connection without verifying the database certificate or hostname. Every
+production URL must name exactly one nonempty host or Unix-socket path;
+hostless and comma-separated multi-host URLs are rejected. TLS may be omitted
+only for `localhost`, `127.0.0.1`, `::1`, a Unix-socket path, or a local-proxy
+path. A query-string `host` overrides the URL authority only when the authority
+omits its host. A `hostaddr` is allowed only with that explicit host and
+`sslmode=require`.
 
 Connection-service URLs, `PGSERVICE`, `PGSERVICEFILE`, `.pgpass`, and
 `PGPASSFILE` are unsupported. The URL accepts only `host`, `hostaddr`,
-`sslmode`, and `sslrootcert` query parameters. `sslrootcert` must be a nonempty
-absolute path. Percent-encode reserved characters in the required username and
-password. The process pins `search_path=public`; caller-supplied `options` are
-rejected.
+`sslmode` query parameters. Percent-encode reserved characters in the required
+username and password. The process pins `search_path=public`; caller-supplied
+`options` are rejected.
 
 See the [runtime settings reference](configuration.md#service-settings) for
 the complete ambient-variable denylist. The same production database rules

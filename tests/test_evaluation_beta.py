@@ -1945,7 +1945,7 @@ def test_database_probe_is_postgres_read_only_and_at_exact_migration(
 
     monkeypatch.setenv(
         "EXTRA_CODEOWNERS_BETA_DATABASE_URL",
-        ("postgresql+psycopg://operator:secret@db.example.test/beta?sslmode=verify-full"),
+        ("postgresql+psycopg://operator:secret@db.example.test/beta?sslmode=require"),
     )
     monkeypatch.setattr(beta, "create_engine", fake_create_engine)
     monkeypatch.setattr(
@@ -1976,7 +1976,7 @@ def test_database_probe_is_postgres_read_only_and_at_exact_migration(
     assert captured["connect_args"]["user"] == "operator"
     assert captured["connect_args"]["password"] == "secret"
     assert captured["connect_args"]["gssencmode"] == "disable"
-    assert captured["connect_args"]["sslmode"] == "verify-full"
+    assert captured["connect_args"]["sslmode"] == "require"
     assert captured["poolclass"] is NullPool
     assert captured["pool_pre_ping"] is False
     assert captured["hide_parameters"] is True
@@ -1990,7 +1990,7 @@ def test_database_probe_rejects_ambient_libpq_connection_settings(
 ) -> None:
     monkeypatch.setenv(
         "EXTRA_CODEOWNERS_BETA_DATABASE_URL",
-        "postgresql+psycopg://operator:secret@db.example.test/beta?sslmode=verify-full",
+        "postgresql+psycopg://operator:secret@db.example.test/beta?sslmode=require",
     )
     monkeypatch.setenv("PGHOSTADDR", "203.0.113.1")
     monkeypatch.setattr(
@@ -2007,12 +2007,12 @@ def test_database_probe_rejects_ambient_libpq_connection_settings(
     "database_url",
     [
         "postgresql+psycopg://operator:secret@db.example.test/beta",
-        ("postgresql+psycopg://operator:secret@db.example.test:0/beta?sslmode=verify-full"),
-        ("postgresql+psycopg://operator:secret@db.example.test:-1/beta?sslmode=verify-full"),
-        ("postgresql+psycopg://operator:secret@db.example.test:65536/beta?sslmode=verify-full"),
+        ("postgresql+psycopg://operator:secret@db.example.test:0/beta?sslmode=require"),
+        ("postgresql+psycopg://operator:secret@db.example.test:-1/beta?sslmode=require"),
+        ("postgresql+psycopg://operator:secret@db.example.test:65536/beta?sslmode=require"),
         (
             "postgresql+psycopg://operator:secret@db.example.test/beta"
-            "?sslmode=verify-full&options=-csearch_path%3Dunsafe"
+            "?sslmode=require&options=-csearch_path%3Dunsafe"
         ),
         "postgresql+psycopg://operator:secret@/beta",
         "postgresql+psycopg://operator@127.0.0.1/beta",
@@ -2042,7 +2042,7 @@ def test_database_probe_disposes_engine_when_required_release_contract_fails(
     engine = FakeEngine()
     monkeypatch.setenv(
         "EXTRA_CODEOWNERS_BETA_DATABASE_URL",
-        ("postgresql+psycopg://operator:do-not-report@db.example.test/beta?sslmode=verify-full"),
+        ("postgresql+psycopg://operator:do-not-report@db.example.test/beta?sslmode=require"),
     )
     monkeypatch.setattr(beta, "create_engine", lambda *args, **kwargs: engine)
 

@@ -118,8 +118,8 @@ Before scheduling a deployment, obtain:
 - a GitHub App with the
   [required permissions and events](../reference/github-permissions.md)
 - a public HTTPS origin with a valid certificate
-- PostgreSQL with hostname-verified TLS, or an operator-controlled local proxy
-  or Unix socket
+- PostgreSQL that accepts TLS with `sslmode=require`, or an operator-controlled
+  local proxy or Unix socket
 - tested PostgreSQL backups and a database credential restricted to this
   service
 - a secret manager for the App private key and webhook secret
@@ -142,7 +142,7 @@ access to unrelated databases.
 Use a SQLAlchemy URL through the exact `postgresql+psycopg` driver:
 
 ```text
-postgresql+psycopg://DB_USER:DB_PASSWORD@DB_HOST:5432/DB_NAME?sslmode=verify-full
+postgresql+psycopg://DB_USER:DB_PASSWORD@DB_HOST:5432/DB_NAME?sslmode=require
 ```
 
 Replace every uppercase placeholder. The host, database, username, and
@@ -151,26 +151,24 @@ characters in the username and password, then treat the complete URL as a
 secret. An explicit port must be between 1 and 65535; omit it only when port
 5432 is correct.
 
-Keep `sslmode=verify-full` for a remote database. Add provider CA options
-such as `sslrootcert=/run/secrets/extra-codeowners/database-ca.pem` when
-needed. The CA path must be nonempty and absolute. Extra CODEOWNERS rejects
-`sslmode=require` and `sslmode=verify-ca` because neither verifies the database
-hostname.
+Use `sslmode=require` for a remote database. It encrypts the connection but
+does not verify the database certificate or hostname. Keep the database route
+on a private network you control and restrict the database role to this
+service.
 
 Use one route. A query-string `host` may supply the host only when the URL
 authority omits it. An explicit `hostaddr` also requires that host and
-`sslmode=verify-full`, even when the host looks local. Only `localhost`,
+`sslmode=require`, even when the host looks local. Only `localhost`,
 `127.0.0.1`, `::1`, or a Unix-socket path may use an operator-controlled local
 transport without TLS. Hostless and comma-separated routes are rejected. You
 must authenticate and secure a local proxy's upstream connection.
 
-Only `host`, `hostaddr`, `sslmode`, and `sslrootcert` query parameters are
-supported. Connection-service URLs, `PGSERVICE`, `PGSERVICEFILE`, `.pgpass`,
-and `PGPASSFILE` are not. Keep every ambient libpq connection variable out of
-the application and migrator environments; production validation fails even
-when one is present with an empty value. Both processes disable GSSAPI
-encryption so it cannot bypass the reviewed TLS certificate path, and pin
-`search_path=public`.
+Only `host`, `hostaddr`, and `sslmode` query parameters are supported.
+Connection-service URLs, `PGSERVICE`, `PGSERVICEFILE`, `.pgpass`, and
+`PGPASSFILE` are not. Keep every ambient libpq connection variable out of the
+application and migrator environments; production validation fails even when
+one is present with an empty value. Both processes disable GSSAPI encryption
+so it cannot bypass the required SSL transport, and pin `search_path=public`.
 
 Normal service startup checks the Alembic head and the
 `required-release-contract`. It never creates or changes schema. Follow
@@ -223,7 +221,7 @@ EXTRA_CODEOWNERS_ENVIRONMENT=production
 EXTRA_CODEOWNERS_GITHUB_APP_ID=123456
 EXTRA_CODEOWNERS_GITHUB_PRIVATE_KEY_FILE=/run/secrets/github-private-key
 EXTRA_CODEOWNERS_GITHUB_WEBHOOK_SECRET_FILE=/run/secrets/github-webhook-secret
-EXTRA_CODEOWNERS_DATABASE_URL=postgresql+psycopg://DB_USER:DB_PASSWORD@DB_HOST:5432/DB_NAME?sslmode=verify-full
+EXTRA_CODEOWNERS_DATABASE_URL=postgresql+psycopg://DB_USER:DB_PASSWORD@DB_HOST:5432/DB_NAME?sslmode=require
 EXTRA_CODEOWNERS_WORKER_RETRY_MAX_SECONDS=60
 EXTRA_CODEOWNERS_WEBHOOK_DELIVERY_RETENTION_DAYS=30
 ```
@@ -239,7 +237,7 @@ Production startup rejects:
 
 - SQLite and every URL that does not use the exact `postgresql+psycopg` driver
 - a URL without one explicit host, database, username, and nonempty password
-- remote PostgreSQL without `sslmode=verify-full`
+- remote PostgreSQL without `sslmode=require`
 - connection-service URLs, unknown query parameters, and ambient libpq
   connection variables
 - a webhook secret shorter than 32 UTF-8 bytes
