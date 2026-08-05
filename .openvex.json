@@ -1,9 +1,9 @@
 {
   "@context": "https://openvex.dev/ns/v0.2.0",
-  "@id": "https://github.com/stampbot/extra-codeowners/security/vex/python-3.14.6/2",
+  "@id": "https://github.com/stampbot/extra-codeowners/security/vex/python-3.14.6/3",
   "author": "https://github.com/stampbot/extra-codeowners",
-  "timestamp": "2026-07-14T00:00:00Z",
-  "version": 2,
+  "timestamp": "2026-08-04T00:00:00Z",
+  "version": 3,
   "statements": [
     {
       "vulnerability": {
@@ -130,6 +130,48 @@
       "status": "not_affected",
       "justification": "vulnerable_code_not_in_execute_path",
       "impact_statement": "Extra CODEOWNERS does not import or invoke html.parser.HTMLParser. Its only html standard-library use is html.escape for static setup-page output; untrusted webhook and GitHub API data never enters the vulnerable incremental parser."
+    },
+    {
+      "vulnerability": {
+        "name": "GHSA-g6cj-pr64-35w5"
+      },
+      "products": [
+        {
+          "@id": "extra-codeowners:ci-amd64",
+          "subcomponents": [
+            {
+              "@id": "pkg:pypi/cryptography@48.0.1"
+            }
+          ]
+        },
+        {
+          "@id": "extra-codeowners:ci-arm64",
+          "subcomponents": [
+            {
+              "@id": "pkg:pypi/cryptography@48.0.1"
+            }
+          ]
+        },
+        {
+          "@id": "extra-codeowners:release-candidate-amd64",
+          "subcomponents": [
+            {
+              "@id": "pkg:pypi/cryptography@48.0.1"
+            }
+          ]
+        },
+        {
+          "@id": "extra-codeowners:release-candidate-arm64",
+          "subcomponents": [
+            {
+              "@id": "pkg:pypi/cryptography@48.0.1"
+            }
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "Extra CODEOWNERS does not import the PKCS#7 APIs, accept PKCS#7 EnvelopedData, or call pkcs7_decrypt_der, pkcs7_decrypt_pem, or pkcs7_decrypt_smime. Runtime inputs cannot reach the vulnerable private-key decryption path."
     }
   ]
 }

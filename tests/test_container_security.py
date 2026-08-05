@@ -4,8 +4,12 @@ from pathlib import Path
 import extra_codeowners
 
 
-def test_openvex_excluded_standard_library_paths_are_not_imported() -> None:
-    forbidden = {"html.parser", "tarfile"}
+def test_openvex_excluded_apis_are_not_imported() -> None:
+    forbidden = {
+        "cryptography.hazmat.primitives.serialization.pkcs7",
+        "html.parser",
+        "tarfile",
+    }
     imported: set[str] = set()
     package_file = extra_codeowners.__file__
     assert package_file is not None

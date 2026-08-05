@@ -195,24 +195,26 @@ That order implements the
 An unavailable upstream fix remains visible, while an available fix cannot be
 ignored merely because the raw inventory did not fail.
 
-## Why the three OpenVEX dispositions are narrow
+## Why the four OpenVEX dispositions are narrow
 
-Python 3.14.6 had three High findings without a supported 3.14 fix in the
-selected image. Each OpenVEX statement identifies CPython 3.14.6 and the exact
-CI or release product. Before signing and attestation, the release workflow
-rewrites those products to the published OCI digest.
+Python 3.14.6 has three High findings without a supported 3.14 fix in the
+selected image. A fourth finding is in `cryptography` 48.0.1, but Extra
+CODEOWNERS cannot invoke the affected API. Each OpenVEX statement identifies
+the exact component and CI or release product. Before signing and attestation,
+the release workflow rewrites those products to the published OCI digest.
 
 | Finding | Vulnerable path | Why it cannot execute here |
 | --- | --- | --- |
 | CVE-2026-11940 | `tarfile.extractall` hardlink and symlink handling | The application does not import `tarfile`, accept archives, or extract runtime input. |
 | CVE-2026-11972 | `tarfile` streaming mode (`r\|`) end-of-file handling | The application does not import `tarfile` or parse a runtime archive. |
 | CVE-2026-15308 | `html.parser.HTMLParser` incremental parsing | The application uses `html.escape` for a static setup response and never sends untrusted input through `HTMLParser`. |
+| GHSA-g6cj-pr64-35w5 | `cryptography` PKCS#7 EnvelopedData decryption | The application does not import the PKCS#7 module, accept EnvelopedData, or call a PKCS#7 decrypt API. |
 
-An AST-based test fails if production code imports either excluded standard
-library path. It is a tripwire for these exact claims, not a general
-reachability proof. A dependency or Python update still requires a new scan and
-a review of every VEX statement. When a supported fix appears, the base should
-be updated instead of extending the exception.
+An AST-based test fails if production code imports an excluded standard-library
+path or the `cryptography` PKCS#7 module. It is a tripwire for these exact
+claims, not a general reachability proof. A dependency or Python update still
+requires a new scan and a review of every VEX statement. Issue [#122](https://github.com/stampbot/extra-codeowners/issues/122)
+tracks the `cryptography` 50.0.0 upgrade and its required native-wheel review.
 
 The VEX statements do not hide Medium or Low findings. Raw scan artifacts retain
 the vulnerability inventory, and the SBOM separately records installed
