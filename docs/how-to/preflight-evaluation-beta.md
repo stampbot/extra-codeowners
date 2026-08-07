@@ -323,9 +323,11 @@ Use the exact `postgresql+psycopg` driver and include one host, database,
 username, and nonempty password. Percent-encode reserved characters in the
 username and password. An authority port, when present, must be between 1 and
 65535; omitting it selects PostgreSQL's port 5432. A remote connection must
-use `sslmode=require`. A direct loopback address or an operator-controlled
-Unix-socket proxy may omit TLS. The preflight disables GSSAPI encryption so
-libpq cannot bypass the required SSL transport.
+use `sslmode=require`. The application prevents libpq from loading its default
+root certificate, so the connection is encrypted without verifying the
+database certificate or hostname. A direct loopback address or an
+operator-controlled Unix-socket proxy may omit TLS. The preflight disables
+GSSAPI encryption so libpq cannot bypass the required SSL transport.
 
 The URL may use only `host`, `hostaddr`, and `sslmode` query parameters. A
 query-string `host` requires an empty authority host. An explicit `hostaddr`

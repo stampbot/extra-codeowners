@@ -152,9 +152,10 @@ secret. An explicit port must be between 1 and 65535; omit it only when port
 5432 is correct.
 
 Use `sslmode=require` for a remote database. It encrypts the connection but
-does not verify the database certificate or hostname. Keep the database route
-on a private network you control and restrict the database role to this
-service.
+does not verify the database certificate or hostname. The application prevents
+libpq from loading its default root certificate, so a file in the process
+account does not change that behavior. Keep the database route on a private
+network you control and restrict the database role to this service.
 
 Use one route. A query-string `host` may supply the host only when the URL
 authority omits it. An explicit `hostaddr` also requires that host and

@@ -227,8 +227,9 @@ export PGGSSENCMODE="disable"
 `PGPASSWORD` must already contain the backup role's password without printing
 it. The other values must explicitly identify the production Extra CODEOWNERS
 database. `PGSSLMODE=require` encrypts the connection but does not verify the
-database certificate or hostname. Run backups from an operator-controlled
-network and keep the backup role limited to the application database.
+database certificate or hostname unless libpq finds a root certificate on the
+operator host. Run backups from an operator-controlled network and keep the
+backup role limited to the application database.
 `PGGSSENCMODE=disable` prevents libpq from preferring GSSAPI encryption over
 the configured SSL transport when the operator host has Kerberos credentials.
 

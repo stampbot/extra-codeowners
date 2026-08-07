@@ -202,10 +202,12 @@ The source check requires Linux facilities including `/proc/self/fd`,
 time, a small environment, disabled hooks and prompts, and no system or global
 Git configuration.
 
-Remote PostgreSQL connections require `sslmode=require`. A direct loopback
-address or operator-controlled Unix-socket proxy may omit TLS. An authority
-port, when present, must be between 1 and 65535; omission means 5432. An
-optional `hostaddr` requires an explicit host and `require`. The connection
+Remote PostgreSQL connections require `sslmode=require`. The application
+prevents libpq from loading its default root certificate, so the connection is
+encrypted without verifying the database certificate or hostname. A direct
+loopback address or operator-controlled Unix-socket proxy may omit TLS. An
+authority port, when present, must be between 1 and 65535; omission means 5432.
+An optional `hostaddr` requires an explicit host and `require`. The connection
 sets `gssencmode=disable`, preventing GSSAPI encryption from bypassing the
 required SSL transport. Service-file routing, unknown query parameters, ambient
 libpq connection variables, hostless and comma-separated routes, an authority

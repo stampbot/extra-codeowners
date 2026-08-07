@@ -45,6 +45,13 @@ DATABASE_CONNECT_TIMEOUT_SECONDS = 3
 DATABASE_POOL_TIMEOUT_SECONDS = 2
 DATABASE_STATEMENT_TIMEOUT_MILLISECONDS = 3_000
 MAX_BASE_SCOPED_AUTHORITY_JOBS_PER_REPOSITORY = 100
+# ``sslmode=require`` normally skips server-certificate verification, but libpq
+# upgrades it to ``verify-ca`` when its default root certificate exists. Point
+# it at a child of the platform null device instead: the device cannot contain
+# children, so the path cannot exist or be created. This preserves the
+# deliberate encryption-only production contract without trusting a CA file
+# that happened to be present in the process account's home directory.
+LIBPQ_DISABLED_ROOT_CERT = os.path.join(os.devnull, "extra-codeowners-root.crt")
 
 
 def isolated_postgresql_connect_args(database_url: str) -> dict[str, object]:
@@ -93,6 +100,7 @@ def isolated_postgresql_connect_args(database_url: str) -> dict[str, object]:
         # are available, bypassing the configured SSL transport.
         "gssencmode": "disable",
         "sslmode": sslmode or ("disable" if local and not hostaddr else "require"),
+        "sslrootcert": LIBPQ_DISABLED_ROOT_CERT,
         "user": parsed.username,
     }
     return arguments

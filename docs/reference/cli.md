@@ -50,8 +50,10 @@ In production mode, startup rejects:
 - any ambient libpq connection variable.
 
 Every remote production URL must use `sslmode=require`. This encrypts the
-connection without verifying the database certificate or hostname. Every
-production URL must name exactly one nonempty host or Unix-socket path;
+connection without verifying the database certificate or hostname. The process
+prevents libpq from loading its default root certificate, so that behavior does
+not depend on a file in the process account. Every production URL must name
+exactly one nonempty host or Unix-socket path;
 hostless and comma-separated multi-host URLs are rejected. TLS may be omitted
 only for `localhost`, `127.0.0.1`, `::1`, a Unix-socket path, or a local-proxy
 path. A query-string `host` overrides the URL authority only when the authority

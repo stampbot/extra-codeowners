@@ -8,6 +8,7 @@ from sqlalchemy import Table, create_engine, inspect, select, text, update
 from sqlalchemy.exc import IntegrityError
 
 from extra_codeowners.database import (
+    LIBPQ_DISABLED_ROOT_CERT,
     AuthorityJob,
     AuthorityRequest,
     EvaluationJob,
@@ -108,6 +109,8 @@ def test_isolated_postgresql_connect_args_neutralize_ambient_hostaddr(
     assert arguments["port"] == 5432
     assert arguments["gssencmode"] == "disable"
     assert arguments["sslmode"] == "disable"
+    assert arguments["sslrootcert"] == LIBPQ_DISABLED_ROOT_CERT
+    assert not Path(LIBPQ_DISABLED_ROOT_CERT).exists()
 
 
 @pytest.mark.parametrize("port", [1, 65535])
@@ -133,6 +136,8 @@ def test_isolated_postgresql_connect_args_default_remote_transport_uses_tls() ->
     )
 
     assert arguments["sslmode"] == "require"
+    assert arguments["sslrootcert"] == LIBPQ_DISABLED_ROOT_CERT
+    assert not Path(LIBPQ_DISABLED_ROOT_CERT).exists()
 
 
 def test_isolated_postgresql_connect_args_rejects_certificate_configuration() -> None:

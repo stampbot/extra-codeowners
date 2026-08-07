@@ -189,9 +189,11 @@ Replace the App ID and every database placeholder. The URL must use the exact
 `postgresql+psycopg` driver and contain one explicit host, database, username,
 and nonempty password. Percent-encode reserved characters in the username and
 password. For remote PostgreSQL, use `sslmode=require`. This encrypts the
-connection but does not verify the database certificate or hostname. Treat the
-complete URL as a secret. An explicit port must be between 1 and 65535; omit it
-only when port 5432 is correct.
+connection but does not verify the database certificate or hostname. The
+application prevents libpq from loading its default root certificate, so a file
+in the process account does not change that behavior. Treat the complete URL as
+a secret. An explicit port must be between 1 and 65535; omit it only when port
+5432 is correct.
 
 Only `host`, `hostaddr`, and `sslmode` query parameters are supported.
 `hostaddr` requires one explicit hostname, supplied either by the URL authority
