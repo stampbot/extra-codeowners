@@ -132,8 +132,8 @@ app.kubernetes.io/component: application
 {{- end -}}
 {{- range .Values.migrations.extraVolumeMounts -}}
 {{- $mountPath := clean .mountPath -}}
-{{- if not (or (eq $mountPath "/run/secrets/extra-codeowners") (hasPrefix "/run/secrets/extra-codeowners/" $mountPath) (eq $mountPath "/run/secrets/database-ca") (hasPrefix "/run/secrets/database-ca/" $mountPath)) -}}
-{{- fail "migrations.extraVolumeMounts are limited to /run/secrets/extra-codeowners or /run/secrets/database-ca" -}}
+{{- if not (or (eq $mountPath "/run/secrets/extra-codeowners") (hasPrefix "/run/secrets/extra-codeowners/" $mountPath)) -}}
+{{- fail "migrations.extraVolumeMounts are limited to /run/secrets/extra-codeowners" -}}
 {{- end -}}
 {{- if not (default false .readOnly) -}}
 {{- fail "migrations.extraVolumeMounts must be read-only" -}}

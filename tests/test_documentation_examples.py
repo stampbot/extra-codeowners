@@ -126,11 +126,8 @@ def test_upgrade_backup_example_preserves_transport_and_file_security() -> None:
     runbook = UPGRADE_RUNBOOK.read_text(encoding="utf-8")
 
     for required in (
-        'export PGSSLMODE="verify-full"',
-        "export PGSSLROOTCERT=",
+        'export PGSSLMODE="require"',
         'export PGGSSENCMODE="disable"',
-        'test ! -L "$PGSSLROOTCERT"',
-        "PGSSLROOTCERT_SHA256=",
         '[[ "$variable" == PG* && "$variable" != "PGPASSWORD" ]]',
         "mktemp --directory",
         "umask 077",

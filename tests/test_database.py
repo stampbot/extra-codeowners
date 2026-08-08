@@ -8,6 +8,7 @@ from sqlalchemy import Table, create_engine, inspect, select, text, update
 from sqlalchemy.exc import IntegrityError
 
 from extra_codeowners.database import (
+    LIBPQ_DISABLED_ROOT_CERT,
     AuthorityJob,
     AuthorityRequest,
     EvaluationJob,
@@ -108,6 +109,8 @@ def test_isolated_postgresql_connect_args_neutralize_ambient_hostaddr(
     assert arguments["port"] == 5432
     assert arguments["gssencmode"] == "disable"
     assert arguments["sslmode"] == "disable"
+    assert arguments["sslrootcert"] == LIBPQ_DISABLED_ROOT_CERT
+    assert not Path(LIBPQ_DISABLED_ROOT_CERT).exists()
 
 
 @pytest.mark.parametrize("port", [1, 65535])
@@ -127,13 +130,30 @@ def test_isolated_postgresql_connect_args_reject_invalid_explicit_ports(port: in
         )
 
 
-def test_isolated_postgresql_connect_args_preserve_an_explicit_absolute_ca() -> None:
+def test_isolated_postgresql_connect_args_default_remote_transport_uses_tls() -> None:
     arguments = isolated_postgresql_connect_args(
-        "postgresql+psycopg://user:password@db.example.test/database?"
-        "sslmode=verify-full&sslrootcert=%2Frun%2Fsecrets%2Fdatabase-ca%2Froot.pem"
+        "postgresql+psycopg://user:password@db.example.test/database"
     )
 
-    assert arguments["sslrootcert"] == "/run/secrets/database-ca/root.pem"
+    assert arguments["sslmode"] == "require"
+    assert arguments["sslrootcert"] == LIBPQ_DISABLED_ROOT_CERT
+    assert not Path(LIBPQ_DISABLED_ROOT_CERT).exists()
+
+
+@pytest.mark.parametrize("sslmode", ("allow", "prefer", "verify-ca", "verify-full"))
+def test_isolated_postgresql_connect_args_rejects_unsupported_tls_modes(sslmode: str) -> None:
+    with pytest.raises(ValueError, match="unsupported TLS mode"):
+        isolated_postgresql_connect_args(
+            f"postgresql+psycopg://user:password@localhost/database?sslmode={sslmode}"
+        )
+
+
+def test_isolated_postgresql_connect_args_rejects_certificate_configuration() -> None:
+    with pytest.raises(ValueError, match="unsupported connection parameters"):
+        isolated_postgresql_connect_args(
+            "postgresql+psycopg://user:password@db.example.test/database?"
+            "sslmode=require&sslrootcert=%2Frun%2Fsecrets%2Fdatabase-ca%2Froot.pem"
+        )
 
 
 def test_isolated_postgresql_connect_args_reject_an_empty_password() -> None:

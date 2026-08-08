@@ -182,29 +182,27 @@ EXTRA_CODEOWNERS_GITHUB_WEBHOOK_SECRET_FILE=/run/secrets/extra-codeowners/github
 The database file contains:
 
 ```text
-EXTRA_CODEOWNERS_DATABASE_URL=postgresql+psycopg://DB_USER:DB_PASSWORD@DB_HOST:5432/DB_NAME?sslmode=verify-full
+EXTRA_CODEOWNERS_DATABASE_URL=postgresql+psycopg://DB_USER:DB_PASSWORD@DB_HOST:5432/DB_NAME?sslmode=require
 ```
 
 Replace the App ID and every database placeholder. The URL must use the exact
 `postgresql+psycopg` driver and contain one explicit host, database, username,
 and nonempty password. Percent-encode reserved characters in the username and
-password. For remote PostgreSQL, keep `sslmode=verify-full`. Treat the complete
-URL as a secret. An explicit port must be between 1 and 65535; omit it only
-when port 5432 is correct.
+password. For remote PostgreSQL, use `sslmode=require`. This encrypts the
+connection but does not verify the database certificate or hostname. The
+application prevents libpq from loading its default root certificate, so a file
+in the process account does not change that behavior. Treat the complete URL as
+a secret. An explicit port must be between 1 and 65535; omit it only when port
+5432 is correct.
 
-Only `host`, `hostaddr`, `sslmode`, and `sslrootcert` query parameters are
-supported. `hostaddr` requires one explicit hostname, supplied either by the
-URL authority or by the `host` query parameter, plus `sslmode=verify-full`.
-Connection-service URLs, `.pgpass`, ambient libpq connection variables, and
-unknown query parameters are unsupported. The runtime and migrator pin
-`gssencmode=disable` so GSSAPI encryption cannot bypass the reviewed TLS
-certificate path, and pin `search_path=public`.
-
-If the provider uses a private CA, mount its certificate read-only below
-`/run/secrets/extra-codeowners/` in both the runtime and migration containers.
-Set the URL's `sslrootcert` parameter to that exact nonempty absolute path.
-Migration-only CA mounts may instead use `/run/secrets/database-ca/`; the
-runtime does not allow that prefix.
+Only `host`, `hostaddr`, and `sslmode` query parameters are supported.
+`hostaddr` requires one explicit hostname, supplied either by the URL authority
+or by the `host` query parameter, plus `sslmode=require`. Connection-service
+URLs, `.pgpass`, ambient libpq connection variables, and unknown query
+parameters are unsupported. The runtime and migrator pin `gssencmode=disable`
+so GSSAPI encryption cannot bypass the required SSL transport, and pin
+`search_path=public`. Use `sslmode=require` or `sslmode=disable`;
+certificate-verification modes are unsupported.
 
 Export only file paths:
 
@@ -761,7 +759,7 @@ descriptions.
 | `migrations.extraEnvFrom` | array | `[]` | Reserved. Any nonempty value is rejected; use explicit `migrations.extraEnv` entries. |
 | `migrations.extraEnv` | array | `[]` | Migration-only `EnvVar` objects with `name` and exactly one of `value` or `valueFrom`. Cannot override the production environment or set any `PG*`, interpreter, or loader name rejected by runtime `extraEnv`. |
 | `migrations.extraVolumes` | array | `[]` | Migration-only volumes; `tmp` is reserved. |
-| `migrations.extraVolumeMounts` | array | `[]` | Read-only mounts at or below `/run/secrets/extra-codeowners` or `/run/secrets/database-ca`; other paths are rejected. |
+| `migrations.extraVolumeMounts` | array | `[]` | Read-only mounts at or below `/run/secrets/extra-codeowners`; other paths are rejected. |
 | `service.type` | enum | `ClusterIP` | `ClusterIP`, `NodePort`, or `LoadBalancer`. |
 | `service.port` | integer | `80` | 1 through 65535. |
 | `service.annotations` | string map | `{}` | Adds Service annotations. |

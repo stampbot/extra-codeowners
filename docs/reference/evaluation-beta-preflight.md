@@ -202,17 +202,19 @@ The source check requires Linux facilities including `/proc/self/fd`,
 time, a small environment, disabled hooks and prompts, and no system or global
 Git configuration.
 
-Remote PostgreSQL connections require `sslmode=verify-full`. A direct loopback
-address or operator-controlled Unix-socket proxy may omit TLS. An authority
-port, when present, must be between 1 and 65535; omission means 5432. An
-optional `hostaddr` requires an explicit host and `verify-full`.
-`sslrootcert`, when present, must name a nonempty absolute path. The connection
+Remote PostgreSQL connections require `sslmode=require`. The application
+prevents libpq from loading its default root certificate, so the connection is
+encrypted without verifying the database certificate or hostname. A direct
+loopback address or operator-controlled Unix-socket proxy may omit TLS. An
+authority port, when present, must be between 1 and 65535; omission means 5432.
+An optional `hostaddr` requires an explicit host and `require`. The connection
 sets `gssencmode=disable`, preventing GSSAPI encryption from bypassing the
-pinned TLS certificate path. Service-file routing, unknown query parameters,
-ambient libpq connection variables, hostless and comma-separated routes, an
-authority host combined with a query-string `host`, and caller-supplied libpq
-`options` are rejected. The URL must carry its own password, so `.pgpass` and
-`PGPASSFILE` are not used.
+required SSL transport. Service-file routing, unknown query parameters, ambient
+libpq connection variables, hostless and comma-separated routes, an authority
+host combined with a query-string `host`, and caller-supplied libpq `options`
+are rejected. Its TLS mode must be `require` or `disable`; certificate-
+verification modes are unsupported. The URL must carry its own password, so
+`.pgpass` and `PGPASSFILE` are not used.
 
 GitHub and service requests time out after 10 seconds, do not follow redirects,
 and ignore ambient proxy and certificate environment variables. Responses,

@@ -45,6 +45,13 @@ DATABASE_CONNECT_TIMEOUT_SECONDS = 3
 DATABASE_POOL_TIMEOUT_SECONDS = 2
 DATABASE_STATEMENT_TIMEOUT_MILLISECONDS = 3_000
 MAX_BASE_SCOPED_AUTHORITY_JOBS_PER_REPOSITORY = 100
+# ``sslmode=require`` normally skips server-certificate verification, but libpq
+# upgrades it to ``verify-ca`` when its default root certificate exists. Point
+# it at a child of the platform null device instead: the device cannot contain
+# children, so the path cannot exist or be created. This preserves the
+# deliberate encryption-only production contract without trusting a CA file
+# that happened to be present in the process account's home directory.
+LIBPQ_DISABLED_ROOT_CERT = os.path.join(os.devnull, "extra-codeowners-root.crt")
 
 
 def isolated_postgresql_connect_args(database_url: str) -> dict[str, object]:
@@ -56,23 +63,24 @@ def isolated_postgresql_connect_args(database_url: str) -> dict[str, object]:
     port = parsed.port
     if port is not None and not 1 <= port <= 65535:
         raise ValueError("PostgreSQL URL port must be between 1 and 65535")
-    allowed_query_parameters = {"host", "hostaddr", "sslmode", "sslrootcert"}
+    allowed_query_parameters = {"host", "hostaddr", "sslmode"}
     if set(parsed.query) - allowed_query_parameters:
         raise ValueError("PostgreSQL URL contains unsupported connection parameters")
     query_host = parsed.query.get("host")
     hostaddr = parsed.query.get("hostaddr")
     sslmode = parsed.query.get("sslmode")
-    sslrootcert = parsed.query.get("sslrootcert")
     if (
         parsed.drivername != "postgresql+psycopg"
         or (query_host is not None and not isinstance(query_host, str))
         or (hostaddr is not None and not isinstance(hostaddr, str))
         or (sslmode is not None and not isinstance(sslmode, str))
-        or (sslrootcert is not None and not isinstance(sslrootcert, str))
+        or sslmode not in {None, "disable", "require"}
         or (query_host is not None and parsed.host is not None)
-        or (isinstance(sslrootcert, str) and (not sslrootcert or not sslrootcert.startswith("/")))
     ):
-        raise ValueError("PostgreSQL URL has an ambiguous or unsupported route")
+        raise ValueError(
+            "PostgreSQL URL has an unsupported route, an ambiguous route, or an unsupported "
+            "TLS mode"
+        )
     host = query_host if isinstance(query_host, str) else parsed.host
     if (
         not host
@@ -93,13 +101,12 @@ def isolated_postgresql_connect_args(database_url: str) -> dict[str, object]:
         "password": parsed.password,
         "port": 5432 if port is None else port,
         # libpq otherwise prefers GSSAPI encryption to SSL when credentials
-        # are available, bypassing the pinned TLS certificate contract.
+        # are available, bypassing the configured SSL transport.
         "gssencmode": "disable",
-        "sslmode": sslmode or ("disable" if local and not hostaddr else "verify-full"),
+        "sslmode": sslmode or ("disable" if local and not hostaddr else "require"),
+        "sslrootcert": LIBPQ_DISABLED_ROOT_CERT,
         "user": parsed.username,
     }
-    if sslrootcert is not None:
-        arguments["sslrootcert"] = sslrootcert
     return arguments
 
 

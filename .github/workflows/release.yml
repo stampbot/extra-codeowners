@@ -658,15 +658,16 @@ jobs:
             '.["@id"] = $document_id
              | .timestamp = $timestamp
              | .statements |= map(
-                 .timestamp = $timestamp
+                 .products[0].subcomponents as $subcomponents
+                 | .timestamp = $timestamp
                  | .products = [
                      {
                        "@id": $amd64_product,
-                       "subcomponents": [{"@id": "pkg:generic/python@3.14.6"}]
+                       "subcomponents": $subcomponents
                      },
                      {
                        "@id": $arm64_product,
-                       "subcomponents": [{"@id": "pkg:generic/python@3.14.6"}]
+                       "subcomponents": $subcomponents
                      }
                    ]
                )' \
@@ -707,10 +708,11 @@ jobs:
             '.["@id"] = $document_id
              | .timestamp = $timestamp
              | .statements |= map(
-                 .timestamp = $timestamp
+                 .products[0].subcomponents as $subcomponents
+                 | .timestamp = $timestamp
                  | .products = [{
                      "@id": $product,
-                     "subcomponents": [{"@id": "pkg:generic/python@3.14.6"}]
+                     "subcomponents": $subcomponents
                    }]
                )' \
             .openvex.json > "extra-codeowners-${VERSION}.openvex.json"

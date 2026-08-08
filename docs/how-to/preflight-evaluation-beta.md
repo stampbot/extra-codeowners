@@ -323,15 +323,17 @@ Use the exact `postgresql+psycopg` driver and include one host, database,
 username, and nonempty password. Percent-encode reserved characters in the
 username and password. An authority port, when present, must be between 1 and
 65535; omitting it selects PostgreSQL's port 5432. A remote connection must
-use `sslmode=verify-full`. A direct loopback address or an operator-controlled
-Unix-socket proxy may omit TLS. The preflight disables GSSAPI encryption so
-libpq cannot bypass the pinned TLS certificate path.
+use `sslmode=require`. The application prevents libpq from loading its default
+root certificate, so the connection is encrypted without verifying the
+database certificate or hostname. A direct loopback address or an
+operator-controlled Unix-socket proxy may omit TLS. The preflight disables
+GSSAPI encryption so libpq cannot bypass the required SSL transport.
 
-The URL may use only `host`, `hostaddr`, `sslmode`, and `sslrootcert` query
-parameters. A query-string `host` requires an empty authority host. An explicit
-`hostaddr` requires that host and `sslmode=verify-full`; `sslrootcert` must be a
-nonempty absolute path. Connection services, unknown query parameters,
-`.pgpass`, and `PGPASSFILE` are unsupported.
+The URL may use only `host`, `hostaddr`, and `sslmode` query parameters. Its
+TLS mode must be `require` or `disable`; certificate-verification modes are
+unsupported. A query-string `host` requires an empty authority host. An
+explicit `hostaddr` requires that host and `sslmode=require`. Connection
+services, unknown query parameters, `.pgpass`, and `PGPASSFILE` are unsupported.
 
 Run the preflight from a shell without ambient libpq connection variables.
 This command must print nothing:

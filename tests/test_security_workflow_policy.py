@@ -391,6 +391,21 @@ def test_release_publication_authority_is_limited_to_explicit_alpha_tags() -> No
         assert not re.search(r"(?m)^      [a-z-]+: write$", jobs[name])
 
 
+def test_release_vex_rewrites_preserve_each_statement_component_identity() -> None:
+    source = (WORKFLOWS / "release.yml").read_text(encoding="utf-8")
+    platform_scan = source.split("      - name: Generate platform-source scan VEX\n", 1)[1].split(
+        "      - name: Scan published amd64 candidate digest\n", 1
+    )[0]
+    digest_vex = source.split("      - name: Generate digest-bound OpenVEX document\n", 1)[1].split(
+        "      - name: Attest image provenance\n", 1
+    )[0]
+
+    for rewrite in (platform_scan, digest_vex):
+        assert ".products[0].subcomponents as $subcomponents" in rewrite
+        assert '"subcomponents": $subcomponents' in rewrite
+        assert '"pkg:generic/python@3.14.6"' not in rewrite
+
+
 @pytest.mark.skipif(BASH is None, reason="the hardened runtime intentionally contains no shell")
 def test_release_publication_blocker_allows_only_alpha() -> None:
     source = (WORKFLOWS / "release.yml").read_text(encoding="utf-8")

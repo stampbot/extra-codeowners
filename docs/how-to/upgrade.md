@@ -220,27 +220,18 @@ export PGPORT="5432"
 export PGUSER="extra_codeowners_backup"
 export PGPASSWORD
 export PGDATABASE="extra_codeowners"
-export PGSSLMODE="verify-full"
-export PGSSLROOTCERT="/path/to/reviewed-postgresql-ca.pem"
-test -f "$PGSSLROOTCERT"
-test -r "$PGSSLROOTCERT"
-test ! -L "$PGSSLROOTCERT"
-PGSSLROOTCERT_MODE="$(stat -c %a -- "$PGSSLROOTCERT")"
-test $((8#$PGSSLROOTCERT_MODE & 8#022)) -eq 0
-PGSSLROOTCERT_SHA256="$(sha256sum -- "$PGSSLROOTCERT" | cut -d' ' -f1)"
-test "${#PGSSLROOTCERT_SHA256}" -eq 64
+export PGSSLMODE="require"
 export PGGSSENCMODE="disable"
 ```
 
 `PGPASSWORD` must already contain the backup role's password without printing
 it. The other values must explicitly identify the production Extra CODEOWNERS
-database. `PGHOST` must be a DNS name covered by the database server
-certificate, and `PGSSLROOTCERT` must name the reviewed CA file for that
-server. `verify-full` makes both PostgreSQL clients reject a bad certificate
-or hostname instead of falling back to an unauthenticated connection.
-`PGGSSENCMODE=disable` prevents libpq from preferring GSSAPI encryption and
-bypassing that certificate path when the operator host has Kerberos
-credentials. Record the CA checksum in the change record.
+database. `PGSSLMODE=require` encrypts the connection but does not verify the
+database certificate or hostname unless libpq finds a root certificate on the
+operator host. Run backups from an operator-controlled network and keep the
+backup role limited to the application database.
+`PGGSSENCMODE=disable` prevents libpq from preferring GSSAPI encryption over
+the configured SSL transport when the operator host has Kerberos credentials.
 
 These variables are for `pg_dump` and `pg_restore` only; the helper removes
 them before any application command.
@@ -319,9 +310,8 @@ Create an empty, access-restricted PostgreSQL database outside the production
 service path. Make `PGUSER` its owner, or grant that role `CONNECT` and the
 schema and object-creation rights needed by `pg_restore`, without granting
 access to any unrelated database. Set `RESTORE_DATABASE` to its name, then
-restore through the same explicit host, port, role, and authenticated TLS
-settings. Verify the protected file, CA, and recorded checksums immediately
-before the restore:
+restore through the same explicit host, port, role, and SSL settings. Verify
+the protected backup and recorded checksums immediately before the restore:
 
 ```bash
 set -euo pipefail
@@ -336,9 +326,6 @@ test -f "$BACKUP_CHECKSUM_FILE"
 test ! -L "$BACKUP_CHECKSUM_FILE"
 test "$(stat -c %u -- "$BACKUP_CHECKSUM_FILE")" -eq "$(id -u)"
 test "$(stat -c %a -- "$BACKUP_CHECKSUM_FILE")" = "600"
-test "$(
-  sha256sum -- "$PGSSLROOTCERT" | cut -d' ' -f1
-)" = "$PGSSLROOTCERT_SHA256"
 (
   cd "$BACKUP_DIR" || exit 1
   sha256sum --check --strict -- "$BACKUP_NAME.sha256"
@@ -375,7 +362,7 @@ shell:
 
 ```bash
 unset PGHOST PGPORT PGUSER PGPASSWORD PGDATABASE
-unset PGSSLMODE PGSSLROOTCERT PGSSLROOTCERT_MODE PGSSLROOTCERT_SHA256
+unset PGSSLMODE
 unset PGGSSENCMODE RESTORE_DATABASE
 unset BACKUP_PARENT BACKUP_DIR BACKUP_NAME BACKUP_FILE BACKUP_CHECKSUM_FILE
 ```

@@ -131,7 +131,7 @@ migrations:
   # migrations.extraVolumes appends migration-only volumes other than the built-in tmp volume.
   extraVolumes: []
   # migrations.extraVolumeMounts appends read-only mounts at or below
-  # /run/secrets/extra-codeowners or /run/secrets/database-ca.
+  # /run/secrets/extra-codeowners.
   extraVolumeMounts: []
 
 # service configures the in-cluster HTTP service.
