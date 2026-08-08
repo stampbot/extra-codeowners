@@ -30,7 +30,7 @@ the `unproven-libffi-build-input` policy omission remains open.
 ## Rust evidence
 
 The other files are exact `Cargo.lock` and CycloneDX documents extracted from
-the Pydantic Core 2.46.4 and Cryptography 48.0.1 artifacts pinned in
+the Pydantic Core 2.46.4 and Cryptography 50.0.0 artifacts pinned in
 [`container-policy.json`](../../../../../.compliance/container-policy.json).
 The tests pin each decoded file's digest and use it only to exercise parsing
 and source-accounting behavior. The crate fixtures under `crates/` retain their

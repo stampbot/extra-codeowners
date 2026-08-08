@@ -3014,7 +3014,7 @@ def test_native_wheel_selection_uses_exact_installed_abi_build_and_platform(
 ) -> None:
     inventory, locked, _content = native_wheel_case(
         component_name="cryptography",
-        version="48.0.1",
+        version="50.0.0",
         tag="cp311-abi3-musllinux_1_2_x86_64",
         build="1",
     )
@@ -3022,10 +3022,10 @@ def test_native_wheel_selection_uses_exact_installed_abi_build_and_platform(
     lock.write_text(
         native_wheel_lock_record(
             locked,
-            "cryptography-48.0.1-cp39-abi3-musllinux_1_2_x86_64.whl",
-            "cryptography-48.0.1-cp314t-cp314t-musllinux_1_2_x86_64.whl",
-            "cryptography-48.0.1-cp311-abi3-musllinux_1_2_aarch64.whl",
-            "cryptography-48.0.1-2-cp311-abi3-musllinux_1_2_x86_64.whl",
+            "cryptography-50.0.0-cp39-abi3-musllinux_1_2_x86_64.whl",
+            "cryptography-50.0.0-cp314t-cp314t-musllinux_1_2_x86_64.whl",
+            "cryptography-50.0.0-cp311-abi3-musllinux_1_2_aarch64.whl",
+            "cryptography-50.0.0-2-cp311-abi3-musllinux_1_2_x86_64.whl",
         )
     )
 
@@ -3053,8 +3053,8 @@ def test_committed_lock_selects_exact_four_native_owner_wheels() -> None:
     policy = json.loads(Path(".compliance/container-policy.json").read_text())
     matrix = {
         "linux/amd64": {
-            "python:cryptography@48.0.1": (
-                "cryptography-48.0.1-cp311-abi3-musllinux_1_2_x86_64.whl",
+            "python:cryptography@50.0.0": (
+                "cryptography-50.0.0-cp311-abi3-musllinux_1_2_x86_64.whl",
                 "cp311-abi3-musllinux_1_2_x86_64",
             ),
             "python:greenlet@3.5.3": (
@@ -3071,8 +3071,8 @@ def test_committed_lock_selects_exact_four_native_owner_wheels() -> None:
             ),
         },
         "linux/arm64": {
-            "python:cryptography@48.0.1": (
-                "cryptography-48.0.1-cp311-abi3-musllinux_1_2_aarch64.whl",
+            "python:cryptography@50.0.0": (
+                "cryptography-50.0.0-cp311-abi3-musllinux_1_2_aarch64.whl",
                 "cp311-abi3-musllinux_1_2_aarch64",
             ),
             "python:greenlet@3.5.3": (
@@ -5994,33 +5994,33 @@ def test_committed_policy_retains_pydantic_cargo_sources_and_closes_runtime_bind
     cryptography_crate_source_ids = {
         "crates-io:asn1@0.24.1",
         "crates-io:asn1_derive@0.24.1",
-        "crates-io:base64@0.22.1",
-        "crates-io:bitflags@2.11.1",
-        "crates-io:cc@1.2.61",
+        "crates-io:base64@0.23.0",
+        "crates-io:bitflags@2.13.1",
+        "crates-io:cc@1.4.0",
         "crates-io:cfg-if@1.0.4",
         "crates-io:find-msvc-tools@0.1.9",
         "crates-io:foreign-types-shared@0.1.1",
         "crates-io:foreign-types@0.3.2",
         "crates-io:heck@0.5.0",
         "crates-io:itoa@1.0.18",
-        "crates-io:libc@0.2.186",
+        "crates-io:libc@0.2.189",
         "crates-io:once_cell@1.21.4",
         "crates-io:openssl-macros@0.1.1",
-        "crates-io:openssl-sys@0.9.115",
-        "crates-io:openssl@0.10.79",
-        "crates-io:pem@3.0.6",
+        "crates-io:openssl-sys@0.9.117",
+        "crates-io:openssl@0.10.81",
+        "crates-io:pem@4.0.0",
         "crates-io:pkg-config@0.3.33",
-        "crates-io:portable-atomic@1.13.1",
-        "crates-io:proc-macro2@1.0.106",
-        "crates-io:pyo3-build-config@0.28.3",
-        "crates-io:pyo3-ffi@0.28.3",
-        "crates-io:pyo3-macros-backend@0.28.3",
-        "crates-io:pyo3-macros@0.28.3",
-        "crates-io:pyo3@0.28.3",
-        "crates-io:quote@1.0.45",
-        "crates-io:self_cell@1.2.2",
-        "crates-io:shlex@1.3.0",
-        "crates-io:syn@2.0.117",
+        "crates-io:portable-atomic@1.14.0",
+        "crates-io:proc-macro2@1.0.107",
+        "crates-io:pyo3-build-config@0.29.0",
+        "crates-io:pyo3-ffi@0.29.0",
+        "crates-io:pyo3-macros-backend@0.29.0",
+        "crates-io:pyo3-macros@0.29.0",
+        "crates-io:pyo3@0.29.0",
+        "crates-io:quote@1.0.47",
+        "crates-io:self_cell@1.3.0",
+        "crates-io:shlex@2.0.1",
+        "crates-io:syn@2.0.119",
         "crates-io:target-lexicon@0.13.5",
         "crates-io:unicode-ident@1.0.24",
         "crates-io:vcpkg@0.2.15",
@@ -6036,37 +6036,37 @@ def test_committed_policy_retains_pydantic_cargo_sources_and_closes_runtime_bind
         for source_id, source_record in policy["native_component_sources"].items()
         if source_id in all_crate_source_ids
     )
-    local_source_id = "owner-sdist:python:cryptography@48.0.1#src/rust"
+    local_source_id = "owner-sdist:python:cryptography@50.0.0#src/rust"
     local_source = policy["native_component_sources"][local_source_id]
     assert {
         key: value
         for key, value in local_source.items()
         if key not in {"cargo_packages", "workspace_manifest"}
     } == {
-        "expanded_size": 1221863,
+        "expanded_size": 1322054,
         "kind": "owner-sdist-subpath",
-        "member_count": 113,
+        "member_count": 115,
         "notices": [
             {
-                "member": "cryptography-48.0.1/LICENSE",
+                "member": "cryptography-50.0.0/LICENSE",
                 "sha256": ("3e0c7c091a948b82533ba98fd7cbb40432d6f1a9acbf85f5922d2f99a93ae6bb"),
                 "size": 197,
             },
             {
-                "member": "cryptography-48.0.1/LICENSE.APACHE",
+                "member": "cryptography-50.0.0/LICENSE.APACHE",
                 "sha256": ("aac73b3148f6d1d7111dbca32099f68d26c644c6813ae1e4f05f6579aa2663fe"),
                 "size": 11360,
             },
             {
-                "member": "cryptography-48.0.1/LICENSE.BSD",
+                "member": "cryptography-50.0.0/LICENSE.BSD",
                 "sha256": ("602c4c7482de6479dd2e9793cda275e5e63d773dacd1eca689232ab7008fb4fb"),
                 "size": 1532,
             },
         ],
-        "owner": "python:cryptography@48.0.1",
+        "owner": "python:cryptography@50.0.0",
         "path": "src/rust",
         "reviewed_license": "Apache-2.0 OR BSD-3-Clause",
-        "tree_sha256": "201bc453ace982c914570aa70b70f7e65e2d3f547ba69bd1eb38304bbb39d357",
+        "tree_sha256": "4ab446626dc2c4f2a0cf8ea262d3d24c886f4a1c48f01f451c230a982676f077",
     }
     assert [
         (
@@ -6082,72 +6082,72 @@ def test_committed_policy_retains_pydantic_cargo_sources_and_closes_runtime_bind
         (
             ".",
             "cryptography-rust",
-            "0.1.0",
-            "cryptography-48.0.1/src/rust/Cargo.toml",
+            "0.50.0",
+            "cryptography-50.0.0/src/rust/Cargo.toml",
             "255631745bb2f077f26cf7cdbfa9ee831f96ed0c013e9fa0dce3e78af43abc54",
             1526,
         ),
         (
             "cryptography-cffi",
             "cryptography-cffi",
-            "0.1.0",
-            "cryptography-48.0.1/src/rust/cryptography-cffi/Cargo.toml",
-            "233dcd723ad23d0aea9717215eb6596272b11c5cb6796edeff93c6704be2fcbe",
-            423,
+            "0.50.0",
+            "cryptography-50.0.0/src/rust/cryptography-cffi/Cargo.toml",
+            "e533932e1d882f258105f50601013c18888a44a56e3fbd8153a01b07ac5970be",
+            458,
         ),
         (
             "cryptography-crypto",
             "cryptography-crypto",
-            "0.1.0",
-            "cryptography-48.0.1/src/rust/cryptography-crypto/Cargo.toml",
+            "0.50.0",
+            "cryptography-50.0.0/src/rust/cryptography-crypto/Cargo.toml",
             "5d3499ad8c4e564a789453bcd721782250435735e94407d8de061dc7fc57b32d",
             235,
         ),
         (
             "cryptography-keepalive",
             "cryptography-keepalive",
-            "0.1.0",
-            "cryptography-48.0.1/src/rust/cryptography-keepalive/Cargo.toml",
+            "0.50.0",
+            "cryptography-50.0.0/src/rust/cryptography-keepalive/Cargo.toml",
             "abe27146fda8c55a9ff3758bbcf34527b7fa42c677d7166d746cc9e541d37732",
             235,
         ),
         (
             "cryptography-key-parsing",
             "cryptography-key-parsing",
-            "0.1.0",
-            "cryptography-48.0.1/src/rust/cryptography-key-parsing/Cargo.toml",
+            "0.50.0",
+            "cryptography-50.0.0/src/rust/cryptography-key-parsing/Cargo.toml",
             "69904d1b1a7383a415924e379c496303f15e87bcb7a45a94512a43887b71480b",
             788,
         ),
         (
             "cryptography-openssl",
             "cryptography-openssl",
-            "0.1.0",
-            "cryptography-48.0.1/src/rust/cryptography-openssl/Cargo.toml",
+            "0.50.0",
+            "cryptography-50.0.0/src/rust/cryptography-openssl/Cargo.toml",
             "3109ef1f8a226c07e5728ac5a9475893a721694529d7d4dba4ef241bfb237399",
             608,
         ),
         (
             "cryptography-x509",
             "cryptography-x509",
-            "0.1.0",
-            "cryptography-48.0.1/src/rust/cryptography-x509/Cargo.toml",
+            "0.50.0",
+            "cryptography-50.0.0/src/rust/cryptography-x509/Cargo.toml",
             "70252c64c92650285f8f6effac3cfc0a9ecc65c4af047ff33ae828e8ed1efb87",
             230,
         ),
         (
             "cryptography-x509-verification",
             "cryptography-x509-verification",
-            "0.1.0",
-            "cryptography-48.0.1/src/rust/cryptography-x509-verification/Cargo.toml",
+            "0.50.0",
+            "cryptography-50.0.0/src/rust/cryptography-x509-verification/Cargo.toml",
             "a3e20dcc02bc1ac52bdcd8f0b919b04b23d4d6dec03e1d487a16b387b511af3e",
             338,
         ),
     ]
     assert local_source["workspace_manifest"] == {
-        "member": "cryptography-48.0.1/Cargo.toml",
-        "sha256": "1ee5c3835911f8750ff6e7fa9477766a2d1f64daaf00d29c50db2cceefa42eb7",
-        "size": 977,
+        "member": "cryptography-50.0.0/Cargo.toml",
+        "sha256": "02ee84666ffed9ccafc2d7940524202946366d15b685101d56a4b3cb8f8ad4a5",
+        "size": 987,
     }
     openssl_source_id = "upstream-release:openssl@4.0.1"
     assert policy["native_component_sources"][openssl_source_id] == {
@@ -6193,7 +6193,7 @@ def test_committed_policy_retains_pydantic_cargo_sources_and_closes_runtime_bind
 
     expected_owners = [
         "python:cffi@2.1.0",
-        "python:cryptography@48.0.1",
+        "python:cryptography@50.0.0",
         "python:greenlet@3.5.3",
         "python:markupsafe@3.0.3",
         "python:psycopg-c@3.3.4",
@@ -6202,7 +6202,7 @@ def test_committed_policy_retains_pydantic_cargo_sources_and_closes_runtime_bind
     ]
     expected_states = {
         "python:cffi@2.1.0": "closed",
-        "python:cryptography@48.0.1": "closed",
+        "python:cryptography@50.0.0": "closed",
         "python:greenlet@3.5.3": "closed",
         "python:markupsafe@3.0.3": "closed",
         "python:psycopg-c@3.3.4": "closed",
@@ -6221,13 +6221,13 @@ def test_committed_policy_retains_pydantic_cargo_sources_and_closes_runtime_bind
             for record in owners
         } == expected_omissions
         cryptography = next(
-            record for record in owners if record["owner"] == "python:cryptography@48.0.1"
+            record for record in owners if record["owner"] == "python:cryptography@50.0.0"
         )
         assert cryptography["cargo_lock"] == {
-            "member": "cryptography-48.0.1/Cargo.lock",
+            "member": "cryptography-50.0.0/Cargo.lock",
             "non_sbom_packages": [],
-            "sha256": "585b66741011c621f66405ee9392b9fd35b62a7dbdabba6e37edc8cbad5c5a9a",
-            "size": 8521,
+            "sha256": "3c8089b775e418aab3c05bf9a0bd613baa35b8cc031c0dc567d8e5e94d41862c",
+            "size": 8528,
             "source_ids": sorted(cryptography_crate_source_ids),
         }
         assert {
@@ -6243,7 +6243,7 @@ def test_committed_policy_retains_pydantic_cargo_sources_and_closes_runtime_bind
             "kind": "embedded-component",
         }
         assert rust_sbom["observation"]["metadata_component"]["purl"] == (
-            "pkg:cargo/cryptography-rust@0.1.0?download_url=file://."
+            "pkg:cargo/cryptography-rust@0.50.0?download_url=file://."
         )
         rust_payload = next(
             disposition
@@ -6316,7 +6316,7 @@ def test_committed_policy_retains_pydantic_cargo_sources_and_closes_runtime_bind
         ledger = evidence.native_component_coverage_ledger(inventory, policy)
         assert [record["owner"] for record in ledger["resolved_owners"]] == [
             "python:cffi@2.1.0",
-            "python:cryptography@48.0.1",
+            "python:cryptography@50.0.0",
             "python:greenlet@3.5.3",
             "python:markupsafe@3.0.3",
             "python:psycopg-c@3.3.4",
@@ -6450,17 +6450,17 @@ def test_committed_cryptography_owner_sdist_review_rejects_semantic_substitution
     mutation: str,
 ) -> None:
     policy = cast(dict[str, Any], json.loads(Path(".compliance/container-policy.json").read_text()))
-    source_id = "owner-sdist:python:cryptography@48.0.1#src/rust"
+    source_id = "owner-sdist:python:cryptography@50.0.0#src/rust"
     source = policy["native_component_sources"][source_id]
 
     if mutation == "path":
-        replacement_id = "owner-sdist:python:cryptography@48.0.1#src/other"
+        replacement_id = "owner-sdist:python:cryptography@50.0.0#src/other"
         source = policy["native_component_sources"].pop(source_id)
         source["path"] = "src/other"
         policy["native_component_sources"][replacement_id] = source
         for records in policy["native_component_coverage"].values():
             cryptography = next(
-                record for record in records if record["owner"] == "python:cryptography@48.0.1"
+                record for record in records if record["owner"] == "python:cryptography@50.0.0"
             )
             review = next(
                 record
@@ -6472,7 +6472,7 @@ def test_committed_cryptography_owner_sdist_review_rejects_semantic_substitution
         source["reviewed_license"] = "GPL-3.0-only"
         for records in policy["native_component_coverage"].values():
             cryptography = next(
-                record for record in records if record["owner"] == "python:cryptography@48.0.1"
+                record for record in records if record["owner"] == "python:cryptography@50.0.0"
             )
             review = next(
                 record
@@ -6483,7 +6483,7 @@ def test_committed_cryptography_owner_sdist_review_rejects_semantic_substitution
     else:
         for records in policy["native_component_coverage"].values():
             cryptography = next(
-                record for record in records if record["owner"] == "python:cryptography@48.0.1"
+                record for record in records if record["owner"] == "python:cryptography@50.0.0"
             )
             review = next(
                 record
@@ -6504,7 +6504,7 @@ def test_committed_cryptography_owner_sdist_review_rejects_semantic_substitution
                     record
                     for record in sbom["observation"]["components"]
                     if record["purl"]
-                    == ("pkg:cargo/cryptography-cffi@0.1.0?download_url=file://cryptography-cffi")
+                    == ("pkg:cargo/cryptography-cffi@0.50.0?download_url=file://cryptography-cffi")
                 )
                 old_purl = component["purl"]
                 old_bom_ref = component["bom_ref"]
@@ -6607,7 +6607,7 @@ def test_committed_cryptography_upstream_review_rejects_semantic_substitution(
         policy["native_component_sources"][replacement_id] = source
         for records in policy["native_component_coverage"].values():
             cryptography = next(
-                record for record in records if record["owner"] == "python:cryptography@48.0.1"
+                record for record in records if record["owner"] == "python:cryptography@50.0.0"
             )
             review = next(
                 record
@@ -6618,7 +6618,7 @@ def test_committed_cryptography_upstream_review_rejects_semantic_substitution(
     else:
         for records in policy["native_component_coverage"].values():
             cryptography = next(
-                record for record in records if record["owner"] == "python:cryptography@48.0.1"
+                record for record in records if record["owner"] == "python:cryptography@50.0.0"
             )
             review = next(
                 record
@@ -6626,7 +6626,7 @@ def test_committed_cryptography_upstream_review_rejects_semantic_substitution(
                 if record["source"] == source_id
             )
             if mutation == "source":
-                review["source"] = "owner-sdist:python:cryptography@48.0.1#src/rust"
+                review["source"] = "owner-sdist:python:cryptography@50.0.0#src/rust"
                 review["reviewed_license"] = "Apache-2.0 OR BSD-3-Clause"
                 continue
             if mutation == "review-license":
@@ -6672,7 +6672,7 @@ def test_known_omission_dispositions_bind_the_named_omission(
     for records in policy["native_component_coverage"].values():
         owners = {record["owner"]: record for record in records}
         if mutation == "metadata-root":
-            cryptography = owners["python:cryptography@48.0.1"]
+            cryptography = owners["python:cryptography@50.0.0"]
             sbom = next(
                 record
                 for record in cryptography["sboms"]
@@ -6775,7 +6775,7 @@ def test_native_relationship_requires_payload_observation_mapping(side: str, mes
     policy = cast(dict[str, Any], json.loads(Path(".compliance/container-policy.json").read_text()))
     for records in policy["native_component_coverage"].values():
         owners = {record["owner"]: record for record in records}
-        cryptography = owners["python:cryptography@48.0.1"]
+        cryptography = owners["python:cryptography@50.0.0"]
         greenlet = owners["python:greenlet@3.5.3"]
         relationship = cryptography["canonical_relationships"][0]
         if side == "source":
@@ -6811,7 +6811,7 @@ def test_native_relationship_target_bom_ref_drift_has_equivalent_semantics() -> 
     policy = cast(dict[str, Any], json.loads(Path(".compliance/container-policy.json").read_text()))
     records = policy["native_component_coverage"]["linux/arm64"]
     owners = {record["owner"]: record for record in records}
-    cryptography = owners["python:cryptography@48.0.1"]
+    cryptography = owners["python:cryptography@50.0.0"]
     greenlet = owners["python:greenlet@3.5.3"]
     target = cryptography["canonical_relationships"][0]["reference_observation"]
     sbom = next(record for record in greenlet["sboms"] if record["path"] == target["sbom_path"])
@@ -10170,20 +10170,20 @@ def test_real_pydantic_cargo_lock_accounts_for_87_crates_and_16_lock_only_packag
 
 def test_real_cryptography_cargo_lock_and_openssl_observation_are_retained() -> None:
     context, sources, archive, parsed = real_rust_cargo_lock_case(
-        owner="python:cryptography@48.0.1",
-        sbom_filename="cryptography-48.0.1.cryptography-rust.cyclonedx.json",
+        owner="python:cryptography@50.0.0",
+        sbom_filename="cryptography-50.0.0.cryptography-rust.cyclonedx.json",
         installed_sbom_path=(
-            "cryptography-48.0.1.dist-info/sboms/cryptography-rust.cyclonedx.json"
+            "cryptography-50.0.0.dist-info/sboms/cryptography-rust.cyclonedx.json"
         ),
-        lock_filename="cryptography-48.0.1.Cargo.lock",
-        lock_member="cryptography-48.0.1/Cargo.lock",
+        lock_filename="cryptography-50.0.0.Cargo.lock",
+        lock_member="cryptography-50.0.0/Cargo.lock",
         metadata_is_owner=False,
     )
     assert (
         evidence.sha256_bytes(
-            real_v7_fixture_bytes("cryptography-48.0.1.cryptography-rust.cyclonedx.json")
+            real_v7_fixture_bytes("cryptography-50.0.0.cryptography-rust.cyclonedx.json")
         )
-        == "9b2b3873832a3999a192327543e07e9cdcd66f083fd77a009054ace71cc6e92f"
+        == "611ba07d92771c5e6f885b50c2c5bfad768ed5320e5b926739a8a10ff0420a6d"
     )
     assert len(parsed["components"]) == 40
     assert len(context["record"]["cargo_lock"]["source_ids"]) == 32
@@ -10192,12 +10192,12 @@ def test_real_cryptography_cargo_lock_and_openssl_observation_are_retained() -> 
         context,
         sources,
         archive,
-        archive_name="cryptography-48.0.1.tar.gz",
-    ) == real_v7_fixture_bytes("cryptography-48.0.1.Cargo.lock")
+        archive_name="cryptography-50.0.0.tar.gz",
+    ) == real_v7_fixture_bytes("cryptography-50.0.0.Cargo.lock")
 
-    openssl_raw = real_v7_fixture_bytes("cryptography-48.0.1.openssl.cyclonedx.json")
+    openssl_raw = real_v7_fixture_bytes("cryptography-50.0.0.openssl.cyclonedx.json")
     assert evidence.sha256_bytes(openssl_raw) == (
-        "58f780e03ba9030ff66b3ed9e02c06e72a9f0a477caa3ae4299ab3e7b81c5f50"
+        "8a378e5d6dc3217a5ce1684fddf617b943b6221cef23f3340f650aeace2b7ff1"
     )
     openssl = evidence.parse_cyclonedx_sbom(openssl_raw, "cryptography OpenSSL fixture")
     assert openssl["components"] == [
@@ -10317,12 +10317,12 @@ def test_cffi_policy_uses_signed_build_provenance_and_runtime_file_binding() -> 
     ("filename", "sha256"),
     (
         (
-            "cryptography-48.0.1-cp311-abi3-musllinux_1_2_aarch64.auditwheel.cdx.json",
-            "2ec6b8e8ae1c144269de3834e53f5919f5042980d191ff7f3efd17885028102f",
+            "cryptography-50.0.0-cp311-abi3-musllinux_1_2_aarch64.auditwheel.cdx.json",
+            "1b465fa0af53a4c9a9eb762932abe5287bcf9c78a271bd2bc0f09f991d2f5839",
         ),
         (
-            "cryptography-48.0.1-cp311-abi3-musllinux_1_2_x86_64.auditwheel.cdx.json",
-            "dae5479c7694801d07dbd8b0a8a495e4aebce0c30832910ca5c848ca66e40fd3",
+            "cryptography-50.0.0-cp311-abi3-musllinux_1_2_x86_64.auditwheel.cdx.json",
+            "a996bb926c4d1ddf260122570d4214c463640524e3257bb2605003fca81da2e4",
         ),
         (
             "greenlet-3.5.3-cp314-cp314-musllinux_1_2_aarch64.auditwheel.cdx.json",
