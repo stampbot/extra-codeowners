@@ -189,7 +189,7 @@ Only three query parameters are supported:
 | --- | --- |
 | `host` | Supplies the one host or Unix-socket path only when the URL authority omits its host. |
 | `hostaddr` | Supplies one nonempty address. It requires an explicit `host` and `sslmode=require`. |
-| `sslmode` | A remote route requires `require`. It encrypts the connection but does not verify the database certificate or hostname. The application prevents libpq from loading its default root certificate, so that behavior does not vary with the process account. An operator-controlled `localhost`, `127.0.0.1`, `::1`, or Unix-socket route may omit TLS when `hostaddr` is absent. |
+| `sslmode` | `require` or `disable`. A remote route requires `require`. It encrypts the connection but does not verify the database certificate or hostname. The application prevents libpq from loading its default root certificate, so that behavior does not vary with the process account. Certificate-verification modes are unsupported. An operator-controlled `localhost`, `127.0.0.1`, `::1`, or Unix-socket route may omit TLS or use `disable` when `hostaddr` is absent. |
 
 Unknown query parameters are rejected. In particular, `service` URLs,
 `PGSERVICE`, and `PGSERVICEFILE` are unsupported. The application also supplies

@@ -62,9 +62,10 @@ omits its host. A `hostaddr` is allowed only with that explicit host and
 
 Connection-service URLs, `PGSERVICE`, `PGSERVICEFILE`, `.pgpass`, and
 `PGPASSFILE` are unsupported. The URL accepts only `host`, `hostaddr`,
-`sslmode` query parameters. Percent-encode reserved characters in the required
-username and password. The process pins `search_path=public`; caller-supplied
-`options` are rejected.
+`sslmode` query parameters. Its TLS mode must be `require` or `disable`;
+certificate-verification modes are unsupported. Percent-encode reserved
+characters in the required username and password. The process pins
+`search_path=public`; caller-supplied `options` are rejected.
 
 See the [runtime settings reference](configuration.md#service-settings) for
 the complete ambient-variable denylist. The same production database rules

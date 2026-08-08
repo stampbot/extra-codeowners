@@ -339,6 +339,16 @@ def test_production_database_transport_validator_rejects_unsafe_routes(
         validate_production_database_transport(database_url)
 
 
+@pytest.mark.parametrize("sslmode", ("verify-ca", "verify-full"))
+def test_production_local_postgresql_rejects_certificate_verification_modes(
+    sslmode: str,
+) -> None:
+    with pytest.raises(ValueError, match="unsupported TLS mode"):
+        validate_production_database_transport(
+            f"postgresql+psycopg://user:password@localhost/database?sslmode={sslmode}"
+        )
+
+
 @pytest.mark.parametrize("ssl_mode", [None, "verify-ca", "verify-full"])
 def test_remote_production_postgresql_requires_encrypted_transport(
     ssl_mode: str | None,
@@ -353,7 +363,7 @@ def test_remote_production_postgresql_requires_encrypted_transport(
         database_url=f"postgresql+psycopg://user:password@db.example.test/database{suffix}",
     )
 
-    with pytest.raises(ValueError, match="sslmode=require"):
+    with pytest.raises(ValueError, match=r"sslmode=require|unsupported TLS mode"):
         settings.validate_for_service()
 
 

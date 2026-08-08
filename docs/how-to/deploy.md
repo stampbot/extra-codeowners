@@ -170,6 +170,8 @@ Connection-service URLs, `PGSERVICE`, `PGSERVICEFILE`, `.pgpass`, and
 application and migrator environments; production validation fails even when
 one is present with an empty value. Both processes disable GSSAPI encryption
 so it cannot bypass the required SSL transport, and pin `search_path=public`.
+Use `sslmode=require` or `sslmode=disable`; certificate-verification modes are
+unsupported.
 
 Normal service startup checks the Alembic head and the
 `required-release-contract`. It never creates or changes schema. Follow

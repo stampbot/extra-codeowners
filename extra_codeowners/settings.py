@@ -206,7 +206,8 @@ def validate_production_database_transport(database_url_value: str) -> None:
         isolated_postgresql_connect_args(database_url_value)
     except (TypeError, ValueError) as error:
         raise ValueError(
-            "production PostgreSQL requires an explicit database, username, and password"
+            "production PostgreSQL requires an explicit database, username, password, and valid "
+            f"route: {error}"
         ) from error
     local_transport = hostaddr is None and (
         effective_host in {"localhost", "127.0.0.1", "::1"} or effective_host.startswith("/")

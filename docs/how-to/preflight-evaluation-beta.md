@@ -329,10 +329,11 @@ database certificate or hostname. A direct loopback address or an
 operator-controlled Unix-socket proxy may omit TLS. The preflight disables
 GSSAPI encryption so libpq cannot bypass the required SSL transport.
 
-The URL may use only `host`, `hostaddr`, and `sslmode` query parameters. A
-query-string `host` requires an empty authority host. An explicit `hostaddr`
-requires that host and `sslmode=require`. Connection services, unknown query
-parameters, `.pgpass`, and `PGPASSFILE` are unsupported.
+The URL may use only `host`, `hostaddr`, and `sslmode` query parameters. Its
+TLS mode must be `require` or `disable`; certificate-verification modes are
+unsupported. A query-string `host` requires an empty authority host. An
+explicit `hostaddr` requires that host and `sslmode=require`. Connection
+services, unknown query parameters, `.pgpass`, and `PGPASSFILE` are unsupported.
 
 Run the preflight from a shell without ambient libpq connection variables.
 This command must print nothing:

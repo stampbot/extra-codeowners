@@ -201,7 +201,8 @@ or by the `host` query parameter, plus `sslmode=require`. Connection-service
 URLs, `.pgpass`, ambient libpq connection variables, and unknown query
 parameters are unsupported. The runtime and migrator pin `gssencmode=disable`
 so GSSAPI encryption cannot bypass the required SSL transport, and pin
-`search_path=public`.
+`search_path=public`. Use `sslmode=require` or `sslmode=disable`;
+certificate-verification modes are unsupported.
 
 Export only file paths:
 

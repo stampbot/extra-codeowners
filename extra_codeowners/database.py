@@ -74,9 +74,13 @@ def isolated_postgresql_connect_args(database_url: str) -> dict[str, object]:
         or (query_host is not None and not isinstance(query_host, str))
         or (hostaddr is not None and not isinstance(hostaddr, str))
         or (sslmode is not None and not isinstance(sslmode, str))
+        or sslmode not in {None, "disable", "require"}
         or (query_host is not None and parsed.host is not None)
     ):
-        raise ValueError("PostgreSQL URL has an ambiguous or unsupported route")
+        raise ValueError(
+            "PostgreSQL URL has an unsupported route, an ambiguous route, or an unsupported "
+            "TLS mode"
+        )
     host = query_host if isinstance(query_host, str) else parsed.host
     if (
         not host

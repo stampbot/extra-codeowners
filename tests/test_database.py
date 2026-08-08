@@ -140,6 +140,14 @@ def test_isolated_postgresql_connect_args_default_remote_transport_uses_tls() ->
     assert not Path(LIBPQ_DISABLED_ROOT_CERT).exists()
 
 
+@pytest.mark.parametrize("sslmode", ("allow", "prefer", "verify-ca", "verify-full"))
+def test_isolated_postgresql_connect_args_rejects_unsupported_tls_modes(sslmode: str) -> None:
+    with pytest.raises(ValueError, match="unsupported TLS mode"):
+        isolated_postgresql_connect_args(
+            f"postgresql+psycopg://user:password@localhost/database?sslmode={sslmode}"
+        )
+
+
 def test_isolated_postgresql_connect_args_rejects_certificate_configuration() -> None:
     with pytest.raises(ValueError, match="unsupported connection parameters"):
         isolated_postgresql_connect_args(
