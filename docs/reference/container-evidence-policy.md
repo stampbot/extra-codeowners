@@ -526,7 +526,7 @@ owners are copied in full to `unresolved_owners`. The count and names are
 derived from that open list.
 
 The current ledger closes all seven observed native owners: CFFI 2.1.0,
-Cryptography 48.0.1, Greenlet 3.5.3, MarkupSafe 3.0.3, Psycopg C 3.3.4,
+Cryptography 50.0.0, Greenlet 3.5.3, MarkupSafe 3.0.3, Psycopg C 3.3.4,
 Pydantic Core 2.46.4, and SQLAlchemy 2.0.51. CFFI's `libffi.so.8`, Psycopg C's
 `libpq.so.5`, and Pydantic Core's `libgcc_s.so.1` are bound to the exact
 APK-owned runtime and resolved paths through the schema-9 rules above.

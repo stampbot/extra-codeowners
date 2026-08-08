@@ -698,7 +698,7 @@ for architecture in amd64 arm64; do
       and .complete == true
       and ([.resolved_owners[].owner] == [
         "python:cffi@2.1.0",
-        "python:cryptography@48.0.1",
+        "python:cryptography@50.0.0",
         "python:greenlet@3.5.3",
         "python:markupsafe@3.0.3",
         "python:psycopg-c@3.3.4",
@@ -707,7 +707,7 @@ for architecture in amd64 arm64; do
       ])
       and .unresolved_owners == []
       and ([.observed_sbom_anomalies[].owner] == [
-        "python:cryptography@48.0.1",
+        "python:cryptography@50.0.0",
         "python:greenlet@3.5.3"
       ])
       and .remaining_owner_count == 0
@@ -889,7 +889,7 @@ inventory assertion.
 On both platforms, the ledger must contain these seven closed owners:
 
 - `python:cffi@2.1.0`
-- `python:cryptography@48.0.1`
+- `python:cryptography@50.0.0`
 - `python:greenlet@3.5.3`
 - `python:markupsafe@3.0.3`
 - `python:psycopg-c@3.3.4`
