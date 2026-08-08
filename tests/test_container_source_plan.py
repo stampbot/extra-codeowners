@@ -30,7 +30,7 @@ NATIVE_WHEELHOUSE_CONTRACT_SHA256 = hashlib.sha256(
     NATIVE_WHEELHOUSE_CONTRACT.read_bytes()
 ).hexdigest()
 REVISION = "1" * 40
-REAL_PLAN_SHA256 = "d6ffd7ca0a68185afc48a03e060e85f7dde57d74a0114cd19cbf08715eed85ba"
+REAL_PLAN_SHA256 = "7c3631b0a73e62ff882a119c4c97550ce793b732f2f1cde6b37769624dc0256a"
 REQUEST_KEYS = {
     "id",
     "url",
@@ -462,7 +462,7 @@ def test_real_policy_direct_plan_is_stable_and_complete() -> None:
 
     requests = first["requests"]
     assert isinstance(requests, list)
-    assert len(requests) == 228
+    assert len(requests) == 234
     assert [request["id"] for request in requests] == sorted(request["id"] for request in requests)
     assert len({request["id"] for request in requests}) == len(requests)
     assert Counter(request["id"].split(":", maxsplit=1)[0] for request in requests) == {
@@ -470,7 +470,7 @@ def test_real_policy_direct_plan_is_stable_and_complete() -> None:
         "cpython": 1,
         "docker-python": 2,
         "license-text": 25,
-        "native-source": 131,
+        "native-source": 137,
         "native-wheelhouse-source": 1,
         "python-sdist": 38,
         "python-wheel": 8,
@@ -529,12 +529,12 @@ def test_real_policy_plan_covers_platform_wheels_and_reuses_owner_sdist() -> Non
         ]
         assert len(wheel_ids) == 4
 
-    owner_request = requests["python-sdist:cryptography@48.0.1"]
+    owner_request = requests["python-sdist:cryptography@50.0.0"]
     assert owner_request["consumers"] == [
-        "platform:linux/amd64:native-owner:python:cryptography@48.0.1",
-        "platform:linux/amd64:python:cryptography@48.0.1",
-        "platform:linux/arm64:native-owner:python:cryptography@48.0.1",
-        "platform:linux/arm64:python:cryptography@48.0.1",
+        "platform:linux/amd64:native-owner:python:cryptography@50.0.0",
+        "platform:linux/amd64:python:cryptography@50.0.0",
+        "platform:linux/arm64:native-owner:python:cryptography@50.0.0",
+        "platform:linux/arm64:python:cryptography@50.0.0",
     ]
     pydantic_request = requests["python-sdist:pydantic-core@2.46.4"]
     assert pydantic_request["consumers"] == [
@@ -689,7 +689,7 @@ def test_direct_plan_rejects_native_wheel_policy_substitution(tmp_path: Path) ->
     owner = next(
         record
         for record in policy["native_component_coverage"]["linux/amd64"]
-        if record["owner"] == "python:cryptography@48.0.1"
+        if record["owner"] == "python:cryptography@50.0.0"
     )
     owner["wheel"]["sha256"] = "0" * 64
 
@@ -784,7 +784,7 @@ def test_direct_plan_rejects_lock_source_substitution(tmp_path: Path) -> None:
     cryptography = next(
         owner
         for owner in policy["native_component_coverage"]["linux/amd64"]
-        if owner["owner"] == "python:cryptography@48.0.1"
+        if owner["owner"] == "python:cryptography@50.0.0"
     )
     digest = cryptography["owner_source"]["sha256"]
     lock = UV_LOCK.read_bytes()
