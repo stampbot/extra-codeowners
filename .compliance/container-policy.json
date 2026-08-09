@@ -695,14 +695,14 @@
           "gid": 0,
           "layer": 5,
           "mode": 493,
-          "path": "opt/venv/lib/python3.14/site-packages/extra_codeowners-0.1.0a2.dist-info",
+          "path": "opt/venv/lib/python3.14/site-packages/extra_codeowners-0.1.0a3.dist-info",
           "uid": 0
         },
         {
           "gid": 0,
           "layer": 5,
           "mode": 493,
-          "path": "opt/venv/lib/python3.14/site-packages/extra_codeowners-0.1.0a2.dist-info/licenses",
+          "path": "opt/venv/lib/python3.14/site-packages/extra_codeowners-0.1.0a3.dist-info/licenses",
           "uid": 0
         },
         {
@@ -2617,14 +2617,14 @@
           "gid": 0,
           "layer": 5,
           "mode": 493,
-          "path": "opt/venv/lib/python3.14/site-packages/extra_codeowners-0.1.0a2.dist-info",
+          "path": "opt/venv/lib/python3.14/site-packages/extra_codeowners-0.1.0a3.dist-info",
           "uid": 0
         },
         {
           "gid": 0,
           "layer": 5,
           "mode": 493,
-          "path": "opt/venv/lib/python3.14/site-packages/extra_codeowners-0.1.0a2.dist-info/licenses",
+          "path": "opt/venv/lib/python3.14/site-packages/extra_codeowners-0.1.0a3.dist-info/licenses",
           "uid": 0
         },
         {
@@ -4112,7 +4112,7 @@
       "expression": "Apache-2.0 OR BSD-3-Clause",
       "rationale": "Accepted from installed metadata for CI drift review; this is not distribution approval."
     },
-    "python:extra-codeowners@0.1.0a2": {
+    "python:extra-codeowners@0.1.0a3": {
       "expression": "Apache-2.0",
       "rationale": "Accepted from installed metadata for CI drift review; this is not distribution approval."
     },
@@ -13208,10 +13208,10 @@
       {
         "ecosystem": "python",
         "effective": true,
-        "metadata_sha256": "11b574cb6127f0285f1535af4c6819df372e90843b129abc05a2c97865f779d9",
+        "metadata_sha256": "e64ad928d15bf7c8cb4b9f005f697d058f965ee4a82fd46c24a90d22232a50d0",
         "name": "extra-codeowners",
         "observed_license": "Apache-2.0",
-        "version": "0.1.0a2"
+        "version": "0.1.0a3"
       },
       {
         "ecosystem": "python",
@@ -13894,10 +13894,10 @@
       {
         "ecosystem": "python",
         "effective": true,
-        "metadata_sha256": "11b574cb6127f0285f1535af4c6819df372e90843b129abc05a2c97865f779d9",
+        "metadata_sha256": "e64ad928d15bf7c8cb4b9f005f697d058f965ee4a82fd46c24a90d22232a50d0",
         "name": "extra-codeowners",
         "observed_license": "Apache-2.0",
-        "version": "0.1.0a2"
+        "version": "0.1.0a3"
       },
       {
         "ecosystem": "python",
@@ -14622,8 +14622,8 @@
           "gid": 0,
           "layer": 5,
           "mode": 420,
-          "path": "opt/venv/lib/python3.14/site-packages/extra_codeowners-0.1.0a2.dist-info/RECORD",
-          "sha256": "c0555b34f62f4268be0e9adabecd091ca3bd753c3a9b5a9deb822b7ca497576e",
+          "path": "opt/venv/lib/python3.14/site-packages/extra_codeowners-0.1.0a3.dist-info/RECORD",
+          "sha256": "910e6a45b37ff7a1d9747e5ed710524e53093bd4eeaee418a30d3ed755d09cb5",
           "size": 2947,
           "uid": 0
         },
@@ -14632,7 +14632,7 @@
           "gid": 0,
           "layer": 5,
           "mode": 420,
-          "path": "opt/venv/lib/python3.14/site-packages/extra_codeowners-0.1.0a2.dist-info/WHEEL",
+          "path": "opt/venv/lib/python3.14/site-packages/extra_codeowners-0.1.0a3.dist-info/WHEEL",
           "sha256": "942926c567d0b1273d09f20295879abd37507845f6b683eab9f87d808df91100",
           "size": 87,
           "uid": 0
@@ -15620,8 +15620,8 @@
           "gid": 0,
           "layer": 5,
           "mode": 420,
-          "path": "opt/venv/lib/python3.14/site-packages/extra_codeowners-0.1.0a2.dist-info/RECORD",
-          "sha256": "c0555b34f62f4268be0e9adabecd091ca3bd753c3a9b5a9deb822b7ca497576e",
+          "path": "opt/venv/lib/python3.14/site-packages/extra_codeowners-0.1.0a3.dist-info/RECORD",
+          "sha256": "910e6a45b37ff7a1d9747e5ed710524e53093bd4eeaee418a30d3ed755d09cb5",
           "size": 2947,
           "uid": 0
         },
@@ -15630,7 +15630,7 @@
           "gid": 0,
           "layer": 5,
           "mode": 420,
-          "path": "opt/venv/lib/python3.14/site-packages/extra_codeowners-0.1.0a2.dist-info/WHEEL",
+          "path": "opt/venv/lib/python3.14/site-packages/extra_codeowners-0.1.0a3.dist-info/WHEEL",
           "sha256": "942926c567d0b1273d09f20295879abd37507845f6b683eab9f87d808df91100",
           "size": 87,
           "uid": 0

@@ -6,6 +6,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Rel
 
 ## [Unreleased]
 
+## [0.1.0-alpha.3] - 2026-08-08
+
+### Changed
+
+- Production PostgreSQL connections can use `sslmode=require` when the deployment has no CA verification path. `sslmode=verify-full` remains available for deployments that do.
+
+### Security
+
+- Updated `cryptography` to 50.0.0 and refreshed the reviewed native source and wheel evidence for both supported container architectures.
+
 ### Added
 
 - GitHub App service with signed webhook ingestion and Check Runs.
