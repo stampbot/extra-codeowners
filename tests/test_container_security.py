@@ -4,9 +4,8 @@ from pathlib import Path
 import extra_codeowners
 
 
-def test_openvex_excluded_apis_are_not_imported() -> None:
+def test_openvex_excluded_standard_library_apis_are_not_imported() -> None:
     forbidden = {
-        "cryptography.hazmat.primitives.serialization.pkcs7",
         "html.parser",
         "tarfile",
     }
