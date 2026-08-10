@@ -310,15 +310,19 @@ jobs:
           fi
 
       - name: Render optional resources
-        run: >-
-          helm template extra-codeowners charts/extra-codeowners
-          --set existingSecret=extra-codeowners-runtime
-          --set ingress.enabled=true
-          --set ingress.className=nginx
-          --set autoscaling.enabled=true
-          --set podDisruptionBudget.enabled=true
-          --set allowInsecureChanges=true
-          > rendered-optional.yaml
+        run: |
+          helm template extra-codeowners charts/extra-codeowners \
+            --set existingSecret=extra-codeowners-runtime \
+            --set ingress.enabled=true \
+            --set ingress.className=nginx \
+            --set autoscaling.enabled=true \
+            --set podDisruptionBudget.enabled=true \
+            --set allowInsecureChanges=true \
+            --set-string deploymentAnnotations.reloader\\.stakater\\.com/auto=true \
+            > rendered-optional.yaml
+          yq eval -e \
+            'select(.kind == "Deployment") | .metadata.annotations."reloader.stakater.com/auto" == "true"' \
+            rendered-optional.yaml | grep -Fx true
 
       - name: Render mounted GitHub credentials
         run: >-

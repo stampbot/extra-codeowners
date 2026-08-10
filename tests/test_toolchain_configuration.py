@@ -260,9 +260,14 @@ def test_helm_chart_protects_startup_and_rejects_explicit_libpq_environment() ->
     image = cast(dict[str, Any], values["image"])
     assert image["tag"] == "0.1.0-alpha.3"
 
+    assert values["deploymentAnnotations"] == {}
+
     assert values["extraManifests"] == []
 
     schema = json.loads((ROOT / "charts" / "extra-codeowners" / "values.schema.json").read_text())
+    assert "deploymentAnnotations" in schema["required"]
+    assert schema["properties"]["deploymentAnnotations"] == {"$ref": "#/definitions/stringMap"}
+
     probes = schema["properties"]["probes"]
     assert "startup" in probes["required"]
     assert probes["properties"]["startup"] == {"$ref": "#/definitions/probe"}

@@ -724,6 +724,7 @@ descriptions.
 | `deploymentStrategy.type` | enum | `Recreate` | `Recreate` or `RollingUpdate`. |
 | `deploymentStrategy.rollingUpdate.maxUnavailable` | integer or percentage | unset | Nonnegative; valid only with `RollingUpdate`. |
 | `deploymentStrategy.rollingUpdate.maxSurge` | integer or percentage | unset | Nonnegative; valid only with `RollingUpdate`. |
+| `deploymentAnnotations` | string map | `{}` | Adds annotations to the Deployment resource, for example a Reloader Secret-change trigger. |
 | `image.repository` | string | `example.invalid/stampbot/extra-codeowners` | Nonempty, intentionally non-pullable placeholder. |
 | `image.pullPolicy` | enum | `IfNotPresent` | `Always`, `IfNotPresent`, or `Never`. |
 | `image.tag` | string | `0.1.0-alpha.3` | SemVer tag for the image released with this chart. |
