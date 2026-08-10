@@ -6,6 +6,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Rel
 
 ## [Unreleased]
 
+## [0.1.0-alpha.3] - 2026-08-08
+
 ### Added
 
 - GitHub App service with signed webhook ingestion and Check Runs.
@@ -193,5 +195,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Rel
   no longer reports a complete scan.
 - GitHub API error messages are capped at 1,000 characters, and non-finite rate-limit hints use the bounded default delay.
 - Shell lint CI verifies the pinned official ShellCheck release archive instead of depending on an anonymous Docker Hub pull.
+- Production PostgreSQL connections can use `sslmode=require` when the deployment has no CA verification path. `sslmode=verify-full` remains available for deployments that do.
+
+### Security
+
+- Updated `cryptography` to 50.0.0 and refreshed the reviewed native source and wheel evidence for both supported container architectures.
 
 [Unreleased]: https://github.com/stampbot/extra-codeowners/commits/main
