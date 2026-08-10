@@ -6,6 +6,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Rel
 
 ## [Unreleased]
 
+### Added
+
+- A Helm `deploymentAnnotations` value for workload-level integrations such as
+  Stakater Reloader.
+
 ## [0.1.0-alpha.3] - 2026-08-08
 
 ### Added

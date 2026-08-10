@@ -8,6 +8,9 @@ revisionHistoryLimit: 3
 deploymentStrategy:
   type: Recreate
 
+# deploymentAnnotations adds annotations to the Deployment resource.
+deploymentAnnotations: {}
+
 # image configures an operator-built Extra CODEOWNERS container.
 image:
   # image.repository intentionally fails until an operator supplies a private repository.
