@@ -679,7 +679,7 @@ class EvaluationService:
         for alias, app in organization.apps.items():
             if app.bot_user_id not in bot_user_ids:
                 continue
-            metadata = await self.github.get_app(installation_id, app.slug)
+            metadata = await self.github.get_app(app.slug)
             observed_id = metadata.get("id")
             observed_slug = metadata.get("slug")
             if observed_id != app.app_id or str(observed_slug).lower() != app.slug:

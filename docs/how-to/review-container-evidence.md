@@ -620,6 +620,11 @@ all-layer schema and cross-file relationships. The following diffs make the
 policy decisions visible to a human. Set `PR_SOURCE` to the same read-only
 checkout of the exact synthetic merge commit used above:
 
+The selected application's `RECORD` file changes with every wheel, so it does
+not belong in the static payload diff. The command below identifies that one
+file and excludes it from the raw `wheel_identity_files` comparison. Later
+evidence checks the record against the selected-wheel installation contract.
+
 ```bash
 test "$POLICY" = "$REVIEWED_INPUTS/container-policy.json"
 PR_BASE_SHA="$(jq -er '.base.sha' "$INCOMING/pr.json")"
@@ -655,14 +660,25 @@ for architecture in amd64 arm64; do
     ' "$inventory" > "$DIFF_ROOT/${architecture}-cpython-runtime.json"
   LC_ALL=C sed -n 'l' "$DIFF_ROOT/${architecture}-cpython-runtime.json"
 
+  application_record_path="$(jq -er '
+      [
+        .wheel_installations[]
+        | select(.owner | startswith("python:extra-codeowners@"))
+        | select(.record.effective == true)
+        | .record.path
+      ]
+      | if length == 1 then .[0] else error("expected one effective application RECORD") end
+    ' "$inventory")"
+
   for category in embedded_sboms native_payloads wheel_identity_files; do
     jq -e --ascii-output --sort-keys \
       --arg platform "$platform" --arg category "$category" \
       '.unexpanded_python_payloads[$platform][$category]' "$POLICY" \
       > "$DIFF_ROOT/${architecture}-expected-${category}.json"
-    jq -e --ascii-output --sort-keys --arg category "$category" '
+    jq -e --ascii-output --sort-keys \
+      --arg category "$category" --arg application_record_path "$application_record_path" '
         if $category == "wheel_identity_files"
-        then .[$category]
+        then [.[$category][] | select(.path != $application_record_path)]
         else [.[$category][] | {
           effective, layer, path, sha256, size, mode, uid, gid
         }]

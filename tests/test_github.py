@@ -2,6 +2,7 @@ import asyncio
 import gzip
 import json
 from collections.abc import AsyncIterator, Callable
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import cast
 
@@ -639,8 +640,6 @@ async def test_read_helpers_share_installation_token_and_validate_shapes(private
             return httpx.Response(200, json={"privacy": "closed"})
         if path == "/orgs/example/teams/platform/repos/example/project":
             return httpx.Response(200, json={"permissions": {"push": True}})
-        if path == "/apps/stampbot":
-            return httpx.Response(200, json={"id": 99, "slug": "stampbot"})
         if path.endswith("/contents/missing"):
             return httpx.Response(404, json={"message": "Not Found"})
         return httpx.Response(500, json={"message": "unexpected route"})
@@ -654,11 +653,121 @@ async def test_read_helpers_share_installation_token_and_validate_shapes(private
     assert await client.team_member(2, "example", "platform", "octocat") is True
     assert await client.user_can_own_repository(2, "example/project", "octocat") is True
     assert await client.team_can_own_repository(2, "example", "platform", "example/project") is True
-    assert await client.get_app(2, "stampbot") == {"id": 99, "slug": "stampbot"}
     assert await client.get_file_text(2, "example/project", "missing") is None
     await client.close()
 
     assert token_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_get_app_uses_the_public_identity_endpoint_without_a_bearer_token(
+    private_key: str,
+) -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        assert request.url.path == "/apps/stampbot"
+        assert "authorization" not in request.headers
+        return httpx.Response(200, json={"id": 99, "slug": "stampbot"})
+
+    client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
+
+    first = await client.get_app("stampbot")
+    first["id"] = 0
+    assert await client.get_app("stampbot") == {"id": 99, "slug": "stampbot"}
+    await client.close()
+
+    assert len(requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_get_app_coalesces_concurrent_public_identity_lookups(
+    private_key: str,
+) -> None:
+    calls = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        assert request.url.path == "/apps/stampbot"
+        await asyncio.sleep(0)
+        return httpx.Response(200, json={"id": 99, "slug": "stampbot"})
+
+    client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
+
+    responses = await asyncio.gather(*(client.get_app("stampbot") for _ in range(20)))
+    await client.close()
+
+    assert responses == [{"id": 99, "slug": "stampbot"}] * 20
+    assert calls == 1
+
+
+@pytest.mark.asyncio
+async def test_get_app_refreshes_public_identity_after_cache_expiry(
+    private_key: str,
+) -> None:
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        assert request.url.path == "/apps/stampbot"
+        return httpx.Response(200, json={"id": 99, "slug": "stampbot"})
+
+    client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
+
+    assert await client.get_app("stampbot") == {"id": 99, "slug": "stampbot"}
+    client._app_identities["stampbot"] = replace(
+        client._app_identities["stampbot"],
+        expires_at=datetime.now(UTC) - timedelta(seconds=1),
+    )
+    assert await client.get_app("stampbot") == {"id": 99, "slug": "stampbot"}
+    await client.close()
+
+    assert calls == 2
+
+
+@pytest.mark.asyncio
+async def test_get_app_cache_is_bounded_and_prunes_expired_entries(
+    private_key: str,
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        slug = request.url.path.removeprefix("/apps/")
+        return httpx.Response(200, json={"id": len(slug), "slug": slug})
+
+    client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
+
+    for number in range(129):
+        slug = f"app-{number}"
+        assert await client.get_app(slug) == {"id": len(slug), "slug": slug}
+
+    assert len(client._app_identities) == 128
+    assert "app-0" not in client._app_identities
+    client._app_identities["app-1"] = replace(
+        client._app_identities["app-1"],
+        expires_at=datetime.now(UTC) - timedelta(seconds=1),
+    )
+    assert await client.get_app("fresh") == {"id": 5, "slug": "fresh"}
+    await client.close()
+
+    assert len(client._app_identities) == 128
+    assert "app-1" not in client._app_identities
+
+
+@pytest.mark.asyncio
+async def test_get_app_discards_a_failed_in_flight_lookup(private_key: str) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, json={"message": "unavailable"})
+
+    client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
+
+    with pytest.raises(GitHubAPIError, match="500: unavailable"):
+        await client.get_app("stampbot")
+    await client.close()
+
+    assert client._app_identity_requests == {}
+    assert client._app_identities == {}
 
 
 @pytest.mark.asyncio
@@ -1308,7 +1417,12 @@ async def test_installation_token_response_shape_fails_closed(private_key: str) 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "authentication",
-    [{}, {"installation_id": 2, "app_authenticated": True}],
+    [
+        {},
+        {"installation_id": 2, "app_authenticated": True},
+        {"installation_id": 2, "unauthenticated": True},
+        {"app_authenticated": True, "unauthenticated": True},
+    ],
 )
 async def test_request_requires_exactly_one_authentication_mode(
     private_key: str,

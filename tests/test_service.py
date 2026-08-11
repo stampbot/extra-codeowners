@@ -140,7 +140,7 @@ required_labels = ["autoapprove"]
     ) -> bool:
         return team_slug == "platform"
 
-    async def get_app(self, installation_id: int, slug: str) -> dict[str, Any]:
+    async def get_app(self, slug: str) -> dict[str, Any]:
         return {"id": 2909932, "slug": slug}
 
     async def upsert_check_run(

@@ -6,6 +6,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Rel
 
 ## [Unreleased]
 
+### Fixed
+
+- Fetch enrolled App identity without an installation token. GitHub rejects
+  that token for a different App.
+- Cache successful public App identity lookups for one hour to avoid consuming
+  the unauthenticated GitHub API quota during every evaluation.
+- Bind the application's changing installed `RECORD` file to the selected wheel
+  instead of a stale static container-policy baseline.
+
 ## [0.1.0-alpha.4] - 2026-08-10
 
 ### Added

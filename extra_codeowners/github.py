@@ -6,6 +6,7 @@ import asyncio
 import json as json_module
 import math
 import re
+from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
@@ -210,6 +211,19 @@ class InstallationToken:
     expires_at: datetime
 
 
+APP_IDENTITY_CACHE_TTL = timedelta(hours=1)
+MAX_CACHED_APP_IDENTITIES: Final = 128
+MAX_PENDING_APP_IDENTITY_LOOKUPS: Final = 128
+
+
+@dataclass(frozen=True, slots=True)
+class _CachedAppIdentity:
+    """A public GitHub App identity cached for a bounded interval."""
+
+    value: dict[str, Any]
+    expires_at: datetime
+
+
 @dataclass(frozen=True, slots=True)
 class _BoundedJsonResponse:
     """Parsed JSON plus the bounded retry metadata needed after HTTP 200."""
@@ -253,6 +267,9 @@ class GitHubClient:
         self._private_key = loaded_key
         self._tokens: dict[int, InstallationToken] = {}
         self._token_locks: dict[int, asyncio.Lock] = {}
+        self._app_identities: OrderedDict[str, _CachedAppIdentity] = OrderedDict()
+        self._app_identity_requests: dict[str, asyncio.Future[dict[str, Any]]] = {}
+        self._app_identity_cache_lock = asyncio.Lock()
         self._http = httpx.AsyncClient(
             base_url=api_url.rstrip("/"),
             timeout=httpx.Timeout(timeout_seconds),
@@ -348,20 +365,22 @@ class GitHubClient:
         *,
         installation_id: int | None = None,
         app_authenticated: bool = False,
+        unauthenticated: bool = False,
         params: dict[str, Any] | None = None,
         json: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,
         allow_not_found: bool = False,
         stop: asyncio.Event | None = None,
     ) -> dict[str, Any]:
-        if app_authenticated == (installation_id is not None):
+        if int(app_authenticated) + int(installation_id is not None) + int(unauthenticated) != 1:
             msg = "request must use exactly one authentication mode"
             raise ValueError(msg)
-        response = await self._authenticated_response(
+        response = await self._api_response(
             method,
             path,
             installation_id=installation_id,
             app_authenticated=app_authenticated,
+            unauthenticated=unauthenticated,
             params=params,
             json=json,
             headers=headers,
@@ -380,27 +399,33 @@ class GitHubClient:
         self._raise_api_error(response, method, path)
         raise AssertionError("unreachable")  # pragma: no cover
 
-    async def _authenticated_response(
+    async def _api_response(
         self,
         method: str,
         path: str,
         *,
         installation_id: int | None = None,
         app_authenticated: bool = False,
+        unauthenticated: bool = False,
         params: dict[str, Any] | None = None,
         json: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,
         stop: asyncio.Event | None = None,
     ) -> httpx.Response:
-        """Send an authenticated request, refreshing a rejected installation token once."""
-        attempts = 1 if app_authenticated else 2
+        """Send a public, App, or installation request with bounded retries."""
+        attempts = 1 if app_authenticated or unauthenticated else 2
         for attempt in range(attempts):
             self._raise_if_stopped(stop)
-            if app_authenticated:
+            request_headers = headers or {}
+            if unauthenticated:
+                pass
+            elif app_authenticated:
                 token = self._app_jwt()
+                request_headers = {**request_headers, "Authorization": f"Bearer {token}"}
             else:
                 assert installation_id is not None
                 token = await self._installation_token(installation_id, stop=stop)
+                request_headers = {**request_headers, "Authorization": f"Bearer {token}"}
             self._raise_if_stopped(stop)
             try:
                 async with asyncio.timeout(self._request_deadline_seconds):
@@ -409,7 +434,7 @@ class GitHubClient:
                         path,
                         params=params,
                         json=json,
-                        headers={**(headers or {}), "Authorization": f"Bearer {token}"},
+                        headers=request_headers,
                     )
             except TimeoutError as error:
                 if stop is not None and stop.is_set():
@@ -424,7 +449,7 @@ class GitHubClient:
                     ) from error
                 raise
             self._raise_if_stopped(stop)
-            if response.status_code != 401 or app_authenticated or attempt > 0:
+            if response.status_code != 401 or app_authenticated or unauthenticated or attempt > 0:
                 return response
             assert installation_id is not None
             cached = self._tokens.get(installation_id)
@@ -570,7 +595,7 @@ class GitHubClient:
         while True:
             self._raise_if_stopped(stop)
             query["page"] = page
-            response = await self._authenticated_response(
+            response = await self._api_response(
                 "GET",
                 path,
                 installation_id=installation_id,
@@ -1301,13 +1326,69 @@ class GitHubClient:
             return False
         return any(permissions.get(level) is True for level in ("push", "maintain", "admin"))
 
-    async def get_app(self, installation_id: int, slug: str) -> dict[str, Any]:
-        """Fetch independently observed public identity metadata for an allowed App."""
-        return await self._request(
-            "GET",
-            f"/apps/{slug}",
-            installation_id=installation_id,
-        )
+    async def get_app(self, slug: str) -> dict[str, Any]:
+        """Fetch bounded-cached public identity metadata for an allowed App."""
+        cache_key = slug.lower()
+        async with self._app_identity_cache_lock:
+            now = datetime.now(UTC)
+            self._expire_cached_app_identities(now)
+            cached = self._app_identities.get(cache_key)
+            if cached is not None and cached.expires_at > now:
+                self._app_identities.move_to_end(cache_key)
+                return dict(cached.value)
+
+            request = self._app_identity_requests.get(cache_key)
+            if request is None:
+                if len(self._app_identity_requests) >= MAX_PENDING_APP_IDENTITY_LOOKUPS:
+                    msg = "too many concurrent public GitHub App identity lookups"
+                    raise GitHubError(msg)
+                request = asyncio.get_running_loop().create_future()
+                self._app_identity_requests[cache_key] = request
+                fetch_identity = True
+            else:
+                fetch_identity = False
+
+        if not fetch_identity:
+            return dict(await asyncio.shield(request))
+
+        try:
+            metadata = await self._request(
+                "GET",
+                f"/apps/{slug}",
+                unauthenticated=True,
+            )
+        except BaseException as error:
+            async with self._app_identity_cache_lock:
+                if self._app_identity_requests.get(cache_key) is request:
+                    self._app_identity_requests.pop(cache_key, None)
+                if not request.done():
+                    if isinstance(error, asyncio.CancelledError):
+                        request.cancel()
+                    else:
+                        request.set_exception(error)
+                        request.exception()
+            raise
+
+        value = dict(metadata)
+        async with self._app_identity_cache_lock:
+            if self._app_identity_requests.get(cache_key) is request:
+                self._app_identity_requests.pop(cache_key, None)
+            self._app_identities[cache_key] = _CachedAppIdentity(
+                value=value,
+                expires_at=datetime.now(UTC) + APP_IDENTITY_CACHE_TTL,
+            )
+            self._app_identities.move_to_end(cache_key)
+            while len(self._app_identities) > MAX_CACHED_APP_IDENTITIES:
+                self._app_identities.popitem(last=False)
+            if not request.done():
+                request.set_result(value)
+        return dict(value)
+
+    def _expire_cached_app_identities(self, now: datetime) -> None:
+        """Remove expired public App identities while the cache lock is held."""
+        for cache_key, cached in tuple(self._app_identities.items()):
+            if cached.expires_at <= now:
+                self._app_identities.pop(cache_key, None)
 
     async def _latest_check_run_id(
         self,
@@ -1489,7 +1570,7 @@ class GitHubClient:
         page = 1
         while True:
             self._raise_if_stopped(stop)
-            response = await self._authenticated_response(
+            response = await self._api_response(
                 "GET",
                 "/app/installations",
                 app_authenticated=True,
@@ -1524,7 +1605,7 @@ class GitHubClient:
         page = 1
         while True:
             self._raise_if_stopped(stop)
-            response = await self._authenticated_response(
+            response = await self._api_response(
                 "GET",
                 "/installation/repositories",
                 installation_id=installation_id,

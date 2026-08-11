@@ -4000,6 +4000,70 @@ def validate_unexpanded_payload_policy_schema(
     return baselines
 
 
+def selected_application_record_occurrences(
+    inventory: Mapping[str, Any],
+) -> frozenset[tuple[int, str]]:
+    """Return the effective application RECORD occurrence bound later to the selected wheel."""
+
+    components = inventory.get("components")
+    if not isinstance(components, list):
+        return frozenset()
+    versions = [
+        component.get("version")
+        for component in components
+        if isinstance(component, dict)
+        and component.get("ecosystem") == "python"
+        and component.get("name") == APPLICATION_NAME
+        and component.get("effective") is True
+    ]
+    if len(versions) != 1 or not isinstance(versions[0], str):
+        return frozenset()
+
+    installations = inventory.get("wheel_installations")
+    if not isinstance(installations, list):
+        return frozenset()
+    expected_owner = f"python:{APPLICATION_NAME}@{versions[0]}"
+    occurrences: list[tuple[int, str]] = []
+    for installation in installations:
+        if not isinstance(installation, dict) or installation.get("owner") != expected_owner:
+            continue
+        record = installation.get("record")
+        if not isinstance(record, dict) or record.get("effective") is not True:
+            continue
+        layer = record.get("layer")
+        path = record.get("path")
+        if (
+            not isinstance(layer, int)
+            or isinstance(layer, bool)
+            or not isinstance(path, str)
+            or WHEEL_IDENTITY_FILE.search(path) is None
+            or not path.endswith("/RECORD")
+        ):
+            continue
+        occurrences.append((layer, path))
+    if len(occurrences) != 1:
+        return frozenset()
+    return frozenset(occurrences)
+
+
+def static_wheel_identity_files(
+    records: object,
+    dynamically_bound_occurrences: frozenset[tuple[int, str]],
+) -> object:
+    """Remove the selected application's dynamically verified RECORD from a static baseline."""
+
+    if not isinstance(records, list):
+        return records
+    return [
+        record
+        for record in records
+        if not (
+            isinstance(record, dict)
+            and (record.get("layer"), record.get("path")) in dynamically_bound_occurrences
+        )
+    ]
+
+
 def verify_unexpanded_payload_policy(
     inventory: Mapping[str, Any], policy: Mapping[str, Any]
 ) -> None:
@@ -4014,6 +4078,7 @@ def verify_unexpanded_payload_policy(
     if platform not in baselines:
         raise EvidenceError(f"policy has no unexpanded payload baseline for {platform}")
     observed: dict[str, object] = {}
+    dynamically_bound_occurrences = selected_application_record_occurrences(inventory)
     for category in categories:
         records = inventory.get(category)
         if category in {"embedded_sboms", "native_payloads"}:
@@ -4026,7 +4091,10 @@ def verify_unexpanded_payload_policy(
                 payload_record_projection(record) for record in records if isinstance(record, dict)
             ]
         else:
-            observed[category] = records
+            observed[category] = static_wheel_identity_files(
+                records,
+                dynamically_bound_occurrences,
+            )
     if canonical_json(observed) != canonical_json(baselines[platform]):
         raise EvidenceError(
             "unexpanded native, SBOM, or installed-wheel identity files differ from policy"
