@@ -11,6 +11,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from pydantic import ValidationError
 
+import extra_codeowners.github as github_module
 from extra_codeowners.dco import (
     MAX_PULL_COMMITS,
     GitHubActor,
@@ -672,10 +673,57 @@ async def test_get_app_uses_the_public_identity_endpoint_without_a_bearer_token(
 
     client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
 
+    first = await client.get_app("stampbot")
+    first["id"] = 0
     assert await client.get_app("stampbot") == {"id": 99, "slug": "stampbot"}
     await client.close()
 
     assert len(requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_get_app_coalesces_concurrent_public_identity_lookups(
+    private_key: str,
+) -> None:
+    calls = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        assert request.url.path == "/apps/stampbot"
+        await asyncio.sleep(0)
+        return httpx.Response(200, json={"id": 99, "slug": "stampbot"})
+
+    client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
+
+    responses = await asyncio.gather(*(client.get_app("stampbot") for _ in range(20)))
+    await client.close()
+
+    assert responses == [{"id": 99, "slug": "stampbot"}] * 20
+    assert calls == 1
+
+
+@pytest.mark.asyncio
+async def test_get_app_refreshes_public_identity_after_cache_expiry(
+    private_key: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        assert request.url.path == "/apps/stampbot"
+        return httpx.Response(200, json={"id": 99, "slug": "stampbot"})
+
+    monkeypatch.setattr(github_module, "APP_IDENTITY_CACHE_TTL", timedelta(seconds=0))
+    client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
+
+    assert await client.get_app("stampbot") == {"id": 99, "slug": "stampbot"}
+    assert await client.get_app("stampbot") == {"id": 99, "slug": "stampbot"}
+    await client.close()
+
+    assert calls == 2
 
 
 @pytest.mark.asyncio

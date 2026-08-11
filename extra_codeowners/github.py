@@ -210,6 +210,17 @@ class InstallationToken:
     expires_at: datetime
 
 
+APP_IDENTITY_CACHE_TTL = timedelta(hours=1)
+
+
+@dataclass(frozen=True, slots=True)
+class _CachedAppIdentity:
+    """A public GitHub App identity cached for a bounded interval."""
+
+    value: dict[str, Any]
+    expires_at: datetime
+
+
 @dataclass(frozen=True, slots=True)
 class _BoundedJsonResponse:
     """Parsed JSON plus the bounded retry metadata needed after HTTP 200."""
@@ -253,6 +264,8 @@ class GitHubClient:
         self._private_key = loaded_key
         self._tokens: dict[int, InstallationToken] = {}
         self._token_locks: dict[int, asyncio.Lock] = {}
+        self._app_identities: dict[str, _CachedAppIdentity] = {}
+        self._app_identity_locks: dict[str, asyncio.Lock] = {}
         self._http = httpx.AsyncClient(
             base_url=api_url.rstrip("/"),
             timeout=httpx.Timeout(timeout_seconds),
@@ -1310,12 +1323,29 @@ class GitHubClient:
         return any(permissions.get(level) is True for level in ("push", "maintain", "admin"))
 
     async def get_app(self, slug: str) -> dict[str, Any]:
-        """Fetch independently observed public identity metadata for an allowed App."""
-        return await self._request(
-            "GET",
-            f"/apps/{slug}",
-            unauthenticated=True,
-        )
+        """Fetch bounded-cached public identity metadata for an allowed App."""
+        cache_key = slug.lower()
+        now = datetime.now(UTC)
+        cached = self._app_identities.get(cache_key)
+        if cached is not None and cached.expires_at > now:
+            return dict(cached.value)
+
+        lock = self._app_identity_locks.setdefault(cache_key, asyncio.Lock())
+        async with lock:
+            cached = self._app_identities.get(cache_key)
+            now = datetime.now(UTC)
+            if cached is not None and cached.expires_at > now:
+                return dict(cached.value)
+            metadata = await self._request(
+                "GET",
+                f"/apps/{slug}",
+                unauthenticated=True,
+            )
+            self._app_identities[cache_key] = _CachedAppIdentity(
+                value=dict(metadata),
+                expires_at=now + APP_IDENTITY_CACHE_TTL,
+            )
+            return dict(metadata)
 
     async def _latest_check_run_id(
         self,
