@@ -56,6 +56,7 @@ nav:
       - Property testing: explanation/property-testing.md
   - Maintainer and release engineering:
       - Overview: maintainers/index.md
+      - Prepare an alpha release: maintainers/prepare-alpha-release.md
       - Run the live GitHub contract: how-to/run-live-github-contract.md
       - Live GitHub evidence reports: reference/live-github-evidence-reports.md
       - Respond to dependency audit: how-to/respond-to-dependency-audit.md

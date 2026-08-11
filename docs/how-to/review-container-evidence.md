@@ -620,10 +620,11 @@ all-layer schema and cross-file relationships. The following diffs make the
 policy decisions visible to a human. Set `PR_SOURCE` to the same read-only
 checkout of the exact synthetic merge commit used above:
 
-The selected application's `RECORD` file changes with every wheel, so it does
-not belong in the static payload diff. The command below identifies that one
-file and excludes it from the raw `wheel_identity_files` comparison. Later
-evidence checks the record against the selected-wheel installation contract.
+The application changes with every wheel. Its component, effective `WHEEL` and
+`RECORD` files, and versioned `.dist-info` directories are outside the static
+policy because the selected wheel and source revision bind them separately.
+Derive the exact dynamic records from the inventory that the trusted check has
+already validated. The projections below exclude only those records.
 
 ```bash
 test "$POLICY" = "$REVIEWED_INPUTS/container-policy.json"
@@ -649,7 +650,49 @@ for architecture in amd64 arm64; do
   jq -e --ascii-output --sort-keys --arg platform "$platform" \
     '.platforms[$platform]' "$POLICY" \
     > "$DIFF_ROOT/${architecture}-expected-components.json"
-  jq -e --ascii-output --sort-keys '.components' "$inventory" \
+  application_version="$(jq -er '
+      [
+        .components[]
+        | select(
+            .ecosystem == "python"
+            and .name == "extra-codeowners"
+            and .effective == true
+            and .observed_license == "Apache-2.0"
+          )
+        | .version
+      ]
+      | if (length == 1 and (.[0] | type == "string"))
+        then .[0]
+        else error("expected one effective Extra CODEOWNERS application component")
+        end
+    ' "$inventory")"
+  application_owner="python:extra-codeowners@${application_version}"
+  application_identity_occurrences="$(jq -ce --arg application_owner "$application_owner" '
+      [
+        .wheel_installations[]
+        | select(
+            .owner == $application_owner
+            and .record.effective == true
+            and .wheel.effective == true
+          )
+        | {layer: .record.layer, path: .record.path},
+          {layer: .wheel.layer, path: .wheel.path}
+      ]
+      | if (length == 2 and ([.[] | [.layer, .path]] | unique | length == 2))
+        then .
+        else error("expected one selected application WHEEL and RECORD pair")
+        end
+    ' "$inventory")"
+  jq -e --ascii-output --sort-keys --arg application_version "$application_version" '
+      [
+        .components[]
+        | select(
+            .ecosystem != "python"
+            or .name != "extra-codeowners"
+            or .version != $application_version
+          )
+      ]
+    ' "$inventory" \
     > "$DIFF_ROOT/${architecture}-observed-components.json"
   diff --unified "$DIFF_ROOT/${architecture}-expected-components.json" \
     "$DIFF_ROOT/${architecture}-observed-components.json"
@@ -660,25 +703,25 @@ for architecture in amd64 arm64; do
     ' "$inventory" > "$DIFF_ROOT/${architecture}-cpython-runtime.json"
   LC_ALL=C sed -n 'l' "$DIFF_ROOT/${architecture}-cpython-runtime.json"
 
-  application_record_path="$(jq -er '
-      [
-        .wheel_installations[]
-        | select(.owner | startswith("python:extra-codeowners@"))
-        | select(.record.effective == true)
-        | .record.path
-      ]
-      | if length == 1 then .[0] else error("expected one effective application RECORD") end
-    ' "$inventory")"
-
   for category in embedded_sboms native_payloads wheel_identity_files; do
     jq -e --ascii-output --sort-keys \
       --arg platform "$platform" --arg category "$category" \
       '.unexpanded_python_payloads[$platform][$category]' "$POLICY" \
       > "$DIFF_ROOT/${architecture}-expected-${category}.json"
     jq -e --ascii-output --sort-keys \
-      --arg category "$category" --arg application_record_path "$application_record_path" '
+      --arg category "$category" \
+      --argjson application_identity_occurrences "$application_identity_occurrences" '
         if $category == "wheel_identity_files"
-        then [.[$category][] | select(.path != $application_record_path)]
+        then [
+          .[$category][]
+          | select(
+              . as $record
+              | ($application_identity_occurrences | index({
+                  layer: $record.layer,
+                  path: $record.path
+                }) | not)
+            )
+        ]
         else [.[$category][] | {
           effective, layer, path, sha256, size, mode, uid, gid
         }]
@@ -783,6 +826,7 @@ for architecture in amd64 arm64; do
   "$TRUSTED_ROOT/.venv/bin/python" \
     "$TRUSTED_ROOT/.github/scripts/container_evidence.py" filesystem-policy-view \
     --files-inventory "$files" \
+    --inventory "$inventory" \
     --policy "$POLICY" \
     --output "$DIFF_ROOT/${architecture}-observed-filesystem-policy.json"
   jq -e --ascii-output --sort-keys --arg platform "$platform" '
@@ -805,15 +849,18 @@ for architecture in amd64 arm64; do
 done
 ```
 
-No diff output means the exact ordered base diff IDs, top-level components,
-raw wheel surfaces, APK database and post-base APK world history, and canonical
+No diff output means the exact ordered base diff IDs, static components, static
+wheel surfaces, APK database and post-base APK world history, and static
 directory effects and removals match reviewed policy. It also means the exact
-post-base system files and links match. Review the printed structured wheel
-payloads, coverage ledger, and CPython runtime record as well. The CPython
-record must bind the expected version header, interpreter link, interpreter,
-and shared library from one reviewed base layer. Each embedded SBOM and native
-payload must name the expected wheel owner, and its CycloneDX or ELF identity
-must agree with the upstream component and selected architecture.
+post-base system files and links match. The omitted application component,
+`WHEEL`, `RECORD`, and versioned `.dist-info` directories are not waived. The
+selected-wheel installation and source-binding checks cover them later in the
+evidence flow. Review the printed structured wheel payloads, coverage ledger,
+and CPython runtime record as well. The CPython record must bind the expected
+version header, interpreter link, interpreter, and shared library from one
+reviewed base layer. Each embedded SBOM and native payload must name the
+expected wheel owner, and its CycloneDX or ELF identity must agree with the
+upstream component and selected architecture.
 
 The filesystem projection validates all raw headers but omits only
 exporter-specific directory re-emissions and whiteout marker attributes that do

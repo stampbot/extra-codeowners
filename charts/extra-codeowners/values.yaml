@@ -17,8 +17,8 @@ image:
   repository: example.invalid/stampbot/extra-codeowners
   # image.pullPolicy controls when Kubernetes pulls the image.
   pullPolicy: IfNotPresent
-  # image.tag is the SemVer container tag for this chart release.
-  tag: "0.1.0-alpha.4"
+  # image.tag overrides the released chart's appVersion when it is nonempty.
+  tag: ""
   # image.digest, when set, takes precedence over image.tag.
   digest: ""
 

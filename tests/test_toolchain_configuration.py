@@ -258,7 +258,7 @@ def test_helm_chart_protects_startup_and_rejects_explicit_libpq_environment() ->
     }
 
     image = cast(dict[str, Any], values["image"])
-    assert image["tag"] == "0.1.0-alpha.4"
+    assert image["tag"] == ""
 
     assert values["deploymentAnnotations"] == {}
 
@@ -319,6 +319,23 @@ def test_helm_chart_protects_startup_and_rejects_explicit_libpq_environment() ->
     ).read_text()
     assert "{{ toYaml . }}" in extra_manifests_template
     assert "tpl" not in extra_manifests_template
+
+
+def test_release_chart_metadata_is_derived_from_the_signed_tag() -> None:
+    chart = yaml.safe_load((ROOT / "charts" / "extra-codeowners" / "Chart.yaml").read_text())
+    release = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+    mise = (ROOT / "mise.toml").read_text(encoding="utf-8")
+
+    assert chart["version"] == "0.0.0-dev"
+    assert chart["appVersion"] == "0.0.0-dev"
+    assert "helm package charts/extra-codeowners \\" in release
+    assert '--version "$VERSION" \\' in release
+    assert '--app-version "$VERSION"' in release
+    assert 'chart="dist/extra-codeowners-${VERSION}.tgz"' in release
+    assert 'helm template extra-codeowners "$chart"' in release
+    assert "sed -i" not in release
+    assert '[tasks."release:prepare-alpha"]' in mise
+    assert 'run = "uv run --frozen python tools/prepare_prerelease.py"' in mise
 
 
 def test_pinned_uv_exposes_the_scheduled_audit_interface_without_network() -> None:
@@ -999,15 +1016,17 @@ def test_reusable_workflow_proves_one_native_cross_architecture_distribution() -
     assert '--source-revision "$GITHUB_SHA"' in proof
     assert '--scratch-directory "$scratch"' in proof
     assert "compression-level: 0" in proof
-    assert "python-distributions-${{ matrix.architecture }}-${{ github.sha }}-attempt-" in proof
-    assert "${{ github.run_attempt }}" in proof
+    # A selector-only retry retains successful native jobs from its first attempt.
+    assert "python-distributions-${{ matrix.architecture }}-${{ github.sha }}" in proof
+    assert "-attempt-${{ github.run_attempt }}" not in proof
+    assert "overwrite: true" in proof
 
     assert "needs: native-proof" in selector
     assert "if: ${{ always() }}" in selector
     assert 'if [ "$PROOF_RESULT" != success ]; then' in selector
     assert selector.count("actions/download-artifact@3e5f45b2") == 2
-    assert "python-distributions-amd64-${{ github.sha }}-attempt-" in selector
-    assert "python-distributions-arm64-${{ github.sha }}-attempt-" in selector
+    assert "python-distributions-amd64-${{ github.sha }}" in selector
+    assert "python-distributions-arm64-${{ github.sha }}" in selector
     assert "merge-multiple" not in selector
     assert selector.count("digest-mismatch: error") == 2
     assert "artifact-id: ${{ steps.upload-selected.outputs.artifact-id }}" in selector
@@ -1530,3 +1549,37 @@ def test_evaluation_beta_tools_are_in_every_python_type_check_entrypoint() -> No
     for source_name, source in sources.items():
         for path in required:
             assert path in source, f"{source_name} does not type-check {path}"
+
+
+def test_container_evidence_review_projects_dynamic_application_records() -> None:
+    """Keep the human policy diff aligned with the selected-wheel verifier."""
+    review = (ROOT / "docs" / "how-to" / "review-container-evidence.md").read_text(encoding="utf-8")
+    section = review.split("## 4. Review policy and inventory drift\n", 1)[1].split(
+        "\n## 5. Confirm source completeness", 1
+    )[0]
+    code = section.split("```bash\n", 1)[1].split("\n```", 1)[0]
+    shell = shutil.which("sh")
+
+    assert shell is not None
+    assert "application_identity_occurrences" in code
+    assert "--argjson application_identity_occurrences" in code
+    assert '--inventory "$inventory"' in code
+    assert '--arg application_version "$application_version"' in code
+    result = subprocess.run(  # noqa: S603 - linting this repository-owned documentation block
+        [shell, "-n"],
+        input=code,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+
+    reference = (ROOT / "docs" / "reference" / "container-evidence-policy.md").read_text(
+        encoding="utf-8"
+    )
+    expected_command = (
+        "filesystem-policy-view \\\n"
+        "  --files-inventory PATH_TO_ALL_LAYER_INVENTORY \\\n"
+        "  --inventory PATH_TO_COMPONENT_INVENTORY"
+    )
+    assert expected_command in reference

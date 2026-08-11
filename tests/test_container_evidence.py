@@ -512,7 +512,18 @@ def standalone_inventory(component: dict[str, Any]) -> dict[str, Any]:
         "native_wheelhouse_schema": NATIVE_WHEELHOUSE_SCHEMA,
         "apk_database_sha256": "d" * 64,
         "apk_shared_libraries": [],
-        "components": [component, synthetic_runtime_component()],
+        "components": [
+            component,
+            {
+                "ecosystem": "python",
+                "name": evidence.APPLICATION_NAME,
+                "version": "1.0",
+                "observed_license": evidence.APPLICATION_LICENSE,
+                "effective": True,
+                "metadata_sha256": "1" * 64,
+            },
+            synthetic_runtime_component(),
+        ],
         "embedded_sboms": [],
         "native_payloads": [],
         "wheel_identity_files": [],
@@ -8544,6 +8555,25 @@ def test_policy_comparison_and_human_approval_are_separate() -> None:
         ],
     )
     evidence.verify_inventory(inventory, policy, require_approval=False)
+    missing_application = copy.deepcopy(inventory)
+    missing_application["components"] = [
+        item
+        for item in missing_application["components"]
+        if item["name"] != evidence.APPLICATION_NAME
+    ]
+    with pytest.raises(evidence.EvidenceError, match="one effective application"):
+        evidence.verify_inventory(missing_application, policy, require_approval=False)
+
+    unexpected_application_license = copy.deepcopy(inventory)
+    application = next(
+        item
+        for item in unexpected_application_license["components"]
+        if item["name"] == evidence.APPLICATION_NAME
+    )
+    application["observed_license"] = "MIT"
+    with pytest.raises(evidence.EvidenceError, match="unexpected license"):
+        evidence.verify_inventory(unexpected_application_license, policy, require_approval=False)
+
     with pytest.raises(evidence.EvidenceError, match="maintainer approval"):
         evidence.verify_inventory(inventory, policy, require_approval=True)
 
@@ -8789,7 +8819,9 @@ def test_license_refs_require_exact_pinned_custom_evidence() -> None:
         }
     ]
     with pytest.raises(evidence.EvidenceError, match="pinned source-carried notice"):
-        evidence.verify_pinned_custom_license_records(inventory["components"], policy, unrelated)
+        evidence.verify_pinned_custom_license_records(
+            evidence.static_components(inventory["components"]), policy, unrelated
+        )
 
 
 def test_runtime_license_ref_uses_the_canonical_component_key() -> None:
@@ -9723,7 +9755,7 @@ def test_inventory_reports_unexpanded_wheel_sboms_and_native_payloads(
         evidence.verify_unexpanded_payload_policy(changed_wheel, payload_policy)
 
 
-def test_unexpanded_policy_excludes_only_the_selected_application_record() -> None:
+def test_unexpanded_policy_excludes_selected_application_wheel_identity_files() -> None:
     application_record = {
         "effective": True,
         "gid": 0,
@@ -9744,6 +9776,16 @@ def test_unexpanded_policy_excludes_only_the_selected_application_record() -> No
         "size": 200,
         "uid": 0,
     }
+    application_wheel = {
+        "effective": True,
+        "gid": 0,
+        "layer": 5,
+        "mode": 0o644,
+        "path": ("opt/venv/lib/python3.14/site-packages/extra_codeowners-1.dist-info/WHEEL"),
+        "sha256": "c" * 64,
+        "size": 87,
+        "uid": 0,
+    }
     inventory: dict[str, Any] = {
         "components": [
             {
@@ -9756,11 +9798,12 @@ def test_unexpanded_policy_excludes_only_the_selected_application_record() -> No
         "embedded_sboms": [],
         "native_payloads": [],
         "platform": "linux/amd64",
-        "wheel_identity_files": [application_record, dependency_record],
+        "wheel_identity_files": [application_record, application_wheel, dependency_record],
         "wheel_installations": [
             {
                 "owner": "python:extra-codeowners@1",
                 "record": application_record,
+                "wheel": application_wheel,
             }
         ],
     }
@@ -9784,10 +9827,58 @@ def test_unexpanded_policy_excludes_only_the_selected_application_record() -> No
     changed_application["wheel_identity_files"][0]["sha256"] = "c" * 64
     evidence.verify_unexpanded_payload_policy(changed_application, policy)
 
+    changed_application_wheel = copy.deepcopy(inventory)
+    changed_application_wheel["wheel_identity_files"][1]["sha256"] = "d" * 64
+    evidence.verify_unexpanded_payload_policy(changed_application_wheel, policy)
+
     changed_dependency = copy.deepcopy(inventory)
-    changed_dependency["wheel_identity_files"][1]["sha256"] = "d" * 64
+    changed_dependency["wheel_identity_files"][2]["sha256"] = "e" * 64
     with pytest.raises(evidence.EvidenceError, match="differ from policy"):
         evidence.verify_unexpanded_payload_policy(changed_dependency, policy)
+
+
+def test_static_directory_effects_exclude_only_selected_application_dist_info() -> None:
+    dist_info = "opt/venv/lib/python3.14/site-packages/extra_codeowners-1.dist-info"
+    application = {
+        "ecosystem": "python",
+        "effective": True,
+        "metadata_sha256": "a" * 64,
+        "name": "extra-codeowners",
+        "observed_license": "Apache-2.0",
+        "version": "1",
+    }
+    inventory: dict[str, Any] = {
+        "components": [application],
+        "wheel_installations": [
+            {
+                "owner": "python:extra-codeowners@1",
+                "record": {"effective": True},
+                "metadata": {"layer": 5, "path": f"{dist_info}/METADATA"},
+                "entries": [{"path": f"{dist_info}/licenses/LICENSE"}],
+            }
+        ],
+    }
+    effects = [
+        {"layer": 5, "path": dist_info, "mode": 0o755, "uid": 0, "gid": 0},
+        {"layer": 5, "path": f"{dist_info}/licenses", "mode": 0o755, "uid": 0, "gid": 0},
+        {
+            "layer": 5,
+            "path": "opt/venv/lib/python3.14/site-packages/extra_codeowners",
+            "mode": 0o755,
+            "uid": 0,
+            "gid": 0,
+        },
+    ]
+
+    dynamic = evidence.selected_application_directory_effect_occurrences(inventory, effects)
+    assert dynamic == {(5, dist_info), (5, f"{dist_info}/licenses")}
+    assert evidence.static_directory_effects(effects, dynamic) == [effects[2]]
+
+    changed = copy.deepcopy(effects)
+    changed[1]["mode"] = 0o700
+    dynamic = evidence.selected_application_directory_effect_occurrences(inventory, changed)
+    assert dynamic == {(5, dist_info)}
+    assert evidence.static_directory_effects(changed, dynamic) == [changed[1], changed[2]]
 
 
 def test_cyclonedx_projection_uses_bom_ref_for_repeated_purl_occurrences() -> None:
@@ -12349,7 +12440,19 @@ def test_ci_artifact_extractor_rejects_content_tampering(mutation: str, tmp_path
 
 def test_source_policy_has_exact_nonduplicated_coverage() -> None:
     policy = json.loads(Path(".compliance/container-policy.json").read_text())
-    inventory = {"components": policy["platforms"]["linux/amd64"]}
+    inventory = {
+        "components": [
+            *policy["platforms"]["linux/amd64"],
+            {
+                "ecosystem": "python",
+                "name": evidence.APPLICATION_NAME,
+                "version": "1.0",
+                "observed_license": evidence.APPLICATION_LICENSE,
+                "effective": True,
+                "metadata_sha256": "1" * 64,
+            },
+        ]
+    }
     lock_sources = evidence.parse_lock_sources(Path("uv.lock"))
     evidence.validate_source_policy_coverage(inventory, policy, lock_sources)
 
@@ -12410,6 +12513,20 @@ def test_policy_schema_rejects_unknown_fields_at_every_boundary() -> None:
     resolution["reviewer"] = "untrusted"
     with pytest.raises(evidence.EvidenceError, match="license resolution"):
         evidence.validate_policy_schema(unknown_resolution_field)
+
+    pinned_application = copy.deepcopy(policy)
+    pinned_application["platforms"]["linux/amd64"].append(
+        {
+            "ecosystem": "python",
+            "effective": True,
+            "metadata_sha256": "a" * 64,
+            "name": "extra-codeowners",
+            "observed_license": "Apache-2.0",
+            "version": "0.1.0a4",
+        }
+    )
+    with pytest.raises(evidence.EvidenceError, match="must not statically pin"):
+        evidence.validate_policy_schema(pinned_application)
 
 
 def test_policy_binds_cpython_runtime_to_base_recipe_source_and_license() -> None:
@@ -13549,6 +13666,7 @@ def test_trusted_native_component_bundle_contract_is_internally_bound(
         "pkg:generic/libdemo@1.2.3 | alpine:demo-native@1.2.3-r0 |"
     ) in notices
     assert ("| python | markupsafe | 3.0.3 | yes | BSD-3-Clause | BSD-3-Clause |") in notices
+    assert "extra-codeowners" not in notices
 
     checksum_records = {
         path: digest
@@ -14124,7 +14242,7 @@ def test_verify_ci_policy_command_composes_every_trusted_gate(
     monkeypatch.setattr(
         evidence,
         "verify_post_base_filesystem_policy",
-        lambda files, policy: calls.append(("filesystem", files, policy)),
+        lambda files, policy, inventory: calls.append(("filesystem", files, policy, inventory)),
     )
     monkeypatch.setattr(
         evidence,
@@ -14145,7 +14263,7 @@ def test_verify_ci_policy_command_composes_every_trusted_gate(
         ("deep", records["files.json"], records["inventory.json"]),
         ("policy", records["inventory.json"], records["policy.json"], False),
         ("base", records["files.json"], records["policy.json"]),
-        ("filesystem", records["files.json"], records["policy.json"]),
+        ("filesystem", records["files.json"], records["policy.json"], records["inventory.json"]),
         ("dockerfile", Path("Dockerfile"), records["policy.json"]),
     ]
 
@@ -14216,6 +14334,105 @@ def test_filesystem_policy_view_emits_validated_semantic_projection(tmp_path: Pa
                     "target": "removed",
                 }
             ],
+            "post_base_system_links": [],
+            "post_base_system_regular_occurrences": [],
+        }
+    )
+
+
+def test_filesystem_policy_view_filters_selected_application_directories(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The review projection must use the same dynamic-directory rule as verification."""
+    dist_info = "opt/venv/lib/python3.14/site-packages/extra_codeowners-1.dist-info"
+    files: dict[str, Any] = {"platform": "linux/amd64"}
+    policy: dict[str, Any] = {}
+    inventory: dict[str, Any] = {
+        "components": [
+            {
+                "ecosystem": "python",
+                "effective": True,
+                "metadata_sha256": "a" * 64,
+                "name": "extra-codeowners",
+                "observed_license": "Apache-2.0",
+                "version": "1",
+            }
+        ],
+        "wheel_installations": [
+            {
+                "owner": "python:extra-codeowners@1",
+                "record": {"effective": True},
+                "metadata": {"layer": 5, "path": f"{dist_info}/METADATA"},
+                "entries": [{"path": f"{dist_info}/licenses/LICENSE"}],
+            }
+        ],
+    }
+    directory_effects = [
+        {"layer": 5, "path": dist_info, "mode": 0o755, "uid": 0, "gid": 0},
+        {
+            "layer": 5,
+            "path": f"{dist_info}/licenses",
+            "mode": 0o755,
+            "uid": 0,
+            "gid": 0,
+        },
+        {"layer": 5, "path": "opt/application", "mode": 0o755, "uid": 0, "gid": 0},
+    ]
+    source_paths = {
+        "files.json": files,
+        "policy.json": policy,
+        "inventory.json": inventory,
+    }
+    validation_calls: list[tuple[object, ...]] = []
+
+    monkeypatch.setattr(evidence, "load_json", lambda path: source_paths[str(path)])
+    monkeypatch.setattr(evidence, "validate_filesystem_policy_view_input", lambda _files: None)
+    monkeypatch.setattr(evidence, "validate_policy_schema", lambda _policy: None)
+    monkeypatch.setattr(
+        evidence,
+        "validate_all_layer_inventory",
+        lambda actual_files, actual_inventory: validation_calls.append(
+            ("all-layers", actual_files, actual_inventory)
+        ),
+    )
+    monkeypatch.setattr(
+        evidence,
+        "verify_inventory",
+        lambda actual_inventory, actual_policy, *, require_approval: validation_calls.append(
+            ("inventory", actual_inventory, actual_policy, require_approval)
+        ),
+    )
+    monkeypatch.setattr(evidence, "verify_base_layer_binding", lambda _files, _policy: None)
+    monkeypatch.setattr(evidence, "post_base_layer_count", lambda _files, _policy: 1)
+    monkeypatch.setattr(
+        evidence,
+        "canonical_post_base_filesystem_changes",
+        lambda _files, _count, _platform: (directory_effects, []),
+    )
+    monkeypatch.setattr(evidence, "post_base_apk_world_occurrences", lambda *_args: [])
+    monkeypatch.setattr(evidence, "post_base_system_regular_occurrences", lambda *_args: [])
+    monkeypatch.setattr(evidence, "post_base_system_links", lambda *_args: [])
+    output = tmp_path / "filesystem-policy-view.json"
+
+    evidence.command_filesystem_policy_view(
+        SimpleNamespace(
+            files_inventory="files.json",
+            inventory="inventory.json",
+            policy="policy.json",
+            output=str(output),
+        )
+    )
+
+    assert validation_calls == [
+        ("all-layers", files, inventory),
+        ("inventory", inventory, policy, False),
+    ]
+    assert output.read_bytes() == evidence.canonical_json(
+        {
+            "platform": "linux/amd64",
+            "post_base_apk_world_occurrences": [],
+            "post_base_directory_effects": [directory_effects[2]],
+            "post_base_removals": [],
             "post_base_system_links": [],
             "post_base_system_regular_occurrences": [],
         }

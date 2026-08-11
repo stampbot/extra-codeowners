@@ -135,6 +135,7 @@ jobs:
           uv run ruff check .
           uv run mypy extra_codeowners tests tools/evaluation_beta.py \
             tools/evaluation_beta_bootstrap.py \
+            tools/prepare_prerelease.py \
             .github/scripts/acquire_github_release_assets.py \
             .github/scripts/acquire_oci_index.py \
             .github/scripts/build_python_artifacts.py \
@@ -859,18 +860,26 @@ jobs:
         env:
           VERSION: ${{ needs.validate.outputs.version }}
         run: |
-          sed -i \
-            "s/^  tag: \".*\"$/  tag: \"${VERSION}\"/" \
-            charts/extra-codeowners/values.yaml
-          sed -i \
-            "s/--version 0\.1\.0/--version ${VERSION}/g" \
-            charts/extra-codeowners/README.md
+          set -o pipefail
           helm lint charts/extra-codeowners
           mkdir -p dist
           helm package charts/extra-codeowners \
             --version "$VERSION" \
             --app-version "$VERSION" \
             --destination dist
+          chart="dist/extra-codeowners-${VERSION}.tgz"
+          test -f "$chart"
+          chart_version="$(tar -xOf "$chart" extra-codeowners/Chart.yaml \
+            | awk '$1 == "version:" {print $2}')"
+          app_version="$(tar -xOf "$chart" extra-codeowners/Chart.yaml \
+            | awk '$1 == "appVersion:" {gsub(/"/, "", $2); print $2}')"
+          if [[ "$chart_version" != "$VERSION" || "$app_version" != "$VERSION" ]]; then
+            echo "Packaged chart metadata does not match the signed release tag." >&2
+            exit 1
+          fi
+          helm template extra-codeowners "$chart" \
+            --set image.repository=example.invalid/release-check \
+            | grep -F "image: \"example.invalid/release-check:${VERSION}\""
 
       - name: Attest chart package
         uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1

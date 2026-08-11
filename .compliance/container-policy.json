@@ -695,20 +695,6 @@
           "gid": 0,
           "layer": 5,
           "mode": 493,
-          "path": "opt/venv/lib/python3.14/site-packages/extra_codeowners-0.1.0a4.dist-info",
-          "uid": 0
-        },
-        {
-          "gid": 0,
-          "layer": 5,
-          "mode": 493,
-          "path": "opt/venv/lib/python3.14/site-packages/extra_codeowners-0.1.0a4.dist-info/licenses",
-          "uid": 0
-        },
-        {
-          "gid": 0,
-          "layer": 5,
-          "mode": 493,
           "path": "opt/venv/lib/python3.14/site-packages/extra_codeowners/alembic",
           "uid": 0
         },
@@ -2617,20 +2603,6 @@
           "gid": 0,
           "layer": 5,
           "mode": 493,
-          "path": "opt/venv/lib/python3.14/site-packages/extra_codeowners-0.1.0a4.dist-info",
-          "uid": 0
-        },
-        {
-          "gid": 0,
-          "layer": 5,
-          "mode": 493,
-          "path": "opt/venv/lib/python3.14/site-packages/extra_codeowners-0.1.0a4.dist-info/licenses",
-          "uid": 0
-        },
-        {
-          "gid": 0,
-          "layer": 5,
-          "mode": 493,
           "path": "opt/venv/lib/python3.14/site-packages/extra_codeowners/alembic",
           "uid": 0
         },
@@ -4110,10 +4082,6 @@
     },
     "python:cryptography@50.0.0": {
       "expression": "Apache-2.0 OR BSD-3-Clause",
-      "rationale": "Accepted from installed metadata for CI drift review; this is not distribution approval."
-    },
-    "python:extra-codeowners@0.1.0a4": {
-      "expression": "Apache-2.0",
       "rationale": "Accepted from installed metadata for CI drift review; this is not distribution approval."
     },
     "python:fastapi@0.139.0": {
@@ -13208,14 +13176,6 @@
       {
         "ecosystem": "python",
         "effective": true,
-        "metadata_sha256": "c311ab44e6ca05efd1d1148393a0672d075807cd3133e6aed131e137572aaf0f",
-        "name": "extra-codeowners",
-        "observed_license": "Apache-2.0",
-        "version": "0.1.0a4"
-      },
-      {
-        "ecosystem": "python",
-        "effective": true,
         "metadata_sha256": "92fe20dad21e73ecdabb3dcbc75a01226606f7f259161a19a09a288828d8af98",
         "name": "fastapi",
         "observed_license": "MIT",
@@ -13890,14 +13850,6 @@
         "name": "cryptography",
         "observed_license": "Apache-2.0 OR BSD-3-Clause",
         "version": "50.0.0"
-      },
-      {
-        "ecosystem": "python",
-        "effective": true,
-        "metadata_sha256": "c311ab44e6ca05efd1d1148393a0672d075807cd3133e6aed131e137572aaf0f",
-        "name": "extra-codeowners",
-        "observed_license": "Apache-2.0",
-        "version": "0.1.0a4"
       },
       {
         "ecosystem": "python",
@@ -14615,16 +14567,6 @@
           "path": "opt/venv/lib/python3.14/site-packages/cryptography-50.0.0.dist-info/WHEEL",
           "sha256": "d10eb798dcc14bb30155e50d984d25814b4158aa0e6f0b5136f01d6a1c3bcccd",
           "size": 108,
-          "uid": 0
-        },
-        {
-          "effective": true,
-          "gid": 0,
-          "layer": 5,
-          "mode": 420,
-          "path": "opt/venv/lib/python3.14/site-packages/extra_codeowners-0.1.0a4.dist-info/WHEEL",
-          "sha256": "942926c567d0b1273d09f20295879abd37507845f6b683eab9f87d808df91100",
-          "size": 87,
           "uid": 0
         },
         {
@@ -15603,16 +15545,6 @@
           "path": "opt/venv/lib/python3.14/site-packages/cryptography-50.0.0.dist-info/WHEEL",
           "sha256": "301b686834328f46a7e2de8f6e61c41609b5109f9d36ee9ecadc76e376c0e11e",
           "size": 109,
-          "uid": 0
-        },
-        {
-          "effective": true,
-          "gid": 0,
-          "layer": 5,
-          "mode": 420,
-          "path": "opt/venv/lib/python3.14/site-packages/extra_codeowners-0.1.0a4.dist-info/WHEEL",
-          "sha256": "942926c567d0b1273d09f20295879abd37507845f6b683eab9f87d808df91100",
-          "size": 87,
           "uid": 0
         },
         {

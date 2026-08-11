@@ -58,7 +58,7 @@ The policy has exactly these fields:
 | `base_image` | string | Nonempty bounded Dockerfile base reference; the schema rejects whitespace and `@`. The checked-in value is a tagged Docker Official Python reference. | Exact Dockerfile binding during `bundle` and `verify-ci-policy`. |
 | `base_image_index_digest` | `qualified_sha256` | Reviewed multi-platform base index. | Schema validation during `verify`; exact Dockerfile/index binding during `bundle` and `verify-ci-policy`. |
 | `base_image_platforms` | platform object | Exact ordered base layer diff IDs for both platforms. | Base-prefix and post-base provenance gates. |
-| `platforms` | platform object | Exact normalized component list for each platform. | `verify` and `bundle`. |
+| `platforms` | platform object | Exact normalized third-party and runtime component list for each platform. The first-party application is bound to its selected wheel and source revision instead. | `verify` and `bundle`. |
 | `distribution_approval` | object | Separate human decision about recipient distribution. | Required only when `--require-distribution-approval` is set. |
 | `license_resolutions` | object | Reviewed expression and rationale for every exact component identity. | Inventory verification, notices, and bundle generation. |
 | `license_texts` | array | Hash-pinned standard license texts required by reviewed expressions. | Inventory coverage, direct-source planning, and verified-store consumption. |
@@ -254,12 +254,13 @@ covers base-image identities such as system `pip` WHEEL and RECORD files outside
 virtual environment. These baselines make known incomplete surfaces visible;
 the separate coverage policy says which owners have been resolved.
 
-The selected Extra CODEOWNERS application's effective `RECORD` file is the one
-exception. It changes whenever the application wheel changes, so the static
-baseline excludes it. The evidence bundle checks that record against the
-selected wheel's installation contract and checks the installed application
-files against the selected Git revision. Other wheel identity files remain in
-the static baseline.
+The selected Extra CODEOWNERS application's component metadata, effective
+`WHEEL` and `RECORD` files, and versioned `.dist-info` directories are the
+exception. They change with every application wheel, so the static policy does
+not pin them. The evidence bundle checks the selected wheel's complete
+installation contract and checks the installed application files against the
+selected Git revision. Other wheel identity files remain in the static
+baseline.
 
 Each `wheel_installations` record preserves the exact WHEEL build tag as well
 as its tags and `Root-Is-Purelib` value. Bundle generation uses those fields to
@@ -645,7 +646,7 @@ imply that a wider gate passed.
 | `verify` | One standalone component inventory, the policy schema, exact components, payload baselines, native-component coverage, APK database history, license coverage, and optional distribution approval. |
 | `bundle` | The `verify` scope plus the all-layer inventory, Dockerfile and base binding, exact post-base APK world history, post-base provenance, Git source binding, lock-to-wheel and lock-to-sdist binding, verified direct and Alpine source stores, recipe and distfile verification, retained notices, and deterministic archive limits. It requires trusted plan digests and sizes and has no network fallback. |
 | `native-component-coverage-view` | The canonical per-owner coverage ledger after full standalone inventory verification. |
-| `filesystem-policy-view` | A human-readable projection of raw layer records into exact post-base APK world and system-file history plus canonical directory-effect and removal policy. |
+| `filesystem-policy-view` | A human-readable projection of raw layer records into exact post-base APK world and system-file history plus canonical directory-effect and removal policy. With a component inventory, it omits only the selected application's dynamically bound `.dist-info` directories. |
 | `verify-ci-policy` | The offline policy checks possible from an extracted pull-request artifact, materialized policy blob, and materialized Dockerfile blob. |
 
 `export_container_image.py` is deliberately not an archive parser or a
@@ -685,12 +686,15 @@ Generate the filesystem-policy projection with:
 uv run --frozen python .github/scripts/container_evidence.py \
   filesystem-policy-view \
   --files-inventory PATH_TO_ALL_LAYER_INVENTORY \
+  --inventory PATH_TO_COMPONENT_INVENTORY \
   --policy .compliance/container-policy.json \
   --output PATH_TO_POLICY_VIEW
 ```
 
-The command validates the standalone all-layer fields it consumes, binds the
-reviewed base prefix, and emits `platform`,
+The command validates the standalone all-layer fields it consumes, the complete
+component inventory and policy, and the relationship between those inventories.
+It binds the reviewed base prefix, then omits only versioned application
+`.dist-info` directory effects that the selected wheel binds. It emits `platform`,
 `post_base_apk_world_occurrences`, `post_base_directory_effects`, and
 `post_base_removals`, plus `post_base_system_regular_occurrences` and
 `post_base_system_links`. It does not replace `verify-ci-policy` or `bundle`.
