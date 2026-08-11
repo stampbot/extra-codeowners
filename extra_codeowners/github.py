@@ -348,20 +348,22 @@ class GitHubClient:
         *,
         installation_id: int | None = None,
         app_authenticated: bool = False,
+        unauthenticated: bool = False,
         params: dict[str, Any] | None = None,
         json: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,
         allow_not_found: bool = False,
         stop: asyncio.Event | None = None,
     ) -> dict[str, Any]:
-        if app_authenticated == (installation_id is not None):
+        if int(app_authenticated) + int(installation_id is not None) + int(unauthenticated) != 1:
             msg = "request must use exactly one authentication mode"
             raise ValueError(msg)
-        response = await self._authenticated_response(
+        response = await self._api_response(
             method,
             path,
             installation_id=installation_id,
             app_authenticated=app_authenticated,
+            unauthenticated=unauthenticated,
             params=params,
             json=json,
             headers=headers,
@@ -380,27 +382,33 @@ class GitHubClient:
         self._raise_api_error(response, method, path)
         raise AssertionError("unreachable")  # pragma: no cover
 
-    async def _authenticated_response(
+    async def _api_response(
         self,
         method: str,
         path: str,
         *,
         installation_id: int | None = None,
         app_authenticated: bool = False,
+        unauthenticated: bool = False,
         params: dict[str, Any] | None = None,
         json: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,
         stop: asyncio.Event | None = None,
     ) -> httpx.Response:
-        """Send an authenticated request, refreshing a rejected installation token once."""
-        attempts = 1 if app_authenticated else 2
+        """Send a public, App, or installation request with bounded retries."""
+        attempts = 1 if app_authenticated or unauthenticated else 2
         for attempt in range(attempts):
             self._raise_if_stopped(stop)
-            if app_authenticated:
+            request_headers = headers or {}
+            if unauthenticated:
+                pass
+            elif app_authenticated:
                 token = self._app_jwt()
+                request_headers = {**request_headers, "Authorization": f"Bearer {token}"}
             else:
                 assert installation_id is not None
                 token = await self._installation_token(installation_id, stop=stop)
+                request_headers = {**request_headers, "Authorization": f"Bearer {token}"}
             self._raise_if_stopped(stop)
             try:
                 async with asyncio.timeout(self._request_deadline_seconds):
@@ -409,7 +417,7 @@ class GitHubClient:
                         path,
                         params=params,
                         json=json,
-                        headers={**(headers or {}), "Authorization": f"Bearer {token}"},
+                        headers=request_headers,
                     )
             except TimeoutError as error:
                 if stop is not None and stop.is_set():
@@ -424,7 +432,7 @@ class GitHubClient:
                     ) from error
                 raise
             self._raise_if_stopped(stop)
-            if response.status_code != 401 or app_authenticated or attempt > 0:
+            if response.status_code != 401 or app_authenticated or unauthenticated or attempt > 0:
                 return response
             assert installation_id is not None
             cached = self._tokens.get(installation_id)
@@ -570,7 +578,7 @@ class GitHubClient:
         while True:
             self._raise_if_stopped(stop)
             query["page"] = page
-            response = await self._authenticated_response(
+            response = await self._api_response(
                 "GET",
                 path,
                 installation_id=installation_id,
@@ -1301,12 +1309,12 @@ class GitHubClient:
             return False
         return any(permissions.get(level) is True for level in ("push", "maintain", "admin"))
 
-    async def get_app(self, installation_id: int, slug: str) -> dict[str, Any]:
+    async def get_app(self, slug: str) -> dict[str, Any]:
         """Fetch independently observed public identity metadata for an allowed App."""
         return await self._request(
             "GET",
             f"/apps/{slug}",
-            installation_id=installation_id,
+            unauthenticated=True,
         )
 
     async def _latest_check_run_id(
@@ -1489,7 +1497,7 @@ class GitHubClient:
         page = 1
         while True:
             self._raise_if_stopped(stop)
-            response = await self._authenticated_response(
+            response = await self._api_response(
                 "GET",
                 "/app/installations",
                 app_authenticated=True,
@@ -1524,7 +1532,7 @@ class GitHubClient:
         page = 1
         while True:
             self._raise_if_stopped(stop)
-            response = await self._authenticated_response(
+            response = await self._api_response(
                 "GET",
                 "/installation/repositories",
                 installation_id=installation_id,

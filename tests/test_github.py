@@ -639,8 +639,6 @@ async def test_read_helpers_share_installation_token_and_validate_shapes(private
             return httpx.Response(200, json={"privacy": "closed"})
         if path == "/orgs/example/teams/platform/repos/example/project":
             return httpx.Response(200, json={"permissions": {"push": True}})
-        if path == "/apps/stampbot":
-            return httpx.Response(200, json={"id": 99, "slug": "stampbot"})
         if path.endswith("/contents/missing"):
             return httpx.Response(404, json={"message": "Not Found"})
         return httpx.Response(500, json={"message": "unexpected route"})
@@ -654,11 +652,30 @@ async def test_read_helpers_share_installation_token_and_validate_shapes(private
     assert await client.team_member(2, "example", "platform", "octocat") is True
     assert await client.user_can_own_repository(2, "example/project", "octocat") is True
     assert await client.team_can_own_repository(2, "example", "platform", "example/project") is True
-    assert await client.get_app(2, "stampbot") == {"id": 99, "slug": "stampbot"}
     assert await client.get_file_text(2, "example/project", "missing") is None
     await client.close()
 
     assert token_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_get_app_uses_the_public_identity_endpoint_without_a_bearer_token(
+    private_key: str,
+) -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        assert request.url.path == "/apps/stampbot"
+        assert "authorization" not in request.headers
+        return httpx.Response(200, json={"id": 99, "slug": "stampbot"})
+
+    client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
+
+    assert await client.get_app("stampbot") == {"id": 99, "slug": "stampbot"}
+    await client.close()
+
+    assert len(requests) == 1
 
 
 @pytest.mark.asyncio
@@ -1308,7 +1325,12 @@ async def test_installation_token_response_shape_fails_closed(private_key: str) 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "authentication",
-    [{}, {"installation_id": 2, "app_authenticated": True}],
+    [
+        {},
+        {"installation_id": 2, "app_authenticated": True},
+        {"installation_id": 2, "unauthenticated": True},
+        {"app_authenticated": True, "unauthenticated": True},
+    ],
 )
 async def test_request_requires_exactly_one_authentication_mode(
     private_key: str,
