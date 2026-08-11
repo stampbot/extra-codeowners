@@ -6,6 +6,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Rel
 
 ## [Unreleased]
 
+## [0.1.0-alpha.4] - 2026-08-10
+
 ### Added
 
 - A Helm `deploymentAnnotations` value for workload-level integrations such as
