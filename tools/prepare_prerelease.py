@@ -129,35 +129,49 @@ def require_clean_checkout(root: Path) -> None:
 def prepare_in(
     root: Path, version: AlphaVersion, release_date: dt.date, *, run_focused_checks: bool = True
 ) -> None:
-    """Update versioned files and prove their focused local contracts."""
+    """Transactionally update versioned files and prove their focused local contracts."""
 
-    current = project_version(root / PROJECT.name)
-    target = Version(version.project)
-    if target <= current:
-        raise PreparationError(
-            f"target {version.release} is not newer than project version {current}"
-        )
+    project = root / PROJECT.name
+    lock = root / LOCK.name
     changelog = root / CHANGELOG.name
-    updated_changelog = update_changelog(
-        changelog.read_text(encoding="utf-8"), version, release_date
-    )
-    run(["uv", "version", version.project, "--no-sync"], cwd=root)
-    changelog.write_text(updated_changelog, encoding="utf-8")
-    run(["uv", "lock", "--check"], cwd=root)
-    if run_focused_checks:
-        run(
-            [
-                "uv",
-                "run",
-                "--frozen",
-                "--no-sync",
-                "pytest",
-                "--no-cov",
-                "tests/test_container_source_plan.py",
-                "tests/test_toolchain_configuration.py",
-            ],
-            cwd=root,
+    originals = {path: path.read_bytes() for path in (project, lock, changelog)}
+    try:
+        current = project_version(project)
+        target = Version(version.project)
+        if target <= current:
+            raise PreparationError(
+                f"target {version.release} is not newer than project version {current}"
+            )
+        updated_changelog = update_changelog(
+            changelog.read_text(encoding="utf-8"), version, release_date
         )
+        run(["uv", "version", version.project, "--no-sync"], cwd=root)
+        changelog.write_text(updated_changelog, encoding="utf-8")
+        run(["uv", "lock", "--check"], cwd=root)
+        if run_focused_checks:
+            run(
+                [
+                    "uv",
+                    "run",
+                    "--frozen",
+                    "pytest",
+                    "--no-cov",
+                    "tests/test_container_source_plan.py",
+                    "tests/test_toolchain_configuration.py",
+                ],
+                cwd=root,
+            )
+    except (OSError, PreparationError) as exc:
+        try:
+            for path, content in originals.items():
+                path.write_bytes(content)
+        except OSError as restore_error:
+            raise PreparationError(
+                "release preparation failed and could not restore the original tracked files"
+            ) from restore_error
+        if isinstance(exc, PreparationError):
+            raise
+        raise PreparationError("could not update the tracked release files") from exc
 
 
 def dry_run(root: Path, version: AlphaVersion, release_date: dt.date) -> str:

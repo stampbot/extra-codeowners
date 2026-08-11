@@ -104,4 +104,4 @@ depends = ["lint", "test", "docs", "helm"]
 
 [tasks."release:prepare-alpha"]
 description = "Prepare an alpha release without creating a tag or publishing artifacts"
-run = "uv run --frozen --no-sync python tools/prepare_prerelease.py"
+run = "uv run --frozen python tools/prepare_prerelease.py"

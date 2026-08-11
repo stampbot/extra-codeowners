@@ -145,7 +145,6 @@ def test_prepare_in_updates_changelog_and_runs_the_focused_contracts(
                 "uv",
                 "run",
                 "--frozen",
-                "--no-sync",
                 "pytest",
                 "--no-cov",
                 "tests/test_container_source_plan.py",
@@ -155,3 +154,32 @@ def test_prepare_in_updates_changelog_and_runs_the_focused_contracts(
         ),
     ]
     assert "## [0.1.0-alpha.5] - 2026-08-11" in changelog.read_text()
+
+
+def test_prepare_in_restores_all_tracked_files_after_a_relock_failure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    project = tmp_path / "pyproject.toml"
+    lock = tmp_path / "uv.lock"
+    changelog = tmp_path / "CHANGELOG.md"
+    project.write_text('[project]\nversion = "0.1.0a4"\n')
+    lock.write_text("version = 1\n")
+    changelog.write_text("# Changelog\n\n## [Unreleased]\n\n- Change.\n\n## [0.1.0-alpha.4]\n")
+    originals = {path: path.read_bytes() for path in (project, lock, changelog)}
+
+    def fail_after_writing_project(command: list[str], *, cwd: Path) -> None:
+        assert command == ["uv", "version", "0.1.0a5", "--no-sync"]
+        assert cwd == tmp_path
+        project.write_text('[project]\nversion = "0.1.0a5"\n')
+        raise preparation.PreparationError("simulated relock failure")
+
+    monkeypatch.setattr(preparation, "run", fail_after_writing_project)
+
+    with pytest.raises(preparation.PreparationError, match="simulated relock failure"):
+        preparation.prepare_in(
+            tmp_path,
+            preparation.parse_alpha_version("0.1.0-alpha.5"),
+            dt.date(2026, 8, 11),
+        )
+
+    assert {path: path.read_bytes() for path in originals} == originals

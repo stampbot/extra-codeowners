@@ -335,7 +335,7 @@ def test_release_chart_metadata_is_derived_from_the_signed_tag() -> None:
     assert 'helm template extra-codeowners "$chart"' in release
     assert "sed -i" not in release
     assert '[tasks."release:prepare-alpha"]' in mise
-    assert 'run = "uv run --frozen --no-sync python tools/prepare_prerelease.py"' in mise
+    assert 'run = "uv run --frozen python tools/prepare_prerelease.py"' in mise
 
 
 def test_pinned_uv_exposes_the_scheduled_audit_interface_without_network() -> None:

@@ -39,9 +39,9 @@ moves the current Unreleased notes under the alpha heading. It then checks the
 lock file and runs the source-plan and toolchain test modules. Review that
 small diff, commit it, and open the pull request for review.
 
-If a focused check fails, don't create the release PR yet. The command has
-already made the three tracked changes, so leave them in place, fix the failure,
-and rerun the named check. Once it passes, inspect the same diff and continue.
+If a relock or focused check fails, don't create the release PR yet. The command
+restores the three tracked files before it exits. Fix the failure, rerun the
+command, then inspect the new diff and continue.
 
 ## Publish after the pull request merges
 
