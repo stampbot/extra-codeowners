@@ -254,6 +254,13 @@ covers base-image identities such as system `pip` WHEEL and RECORD files outside
 virtual environment. These baselines make known incomplete surfaces visible;
 the separate coverage policy says which owners have been resolved.
 
+The selected Extra CODEOWNERS application's effective `RECORD` file is the one
+exception. It changes whenever the application wheel changes, so the static
+baseline excludes it. The evidence bundle checks that record against the
+selected wheel's installation contract and checks the installed application
+files against the selected Git revision. Other wheel identity files remain in
+the static baseline.
+
 Each `wheel_installations` record preserves the exact WHEEL build tag as well
 as its tags and `Root-Is-Purelib` value. Bundle generation uses those fields to
 select one platform wheel from `uv.lock`; a merely compatible wheel is not an

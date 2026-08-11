@@ -9723,6 +9723,73 @@ def test_inventory_reports_unexpanded_wheel_sboms_and_native_payloads(
         evidence.verify_unexpanded_payload_policy(changed_wheel, payload_policy)
 
 
+def test_unexpanded_policy_excludes_only_the_selected_application_record() -> None:
+    application_record = {
+        "effective": True,
+        "gid": 0,
+        "layer": 5,
+        "mode": 0o644,
+        "path": ("opt/venv/lib/python3.14/site-packages/extra_codeowners-1.dist-info/RECORD"),
+        "sha256": "a" * 64,
+        "size": 100,
+        "uid": 0,
+    }
+    dependency_record = {
+        "effective": True,
+        "gid": 0,
+        "layer": 5,
+        "mode": 0o644,
+        "path": "opt/venv/lib/python3.14/site-packages/dependency-1.dist-info/RECORD",
+        "sha256": "b" * 64,
+        "size": 200,
+        "uid": 0,
+    }
+    inventory = {
+        "components": [
+            {
+                "ecosystem": "python",
+                "effective": True,
+                "name": "extra-codeowners",
+                "version": "1",
+            }
+        ],
+        "embedded_sboms": [],
+        "native_payloads": [],
+        "platform": "linux/amd64",
+        "wheel_identity_files": [application_record, dependency_record],
+        "wheel_installations": [
+            {
+                "owner": "python:extra-codeowners@1",
+                "record": application_record,
+            }
+        ],
+    }
+    policy = {"unexpanded_python_payloads": empty_unexpanded_payload_policy()}
+    policy["unexpanded_python_payloads"]["linux/amd64"] = {
+        "embedded_sboms": [],
+        "native_payloads": [],
+        "wheel_identity_files": [dependency_record],
+    }
+
+    evidence.verify_unexpanded_payload_policy(inventory, policy)
+
+    stale_policy = copy.deepcopy(policy)
+    stale_policy["unexpanded_python_payloads"]["linux/amd64"]["wheel_identity_files"].append(
+        application_record
+    )
+    with pytest.raises(evidence.EvidenceError, match="differ from policy"):
+        evidence.verify_unexpanded_payload_policy(inventory, stale_policy)
+
+    changed_application = copy.deepcopy(inventory)
+    changed_application["wheel_identity_files"][0]["sha256"] = "c" * 64
+    evidence.verify_unexpanded_payload_policy(changed_application, policy)
+
+    changed_dependency = copy.deepcopy(inventory)
+    changed_dependency["wheel_identity_files"][1]["sha256"] = "d" * 64
+    with pytest.raises(evidence.EvidenceError, match="differ from policy"):
+        evidence.verify_unexpanded_payload_policy(changed_dependency, policy)
+
+
 def test_cyclonedx_projection_uses_bom_ref_for_repeated_purl_occurrences() -> None:
     component = {
         "type": "library",

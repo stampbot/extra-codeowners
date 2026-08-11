@@ -14622,16 +14622,6 @@
           "gid": 0,
           "layer": 5,
           "mode": 420,
-          "path": "opt/venv/lib/python3.14/site-packages/extra_codeowners-0.1.0a4.dist-info/RECORD",
-          "sha256": "d69957b905b5ffb2f1c66c536205595939f155470f6be510d7c54149f4b8fc51",
-          "size": 2947,
-          "uid": 0
-        },
-        {
-          "effective": true,
-          "gid": 0,
-          "layer": 5,
-          "mode": 420,
           "path": "opt/venv/lib/python3.14/site-packages/extra_codeowners-0.1.0a4.dist-info/WHEEL",
           "sha256": "942926c567d0b1273d09f20295879abd37507845f6b683eab9f87d808df91100",
           "size": 87,
@@ -15613,16 +15603,6 @@
           "path": "opt/venv/lib/python3.14/site-packages/cryptography-50.0.0.dist-info/WHEEL",
           "sha256": "301b686834328f46a7e2de8f6e61c41609b5109f9d36ee9ecadc76e376c0e11e",
           "size": 109,
-          "uid": 0
-        },
-        {
-          "effective": true,
-          "gid": 0,
-          "layer": 5,
-          "mode": 420,
-          "path": "opt/venv/lib/python3.14/site-packages/extra_codeowners-0.1.0a4.dist-info/RECORD",
-          "sha256": "d69957b905b5ffb2f1c66c536205595939f155470f6be510d7c54149f4b8fc51",
-          "size": 2947,
           "uid": 0
         },
         {
