@@ -2,6 +2,7 @@ import asyncio
 import gzip
 import json
 from collections.abc import AsyncIterator, Callable
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import cast
 
@@ -11,7 +12,6 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from pydantic import ValidationError
 
-import extra_codeowners.github as github_module
 from extra_codeowners.dco import (
     MAX_PULL_COMMITS,
     GitHubActor,
@@ -706,7 +706,6 @@ async def test_get_app_coalesces_concurrent_public_identity_lookups(
 @pytest.mark.asyncio
 async def test_get_app_refreshes_public_identity_after_cache_expiry(
     private_key: str,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls = 0
 
@@ -716,10 +715,13 @@ async def test_get_app_refreshes_public_identity_after_cache_expiry(
         assert request.url.path == "/apps/stampbot"
         return httpx.Response(200, json={"id": 99, "slug": "stampbot"})
 
-    monkeypatch.setattr(github_module, "APP_IDENTITY_CACHE_TTL", timedelta(seconds=0))
     client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
 
     assert await client.get_app("stampbot") == {"id": 99, "slug": "stampbot"}
+    client._app_identities["stampbot"] = replace(
+        client._app_identities["stampbot"],
+        expires_at=datetime.now(UTC) - timedelta(seconds=1),
+    )
     assert await client.get_app("stampbot") == {"id": 99, "slug": "stampbot"}
     await client.close()
 
