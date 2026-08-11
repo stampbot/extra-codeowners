@@ -1558,15 +1558,15 @@ def test_container_evidence_review_projects_dynamic_application_records() -> Non
         "\n## 5. Confirm source completeness", 1
     )[0]
     code = section.split("```bash\n", 1)[1].split("\n```", 1)[0]
-    bash = shutil.which("bash")
+    shell = shutil.which("sh")
 
-    assert bash is not None
+    assert shell is not None
     assert "application_identity_occurrences" in code
     assert "--argjson application_identity_occurrences" in code
     assert '--inventory "$inventory"' in code
     assert '--arg application_version "$application_version"' in code
     result = subprocess.run(  # noqa: S603 - linting this repository-owned documentation block
-        [bash, "-n"],
+        [shell, "-n"],
         input=code,
         capture_output=True,
         text=True,
