@@ -14340,6 +14340,105 @@ def test_filesystem_policy_view_emits_validated_semantic_projection(tmp_path: Pa
     )
 
 
+def test_filesystem_policy_view_filters_selected_application_directories(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The review projection must use the same dynamic-directory rule as verification."""
+    dist_info = "opt/venv/lib/python3.14/site-packages/extra_codeowners-1.dist-info"
+    files: dict[str, Any] = {"platform": "linux/amd64"}
+    policy: dict[str, Any] = {}
+    inventory: dict[str, Any] = {
+        "components": [
+            {
+                "ecosystem": "python",
+                "effective": True,
+                "metadata_sha256": "a" * 64,
+                "name": "extra-codeowners",
+                "observed_license": "Apache-2.0",
+                "version": "1",
+            }
+        ],
+        "wheel_installations": [
+            {
+                "owner": "python:extra-codeowners@1",
+                "record": {"effective": True},
+                "metadata": {"layer": 5, "path": f"{dist_info}/METADATA"},
+                "entries": [{"path": f"{dist_info}/licenses/LICENSE"}],
+            }
+        ],
+    }
+    directory_effects = [
+        {"layer": 5, "path": dist_info, "mode": 0o755, "uid": 0, "gid": 0},
+        {
+            "layer": 5,
+            "path": f"{dist_info}/licenses",
+            "mode": 0o755,
+            "uid": 0,
+            "gid": 0,
+        },
+        {"layer": 5, "path": "opt/application", "mode": 0o755, "uid": 0, "gid": 0},
+    ]
+    source_paths = {
+        "files.json": files,
+        "policy.json": policy,
+        "inventory.json": inventory,
+    }
+    validation_calls: list[tuple[object, ...]] = []
+
+    monkeypatch.setattr(evidence, "load_json", lambda path: source_paths[str(path)])
+    monkeypatch.setattr(evidence, "validate_filesystem_policy_view_input", lambda _files: None)
+    monkeypatch.setattr(evidence, "validate_policy_schema", lambda _policy: None)
+    monkeypatch.setattr(
+        evidence,
+        "validate_all_layer_inventory",
+        lambda actual_files, actual_inventory: validation_calls.append(
+            ("all-layers", actual_files, actual_inventory)
+        ),
+    )
+    monkeypatch.setattr(
+        evidence,
+        "verify_inventory",
+        lambda actual_inventory, actual_policy, *, require_approval: validation_calls.append(
+            ("inventory", actual_inventory, actual_policy, require_approval)
+        ),
+    )
+    monkeypatch.setattr(evidence, "verify_base_layer_binding", lambda _files, _policy: None)
+    monkeypatch.setattr(evidence, "post_base_layer_count", lambda _files, _policy: 1)
+    monkeypatch.setattr(
+        evidence,
+        "canonical_post_base_filesystem_changes",
+        lambda _files, _count, _platform: (directory_effects, []),
+    )
+    monkeypatch.setattr(evidence, "post_base_apk_world_occurrences", lambda *_args: [])
+    monkeypatch.setattr(evidence, "post_base_system_regular_occurrences", lambda *_args: [])
+    monkeypatch.setattr(evidence, "post_base_system_links", lambda *_args: [])
+    output = tmp_path / "filesystem-policy-view.json"
+
+    evidence.command_filesystem_policy_view(
+        SimpleNamespace(
+            files_inventory="files.json",
+            inventory="inventory.json",
+            policy="policy.json",
+            output=str(output),
+        )
+    )
+
+    assert validation_calls == [
+        ("all-layers", files, inventory),
+        ("inventory", inventory, policy, False),
+    ]
+    assert output.read_bytes() == evidence.canonical_json(
+        {
+            "platform": "linux/amd64",
+            "post_base_apk_world_occurrences": [],
+            "post_base_directory_effects": [directory_effects[2]],
+            "post_base_removals": [],
+            "post_base_system_links": [],
+            "post_base_system_regular_occurrences": [],
+        }
+    )
+
+
 def test_native_component_coverage_view_emits_validated_ledger(tmp_path: Path) -> None:
     component = {
         "ecosystem": "python",

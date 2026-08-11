@@ -15974,13 +15974,22 @@ def command_filesystem_policy_view(args: argparse.Namespace) -> None:
 
     files = load_json(Path(args.files_inventory))
     policy = load_json(Path(args.policy))
+    inventory = load_json(Path(args.inventory)) if args.inventory else None
     validate_filesystem_policy_view_input(files)
     validate_policy_schema(policy)
+    if inventory is not None:
+        validate_all_layer_inventory(files, inventory)
+        verify_inventory(inventory, policy, require_approval=False)
     verify_base_layer_binding(files, policy)
     platform = files["platform"]
     directory_effects, removals = canonical_post_base_filesystem_changes(
         files, post_base_layer_count(files, policy), platform
     )
+    if inventory is not None:
+        directory_effects = static_directory_effects(
+            directory_effects,
+            selected_application_directory_effect_occurrences(inventory, directory_effects),
+        )
     apk_world_occurrences = post_base_apk_world_occurrences(
         files, post_base_layer_count(files, policy), platform
     )
@@ -16234,6 +16243,7 @@ def parser() -> argparse.ArgumentParser:
         help="emit canonical semantic directory and removal policy input",
     )
     filesystem_policy_view.add_argument("--files-inventory", required=True)
+    filesystem_policy_view.add_argument("--inventory")
     filesystem_policy_view.add_argument("--policy", required=True)
     filesystem_policy_view.add_argument("--output", required=True)
     filesystem_policy_view.set_defaults(function=command_filesystem_policy_view)

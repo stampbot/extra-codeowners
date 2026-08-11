@@ -1549,3 +1549,37 @@ def test_evaluation_beta_tools_are_in_every_python_type_check_entrypoint() -> No
     for source_name, source in sources.items():
         for path in required:
             assert path in source, f"{source_name} does not type-check {path}"
+
+
+def test_container_evidence_review_projects_dynamic_application_records() -> None:
+    """Keep the human policy diff aligned with the selected-wheel verifier."""
+    review = (ROOT / "docs" / "how-to" / "review-container-evidence.md").read_text(encoding="utf-8")
+    section = review.split("## 4. Review policy and inventory drift\n", 1)[1].split(
+        "\n## 5. Confirm source completeness", 1
+    )[0]
+    code = section.split("```bash\n", 1)[1].split("\n```", 1)[0]
+    bash = shutil.which("bash")
+
+    assert bash is not None
+    assert "application_identity_occurrences" in code
+    assert "--argjson application_identity_occurrences" in code
+    assert '--inventory "$inventory"' in code
+    assert '--arg application_version "$application_version"' in code
+    result = subprocess.run(  # noqa: S603 - linting this repository-owned documentation block
+        [bash, "-n"],
+        input=code,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+
+    reference = (ROOT / "docs" / "reference" / "container-evidence-policy.md").read_text(
+        encoding="utf-8"
+    )
+    expected_command = (
+        "filesystem-policy-view \\\n"
+        "  --files-inventory PATH_TO_ALL_LAYER_INVENTORY \\\n"
+        "  --inventory PATH_TO_COMPONENT_INVENTORY"
+    )
+    assert expected_command in reference

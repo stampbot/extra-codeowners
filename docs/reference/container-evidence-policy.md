@@ -646,7 +646,7 @@ imply that a wider gate passed.
 | `verify` | One standalone component inventory, the policy schema, exact components, payload baselines, native-component coverage, APK database history, license coverage, and optional distribution approval. |
 | `bundle` | The `verify` scope plus the all-layer inventory, Dockerfile and base binding, exact post-base APK world history, post-base provenance, Git source binding, lock-to-wheel and lock-to-sdist binding, verified direct and Alpine source stores, recipe and distfile verification, retained notices, and deterministic archive limits. It requires trusted plan digests and sizes and has no network fallback. |
 | `native-component-coverage-view` | The canonical per-owner coverage ledger after full standalone inventory verification. |
-| `filesystem-policy-view` | A human-readable projection of raw layer records into exact post-base APK world and system-file history plus canonical directory-effect and removal policy. |
+| `filesystem-policy-view` | A human-readable projection of raw layer records into exact post-base APK world and system-file history plus canonical directory-effect and removal policy. With a component inventory, it omits only the selected application's dynamically bound `.dist-info` directories. |
 | `verify-ci-policy` | The offline policy checks possible from an extracted pull-request artifact, materialized policy blob, and materialized Dockerfile blob. |
 
 `export_container_image.py` is deliberately not an archive parser or a
@@ -686,12 +686,15 @@ Generate the filesystem-policy projection with:
 uv run --frozen python .github/scripts/container_evidence.py \
   filesystem-policy-view \
   --files-inventory PATH_TO_ALL_LAYER_INVENTORY \
+  --inventory PATH_TO_COMPONENT_INVENTORY \
   --policy .compliance/container-policy.json \
   --output PATH_TO_POLICY_VIEW
 ```
 
-The command validates the standalone all-layer fields it consumes, binds the
-reviewed base prefix, and emits `platform`,
+The command validates the standalone all-layer fields it consumes, the complete
+component inventory and policy, and the relationship between those inventories.
+It binds the reviewed base prefix, then omits only versioned application
+`.dist-info` directory effects that the selected wheel binds. It emits `platform`,
 `post_base_apk_world_occurrences`, `post_base_directory_effects`, and
 `post_base_removals`, plus `post_base_system_regular_occurrences` and
 `post_base_system_links`. It does not replace `verify-ci-policy` or `bundle`.
