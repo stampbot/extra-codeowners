@@ -1016,15 +1016,17 @@ def test_reusable_workflow_proves_one_native_cross_architecture_distribution() -
     assert '--source-revision "$GITHUB_SHA"' in proof
     assert '--scratch-directory "$scratch"' in proof
     assert "compression-level: 0" in proof
-    assert "python-distributions-${{ matrix.architecture }}-${{ github.sha }}-attempt-" in proof
-    assert "${{ github.run_attempt }}" in proof
+    # A selector-only retry retains successful native jobs from its first attempt.
+    assert "python-distributions-${{ matrix.architecture }}-${{ github.sha }}" in proof
+    assert "-attempt-${{ github.run_attempt }}" not in proof
+    assert "overwrite: true" in proof
 
     assert "needs: native-proof" in selector
     assert "if: ${{ always() }}" in selector
     assert 'if [ "$PROOF_RESULT" != success ]; then' in selector
     assert selector.count("actions/download-artifact@3e5f45b2") == 2
-    assert "python-distributions-amd64-${{ github.sha }}-attempt-" in selector
-    assert "python-distributions-arm64-${{ github.sha }}-attempt-" in selector
+    assert "python-distributions-amd64-${{ github.sha }}" in selector
+    assert "python-distributions-arm64-${{ github.sha }}" in selector
     assert "merge-multiple" not in selector
     assert selector.count("digest-mismatch: error") == 2
     assert "artifact-id: ${{ steps.upload-selected.outputs.artifact-id }}" in selector

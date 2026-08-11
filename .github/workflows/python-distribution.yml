@@ -115,11 +115,14 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: >-
-            python-distributions-${{ matrix.architecture }}-${{ github.sha }}-attempt-${{ github.run_attempt }}
+            python-distributions-${{ matrix.architecture }}-${{ github.sha }}
           path: ${{ runner.temp }}/python-distributions-${{ matrix.architecture }}/
           compression-level: 0
           if-no-files-found: error
           retention-days: 5
+          # A selector-only retry must consume proofs from successful native jobs
+          # in an earlier run attempt. A complete retry replaces the scoped proof.
+          overwrite: true
 
   select:
     name: Select cross-architecture proof
@@ -156,7 +159,7 @@ jobs:
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: >-
-            python-distributions-amd64-${{ github.sha }}-attempt-${{ github.run_attempt }}
+            python-distributions-amd64-${{ github.sha }}
           path: ${{ runner.temp }}/python-distributions-amd64
           digest-mismatch: error
 
@@ -164,7 +167,7 @@ jobs:
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: >-
-            python-distributions-arm64-${{ github.sha }}-attempt-${{ github.run_attempt }}
+            python-distributions-arm64-${{ github.sha }}
           path: ${{ runner.temp }}/python-distributions-arm64
           digest-mismatch: error
 
