@@ -6,6 +6,7 @@ import asyncio
 import json as json_module
 import math
 import re
+from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
@@ -211,6 +212,8 @@ class InstallationToken:
 
 
 APP_IDENTITY_CACHE_TTL = timedelta(hours=1)
+MAX_CACHED_APP_IDENTITIES: Final = 128
+MAX_PENDING_APP_IDENTITY_LOOKUPS: Final = 128
 
 
 @dataclass(frozen=True, slots=True)
@@ -264,8 +267,9 @@ class GitHubClient:
         self._private_key = loaded_key
         self._tokens: dict[int, InstallationToken] = {}
         self._token_locks: dict[int, asyncio.Lock] = {}
-        self._app_identities: dict[str, _CachedAppIdentity] = {}
-        self._app_identity_locks: dict[str, asyncio.Lock] = {}
+        self._app_identities: OrderedDict[str, _CachedAppIdentity] = OrderedDict()
+        self._app_identity_requests: dict[str, asyncio.Future[dict[str, Any]]] = {}
+        self._app_identity_cache_lock = asyncio.Lock()
         self._http = httpx.AsyncClient(
             base_url=api_url.rstrip("/"),
             timeout=httpx.Timeout(timeout_seconds),
@@ -1325,27 +1329,66 @@ class GitHubClient:
     async def get_app(self, slug: str) -> dict[str, Any]:
         """Fetch bounded-cached public identity metadata for an allowed App."""
         cache_key = slug.lower()
-        now = datetime.now(UTC)
-        cached = self._app_identities.get(cache_key)
-        if cached is not None and cached.expires_at > now:
-            return dict(cached.value)
-
-        lock = self._app_identity_locks.setdefault(cache_key, asyncio.Lock())
-        async with lock:
-            cached = self._app_identities.get(cache_key)
+        async with self._app_identity_cache_lock:
             now = datetime.now(UTC)
+            self._expire_cached_app_identities(now)
+            cached = self._app_identities.get(cache_key)
             if cached is not None and cached.expires_at > now:
+                self._app_identities.move_to_end(cache_key)
                 return dict(cached.value)
+
+            request = self._app_identity_requests.get(cache_key)
+            if request is None:
+                if len(self._app_identity_requests) >= MAX_PENDING_APP_IDENTITY_LOOKUPS:
+                    msg = "too many concurrent public GitHub App identity lookups"
+                    raise GitHubError(msg)
+                request = asyncio.get_running_loop().create_future()
+                self._app_identity_requests[cache_key] = request
+                fetch_identity = True
+            else:
+                fetch_identity = False
+
+        if not fetch_identity:
+            return dict(await asyncio.shield(request))
+
+        try:
             metadata = await self._request(
                 "GET",
                 f"/apps/{slug}",
                 unauthenticated=True,
             )
+        except BaseException as error:
+            async with self._app_identity_cache_lock:
+                if self._app_identity_requests.get(cache_key) is request:
+                    self._app_identity_requests.pop(cache_key, None)
+                if not request.done():
+                    if isinstance(error, asyncio.CancelledError):
+                        request.cancel()
+                    else:
+                        request.set_exception(error)
+                        request.exception()
+            raise
+
+        value = dict(metadata)
+        async with self._app_identity_cache_lock:
+            if self._app_identity_requests.get(cache_key) is request:
+                self._app_identity_requests.pop(cache_key, None)
             self._app_identities[cache_key] = _CachedAppIdentity(
-                value=dict(metadata),
-                expires_at=now + APP_IDENTITY_CACHE_TTL,
+                value=value,
+                expires_at=datetime.now(UTC) + APP_IDENTITY_CACHE_TTL,
             )
-            return dict(metadata)
+            self._app_identities.move_to_end(cache_key)
+            while len(self._app_identities) > MAX_CACHED_APP_IDENTITIES:
+                self._app_identities.popitem(last=False)
+            if not request.done():
+                request.set_result(value)
+        return dict(value)
+
+    def _expire_cached_app_identities(self, now: datetime) -> None:
+        """Remove expired public App identities while the cache lock is held."""
+        for cache_key, cached in tuple(self._app_identities.items()):
+            if cached.expires_at <= now:
+                self._app_identities.pop(cache_key, None)
 
     async def _latest_check_run_id(
         self,

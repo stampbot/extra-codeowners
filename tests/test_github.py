@@ -729,6 +729,48 @@ async def test_get_app_refreshes_public_identity_after_cache_expiry(
 
 
 @pytest.mark.asyncio
+async def test_get_app_cache_is_bounded_and_prunes_expired_entries(
+    private_key: str,
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        slug = request.url.path.removeprefix("/apps/")
+        return httpx.Response(200, json={"id": len(slug), "slug": slug})
+
+    client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
+
+    for number in range(129):
+        slug = f"app-{number}"
+        assert await client.get_app(slug) == {"id": len(slug), "slug": slug}
+
+    assert len(client._app_identities) == 128
+    assert "app-0" not in client._app_identities
+    client._app_identities["app-1"] = replace(
+        client._app_identities["app-1"],
+        expires_at=datetime.now(UTC) - timedelta(seconds=1),
+    )
+    assert await client.get_app("fresh") == {"id": 5, "slug": "fresh"}
+    await client.close()
+
+    assert len(client._app_identities) == 128
+    assert "app-1" not in client._app_identities
+
+
+@pytest.mark.asyncio
+async def test_get_app_discards_a_failed_in_flight_lookup(private_key: str) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, json={"message": "unavailable"})
+
+    client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
+
+    with pytest.raises(GitHubAPIError, match="500: unavailable"):
+        await client.get_app("stampbot")
+    await client.close()
+
+    assert client._app_identity_requests == {}
+    assert client._app_identities == {}
+
+
+@pytest.mark.asyncio
 async def test_api_errors_expose_status_without_leaking_headers(private_key: str) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path.endswith("/access_tokens"):

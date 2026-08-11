@@ -9744,7 +9744,7 @@ def test_unexpanded_policy_excludes_only_the_selected_application_record() -> No
         "size": 200,
         "uid": 0,
     }
-    inventory = {
+    inventory: dict[str, Any] = {
         "components": [
             {
                 "ecosystem": "python",
