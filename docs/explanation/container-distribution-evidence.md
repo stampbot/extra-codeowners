@@ -149,8 +149,10 @@ every layer against the bytes it received. It then:
 5. requires the saved configuration's ordered rootfs diff IDs to match every
    layer and requires the initial diff IDs to match the reviewed
    platform-specific Docker Official Python base
-6. compares the normalized top-level component inventory byte-for-byte with the
-   reviewed platform policy, including one exact CPython runtime identity
+6. compares the normalized third-party and runtime component inventory
+   byte-for-byte with the reviewed platform policy, including one exact CPython
+   runtime identity; the first-party application is bound separately to its
+   selected wheel and Git revision
 7. reverifies the exact selected proof, requires every application-owned
    runtime file (including the installer-generated `RECORD` and reviewed
    launcher aliases) to match one complete selected-wheel layout, and retains

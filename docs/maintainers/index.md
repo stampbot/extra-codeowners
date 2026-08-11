@@ -12,6 +12,7 @@ distribution.
 ## Release readiness
 
 - [Current project status](../reference/project-status.md)
+- [Prepare an alpha release](prepare-alpha-release.md)
 - [Prepare a future deployment](../how-to/deploy.md)
 - [Container distribution evidence](../explanation/container-distribution-evidence.md)
 - [Container evidence policy](../reference/container-evidence-policy.md)

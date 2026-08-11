@@ -727,7 +727,7 @@ descriptions.
 | `deploymentAnnotations` | string map | `{}` | Adds annotations to the Deployment resource, for example a Reloader Secret-change trigger. |
 | `image.repository` | string | `example.invalid/stampbot/extra-codeowners` | Nonempty, intentionally non-pullable placeholder. |
 | `image.pullPolicy` | enum | `IfNotPresent` | `Always`, `IfNotPresent`, or `Never`. |
-| `image.tag` | string | `0.1.0-alpha.4` | SemVer tag for the image released with this chart. |
+| `image.tag` | string | empty | Overrides the chart app version. Leave it empty to use the image tag released with the chart. |
 | `image.digest` | string | empty | Empty or `sha256:` plus 64 lowercase hex characters; overrides the tag. |
 | `imagePullSecrets` | array | `[]` | Objects containing a nonempty `name`. |
 | `nameOverride` | string | empty | Replaces the chart-name portion of resource names. |

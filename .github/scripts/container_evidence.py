@@ -59,6 +59,7 @@ import verified_source_store  # noqa: E402
 SCHEMA_VERSION = 9
 EVIDENCE_MEDIA_TYPE = f"application/vnd.stampbot.container-evidence.v{SCHEMA_VERSION}+tar+gzip"
 APPLICATION_NAME = "extra-codeowners"
+APPLICATION_LICENSE = "Apache-2.0"
 EXPECTED_RUNTIME_PYTHON = "3.14.6"
 CPYTHON_RUNTIME_MINOR = EXPECTED_RUNTIME_PYTHON.rsplit(".", 1)[0]
 CPYTHON_RUNTIME_NAME = "cpython"
@@ -2026,6 +2027,11 @@ def validate_policy_schema(policy: Mapping[str, Any]) -> None:
     )
     for platform, components in platforms.items():
         validated = validate_component_records(components, f"policy platform {platform}")
+        if any(component["name"] == APPLICATION_NAME for component in validated):
+            raise EvidenceError(
+                "policy must not statically pin the application component; "
+                "the selected wheel binds it to the reviewed source revision"
+            )
         validate_platform_component_invariants(validated, platform, f"policy platform {platform}")
 
     approval = require_exact_fields(
@@ -3838,6 +3844,27 @@ def policy_components(policy: Mapping[str, Any], platform: str) -> list[dict[str
     return sorted(records, key=component_sort_key)
 
 
+def selected_application_component(
+    components: Sequence[Mapping[str, Any]],
+) -> Mapping[str, Any]:
+    """Return the one effective application component bound outside static policy."""
+
+    selected = [component for component in components if component.get("name") == APPLICATION_NAME]
+    if len(selected) != 1 or selected[0].get("effective") is not True:
+        raise EvidenceError("component inventory must contain one effective application component")
+    application = selected[0]
+    if application.get("observed_license") != APPLICATION_LICENSE:
+        raise EvidenceError("application component has an unexpected license expression")
+    return application
+
+
+def static_components(components: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
+    """Exclude the selected first-party wheel from the third-party policy baseline."""
+
+    application = selected_application_component(components)
+    return [component for component in components if component is not application]
+
+
 def validated_custom_license_evidence(
     components: Sequence[Mapping[str, Any]], policy: Mapping[str, Any]
 ) -> dict[str, set[str]]:
@@ -4000,10 +4027,10 @@ def validate_unexpanded_payload_policy_schema(
     return baselines
 
 
-def selected_application_record_occurrences(
+def selected_application_wheel_identity_occurrences(
     inventory: Mapping[str, Any],
 ) -> frozenset[tuple[int, str]]:
-    """Return the effective application RECORD occurrence bound later to the selected wheel."""
+    """Return effective application WHEEL and RECORD occurrences bound to its selected wheel."""
 
     components = inventory.get("components")
     if not isinstance(components, list):
@@ -4030,18 +4057,22 @@ def selected_application_record_occurrences(
         record = installation.get("record")
         if not isinstance(record, dict) or record.get("effective") is not True:
             continue
-        layer = record.get("layer")
-        path = record.get("path")
-        if (
-            not isinstance(layer, int)
-            or isinstance(layer, bool)
-            or not isinstance(path, str)
-            or WHEEL_IDENTITY_FILE.search(path) is None
-            or not path.endswith("/RECORD")
-        ):
-            continue
-        occurrences.append((layer, path))
-    if len(occurrences) != 1:
+        for field in ("record", "wheel"):
+            identity = installation.get(field)
+            if not isinstance(identity, dict) or identity.get("effective") is not True:
+                return frozenset()
+            layer = identity.get("layer")
+            path = identity.get("path")
+            if (
+                not isinstance(layer, int)
+                or isinstance(layer, bool)
+                or not isinstance(path, str)
+                or WHEEL_IDENTITY_FILE.search(path) is None
+                or not path.endswith(f"/{field.upper()}")
+            ):
+                return frozenset()
+            occurrences.append((layer, path))
+    if len(occurrences) != 2 or len(set(occurrences)) != 2:
         return frozenset()
     return frozenset(occurrences)
 
@@ -4050,7 +4081,7 @@ def static_wheel_identity_files(
     records: object,
     dynamically_bound_occurrences: frozenset[tuple[int, str]],
 ) -> object:
-    """Remove the selected application's dynamically verified RECORD from a static baseline."""
+    """Remove selected-wheel identity files bound outside the static policy baseline."""
 
     if not isinstance(records, list):
         return records
@@ -4061,6 +4092,91 @@ def static_wheel_identity_files(
             isinstance(record, dict)
             and (record.get("layer"), record.get("path")) in dynamically_bound_occurrences
         )
+    ]
+
+
+def selected_application_directory_effect_occurrences(
+    inventory: Mapping[str, Any], directory_effects: Sequence[Mapping[str, Any]]
+) -> frozenset[tuple[int, str]]:
+    """Return versioned dist-info directories bound by the selected application wheel.
+
+    A selected wheel records regular files, not directory headers. Only ignore a
+    directory effect when its layer and root-owned mode match the selected wheel
+    metadata layer. Any altered, extra, or later directory remains subject to
+    the static filesystem policy.
+    """
+
+    components = inventory.get("components")
+    installations = inventory.get("wheel_installations")
+    if not isinstance(components, list) or not isinstance(installations, list):
+        return frozenset()
+    try:
+        application = selected_application_component(
+            [component for component in components if isinstance(component, dict)]
+        )
+    except EvidenceError:
+        return frozenset()
+    owner = f"python:{APPLICATION_NAME}@{application['version']}"
+    selected = [
+        installation
+        for installation in installations
+        if isinstance(installation, dict)
+        and installation.get("owner") == owner
+        and isinstance(installation.get("record"), dict)
+        and installation["record"].get("effective") is True
+    ]
+    if len(selected) != 1:
+        return frozenset()
+    installation = selected[0]
+    metadata = installation.get("metadata")
+    entries = installation.get("entries")
+    if not isinstance(metadata, dict) or not isinstance(entries, list):
+        return frozenset()
+    layer = metadata.get("layer")
+    path = metadata.get("path")
+    if (
+        not isinstance(layer, int)
+        or isinstance(layer, bool)
+        or not isinstance(path, str)
+        or DIST_INFO.search(path) is None
+    ):
+        return frozenset()
+    dist_info = str(PurePosixPath(path).parent)
+    paths = {dist_info}
+    license_prefix = f"{dist_info}/licenses/"
+    if any(
+        isinstance(entry, dict)
+        and isinstance(entry.get("path"), str)
+        and entry["path"].startswith(license_prefix)
+        for entry in entries
+    ):
+        paths.add(f"{dist_info}/licenses")
+    occurrences: set[tuple[int, str]] = set()
+    for effect in directory_effects:
+        effect_layer = effect.get("layer")
+        effect_path = effect.get("path")
+        if effect_path not in paths:
+            continue
+        if (
+            effect_layer != layer
+            or effect.get("mode") != 0o755
+            or effect.get("uid") != 0
+            or effect.get("gid") != 0
+        ):
+            continue
+        occurrences.add((layer, effect_path))
+    return frozenset(occurrences)
+
+
+def static_directory_effects(
+    effects: Sequence[Mapping[str, Any]], dynamically_bound_occurrences: frozenset[tuple[int, str]]
+) -> list[dict[str, Any]]:
+    """Remove only selected-wheel dist-info directory effects from a static baseline."""
+
+    return [
+        dict(effect)
+        for effect in effects
+        if (effect.get("layer"), effect.get("path")) not in dynamically_bound_occurrences
     ]
 
 
@@ -4078,7 +4194,7 @@ def verify_unexpanded_payload_policy(
     if platform not in baselines:
         raise EvidenceError(f"policy has no unexpanded payload baseline for {platform}")
     observed: dict[str, object] = {}
-    dynamically_bound_occurrences = selected_application_record_occurrences(inventory)
+    dynamically_bound_occurrences = selected_application_wheel_identity_occurrences(inventory)
     for category in categories:
         records = inventory.get(category)
         if category in {"embedded_sboms", "native_payloads"}:
@@ -8741,12 +8857,13 @@ def verify_inventory(
     inventory: Mapping[str, Any], policy: Mapping[str, Any], *, require_approval: bool
 ) -> None:
     actual = validate_component_inventory(inventory)
+    static_actual = static_components(actual)
     validate_policy_schema(policy)
     platform = inventory.get("platform")
     if platform not in {"linux/amd64", "linux/arm64"}:
         raise EvidenceError("inventory platform is unsupported")
     expected = policy_components(policy, platform)
-    if canonical_json(sorted(actual, key=component_sort_key)) != canonical_json(expected):
+    if canonical_json(sorted(static_actual, key=component_sort_key)) != canonical_json(expected):
         raise EvidenceError(
             "component/license inventory differs from the reviewed policy; "
             "inspect the normalized diff and review every change"
@@ -8754,14 +8871,14 @@ def verify_inventory(
     verify_unexpanded_payload_policy(inventory, policy)
     native_coverage = native_component_coverage_ledger(inventory, policy)
     verify_apk_database_baseline(inventory, policy)
-    actual_keys = {component_key(component) for component in actual}
+    actual_keys = {component_key(component) for component in static_actual}
     resolutions = policy.get("license_resolutions")
     if not isinstance(resolutions, dict) or set(resolutions) != actual_keys:
         raise EvidenceError(
             "reviewed license resolutions do not exactly cover the component inventory"
         )
-    validate_standard_license_text_coverage(actual, policy)
-    validated_custom_license_evidence(actual, policy)
+    validate_standard_license_text_coverage(static_actual, policy)
+    validated_custom_license_evidence(static_actual, policy)
     expected_base = policy.get("base_image_index_digest")
     if not isinstance(expected_base, str) or not SHA256.fullmatch(expected_base):
         raise EvidenceError("policy base image index digest is invalid")
@@ -9543,7 +9660,9 @@ def post_base_layer_count(files: Mapping[str, Any], policy: Mapping[str, Any]) -
     return len(base_layers)
 
 
-def verify_post_base_filesystem_policy(files: Mapping[str, Any], policy: Mapping[str, Any]) -> None:
+def verify_post_base_filesystem_policy(
+    files: Mapping[str, Any], policy: Mapping[str, Any], inventory: Mapping[str, Any] | None = None
+) -> None:
     """Compare semantic post-base directory changes and removals with policy."""
 
     platform = files.get("platform")
@@ -9553,6 +9672,14 @@ def verify_post_base_filesystem_policy(files: Mapping[str, Any], policy: Mapping
     verify_post_base_system_baselines(files, policy)
     observed_directory_effects, observed_removals = canonical_post_base_filesystem_changes(
         files, base_layer_count, platform
+    )
+    dynamically_bound_directories = (
+        selected_application_directory_effect_occurrences(inventory, observed_directory_effects)
+        if inventory is not None
+        else frozenset()
+    )
+    observed_directory_effects = static_directory_effects(
+        observed_directory_effects, dynamically_bound_directories
     )
     expected_directory_effects = validate_directory_effect_policy(
         baseline["post_base_directory_effects"], platform
@@ -9711,7 +9838,7 @@ def verify_post_base_provenance(
     for record in post_base_non_regular:
         require_root_header(record, 0o777, f"post-base link {record['path']}")
 
-    verify_post_base_filesystem_policy(files, policy)
+    verify_post_base_filesystem_policy(files, policy, inventory)
 
 
 def validate_all_layer_inventory(files: Mapping[str, Any], inventory: Mapping[str, Any]) -> None:
@@ -12586,7 +12713,7 @@ def validate_source_policy_coverage(
         raise EvidenceError("Alpine recipe exceptions contain an unused origin")
 
     validate_native_component_policy_schema(policy)
-    validate_standard_license_text_coverage(inventory["components"], policy)
+    validate_standard_license_text_coverage(static_components(inventory["components"]), policy)
 
 
 def alpine_recipe_exception(
@@ -14972,7 +15099,8 @@ def _build_bundle_with_boundary(
             retained_path = root / record["path"]
             record["sha256"] = sha256_file(retained_path, max_bytes=MAX_BUNDLE_RETAINED_BYTES)
             record["size"] = retained_path.stat().st_size
-        verify_pinned_custom_license_records(inventory["components"], policy, license_records)
+        static_inventory_components = static_components(inventory["components"])
+        verify_pinned_custom_license_records(static_inventory_components, policy, license_records)
 
         notices = BoundedBytesBuilder()
         notices.append("# Third-party notices\n\n")
@@ -14984,16 +15112,18 @@ def _build_bundle_with_boundary(
             "| Ecosystem | Component | Version | In effective filesystem | Observed | Reviewed |\n"
         )
         notices.append("| --- | --- | --- | --- | --- | --- |\n")
-        for component in sorted(inventory["components"], key=component_sort_key):
-            ecosystem = markdown_cell(component["ecosystem"])
-            name = markdown_cell(component["name"])
-            component_version = markdown_cell(component["version"])
-            observed = markdown_cell(component["observed_license"]) or "Not declared"
-            approved = markdown_cell(resolved_license(component, policy))
+        for inventory_component in sorted(static_inventory_components, key=component_sort_key):
+            ecosystem = markdown_cell(inventory_component["ecosystem"])
+            name = markdown_cell(inventory_component["name"])
+            component_version = markdown_cell(inventory_component["version"])
+            observed = markdown_cell(inventory_component["observed_license"]) or "Not declared"
+            approved = markdown_cell(resolved_license(inventory_component, policy))
+            effective = (
+                "yes" if inventory_component["effective"] else "no; retained in a lower layer"
+            )
             notices.append(
                 f"| {ecosystem} | {name} | {component_version} | "
-                f"{'yes' if component['effective'] else 'no; retained in a lower layer'} | "
-                f"{observed} | {approved} |\n"
+                f"{effective} | {observed} | {approved} |\n"
             )
         nested_components: set[tuple[str, ...]] = set()
         native_omissions: list[tuple[str, str, str, str]] = []
@@ -15659,7 +15789,7 @@ def command_verify_ci_policy(args: argparse.Namespace) -> None:
     validate_all_layer_inventory(files, inventory)
     verify_inventory(inventory, policy, require_approval=False)
     verify_base_layer_binding(files, policy)
-    verify_post_base_filesystem_policy(files, policy)
+    verify_post_base_filesystem_policy(files, policy, inventory)
     verify_dockerfile_base(Path(args.dockerfile), policy)
 
 

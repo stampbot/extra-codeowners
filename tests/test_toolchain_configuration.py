@@ -258,7 +258,7 @@ def test_helm_chart_protects_startup_and_rejects_explicit_libpq_environment() ->
     }
 
     image = cast(dict[str, Any], values["image"])
-    assert image["tag"] == "0.1.0-alpha.4"
+    assert image["tag"] == ""
 
     assert values["deploymentAnnotations"] == {}
 
@@ -319,6 +319,23 @@ def test_helm_chart_protects_startup_and_rejects_explicit_libpq_environment() ->
     ).read_text()
     assert "{{ toYaml . }}" in extra_manifests_template
     assert "tpl" not in extra_manifests_template
+
+
+def test_release_chart_metadata_is_derived_from_the_signed_tag() -> None:
+    chart = yaml.safe_load((ROOT / "charts" / "extra-codeowners" / "Chart.yaml").read_text())
+    release = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+    mise = (ROOT / "mise.toml").read_text(encoding="utf-8")
+
+    assert chart["version"] == "0.0.0-dev"
+    assert chart["appVersion"] == "0.0.0-dev"
+    assert "helm package charts/extra-codeowners \\" in release
+    assert '--version "$VERSION" \\' in release
+    assert '--app-version "$VERSION"' in release
+    assert 'chart="dist/extra-codeowners-${VERSION}.tgz"' in release
+    assert 'helm template extra-codeowners "$chart"' in release
+    assert "sed -i" not in release
+    assert '[tasks."release:prepare-alpha"]' in mise
+    assert 'run = "uv run --frozen --no-sync python tools/prepare_prerelease.py"' in mise
 
 
 def test_pinned_uv_exposes_the_scheduled_audit_interface_without_network() -> None:

@@ -30,7 +30,6 @@ NATIVE_WHEELHOUSE_CONTRACT_SHA256 = hashlib.sha256(
     NATIVE_WHEELHOUSE_CONTRACT.read_bytes()
 ).hexdigest()
 REVISION = "1" * 40
-REAL_PLAN_SHA256 = "46499e19b25193fe58226fbbd8aff7acf22982ea98f9ff46bf245a0b1a507e24"
 REQUEST_KEYS = {
     "id",
     "url",
@@ -494,7 +493,8 @@ def test_real_policy_direct_plan_is_stable_and_complete() -> None:
     assert raw.count(b"\n") == 1
     assert json.loads(raw) == first
     assert source_plan.canonical_json(json.loads(raw)) == raw
-    assert hashlib.sha256(raw).hexdigest() == REAL_PLAN_SHA256
+    assert first["policy_sha256"] == hashlib.sha256(POLICY.read_bytes()).hexdigest()
+    assert first["uv_lock_sha256"] == hashlib.sha256(UV_LOCK.read_bytes()).hexdigest()
     contract = source_plan._source_store_contract()
     assert source_plan.MAX_TOTAL_OBJECT_BYTES == contract.MAX_TOTAL_OBJECT_BYTES
     parsed = contract.strict_json_bytes(

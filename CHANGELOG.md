@@ -15,6 +15,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Rel
 - Bind the application's changing installed `RECORD` file to the selected wheel
   instead of a stale static container-policy baseline.
 
+### Changed
+
+- Alpha release preparation now updates the project version, lock file, and
+  changelog with one checked command. Published chart metadata and its default
+  image tag come from the signed release tag.
+- Container evidence binds first-party wheel metadata to the selected wheel and
+  source revision, so an application version bump does not rewrite the
+  third-party dependency policy.
+
 ## [0.1.0-alpha.4] - 2026-08-10
 
 ### Added

@@ -2,8 +2,8 @@ apiVersion: v2
 name: extra-codeowners
 description: Deploy the Extra CODEOWNERS GitHub App service
 type: application
-version: 0.1.0-alpha.4
-appVersion: "0.1.0a4"
+version: 0.0.0-dev
+appVersion: "0.0.0-dev"
 kubeVersion: ">=1.27.0-0"
 home: https://github.com/stampbot/extra-codeowners
 sources:
