@@ -6,6 +6,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Rel
 
 ## [Unreleased]
 
+## [0.1.0-alpha.5] - 2026-08-11
+
 ### Fixed
 
 - Fetch enrolled App identity without an installation token. GitHub rejects
