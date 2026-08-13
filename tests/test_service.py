@@ -140,8 +140,9 @@ required_labels = ["autoapprove"]
     ) -> bool:
         return team_slug == "platform"
 
-    async def get_app(self, slug: str) -> dict[str, Any]:
-        return {"id": 2909932, "slug": slug}
+    async def get_user(self, installation_id: int, login: str) -> dict[str, Any]:
+        assert installation_id == 2
+        return {"id": 262871904, "login": login, "type": "Bot"}
 
     async def upsert_check_run(
         self,
@@ -971,9 +972,11 @@ async def test_existing_success_is_revoked_before_policy_fetch_failure(tmp_path:
 
 
 @pytest.mark.asyncio
-async def test_app_metadata_mismatch_does_not_authorize_bot(tmp_path: Path) -> None:
+async def test_bot_user_identity_mismatch_does_not_authorize_bot(tmp_path: Path) -> None:
     github = FakeGitHub(changed_path="uv.lock")
-    github.get_app = AsyncMock(return_value={"id": 999, "slug": "stampbot"})  # type: ignore[method-assign]
+    github.get_user = AsyncMock(  # type: ignore[method-assign]
+        return_value={"id": 999, "login": "stampbot[bot]", "type": "Bot"}
+    )
     store = migrated_store(f"sqlite:///{tmp_path / 'audit.db'}")
 
     await EvaluationService(settings(), github, store).evaluate_job(job(store))  # type: ignore[arg-type]

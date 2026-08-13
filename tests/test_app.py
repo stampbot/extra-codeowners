@@ -325,6 +325,46 @@ def test_health_and_signed_webhook_ingestion(tmp_path: Path) -> None:
     assert [check["status"] for check in github.checks] == ["in_progress"]
 
 
+def test_check_run_re_evaluate_action_only_queues_this_apps_check(tmp_path: Path) -> None:
+    store = migrated_store(f"sqlite:///{tmp_path / 'app.db'}")
+    github = StubGitHub()
+    app = app_module.create_app(configured_settings(), github=github, store=store)  # type: ignore[arg-type]
+    payload: dict[str, Any] = {
+        "action": "requested_action",
+        "installation": {"id": 10},
+        "repository": {"full_name": "example/project"},
+        "requested_action": {"identifier": "re-evaluate"},
+        "check_run": {
+            "app": {"id": 123},
+            "head_sha": HEAD,
+            "pull_requests": [{"number": 7}],
+        },
+    }
+    body = json.dumps(payload).encode()
+    headers = webhook_headers(body, "check-action")
+    headers["X-GitHub-Event"] = "check_run"
+
+    with TestClient(app) as client:
+        response = client.post("/webhooks/github", content=body, headers=headers)
+
+    assert response.status_code == 202
+    assert response.json() == {"accepted": True, "queued": True}
+    assert store.pending_count() == 2
+    assert [check["status"] for check in github.checks] == ["in_progress"]
+
+    payload["check_run"] = {**payload["check_run"], "app": {"id": 456}}
+    foreign_body = json.dumps(payload).encode()
+    foreign_headers = webhook_headers(foreign_body, "foreign-check-action")
+    foreign_headers["X-GitHub-Event"] = "check_run"
+
+    with TestClient(app) as client:
+        foreign = client.post("/webhooks/github", content=foreign_body, headers=foreign_headers)
+
+    assert foreign.status_code == 202
+    assert foreign.json() == {"accepted": True, "queued": False}
+    assert store.pending_count() == 2
+
+
 def test_health_openapi_publishes_success_and_failure_response_contracts() -> None:
     schema = app_module.create_app(configured_settings()).openapi()
     cases = {

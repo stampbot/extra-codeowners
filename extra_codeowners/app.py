@@ -505,6 +505,7 @@ def create_app(
                 webhook,
                 policy_path=runtime.policy_path,
                 org_config_repository=runtime.org_config_repository,
+                expected_app_id=runtime.github_app_id,
             )
             if isinstance(job, JobRequest) and runtime.is_organization_config_repository(
                 job.repository_full_name

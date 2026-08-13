@@ -121,6 +121,20 @@ The service does not expose remaining GitHub rate-limit quota. Watch API
 failures instead, and keep the service limited to disposable repositories
 until a deployment-specific rate-limit monitor closes that gap.
 
+## Re-evaluate a check
+
+If a qualifying review has arrived but the Extra CODEOWNERS result has not
+changed, open that check's details on the pull request and select
+**Re-evaluate**. GitHub sends the action back to the installed App, which
+queues a new evaluation for the current head commit. You do not need to push an
+empty commit or create another review.
+
+The action does not override policy or approve the pull request. It only asks
+the service to fetch the current review, policy, and ownership evidence again.
+The check first returns to `in_progress`, then shows either the updated result
+or the reason it still cannot pass. If it remains `in_progress`, use the queue
+and invalidation metrics above to find the blocked stage.
+
 ## Protect logs and audit data
 
 Accepted-webhook logs include the delivery ID, event, action, available

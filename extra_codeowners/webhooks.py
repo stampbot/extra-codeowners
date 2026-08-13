@@ -28,6 +28,7 @@ PULL_REQUEST_ACTIONS: Final = frozenset(
 )
 REVIEW_ACTIONS: Final = frozenset({"submitted", "edited", "dismissed"})
 CODEOWNERS_PATHS: Final = frozenset({".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS"})
+RE_EVALUATE_ACTION_IDENTIFIER: Final = "re-evaluate"
 
 
 class WebhookError(ValueError):
@@ -149,6 +150,46 @@ def _pull_request_job(
     )
 
 
+def _check_run_job(
+    webhook: VerifiedWebhook,
+    *,
+    expected_app_id: int | None,
+) -> JobRequest | None:
+    """Map one managed Check Run re-request or action to its exact pull request."""
+    check_run = webhook.payload.get("check_run")
+    if not isinstance(check_run, dict):
+        raise WebhookError("webhook omitted check_run")
+    if expected_app_id is not None:
+        source = check_run.get("app")
+        source_id = source.get("id") if isinstance(source, dict) else None
+        if isinstance(source_id, bool) or source_id != expected_app_id:
+            return None
+    if webhook.action == "requested_action":
+        requested_action = webhook.payload.get("requested_action")
+        if (
+            not isinstance(requested_action, dict)
+            or requested_action.get("identifier") != RE_EVALUATE_ACTION_IDENTIFIER
+        ):
+            return None
+    pulls = check_run.get("pull_requests")
+    if not isinstance(pulls, list) or len(pulls) != 1 or not isinstance(pulls[0], dict):
+        return None
+    number = _positive_int(pulls[0].get("number"), "check_run pull number")
+    head_sha = _head_sha(check_run.get("head_sha"), "check_run.head_sha")
+    reason = (
+        "check_run.requested_action.re-evaluate"
+        if webhook.action == "requested_action"
+        else "check_run.rerequested"
+    )
+    return JobRequest(
+        installation_id=_installation_id(webhook.payload),
+        repository_full_name=_repository_name(webhook.payload),
+        pull_number=number,
+        reason=reason,
+        head_sha_hint=head_sha,
+    )
+
+
 def _push_authority_job(
     webhook: VerifiedWebhook,
     *,
@@ -234,6 +275,7 @@ def evaluation_job(
     *,
     policy_path: str = ".github/extra-codeowners.toml",
     org_config_repository: str = ".github",
+    expected_app_id: int | None = None,
 ) -> JobRequest | AuthorityRequest | None:
     """Map a verified delivery to evaluation or authority fan-out work."""
     if webhook.event == "pull_request":
@@ -244,22 +286,8 @@ def evaluation_job(
         )
     if webhook.event == "pull_request_review":
         return _pull_request_job(webhook) if webhook.action in REVIEW_ACTIONS else None
-    if webhook.event == "check_run" and webhook.action == "rerequested":
-        check_run = webhook.payload.get("check_run")
-        if not isinstance(check_run, dict):
-            raise WebhookError("webhook omitted check_run")
-        pulls = check_run.get("pull_requests")
-        if not isinstance(pulls, list) or len(pulls) != 1 or not isinstance(pulls[0], dict):
-            return None
-        number = _positive_int(pulls[0].get("number"), "check_run pull number")
-        head_sha = _head_sha(check_run.get("head_sha"), "check_run.head_sha")
-        return JobRequest(
-            installation_id=_installation_id(webhook.payload),
-            repository_full_name=_repository_name(webhook.payload),
-            pull_number=number,
-            reason="check_run.rerequested",
-            head_sha_hint=head_sha,
-        )
+    if webhook.event == "check_run" and webhook.action in {"rerequested", "requested_action"}:
+        return _check_run_job(webhook, expected_app_id=expected_app_id)
     if webhook.event == "push":
         return _push_authority_job(
             webhook,
