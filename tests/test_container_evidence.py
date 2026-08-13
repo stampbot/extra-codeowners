@@ -11795,12 +11795,17 @@ def test_runtime_identity_expectations_match_dockerfile_and_mise() -> None:
     ) in builder_stage
     assert dockerfile.count("UV_NO_INSTALLER_METADATA=1") == 1
     assert builder_stage.index("UV_NO_INSTALLER_METADATA=1") < builder_stage.index("uv sync")
-    assert "RUN apk add --no-cache \\" in test_stage
+    assert dockerfile.count("for attempt in 1 2 3; do") == 3
+    assert dockerfile.count("APK retrieval failed; retrying ($attempt/3).") == 3
+    assert "if apk add --no-cache --timeout 30 \\" in builder_stage
+    assert "if apk add --no-cache --timeout 30 \\" in test_stage
     assert "git=2.54.0-r0" in test_stage
     assert "openssh-keygen=10.3_p1-r0" in test_stage
     assert ".github/scripts/smoke-container.sh \\" in test_stage
     assert "COPY charts/ ./charts/" in test_stage
-    assert runtime_stage.index("apk add --no-cache") < runtime_stage.index(": > /var/log/apk.log")
+    assert runtime_stage.index("apk add --no-cache --timeout 30") < runtime_stage.index(
+        ": > /var/log/apk.log"
+    )
     assert "!.github/scripts/smoke-container.sh" in dockerignore
     assert "charts" not in dockerignore
 
