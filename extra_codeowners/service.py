@@ -674,25 +674,33 @@ class EvaluationService:
         organization: OrganizationPolicy,
         bot_user_ids: frozenset[int],
     ) -> dict[int, tuple[str, EnrolledApplication, int, str]]:
-        """Bind configured bot users to independently fetched App identities."""
+        """Bind configured bot users to GitHub's installation-visible bot identity."""
         validated: dict[int, tuple[str, EnrolledApplication, int, str]] = {}
         for alias, app in organization.apps.items():
             if app.bot_user_id not in bot_user_ids:
                 continue
-            metadata = await self.github.get_app(app.slug)
+            expected_login = f"{app.slug}[bot]"
+            metadata = await self.github.get_user(installation_id, expected_login)
             observed_id = metadata.get("id")
-            observed_slug = metadata.get("slug")
-            if observed_id != app.app_id or str(observed_slug).lower() != app.slug:
+            observed_login = metadata.get("login")
+            observed_type = metadata.get("type")
+            if (
+                observed_id != app.bot_user_id
+                or not isinstance(observed_login, str)
+                or observed_login.lower() != expected_login
+                or observed_type != "Bot"
+            ):
                 log.warning(
-                    "enrolled_app_identity_mismatch",
+                    "enrolled_app_bot_identity_mismatch",
                     alias=alias,
-                    configured_app_id=app.app_id,
-                    observed_app_id=observed_id,
-                    configured_slug=app.slug,
-                    observed_slug=observed_slug,
+                    configured_bot_user_id=app.bot_user_id,
+                    observed_bot_user_id=observed_id,
+                    configured_login=expected_login,
+                    observed_login=observed_login,
+                    observed_type=observed_type,
                 )
                 continue
-            validated[app.bot_user_id] = (alias, app, int(observed_id), str(observed_slug))
+            validated[app.bot_user_id] = (alias, app, app.app_id, app.slug)
         return validated
 
     async def _reviews(
@@ -1432,6 +1440,7 @@ class EvaluationService:
                             text=result.check_output(),
                             details_url=details_url,
                             external_id=external_id,
+                            include_re_evaluate_action=True,
                         )
                     except asyncio.CancelledError:
                         await self._restore_blocking_after_uncertain_completion(

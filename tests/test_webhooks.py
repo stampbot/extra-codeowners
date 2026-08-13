@@ -219,6 +219,54 @@ def test_check_run_rerequest_requires_authoritative_head() -> None:
         evaluation_job(webhook)
 
 
+def test_check_run_re_evaluate_action_maps_single_pull() -> None:
+    webhook = signed(
+        {
+            "action": "requested_action",
+            "installation": {"id": 10},
+            "repository": {"full_name": "example/project"},
+            "requested_action": {"identifier": "re-evaluate"},
+            "check_run": {
+                "app": {"id": 123},
+                "head_sha": "a" * 40,
+                "pull_requests": [{"number": 7}],
+            },
+        },
+        event="check_run",
+    )
+
+    job = evaluation_job(webhook, expected_app_id=123)
+
+    assert isinstance(job, JobRequest)
+    assert job.reason == "check_run.requested_action.re-evaluate"
+
+
+@pytest.mark.parametrize(
+    "check_run_app_id, action_identifier",
+    [(456, "re-evaluate"), (123, "unrecognized")],
+)
+def test_check_run_re_evaluate_ignores_foreign_or_unknown_actions(
+    check_run_app_id: int,
+    action_identifier: str,
+) -> None:
+    webhook = signed(
+        {
+            "action": "requested_action",
+            "installation": {"id": 10},
+            "repository": {"full_name": "example/project"},
+            "requested_action": {"identifier": action_identifier},
+            "check_run": {
+                "app": {"id": check_run_app_id},
+                "head_sha": "a" * 40,
+                "pull_requests": [{"number": 7}],
+            },
+        },
+        event="check_run",
+    )
+
+    assert evaluation_job(webhook, expected_app_id=123) is None
+
+
 def test_installation_event_becomes_installation_authority_job() -> None:
     webhook = signed({"action": "created", "installation": {"id": 10}}, event="installation")
 
