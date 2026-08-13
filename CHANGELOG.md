@@ -6,6 +6,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Rel
 
 ## [Unreleased]
 
+## [0.1.0-alpha.6] - 2026-08-13
+
+### Added
+
+- A **Re-evaluate** action on completed Extra CODEOWNERS checks. It fetches
+  current review and policy evidence again without requiring an empty commit.
+
+### Fixed
+
+- Validate a delegated App through its configured immutable GitHub bot account.
+  GitHub does not let an installation token look up a different App directly.
+
 ## [0.1.0-alpha.5] - 2026-08-11
 
 ### Fixed
