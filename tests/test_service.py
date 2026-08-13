@@ -1336,6 +1336,60 @@ async def test_authority_work_preempts_evaluations_and_fans_out_open_pulls(
 
 
 @pytest.mark.asyncio
+async def test_worker_does_not_starve_evaluations_behind_authority_retries(
+    tmp_path: Path,
+) -> None:
+    store = migrated_store(f"sqlite:///{tmp_path / 'fair-worker.db'}")
+    store.enqueue(
+        JobRequest(
+            installation_id=2,
+            repository_full_name="example/project",
+            pull_number=3,
+            reason="pull_request.opened",
+        )
+    )
+    for delivery_id, repository in (
+        ("authority-one", "example/authority-one"),
+        ("authority-two", "example/authority-two"),
+    ):
+        store.accept_delivery(
+            delivery_id,
+            "push",
+            AuthorityRequest(
+                installation_id=2,
+                repository_full_name=repository,
+                base_ref="main",
+                reason="push.repository_base",
+            ),
+        )
+    stop = asyncio.Event()
+    calls: list[str] = []
+
+    class AuthorityGitHub:
+        async def list_open_pulls(
+            self, installation_id: int, repository: str
+        ) -> list[dict[str, Any]]:
+            calls.append(f"authority:{repository}")
+            raise RuntimeError("repository is temporarily unavailable")
+
+    class Evaluator:
+        github = AuthorityGitHub()
+
+        async def evaluate_job(self, claimed: ClaimedJob) -> None:
+            calls.append(f"evaluation:{claimed.pull_number}")
+            stop.set()
+
+    worker = Worker(settings(), store, Evaluator(), "worker")  # type: ignore[arg-type]
+
+    await worker.run(stop)
+
+    assert calls == ["authority:example/authority-one", "evaluation:3"]
+    assert store.claim("observer", 60) is None
+    assert store.pending_count() == 2
+    assert store.claim_authority("observer", 60) is not None
+
+
+@pytest.mark.asyncio
 async def test_accepted_authority_change_fences_inflight_success(tmp_path: Path) -> None:
     github = FakeGitHub(changed_path="uv.lock")
     store = migrated_store(f"sqlite:///{tmp_path / 'authority-fence.db'}")

@@ -1564,6 +1564,12 @@ class Worker:
         self.store = store
         self.evaluator = evaluator
         self.owner = owner
+        # Shared-head invalidations always take priority because they fence a
+        # potentially stale successful check. Once that work is drained, share
+        # capacity between authority fan-out and ordinary PR evaluation. A
+        # failed fan-out must not indefinitely prevent a PR from being
+        # evaluated.
+        self._prefer_authority_work = True
 
     async def _renew_shared_head_lease(
         self,
@@ -1923,20 +1929,40 @@ class Worker:
                 if shared_head_job is not None:
                     await self._process_shared_head(shared_head_job)
                     continue
-                authority_job = await asyncio.to_thread(
-                    self.store.claim_authority,
-                    self.owner,
-                    self.settings.worker_lease_seconds,
-                )
-                if authority_job is not None:
-                    await self._process_authority(authority_job)
-                    continue
-                job = await asyncio.to_thread(
-                    self.store.claim, self.owner, self.settings.worker_lease_seconds
-                )
-                if job is not None:
-                    await self._process(job)
-                    continue
+                if self._prefer_authority_work:
+                    authority_job = await asyncio.to_thread(
+                        self.store.claim_authority,
+                        self.owner,
+                        self.settings.worker_lease_seconds,
+                    )
+                    if authority_job is not None:
+                        self._prefer_authority_work = False
+                        await self._process_authority(authority_job)
+                        continue
+                    job = await asyncio.to_thread(
+                        self.store.claim, self.owner, self.settings.worker_lease_seconds
+                    )
+                    if job is not None:
+                        self._prefer_authority_work = True
+                        await self._process(job)
+                        continue
+                else:
+                    job = await asyncio.to_thread(
+                        self.store.claim, self.owner, self.settings.worker_lease_seconds
+                    )
+                    if job is not None:
+                        self._prefer_authority_work = True
+                        await self._process(job)
+                        continue
+                    authority_job = await asyncio.to_thread(
+                        self.store.claim_authority,
+                        self.owner,
+                        self.settings.worker_lease_seconds,
+                    )
+                    if authority_job is not None:
+                        self._prefer_authority_work = False
+                        await self._process_authority(authority_job)
+                        continue
             except asyncio.CancelledError:
                 raise
             except Exception:
