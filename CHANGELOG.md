@@ -6,6 +6,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Rel
 
 ## [Unreleased]
 
+## [0.1.0-alpha.7] - 2026-08-13
+
 ### Fixed
 
 - Alternate authority fan-out and ordinary evaluation after exact-head
