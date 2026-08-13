@@ -6,6 +6,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Rel
 
 ## [Unreleased]
 
+## [0.1.0-alpha.7] - 2026-08-13
+
+### Fixed
+
+- Alternate authority fan-out and ordinary evaluation after exact-head
+  invalidation. A retrying repository fan-out can no longer hold up unrelated
+  pull-request decisions.
+- Retry interrupted Alpine package retrieval during container builds without
+  changing the pinned packages or accepting an unbounded retry.
+
 ## [0.1.0-alpha.6] - 2026-08-13
 
 ### Added
