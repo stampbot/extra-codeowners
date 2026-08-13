@@ -47,10 +47,23 @@ RUN --mount=type=cache,target=/root/.cache/uv \
       --no-install-package pydantic-core \
       --no-build
 
-RUN apk add --no-cache \
-    binutils=2.45.1-r1 \
-    libgcc=15.2.0-r5 \
-    libpq=18.4-r0
+# Alpine's CDN occasionally resets a runner's TLS connection while downloading
+# an index. Retry the full authenticated transaction, but retain exact package
+# constraints and discard every failed index before the next attempt.
+RUN set -eu; \
+    for attempt in 1 2 3; do \
+      if apk add --no-cache --timeout 30 \
+          binutils=2.45.1-r1 \
+          libgcc=15.2.0-r5 \
+          libpq=18.4-r0; then \
+        exit 0; \
+      fi; \
+      if [ "$attempt" -eq 3 ]; then \
+        exit 1; \
+      fi; \
+      echo "APK retrieval failed; retrying ($attempt/3)." >&2; \
+      sleep "$attempt"; \
+    done
 
 COPY .github/scripts/build_python_artifacts.py \
      .github/scripts/native_wheelhouse.py \
@@ -148,9 +161,19 @@ FROM builder AS test
 
 # Source-binding tests exercise Git object reads and SSH commit verification.
 # These test-only packages are never copied into or published as the runtime image.
-RUN apk add --no-cache \
-    git=2.54.0-r0 \
-    openssh-keygen=10.3_p1-r0
+RUN set -eu; \
+    for attempt in 1 2 3; do \
+      if apk add --no-cache --timeout 30 \
+          git=2.54.0-r0 \
+          openssh-keygen=10.3_p1-r0; then \
+        exit 0; \
+      fi; \
+      if [ "$attempt" -eq 3 ]; then \
+        exit 1; \
+      fi; \
+      echo "APK retrieval failed; retrying ($attempt/3)." >&2; \
+      sleep "$attempt"; \
+    done
 
 COPY .github/dependabot.yml ./.github/dependabot.yml
 COPY .github/scripts/acquire_github_release_assets.py \
@@ -265,9 +288,19 @@ COPY --from=native-wheelhouse --chown=0:0 /wheelhouse/ /usr/share/extra-codeowne
 
 # The APK database is retained as evidence. Its log contains wall-clock build
 # times, so normalize that non-authoritative file before policy binds the layer.
-RUN apk add --no-cache \
-    libgcc=15.2.0-r5 \
-    libpq=18.4-r0 && \
+RUN set -eu; \
+    for attempt in 1 2 3; do \
+      if apk add --no-cache --timeout 30 \
+          libgcc=15.2.0-r5 \
+          libpq=18.4-r0; then \
+        break; \
+      fi; \
+      if [ "$attempt" -eq 3 ]; then \
+        exit 1; \
+      fi; \
+      echo "APK retrieval failed; retrying ($attempt/3)." >&2; \
+      sleep "$attempt"; \
+    done; \
     : > /var/log/apk.log && \
     chmod 0444 /usr/share/extra-codeowners/native-wheelhouse/* && \
     chmod 0555 /usr/share/extra-codeowners/native-wheelhouse
