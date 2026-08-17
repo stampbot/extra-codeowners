@@ -1,0 +1,12 @@
+ignore:
+  # CPython 3.14 has no compatible fix. Grype marks the advisory as fixed
+  # because Python 3.15 is outside this image's supported minor line. Keep the
+  # package version exact so a base-image update requires a fresh review.
+  - vulnerability: CVE-2026-15308
+    reason: >-
+      CPython 3.14 has no same-line fix; Grype classifies the incompatible
+      Python 3.15 upgrade as a fix for the 3.14 runtime.
+    package:
+      name: python
+      version: 3.14.7
+      type: binary

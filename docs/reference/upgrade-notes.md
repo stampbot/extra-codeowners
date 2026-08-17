@@ -1,22 +1,21 @@
 # Database upgrade notes
 
-This page records the application and database compatibility contract planned
-for each release. No supported release exists yet. When releases begin, read
+This page records the application and database compatibility contract for each
+release line. Alpha releases are not supported production artifacts. Read
 every entry after the version you run, through the version you plan to deploy.
-Any release that changes the Alembic head must update this ledger in the same
-pull request.
+Any change to the Alembic head must update this ledger in the same pull request.
 
 ## 0.1.0
 
-**Status:** Unreleased.
+**Status:** Applies to the `0.1.0-alpha.N` release series.
 
-The planned first release will establish this compatibility contract:
+The alpha series establishes this compatibility contract:
 
 | Field | Contract |
 | --- | --- |
 | Database head | `0003_shared_head_epochs` |
-| Head change | Yes; this release is planned to establish the first supported head. |
-| Supported source releases | None; this is planned as the first supported schema baseline. |
+| Head change | Yes; this release line establishes the first versioned head. |
+| Supported source releases | None; this is the first versioned schema baseline. |
 | Target application compatible before migration | No; startup requires the exact head. |
 | Required process state | Stop webhook ingress and every older worker before applying `0003_shared_head_epochs`. Suspend GitOps reconciliation and remove the HPA before scaling a Kubernetes Deployment to zero. |
 | In-place database downgrade | Not supported. |

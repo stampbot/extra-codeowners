@@ -13,7 +13,7 @@
       "customType": "regex",
       "description": "Update PostgreSQL test service images",
       "managerFilePatterns": [
-        "/^\\.github/workflows/(?:ci|coverage-pages|release)\\.yml$/"
+        "/^\\.github/workflows/(?:ci|coverage-pages)\\.yml$/"
       ],
       "matchStrings": [
         "'postgres:(?<currentValue>[^@\\s]+)@(?<currentDigest>sha256:[a-f0-9]{64})'",
@@ -25,53 +25,105 @@
     },
     {
       "customType": "regex",
-      "description": "Update digest-pinned kubeconform and BuildKit utility containers",
-      "managerFilePatterns": [
-        "/^\\.github/workflows/(?:ci|release)\\.yml$/"
-      ],
-      "matchStrings": [
-        "(?<depName>ghcr.io/yannh/kubeconform):(?<currentValue>[^@\\s]+)@(?<currentDigest>sha256:[a-f0-9]{64})",
-        "(?<depName>moby/buildkit):(?<currentValue>[^@\\s]+)@(?<currentDigest>sha256:[a-f0-9]{64})"
-      ],
-      "datasourceTemplate": "docker",
-      "versioningTemplate": "docker"
-    },
-    {
-      "customType": "regex",
-      "description": "Update digest-pinned QEMU binfmt images",
-      "managerFilePatterns": [
-        "/^\\.github/workflows/(?:ci|release)\\.yml$/"
-      ],
-      "matchStrings": [
-        "(?<depName>tonistiigi/binfmt):(?<currentValue>qemu-v[0-9]+\\.[0-9]+\\.[0-9]+)@(?<currentDigest>sha256:[a-f0-9]{64})"
-      ],
-      "datasourceTemplate": "docker",
-      "versioningTemplate": "regex:^qemu-v(?<major>[0-9]+)\\.(?<minor>[0-9]+)\\.(?<patch>[0-9]+)$"
-    },
-    {
-      "customType": "regex",
-      "description": "Update the pinned Docker Buildx client",
-      "managerFilePatterns": [
-        "/^\\.github/workflows/(?:ci|release)\\.yml$/"
-      ],
-      "matchStrings": [
-        "docker/setup-buildx-action@[^\\s]+\\s+# [^\\n]+\\n\\s+with:\\n\\s+version: v(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)"
-      ],
-      "depNameTemplate": "docker/buildx",
-      "datasourceTemplate": "github-releases",
-      "extractVersionTemplate": "^v(?<version>[0-9]+\\.[0-9]+\\.[0-9]+)$",
-      "versioningTemplate": "semver"
-    },
-    {
-      "customType": "regex",
-      "description": "Open reviewed ShellCheck release updates; CI requires a matching asset digest",
+      "description": "Update the kubeconform validation image",
       "managerFilePatterns": [
         "/^\\.github/workflows/ci\\.yml$/"
       ],
       "matchStrings": [
-        "SHELLCHECK_VERSION: v(?<currentValue>\\d+\\.\\d+\\.\\d+)"
+        "ghcr.io/yannh/kubeconform:v(?<currentValue>\\d+\\.\\d+\\.\\d+)@(?<currentDigest>sha256:[a-f0-9]{64})"
+      ],
+      "depNameTemplate": "ghcr.io/yannh/kubeconform",
+      "datasourceTemplate": "docker",
+      "versioningTemplate": "semver"
+    },
+    {
+      "customType": "regex",
+      "description": "Keep the project-owned uv version current",
+      "managerFilePatterns": [
+        "/^pyproject\\.toml$/"
+      ],
+      "matchStrings": [
+        "required-version = \"==(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)\""
+      ],
+      "depNameTemplate": "astral-sh/uv",
+      "datasourceTemplate": "github-releases",
+      "versioningTemplate": "semver"
+    },
+    {
+      "customType": "regex",
+      "description": "Keep the ShellCheck runtime current",
+      "managerFilePatterns": [
+        "/^\\.github/workflows/ci\\.yml$/"
+      ],
+      "matchStrings": [
+        "koalaman/shellcheck:v(?<currentValue>\\d+\\.\\d+\\.\\d+)@(?<currentDigest>sha256:[a-f0-9]{64})"
       ],
       "depNameTemplate": "koalaman/shellcheck",
+      "datasourceTemplate": "docker",
+      "versioningTemplate": "semver"
+    },
+    {
+      "customType": "regex",
+      "description": "Update the pinned Buildx runtime",
+      "managerFilePatterns": [
+        "/^\\.github/workflows/(?:ci|cold-container|release)\\.yml$/"
+      ],
+      "matchStrings": [
+        "version: v(?<currentValue>\\d+\\.\\d+\\.\\d+) # buildx runtime"
+      ],
+      "depNameTemplate": "docker/buildx",
+      "datasourceTemplate": "github-releases",
+      "versioningTemplate": "semver"
+    },
+    {
+      "customType": "regex",
+      "description": "Update digest-pinned Docker build runtime images",
+      "managerFilePatterns": [
+        "/^\\.github/workflows/(?:ci|cold-container|release)\\.yml$/"
+      ],
+      "matchStrings": [
+        "(?<depName>moby/buildkit):v(?<currentValue>\\d+\\.\\d+\\.\\d+)@(?<currentDigest>sha256:[a-f0-9]{64})",
+        "(?<depName>docker/buildkit-syft-scanner):(?<currentValue>\\d+\\.\\d+\\.\\d+)@(?<currentDigest>sha256:[a-f0-9]{64})"
+      ],
+      "datasourceTemplate": "docker",
+      "versioningTemplate": "semver"
+    },
+    {
+      "customType": "regex",
+      "description": "Keep the Helm 3 runtime current",
+      "managerFilePatterns": [
+        "/^\\.github/workflows/(?:ci|release)\\.yml$/"
+      ],
+      "matchStrings": [
+        "version: v(?<currentValue>\\d+\\.\\d+\\.\\d+) # helm runtime"
+      ],
+      "depNameTemplate": "helm/helm",
+      "datasourceTemplate": "github-releases",
+      "versioningTemplate": "semver"
+    },
+    {
+      "customType": "regex",
+      "description": "Keep the Cosign runtime current",
+      "managerFilePatterns": [
+        "/^\\.github/workflows/release\\.yml$/"
+      ],
+      "matchStrings": [
+        "cosign-release: v(?<currentValue>\\d+\\.\\d+\\.\\d+)"
+      ],
+      "depNameTemplate": "sigstore/cosign",
+      "datasourceTemplate": "github-releases",
+      "versioningTemplate": "semver"
+    },
+    {
+      "customType": "regex",
+      "description": "Keep the Actionlint runtime current",
+      "managerFilePatterns": [
+        "/^\\.github/workflows/workflow-security\\.yml$/"
+      ],
+      "matchStrings": [
+        "version: (?<currentValue>\\d+\\.\\d+\\.\\d+) # actionlint runtime"
+      ],
+      "depNameTemplate": "rhysd/actionlint",
       "datasourceTemplate": "github-releases",
       "versioningTemplate": "semver"
     }
@@ -80,36 +132,13 @@
   "osvVulnerabilityAlerts": true,
   "packageRules": [
     {
-      "description": "Update the complete isolated Python build toolchain together",
-      "matchManagers": [
-        "pip_requirements"
-      ],
-      "matchFileNames": [
-        "requirements-build.txt"
-      ],
-      "groupName": "Python build toolchain",
-      "groupSlug": "python-build-toolchain",
-      "rangeStrategy": "replace",
-      "separateMajorMinor": false
-    },
-    {
-      "description": "Keep the project backend pin with its hashed build closure",
-      "matchManagers": [
-        "pep621"
-      ],
-      "matchFileNames": [
-        "pyproject.toml"
-      ],
-      "matchDepTypes": [
-        "build-system.requires"
-      ],
+      "description": "Group Python build-backend updates",
       "matchPackageNames": [
+        "hatch-vcs",
         "hatchling"
       ],
-      "groupName": "Python build toolchain",
-      "groupSlug": "python-build-toolchain",
-      "rangeStrategy": "replace",
-      "separateMajorMinor": false
+      "groupName": "Python build backend",
+      "rangeStrategy": "pin"
     },
     {
       "description": "Group non-major Python development dependency updates",
@@ -130,14 +159,60 @@
       "enabled": false
     },
     {
-      "description": "Update the uv image, executable, and setup action together",
+      "description": "Update the uv image and local tool version together",
       "matchPackageNames": [
-        "astral-sh/setup-uv",
         "astral-sh/uv",
         "ghcr.io/astral-sh/uv"
       ],
       "groupName": "uv toolchain",
       "enabled": true
+    },
+    {
+      "description": "Update the Docker build runtime together",
+      "matchPackageNames": [
+        "docker/buildkit-syft-scanner",
+        "docker/buildx",
+        "moby/buildkit"
+      ],
+      "groupName": "Docker build runtime",
+      "enabled": true
+    },
+    {
+      "description": "Keep the Helm runtime on its tested major",
+      "matchPackageNames": [
+        "helm/helm"
+      ],
+      "allowedVersions": "<4.0.0",
+      "groupName": "Helm toolchain"
+    },
+    {
+      "description": "Update both kubeconform pins together",
+      "matchPackageNames": [
+        "ghcr.io/yannh/kubeconform",
+        "yannh/kubeconform"
+      ],
+      "groupName": "kubeconform toolchain"
+    },
+    {
+      "description": "Update both ShellCheck pins together",
+      "matchPackageNames": [
+        "koalaman/shellcheck"
+      ],
+      "groupName": "ShellCheck toolchain"
+    },
+    {
+      "description": "Update both Actionlint pins together",
+      "matchPackageNames": [
+        "rhysd/actionlint"
+      ],
+      "groupName": "Actionlint toolchain"
+    },
+    {
+      "description": "Update both Cosign pins together",
+      "matchPackageNames": [
+        "sigstore/cosign"
+      ],
+      "groupName": "Cosign toolchain"
     },
     {
       "description": "Refresh container digests weekly",

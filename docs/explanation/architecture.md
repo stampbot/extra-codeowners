@@ -413,105 +413,96 @@ make that window smaller. They cannot turn a commit-scoped GitHub object into a
 pull-request-scoped one. This mismatch is why the current project must not
 replace native code-owner enforcement in production.
 
-## Distribution boundaries
+## CI and release path
 
-The repository contains the App, evaluator, migrations, and Helm chart source.
-CI can publish multi-platform alpha artifacts for shadow-mode evaluation. It
-does not publish a supported image or chart.
+Pull-request build and test checks run through one `CI` workflow. Linting, the
+Python test matrix, package build, documentation, Helm validation, and native
+container builds can run in parallel. A final `Required` job succeeds only when
+every group succeeds, so repository rules need one stable check name rather
+than a list that changes as the matrix grows. DCO, CodeQL, dependency review,
+the larger property-test profile, and workflow-security checks remain
+independent controls.
 
-CI, manual proof runs, and the tagged read-only scan call one reusable Python
-proof workflow. Each caller builds its own proof inside its own run; no caller
-trusts artifacts from a different workflow run.
+An update to a pull request cancels that pull request's stale CI run. Runs on
+`main` use `queue: max`, so a newer push cannot discard an earlier run. GitHub
+does not promise that queued runs will start in commit order. If a descendant
+run publishes first, the older run proves that the descendant tag is on `main`
+and its release is complete and immutable, then finishes without publishing a
+second version. One release can therefore cover two closely spaced merges
+without turning the older run red.
+
+The container jobs build on native `amd64` and `arm64` runners. Each one runs
+the same hardened smoke test and vulnerability policy. Their BuildKit caches
+are separate because native wheels and image layers are architecture-specific.
+A weekly cold run disables those caches and proves that the build still has all
+of its declared inputs.
+
+On a push to `main`, the `Release` job invokes the reusable release workflow
+after `Required` succeeds. The job stays inside the original CI run, so its
+OpenID Connect (OIDC) attestations and artifacts remain bound to the tested
+commit. There is no release pull request, version file, or manually created tag
+in the normal path.
 
 ```text
-pull request or main CI --+
-manual dispatch ----------+--> reusable Python proof
-validated alpha tag ------+            |
-                           +------------+-------------+
-                           |                          |
-                           v                          v
-                selected five-file           verified raw spine
-                    artifact                    and record
-                    |      |                    |       |
-                    v      v                    v       v
-             CI containers  read-only        read-only  sign, attest, and
-              and evidence  tag scan       materialize  publish alpha
-
-stable-tag blocker -X-> sign, attest, and publish jobs
+merge to main
+    |
+    v
+successful CI on the exact commit
+    |
+    +--> Python wheel and source distribution
+    +--> Helm chart
+    +--> native amd64 image by digest
+    `--> native arm64 image by digest
+             |
+             v
+      create or verify immutable Git tag
+             |
+             v
+      one versioned multi-platform image
+             |
+             v
+      signatures, attestations, and OCI Helm chart
+             |
+             v
+      draft release and uploaded assets
+             |
+             v
+      published, immutable completion record
 ```
 
-Each caller gets a separate proof in its own run. CI keeps its required-check
-wrapper, and the tagged scan downloads the selected artifact by immutable ID.
-The reusable workflow also converts that selection into a [raw
-Python-distribution
-spine](../reference/python-distribution-spine-format.md). A separate read-only
-job verifies the spine and atomically materializes its five files without
-opening the wheel or source-distribution archives.
+The planner reads the reachable release tags and refuses malformed, ambiguous,
+nonlinear, or nonmonotonic history. While the latest release is an alpha, it
+increments the numeric alpha suffix. After a stable release exists, it applies
+conventional-commit rules: a breaking change bumps the major version, `feat`
+bumps the minor version, and everything else bumps the patch version. Python
+archive metadata uses the matching PEP 440 form.
 
-An alpha tag runs the privileged Python, image, chart, and GitHub-release jobs
-after the same source, proof, and vulnerability checks. It is a public
-evaluation artifact, not a supported release. A stable tag remains blocked.
-The alpha path does not complete the missing recipient evidence or the
-privilege-separated release controller. A separate blocked, read-only
-[candidate assembler](../reference/release-asset-candidate-format.md) would
-revalidate the raw pair and inventory the three records beside the current
-candidate files. Its output explicitly forbids publication and does not flow
-into the GitHub release job, so issue #32 remains open.
+A release that has not been superseded builds the Python wheel, source
+distribution, chart, and two native images in parallel from the exact commit
+that passed CI. The architecture jobs push unnamed image digests. Only after
+every build succeeds does the publisher create or verify the immutable tag,
+assemble the versioned multi-platform image, attest and sign the artifacts, and
+publish the OCI chart. It then stages a draft GitHub release, uploads the
+assets, and publishes it. The Python artifacts are GitHub release assets;
+Extra CODEOWNERS is not published to PyPI.
 
-The current container evidence binds CPython's top-level identity to exact
-runtime files and retains its pinned recipe, source archive, and source-carried
-license. It also replays historical Python installs from each layer's `RECORD`.
-Greenlet now has closed-world coverage on both architectures: exact wheel and
-sdist identity, complete native-file ownership, embedded-component identity,
-Alpine GCC source, and reviewed notices. Cryptography binds its 32 crates.io
-components, local Rust subtree, and OpenSSL 4.0.1 release to the literal SBOM
-observations while reusing Greenlet's closed `libgcc` evidence only when the
-platform payload bytes match. MarkupSafe and SQLAlchemy also bind their exact
-wheels and sdists to complete native-payload sets. Both have no embedded SBOM
-and explicitly treat their payloads as owner code.
+The Actions token cannot read GitHub's **Immutable releases** repository setting
+before publication. The workflow therefore reads the published release object
+and succeeds only when GitHub reports it as immutable. It won't allocate the
+next version until the preceding release meets that contract. The historical
+`v0.1.0-alpha.7` release is the one migration exception when it appears as the
+predecessor.
 
-The [native wheelhouse](native-wheelhouse.md) has its own build and publication
-path for reproducible CFFI, Psycopg C, Pydantic Core, and Setuptools wheels.
-That path stays separate from the application build. A signed, digest-pinned
-consumer contract selects its source revision and both platform manifests.
-The application build verifies that contract before parsing or downloading
-wheelhouse data, installs the runtime wheels offline, and retains their bytes
-in the final image. Schema 9 binds CFFI's `libffi.so.8`, Psycopg C's
-`libpq.so.5`, and Pydantic Core's `libgcc_s.so.1` requirements to exact
-APK-owned effective files. The binding checks the package, version, APK
-checksum, runtime path, resolved regular-file path, and effective all-layer
-topology.
+The published immutable GitHub release is the completion record. If publication
+fails, rerunning the failed job in the original CI run keeps the original
+commit. The workflow reuses a valid tag that already points there. When the
+release already exists, it verifies the required assets, image digests, and
+chart artifact instead of publishing a second release. Conflicting state fails
+closed.
 
-The tagged workflow contains image, chart, Python, SBOM, provenance, signature,
-and GitHub-release jobs. It permits only tags in the exact
-`vMAJOR.MINOR.PATCH-alpha.N` form. Stable tags remain blocked until the
-release-controller work is complete. The repository also contains a dormant
-release controller and publication API adapter. Its GitHub-read-only pieces include an
-immutable-release preflight, authenticated GitHub release verifier, tagged
-workflow verifier, release asset acquirer, and single-file Actions provenance
-and Sigstore signature verifiers. The per-file verifiers join an acquired
-file's exact digest to the tagged workflow's certificate, run attempt, SLSA
-statement, and Sigstore bundle. Neither chooses the final asset policy or
-verifies OCI evidence. No workflow connects these commands or supplies their
-tokens.
-
-Six issues define the first supported release boundary:
-
-- [#1](https://github.com/stampbot/extra-codeowners/issues/1): live Check Run
-  invalidation and App-review contract
-- [#18](https://github.com/stampbot/extra-codeowners/issues/18): recipient
-  delivery of complete source and notice evidence
-- [#25](https://github.com/stampbot/extra-codeowners/issues/25): first
-  immutable release publication
-- [#28](https://github.com/stampbot/extra-codeowners/issues/28): privilege
-  separation between untrusted parsing and publication
-- [#30](https://github.com/stampbot/extra-codeowners/issues/30): old public
-  preview image disposition
-- [#32](https://github.com/stampbot/extra-codeowners/issues/32): retained
-  application build-proof handoff.
-
-Workflow definitions are not evidence that an artifact exists. No supported
-release has been published.
+These controls make releases repeatable, but they do not resolve the
+commit-scoped Check Run limitation above. Alpha releases remain suitable only
+for shadow-mode evaluation until the live GitHub contract is proven.
 
 The planned `extra-codeowners-action` should run a prebuilt, signed container
 and reuse the same evaluator and policy schema. A hosted service would add new

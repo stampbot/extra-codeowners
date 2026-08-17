@@ -1,27 +1,21 @@
 # Extra CODEOWNERS Helm chart
 
 This chart deploys the self-hosted Extra CODEOWNERS GitHub App service. The
-repository contains chart source only.
+release workflow publishes it as an OCI chart at
+`oci://ghcr.io/stampbot/charts/extra-codeowners`.
 
 > [!CAUTION]
-> The alpha release path publishes images and OCI charts for non-required,
-> shadow-mode testing. They are not supported releases and do not provide
-> complete recipient compliance evidence. Do not install the older
-> `ghcr.io/stampbot/extra-codeowners:main` image. Never use an alpha artifact
-> to authorize production merges; keep GitHub's native **Require review from
-> Code Owners** rule in place.
+> Alpha images and charts are for non-required shadow-mode testing. Never use
+> one to authorize production merges; keep GitHub's native **Require review
+> from Code Owners** rule in place. The older
+> `ghcr.io/stampbot/extra-codeowners:main` image predates the current release
+> pipeline and must not be deployed.
 
 The current Check Run design has a documented commit-to-pull-request
 inheritance window, tracked in
-[issue #1](https://github.com/stampbot/extra-codeowners/issues/1). The release
-pipeline is also blocked by
-[evidence-delivery issue #18](https://github.com/stampbot/extra-codeowners/issues/18),
-[immutable-release issue #25](https://github.com/stampbot/extra-codeowners/issues/25),
-[publication-isolation issue #28](https://github.com/stampbot/extra-codeowners/issues/28),
-and [application build-proof issue #32](https://github.com/stampbot/extra-codeowners/issues/32).
-
-The procedures below record the chart's operator contract for review and
-future releases. They are not a supported installation path today.
+[issue #1](https://github.com/stampbot/extra-codeowners/issues/1). Read the
+[project status](https://extra-codeowners.readthedocs.io/en/latest/reference/project-status/)
+before testing an alpha.
 
 Read the
 [deployment guide](https://extra-codeowners.readthedocs.io/en/latest/how-to/deploy/),
@@ -33,8 +27,10 @@ and [upgrade procedure][upgrade] before evaluating the chart.
 | Requirement | Contract |
 | --- | --- |
 | Kubernetes | 1.27 or later, enforced by `Chart.yaml` |
-| Helm | 3.19.0, the version pinned and tested by this repository |
-| Application image | A supported image, or an alpha image pinned by digest for shadow-mode testing only |
+| Helm | The Helm 3.x release pinned in the repository's [`mise.toml`][toolchain] |
+| GitHub CLI | A current release with `gh attestation verify` |
+| Docker Buildx | Required on the administration host to resolve the image digest |
+| Application image | An alpha image pinned by digest for shadow-mode testing |
 | Database | PostgreSQL through the exact `postgresql+psycopg` driver, configured under the application's production transport rules |
 | GitHub | An installed Extra CODEOWNERS App |
 | Ingress | Public HTTPS access to only the webhook endpoint |
@@ -79,11 +75,14 @@ The chart sets `EXTRA_CODEOWNERS_ENVIRONMENT=production`. The runtime
 Secret must replace the image's development-only SQLite default with an exact
 `postgresql+psycopg` URL.
 
-The chart fixes the executable search path and dynamic-loader environment. It
-rejects interpreter and loader names—and every name beginning with `PG`—in
-`extraEnv` and `migrations.extraEnv`. It rejects nonempty `extraEnvFrom`
-values because their keys cannot be inspected at render time. Extension
-mounts are read-only and limited to the chart's reserved secret-path prefixes.
+The chart fixes the executable search path, clears dynamic-loader injection
+variables, and disables TLS key logging. It leaves library, locale, character
+conversion, and OpenSSL search paths to the image; the packaged psycopg binary
+doesn't need chart-specific paths. The chart still rejects interpreter and
+loader names—and every name beginning with `PG`—in `extraEnv` and
+`migrations.extraEnv`. It rejects nonempty `extraEnvFrom` values because their
+keys cannot be inspected at render time. Extension mounts are read-only and
+limited to the chart's reserved secret-path prefixes.
 
 Treat `existingSecret` and `migrations.existingSecret` as opaque, trusted
 inputs: Helm cannot inspect an existing Secret at render time. Neither Secret
@@ -97,66 +96,74 @@ select the runtime-default seccomp profile. The Deployment uses
 `Recreate`, the insecure override is off, and credential inputs remain
 outside chart-managed resources.
 
-## Use an alpha image only for shadow-mode testing
+## Select an alpha release
 
-The Dockerfile does not build the application from its ambient source tree. It
-requires a read-only `verified-python` context containing the exact
-five-file Python distribution proof selected across `amd64` and `arm64`.
-It also checks the source revision, application-wheel SHA-256, and
-selection-record SHA-256.
+Use one exact version for the chart and image. The packaged chart's
+`appVersion` selects the matching image tag unless `image.tag` or
+`image.digest` overrides it. Pin `image.digest` for a deployment so a registry
+tag cannot change the selected bytes.
 
-Pull-request CI supplies and verifies those inputs. No supported operator path
-does. Do not replace the proof with a generic artifact extractor, an
-unverified wheel, empty build arguments, or a build from the ambient Docker
-context.
-
-An alpha release carries the image and chart needed for evaluation, but it
-doesn't satisfy the project’s supported-distribution requirements. Record the
-exact image digest, source revision, wheel digest, selection-record digest,
-signature, provenance, notices, and corresponding-source evidence before you
-run it. Keep native review enforcement intact throughout the test. When a
-supported image exists, use the central
+The release workflow builds and tests `amd64` and `arm64` images on native
+runners, then publishes one multi-platform tag. It signs and attests the image
+and chart. Record the version, source revision, multi-platform digest, and
+verification result before you run an alpha. Keep native review enforcement
+intact throughout the test. Use the central
 [deployment guide](https://extra-codeowners.readthedocs.io/en/latest/how-to/deploy/)
 and [upgrade procedure][upgrade] for task steps; use this README for
 chart-specific inputs, defaults, and review constraints.
 
-## Prepare a future source-chart installation
+## Prepare the released chart
 
 The examples use `extra-codeowners` for both the Helm release and
 namespace. Run them in a POSIX-compatible Bash shell from an
 operator-controlled cluster-administration host.
 
-Keep the reviewed source in a clean detached worktree. Define the future image
-coordinates and verify the checkout before creating cluster resources:
+Set `VERSION` to the exact release without the leading `v`. The commands below
+resolve the multi-platform image digest and require its provenance attestation
+to come from this repository's release workflow. They apply the same check to
+the downloaded chart archive before extracting it.
 
 ```bash
 set -euo pipefail
 umask 077
 
-export SOURCE_REVISION='REPLACE_WITH_REVIEWED_40_CHARACTER_COMMIT'
-export CHART_SOURCE='/path/to/clean-detached-extra-codeowners-worktree'
-export IMAGE_REPOSITORY='registry.example.com/stampbot/extra-codeowners'
-export IMAGE_DIGEST='sha256:REPLACE_WITH_64_LOWERCASE_HEX_CHARACTERS'
-export TARGET_ARCH='amd64'
-export GIT_NO_REPLACE_OBJECTS=1
+export VERSION='0.1.0-alpha.8'
+export IMAGE_REPOSITORY='ghcr.io/stampbot/extra-codeowners'
+export CHART_DIRECTORY="$(mktemp -d)"
 
-printf '%s\n' "$SOURCE_REVISION" | grep -Eq '^[0-9a-f]{40}$'
+test "$(
+  gh api "repos/stampbot/extra-codeowners/releases/tags/v$VERSION" \
+    --jq '.draft == false and .immutable == true'
+)" = true
+
+export IMAGE_DIGEST="$(
+  docker buildx imagetools inspect "$IMAGE_REPOSITORY:$VERSION" |
+    awk '$1 == "Digest:" {print $2; exit}'
+)"
 printf '%s\n' "$IMAGE_DIGEST" | grep -Eq '^sha256:[0-9a-f]{64}$'
-case "$TARGET_ARCH" in
-  amd64|arm64) ;;
-  *) exit 1 ;;
-esac
+gh attestation verify "oci://$IMAGE_REPOSITORY@$IMAGE_DIGEST" \
+  --repo stampbot/extra-codeowners \
+  --signer-workflow stampbot/extra-codeowners/.github/workflows/release.yml
 
-test "$(git -C "$CHART_SOURCE" rev-parse \
-  --verify "$SOURCE_REVISION^{commit}")" = "$SOURCE_REVISION"
-test "$(git -C "$CHART_SOURCE" rev-parse HEAD)" = "$SOURCE_REVISION"
-test -z "$(git -C "$CHART_SOURCE" -c core.fsmonitor=false \
-  status --porcelain=v1 --untracked-files=all)"
+helm pull oci://ghcr.io/stampbot/charts/extra-codeowners \
+  --version "$VERSION" \
+  --destination "$CHART_DIRECTORY"
+export CHART_ARCHIVE="$CHART_DIRECTORY/extra-codeowners-$VERSION.tgz"
+test -f "$CHART_ARCHIVE"
+gh attestation verify "$CHART_ARCHIVE" \
+  --repo stampbot/extra-codeowners \
+  --signer-workflow stampbot/extra-codeowners/.github/workflows/release.yml
+tar --extract --gzip --file "$CHART_ARCHIVE" --directory "$CHART_DIRECTORY"
+export CHART_PATH="$CHART_DIRECTORY/extra-codeowners"
+test -f "$CHART_PATH/Chart.yaml"
 ```
 
-Every command must exit zero. The image digest must belong to
-`linux/$TARGET_ARCH`, and the chart source must belong to the same reviewed
-release.
+Every command must exit zero. GitHub documents the
+[attestation verification command](https://docs.github.com/en/actions/how-tos/secure-your-work/use-artifact-attestations/use-artifact-attestations).
+`CHART_DIRECTORY` contains public files, not credentials; remove it after the
+deployment. If you review a source checkout instead, set `CHART_PATH` to its
+`charts/extra-codeowners` directory and prove that the checkout belongs to the
+same release before continuing.
 
 ## Create narrowly scoped Secrets
 
@@ -313,8 +320,6 @@ extraEnv:
         key: EXTRA_CODEOWNERS_DATABASE_URL
 imagePullSecrets:
   - name: extra-codeowners-registry
-nodeSelector:
-  kubernetes.io/arch: amd64
 extraVolumes:
   - name: github-credentials
     secret:
@@ -328,15 +333,15 @@ migrations:
   existingSecret: extra-codeowners-database
 ```
 
-Change `kubernetes.io/arch` to the recorded `TARGET_ARCH`. A
-single-platform digest must never be scheduled on the other architecture.
-If the registry permits anonymous pulls, omit `imagePullSecrets` and do
-not create `extra-codeowners-registry`.
+The published digest is a multi-platform index for `linux/amd64` and
+`linux/arm64`, so Kubernetes selects the image for the scheduled node. If the
+registry permits anonymous pulls, omit `imagePullSecrets` and do not create
+`extra-codeowners-registry`.
 
 Lint and render before installation:
 
 ```bash
-helm lint "$CHART_SOURCE/charts/extra-codeowners" \
+helm lint "$CHART_PATH" \
   --values deployment-values.yaml \
   --set-string image.repository="$IMAGE_REPOSITORY" \
   --set-string image.digest="$IMAGE_DIGEST"
@@ -344,7 +349,7 @@ helm lint "$CHART_SOURCE/charts/extra-codeowners" \
 RENDERED_MANIFEST="$(mktemp)"
 trap 'rm -f "$RENDERED_MANIFEST"' EXIT
 helm template extra-codeowners \
-  "$CHART_SOURCE/charts/extra-codeowners" \
+  "$CHART_PATH" \
   --namespace extra-codeowners \
   --values deployment-values.yaml \
   --set-string image.repository="$IMAGE_REPOSITORY" \
@@ -365,11 +370,11 @@ may retain it.
 
 ## Install and verify
 
-When a supported image exists, install the reviewed image and source chart:
+Install the reviewed alpha image and chart:
 
 ```bash
 helm install extra-codeowners \
-  "$CHART_SOURCE/charts/extra-codeowners" \
+  "$CHART_PATH" \
   --namespace extra-codeowners \
   --values deployment-values.yaml \
   --set-string image.repository="$IMAGE_REPOSITORY" \
@@ -417,10 +422,9 @@ kubectl --namespace extra-codeowners logs \
 The rollout and Helm test must exit zero. Preserve the migration Job logs with
 the change record before its time-to-live expires.
 
-The test Pod does not inherit `nodeSelector`. In a mixed-architecture
-cluster, do not run `helm test` with a single-platform digest unless the
-scheduler can place that Pod on `TARGET_ARCH`. The Deployment and migration
-Job do inherit the configured selector.
+The released multi-platform digest lets Kubernetes choose the matching image
+for the test Pod, Deployment, and migration Job on either supported
+architecture.
 
 If rollout fails, inspect events and bounded logs:
 
@@ -460,7 +464,7 @@ Save it as `ingress-values.yaml` and apply it:
 
 ```bash
 helm upgrade extra-codeowners \
-  "$CHART_SOURCE/charts/extra-codeowners" \
+  "$CHART_PATH" \
   --namespace extra-codeowners \
   --reset-then-reuse-values \
   --values ingress-values.yaml
@@ -512,7 +516,7 @@ upgrade must force autoscaling off:
 
 ```bash
 helm upgrade extra-codeowners \
-  "$CHART_SOURCE/charts/extra-codeowners" \
+  "$CHART_PATH" \
   --namespace extra-codeowners \
   --reset-values \
   --values target-values.yaml \
@@ -534,7 +538,7 @@ migration Job log before you continue: the second hook's
 
 ```bash
 helm upgrade extra-codeowners \
-  "$CHART_SOURCE/charts/extra-codeowners" \
+  "$CHART_PATH" \
   --namespace extra-codeowners \
   --reset-values \
   --values target-values.yaml \
@@ -573,12 +577,12 @@ verify accessible open pull requests before restoring ingress; the current
 reconciliation completion output is not coverage proof.
 
 For an upgrade without a ledger-specific drain, obtain and verify the next
-supported image, record its platform digest, and use the chart from the
+compatible image, record its multi-platform digest, and use the chart from the
 matching reviewed release:
 
 ```bash
 helm upgrade extra-codeowners \
-  "$CHART_SOURCE/charts/extra-codeowners" \
+  "$CHART_PATH" \
   --namespace extra-codeowners \
   --reset-then-reuse-values \
   --set-string image.repository="$IMAGE_REPOSITORY" \
@@ -725,7 +729,7 @@ descriptions.
 | `deploymentStrategy.rollingUpdate.maxUnavailable` | integer or percentage | unset | Nonnegative; valid only with `RollingUpdate`. |
 | `deploymentStrategy.rollingUpdate.maxSurge` | integer or percentage | unset | Nonnegative; valid only with `RollingUpdate`. |
 | `deploymentAnnotations` | string map | `{}` | Adds annotations to the Deployment resource, for example a Reloader Secret-change trigger. |
-| `image.repository` | string | `example.invalid/stampbot/extra-codeowners` | Nonempty, intentionally non-pullable placeholder. |
+| `image.repository` | string | `ghcr.io/stampbot/extra-codeowners` | Public image published with each Extra CODEOWNERS release. |
 | `image.pullPolicy` | enum | `IfNotPresent` | `Always`, `IfNotPresent`, or `Never`. |
 | `image.tag` | string | empty | Overrides the chart app version. Leave it empty to use the image tag released with the chart. |
 | `image.digest` | string | empty | Empty or `sha256:` plus 64 lowercase hex characters; overrides the tag. |
@@ -808,3 +812,4 @@ descriptions.
 
 [upgrade]: https://extra-codeowners.readthedocs.io/en/latest/how-to/upgrade/
 [upgrade-notes]: https://extra-codeowners.readthedocs.io/en/latest/reference/upgrade-notes/
+[toolchain]: https://github.com/stampbot/extra-codeowners/blob/main/mise.toml

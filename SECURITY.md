@@ -29,13 +29,14 @@ promise a response or remediation time.
 
 ## Supported versions
 
-There is no supported release yet. Builds from `main`, pull-request artifacts,
-and the older public GHCR preview are development evidence, not supported
-deployments. The [project status](docs/reference/project-status.md) tracks the
-release blockers.
+There is no supported stable release yet. Alpha GitHub releases, images, and
+charts are for non-required shadow-mode testing. Builds from pull requests and
+the older public `:main` image are not releases. The
+[project status](docs/reference/project-status.md) records the remaining
+production and distribution work.
 
-After the first release, and until a stable support policy is published, only
-the latest minor line will receive security fixes.
+After the first stable release, and until a longer support policy is published,
+only the latest minor line will receive security fixes.
 
 ## What to report
 
@@ -50,7 +51,8 @@ Send a private report when a flaw involves:
   required approval
 - repository transfer, App suspension, or missed-event behavior that can leave
   a false success
-- container, Helm, release, source, SBOM, signature, or provenance integrity
+- container, Helm, release, source, software bill of materials, signature, or
+  provenance integrity
 - resource exhaustion that prevents required checks from converging.
 
 The [threat model](docs/explanation/threat-model.md) describes the expected
@@ -68,85 +70,95 @@ Operators own the deployment boundary. In particular:
 - monitor failed deliveries, queue convergence, and readiness
 - restore native human code-owner enforcement before suspending the App or
   removing repository access
+- pin deployed images by digest
 - apply updates and rehearse credential rotation and database recovery.
 
 The [deployment guide](docs/how-to/deploy.md) and
-[operations guide](docs/how-to/operate.md) cover those procedures. The absence
-of a supported release means operators evaluating the source also own the build
-and distribution risk.
+[operations guide](docs/how-to/operate.md) cover those procedures. An alpha
+operator also accepts that interfaces and database compatibility may change
+before 1.0.
 
-## Container and release policy
+## Container policy
 
-The repository treats container evidence as a security boundary, not as a
-release approval.
+The runtime dependency graph is locked in `uv.lock`. The Docker build installs
+published wheels with `--no-build`; a missing wheel stops the build instead of
+silently compiling native code with an ambient toolchain. The build backend and
+its transitive dependencies are another locked group and do not enter the
+runtime image.
 
-CI builds separate `linux/amd64` and `linux/arm64` candidates. It retains a raw
-vulnerability inventory before applying narrowly reviewed OpenVEX statements.
-Any remaining High or Critical finding blocks the candidate when the scanner
-knows of a fix. Findings without an available or applicable fix remain visible
-in the raw inventory.
+CI builds the container independently on native `amd64` and `arm64` runners.
+Each job runs the image as a nonroot user with no network, no capabilities, and
+a read-only root filesystem. The smoke test checks the architecture, glibc,
+binary PostgreSQL driver, installed version, source revision, file ownership,
+database migration, and health endpoints. A scheduled workflow repeats both
+builds without BuildKit cache.
 
-Current evidence normalizes CPython as a top-level runtime component. It binds
-that record to the interpreter's exact identity files and retains the pinned
-build recipe, source archive, and source-carried license. It also replays
-historical wheel `RECORD` ownership across distributed layers. All seven
-current native-owner records are closed, including exact APK ownership and
-runtime-path binding for wheelhouse-linked libraries. Issue
-[#18](https://github.com/stampbot/extra-codeowners/issues/18) remains open for
-recipient delivery and platform-digest binding; source-accounting success is
-not distribution approval.
+Each container job runs two vulnerability scans:
 
-The application package follows a separate build proof:
+1. A nonblocking scan records the scanner's raw High and Critical inventory as
+   a CI artifact.
+2. A blocking scan rejects every High or Critical finding for which the
+   scanner reports an available fix.
 
-1. Native `amd64` and `arm64` jobs each create two clean, hash-pinned PEP 517
-   distributions.
-2. CI selects byte-identical results and retains the source, wheel, and
-   selection-record digests.
-3. Container jobs download that proof by immutable artifact ID, verify it, and
-   install the selected wheel without consulting the ambient source tree.
+The raw report keeps unfixed findings visible. The blocking policy makes an
+available fix actionable without pretending that an unfixed finding is safe.
+Scanner results can lag disclosures, so
+[issue #22](https://github.com/stampbot/extra-codeowners/issues/22) tracks
+recurring scans of published digests.
 
-CI, manual proof runs, and the tagged read-only scan use this same reusable
-workflow. [#32](https://github.com/stampbot/extra-codeowners/issues/32) remains
-open because retained release evidence and future publication do not yet
-consume the selected proof.
+The [runtime base decision](docs/explanation/runtime-base.md) explains why the
+image uses pinned Debian slim and what that choice leaves exposed.
 
-Tagged publication is structurally disabled. The release workflow may run
-read-only source checks, Python proof, milestone validation, and candidate
-scans. A separate job then fails unconditionally, and every job with image,
-chart, Python-package, signing, attestation, or GitHub-release authority depends
-directly on that blocker. Changing a policy approval field cannot bypass it.
+## Release policy
 
-[#28](https://github.com/stampbot/extra-codeowners/issues/28) tracks the
-privilege-separated evidence and publication design. The `v*` tag ruleset also
-restricts tag changes to an explicit maintainer bypass identity, while the
-workflow verifies the configured milestone title and refuses publication when
-issues remain open. Those controls govern the workflow; they cannot prevent an
-authorized maintainer from creating a Git tag.
+On a push to `main`, the `Release` job invokes the reusable release workflow
+only after `Required` succeeds. It keeps the original commit throughout the
+build and derives the next semantic version from reachable tags. It
+refuses malformed, ambiguous, divergent, or nonmonotonic release history.
 
-A future supported release must include, for each platform digest:
+The release builds a Python wheel and source distribution, the Helm chart, and
+native images in parallel. Native image jobs receive only package-write
+permission and push by digest. The publisher runs after every build succeeds,
+creates the immutable Git tag, joins the native digests into one versioned
+image, and verifies that the result contains only `linux/amd64` and
+`linux/arm64`.
 
-- a signed SPDX SBOM and platform-specific SBOM attestation
-- separate provenance and a signature for the multi-platform index
-- deterministic notices and corresponding-source evidence
-- the exact retained application build proof
-- reviewed component policy and explicit distribution approval.
+Release images carry BuildKit provenance and software bills of materials. The
+publisher adds a GitHub provenance attestation and a keyless Sigstore signature
+for the multi-platform image. It also attests and signs the Python wheel,
+source distribution, and Helm chart, then signs the OCI chart. It stages a
+draft GitHub release, uploads the assets, and publishes it. The run succeeds
+only after GitHub reports that release as published and immutable. That release
+is the completion record. Python artifacts remain GitHub release assets; they
+are not uploaded to PyPI.
 
-Evidence from one architecture must never be presented for another. Current CI
-archives are unsigned review inputs and are not substitutes for released
-evidence or legal review. The
-[container distribution evidence design](docs/explanation/container-distribution-evidence.md)
-documents the detailed contract.
+Repository administrators must enable GitHub's **Immutable releases** setting.
+The workflow's `GITHUB_TOKEN` cannot read that setting before publication, so
+the workflow enforces it as a postcondition on the release object. Before
+building the next version, it also requires the preceding release to be
+complete and immutable. The public `v0.1.0-alpha.7` release is the only
+grandfathered predecessor; it predates this contract.
 
-## OpenVEX exceptions
+Rerun a failed release job only in its original CI run. A retry may reuse a tag
+when it resolves to that same commit. When it detects a completed GitHub
+release, it verifies the required assets, image platforms and digests, and
+chart archive and digest instead of republishing them. A tag, image, or chart
+that conflicts with the original run stops the retry.
 
-Each VEX statement must identify one vulnerability and the exact package
-version, then explain why the affected code cannot run in Extra CODEOWNERS.
-Review that claim as security-sensitive code. If a usable fix exists, upgrade
-instead of adding an exception.
+[Issue #145](https://github.com/stampbot/extra-codeowners/issues/145) tracks
+cryptographic verification of attestations and Sigstore bundles in that
+pre-existing-release path. New publication still creates those attestations
+and signatures before it publishes the immutable completion record.
 
-Source statements live in [`.openvex.json`](.openvex.json). No release VEX
-asset exists today. A future release must bind VEX to the exact image digest,
-attach it as an OCI attestation, sign it, and publish it with the release
-artifacts.
+Actions are pinned to full commit SHAs. The publishing job receives
+`contents`, `packages`, `id-token`, and `attestations` write access; ordinary CI
+keeps repository contents read-only. Tag rules must permit GitHub Actions to
+create a release tag while preventing later update or deletion.
+
+These controls provide traceable release artifacts, not exhaustive legal or
+supply-chain proof. BuildKit metadata and package licenses do not prove that
+every notice or corresponding-source obligation has been met. Alpha releases
+remain unsupported while that work and the live GitHub authorization contract
+are open.
 
 [report]: https://github.com/stampbot/extra-codeowners/security/advisories/new

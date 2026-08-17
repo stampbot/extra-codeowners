@@ -16,16 +16,9 @@ _BUILD_IDENTITY_KEYS = frozenset(
     {
         "schema_version",
         "source_revision",
-        "selection_record_sha256",
-        "wheel_filename",
-        "wheel_sha256",
-        "sdist_filename",
-        "sdist_sha256",
     }
 )
 _REVISION = re.compile(r"^[0-9a-f]{40}$")
-_SHA256 = re.compile(r"^[0-9a-f]{64}$")
-_ARTIFACT_FILENAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,254}$")
 
 
 class BuildIdentityError(RuntimeError):
@@ -34,14 +27,9 @@ class BuildIdentityError(RuntimeError):
 
 @dataclass(frozen=True, slots=True)
 class BuildIdentity:
-    """Source and distribution facts emitted by verified wheel selection."""
+    """Source revision baked into an official container image."""
 
     source_revision: str
-    selection_record_sha256: str
-    wheel_filename: str
-    wheel_sha256: str
-    sdist_filename: str
-    sdist_sha256: str
 
 
 def _reject_json_constant(value: str) -> None:
@@ -71,7 +59,7 @@ def _canonical_json(value: object) -> bytes:
 
 
 def parse_build_identity(content: bytes) -> BuildIdentity:
-    """Parse the canonical, bounded result of ``verify-selection``."""
+    """Parse canonical, bounded build metadata."""
     try:
         value = json.loads(
             content,
@@ -84,36 +72,13 @@ def parse_build_identity(content: bytes) -> BuildIdentity:
         raise BuildIdentityError("build identity has an unexpected schema")
     if _canonical_json(value) != content:
         raise BuildIdentityError("build identity is not canonical JSON")
-    if type(value["schema_version"]) is not int or value["schema_version"] != 1:
+    if type(value["schema_version"]) is not int or value["schema_version"] != 2:
         raise BuildIdentityError("build identity has an unsupported schema version")
 
     source_revision = value["source_revision"]
-    selection_record_sha256 = value["selection_record_sha256"]
-    wheel_filename = value["wheel_filename"]
-    wheel_sha256 = value["wheel_sha256"]
-    sdist_filename = value["sdist_filename"]
-    sdist_sha256 = value["sdist_sha256"]
     if not isinstance(source_revision, str) or _REVISION.fullmatch(source_revision) is None:
         raise BuildIdentityError("build identity has an invalid source revision")
-    digests = (selection_record_sha256, wheel_sha256, sdist_sha256)
-    if any(not isinstance(digest, str) or _SHA256.fullmatch(digest) is None for digest in digests):
-        raise BuildIdentityError("build identity has an invalid artifact digest")
-    filenames = (wheel_filename, sdist_filename)
-    if any(
-        not isinstance(filename, str) or _ARTIFACT_FILENAME.fullmatch(filename) is None
-        for filename in filenames
-    ):
-        raise BuildIdentityError("build identity has an invalid artifact filename")
-    if not wheel_filename.endswith(".whl") or not sdist_filename.endswith(".tar.gz"):
-        raise BuildIdentityError("build identity has an unexpected artifact type")
-    return BuildIdentity(
-        source_revision=source_revision,
-        selection_record_sha256=selection_record_sha256,
-        wheel_filename=wheel_filename,
-        wheel_sha256=wheel_sha256,
-        sdist_filename=sdist_filename,
-        sdist_sha256=sdist_sha256,
-    )
+    return BuildIdentity(source_revision=source_revision)
 
 
 def _stable_identity(metadata: os.stat_result) -> tuple[int, ...]:

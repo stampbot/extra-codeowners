@@ -1,10 +1,10 @@
 [build-system]
-requires = ["hatchling==1.31.0"]
+requires = ["hatchling==1.31.0", "hatch-vcs==0.5.0"]
 build-backend = "hatchling.build"
 
 [project]
 name = "extra-codeowners"
-version = "0.1.0a7"
+dynamic = ["version"]
 description = "A GitHub App that accepts delegated application approvals in place of selected CODEOWNERS"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -45,6 +45,10 @@ Security = "https://github.com/stampbot/extra-codeowners/security/policy"
 extra-codeowners = "extra_codeowners.cli:main"
 
 [dependency-groups]
+build = [
+  "hatch-vcs==0.5.0",
+  "hatchling==1.31.0",
+]
 dev = [
   "hypothesis>=6.151.0,<7",
   "httpx2>=2.5.0,<3",
@@ -62,12 +66,22 @@ docs = [
   "mkdocs>=1.6.0,<2",
   "mkdocs-material>=9.5.0,<10",
 ]
-evidence = [
-  "packaging>=26.0,<27",
-]
 
 [tool.hatch.build.targets.wheel]
 packages = ["extra_codeowners"]
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.version.raw-options]
+fallback_version = "0.0.0+local"
+
+[tool.uv]
+required-version = "==0.11.28"
+required-environments = [
+  "sys_platform == 'linux' and platform_machine == 'x86_64'",
+  "sys_platform == 'linux' and platform_machine == 'aarch64'",
+]
 
 [tool.pytest.ini_options]
 addopts = "--strict-config --strict-markers --cov=extra_codeowners --cov-branch --cov-report=term-missing --cov-report=xml"

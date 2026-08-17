@@ -41,6 +41,7 @@ jobs:
           name: scorecard-results
           path: results.sarif
           if-no-files-found: error
+          overwrite: true
           retention-days: 5
 
       - name: Upload Scorecard SARIF

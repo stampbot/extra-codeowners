@@ -1,139 +1,125 @@
 # Project status
 
-Last verified: 2026-08-01.
+Last verified: 2026-08-16.
 
-Extra CODEOWNERS is ready for source review and shadow-mode testing. It is not
-ready to enforce production merges, and it has no supported release artifact.
+Extra CODEOWNERS is ready for source review and non-required shadow-mode
+testing. It is not ready to replace GitHub's native code-owner enforcement on
+production repositories.
 
-## What is available
-
-Use a source checkout to evaluate the project today:
+## Available surfaces
 
 | Surface | Status |
 | --- | --- |
 | Source checkout | Available for development and evaluation |
-| App Manifest registration | Implemented for development testing |
-| Evaluation-beta preflight | Available from source; checks prerequisites but does not run the beta |
-| Production code-owner enforcement | Not supported; live GitHub contracts remain open in [issue #1][issue-1] |
-| Supported GitHub release | Not available |
-| Supported container image | Not available |
-| Packaged Helm chart | An alpha prerelease path is available for shadow-mode testing; no chart is supported |
-| Public GitHub Container Registry (GHCR) package | The alpha path can publish images for shadow-mode testing; neither they nor the older `:main` preview are supported |
-| Native dependency wheelhouse | Signed build and publication path implemented; application images consume its immutable contract |
-| Container evidence verifier | Schema-9 content, immutable GitHub release, and tagged workflow identity verification are implemented in source; they are not connected, and per-asset producer and OCI authentication remain blocked |
+| GitHub App Manifest registration | Implemented; [issue #131][issue-131] tracks a stale post-install redirect |
+| Policy evaluation and Check Run | Implemented; production provider contracts remain open in [issue #1][issue-1] |
+| GitHub release | Published automatically by successful `main` CI; an interrupted run may leave a draft until that run is retried |
+| Container image | Signed, attested, multi-platform alpha image in GitHub Container Registry (GHCR) |
+| Helm chart | Signed alpha OCI chart in GHCR |
+| Python wheel and source distribution | Signed and attested GitHub release assets; not published to the Python Package Index (PyPI) |
+| Production code-owner enforcement | Not supported |
 | Hosted service | Not available |
 | `extra-codeowners-action` Marketplace Action | Not available |
 
-The source contains the GitHub App, policy evaluator, App Manifest flow, local
-SQLite support, PostgreSQL support for future deployments, a Helm chart, and
-the test and evidence pipelines. You can use those pieces to study the policy
-model or run a disposable live test. They don't add up to a release.
+Current alpha releases are complete enough to run the App in shadow mode. Pin
+the image by digest, use the chart from the same version, and leave the check
+non-required. The [deployment guide](../how-to/deploy.md) covers that path.
 
-The alpha pipeline accepts tags in the exact
-`vMAJOR.MINOR.PATCH-alpha.N` form. Use an alpha only for a non-required,
-shadow-mode evaluation, record its immutable digest, and leave native review
-enforcement in place. Alpha artifacts do not close the evidence gaps below and
-are not an approved distribution.
+The old `ghcr.io/stampbot/extra-codeowners:main` preview predates the current
+pipeline. Don't deploy, mirror, or redistribute it. [Issue #30][issue-30]
+tracks its final disposition.
 
-`ghcr.io/stampbot/extra-codeowners:main` predates the current release controls.
-Its exact component and source evidence is incomplete under [issue #18][issue-18].
-Don't deploy, mirror, or redistribute it. [Issue #30][issue-30] tracks its
-inventory and final disposition.
+## Release behavior
 
-## Why production enforcement is blocked {#production-enforcement-blocker}
+A push to `main` must pass the required CI jobs before `Release` invokes the
+reusable release workflow. It derives the next semantic version from
+reachable Git tags, then builds the Python wheel, source distribution, Helm
+chart, and native `amd64` and `arm64` images from that exact commit.
+
+Branch concurrency uses `queue: max`, so a later `main` push cannot discard an
+earlier run. GitHub may start queued runs out of commit order. If a descendant
+run publishes first, the older run proves that the descendant release is on
+`main`, complete, and immutable, then finishes without publishing duplicate
+artifacts. One release may therefore contain more than one closely spaced
+merge.
+
+The two image jobs push content-addressed native images. The publisher joins
+them into one versioned multi-platform image, signs and attests the released
+artifacts, publishes the OCI chart, and stages a draft GitHub release. It
+uploads the release assets, publishes the release, and succeeds only when
+GitHub reports it as immutable. That published immutable release is the
+completion record. Rerunning the failed job in the original CI run keeps the
+same commit, reuses matching immutable state, and refuses a collision.
+
+While the latest version is an alpha, each newly published release increments
+its numeric alpha suffix. Once the latest version is stable, conventional
+commits select major, minor, or patch bumps. There is no release pull request
+or manually maintained version file. The current planner does not promote the
+alpha line to its first stable release; [issue #144][issue-144] owns that
+decision.
+
+These controls describe what the workflow publishes. They do not make an alpha
+a supported production release. [Issue #18][issue-18] still tracks complete
+notices and corresponding-source delivery, and
+[issue #74][issue-74] tracks clean-client verification of a published release.
+
+## Production enforcement blocker {#production-enforcement-blocker}
 
 GitHub attaches a Check Run to a commit, but Extra CODEOWNERS evaluates one
 pull request: its base, changed paths, labels, and reviews. Two open pull
-requests can share a head commit. In that case, a successful result from the
-first pull request can appear on the second before Extra CODEOWNERS receives
-the event that should revoke it.
+requests can share a head commit. A success from the first pull request can
+therefore appear on the second before Extra CODEOWNERS receives the event that
+should revoke it.
 
-The service now resets its managed check to `in_progress`, asks GitHub for
-every current pull request using that commit, and reevaluates each one.
-Generation guards stop an older worker from overwriting newer evidence. Those
-controls start only after GitHub delivers an event.
+The service resets its managed check to `in_progress`, asks GitHub for every
+current pull request using that commit, and reevaluates each one. Generation
+guards stop an older worker from overwriting newer evidence. Those controls
+start only after GitHub delivers an event.
 
-GitHub's commit-to-pull-requests endpoint creates a second limit: the response
-doesn't say whether the list is complete. The service can't revoke a check for
-a pull request GitHub omitted.
+GitHub's commit-to-pull-requests endpoint has another limit: its response does
+not say whether the list is complete. The service cannot revoke a check for a
+pull request GitHub omitted.
 
-[Issue #1][issue-1] owns the remaining provider tests:
+[Issue #1][issue-1] owns the remaining live tests:
 
 - required-check behavior when a completed Check Run returns to `in_progress`
 - shared-head opening and retargeting with delayed or lost webhooks
 - expected-source selection in repository and organization rulesets
-- the way third-party App reviews interact with the ordinary approval count
+- interaction between a third-party App review and the ordinary approval count
 - installation lifecycle, repository transfer, and access loss.
 
-No dated live execution has proved the whole contract. Keep GitHub's native
-**Require review from Code Owners** rule on production repositories until
-issue #1 closes.
+Keep GitHub's native **Require review from Code Owners** rule on production
+repositories until that contract is proven.
 
-## Why supported distribution is blocked {#distribution-blockers}
+## Other open hardening work
 
-Stable tagged publication is disabled. Alpha publication does not remove any
-of these requirements; these issues define the first supported release
-boundary:
-
-| Issue | Required outcome |
-| --- | --- |
-| [#1][issue-1] | Prove the live Check Run, App-review, and authority-loss contracts |
-| [#18][issue-18] | Complete notices and corresponding-source evidence |
-| [#25][issue-25] | Publish the first release as an immutable GitHub release |
-| [#28][issue-28] | Separate archive parsing from publication authority and finish recipient verification |
-| [#30][issue-30] | Inventory the public preview and decide its disposition |
-| [#32][issue-32] | Retain and bind the selected Python build proof |
-
-CI produces detailed Python and container evidence. That evidence tells a
-reviewer what remains incomplete; it does not make an alpha artifact suitable
-for production use or supported distribution.
-
-## Inactive hardening work
-
-The source includes a bounded Developer Certificate of Origin (DCO) evaluator.
-It binds a decision to one repository, pull request, and exact base and head
-commit. No independent service or workflow calls it yet, so a pull request can
-still modify the workflow that checks that same pull request. Read the
+The repository contains a bounded Developer Certificate of Origin (DCO)
+evaluator. It binds a decision to one repository, pull request, and exact base
+and head commit. No independent service or workflow calls it yet, so a pull
+request can still modify the workflow that checks that pull request. Read the
 [DCO evidence contract](dco-evidence.md) for the implemented boundary.
 [Issue #40][issue-40] tracks independent execution.
 
-There are also parts of a future privileged release path:
-
-- a bounded schema-9
-  [container evidence verifier](container-evidence-release-contract.md#current-content-verifier)
-- a read-only
-  [authenticated GitHub release verifier](authenticated-github-release-record.md)
-- a read-only
-  [tagged release workflow verifier](authenticated-release-workflow-record.md)
-- a GitHub-read-only
-  [authenticated asset acquirer](authenticated-release-asset-acquisition.md)
-- a read-only
-  [Actions provenance verifier](authenticated-actions-build-provenance.md)
-- a read-only
-  [Sigstore blob-signature verifier](authenticated-blob-signature.md)
-- an offline [release controller](immutable-release-controller.md)
-- a [GitHub release API adapter](github-release-api-adapter.md)
-- a read-only [immutable-release preflight](immutable-release-preflight.md)
-- a [blocked release candidate assembler](release-asset-candidate-format.md).
-
-No workflow gives the controller path publication authority. The candidate
-assembler is downstream of the stable publication block and is skipped for an
-alpha tag. If someone invokes it independently, its record still forbids
-publication. These are reviewable contracts, not a working supported-release
-process.
+The release pipeline produces BuildKit software bills of materials,
+provenance, signatures, attestations, and vulnerability reports. It does not
+claim that those artifacts prove every open-source redistribution duty. The
+project also needs recurring scans of already-published digests because a clean
+release-day scan cannot see tomorrow's disclosure; [issue #22][issue-22]
+tracks that work.
 
 ## Planned distributions
 
 The self-hosted GitHub App comes first. A packaged Marketplace Action and a
 hosted service are separate roadmap items, with no availability date.
 
-Follow the linked issues for current evidence and decisions. This page should
-change whenever an availability or safety claim changes.
+Follow the linked issues for current evidence and decisions. Update this page
+whenever an availability or safety claim changes.
 
 [issue-1]: https://github.com/stampbot/extra-codeowners/issues/1
 [issue-18]: https://github.com/stampbot/extra-codeowners/issues/18
-[issue-25]: https://github.com/stampbot/extra-codeowners/issues/25
-[issue-28]: https://github.com/stampbot/extra-codeowners/issues/28
+[issue-22]: https://github.com/stampbot/extra-codeowners/issues/22
 [issue-30]: https://github.com/stampbot/extra-codeowners/issues/30
-[issue-32]: https://github.com/stampbot/extra-codeowners/issues/32
 [issue-40]: https://github.com/stampbot/extra-codeowners/issues/40
+[issue-74]: https://github.com/stampbot/extra-codeowners/issues/74
+[issue-131]: https://github.com/stampbot/extra-codeowners/issues/131
+[issue-144]: https://github.com/stampbot/extra-codeowners/issues/144

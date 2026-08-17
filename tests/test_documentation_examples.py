@@ -37,18 +37,24 @@ CLOUDFLARED_ASSETS = {
 }
 
 
-def test_container_test_stage_carries_documentation_test_inputs() -> None:
+def test_production_container_context_excludes_documentation_and_test_inputs() -> None:
     dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
     dockerignore = (ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines()
 
-    assert "COPY docs/ ./docs/" in dockerfile
-    assert "COPY examples/ ./examples/" in dockerfile
-    assert (
-        "COPY .dockerignore Dockerfile mise.toml mise.tutorial.toml mkdocs.yml renovate.json ./"
-        in dockerfile
-    )
-    for included in ("!docs/**", "!examples/**", "!mise.tutorial.toml"):
-        assert included in dockerignore
+    assert "COPY pyproject.toml uv.lock README.md LICENSE ./" in dockerfile
+    assert "COPY extra_codeowners/ ./extra_codeowners/" in dockerfile
+    assert "COPY docs/" not in dockerfile
+    assert "COPY examples/" not in dockerfile
+    assert dockerignore == [
+        "*",
+        "!Dockerfile",
+        "!LICENSE",
+        "!README.md",
+        "!pyproject.toml",
+        "!uv.lock",
+        "!extra_codeowners/",
+        "!extra_codeowners/**",
+    ]
 
 
 def test_published_policy_pair_compiles_and_preserves_its_guardrails() -> None:

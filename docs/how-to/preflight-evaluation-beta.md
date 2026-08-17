@@ -269,6 +269,11 @@ uv run --no-sync python -I -S -B \
   tools/evaluation_beta_bootstrap.py --version
 ```
 
+The last command reads the installed Extra CODEOWNERS distribution metadata
+from the external environment without importing project code. Copy its exact
+output into `extra_codeowners_version`. Stop if the command reports missing,
+duplicate, or invalid metadata.
+
 Pin both public repositories by numeric ID, default-branch name, and full
 default-branch commit. Enter the App and installation identities recorded
 earlier. `check_name` and `policy_path` must match the running service.
