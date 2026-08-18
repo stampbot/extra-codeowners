@@ -12,11 +12,14 @@ format: ## Format Python source and test files.
 lint: ## Run source and repository linters.
 	uv run ruff format --check .
 	uv run ruff check .
-	uv run mypy extra_codeowners tests
+	uv run mypy extra_codeowners tests tools/evaluation_beta.py \
+		tools/evaluation_beta_bootstrap.py tools/readthedocs_bootstrap.py \
+		.github/scripts/release_plan.py
 	uv run yamllint .
 	actionlint
-	shellcheck .github/scripts/smoke-container.sh
-	jq -e -f .github/scripts/validate-openvex.jq .openvex.json >/dev/null
+	shellcheck .github/scripts/smoke-container.sh \
+		.github/scripts/test-helm-chart.sh \
+		.github/scripts/test-postgres-backup-restore.sh
 	markdownlint-cli2 '**/*.md' '#site/**' '#.venv/**'
 
 test: ## Run all locally available tests without enforcing coverage.

@@ -4,13 +4,14 @@ build:
   os: ubuntu-24.04
   tools:
     python: "3.12"
-
-python:
-  install:
-    - method: uv
-      command: sync
-      groups:
-        - docs
+  jobs:
+    # Read the Docs installs its latest uv for method: uv. Bootstrap the exact
+    # project-owned version instead, without duplicating that version here.
+    install:
+      - python tools/readthedocs_bootstrap.py
+      - >-
+        UV_PROJECT_ENVIRONMENT="$READTHEDOCS_VIRTUALENV_PATH"
+        uv sync --frozen --only-group docs
 
 mkdocs:
   configuration: mkdocs.yml

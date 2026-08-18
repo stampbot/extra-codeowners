@@ -105,14 +105,11 @@ private index URLs, and environment dumps.
 
 ## When the uv audit interface changes
 
-`mise.toml` is the reviewed uv version. The digest-pinned uv image in the
-Dockerfile and every `astral-sh/setup-uv` step must report that same version.
-Both architecture builds check the digest-selected executable, and
-pull-request tests exercise the pinned preview audit help without making a
-network request.
+`[tool.uv].required-version` in `pyproject.toml` is the project-wide uv
+contract. The setup action reads it, while `mise.toml` installs the same local
+version and the Dockerfile pins the matching uv image by digest.
 
-Renovate manages the image, digest, runtime strings, and setup action as one
-`uv toolchain` update; Dependabot intentionally ignores only
-`astral-sh/setup-uv`. Review the upstream release notes and image digest before
-merging. Never change one location alone or bypass
+Renovate groups the project version, local tool, and container image as one
+`uv toolchain` update. Dependabot updates the setup action itself. Review the
+upstream release notes and image digest before merging, and don't bypass
 `test_toolchain_configuration.py` when it reports drift.

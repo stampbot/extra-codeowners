@@ -414,11 +414,6 @@ def test_runtime_identity_binds_effective_service_and_baked_build(
 ) -> None:
     build_identity = BuildIdentity(
         source_revision=HEAD,
-        selection_record_sha256="b" * 64,
-        wheel_filename="extra_codeowners-0.1.0-py3-none-any.whl",
-        wheel_sha256="c" * 64,
-        sdist_filename="extra_codeowners-0.1.0.tar.gz",
-        sdist_sha256="d" * 64,
     )
     monkeypatch.setattr(app_module, "load_build_identity", lambda: build_identity)
     store = migrated_store(f"sqlite:///{tmp_path / 'runtime-identity.db'}")

@@ -1,119 +1,91 @@
-# Prepare a future deployment
+# Deploy an alpha in shadow mode
 
-Use this guide to design the database, secrets, network boundary, probes, and
-rollback plan for an Extra CODEOWNERS deployment. The project has no supported
-production release, hosted service, or Marketplace Action. Alpha images and
-OCI charts are available only for non-required, shadow-mode evaluation, so you
-cannot complete a supported installation yet.
+Use this guide to deploy the self-hosted GitHub App with PostgreSQL and the
+published Helm chart. The current releases are alpha software. Run the check as
+non-required evidence while you test it; don't let it authorize a production
+merge.
 
 !!! danger
-    Do not deploy the old `ghcr.io/stampbot/extra-codeowners:main` image,
-    mirror it, or build a substitute from the current Dockerfile. Keep GitHub's
-    native **Require review from Code Owners** rule on production repositories.
-    The release pipeline and the commit-scoped Check Run behavior both have
-    open blockers. [Issue #1](https://github.com/stampbot/extra-codeowners/issues/1)
-    tracks the Check Run gap, and
-    [issue #30](https://github.com/stampbot/extra-codeowners/issues/30) tracks
-    the old image.
+    Keep GitHub's native **Require review from Code Owners** rule on production
+    repositories. The commit-scoped Check Run behavior still has an open
+    provider contract in
+    [issue #1](https://github.com/stampbot/extra-codeowners/issues/1). Do not
+    deploy, mirror, or redistribute the older `:main` preview; it predates the
+    current release pipeline.
 
-## Understand the release boundary
+## Choose one release
 
-The main-branch publication job has been removed. An exact
-`vMAJOR.MINOR.PATCH-alpha.N` tag can publish an image, chart, signed assets,
-and a GitHub prerelease after the existing proof and scan jobs pass. Its Python
-distribution uses the matching PEP 440 version, for example
-`v0.1.0-alpha.1` produces `0.1.0a1`. That path is for evaluation only. Stable
-publication is stopped before any job with package, signing, attestation, or
-release authority can run.
+On a push to `main`, the release job runs after required CI succeeds and
+publishes one immutable release. Use the same version everywhere:
 
-Six open issues in the **First supported release** milestone define the
-remaining boundary:
+- container image: `ghcr.io/stampbot/extra-codeowners:VERSION`
+- Helm chart: `oci://ghcr.io/stampbot/charts/extra-codeowners`
+- Python wheel, source distribution, signatures, and scan reports: the matching
+  GitHub release.
 
-- [#1](https://github.com/stampbot/extra-codeowners/issues/1) proves the live
-  Check Run invalidation and GitHub App review contracts.
-- [#18](https://github.com/stampbot/extra-codeowners/issues/18) delivers the
-  complete notice, license, and corresponding-source evidence against the exact
-  platform digests.
-- [#28](https://github.com/stampbot/extra-codeowners/issues/28) separates
-  untrusted archive parsing from publication credentials and signing
-  authority.
-- [#32](https://github.com/stampbot/extra-codeowners/issues/32) completes the
-  hash-pinned application build and retains its selected proof for release
-  consumers.
-- [#25](https://github.com/stampbot/extra-codeowners/issues/25) makes the first
-  GitHub release draft-first and immutable after its complete artifact set is
-  verified.
-- [#30](https://github.com/stampbot/extra-codeowners/issues/30) decides the
-  disposition of the old pre-compliance public preview images.
+Replace `VERSION` with an exact value such as `0.1.0-alpha.8`. Don't use a
+floating tag. Resolve and record the multi-platform image digest before you
+change the cluster; the chart also accepts that digest through `image.digest`.
 
-Current continuous integration (CI) builds the Python distribution twice on
-each native architecture. It selects one byte-identical five-file proof across
-`amd64` and `arm64`, then passes that directory to the Dockerfile as a
-read-only `verified-python` build context. The Dockerfile also requires the
-source revision, application-wheel SHA-256, and selection-record SHA-256. It
-fails when any input is missing or changed.
+The released chart sets its `appVersion` to the same version and uses it as the
+default image tag. Confirm that before installation:
 
-The manual **Python distribution proof** workflow can create that proof for the
-commit resolved from a chosen ref. It has repository-read permission only. The
-tagged candidate scan creates and verifies a fresh proof in the same workflow
-run. Neither path provides a supported way to build or deploy an image.
+```bash
+export VERSION='0.1.0-alpha.8'
+helm show chart \
+  oci://ghcr.io/stampbot/charts/extra-codeowners \
+  --version "$VERSION"
+```
 
-The reusable workflow also emits a [raw spine and canonical
-record](../reference/python-distribution-spine-format.md). A read-only job
-verifies that pair and atomically materializes its five files without opening
-the wheel or source-distribution archives.
+The output must show `version` and `appVersion` equal to `VERSION`. Check the
+matching GitHub release before continuing. The release workflow signs and
+attests the image, chart, and Python artifacts, but verification is still the
+operator's job. A workflow file by itself does not prove that publication
+finished.
 
-An alpha tag runs the privileged consumer for the same pair and retains the
-three selection records beside the signed distributions. The stable publication
-block keeps that consumer unreachable for a supported release.
+Require GitHub to report the release as published and immutable:
 
-A second blocked, read-only job would revalidate the raw pair and build a
-[15-file candidate inventory](../reference/release-asset-candidate-format.md)
-that includes each record directly. Its candidate record says source
-completeness and publication are false. The GitHub release job does not consume
-it, so [#32](https://github.com/stampbot/extra-codeowners/issues/32) still
-tracks the durable publication handoff.
+```bash
+test "$(
+  gh api "repos/stampbot/extra-codeowners/releases/tags/v$VERSION" \
+    --jq '.draft == false and .immutable == true'
+)" = true
+```
 
-Do not replace this proof with a generic ZIP extraction, an unverified wheel,
-empty Docker build arguments, or a project build that relies on ambient
-configuration.
+The command exits silently on success. Stop if it prints an error or exits
+nonzero.
 
-CI also records CPython as a top-level runtime component. The evidence binds
-the interpreter to exact platform identity files and retains the pinned build
-recipe, source archive, source-carried license, and historical ineffective
-Python `RECORD` ownership. Greenlet also has closed-world wheel, source,
-component, and notice coverage on both platforms. MarkupSafe and SQLAlchemy
-bind their exact wheels and sdists to complete native-payload sets, with
-no embedded SBOM and owner payload dispositions. Cryptography binds its exact
-Rust and OpenSSL sources to their retained observations. The arm64 `libgcc`
-observation keeps its literal `NotpineForGHA` PURL. Its payload bytes match
-Greenlet's, so the policy links that occurrence to Greenlet's closed Alpine GCC
-evidence. CFFI, Psycopg C, and Pydantic Core use the signed native wheelhouse;
-schema 9 binds each linked SONAME to exact APK-owned runtime bytes and package
-identity. All seven current native-owner records are closed, but the
-recipient-facing delivery and publication controls are not.
+Resolve the image digest and verify that GitHub recorded provenance from this
+repository's release workflow:
 
-A future deployment procedure must name all of these values before the steps
-below become runnable:
+```bash
+export IMAGE_REPOSITORY='ghcr.io/stampbot/extra-codeowners'
+export IMAGE_DIGEST="$(
+  docker buildx imagetools inspect "$IMAGE_REPOSITORY:$VERSION" |
+    awk '$1 == "Digest:" {print $2; exit}'
+)"
+printf '%s\n' "$IMAGE_DIGEST" | grep -Eq '^sha256:[0-9a-f]{64}$'
+gh attestation verify "oci://$IMAGE_REPOSITORY@$IMAGE_DIGEST" \
+  --repo stampbot/extra-codeowners \
+  --signer-workflow stampbot/extra-codeowners/.github/workflows/release.yml
+```
 
-- image repository and platform digest
-- source revision
-- application-wheel and selection-record digests
-- signature and provenance verification commands
-- platform-specific notices and corresponding-source archive
-- chart source from the same reviewed release.
+Every command must exit zero. Keep `IMAGE_DIGEST` in the deployment record and
+pass it as the chart's `image.digest`. The `README.md` inside the matching
+chart archive contains the chart verification and install commands.
 
-The [runtime base image decision](../explanation/runtime-base.md) records the
-selected base, architecture evidence, vulnerability dispositions, update
-contract, and residual risk. The
-[container evidence release contract](../reference/container-evidence-release-contract.md)
-defines what a future release must deliver.
+For a source review or local image test, the Dockerfile installs the runtime
+graph from `uv.lock` and rejects dependency source builds. Release builds run
+natively on `amd64` and `arm64`, scan each image, and assemble the
+multi-platform tag only after both builds pass. The
+[runtime-base explanation](../explanation/runtime-base.md) records the exact
+base and residual risk.
 
-## Prerequisites for a future deployment
+## Prerequisites
 
 Before scheduling a deployment, obtain:
 
-- a supported Extra CODEOWNERS image, verified and pinned by platform digest
+- an Extra CODEOWNERS alpha image, verified and pinned by platform digest
 - the exact chart source associated with that image
 - a GitHub App with the
   [required permissions and events](../reference/github-permissions.md)
@@ -125,7 +97,10 @@ Before scheduling a deployment, obtain:
 - a secret manager for the App private key and webhook secret
 - outbound HTTPS access to the configured GitHub API
 - reliable UTC clock synchronization on every node
-- access to the health endpoints, logs, and Prometheus metrics.
+- access to the health endpoints, logs, and Prometheus metrics
+- the Helm 3.x version pinned in
+  [the repository's `mise.toml`](https://github.com/stampbot/extra-codeowners/blob/main/mise.toml),
+  Docker Buildx, and a current GitHub CLI on the administration host.
 
 Clock accuracy matters because GitHub App JSON Web Tokens, setup-state expiry,
 and database leases use wall-clock time.
@@ -370,7 +345,7 @@ This order applies to an authorization defect, a same-schema application
 rollback, and a database restore. It prevents an earlier Extra CODEOWNERS
 success from remaining the only code-owner gate while the service is stopped.
 
-If you have a previously verified supported image, compare the current database
+If you have a previously verified compatible image, compare the current database
 head with that artifact's required head:
 
 1. If the head is unchanged, deploy the previous image by its recorded digest
@@ -385,9 +360,9 @@ head with that artifact's required head:
 Every Alembic head change requires the restore in step 2. An additive physical
 change does not make an old exact-head artifact compatible.
 
-No project-supported previous image exists today. If you don't have a
-previously verified compatible image, keep native code-owner enforcement in
-place and preserve the database and sanitized logs for investigation.
+If you don't have a previously verified compatible image, keep native
+code-owner enforcement in place and preserve the database and sanitized logs
+for investigation.
 
 The Helm chart runs a bounded pre-upgrade migration Job and uses a `Recreate`
 Deployment strategy. `Recreate` prevents old and new application pods from
@@ -410,21 +385,23 @@ database schema, leases, and termination behavior together. Use
 `charts/extra-codeowners/README.md` from the same reviewed checkout;
 don't jump to a mutable default-branch copy.
 
-## Planned release artifacts
+## What a release publishes
 
-After the **First supported release** milestone has no open issues and the
-evidence path passes review, the intended semantic-version release contains:
+Each successful release workflow publishes:
 
 - a signed multi-architecture image at
   `ghcr.io/stampbot/extra-codeowners:VERSION`
 - a signed OCI chart at
   `oci://ghcr.io/stampbot/charts/extra-codeowners`
-- Python wheel and source distributions
-- provenance and SBOM attestations
-- signed notices and corresponding-source evidence for each platform digest.
+- Python wheel and source distribution as GitHub release assets
+- BuildKit provenance and software bill of materials for each native image
+- GitHub provenance attestations and Sigstore signatures for published
+  artifacts
+- native vulnerability reports.
 
-A workflow file is not evidence that an artifact was published. Verify every
-future artifact in GHCR or the GitHub release before using it.
+A published, immutable GitHub release is the pipeline's completion record.
+Verify the release, GHCR image, and OCI chart before using them. The Python
+artifacts are not published to the Python Package Index (PyPI).
 
 Environment-specific chart upgrade evidence and a reproducible Google Cloud
 deployment guide are still planned. Their workload-identity behavior will be

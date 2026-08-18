@@ -4,10 +4,10 @@ Use this runbook to monitor the service, investigate a stale check, rotate
 credentials, and retire an installation without dropping code-owner
 enforcement.
 
-Operate from documentation that matches the deployed commit. Before the first
-supported release, operational interfaces may change without a compatibility
-period. The [deployment guide](deploy.md) describes the runtime and its current
-production blockers.
+Operate from documentation that matches the deployed release. During the alpha
+series, operational interfaces may change without a compatibility period. The
+[deployment guide](deploy.md) describes the runtime and its current production
+blockers.
 
 ## Know the healthy baseline
 

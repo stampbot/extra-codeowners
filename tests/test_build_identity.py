@@ -14,18 +14,12 @@ from extra_codeowners.build_identity import (
 )
 
 REVISION = "a" * 40
-SHA256 = "b" * 64
 
 
 def identity_bytes(**overrides: object) -> bytes:
     value: dict[str, object] = {
-        "schema_version": 1,
+        "schema_version": 2,
         "source_revision": REVISION,
-        "selection_record_sha256": SHA256,
-        "wheel_filename": "extra_codeowners-0.1.0-py3-none-any.whl",
-        "wheel_sha256": "c" * 64,
-        "sdist_filename": "extra_codeowners-0.1.0.tar.gz",
-        "sdist_sha256": "d" * 64,
     }
     value.update(overrides)
     return (
@@ -44,15 +38,10 @@ def load_test_identity(path: Path) -> BuildIdentity | None:
     return load_build_identity(path, expected_owner_uid=os.getuid())
 
 
-def test_parse_build_identity_accepts_verified_selection_result() -> None:
+def test_parse_build_identity_accepts_build_metadata() -> None:
     identity = parse_build_identity(identity_bytes())
 
     assert identity.source_revision == REVISION
-    assert identity.selection_record_sha256 == SHA256
-    assert identity.wheel_filename.endswith(".whl")
-    assert identity.wheel_sha256 == "c" * 64
-    assert identity.sdist_filename.endswith(".tar.gz")
-    assert identity.sdist_sha256 == "d" * 64
 
 
 @pytest.mark.parametrize(
@@ -61,12 +50,8 @@ def test_parse_build_identity_accepts_verified_selection_result() -> None:
         (b"{}\n", "unexpected schema"),
         (identity_bytes(schema_version=True), "schema version"),
         (identity_bytes(source_revision="main"), "source revision"),
-        (identity_bytes(wheel_sha256="f" * 63), "artifact digest"),
-        (identity_bytes(wheel_filename="../project.whl"), "artifact filename"),
-        (identity_bytes(wheel_filename="project.zip"), "artifact type"),
-        (identity_bytes(sdist_filename="project.zip"), "artifact type"),
         (identity_bytes().rstrip(), "canonical JSON"),
-        (b'{"schema_version":1,"schema_version":1}\n', "canonical JSON"),
+        (b'{"schema_version":2,"schema_version":2}\n', "canonical JSON"),
         (b'{"schema_version":NaN}\n', "canonical JSON"),
     ],
 )

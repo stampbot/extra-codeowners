@@ -20,6 +20,7 @@ import sys
 import time
 import tomllib
 from contextlib import suppress
+from importlib.metadata import distributions
 from pathlib import Path
 from typing import Any, Final, NoReturn, cast
 
@@ -32,6 +33,7 @@ MAX_TRACKED_PATH_BYTES: Final = 4096
 MAX_TRACKED_FILE_BYTES: Final = 64 * 1024 * 1024
 MAX_TRACKED_SOURCE_BYTES: Final = 512 * 1024 * 1024
 SAFE_PATH: Final = re.compile(r"^[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*$")
+VERSION_TEXT: Final = re.compile(r"^[0-9A-Za-z][0-9A-Za-z.+_-]{0,63}$")
 
 
 class BootstrapError(RuntimeError):
@@ -314,23 +316,27 @@ def _expected_source_revision(config_path: Path, source_root: Path) -> str:
     return revision
 
 
-def _project_version(source_root: Path) -> str:
-    raw = _read_stable_file(
-        source_root / "pyproject.toml",
-        modes=frozenset({0o444, 0o644}),
-        limit=MAX_CONFIG_BYTES,
-        description="project metadata file",
-    )
+def _installed_distribution_version(site_packages: Path) -> str:
     try:
-        values = tomllib.loads(raw.decode("utf-8"))
-        version = values["project"]["version"]
-    except (KeyError, TypeError, UnicodeError, tomllib.TOMLDecodeError) as error:
-        raise BootstrapError("project metadata does not contain a valid version") from error
-    if (
-        not isinstance(version, str)
-        or re.fullmatch(r"[0-9A-Za-z][0-9A-Za-z.+_-]{0,63}", version) is None
-    ):
-        raise BootstrapError("project metadata does not contain a valid version")
+        installed = list(distributions(name="extra-codeowners", path=[str(site_packages)]))
+        if len(installed) != 1:
+            raise BootstrapError(
+                "external environment must contain exactly one Extra CODEOWNERS distribution"
+            )
+        metadata = installed[0].metadata
+        names = metadata.get_all("Name") or []
+        versions = metadata.get_all("Version") or []
+    except BootstrapError:
+        raise
+    except Exception as error:
+        raise BootstrapError(
+            "installed Extra CODEOWNERS distribution metadata could not be read"
+        ) from error
+    if names != ["extra-codeowners"] or len(versions) != 1 or not isinstance(versions[0], str):
+        raise BootstrapError("installed Extra CODEOWNERS distribution metadata is invalid")
+    version = versions[0]
+    if version != version.strip() or VERSION_TEXT.fullmatch(version) is None:
+        raise BootstrapError("installed Extra CODEOWNERS distribution metadata is invalid")
     return version
 
 
@@ -589,7 +595,7 @@ def _prepare_import_path(
     source_root: Path,
     *,
     expected_revision: str | None,
-) -> None:
+) -> Path:
     virtual_environment = _resolved_directory(
         os.environ.get("VIRTUAL_ENV", ""),
         description="VIRTUAL_ENV",
@@ -628,6 +634,7 @@ def _prepare_import_path(
     # Keep the standard library first, then resolve reviewed project modules
     # from the checkout before consulting the external dependency environment.
     sys.path.extend((str(source_root), str(site_packages)))
+    return site_packages
 
 
 def _delegate() -> NoReturn:
@@ -638,8 +645,8 @@ def _delegate() -> NoReturn:
         raise BootstrapError("source checkout is unavailable") from error
     arguments = sys.argv[1:]
     if arguments == ["--version"]:
-        _prepare_import_path(source_root, expected_revision=None)
-        sys.stdout.write(f"{_project_version(source_root)}\n")
+        site_packages = _prepare_import_path(source_root, expected_revision=None)
+        sys.stdout.write(f"{_installed_distribution_version(site_packages)}\n")
         raise SystemExit(0)
     parsed = _argument_parser().parse_args(arguments)
     config_path = cast(Path, parsed.config)

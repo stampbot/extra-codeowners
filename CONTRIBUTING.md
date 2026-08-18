@@ -74,14 +74,17 @@ The normal suite runs the bounded development property-test profile. Run
 generator or regression seed; generated inputs and CI reports must remain free
 of real payloads and credentials.
 
-The Dockerfile intentionally rejects an ad hoc `docker build .`. It installs
-only the exact application wheel selected by the cross-architecture Python
-proof, passed as a read-only `verified-python` build context with three digest
-arguments. Pull-request CI is the maintained way to create that proof and test
-both image platforms. Follow the
-[container-evidence review guide](docs/how-to/review-container-evidence.md) if
-your change affects the image or its evidence; do not substitute a locally
-built wheel and treat the result as equivalent release evidence.
+The Dockerfile uses the locked runtime graph and refuses dependency source
+builds. A local build is useful for development:
+
+```shell
+docker build --tag extra-codeowners:dev .
+```
+
+Pull-request CI is the release-quality test. It builds on native `amd64` and
+`arm64` runners, runs the hardened smoke test on each image, and checks for
+fixable High or Critical vulnerabilities. A local build on one architecture
+doesn't replace those checks.
 
 The live GitHub contract fixture is destructive and opt-in. It is not part of
 `mise run check`. Use only the disposable organization procedure in the
@@ -153,6 +156,13 @@ linear history. `CODEOWNERS` records ownership, but GitHub does not enforce it
 as a review gate here today. Issue
 [#34](https://github.com/stampbot/extra-codeowners/issues/34) tracks the plan to
 dogfood Extra CODEOWNERS with Stampbot.
+
+After a merge, don't create a release tag or edit a version file. On a push to
+`main`, the `Release` job runs after the required CI checks succeed. It derives
+the next version from Git history, builds both native images in
+parallel, publishes the OCI image and Helm chart, and finishes with an immutable
+GitHub release. The Python wheel and source distribution are attached to that
+release; the project does not publish to PyPI.
 
 When Extra CODEOWNERS evaluates a repository, its default protected-path list
 rejects App substitution for `CODEOWNERS`, Extra CODEOWNERS policy,

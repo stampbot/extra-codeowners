@@ -11,10 +11,10 @@ deploymentStrategy:
 # deploymentAnnotations adds annotations to the Deployment resource.
 deploymentAnnotations: {}
 
-# image configures an operator-built Extra CODEOWNERS container.
+# image configures the published Extra CODEOWNERS container.
 image:
-  # image.repository intentionally fails until an operator supplies a private repository.
-  repository: example.invalid/stampbot/extra-codeowners
+  # image.repository is the public image published with each release.
+  repository: ghcr.io/stampbot/extra-codeowners
   # image.pullPolicy controls when Kubernetes pulls the image.
   pullPolicy: IfNotPresent
   # image.tag overrides the released chart's appVersion when it is nonempty.

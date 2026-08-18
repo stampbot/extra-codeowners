@@ -3,8 +3,8 @@
 
 # Security-sensitive policy and delivery surfaces require explicit ownership.
 /.github/ @dannysauer
+/.grype.yaml @dannysauer
 /charts/ @dannysauer
-/.openvex.json @dannysauer
 /Dockerfile @dannysauer
 /SECURITY.md @dannysauer
 /extra_codeowners/ @dannysauer

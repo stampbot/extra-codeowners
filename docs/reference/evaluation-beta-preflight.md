@@ -38,6 +38,11 @@ library, so an external package cannot replace project or preflight code. It
 does not process `.pth` files or site customization. The source probe then
 verifies the commit signature and repeats the signed-tree comparison.
 
+The informational `--version` command establishes the same checkout and
+external-environment boundaries. It reads exactly one installed
+`extra-codeowners` distribution record from the external environment without
+importing package code. Missing, duplicate, or malformed metadata fails closed.
+
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `--config PATH` | `EXTRA_CODEOWNERS_BETA_CONFIG_FILE`, then `evaluation-beta-preflight.toml` | Owner-only, non-secret TOML configuration outside `source_checkout`. |
@@ -90,7 +95,7 @@ contains every field and no secrets.
 | `source_checkout` | Yes | Reviewed source directory with no tracked, untracked, or ignored changes. A relative path is based at the configuration file's directory. The bootstrap requires this explicit path so it can bind the configured revision before importing checkout code. |
 | `python_version` | Yes | Exact running Python version, such as `3.12.7`. |
 | `uv_version` | Yes | Exact version parsed from `uv --version`. |
-| `extra_codeowners_version` | Yes | Exact imported package version. The package must load from `source_checkout`. |
+| `extra_codeowners_version` | Yes | Exact installed distribution version printed by the bootstrap's `--version` command. During preflight, the package must load from `source_checkout` and report this same version. |
 | `postgres_server_version_num` | Yes | Positive five- or six-digit integer returned by PostgreSQL `SHOW server_version_num`. |
 | `organization_id` | Yes | Positive numeric ID of the disposable GitHub organization. |
 | `target_repository` | Yes | Public `owner/repository` used for beta pull requests. It cannot be `.github`. |
@@ -167,7 +172,7 @@ the other independent checks.
 | Check ID | Passing evidence |
 | --- | --- |
 | `source` | Fixed `/usr/bin/git` sees a current-user-owned, non-shared-writable, standalone, non-shallow checkout without alternates, replacement refs, linked-worktree metadata, gitlinks, or tracked, untracked, or ignored changes. `HEAD` is the pinned commit, strict `fsck` succeeds, and `show` plus `verify-commit` report a good signature from the exact fingerprint. Each of two observations requires safe index flags and modes, exact index equality with the signed commit tree, no ignored content, and matching worktree Git blob hashes. Evidence records the tracked-file count, byte count, `untracked_and_ignored_content: absent-at-both-observations`, and `tracked_content: hashed-twice-against-signed-tree`. |
-| `tool_versions` | Python, uv, and Extra CODEOWNERS versions match. Python imported the package from the configured checkout. |
+| `tool_versions` | Python, uv, and the installed Extra CODEOWNERS distribution versions match. Python imported the package code from the configured checkout. |
 | `app_installations` | Both keys match their exact App identities, permissions, events, organization ownership, single-installation inventories, and repository selections. No installation request is pending. The checker hook configuration and approver bot identity match. Each short-lived probe token contains only Metadata read. |
 | `public_repositories` | Both configured repositories are public, available, organization-owned objects with the expected numeric IDs, full names, default branches, and branch commits. |
 | `branch_safety` | Active rules or classic protection require native code-owner review and at least one approving review. The configured Extra CODEOWNERS context is not required, and no merge queue is active. |

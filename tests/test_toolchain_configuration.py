@@ -1,4 +1,4 @@
-"""Regression tests for the reviewed uv toolchain configuration."""
+"""Regression tests for the reviewed build and release toolchain."""
 
 from __future__ import annotations
 
@@ -17,130 +17,201 @@ import yaml  # type: ignore[import-untyped]
 
 import extra_codeowners
 from tools import evaluation_beta_bootstrap as beta_bootstrap
+from tools import readthedocs_bootstrap
 
 ROOT = Path(__file__).resolve().parents[1]
-SETUP_UV = re.compile(r"^(?P<indent>\s*)uses: astral-sh/setup-uv@(?P<sha>[0-9a-f]{40})(?:\s+#.*)?$")
-SETUP_COSIGN = re.compile(
-    r"^(?P<indent>\s*)uses: sigstore/cosign-installer@"
-    r"(?P<sha>[0-9a-f]{40})(?:\s+#.*)?$"
+TEST_INSTALLED_BETA_VERSION = "9.8.7.dev1+test"
+SETUP_UV = re.compile(
+    r"^(?P<indent>\s*)uses: astral-sh/setup-uv@(?P<sha>[0-9a-f]{40})(?:\s+#.*)?$",
+    flags=re.MULTILINE,
+)
+SETUP_BUILDX = re.compile(
+    r"^(?P<indent>\s*)uses: docker/setup-buildx-action@(?P<sha>[0-9a-f]{40})(?:\s+#.*)?$",
+    flags=re.MULTILINE,
 )
 
 
+def _load_toml(path: Path) -> dict[str, Any]:
+    with path.open("rb") as source:
+        return tomllib.load(source)
+
+
 def _mise_uv_version() -> str:
-    with (ROOT / "mise.toml").open("rb") as source:
-        config = tomllib.load(source)
-    return cast(str, config["tools"]["uv"])
+    return cast(str, _load_toml(ROOT / "mise.toml")["tools"]["uv"])
 
 
-def _workflow_uv_versions() -> list[tuple[Path, str]]:
-    versions: list[tuple[Path, str]] = []
-    for path in sorted((ROOT / ".github" / "workflows").glob("*.y*ml")):
-        lines = path.read_text(encoding="utf-8").splitlines()
-        for index, line in enumerate(lines):
-            action = SETUP_UV.fullmatch(line)
-            if action is None:
-                continue
-            action_indent = len(action.group("indent"))
-            step_prefix = " " * (action_indent - 2) + "- "
-            input_prefix = " " * (action_indent + 2) + 'version: "'
-            version: str | None = None
-            for candidate in lines[index + 1 :]:
-                if candidate.startswith(step_prefix):
-                    break
-                if candidate.startswith(input_prefix) and candidate.endswith('" # uv runtime'):
-                    version = candidate.removeprefix(input_prefix).removesuffix('" # uv runtime')
-            assert version is not None, f"{path}: setup-uv must pin the reviewed uv version"
-            versions.append((path.relative_to(ROOT), version))
-    return versions
+def _workflow_action_steps(workflow: str, action: re.Pattern[str]) -> list[str]:
+    steps: list[str] = []
+    for match in action.finditer(workflow):
+        action_indent = len(match.group("indent"))
+        next_step = re.search(
+            rf"^{' ' * (action_indent - 2)}- ",
+            workflow[match.end() :],
+            flags=re.MULTILINE,
+        )
+        end = match.end() + next_step.start() if next_step is not None else len(workflow)
+        steps.append(workflow[match.start() : end])
+    return steps
 
 
-def _workflow_cosign_versions() -> list[tuple[Path, str]]:
-    versions: list[tuple[Path, str]] = []
-    for path in sorted((ROOT / ".github" / "workflows").glob("*.y*ml")):
-        lines = path.read_text(encoding="utf-8").splitlines()
-        for index, line in enumerate(lines):
-            action = SETUP_COSIGN.fullmatch(line)
-            if action is None:
-                continue
-            action_indent = len(action.group("indent"))
-            step_prefix = " " * (action_indent - 2) + "- "
-            input_prefix = " " * (action_indent + 2) + "cosign-release: v"
-            version: str | None = None
-            for candidate in lines[index + 1 :]:
-                if candidate.startswith(step_prefix):
-                    break
-                if candidate.startswith(input_prefix):
-                    version = candidate.removeprefix(input_prefix)
-            assert version is not None, f"{path}: cosign-installer must pin the reviewed version"
-            versions.append((path.relative_to(ROOT), version))
-    return versions
+def _workflow_job(workflow: str, name: str) -> str:
+    match = re.search(
+        rf"^  {re.escape(name)}:\n(?P<body>.*?)(?=^  [a-zA-Z0-9_-]+:\n|\Z)",
+        workflow,
+        flags=re.MULTILINE | re.DOTALL,
+    )
+    assert match is not None, f"workflow is missing the {name!r} job"
+    return match.group(0)
 
 
-def test_uv_version_is_identical_locally_in_containers_and_in_workflows() -> None:
+def _assert_native_matrix(job: str) -> None:
+    assert "runs-on: ${{ matrix.runner }}" in job
+    assert job.count("- architecture: amd64") == 1
+    assert job.count("- architecture: arm64") == 1
+    assert job.count("machine: x86_64") == 1
+    assert job.count("machine: aarch64") == 1
+    assert job.count("platform: linux/amd64") == 1
+    assert job.count("platform: linux/arm64") == 1
+    assert job.count("runner: ubuntu-24.04\n") == 1
+    assert job.count("runner: ubuntu-24.04-arm") == 1
+    assert 'test "$(uname -m)" = "${EXPECTED_MACHINE}"' in job
+    assert "setup-qemu-action" not in job
+
+
+def test_project_uses_dynamic_vcs_version_and_a_locked_build_group() -> None:
+    project = _load_toml(ROOT / "pyproject.toml")
+    lock = _load_toml(ROOT / "uv.lock")
+
+    metadata = cast(dict[str, Any], project["project"])
+    assert "version" not in metadata
+    assert metadata["dynamic"] == ["version"]
+    assert project["tool"]["hatch"]["version"]["source"] == "vcs"
+    assert project["build-system"]["build-backend"] == "hatchling.build"
+
+    build_requires = cast(list[str], project["build-system"]["requires"])
+    build_group = cast(list[str], project["dependency-groups"]["build"])
+    assert set(build_group) == set(build_requires)
+    assert all("==" in requirement for requirement in build_group)
+
+    root_package = next(
+        package
+        for package in cast(list[dict[str, Any]], lock["package"])
+        if package["name"] == "extra-codeowners"
+    )
+    locked_build = {
+        item["name"]: item["specifier"]
+        for item in root_package["metadata"]["requires-dev"]["build"]
+    }
+    expected_build = {
+        requirement.split("==", 1)[0]: f"=={requirement.split('==', 1)[1]}"
+        for requirement in build_group
+    }
+    assert locked_build == expected_build
+
+
+def test_project_owned_uv_version_drives_local_container_and_action_setup() -> None:
+    project = _load_toml(ROOT / "pyproject.toml")
     reviewed_version = _mise_uv_version()
+    assert project["tool"]["uv"]["required-version"] == f"=={reviewed_version}"
+
     dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
-    image = re.search(
-        r"^FROM ghcr\.io/astral-sh/uv:(?P<version>[0-9]+\.[0-9]+\.[0-9]+)"
+    uv_image = re.search(
+        r"^FROM ghcr\.io/astral-sh/uv:(?P<version>\d+\.\d+\.\d+)"
         r"@sha256:[0-9a-f]{64} AS uv$",
         dockerfile,
         flags=re.MULTILINE,
     )
-    assert image is not None, "Dockerfile must use a digest-pinned uv image"
-    assert image.group("version") == reviewed_version
-    assert "COPY pyproject.toml uv.lock README.md mise.toml requirements-build.txt ./" in dockerfile
+    assert uv_image is not None
+    assert uv_image.group("version") == reviewed_version
+
+    found_steps = 0
+    for path in sorted((ROOT / ".github" / "workflows").glob("*.y*ml")):
+        workflow = path.read_text(encoding="utf-8")
+        steps = _workflow_action_steps(workflow, SETUP_UV)
+        assert workflow.count("uses: astral-sh/setup-uv@") == len(steps), (
+            f"{path}: setup-uv must be pinned to a full commit"
+        )
+        for step in steps:
+            assert re.search(r"(?m)^\s+version:", step) is None, (
+                f"{path}: setup-uv must read tool.uv.required-version"
+            )
+        found_steps += len(steps)
+    assert found_steps > 0
+
+
+def test_debian_container_uses_only_locked_binary_dependencies() -> None:
+    project = _load_toml(ROOT / "pyproject.toml")
+    lock = _load_toml(ROOT / "uv.lock")
+    dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+
+    python_base = re.search(
+        r"^FROM (?P<image>python:\d+\.\d+\.\d+-slim-trixie"
+        r"@sha256:[0-9a-f]{64}) AS python-base$",
+        dockerfile,
+        flags=re.MULTILINE,
+    )
+    assert python_base is not None
+    assert dockerfile.count("FROM python-base AS builder") == 1
+    assert dockerfile.count("FROM python-base AS runtime") == 1
+    assert len(re.findall(r"^FROM ", dockerfile, flags=re.MULTILINE)) == 4
+    assert "apt-get" not in dockerfile
+    assert "apk add" not in dockerfile
+    assert "native-wheelhouse" not in dockerfile
+
+    sync_commands = re.findall(
+        r"(?ms)^\s*uv sync \\\n(?P<arguments>.*?)(?=\n\n|\Z)",
+        dockerfile,
+    )
+    assert len(sync_commands) == 2
+    runtime_sync, build_sync = sync_commands
+    for command in sync_commands:
+        assert "--frozen" in command
+        assert "--no-install-project" in command
+        assert "--no-build" in command
+    assert "--no-dev" in runtime_sync
+    assert "--only-group build" in build_sync
+    assert "uv build \\\n      --python /opt/build-venv/bin/python" in dockerfile
+    assert "SETUPTOOLS_SCM_PRETEND_VERSION" in dockerfile
+    assert "uv pip install" in dockerfile
+    assert "--offline" in dockerfile
+    assert "--no-index" in dockerfile
+    assert "--no-deps" in dockerfile
     assert (
-        "COPY .github/scripts/build_python_artifacts.py \\\n"
-        "     .github/scripts/native_wheelhouse.py \\\n"
-        "     ./.github/scripts/" in dockerfile
+        'ENTRYPOINT ["/opt/venv/bin/python", "-I", "-B", "-u", "-m", "extra_codeowners"]'
+        in dockerfile
     )
-    test_stage = dockerfile.split("FROM builder AS test\n", 1)[1].split("\nFROM ", 1)[0]
-    for script in (
-        "build_release_spine.py",
-        "container_evidence.py",
-        "export_container_image.py",
-        "github_release_api.py",
-        "immutable_release_preflight.py",
-        "release_asset_assembler.py",
-        "release_controller.py",
-        "release_readiness.py",
-        "release_spine.py",
-    ):
-        assert f".github/scripts/{script}" in test_stage
-    assert '["uv", "--version"]' in dockerfile
-    assert "if actual != expected:" in dockerfile
-    assert "digest-selected uv is" in dockerfile
-    assert 'ENTRYPOINT ["/opt/venv/bin/python", "-I", "-m", "extra_codeowners"]' in dockerfile
 
-    workflow_versions = _workflow_uv_versions()
-    assert workflow_versions, "at least one setup-uv invocation is required"
-    assert {version for _, version in workflow_versions} == {reviewed_version}
+    dependencies = cast(list[str], project["project"]["dependencies"])
+    assert any(requirement.startswith("psycopg[binary]") for requirement in dependencies)
+    packages = {package["name"] for package in cast(list[dict[str, Any]], lock["package"])}
+    assert "psycopg-binary" in packages
+    assert "psycopg-c" not in packages
 
 
-def test_release_verification_clis_are_patched_and_pinned() -> None:
-    with (ROOT / "mise.toml").open("rb") as source:
-        tools = cast(dict[str, str], tomllib.load(source)["tools"])
-
-    gh_version = tools["aqua:cli/cli"]
-    cosign_version = tools["aqua:sigstore/cosign"]
-    assert tuple(map(int, gh_version.split("."))) >= (2, 93, 0)
-    assert tuple(map(int, cosign_version.split("."))) >= (3, 0, 6)
-
-    workflow_versions = _workflow_cosign_versions()
-    assert workflow_versions, "at least one cosign-installer invocation is required"
-    assert {version for _, version in workflow_versions} == {cosign_version}
-
-    advisory = "GHSA-8xvp-7hj6-mcj9"
-    wheelhouse_guide = (ROOT / "docs" / "how-to" / "update-native-wheelhouse.md").read_text(
-        encoding="utf-8"
+def test_grype_policy_has_one_scoped_python_line_exception() -> None:
+    policy = cast(
+        dict[str, Any],
+        yaml.safe_load((ROOT / ".grype.yaml").read_text(encoding="utf-8")),
     )
-    recipient_guide = (ROOT / "docs" / "how-to" / "verify-container-release-evidence.md").read_text(
-        encoding="utf-8"
+
+    assert set(policy) == {"ignore"}
+    rules = cast(list[dict[str, Any]], policy["ignore"])
+    assert len(rules) == 1
+    assert rules[0]["vulnerability"] == "CVE-2026-15308"
+    dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+    python_base = re.search(
+        r"(?m)^FROM python:(?P<version>\d+\.\d+\.\d+)-slim-trixie@sha256:[0-9a-f]{64} "
+        r"AS python-base$",
+        dockerfile,
     )
-    assert advisory in wheelhouse_guide
-    assert re.search(r"GitHub CLI\s+2\.93\.0 or newer", wheelhouse_guide)
-    assert "mise exec -- cosign verify" in wheelhouse_guide
-    assert wheelhouse_guide.count("mise exec -- gh attestation verify") == 2
-    assert advisory in recipient_guide
+    assert python_base is not None
+    assert rules[0]["package"] == {
+        "name": "python",
+        "version": python_base.group("version"),
+        "type": "binary",
+    }
+    assert "CPython 3.14" in rules[0]["reason"]
+    assert "Python 3.15" in rules[0]["reason"]
 
 
 def test_dependency_audit_uses_locked_mode_without_frozen_mode() -> None:
@@ -162,87 +233,7 @@ def test_ci_checks_lockfile_freshness_outside_frozen_mode() -> None:
     assert "run: uv lock --check" in lock_check
 
 
-def test_runtime_selects_the_reviewed_psycopg_c_wheelhouse_distribution() -> None:
-    with (ROOT / "pyproject.toml").open("rb") as source:
-        project = tomllib.load(source)
-    with (ROOT / "uv.lock").open("rb") as source:
-        lock = tomllib.load(source)
-    native_inputs = json.loads(
-        (ROOT / "containers" / "native-wheelhouse" / "inputs.json").read_text(encoding="utf-8")
-    )
-    runtime_verifier = (ROOT / ".github" / "scripts" / "verify-container-runtime.py").read_text(
-        encoding="utf-8"
-    )
-
-    dependencies = cast(list[str], project["project"]["dependencies"])
-    assert "psycopg[binary]>=3.2.0,<4" in dependencies
-    assert not any(dependency.startswith("psycopg[c]") for dependency in dependencies)
-
-    packages = {package["name"]: package for package in lock["package"]}
-    psycopg_binary = packages["psycopg-binary"]
-    psycopg = packages["psycopg"]
-    assert psycopg["optional-dependencies"]["binary"] == [
-        {
-            "name": "psycopg-binary",
-            "marker": "implementation_name != 'pypy'",
-        }
-    ]
-    assert psycopg_binary["version"] == psycopg["version"] == "3.3.4"
-    assert "psycopg-c" not in packages
-
-    expected_wheels = {wheel["distribution"]: wheel for wheel in native_inputs["expected_wheels"]}
-    assert expected_wheels["psycopg-c"]["version"] == psycopg["version"]
-    assert expected_wheels["psycopg-c"]["needed_libraries"] == ["libpq.so.5"]
-    assert '"psycopg-c": "psycopg_c"' in runtime_verifier
-    assert "psycopg-binary" not in runtime_verifier
-
-
-def test_dockerfile_consumes_the_immutable_verified_native_wheelhouse() -> None:
-    dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
-    inputs = json.loads(
-        (ROOT / "containers" / "native-wheelhouse" / "inputs.json").read_text(encoding="utf-8")
-    )
-    revision = "0fd9ad42de969af08d2b7d2cb4fa8868fb2a4330"
-    digest = "sha256:49367c7f9ebf4983ecd452f7ae75cebada98561328f3b586f9289c32601e2e8c"
-    reference = (
-        "ghcr.io/stampbot/extra-codeowners-native-wheelhouse:"
-        f"sha-{revision}@{digest} AS native-wheelhouse"
-    )
-
-    assert f"FROM {reference}" in dockerfile
-    assert "ARG NATIVE_WHEELHOUSE" not in dockerfile
-    assert f'native-wheelhouse.index-digest="{digest}"' in dockerfile
-    assert f'native-wheelhouse.revision="{revision}"' in dockerfile
-    assert 'native-wheelhouse.schema="2"' in dockerfile
-    assert "COPY --from=native-wheelhouse /wheelhouse/ /native-wheelhouse/" in dockerfile
-    assert (
-        "COPY --from=native-wheelhouse --chown=0:0 /wheelhouse/ "
-        "/usr/share/extra-codeowners/native-wheelhouse/" in dockerfile
-    )
-    assert "native_wheelhouse.py verify" in dockerfile
-    assert '--platform "${TARGETPLATFORM}"' in dockerfile
-    assert dockerfile.count("binutils=2.45.1-r1") == 1
-    assert dockerfile.count("libgcc=15.2.0-r5") == 2
-    assert dockerfile.count("libpq=18.4-r0") == 2
-    assert dockerfile.count("--no-install-package cffi") == 2
-    assert dockerfile.count("--no-install-package psycopg-binary") == 2
-    assert dockerfile.count("--no-install-package psycopg-c") == 2
-    assert dockerfile.count("--no-install-package pydantic-core") == 2
-    assert dockerfile.count("native_wheelhouse.py verify-installed") == 2
-    assert dockerfile.count("build_python_artifacts.py verify-installed") == 2
-
-    runtime_wheels = {
-        wheel["distribution"]: wheel
-        for wheel in inputs["expected_wheels"]
-        if wheel["distribution"] != "setuptools"
-    }
-    for distribution, wheel in runtime_wheels.items():
-        filename_distribution = distribution.replace("-", "_")
-        version = wheel["version"]
-        assert f"/native-wheelhouse/{filename_distribution}-{version}-*.whl" in dockerfile
-
-
-def test_helm_chart_protects_startup_and_rejects_explicit_libpq_environment() -> None:
+def test_helm_chart_retains_hardening_without_image_specific_loader_paths() -> None:
     values = cast(
         dict[str, Any],
         yaml.safe_load((ROOT / "charts" / "extra-codeowners" / "values.yaml").read_text()),
@@ -258,10 +249,9 @@ def test_helm_chart_protects_startup_and_rejects_explicit_libpq_environment() ->
     }
 
     image = cast(dict[str, Any], values["image"])
+    assert image["repository"] == "ghcr.io/stampbot/extra-codeowners"
     assert image["tag"] == ""
-
     assert values["deploymentAnnotations"] == {}
-
     assert values["extraManifests"] == []
 
     schema = json.loads((ROOT / "charts" / "extra-codeowners" / "values.schema.json").read_text())
@@ -305,6 +295,21 @@ def test_helm_chart_protects_startup_and_rejects_explicit_libpq_environment() ->
         migration_template
     )
 
+    for template in (deployment, migration_template):
+        assert "- name: PATH" in template
+        assert "- name: LD_PRELOAD" in template
+        assert "- name: LD_AUDIT" in template
+        assert "- name: SSLKEYLOGFILE" in template
+        for obsolete_override in (
+            "LD_LIBRARY_PATH",
+            "GCONV_PATH",
+            "LOCPATH",
+            "OPENSSL_CONF",
+            "OPENSSL_MODULES",
+            "OPENSSL_ENGINES",
+        ):
+            assert f"- name: {obsolete_override}" not in template
+
     helpers = (ROOT / "charts" / "extra-codeowners" / "templates" / "_helpers.tpl").read_text()
     assert helpers.count('hasPrefix "PG" .name') == 2
     assert helpers.count("must not set ambient libpq variable") == 2
@@ -321,21 +326,22 @@ def test_helm_chart_protects_startup_and_rejects_explicit_libpq_environment() ->
     assert "tpl" not in extra_manifests_template
 
 
-def test_release_chart_metadata_is_derived_from_the_signed_tag() -> None:
+def test_chart_release_placeholders_and_public_image_are_automatic() -> None:
     chart = yaml.safe_load((ROOT / "charts" / "extra-codeowners" / "Chart.yaml").read_text())
     release = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
-    mise = (ROOT / "mise.toml").read_text(encoding="utf-8")
+    readme = (ROOT / "charts" / "extra-codeowners" / "README.md").read_text(encoding="utf-8")
 
     assert chart["version"] == "0.0.0-dev"
     assert chart["appVersion"] == "0.0.0-dev"
     assert "helm package charts/extra-codeowners \\" in release
-    assert '--version "$VERSION" \\' in release
-    assert '--app-version "$VERSION"' in release
+    assert '--version "${VERSION}" \\' in release
+    assert '--app-version "${VERSION}" \\' in release
     assert 'chart="dist/extra-codeowners-${VERSION}.tgz"' in release
-    assert 'helm template extra-codeowners "$chart"' in release
     assert "sed -i" not in release
-    assert '[tasks."release:prepare-alpha"]' in mise
-    assert 'run = "uv run --frozen python tools/prepare_prerelease.py"' in mise
+    assert (
+        "| `image.repository` | string | `ghcr.io/stampbot/extra-codeowners` "
+        "| Public image published with each Extra CODEOWNERS release. |"
+    ) in readme
 
 
 def test_pinned_uv_exposes_the_scheduled_audit_interface_without_network() -> None:
@@ -434,6 +440,12 @@ def _committed_minimal_beta_bootstrap(
         / "site-packages"
     )
     site_packages.mkdir(parents=True)
+    distribution = site_packages / f"extra_codeowners-{TEST_INSTALLED_BETA_VERSION}.dist-info"
+    distribution.mkdir()
+    (distribution / "METADATA").write_text(
+        f"Metadata-Version: 2.4\nName: extra-codeowners\nVersion: {TEST_INSTALLED_BETA_VERSION}\n",
+        encoding="utf-8",
+    )
     environment = os.environ.copy()
     environment.update(
         {
@@ -855,8 +867,7 @@ def test_evaluation_beta_bootstrap_rejects_ignored_imports_before_execution(
     )
 
     assert result.returncode == 0, result.stderr
-    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    assert result.stdout.strip() == project["project"]["version"]
+    assert result.stdout.strip() == extra_codeowners.__version__
     assert list(checkout.rglob("*.pyc")) == []
     assert list(checkout.rglob("__pycache__")) == []
 
@@ -924,7 +935,118 @@ def test_evaluation_beta_bootstrap_information_does_not_import_project_code(
     )
 
     assert result.returncode == 0, result.stderr
+    if arguments == ("--version",):
+        assert result.stdout == f"{TEST_INSTALLED_BETA_VERSION}\n"
     assert not Path(environment["CHECKOUT_MARKER"]).exists()
+    assert not Path(environment["CHECKOUT_PACKAGE_MARKER"]).exists()
+
+
+def test_evaluation_beta_bootstrap_version_does_not_import_installed_project_code(
+    tmp_path: Path,
+) -> None:
+    checkout, site_packages, environment = _committed_minimal_beta_bootstrap(tmp_path)
+    imported_marker = tmp_path / "installed-package.executed"
+    installed_package = site_packages / "extra_codeowners"
+    installed_package.mkdir()
+    (installed_package / "__init__.py").write_text(
+        "from pathlib import Path\n"
+        f"Path({str(imported_marker)!r}).write_text('executed', encoding='utf-8')\n",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(  # noqa: S603 - fixed test interpreter and script.
+        [
+            sys.executable,
+            "-I",
+            "-S",
+            "-B",
+            str(checkout / "tools" / "evaluation_beta_bootstrap.py"),
+            "--version",
+        ],
+        cwd=checkout,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == f"{TEST_INSTALLED_BETA_VERSION}\n"
+    assert not imported_marker.exists()
+    assert not Path(environment["CHECKOUT_PACKAGE_MARKER"]).exists()
+
+
+@pytest.mark.parametrize("metadata_count", [0, 2])
+def test_evaluation_beta_bootstrap_version_requires_one_installed_distribution(
+    tmp_path: Path,
+    metadata_count: int,
+) -> None:
+    checkout, site_packages, environment = _committed_minimal_beta_bootstrap(tmp_path)
+    distribution = next(site_packages.glob("extra_codeowners-*.dist-info"))
+    if metadata_count == 0:
+        shutil.rmtree(distribution)
+    else:
+        duplicate = site_packages / "extra_codeowners-9.8.8.dist-info"
+        duplicate.mkdir()
+        (duplicate / "METADATA").write_text(
+            "Metadata-Version: 2.4\nName: extra-codeowners\nVersion: 9.8.8\n",
+            encoding="utf-8",
+        )
+
+    result = subprocess.run(  # noqa: S603 - fixed test interpreter and script.
+        [
+            sys.executable,
+            "-I",
+            "-S",
+            "-B",
+            str(checkout / "tools" / "evaluation_beta_bootstrap.py"),
+            "--version",
+        ],
+        cwd=checkout,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 2
+    assert "must contain exactly one Extra CODEOWNERS distribution" in result.stderr
+    assert not Path(environment["CHECKOUT_PACKAGE_MARKER"]).exists()
+
+
+@pytest.mark.parametrize(
+    "metadata_text",
+    [
+        "Metadata-Version: 2.4\nName: extra-codeowners\nVersion: ../../untrusted\n",
+        "Metadata-Version: 2.4\nName: extra-codeowners\nVersion: 9.8.7\nVersion: 9.8.8\n",
+    ],
+)
+def test_evaluation_beta_bootstrap_version_rejects_invalid_distribution_metadata(
+    tmp_path: Path,
+    metadata_text: str,
+) -> None:
+    checkout, site_packages, environment = _committed_minimal_beta_bootstrap(tmp_path)
+    metadata = next(site_packages.glob("extra_codeowners-*.dist-info")) / "METADATA"
+    metadata.write_text(metadata_text, encoding="utf-8")
+
+    result = subprocess.run(  # noqa: S603 - fixed test interpreter and script.
+        [
+            sys.executable,
+            "-I",
+            "-S",
+            "-B",
+            str(checkout / "tools" / "evaluation_beta_bootstrap.py"),
+            "--version",
+        ],
+        cwd=checkout,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 2
+    assert "installed Extra CODEOWNERS distribution metadata is invalid" in result.stderr
     assert not Path(environment["CHECKOUT_PACKAGE_MARKER"]).exists()
 
 
@@ -942,600 +1064,6 @@ def test_evaluation_beta_entrypoints_use_the_isolated_bootstrap() -> None:
     assert "export PYTHONDONTWRITEBYTECODE=1" in how_to
 
 
-def test_renovate_owns_the_complete_uv_toolchain_update() -> None:
-    raw_config = json.loads((ROOT / "renovate.json").read_text(encoding="utf-8"))
-    config = cast(dict[str, Any], raw_config)
-    rules = cast(list[dict[str, Any]], config["packageRules"])
-    grouped_rules = [rule for rule in rules if rule.get("groupName") == "uv toolchain"]
-    assert len(grouped_rules) == 1
-    grouped_packages = set(cast(list[str], grouped_rules[0]["matchPackageNames"]))
-    assert grouped_packages == {
-        "astral-sh/setup-uv",
-        "astral-sh/uv",
-        "ghcr.io/astral-sh/uv",
-    }
-    assert grouped_rules[0].get("enabled") is True
-
-    dependabot = (ROOT / ".github" / "dependabot.yml").read_text(encoding="utf-8")
-    assert re.search(r"(?m)^\s+- dependency-name: astral-sh/setup-uv$", dependabot), (
-        "Dependabot must not compete with Renovate for setup-uv"
-    )
-
-
-def test_renovate_groups_the_hash_locked_python_build_closure() -> None:
-    raw_config = json.loads((ROOT / "renovate.json").read_text(encoding="utf-8"))
-    config = cast(dict[str, Any], raw_config)
-    rules = cast(list[dict[str, Any]], config["packageRules"])
-    grouped_rules = [rule for rule in rules if rule.get("groupSlug") == "python-build-toolchain"]
-    assert grouped_rules == [
-        {
-            "description": "Update the complete isolated Python build toolchain together",
-            "matchManagers": ["pip_requirements"],
-            "matchFileNames": ["requirements-build.txt"],
-            "groupName": "Python build toolchain",
-            "groupSlug": "python-build-toolchain",
-            "rangeStrategy": "replace",
-            "separateMajorMinor": False,
-        },
-        {
-            "description": "Keep the project backend pin with its hashed build closure",
-            "matchManagers": ["pep621"],
-            "matchFileNames": ["pyproject.toml"],
-            "matchDepTypes": ["build-system.requires"],
-            "matchPackageNames": ["hatchling"],
-            "groupName": "Python build toolchain",
-            "groupSlug": "python-build-toolchain",
-            "rangeStrategy": "replace",
-            "separateMajorMinor": False,
-        },
-    ]
-
-
-def test_reusable_workflow_proves_one_native_cross_architecture_distribution() -> None:
-    workflow = (ROOT / ".github" / "workflows" / "python-distribution.yml").read_text(
-        encoding="utf-8"
-    )
-    proof = workflow.split("  native-proof:\n", 1)[1].split("  select:\n", 1)[0]
-    selector = workflow.split("  select:\n", 1)[1].split("  raw-producer:\n", 1)[0]
-
-    assert "  workflow_call:\n" in workflow
-    assert "  workflow_dispatch:\n" in workflow
-    for output in (
-        "artifact-id",
-        "artifact-digest",
-        "wheel-sha256",
-        "selection-record-sha256",
-    ):
-        assert f"value: ${{{{ jobs.raw-consumer.outputs.{output} }}}}" in workflow
-
-    assert "name: Native proof (${{ matrix.architecture }})" in proof
-    assert proof.count("runner: ubuntu-24.04\n") == 1
-    assert proof.count("runner: ubuntu-24.04-arm\n") == 1
-    assert 'python-version: "3.14.6"' in proof
-    assert "timeout-minutes: 20" in proof
-    assert '--source-revision "$GITHUB_SHA"' in proof
-    assert '--scratch-directory "$scratch"' in proof
-    assert "compression-level: 0" in proof
-    # A selector-only retry retains successful native jobs from its first attempt.
-    assert "python-distributions-${{ matrix.architecture }}-${{ github.sha }}" in proof
-    assert "-attempt-${{ github.run_attempt }}" not in proof
-    assert "overwrite: true" in proof
-
-    assert "needs: native-proof" in selector
-    assert "if: ${{ always() }}" in selector
-    assert 'if [ "$PROOF_RESULT" != success ]; then' in selector
-    assert selector.count("actions/download-artifact@3e5f45b2") == 2
-    assert "python-distributions-amd64-${{ github.sha }}" in selector
-    assert "python-distributions-arm64-${{ github.sha }}" in selector
-    assert "merge-multiple" not in selector
-    assert selector.count("digest-mismatch: error") == 2
-    assert "artifact-id: ${{ steps.upload-selected.outputs.artifact-id }}" in selector
-    assert "artifact-digest: ${{ steps.upload-selected.outputs.artifact-digest }}" in selector
-    assert "wheel-sha256: ${{ steps.select.outputs.wheel-sha256 }}" in selector
-    assert (
-        "selection-record-sha256: ${{ steps.select.outputs.selection-record-sha256 }}" in selector
-    )
-    assert "jq -er '.selection_record_sha256'" in selector
-
-
-def test_ci_calls_the_reusable_proof_and_preserves_the_required_check() -> None:
-    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
-    caller = workflow.split("  python-distribution-proof:\n", 1)[1].split(
-        "  python-distribution:\n", 1
-    )[0]
-    required_check = workflow.split("  python-distribution:\n", 1)[1].split("  container:\n", 1)[0]
-    container = workflow.split("  container:\n", 1)[1]
-
-    assert "name: Build Python distribution proof" in caller
-    assert "permissions:\n      contents: read" in caller
-    assert "uses: ./.github/workflows/python-distribution.yml" in caller
-    assert "secrets:" not in caller
-
-    assert "name: Python distribution reproducibility" in required_check
-    assert "needs: python-distribution-proof" in required_check
-    assert "if: ${{ always() }}" in required_check
-    assert "id: accept" in required_check
-    assert 'if [ "$PROOF_RESULT" != success ]; then' in required_check
-    assert '[[ "$ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]]' in required_check
-    assert '[[ "$ARTIFACT_DIGEST" =~ ^[0-9a-f]{64}$ ]]' in required_check
-    assert '[[ "$WHEEL_SHA256" =~ ^[0-9a-f]{64}$ ]]' in required_check
-    assert '[[ "$SELECTION_RECORD_SHA256" =~ ^[0-9a-f]{64}$ ]]' in required_check
-    for output in (
-        "artifact-id",
-        "artifact-digest",
-        "wheel-sha256",
-        "selection-record-sha256",
-    ):
-        assert f"{output}: ${{{{ steps.accept.outputs.{output} }}}}" in required_check
-        assert f"printf '{output}=%s\\n'" in required_check
-
-    assert "      - python-distribution" in container
-    assert "if: ${{ always() }}" in container
-    assert "runs-on: ${{ matrix.runner }}" in container
-    assert (
-        "- architecture: amd64\n"
-        "            machine: x86_64\n"
-        "            platform: linux/amd64\n"
-        "            runner: ubuntu-24.04\n"
-    ) in container
-    assert (
-        "- architecture: arm64\n"
-        "            machine: aarch64\n"
-        "            platform: linux/arm64\n"
-        "            runner: ubuntu-24.04-arm\n"
-    ) in container
-    assert "name: Require the native runner architecture" in container
-    assert "EXPECTED_MACHINE: ${{ matrix.machine }}" in container
-    assert 'actual="$(uname -m)"' in container
-    assert "docker/setup-qemu-action" not in container
-    assert 'if [ "$DISTRIBUTION_RESULT" != success ]; then' in container
-    assert "artifact-ids: ${{ needs.python-distribution.outputs.artifact-id }}" in container
-    assert (
-        container.count("verified-python=${{ steps.python-distribution.outputs.download-path }}")
-        == 2
-    )
-    assert container.count("APPLICATION_SOURCE_REVISION=${{ github.sha }}") == 2
-    assert (
-        container.count(
-            "APPLICATION_WHEEL_SHA256=${{ needs.python-distribution.outputs.wheel-sha256 }}"
-        )
-        == 2
-    )
-    assert (
-        container.count(
-            "APPLICATION_SELECTION_RECORD_SHA256=${{ "
-            "needs.python-distribution.outputs.selection-record-sha256 }}"
-        )
-        == 2
-    )
-    assert "--python-distribution-artifact-id" in container
-    assert "--python-distribution-artifact-digest" in container
-    assert "--application-selection-record-sha256" in container
-    assert "--selected-python-directory" in container
-
-
-def test_ci_fetches_one_shared_verified_source_boundary_for_both_architectures() -> None:
-    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
-    producer = workflow.split("  verified-container-sources:\n", 1)[1].split("  container:\n", 1)[0]
-    container = workflow.split("  container:\n", 1)[1]
-
-    assert "needs: python-distribution" in producer
-    assert "permissions:\n      contents: read" in producer
-    assert "timeout-minutes: 120" in producer
-    for forbidden_permission in ("packages: write", "id-token: write", "attestations: write"):
-        assert forbidden_permission not in producer
-    assert producer.count(".github/scripts/container_source_plan.py direct-plan") == 1
-    assert producer.count(".github/scripts/fetch_verified_sources.py") == 2
-    assert producer.count("timeout --signal=TERM --kill-after=30s") == 5
-    assert producer.count("sigstore/cosign-installer@6f9f1778") == 1
-    assert producer.count(".github/scripts/fetch-native-wheelhouse.sh") == 1
-    assert producer.count(".github/scripts/verify-native-wheelhouse-index.sh") == 1
-    assert producer.count("native-wheelhouse-store") >= 3
-    assert "native-wheelhouse/signature-verification.json" in producer
-    assert producer.index("Verify the signed native wheelhouse before parser build") < (
-        producer.index("Build the current-commit offline parser")
-    )
-    assert "--output /output/alpine-plan.json" in producer
-    assert "materialize-source-plan" in producer
-    assert 'sha256sum "$alpine_plan"' not in producer
-    assert "stat --format='%s' \"$alpine_plan\"" not in producer
-    assert "size=64m,nr_inodes=8192,nosuid,nodev,noexec" in producer
-    assert "--parser source-plan" in producer
-    assert '--container-name "$parser_container_name"' in producer
-    assert "--execute" in producer
-    assert producer.count("-exec chmod 0755") == 1
-    assert producer.count("-exec chmod 0644") == 1
-    assert "chown -R" not in producer
-    assert "--pull=never" not in producer  # The fixed wrapper, not the workflow, owns Docker argv.
-    assert "parser_image_id" in producer
-    assert "^sha256:[0-9a-f]{64}$" in producer
-    assert "docker/setup-buildx-action@bb05f3f" in producer
-    assert "moby/buildkit:v0.30.0@sha256:0168606b" in producer
-    assert producer.count("actions/upload-artifact@043fb46d") == 2
-    assert "artifact-id: ${{ steps.accept-artifact.outputs.artifact-id }}" in producer
-    assert "artifact-digest: ${{ steps.accept-artifact.outputs.artifact-digest }}" in producer
-    assert '[[ "$ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]]' in producer
-    assert '[[ "$ARTIFACT_DIGEST" =~ ^[0-9a-f]{64}$ ]]' in producer
-    assert "verified-source-stores-${{ github.sha }}-attempt-" in producer
-    assert "${{ github.run_attempt }}" in producer
-    assert "if: ${{ always() && !cancelled() }}" in producer
-    assert "direct-fetch-journal.json" in producer
-    assert "alpine-fetch-journal.json" in producer
-    assert "retention-days: 2" in producer
-    for output in (
-        "direct-plan-sha256",
-        "direct-plan-size",
-        "alpine-plan-sha256",
-        "alpine-plan-size",
-    ):
-        assert f"{output}: ${{{{ steps.bindings.outputs.{output} }}}}" in producer
-        assert f"printf '{output}=%s\\n'" in producer
-    source_cleanup = producer.split("          cleanup_plan_output() {\n", 1)[1].split(
-        "          }\n", 1
-    )[0]
-    assert '/usr/bin/docker rm --force "$parser_container_name"' in source_cleanup
-    assert source_cleanup.index("/usr/bin/docker rm --force") < source_cleanup.index(
-        "mountpoint --quiet"
-    )
-
-    assert "      - verified-container-sources" in container
-    source_download = container.split(
-        "      - name: Download all verified source stores by immutable ID\n", 1
-    )[1].split("      - name:", 1)[0]
-    assert (
-        "artifact-ids: ${{ needs.verified-container-sources.outputs.artifact-id }}"
-        in source_download
-    )
-    assert "digest-mismatch: error" in source_download
-    for mutable_input in ("name:", "pattern:", "run-id:", "repository:", "github-token:"):
-        assert mutable_input not in source_download
-    assert container.count("verified-source-stores") == 1
-    assert "Prepare fixed rootless parser read-only inputs" in container
-    assert container.count("-exec chmod 0755") == 1
-    assert container.count("-exec chmod 0644") == 1
-
-
-def test_ci_exports_without_parsing_then_inventories_the_image_offline() -> None:
-    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
-    container = workflow.split("  container:\n", 1)[1]
-    export_step = container.split(
-        "      - name: Export container bytes without parsing image layers\n",
-        1,
-    )[1].split("      - name:", 1)[0]
-    inventory_step = container.split(
-        "      - name: Inventory image layers in the offline parser sandbox\n",
-        1,
-    )[1].split("      - name:", 1)[0]
-    verify_step = container.split(
-        "      - name: Verify generated container inventory\n",
-        1,
-    )[1].split("      - name:", 1)[0]
-
-    assert "container_evidence.py inventory " not in workflow
-    assert "container_evidence.py inventory-image-archive" not in export_step
-    assert "export_container_image.py" in export_step
-    assert "docker image inspect --format '{{.Id}}'" in export_step
-    assert "--allow-config-digest-subject" in export_step
-    assert '--output "$export_root"' in export_step
-    for forbidden in (
-        "tar ",
-        "tarfile",
-        "unzip",
-        "container_evidence.py",
-        "run_evidence_parser.py",
-        "GITHUB_TOKEN",
-        "ACTIONS_ID_TOKEN",
-    ):
-        assert forbidden not in export_step
-
-    assert 'parser_image="extra-codeowners:test-${ARCHITECTURE}"' in inventory_step
-    assert "extra-codeowners-image-inventory-${parser_container_nonce}" in inventory_step
-    assert "--parser image-inventory" in inventory_step
-    assert "--execute" in inventory_step
-    assert "inventory-image-archive" in inventory_step
-    assert '--input "archive=${export_root}/image.tar"' in inventory_step
-    assert '--input "export-record=${export_root}/image-export.json"' in inventory_step
-    assert "--archive /inputs/archive" in inventory_step
-    assert "--export-record /inputs/export-record" in inventory_step
-    assert "size=160m,nr_inodes=8192,nosuid,nodev,noexec" in inventory_step
-    assert "timeout --signal=TERM --kill-after=30s 45m" in inventory_step
-    assert "materialize-image-inventory" in inventory_step
-    assert 'sudo chown "$(id -u):$(id -g)" "$output"' in inventory_step
-    assert "chown -R" not in inventory_step
-    assert "docker.sock" not in inventory_step
-    assert '--input "repo=' not in inventory_step
-    assert inventory_step.index("/usr/bin/docker rm --force") < inventory_step.index(
-        "mountpoint --quiet"
-    )
-    assert 'unlink "${export_root}/image.tar"' in inventory_step
-
-    assert "docker image inspect" not in verify_step
-    assert "image.tar" not in verify_step
-    assert "container_evidence.py run-metadata" in verify_step
-    assert "container_evidence.py verify" in verify_step
-
-
-def test_ci_runs_bundle_only_in_the_raw_id_offline_evidence_sandbox() -> None:
-    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
-    container = workflow.split("  container:\n", 1)[1]
-    sandbox_step = container.split(
-        "      - name: Build source evidence in the offline parser sandbox\n", 1
-    )[1].split("      - name: Upload container distribution evidence\n", 1)[0]
-
-    assert "python .github/scripts/container_evidence.py bundle" not in workflow
-    assert 'parser_image="extra-codeowners:test-${ARCHITECTURE}"' in sandbox_step
-    assert "docker image inspect --format '{{.Id}}'" in sandbox_step
-    assert "^sha256:[0-9a-f]{64}$" in sandbox_step
-    assert '--image "$parser_image_id"' in sandbox_step
-    assert '--container-name "$parser_container_name"' in sandbox_step
-    assert "--parser evidence" in sandbox_step
-    assert "--execute" in sandbox_step
-    assert "timeout --signal=TERM --kill-after=30s 60m" in sandbox_step
-    assert (
-        "size=1152m,nr_inodes=8192,nosuid,nodev,noexec,"
-        "mode=0700,uid=65532,gid=65532" in sandbox_step
-    )
-    for name in ("repo", "inventory", "files", "python", "direct-store", "alpine-store"):
-        assert f'--input "{name}=' in sandbox_step
-    for argument in (
-        "--policy /inputs/repo/.compliance/container-policy.json",
-        "--uv-lock /inputs/repo/uv.lock",
-        "--repo /inputs/repo",
-        "--bundle-work-root /work",
-        "--direct-source-store-root /inputs/direct-store",
-        "--direct-source-plan-sha256",
-        "--direct-source-plan-size",
-        "--alpine-source-store-root /inputs/alpine-store",
-        "--alpine-source-plan-sha256",
-        "--alpine-source-plan-size",
-        "--selected-python-directory /inputs/python",
-        '--output "/output/${bundle}"',
-        '--predicate-output "/output/${predicate}"',
-    ):
-        assert argument in sandbox_step
-    assert 'sudo chown "$(id -u):$(id -g)" "$output"' in sandbox_step
-    assert "chown -R" not in sandbox_step
-    assert "run_evidence_parser.py materialize-evidence" in sandbox_step
-    assert "cp " not in sandbox_step
-    assert "docker.sock" not in sandbox_step
-    evidence_cleanup = sandbox_step.split("          cleanup_evidence_output() {\n", 1)[1].split(
-        "          }\n", 1
-    )[0]
-    assert '/usr/bin/docker rm --force "$parser_container_name"' in evidence_cleanup
-    assert evidence_cleanup.index("/usr/bin/docker rm --force") < evidence_cleanup.index(
-        "mountpoint --quiet"
-    )
-
-
-def test_release_scan_consumes_only_the_same_run_selected_distribution() -> None:
-    workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
-    caller = workflow.split("  python-distribution-proof:\n", 1)[1].split("  quality:\n", 1)[0]
-    scan = workflow.split("  security-scan:\n", 1)[1].split("  publication-block:\n", 1)[0]
-    download = scan.split("      - name: Download the selected Python distribution\n", 1)[1].split(
-        "      - name: Verify the selected Python distribution\n", 1
-    )[0]
-
-    assert "needs: validate" in caller
-    assert "permissions:\n      contents: read" in caller
-    assert "uses: ./.github/workflows/python-distribution.yml" in caller
-    assert "secrets:" not in caller
-
-    assert "      - python-distribution-proof" in scan
-    assert "artifact-ids: ${{ needs.python-distribution-proof.outputs.artifact-id }}" in download
-    assert "digest-mismatch: error" in download
-    for mutable_input in ("name:", "pattern:", "run-id:", "repository:", "github-token:"):
-        assert mutable_input not in download
-    assert "verify-selection" in scan
-    assert '--source-revision "$GITHUB_SHA"' in scan
-    assert '--wheel-sha256 "$WHEEL_SHA256"' in scan
-    assert '--selection-record-sha256 "$SELECTION_RECORD_SHA256"' in scan
-    assert "verified-python=${{ steps.python-distribution.outputs.download-path }}" in scan
-    assert "APPLICATION_SOURCE_REVISION=${{ github.sha }}" in scan
-    assert (
-        "APPLICATION_WHEEL_SHA256=${{ needs.python-distribution-proof.outputs.wheel-sha256 }}"
-        in scan
-    )
-    assert (
-        "APPLICATION_SELECTION_RECORD_SHA256=${{ "
-        "needs.python-distribution-proof.outputs.selection-record-sha256 }}" in scan
-    )
-
-    privileged = workflow.split("  python:\n", 1)[1].split("  image:\n", 1)[0]
-    assert "      - publication-block" in privileged
-    assert "      - python-distribution-proof" in privileged
-    assert (
-        "artifact-ids: ${{ needs.python-distribution-proof.outputs.spine-artifact-id }}"
-        in privileged
-    )
-    assert (
-        "artifact-ids: ${{ needs.python-distribution-proof.outputs.record-artifact-id }}"
-        in privileged
-    )
-    assert privileged.count("skip-decompress: true") == 2
-    assert "python_distribution_spine.py materialize" in privileged
-    assert (
-        "verified-python=${{ steps.python-distribution.outputs.download-path }}" not in privileged
-    )
-    assert "uv build" not in privileged
-
-
-def test_release_image_consumes_the_verified_selected_distribution() -> None:
-    workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
-    image = workflow.split("  image:\n", 1)[1].split("  chart:\n", 1)[0]
-    download = image.split("      - name: Download the selected Python distribution\n", 1)[1].split(
-        "      - name: Verify the selected Python distribution\n", 1
-    )[0]
-
-    assert "      - python-distribution-proof" in image
-    assert "artifact-ids: ${{ needs.python-distribution-proof.outputs.artifact-id }}" in download
-    assert "digest-mismatch: error" in download
-    for mutable_input in ("name:", "pattern:", "run-id:", "repository:", "github-token:"):
-        assert mutable_input not in download
-    assert "verify-selection" in image
-    assert '--source-revision "$GITHUB_SHA"' in image
-    assert '--wheel-sha256 "$WHEEL_SHA256"' in image
-    assert '--selection-record-sha256 "$SELECTION_RECORD_SHA256"' in image
-    assert "verified-python=${{ steps.python-distribution.outputs.download-path }}" in image
-    assert "APPLICATION_SOURCE_REVISION=${{ github.sha }}" in image
-    assert (
-        "APPLICATION_WHEEL_SHA256=${{ needs.python-distribution-proof.outputs.wheel-sha256 }}"
-        in image
-    )
-    assert (
-        "APPLICATION_SELECTION_RECORD_SHA256=${{ "
-        "needs.python-distribution-proof.outputs.selection-record-sha256 }}" in image
-    )
-
-
-def test_dockerfile_can_only_install_the_selected_application_wheel() -> None:
-    dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
-    dockerignore = (ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines()
-    builder = dockerfile.split(" AS builder\n", 1)[1].split("\nFROM builder AS test", 1)[0]
-    test_stage = dockerfile.split("FROM builder AS test\n", 1)[1].split("\nFROM python:", 1)[0]
-
-    assert "COPY extra_codeowners/" not in builder
-    assert "extra_codeowners" in dockerignore
-    assert "uv build" not in dockerfile
-    assert "reinstall-package extra-codeowners" not in dockerfile
-    for runtime_flag in (
-        "--frozen",
-        "--no-dev",
-        "--no-install-project",
-        "--no-install-package cffi",
-        "--no-install-package psycopg-binary",
-        "--no-install-package psycopg-c",
-        "--no-install-package pydantic-core",
-        "--no-build",
-    ):
-        assert runtime_flag in builder
-    assert "--mount=from=verified-python,target=/verified-python,ro" in builder
-    assert "--network=none" in builder
-    assert "verify-selection" in builder
-    assert "--selection-record-sha256" in builder
-    assert "> /build-identity.json" in builder
-    assert "chmod 0444 /build-identity.json" in builder
-    assert "uv pip install" in builder
-    assert "--offline" in builder
-    assert "--no-index" in builder
-    assert "--no-deps" in builder
-    assert "--no-build" in builder
-    assert "--strict" in builder
-    assert "verify-installed" in builder
-    for test_flag in (
-        "--frozen",
-        "--group dev",
-        "--no-install-project",
-        "--no-install-package cffi",
-        "--no-install-package psycopg-binary",
-        "--no-install-package psycopg-c",
-        "--no-install-package pydantic-core",
-        "--inexact",
-        "--no-build",
-    ):
-        assert test_flag in test_stage
-    assert "verify-installed" in test_stage
-    assert "COPY extra_codeowners/" not in test_stage
-    assert "test ! -e /build/extra_codeowners" in test_stage
-    assert 'Path("/opt/venv/lib/python3.14/site-packages")' in test_stage
-    assert dockerfile.count("org.stampbot.extra-codeowners.application-wheel.sha256") == 2
-    assert dockerfile.count("org.stampbot.extra-codeowners.python-selection-record.sha256") == 2
-    assert (
-        "RUN --mount=from=builder,source=/build-identity.json,"
-        "target=/run/build-identity.json,ro" in dockerfile
-    )
-    assert "/run/build-identity.json \\\n      /app/build-identity.json" in dockerfile
-    assert "COPY --from=builder --chown=0:0 --chmod=0444" not in dockerfile
-    assert "EXTRA_CODEOWNERS_BUILD_REVISION" not in dockerfile
-    assert "ARTIFACT_ID" not in dockerfile
-    assert "RUN_ATTEMPT" not in dockerfile
-    assert "VCS_REF" not in dockerfile
-
-
-def test_container_smoke_binds_baked_identity_to_oci_labels_and_live_api() -> None:
-    smoke = (ROOT / ".github" / "scripts" / "smoke-container.sh").read_text(encoding="utf-8")
-
-    assert "org.opencontainers.image.revision" in smoke
-    assert "org.stampbot.extra-codeowners.application-wheel.sha256" in smoke
-    assert "org.stampbot.extra-codeowners.native-wheelhouse.index-digest" in smoke
-    assert "org.stampbot.extra-codeowners.native-wheelhouse.revision" in smoke
-    assert "org.stampbot.extra-codeowners.native-wheelhouse.schema" in smoke
-    assert "org.stampbot.extra-codeowners.python-selection-record.sha256" in smoke
-    assert 'Path("/usr/share/extra-codeowners/native-wheelhouse")' in smoke
-    assert "load_build_identity" in smoke
-    assert "BUILD_IDENTITY_PATH.stat().st_mode) == 0o444" in smoke
-    assert '"http://127.0.0.1:8000/api/runtime-identity"' in smoke
-    assert 'identity["build_revision"] == os.environ["EXPECTED_BUILD_REVISION"]' in smoke
-
-
-def test_workflows_do_not_pass_the_removed_vcs_ref_build_argument() -> None:
-    workflows = "\n".join(path.read_text() for path in Path(".github/workflows").glob("*.yml"))
-    assert "VCS_REF" not in workflows
-
-
-def test_release_spine_scripts_are_in_every_python_type_check_entrypoint() -> None:
-    required = {
-        ".github/scripts/build_release_spine.py",
-        ".github/scripts/release_spine.py",
-    }
-    sources = {
-        "mise": (ROOT / "mise.toml").read_text(encoding="utf-8"),
-        "CI": (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8"),
-        "release": (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8"),
-    }
-    for source_name, source in sources.items():
-        for path in required:
-            assert path in source, f"{source_name} does not type-check {path}"
-
-
-def test_recipient_verifiers_are_type_checked_and_available_to_container_tests() -> None:
-    paths = {
-        ".github/scripts/acquire_github_release_assets.py",
-        ".github/scripts/recipient_evidence.py",
-        ".github/scripts/verify_actions_build_provenance.py",
-        ".github/scripts/verify_blob_signature.py",
-        ".github/scripts/verify_github_release.py",
-        ".github/scripts/verify_release_workflow.py",
-    }
-    sources = {
-        "mise": (ROOT / "mise.toml").read_text(encoding="utf-8"),
-        "CI": (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8"),
-        "release": (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8"),
-    }
-    dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
-    test_stage = dockerfile.split("FROM builder AS test\n", 1)[1].split("\nFROM ", 1)[0]
-    dockerignore = (ROOT / ".dockerignore").read_text(encoding="utf-8")
-    assert "mkdocs.yml" in test_stage
-    for path in paths:
-        for source_name, source in sources.items():
-            assert path in source, f"{source_name} does not type-check {path}"
-        assert path in test_stage
-        assert f"!{path}" in dockerignore
-
-
-def test_source_store_scripts_are_type_checked_and_available_to_container_tests() -> None:
-    required = {
-        ".github/scripts/container_source_plan.py",
-        ".github/scripts/export_container_image.py",
-        ".github/scripts/fetch_verified_sources.py",
-        ".github/scripts/run_evidence_parser.py",
-        ".github/scripts/verified_source_store.py",
-    }
-    type_checks = {
-        "mise": (ROOT / "mise.toml").read_text(encoding="utf-8"),
-        "CI": (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8"),
-        "release": (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8"),
-    }
-    dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
-    dockerignore = (ROOT / ".dockerignore").read_text(encoding="utf-8")
-    test_stage = dockerfile.split("FROM builder AS test\n", 1)[1].split("\nFROM ", 1)[0]
-
-    for path in required:
-        for source_name, source in type_checks.items():
-            assert path in source, f"{source_name} does not type-check {path}"
-        assert path in test_stage, f"container test stage does not copy {path}"
-        assert f"!{path}" in dockerignore, f"Docker build context excludes {path}"
-
-
 def test_evaluation_beta_tools_are_in_every_python_type_check_entrypoint() -> None:
     required = {
         "tools/evaluation_beta.py",
@@ -1544,42 +1072,413 @@ def test_evaluation_beta_tools_are_in_every_python_type_check_entrypoint() -> No
     sources = {
         "mise": (ROOT / "mise.toml").read_text(encoding="utf-8"),
         "CI": (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8"),
-        "release": (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8"),
     }
     for source_name, source in sources.items():
         for path in required:
             assert path in source, f"{source_name} does not type-check {path}"
 
 
-def test_container_evidence_review_projects_dynamic_application_records() -> None:
-    """Keep the human policy diff aligned with the selected-wheel verifier."""
-    review = (ROOT / "docs" / "how-to" / "review-container-evidence.md").read_text(encoding="utf-8")
-    section = review.split("## 4. Review policy and inventory drift\n", 1)[1].split(
-        "\n## 5. Confirm source completeness", 1
-    )[0]
-    code = section.split("```bash\n", 1)[1].split("\n```", 1)[0]
-    shell = shutil.which("sh")
-
-    assert shell is not None
-    assert "application_identity_occurrences" in code
-    assert "--argjson application_identity_occurrences" in code
-    assert '--inventory "$inventory"' in code
-    assert '--arg application_version "$application_version"' in code
-    result = subprocess.run(  # noqa: S603 - linting this repository-owned documentation block
-        [shell, "-n"],
-        input=code,
-        capture_output=True,
-        text=True,
-        check=False,
+def test_renovate_owns_ordinary_docker_uv_and_build_backend_updates() -> None:
+    config = cast(
+        dict[str, Any],
+        json.loads((ROOT / "renovate.json").read_text(encoding="utf-8")),
     )
-    assert result.returncode == 0, result.stderr
+    managers = cast(list[dict[str, Any]], config["customManagers"])
+    uv_managers = [
+        manager
+        for manager in managers
+        if manager.get("description") == "Keep the project-owned uv version current"
+    ]
+    assert len(uv_managers) == 1
+    uv_manager = uv_managers[0]
+    assert uv_manager["managerFilePatterns"] == ["/^pyproject\\.toml$/"]
+    assert uv_manager["depNameTemplate"] == "astral-sh/uv"
+    assert uv_manager["datasourceTemplate"] == "github-releases"
 
-    reference = (ROOT / "docs" / "reference" / "container-evidence-policy.md").read_text(
+    rules = cast(list[dict[str, Any]], config["packageRules"])
+    uv_rules = [rule for rule in rules if rule.get("groupName") == "uv toolchain"]
+    assert len(uv_rules) == 1
+    assert set(cast(list[str], uv_rules[0]["matchPackageNames"])) == {
+        "astral-sh/uv",
+        "ghcr.io/astral-sh/uv",
+    }
+    backend_rules = [rule for rule in rules if rule.get("groupName") == "Python build backend"]
+    assert len(backend_rules) == 1
+    assert set(cast(list[str], backend_rules[0]["matchPackageNames"])) == {
+        "hatch-vcs",
+        "hatchling",
+    }
+    assert any(
+        rule.get("matchManagers") == ["github-actions"] and rule.get("enabled") is False
+        for rule in rules
+    )
+    assert any(rule.get("matchUpdateTypes") == ["digest"] and "schedule" in rule for rule in rules)
+
+    raw_config = (ROOT / "renovate.json").read_text(encoding="utf-8")
+    assert "requirements-build" not in raw_config
+    assert "native-wheelhouse" not in raw_config
+
+    dependabot = yaml.safe_load((ROOT / ".github" / "dependabot.yml").read_text(encoding="utf-8"))
+    assert any(update["package-ecosystem"] == "github-actions" for update in dependabot["updates"])
+
+
+def test_renovate_updates_the_pinned_docker_build_runtime_as_one_unit() -> None:
+    config = cast(
+        dict[str, Any],
+        json.loads((ROOT / "renovate.json").read_text(encoding="utf-8")),
+    )
+    managers = cast(list[dict[str, Any]], config["customManagers"])
+
+    buildx = [
+        manager
+        for manager in managers
+        if manager.get("description") == "Update the pinned Buildx runtime"
+    ]
+    assert len(buildx) == 1
+    assert buildx[0]["depNameTemplate"] == "docker/buildx"
+    assert buildx[0]["datasourceTemplate"] == "github-releases"
+    assert buildx[0]["versioningTemplate"] == "semver"
+
+    images = [
+        manager
+        for manager in managers
+        if manager.get("description") == "Update digest-pinned Docker build runtime images"
+    ]
+    assert len(images) == 1
+    assert images[0]["datasourceTemplate"] == "docker"
+    matchers = "\n".join(cast(list[str], images[0]["matchStrings"]))
+    assert "moby/buildkit" in matchers
+    assert "docker/buildkit-syft-scanner" in matchers
+
+    rules = cast(list[dict[str, Any]], config["packageRules"])
+    runtime_rules = [rule for rule in rules if rule.get("groupName") == "Docker build runtime"]
+    assert len(runtime_rules) == 1
+    assert set(cast(list[str], runtime_rules[0]["matchPackageNames"])) == {
+        "docker/buildkit-syft-scanner",
+        "docker/buildx",
+        "moby/buildkit",
+    }
+
+    assert not any(
+        manager.get("description") == "Update the local Markdown linter" for manager in managers
+    )
+
+
+def test_renovate_mise_manager_exclusively_owns_local_tool_versions() -> None:
+    config = cast(
+        dict[str, Any],
+        json.loads((ROOT / "renovate.json").read_text(encoding="utf-8")),
+    )
+    managers = cast(list[dict[str, Any]], config["customManagers"])
+    rules = cast(list[dict[str, Any]], config["packageRules"])
+
+    for manager in managers:
+        patterns = cast(list[str], manager["managerFilePatterns"])
+        assert all("mise" not in pattern for pattern in patterns), manager["description"]
+    assert not any(
+        rule.get("matchManagers") == ["mise"] and rule.get("enabled") is False for rule in rules
+    )
+
+    local_tools = cast(dict[str, str], _load_toml(ROOT / "mise.toml")["tools"])
+    assert set(local_tools) == {
+        "actionlint",
+        "aqua:cli/cli",
+        "aqua:sigstore/cosign",
+        "helm",
+        "jq",
+        "aqua:yannh/kubeconform",
+        "node",
+        "shellcheck",
+        "uv",
+        "npm:markdownlint-cli2",
+    }
+
+    mise = _load_toml(ROOT / "mise.toml")
+    settings = cast(dict[str, Any], mise["settings"])
+    assert settings["idiomatic_version_file_enable_tools"] == ["python"]
+    assert re.fullmatch(r"3\.\d+", (ROOT / ".python-version").read_text().strip())
+
+
+def test_readthedocs_bootstraps_the_project_owned_uv_version() -> None:
+    config = cast(
+        dict[str, Any],
+        yaml.safe_load((ROOT / ".readthedocs.yaml").read_text(encoding="utf-8")),
+    )
+    build = cast(dict[str, Any], config["build"])
+    jobs = cast(dict[str, list[str]], build["jobs"])
+    install = jobs["install"]
+
+    assert len(install) == 2
+    bootstrap, sync = install
+    assert bootstrap == "python tools/readthedocs_bootstrap.py"
+    assert 'UV_PROJECT_ENVIRONMENT="$READTHEDOCS_VIRTUALENV_PATH"' in sync
+    assert "uv sync --frozen --only-group docs" in sync
+    assert "python" not in config
+
+    required = cast(str, _load_toml(ROOT / "pyproject.toml")["tool"]["uv"]["required-version"])
+    assert readthedocs_bootstrap.required_uv_requirement() == f"uv{required}"
+    command = readthedocs_bootstrap.install_command()
+    assert command[-1] == f"uv{required}"
+    assert "--no-deps" in command
+    assert "--only-binary=:all:" in command
+
+
+def test_readthedocs_bootstrap_rejects_a_nonexact_uv_version(tmp_path: Path) -> None:
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(
+        '[tool.uv]\nrequired-version = ">=0.11"\n',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RuntimeError, match="must be one exact semantic version"):
+        readthedocs_bootstrap.install_command(pyproject)
+
+
+def test_renovate_owns_every_duplicated_ci_tool_pin() -> None:
+    config = cast(
+        dict[str, Any],
+        json.loads((ROOT / "renovate.json").read_text(encoding="utf-8")),
+    )
+    managers = cast(list[dict[str, Any]], config["customManagers"])
+    rules = cast(list[dict[str, Any]], config["packageRules"])
+    expected: dict[str, tuple[str, str, str, set[str]]] = {
+        "Keep the Helm 3 runtime current": (
+            "helm/helm",
+            "github-releases",
+            "Helm toolchain",
+            {"helm/helm"},
+        ),
+        "Keep the Cosign runtime current": (
+            "sigstore/cosign",
+            "github-releases",
+            "Cosign toolchain",
+            {"sigstore/cosign"},
+        ),
+        "Keep the Actionlint runtime current": (
+            "rhysd/actionlint",
+            "github-releases",
+            "Actionlint toolchain",
+            {"rhysd/actionlint"},
+        ),
+        "Keep the ShellCheck runtime current": (
+            "koalaman/shellcheck",
+            "docker",
+            "ShellCheck toolchain",
+            {"koalaman/shellcheck"},
+        ),
+        "Update the kubeconform validation image": (
+            "ghcr.io/yannh/kubeconform",
+            "docker",
+            "kubeconform toolchain",
+            {"ghcr.io/yannh/kubeconform", "yannh/kubeconform"},
+        ),
+    }
+
+    for description, (package, datasource, group_name, group_packages) in expected.items():
+        matches = [manager for manager in managers if manager.get("description") == description]
+        assert len(matches) == 1
+        assert matches[0]["depNameTemplate"] == package
+        assert matches[0]["datasourceTemplate"] == datasource
+        assert matches[0]["versioningTemplate"] == "semver"
+        groups = [rule for rule in rules if rule.get("groupName") == group_name]
+        assert len(groups) == 1
+        assert set(cast(list[str], groups[0]["matchPackageNames"])) == group_packages
+
+    helm_rule = next(rule for rule in rules if rule.get("groupName") == "Helm toolchain")
+    assert helm_rule["allowedVersions"] == "<4.0.0"
+
+
+def test_local_and_ci_validation_tool_versions_match() -> None:
+    tools = cast(dict[str, str], _load_toml(ROOT / "mise.toml")["tools"])
+    ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    release = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+    workflow_security = (ROOT / ".github" / "workflows" / "workflow-security.yml").read_text(
         encoding="utf-8"
     )
-    expected_command = (
-        "filesystem-policy-view \\\n"
-        "  --files-inventory PATH_TO_ALL_LAYER_INVENTORY \\\n"
-        "  --inventory PATH_TO_COMPONENT_INVENTORY"
+
+    assert f"version: v{tools['helm']} # helm runtime" in ci
+    assert release.count(f"version: v{tools['helm']} # helm runtime") == 3
+    assert f"cosign-release: v{tools['aqua:sigstore/cosign']}" in release
+    assert f"version: {tools['actionlint']} # actionlint runtime" in workflow_security
+    assert f"koalaman/shellcheck:v{tools['shellcheck']}@sha256:" in ci
+    assert f"ghcr.io/yannh/kubeconform:v{tools['aqua:yannh/kubeconform']}@sha256:" in ci
+
+
+def test_container_builds_pin_one_consistent_buildx_and_buildkit_runtime() -> None:
+    expected_step_counts = {
+        "ci.yml": 1,
+        "cold-container.yml": 1,
+        "release.yml": 3,
+    }
+    runtime_pins: set[tuple[str, str, str]] = set()
+
+    for workflow_name, expected_count in expected_step_counts.items():
+        workflow = (ROOT / ".github" / "workflows" / workflow_name).read_text(encoding="utf-8")
+        steps = _workflow_action_steps(workflow, SETUP_BUILDX)
+        assert len(steps) == expected_count
+        assert workflow.count("uses: docker/setup-buildx-action@") == len(steps)
+        for step in steps:
+            buildx = re.search(
+                r"(?m)^          version: v(?P<version>\d+\.\d+\.\d+) # buildx runtime$",
+                step,
+            )
+            buildkit = re.search(
+                r"(?m)^            image=moby/buildkit:v(?P<version>\d+\.\d+\.\d+)"
+                r"@(?P<digest>sha256:[0-9a-f]{64})$",
+                step,
+            )
+            assert buildx is not None
+            assert buildkit is not None
+            assert "buildkitd-flags: --debug" in step
+            if workflow_name == "release.yml":
+                assert "cache-binary: false" in step
+            runtime_pins.add(
+                (buildx.group("version"), buildkit.group("version"), buildkit.group("digest"))
+            )
+
+    assert len(runtime_pins) == 1
+
+
+def test_documentation_lint_uses_one_pinned_bundled_action() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    docs = _workflow_job(workflow, "docs")
+
+    assert re.search(
+        r"(?m)^        uses: DavidAnson/markdownlint-cli2-action@[0-9a-f]{40}"
+        r" # v\d+\.\d+\.\d+$",
+        docs,
     )
-    assert expected_command in reference
+    assert "uses: actions/setup-node@" not in docs
+    assert "npx " not in docs
+    local_version = cast(str, _load_toml(ROOT / "mise.toml")["tools"]["npm:markdownlint-cli2"])
+    assert re.fullmatch(r"\d+\.\d+\.\d+", local_version)
+
+
+def test_ci_builds_and_scans_both_architectures_natively() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    container = _workflow_job(workflow, "container")
+    _assert_native_matrix(container)
+
+    assert container.count("uses: docker/build-push-action@") == 1
+    assert "load: true" in container
+    assert "push: false" in container
+    assert "platforms: ${{ matrix.platform }}" in container
+    assert "cache-from: type=gha,scope=container-${{ matrix.architecture }}" in container
+    assert (
+        "cache-to: type=gha,mode=max,scope=container-${{ matrix.architecture }},"
+        "ignore-error=true,timeout=5m"
+    ) in container
+    assert ".github/scripts/smoke-container.sh" in container
+    assert container.count("uses: anchore/scan-action@") == 2
+    assert container.count("by-cve: true") == 2
+    assert container.count("config: .grype.yaml") == 2
+    assert "fail-build: false" in container
+    assert "only-fixed: false" in container
+    assert "fail-build: true" in container
+    assert "only-fixed: true" in container
+
+    required = _workflow_job(workflow, "required")
+    assert "- container" in required
+
+
+def test_scheduled_cold_build_proves_caches_are_optional() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "cold-container.yml").read_text(encoding="utf-8")
+    assert "schedule:" in workflow
+    assert "workflow_dispatch:" in workflow
+
+    container = _workflow_job(workflow, "container")
+    _assert_native_matrix(container)
+    assert container.count("uses: docker/build-push-action@") == 1
+    assert "no-cache: true" in container
+    assert "cache-from:" not in container
+    assert "cache-to:" not in container
+    assert "push: false" in container
+    assert ".github/scripts/smoke-container.sh" in container
+
+
+def test_successful_main_ci_automatically_plans_one_release() -> None:
+    ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    release = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+    plan = _workflow_job(release, "plan")
+    caller = _workflow_job(ci, "release")
+
+    assert re.search(r"(?ms)^  push:\n    branches:\n      - main$", ci)
+    assert "cancel-in-progress: ${{ github.event_name == 'pull_request' }}" in ci
+    assert "queue: ${{ github.event_name == 'pull_request' && 'single' || 'max' }}" in ci
+    assert "workflow_call:" in release
+    assert "workflow_run:" not in release
+    assert "workflow_dispatch:" not in release
+    assert "needs: required" in caller
+    assert "github.event_name == 'push'" in caller
+    assert "github.ref == 'refs/heads/main'" in caller
+    assert "uses: ./.github/workflows/release.yml" in caller
+    assert "SOURCE_REVISION: ${{ github.sha }}" in plan
+    assert "git merge-base --is-ancestor" in plan
+    assert "origin/main" in plan
+    assert "python .github/scripts/release_plan.py" in plan
+    assert "release-please" not in release.lower()
+
+
+def test_release_builds_native_digests_then_publishes_the_exact_manifest() -> None:
+    release = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+    image = _workflow_job(release, "image")
+    publish = _workflow_job(release, "publish")
+    _assert_native_matrix(image)
+
+    assert re.search(r"(?m)^    needs: plan$", image)
+    assert (
+        "outputs: type=image,name=${{ env.IMAGE }},oci-artifact=true,push-by-digest=true" in image
+    )
+    assert "provenance: mode=max" in image
+    assert re.search(
+        r"generator=docker/buildkit-syft-scanner:\d+\.\d+\.\d+"
+        r"@sha256:[0-9a-f]{64}",
+        image,
+    )
+    assert "${IMAGE}@${DIGEST}" in image
+    assert image.count("image: ${{ env.IMAGE }}@${{ steps.build.outputs.digest }}") == 2
+    assert image.count("by-cve: true") == 2
+    assert image.count("config: .grype.yaml") == 2
+    assert "only-fixed: false" in image
+    assert "only-fixed: true" in image
+    assert "digest-${{ matrix.architecture }}.txt" in image
+
+    assert "release-image-amd64-" in publish
+    assert "release-image-arm64-" in publish
+    assert "docker buildx imagetools create" in publish
+    assert '"${IMAGE}@${amd64_build_index}"' in publish
+    assert '"${IMAGE}@${arm64_build_index}"' in publish
+    assert 'amd64) expected_digest="${amd64_digest}"' in publish
+    assert 'arm64) expected_digest="${arm64_digest}"' in publish
+    assert "linux/amd64\\nlinux/arm64" in publish
+    assert "docker buildx imagetools inspect" in publish
+    assert "subject-digest: ${{ steps.image.outputs.digest }}" in publish
+    assert 'cosign sign --yes "${IMAGE}@${DIGEST}"' in publish
+    assert "subject-path: release/python/*" in publish
+    assert "subject-path: release/chart/*.tgz" in publish
+
+
+def test_release_retries_are_idempotent_and_keep_versions_in_one_place() -> None:
+    project = _load_toml(ROOT / "pyproject.toml")
+    release = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+    mise = (ROOT / "mise.toml").read_text(encoding="utf-8")
+
+    assert "workflow_call:" in release
+    assert "workflow_dispatch:" not in release
+    assert "gh api --include" in release
+    assert '"repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}"' in release
+    assert 'if [[ "${status}" == 404 ]]' in release
+    assert "already_released=true" in release
+    assert "needs.plan.outputs.already_released != 'true'" in release
+    assert 'git show-ref --verify --quiet "refs/tags/${TAG}"' in release
+    assert 'git cat-file -t "refs/tags/${TAG}"' in release
+    assert "Publish or verify multiarch image" in release
+    assert "Publish or verify Helm chart" in release
+    assert "version" not in project["project"]
+    assert "release:prepare" not in mise
+    assert "prepare_prerelease.py" not in mise
+
+    planner = ".github/scripts/release_plan.py"
+    assert planner in mise
+    ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    assert planner in ci

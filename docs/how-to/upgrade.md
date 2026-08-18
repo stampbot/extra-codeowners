@@ -10,8 +10,8 @@ bundled with that artifact.
     reject the new head even when the SQL change was additive. Helm rollback
     does not run Alembic downgrade.
 
-There is no supported release today. Apply this procedure only to an artifact
-whose provenance and compatibility you have reviewed, and keep native GitHub
+There is no supported stable release today. Apply this procedure to an alpha
+only after you review its provenance and compatibility, and keep native GitHub
 code-owner enforcement in place.
 
 ## Before you begin

@@ -1,7 +1,8 @@
 # Support
 
-Extra CODEOWNERS does not yet have a tagged release or a hosted service.
-Maintainer support is best-effort, with no response-time commitment.
+Extra CODEOWNERS publishes alpha releases for shadow-mode testing. It has no
+supported stable release or hosted service. Maintainer support is best-effort,
+with no response-time commitment.
 
 ## Choose the right channel
 

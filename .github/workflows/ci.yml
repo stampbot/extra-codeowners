@@ -15,6 +15,7 @@ permissions:
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  queue: ${{ github.event_name == 'pull_request' && 'single' || 'max' }}
 
 env:
   UV_FROZEN: "true"
@@ -22,15 +23,13 @@ env:
 jobs:
   lint:
     name: Lint and type check
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - name: Check out repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
-
-      - name: Validate narrow OpenVEX scope
-        run: jq -e -f .github/scripts/validate-openvex.jq .openvex.json >/dev/null
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -40,13 +39,11 @@ jobs:
       - name: Set up uv
         uses: astral-sh/setup-uv@6ee6290f1cbc4156c0bdd66691b2c144ef8df19a # v7.4.0
         with:
-          version: "0.11.28" # uv runtime
           enable-cache: true
           cache-dependency-glob: uv.lock
 
       - name: Verify lockfile is current
         env:
-          # The workflow-wide frozen mode skips freshness resolution.
           UV_FROZEN: "false"
         run: uv lock --check
 
@@ -62,65 +59,24 @@ jobs:
       - name: Type check
         run: >-
           uv run mypy extra_codeowners tests tools/evaluation_beta.py
-          tools/evaluation_beta_bootstrap.py
-          tools/prepare_prerelease.py
-          .github/scripts/acquire_github_release_assets.py
-          .github/scripts/acquire_oci_index.py
-          .github/scripts/build_python_artifacts.py
-          .github/scripts/build_python_distribution_spine.py
-          .github/scripts/build_release_spine.py
-          .github/scripts/container_evidence.py
-          .github/scripts/container_source_plan.py
-          .github/scripts/export_container_image.py
-          .github/scripts/fetch_verified_sources.py
-          .github/scripts/github_release_api.py
-          .github/scripts/immutable_release_preflight.py
-          .github/scripts/native_wheelhouse.py
-          .github/scripts/python_distribution_spine.py
-          .github/scripts/release_asset_assembler.py
-          .github/scripts/release_controller.py
-          .github/scripts/recipient_evidence.py
-          .github/scripts/verify_actions_build_provenance.py
-          .github/scripts/verify_blob_signature.py
-          .github/scripts/verify_github_release.py
-          .github/scripts/verify_release_workflow.py
-          .github/scripts/release_spine.py
-          .github/scripts/release_readiness.py
-          .github/scripts/run_evidence_parser.py
-          .github/scripts/select_oci_platforms.py
-          .github/scripts/verified_source_store.py
+          tools/evaluation_beta_bootstrap.py tools/readthedocs_bootstrap.py
+          .github/scripts/release_plan.py
 
       - name: Lint YAML
         run: uv run yamllint .
 
-      - name: Install pinned ShellCheck
-        env:
-          # Update this from the GitHub release asset digest in the same reviewed change.
-          SHELLCHECK_SHA256: 8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
-          SHELLCHECK_VERSION: v0.11.0
-        run: |
-          archive="${RUNNER_TEMP}/shellcheck.tar.xz"
-          release="https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}"
-          curl --proto '=https' --tlsv1.2 \
-            --fail --show-error --silent --location \
-            --retry 3 --retry-all-errors \
-            --output "${archive}" \
-            "${release}/shellcheck-${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
-          printf '%s  %s\n' "${SHELLCHECK_SHA256}" "${archive}" | sha256sum --check --strict
-          tar --extract --xz --file "${archive}" --directory "${RUNNER_TEMP}"
-          printf '%s\n' "${RUNNER_TEMP}/shellcheck-${SHELLCHECK_VERSION}" >> "${GITHUB_PATH}"
-
       - name: Lint shell scripts
-        run: >-
-          shellcheck
-          .github/scripts/fetch-native-wheelhouse.sh
-          .github/scripts/smoke-container.sh
-          .github/scripts/test-postgres-backup-restore.sh
-          .github/scripts/verify-native-wheelhouse-index.sh
+        run: |
+          docker run --rm --volume "${PWD}:/mnt:ro" \
+            koalaman/shellcheck:v0.11.0@sha256:61862eba1fcf09a484ebcc6feea46f1782532571a34ed51fedf90dd25f925a8d \
+            .github/scripts/smoke-container.sh \
+            .github/scripts/test-helm-chart.sh \
+            .github/scripts/test-postgres-backup-restore.sh
 
   test:
     name: Test (Python ${{ matrix.python-version }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
@@ -140,8 +96,7 @@ jobs:
             test-postgres-url: ""
     services:
       postgres:
-        # GitHub skips the service when this resolves to the empty string.
-        image: >- # zizmor: ignore[unpinned-images] The only non-empty branch is digest-pinned.
+        image: >- # zizmor: ignore[unpinned-images] Empty matrix branches disable this service.
           ${{ matrix.postgres &&
           'postgres:17.7-alpine@sha256:bb377b7239d2774ac8cc76f481596ce96c5a6b5e9d141f6d0a0ee371a6e7c0f2'
           || '' }}
@@ -170,7 +125,6 @@ jobs:
       - name: Set up uv
         uses: astral-sh/setup-uv@6ee6290f1cbc4156c0bdd66691b2c144ef8df19a # v7.4.0
         with:
-          version: "0.11.28" # uv runtime
           enable-cache: true
           cache-dependency-glob: uv.lock
 
@@ -183,25 +137,21 @@ jobs:
           TEST_POSTGRES_URL: ${{ matrix.test-postgres-url }}
         run: >-
           uv run --python "${{ matrix.python-version }}" pytest
-          --cov=extra_codeowners
-          --cov-branch
-          --cov-report=term-missing
-          --cov-report=xml
-          --cov-report=html
-          --cov-fail-under=85
+          --cov=extra_codeowners --cov-branch --cov-report=term-missing
+          --cov-report=xml --cov-report=html --cov-fail-under=85
 
       - name: Run Python compatibility tests
         if: ${{ !matrix.coverage }}
-        run: uv run pytest --no-cov
+        run: uv run --python "${{ matrix.python-version }}" pytest --no-cov
 
-      - name: Migrate native PostgreSQL backup source
+      - name: Migrate PostgreSQL test database
         if: matrix.postgres
         env:
           EXTRA_CODEOWNERS_DATABASE_URL: ${{ matrix.test-postgres-url }}
           EXTRA_CODEOWNERS_ENVIRONMENT: production
         run: uv run python -m extra_codeowners database migrate
 
-      - name: Verify native PostgreSQL backup and restore
+      - name: Verify PostgreSQL backup and restore
         if: matrix.postgres
         env:
           PGHOST: 127.0.0.1
@@ -210,9 +160,9 @@ jobs:
           PGUSER: extra_codeowners
           RESTORE_DATABASE: extra_codeowners_restore_test
           SOURCE_DATABASE: extra_codeowners_test
-        run: |
-          .github/scripts/test-postgres-backup-restore.sh \
-            'postgres:17.7-alpine@sha256:bb377b7239d2774ac8cc76f481596ce96c5a6b5e9d141f6d0a0ee371a6e7c0f2'
+        run: >-
+          .github/scripts/test-postgres-backup-restore.sh
+          'postgres:17.7-alpine@sha256:bb377b7239d2774ac8cc76f481596ce96c5a6b5e9d141f6d0a0ee371a6e7c0f2'
 
       - name: Upload coverage report
         if: matrix.coverage
@@ -223,11 +173,62 @@ jobs:
             coverage.xml
             htmlcov/
           if-no-files-found: error
+          overwrite: true
           retention-days: 14
+
+  package:
+    name: Python package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out complete Git history
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version-file: .python-version
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@6ee6290f1cbc4156c0bdd66691b2c144ef8df19a # v7.4.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install locked build backend
+        run: uv sync --frozen --only-group build --no-install-project --no-build
+
+      - name: Build wheel and source distribution
+        run: uv build --python .venv/bin/python --no-build-isolation --out-dir dist
+
+      - name: Verify wheel metadata and clean installation
+        run: |
+          set -euo pipefail
+          wheel="$(find dist -maxdepth 1 -type f -name '*.whl' -print -quit)"
+          sdist="$(find dist -maxdepth 1 -type f -name '*.tar.gz' -print -quit)"
+          test -n "${wheel}" && test -n "${sdist}"
+          uv venv "${RUNNER_TEMP}/wheel-check"
+          uv pip install --python "${RUNNER_TEMP}/wheel-check/bin/python" \
+            --offline --no-index --no-deps "${wheel}"
+          "${RUNNER_TEMP}/wheel-check/bin/python" -c \
+            'import extra_codeowners, importlib.metadata; assert importlib.metadata.version("extra-codeowners")'
+
+      - name: Upload Python distributions
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: python-distributions-${{ github.sha }}
+          path: dist/
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 7
 
   docs:
     name: Documentation and Markdown
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - name: Check out repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -239,30 +240,30 @@ jobs:
         with:
           python-version-file: .python-version
 
-      - name: Set up Node.js
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
-        with:
-          node-version: 24
-
       - name: Set up uv
         uses: astral-sh/setup-uv@6ee6290f1cbc4156c0bdd66691b2c144ef8df19a # v7.4.0
         with:
-          version: "0.11.28" # uv runtime
           enable-cache: true
           cache-dependency-glob: uv.lock
 
-      - name: Install locked dependencies
-        run: uv sync --all-groups --frozen
+      - name: Install documentation dependencies
+        run: uv sync --frozen --only-group docs
 
       - name: Build documentation in strict mode
         run: uv run mkdocs build --strict
 
       - name: Lint Markdown
-        run: npx --yes markdownlint-cli2@0.20.0 '**/*.md' '#site/**' '#.venv/**'
+        uses: DavidAnson/markdownlint-cli2-action@21c1be1b93ad9ed58fa840aacc3f279cde2a72ff # v24.2.0
+        with:
+          globs: |
+            **/*.md
+            #site/**
+            #.venv/**
 
   helm:
     name: Helm chart
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - name: Check out repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -272,971 +273,24 @@ jobs:
       - name: Set up Helm
         uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
         with:
-          version: v3.19.0
+          version: v3.19.0 # helm runtime
 
-      - name: Verify chart metadata and license
-        run: |
-          cmp --silent LICENSE charts/extra-codeowners/LICENSE
-          chart_version="$(helm show chart charts/extra-codeowners \
-            | awk '$1 == "version:" {print $2}')"
-          app_version="$(helm show chart charts/extra-codeowners \
-            | awk '$1 == "appVersion:" {gsub(/"/, "", $2); print $2}')"
-          image_tag="$(awk '$1 == "tag:" {gsub(/"/, "", $2); print $2}' \
-            charts/extra-codeowners/values.yaml)"
-          if [[ "$chart_version" != "0.0.0-dev" || "$app_version" != "0.0.0-dev" || \
-            -n "$image_tag" ]]; then
-            echo "Source chart metadata must stay development-only; the signed release tag supplies it." >&2
-            exit 1
-          fi
+      - name: Test chart
+        run: .github/scripts/test-helm-chart.sh "${RUNNER_TEMP}/helm"
 
-      - name: Lint chart
-        run: helm lint charts/extra-codeowners
-
-      - name: Render default values
-        run: |
-          helm template extra-codeowners charts/extra-codeowners > rendered-default.yaml
-          helm template extra-codeowners charts/extra-codeowners \
-            --show-only templates/tests/test-connection.yaml > rendered-test.yaml
-          if grep -Eq \
-            '^[[:space:]]+app\.kubernetes\.io/(name|instance):' \
-            rendered-test.yaml; then
-            echo "Helm test Pod must not match the application Service selector." >&2
-            exit 1
-          fi
-
-      - name: Render optional resources
-        run: |
-          helm template extra-codeowners charts/extra-codeowners \
-            --set existingSecret=extra-codeowners-runtime \
-            --set ingress.enabled=true \
-            --set ingress.className=nginx \
-            --set autoscaling.enabled=true \
-            --set podDisruptionBudget.enabled=true \
-            --set allowInsecureChanges=true \
-            --set-string deploymentAnnotations.reloader\\.stakater\\.com/auto=true \
-            > rendered-optional.yaml
-          yq eval -e \
-            'select(.kind == "Deployment") | .metadata.annotations."reloader.stakater.com/auto" == "true"' \
-            rendered-optional.yaml | grep -Fx true
-
-      - name: Render mounted GitHub credentials
-        run: >-
-          helm template extra-codeowners charts/extra-codeowners
-          --set existingSecret=extra-codeowners-runtime
-          --set extraVolumes[0].name=github-credentials
-          --set extraVolumes[0].secret.secretName=extra-codeowners-github
-          --set extraVolumes[0].secret.defaultMode=288
-          --set extraVolumeMounts[0].name=github-credentials
-          --set extraVolumeMounts[0].mountPath=/run/secrets/extra-codeowners
-          --set extraVolumeMounts[0].readOnly=true
-          --set migrations.existingSecret=extra-codeowners-database
-          --set migrations.extraVolumes[0].name=migration-credentials
-          --set migrations.extraVolumes[0].secret.secretName=extra-codeowners-migration-credentials
-          --set migrations.extraVolumeMounts[0].name=migration-credentials
-          --set migrations.extraVolumeMounts[0].mountPath=/run/secrets/extra-codeowners/database
-          --set migrations.extraVolumeMounts[0].readOnly=true
-          > rendered-credentials.yaml
-
-      - name: Verify workload selector and credential isolation
-        run: |
-          helm template extra-codeowners charts/extra-codeowners \
-            --set existingSecret=extra-codeowners-runtime \
-            --set extraVolumes[0].name=github-credentials \
-            --set extraVolumes[0].secret.secretName=extra-codeowners-github \
-            --set extraVolumeMounts[0].name=github-credentials \
-            --set extraVolumeMounts[0].mountPath=/run/secrets/extra-codeowners \
-            --set extraVolumeMounts[0].readOnly=true \
-            --set migrations.existingSecret=extra-codeowners-database \
-            --set migrations.extraVolumes[0].name=migration-credentials \
-            --set migrations.extraVolumes[0].secret.secretName=extra-codeowners-migration-credentials \
-            --set migrations.extraVolumeMounts[0].name=migration-credentials \
-            --set migrations.extraVolumeMounts[0].mountPath=/run/secrets/extra-codeowners/database \
-            --set migrations.extraVolumeMounts[0].readOnly=true \
-            --show-only templates/migration-job.yaml > rendered-migration-job.yaml
-          helm template extra-codeowners charts/extra-codeowners \
-            --show-only templates/service.yaml > rendered-service.yaml
-          helm template extra-codeowners charts/extra-codeowners \
-            --show-only templates/networkpolicy.yaml > rendered-network-policy.yaml
-          helm template extra-codeowners charts/extra-codeowners \
-            --show-only templates/deployment.yaml > rendered-deployment.yaml
-          deployment_selector="$(awk '
-            /^  selector:$/ { capture = 1 }
-            capture { print }
-            /^  template:$/ { exit }
-          ' rendered-deployment.yaml)"
-          grep -Fq 'app.kubernetes.io/instance: extra-codeowners' rendered-migration-job.yaml
-          grep -Fq 'app.kubernetes.io/component: database-migration' rendered-migration-job.yaml
-          grep -Fq 'enableServiceLinks: false' rendered-migration-job.yaml
-          grep -Fq 'name: extra-codeowners-database' rendered-migration-job.yaml
-          grep -Fq 'name: migration-credentials' rendered-migration-job.yaml
-          grep -Fq 'name: LD_LIBRARY_PATH' rendered-migration-job.yaml
-          grep -Fq 'name: OPENSSL_CONF' rendered-migration-job.yaml
-          grep -Fq '"helm.sh/hook": pre-install,pre-upgrade' rendered-migration-job.yaml
-          grep -Fq 'app.kubernetes.io/component: application' rendered-service.yaml
-          grep -Fq 'app.kubernetes.io/name: extra-codeowners' <<< "$deployment_selector"
-          grep -Fq 'app.kubernetes.io/instance: extra-codeowners' <<< "$deployment_selector"
-          grep -Fq 'app.kubernetes.io/component: application' rendered-deployment.yaml
-          grep -Fq 'enableServiceLinks: false' rendered-deployment.yaml
-          grep -Fq 'name: LD_LIBRARY_PATH' rendered-deployment.yaml
-          grep -Fq 'value: /opt/venv/lib:/usr/local/lib:/usr/lib:/lib' rendered-deployment.yaml
-          grep -Fq 'name: OPENSSL_CONF' rendered-deployment.yaml
-          grep -Fq 'value: /dev/null' rendered-deployment.yaml
-          grep -Fq 'app.kubernetes.io/instance: extra-codeowners' rendered-network-policy.yaml
-          if grep -Fq 'app.kubernetes.io/component:' <<< "$deployment_selector"; then
-            echo 'Deployment immutable selector no longer matches the legacy release selector.' >&2
-            exit 1
-          fi
-          if grep -Fq 'app.kubernetes.io/component:' rendered-network-policy.yaml; then
-            echo 'NetworkPolicy no longer covers both application and migration pods.' >&2
-            exit 1
-          fi
-          if grep -Eq 'extra-codeowners-(runtime|github)|github-credentials' \
-            rendered-migration-job.yaml; then
-            echo 'Migration Job inherited runtime GitHub credentials.' >&2
-            exit 1
-          fi
-
-      - name: Render controller-ordered migration
-        run: |
-          helm template extra-codeowners charts/extra-codeowners \
-            --set migrations.asHelmHook=false \
-            --set-json 'migrations.annotations={"argocd.argoproj.io/sync-wave":"-1"}' \
-            --show-only templates/migration-job.yaml > rendered-controller-migration-job.yaml
-          grep -Fq 'argocd.argoproj.io/sync-wave: "-1"' rendered-controller-migration-job.yaml
-          grep -Fq '"argocd.argoproj.io/hook": Sync' rendered-controller-migration-job.yaml
-          grep -Fq '"argocd.argoproj.io/hook-delete-policy": BeforeHookCreation,HookSucceeded' \
-            rendered-controller-migration-job.yaml
-          if grep -Fq 'helm.sh/hook:' rendered-controller-migration-job.yaml; then
-            echo 'Controller-ordered migration unexpectedly retained Helm hook annotations.' >&2
-            exit 1
-          fi
-
-      - name: Render trusted supplementary manifests without templating them
-        run: |
-          helm template extra-codeowners charts/extra-codeowners \
-            --values tests/fixtures/helm-extra-manifests.yaml \
-            --show-only templates/extra-manifests.yaml > rendered-extra-manifests.yaml
-          yq eval 'select(.kind == "Password") | .metadata.name' \
-            rendered-extra-manifests.yaml | grep -Fx 'extra-codeowners-setup-state'
-          yq eval 'select(.kind == "ExternalSecret") | .spec.target.template.data.EXTRA_CODEOWNERS_SETUP_STATE_SECRET' \
-            rendered-extra-manifests.yaml | grep -Fx '{{ .password }}'
-          if helm template extra-codeowners charts/extra-codeowners \
-            --set-json 'extraManifests=[{"apiVersion":"v1","kind":"Secret","metadata":{"name":"must-not-render"}}]' \
-            >/dev/null 2>&1; then
-            echo 'Chart accepted a Secret through extraManifests.' >&2
-            exit 1
-          fi
-          if helm template extra-codeowners charts/extra-codeowners \
-            --set-json 'extraManifests=[{"apiVersion":"v1","kind":"List","metadata":{"name":"must-not-render"},"items":[{"apiVersion":"v1","kind":"Secret","metadata":{"name":"must-not-render"}}]}]' \
-            >/dev/null 2>&1; then
-            echo 'Chart accepted a Secret nested in a List through extraManifests.' >&2
-            exit 1
-          fi
-
-      - name: Render rolling-update opt-in
-        run: >-
-          helm template extra-codeowners charts/extra-codeowners
-          --set deploymentStrategy.type=RollingUpdate
-          --set deploymentStrategy.rollingUpdate.maxUnavailable=0
-          --set deploymentStrategy.rollingUpdate.maxSurge=1
-          > rendered-rolling-update.yaml
-
-      - name: Reject chart-managed environment overrides
-        run: |
-          reject_values() {
-            description="$1"
-            shift
-            if helm template extra-codeowners charts/extra-codeowners \
-              "$@" >/dev/null 2>&1; then
-              echo "Chart accepted unsafe values: ${description}." >&2
-              exit 1
-            fi
-          }
-
-          reject_values "insecure-mode environment override" \
-            --set-string extraEnv[0].name=EXTRA_CODEOWNERS_ALLOW_INSECURE_CHANGES \
-            --set-string extraEnv[0].value=true
-          reject_values "runtime-environment override" \
-            --set-string extraEnv[0].name=EXTRA_CODEOWNERS_ENVIRONMENT \
-            --set-string extraEnv[0].value=development
-          reject_values "runtime ambient libpq environment" \
-            --set-string extraEnv[0].name=PGHOST \
-            --set-string extraEnv[0].value=database.example.com
-          reject_values "runtime interpreter environment injection" \
-            --set-string extraEnv[0].name=PYTHONPATH \
-            --set-string extraEnv[0].value=/run/secrets/extra-codeowners
-          reject_values "runtime loader environment injection" \
-            --set-string extraEnv[0].name=LD_PRELOAD \
-            --set-string extraEnv[0].value=/run/secrets/extra-codeowners/injected.so
-          reject_values "runtime uninspectable environment source" \
-            --set-string extraEnvFrom[0].secretRef.name=uninspectable
-          reject_values "migration hook override" \
-            --set-string migrations.annotations.helm\\.sh/hook=post-install
-          reject_values "migration environment override" \
-            --set-string migrations.extraEnv[0].name=EXTRA_CODEOWNERS_ENVIRONMENT \
-            --set-string migrations.extraEnv[0].value=development
-          reject_values "migration ambient libpq environment" \
-            --set-string migrations.extraEnv[0].name=PGSERVICE \
-            --set-string migrations.extraEnv[0].value=database
-          reject_values "migration loader environment injection" \
-            --set-string migrations.extraEnv[0].name=LD_LIBRARY_PATH \
-            --set-string migrations.extraEnv[0].value=/run/secrets/extra-codeowners
-          reject_values "migration uninspectable environment source" \
-            --set-string migrations.extraEnvFrom[0].secretRef.name=uninspectable
-          reject_values "migration temporary-volume override" \
-            --set-string migrations.extraVolumes[0].name=tmp \
-            --set-string migrations.extraVolumes[0].emptyDir={}
-          reject_values "migration temporary-mount override" \
-            --set-string migrations.extraVolumeMounts[0].name=other \
-            --set-string migrations.extraVolumeMounts[0].mountPath=/tmp
-          reject_values "migration deprecated CA mount" \
-            --set-string migrations.extraVolumeMounts[0].name=other \
-            --set-string migrations.extraVolumeMounts[0].mountPath=/run/secrets/database-ca \
-            --set migrations.extraVolumeMounts[0].readOnly=true
-          reject_values "pod selector-label override" \
-            --set-string podLabels.app\\.kubernetes\\.io/name=hijack
-          reject_values "pod component-label override" \
-            --set-string podLabels.app\\.kubernetes\\.io/component=database-migration
-          reject_values "temporary-volume override" \
-            --set-string extraVolumes[0].name=tmp \
-            --set-string extraVolumes[0].emptyDir={}
-          reject_values "temporary-mount override" \
-            --set-string extraVolumeMounts[0].name=other \
-            --set-string extraVolumeMounts[0].mountPath=/tmp
-          reject_values "build-identity parent-mount override" \
-            --set-string extraVolumeMounts[0].name=other \
-            --set-string extraVolumeMounts[0].mountPath=/app
-          reject_values "build-identity file-mount override" \
-            --set-string extraVolumeMounts[0].name=other \
-            --set-string extraVolumeMounts[0].mountPath=/app/build-identity.json
-          reject_values "normalized build-identity mount override" \
-            --set-string extraVolumeMounts[0].name=other \
-            --set-string extraVolumeMounts[0].mountPath=/app/other/../build-identity.json
-          reject_values "runtime interpreter mount override" \
-            --set-string extraVolumeMounts[0].name=other \
-            --set-string extraVolumeMounts[0].mountPath=/opt/venv/lib \
-            --set extraVolumeMounts[0].readOnly=true
-          reject_values "runtime writable secret mount" \
-            --set-string extraVolumeMounts[0].name=other \
-            --set-string extraVolumeMounts[0].mountPath=/run/secrets/extra-codeowners/other \
-            --set extraVolumeMounts[0].readOnly=false
-          reject_values "normalized runtime secret escape" \
-            --set-string extraVolumeMounts[0].name=other \
-            --set-string extraVolumeMounts[0].mountPath=/run/secrets/extra-codeowners/../../../opt/venv \
-            --set extraVolumeMounts[0].readOnly=true
-          reject_values "migration interpreter mount override" \
-            --set-string migrations.extraVolumeMounts[0].name=other \
-            --set-string migrations.extraVolumeMounts[0].mountPath=/opt/venv/lib \
-            --set migrations.extraVolumeMounts[0].readOnly=true
-          reject_values "rolling-update settings on Recreate" \
-            --set deploymentStrategy.rollingUpdate.maxSurge=1
-
-      - name: Validate Kubernetes resources
+      - name: Validate rendered Kubernetes resources
         run: >-
           docker run --rm
-          --volume "${PWD}:/work:ro"
+          --volume "${RUNNER_TEMP}/helm:/work:ro"
           ghcr.io/yannh/kubeconform:v0.7.0@sha256:85dbef6b4b312b99133decc9c6fc9495e9fc5f92293d4ff3b7e1b30f5611823c
           -kubernetes-version 1.27.0 -strict -summary
-          /work/rendered-default.yaml
-          /work/rendered-optional.yaml
-          /work/rendered-credentials.yaml
-          /work/rendered-rolling-update.yaml
-
-      - name: Package chart
-        run: helm package charts/extra-codeowners --destination /tmp
-
-  python-distribution-proof:
-    name: Build Python distribution proof
-    permissions:
-      contents: read
-    uses: ./.github/workflows/python-distribution.yml
-
-  python-distribution:
-    name: Python distribution reproducibility
-    needs: python-distribution-proof
-    if: ${{ always() }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 2
-    outputs:
-      artifact-id: ${{ steps.accept.outputs.artifact-id }}
-      artifact-digest: ${{ steps.accept.outputs.artifact-digest }}
-      wheel-sha256: ${{ steps.accept.outputs.wheel-sha256 }}
-      selection-record-sha256: ${{ steps.accept.outputs.selection-record-sha256 }}
-    steps:
-      - name: Require a complete reusable distribution proof
-        id: accept
-        env:
-          PROOF_RESULT: ${{ needs.python-distribution-proof.result }}
-          ARTIFACT_ID: ${{ needs.python-distribution-proof.outputs.artifact-id }}
-          ARTIFACT_DIGEST: ${{ needs.python-distribution-proof.outputs.artifact-digest }}
-          WHEEL_SHA256: ${{ needs.python-distribution-proof.outputs.wheel-sha256 }}
-          SELECTION_RECORD_SHA256: >-
-            ${{ needs.python-distribution-proof.outputs.selection-record-sha256 }}
-        run: |
-          set -euo pipefail
-          if [ "$PROOF_RESULT" != success ]; then
-            echo "Reusable distribution proof result was $PROOF_RESULT, not success." >&2
-            exit 1
-          fi
-          if ! [[ "$ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]]; then
-            echo "Reusable distribution proof returned an invalid artifact ID." >&2
-            exit 1
-          fi
-          if ! [[ "$ARTIFACT_DIGEST" =~ ^[0-9a-f]{64}$ ]]; then
-            echo "Reusable distribution proof returned an invalid artifact digest." >&2
-            exit 1
-          fi
-          if ! [[ "$WHEEL_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
-            echo "Reusable distribution proof returned an invalid wheel digest." >&2
-            exit 1
-          fi
-          if ! [[ "$SELECTION_RECORD_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
-            echo "Reusable distribution proof returned an invalid selection-record digest." >&2
-            exit 1
-          fi
-          {
-            printf 'artifact-id=%s\n' "$ARTIFACT_ID"
-            printf 'artifact-digest=%s\n' "$ARTIFACT_DIGEST"
-            printf 'wheel-sha256=%s\n' "$WHEEL_SHA256"
-            printf 'selection-record-sha256=%s\n' "$SELECTION_RECORD_SHA256"
-          } >>"$GITHUB_OUTPUT"
-
-  release-spine-transport-producer:
-    name: Raw OCI release-spine producer
-    needs: python-distribution
-    permissions:
-      contents: read
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    outputs:
-      index-digest: ${{ steps.build-image.outputs.digest }}
-      record-artifact-id: ${{ steps.upload-record.outputs.artifact-id }}
-      record-artifact-digest: ${{ steps.upload-record.outputs.artifact-digest }}
-      run-attempt: ${{ steps.identity.outputs.run-attempt }}
-      run-id: ${{ steps.identity.outputs.run-id }}
-      spine-artifact-id: ${{ steps.upload-spine.outputs.artifact-id }}
-      spine-artifact-digest: ${{ steps.upload-spine.outputs.artifact-digest }}
-      version: ${{ steps.identity.outputs.version }}
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          persist-credentials: false
-
-      - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version-file: .python-version
-
-      - name: Download the selected Python distribution by immutable ID
-        id: selected-python
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          artifact-ids: ${{ needs.python-distribution.outputs.artifact-id }}
-          path: ${{ runner.temp }}/verified-python
-          digest-mismatch: error
-
-      - name: Verify the selected Python distribution
-        env:
-          DISTRIBUTION_DIRECTORY: ${{ steps.selected-python.outputs.download-path }}
-          SELECTION_RECORD_SHA256: >-
-            ${{ needs.python-distribution.outputs.selection-record-sha256 }}
-          WHEEL_SHA256: ${{ needs.python-distribution.outputs.wheel-sha256 }}
-        run: >-
-          python .github/scripts/build_python_artifacts.py verify-selection
-          --directory "$DISTRIBUTION_DIRECTORY"
-          --source-revision "$GITHUB_SHA"
-          --wheel-sha256 "$WHEEL_SHA256"
-          --selection-record-sha256 "$SELECTION_RECORD_SHA256"
-
-      - name: Prepare immutable candidate identity
-        id: identity
-        env:
-          CANDIDATE_REGISTRY: ghcr.io
-          CANDIDATE_REPOSITORY: ${{ github.repository }}
-          PYTHON_ARTIFACT_DIGEST: ${{ needs.python-distribution.outputs.artifact-digest }}
-          PYTHON_ARTIFACT_ID: ${{ needs.python-distribution.outputs.artifact-id }}
-          REPOSITORY_ID: ${{ github.repository_id }}
-          REPOSITORY_NAME: ${{ github.repository }}
-          SELECTION_RECORD_SHA256: >-
-            ${{ needs.python-distribution.outputs.selection-record-sha256 }}
-          WHEEL_SHA256: ${{ needs.python-distribution.outputs.wheel-sha256 }}
-          WORKFLOW_REF: ${{ github.workflow_ref }}
-          WORKFLOW_SHA: ${{ github.workflow_sha }}
-        run: |
-          set -euo pipefail
-          if ! [[ "$PYTHON_ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]]; then
-            echo "Selected Python artifact ID is invalid." >&2
-            exit 1
-          fi
-          for digest in \
-            "$PYTHON_ARTIFACT_DIGEST" "$WHEEL_SHA256" "$SELECTION_RECORD_SHA256"; do
-            if ! [[ "$digest" =~ ^[0-9a-f]{64}$ ]]; then
-              echo "Selected Python distribution digest is invalid." >&2
-              exit 1
-            fi
-          done
-          output="${RUNNER_TEMP}/release-spine"
-          layout="${RUNNER_TEMP}/release-spine-layout-run-${GITHUB_RUN_ID}"
-          layout="${layout}-attempt-${GITHUB_RUN_ATTEMPT}"
-          if [ -e "$layout" ]; then
-            echo "Refusing to overwrite an existing OCI layout." >&2
-            exit 1
-          fi
-          install --directory --mode=0700 "$output"
-          candidate_tag="release-candidate-${GITHUB_SHA}"
-          candidate_name="${CANDIDATE_REGISTRY}/${CANDIDATE_REPOSITORY}:${candidate_tag}"
-          version="$(python - <<'PY'
-          import pathlib
-          import tomllib
-
-          project = tomllib.loads(pathlib.Path("pyproject.toml").read_text())
-          print(project["project"]["version"])
-          PY
-          )"
-          if ! [[ "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(a[1-9][0-9]*)?$ ]]; then
-            echo "Project version is not a supported stable or alpha version." >&2
-            exit 1
-          fi
-          basename="extra-codeowners-image-${GITHUB_SHA}"
-          basename="${basename}-python-artifact-${PYTHON_ARTIFACT_ID}"
-          basename="${basename}-run-${GITHUB_RUN_ID}-attempt-${GITHUB_RUN_ATTEMPT}"
-          {
-            printf 'candidate-name=%s\n' "$candidate_name"
-            printf 'candidate-tag=%s\n' "$candidate_tag"
-            printf 'layout-path=%s\n' "$layout"
-            printf 'oci-output=type=oci,dest=%s,tar=false,name=%s\n' \
-              "$layout" "$candidate_name"
-            printf 'record-path=%s/%s.spine.json\n' "$output" "$basename"
-            printf 'run-attempt=%s\n' "$GITHUB_RUN_ATTEMPT"
-            printf 'run-id=%s\n' "$GITHUB_RUN_ID"
-            printf 'spine-path=%s/%s.bin\n' "$output" "$basename"
-            printf 'version=%s\n' "$version"
-          } >>"$GITHUB_OUTPUT"
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
-        with:
-          cache-image: false
-          image: >-
-            tonistiigi/binfmt:qemu-v10.2.3@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
-
-      - name: Set up pinned Docker Buildx
-        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
-        with:
-          cache-binary: false
-          version: v0.35.0
-          driver-opts: >-
-            image=moby/buildkit:v0.30.0@sha256:0168606be2315b7c807a03b3d8aa79beefdb31c98740cebdffdfeebf31190c9f
-
-      - name: Export the real multi-platform OCI candidate
-        id: build-image
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
-        env:
-          DOCKER_BUILD_RECORD_UPLOAD: "false"
-        with:
-          build-contexts: |
-            verified-python=${{ steps.selected-python.outputs.download-path }}
-          build-args: |
-            APPLICATION_SOURCE_REVISION=${{ github.sha }}
-            APPLICATION_WHEEL_SHA256=${{ needs.python-distribution.outputs.wheel-sha256 }}
-            APPLICATION_SELECTION_RECORD_SHA256=${{ needs.python-distribution.outputs.selection-record-sha256 }}
-            VERSION=${{ steps.identity.outputs.version }}
-          context: .
-          outputs: ${{ steps.identity.outputs.oci-output }}
-          platforms: linux/amd64,linux/arm64
-          provenance: false
-          push: false
-          sbom: false
-          target: runtime
-
-      - name: Build bounded raw release artifacts
-        env:
-          CANDIDATE_REGISTRY: ghcr.io
-          CANDIDATE_REPOSITORY: ${{ github.repository }}
-          CANDIDATE_TAG: ${{ steps.identity.outputs.candidate-tag }}
-          INDEX_DIGEST: ${{ steps.build-image.outputs.digest }}
-          LAYOUT_PATH: ${{ steps.identity.outputs.layout-path }}
-          PYTHON_ARTIFACT_DIGEST: ${{ needs.python-distribution.outputs.artifact-digest }}
-          PYTHON_ARTIFACT_ID: ${{ needs.python-distribution.outputs.artifact-id }}
-          RECORD_PATH: ${{ steps.identity.outputs.record-path }}
-          REPOSITORY_ID: ${{ github.repository_id }}
-          REPOSITORY_NAME: ${{ github.repository }}
-          SELECTION_RECORD_SHA256: >-
-            ${{ needs.python-distribution.outputs.selection-record-sha256 }}
-          SPINE_PATH: ${{ steps.identity.outputs.spine-path }}
-          VERSION: ${{ steps.identity.outputs.version }}
-          WHEEL_SHA256: ${{ needs.python-distribution.outputs.wheel-sha256 }}
-          WORKFLOW_REF: ${{ github.workflow_ref }}
-          WORKFLOW_SHA: ${{ github.workflow_sha }}
-        run: |
-          set -euo pipefail
-          if ! [[ "$INDEX_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
-            echo "Pinned build action returned an invalid root digest." >&2
-            exit 1
-          fi
-          python .github/scripts/build_release_spine.py \
-            --layout "$LAYOUT_PATH" \
-            --spine-output "$SPINE_PATH" \
-            --record-output "$RECORD_PATH" \
-            --repository-id "$REPOSITORY_ID" \
-            --repository-name "$REPOSITORY_NAME" \
-            --run-id "$GITHUB_RUN_ID" \
-            --run-attempt "$GITHUB_RUN_ATTEMPT" \
-            --source-revision "$GITHUB_SHA" \
-            --version "$VERSION" \
-            --workflow-path .github/workflows/ci.yml \
-            --workflow-ref "$WORKFLOW_REF" \
-            --workflow-sha "$WORKFLOW_SHA" \
-            --candidate-registry "$CANDIDATE_REGISTRY" \
-            --candidate-repository "$CANDIDATE_REPOSITORY" \
-            --candidate-tag "$CANDIDATE_TAG" \
-            --index-digest "$INDEX_DIGEST" \
-            --python-artifact-id "$PYTHON_ARTIFACT_ID" \
-            --python-artifact-sha256 "$PYTHON_ARTIFACT_DIGEST" \
-            --wheel-sha256 "$WHEEL_SHA256" \
-            --selection-record-sha256 "$SELECTION_RECORD_SHA256"
-
-      - name: Upload the raw spine bytes
-        id: upload-spine
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          path: ${{ steps.identity.outputs.spine-path }}
-          archive: false
-          if-no-files-found: error
-          retention-days: 1
-
-      - name: Upload the raw spine record
-        id: upload-record
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          path: ${{ steps.identity.outputs.record-path }}
-          archive: false
-          if-no-files-found: error
-          retention-days: 1
-
-  release-spine-transport-consumer:
-    name: Raw OCI release-spine transport
-    needs:
-      - python-distribution
-      - release-spine-transport-producer
-    if: ${{ always() }}
-    permissions:
-      contents: read
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    steps:
-      - name: Require a complete raw OCI release-spine producer
-        shell: bash
-        env:
-          PRODUCER_RESULT: ${{ needs.release-spine-transport-producer.result }}
-        run: |
-          set -euo pipefail
-          if [ "$PRODUCER_RESULT" != success ]; then
-            echo "Raw OCI release-spine producer result was $PRODUCER_RESULT, not success." >&2
-            exit 1
-          fi
-
-      - name: Check out repository
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          persist-credentials: false
-
-      - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version-file: .python-version
-
-      - name: Download the raw spine by immutable ID
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          artifact-ids: >-
-            ${{ needs.release-spine-transport-producer.outputs.spine-artifact-id }}
-          path: ${{ runner.temp }}/downloaded-spine
-          skip-decompress: true
-          digest-mismatch: error
-
-      - name: Download the raw record by immutable ID
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          artifact-ids: >-
-            ${{ needs.release-spine-transport-producer.outputs.record-artifact-id }}
-          path: ${{ runner.temp }}/downloaded-record
-          skip-decompress: true
-          digest-mismatch: error
-
-      - name: Verify the bounded raw transport
-        shell: bash
-        env:
-          INDEX_DIGEST: ${{ needs.release-spine-transport-producer.outputs.index-digest }}
-          PYTHON_ARTIFACT_DIGEST: ${{ needs.python-distribution.outputs.artifact-digest }}
-          PYTHON_ARTIFACT_ID: ${{ needs.python-distribution.outputs.artifact-id }}
-          PRODUCER_RUN_ATTEMPT: >-
-            ${{ needs.release-spine-transport-producer.outputs.run-attempt }}
-          PRODUCER_RUN_ID: ${{ needs.release-spine-transport-producer.outputs.run-id }}
-          RECORD_ARTIFACT_DIGEST: >-
-            ${{ needs.release-spine-transport-producer.outputs.record-artifact-digest }}
-          REPOSITORY_ID: ${{ github.repository_id }}
-          REPOSITORY_NAME: ${{ github.repository }}
-          SELECTION_RECORD_SHA256: >-
-            ${{ needs.python-distribution.outputs.selection-record-sha256 }}
-          SPINE_ARTIFACT_DIGEST: >-
-            ${{ needs.release-spine-transport-producer.outputs.spine-artifact-digest }}
-          VERSION: ${{ needs.release-spine-transport-producer.outputs.version }}
-          WHEEL_SHA256: ${{ needs.python-distribution.outputs.wheel-sha256 }}
-          WORKFLOW_REF: ${{ github.workflow_ref }}
-          WORKFLOW_SHA: ${{ github.workflow_sha }}
-        run: |
-          set -euo pipefail
-          if [ "$PRODUCER_RUN_ID" != "$GITHUB_RUN_ID" ]; then
-            echo "Raw release-spine producer returned the wrong run ID." >&2
-            exit 1
-          fi
-          for identifier in "$PYTHON_ARTIFACT_ID" "$PRODUCER_RUN_ID" "$PRODUCER_RUN_ATTEMPT"; do
-            if ! [[ "$identifier" =~ ^[1-9][0-9]*$ ]]; then
-              echo "Raw release-spine producer returned an invalid identity." >&2
-              exit 1
-            fi
-          done
-          candidate_tag="release-candidate-${GITHUB_SHA}"
-          basename="extra-codeowners-image-${GITHUB_SHA}"
-          basename="${basename}-python-artifact-${PYTHON_ARTIFACT_ID}"
-          basename="${basename}-run-${PRODUCER_RUN_ID}-attempt-${PRODUCER_RUN_ATTEMPT}"
-          python .github/scripts/release_spine.py verify \
-            --record "${RUNNER_TEMP}/downloaded-record/${basename}.spine.json" \
-            --spine "${RUNNER_TEMP}/downloaded-spine/${basename}.bin" \
-            --record-artifact-sha256 "$RECORD_ARTIFACT_DIGEST" \
-            --spine-artifact-sha256 "$SPINE_ARTIFACT_DIGEST" \
-            --repository-id "$REPOSITORY_ID" \
-            --repository-name "$REPOSITORY_NAME" \
-            --run-id "$PRODUCER_RUN_ID" \
-            --run-attempt "$PRODUCER_RUN_ATTEMPT" \
-            --source-revision "$GITHUB_SHA" \
-            --version "$VERSION" \
-            --workflow-path .github/workflows/ci.yml \
-            --workflow-ref "$WORKFLOW_REF" \
-            --workflow-sha "$WORKFLOW_SHA" \
-            --candidate-registry ghcr.io \
-            --candidate-repository "$REPOSITORY_NAME" \
-            --candidate-tag "$candidate_tag" \
-            --index-digest "$INDEX_DIGEST" \
-            --python-artifact-id "$PYTHON_ARTIFACT_ID" \
-            --python-artifact-sha256 "$PYTHON_ARTIFACT_DIGEST" \
-            --wheel-sha256 "$WHEEL_SHA256" \
-            --selection-record-sha256 "$SELECTION_RECORD_SHA256"
-
-  verified-container-sources:
-    name: Fetch verified container sources once
-    needs: python-distribution
-    permissions:
-      contents: read
-    runs-on: ubuntu-24.04
-    timeout-minutes: 120
-    outputs:
-      artifact-id: ${{ steps.accept-artifact.outputs.artifact-id }}
-      artifact-digest: ${{ steps.accept-artifact.outputs.artifact-digest }}
-      direct-plan-sha256: ${{ steps.bindings.outputs.direct-plan-sha256 }}
-      direct-plan-size: ${{ steps.bindings.outputs.direct-plan-size }}
-      alpine-plan-sha256: ${{ steps.bindings.outputs.alpine-plan-sha256 }}
-      alpine-plan-size: ${{ steps.bindings.outputs.alpine-plan-size }}
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          persist-credentials: false
-
-      - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version-file: .python-version
-
-      - name: Download the selected Python distribution
-        id: python-distribution
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          artifact-ids: ${{ needs.python-distribution.outputs.artifact-id }}
-          path: ${{ runner.temp }}/verified-python
-          digest-mismatch: error
-
-      - name: Verify the selected Python distribution
-        env:
-          DISTRIBUTION_DIRECTORY: ${{ steps.python-distribution.outputs.download-path }}
-          SELECTION_RECORD_SHA256: >-
-            ${{ needs.python-distribution.outputs.selection-record-sha256 }}
-          WHEEL_SHA256: ${{ needs.python-distribution.outputs.wheel-sha256 }}
-        run: >-
-          python .github/scripts/build_python_artifacts.py verify-selection
-          --directory "$DISTRIBUTION_DIRECTORY"
-          --source-revision "$GITHUB_SHA"
-          --wheel-sha256 "$WHEEL_SHA256"
-          --selection-record-sha256 "$SELECTION_RECORD_SHA256"
-
-      - name: Set up pinned Docker Buildx
-        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
-        with:
-          cache-binary: false
-          version: v0.35.0
-          driver-opts: >-
-            image=moby/buildkit:v0.30.0@sha256:0168606be2315b7c807a03b3d8aa79beefdb31c98740cebdffdfeebf31190c9f
-
-      - name: Install cosign
-        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
-        with:
-          cosign-release: v3.0.6
-
-      - name: Verify the signed native wheelhouse before parser build
-        run: >-
-          timeout --signal=TERM --kill-after=30s 10m
-          bash .github/scripts/verify-native-wheelhouse-index.sh
-          containers/native-wheelhouse/consumer.json
-          "${RUNNER_TEMP}/native-wheelhouse-parser-preflight"
-
-      - name: Build the current-commit offline parser
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
-        env:
-          DOCKER_BUILD_RECORD_UPLOAD: "false"
-        with:
-          build-contexts: |
-            verified-python=${{ steps.python-distribution.outputs.download-path }}
-          build-args: |
-            APPLICATION_SOURCE_REVISION=${{ github.sha }}
-            APPLICATION_WHEEL_SHA256=${{ needs.python-distribution.outputs.wheel-sha256 }}
-            APPLICATION_SELECTION_RECORD_SHA256=${{ needs.python-distribution.outputs.selection-record-sha256 }}
-          context: .
-          load: true
-          platforms: linux/amd64
-          provenance: false
-          push: false
-          sbom: false
-          target: test
-          tags: extra-codeowners:source-parser-${{ github.sha }}
-
-      - name: Fetch all verified source stores under fixed timeouts
-        id: bindings
-        env:
-          SOURCE_ARTIFACT_ROOT: ${{ runner.temp }}/verified-source-artifact
-          SOURCE_WORK_ROOT: ${{ runner.temp }}/verified-source-work
-        run: |
-          set -euo pipefail
-          umask 077
-          if [ -e "$SOURCE_ARTIFACT_ROOT" ] || [ -e "$SOURCE_WORK_ROOT" ]; then
-            echo "Refusing to reuse an existing verified source workspace." >&2
-            exit 1
-          fi
-          install --directory --mode=0700 "$SOURCE_ARTIFACT_ROOT" "$SOURCE_WORK_ROOT"
-          direct_plan="${SOURCE_WORK_ROOT}/direct-plan.json"
-          direct_store="${SOURCE_ARTIFACT_ROOT}/direct-store"
-          direct_journal="${SOURCE_WORK_ROOT}/direct-fetch-journal.json"
-          grant_parser_read_access() {
-            for root in "$@"; do
-              find "$root" -xdev -type d \
-                -exec chmod 0755 -- {} +
-              find "$root" -xdev -type f \
-                -exec chmod 0644 -- {} +
-            done
-          }
-          timeout --signal=TERM --kill-after=30s 30m \
-            bash .github/scripts/fetch-native-wheelhouse.sh \
-              "${GITHUB_WORKSPACE}/containers/native-wheelhouse/consumer.json" \
-              "${GITHUB_WORKSPACE}/containers/native-wheelhouse/inputs.json" \
-              "${SOURCE_ARTIFACT_ROOT}/native-wheelhouse-store" \
-              "${SOURCE_WORK_ROOT}/native-wheelhouse"
-          grant_parser_read_access \
-            "${SOURCE_ARTIFACT_ROOT}/native-wheelhouse-store"
-
-          python .github/scripts/container_source_plan.py direct-plan \
-            --policy .compliance/container-policy.json \
-            --uv-lock uv.lock \
-            --native-wheelhouse-contract containers/native-wheelhouse/consumer.json \
-            --source-revision "$GITHUB_SHA" \
-            --output "$direct_plan"
-          direct_sha256="$(sha256sum "$direct_plan" | cut -d' ' -f1)"
-          direct_size="$(stat --format='%s' "$direct_plan")"
-          timeout --signal=TERM --kill-after=30s 30m \
-            python .github/scripts/fetch_verified_sources.py \
-              --plan "$direct_plan" \
-              --output "$direct_store" \
-              --journal "$direct_journal" \
-              --expected-plan-sha256 "$direct_sha256" \
-              --expected-plan-size "$direct_size" \
-              >"${SOURCE_WORK_ROOT}/direct-verification.json"
-          grant_parser_read_access "$direct_store"
-
-          parser_image_id="$(
-            docker image inspect \
-              --format '{{.Id}}' \
-              "extra-codeowners:source-parser-${GITHUB_SHA}"
-          )"
-          if ! [[ "$parser_image_id" =~ ^sha256:[0-9a-f]{64}$ ]]; then
-            echo "Current-commit parser image has an invalid local image ID." >&2
-            exit 1
-          fi
-          parser_container_nonce="$(python -c 'import secrets; print(secrets.token_hex(16))')"
-          if ! [[ "$parser_container_nonce" =~ ^[0-9a-f]{32}$ ]]; then
-            echo "Cannot allocate a unique source-plan parser container name." >&2
-            exit 1
-          fi
-          parser_container_name="extra-codeowners-source-plan-${parser_container_nonce}"
-          plan_output="${SOURCE_WORK_ROOT}/source-plan-output"
-          if [ -e "$plan_output" ]; then
-            echo "Refusing to reuse an existing source-plan output mount." >&2
-            exit 1
-          fi
-          install --directory --mode=0700 "$plan_output"
-          sudo mount \
-            --types tmpfs \
-            --options size=64m,nr_inodes=8192,nosuid,nodev,noexec,mode=0700,uid=65532,gid=65532 \
-            tmpfs "$plan_output"
-          cleanup_plan_output() {
-            env -i \
-              DOCKER_CONFIG=/nonexistent \
-              HOME=/nonexistent \
-              PATH=/usr/bin:/bin \
-              /usr/bin/timeout --signal=TERM --kill-after=5s 15s \
-              /usr/bin/docker rm --force "$parser_container_name" \
-              >/dev/null 2>&1 || true
-            if mountpoint --quiet "$plan_output"; then
-              sudo umount "$plan_output" || sudo umount --lazy "$plan_output"
-            fi
-            rmdir "$plan_output"
-          }
-          trap cleanup_plan_output EXIT
-          timeout --signal=TERM --kill-after=30s 10m \
-            python .github/scripts/run_evidence_parser.py command \
-              --image "$parser_image_id" \
-              --container-name "$parser_container_name" \
-              --input "direct-store=$direct_store" \
-              --input "policy=${GITHUB_WORKSPACE}/.compliance/container-policy.json" \
-              --output "$plan_output" \
-              --parser source-plan \
-              --execute \
-              -- \
-              alpine-distfile-plan \
-              --policy /inputs/policy \
-              --direct-store /inputs/direct-store \
-              --expected-parent-plan-sha256 "$direct_sha256" \
-              --expected-parent-plan-size "$direct_size" \
-              --output /output/alpine-plan.json
-          sudo chown "$(id -u):$(id -g)" "$plan_output"
-          materialized_plan_root="${SOURCE_WORK_ROOT}/materialized-alpine-plan"
-          if [ -e "$materialized_plan_root" ]; then
-            echo "Refusing to reuse a source-plan materialization directory." >&2
-            exit 1
-          fi
-          install --directory --mode=0700 "$materialized_plan_root"
-          plan_binding="$(
-            python .github/scripts/run_evidence_parser.py materialize-source-plan \
-              --source "$plan_output" \
-              --destination "$materialized_plan_root"
-          )"
-          alpine_sha256="$(
-            jq -er '
-              select(
-                .schema_version == 1 and
-                .kind == "extra-codeowners/materialized-source-plan" and
-                .filename == "alpine-plan.json"
-              ) |
-              .sha256
-            ' <<<"$plan_binding"
-          )"
-          alpine_size="$(
-            jq -er '
-              select(
-                .schema_version == 1 and
-                .kind == "extra-codeowners/materialized-source-plan" and
-                .filename == "alpine-plan.json"
-              ) |
-              .size
-            ' <<<"$plan_binding"
-          )"
-          alpine_plan="${materialized_plan_root}/alpine-plan.json"
-          cleanup_plan_output
-          trap - EXIT
-          timeout --signal=TERM --kill-after=30s 30m \
-            python .github/scripts/fetch_verified_sources.py \
-              --plan "$alpine_plan" \
-              --output "${SOURCE_ARTIFACT_ROOT}/alpine-store" \
-              --journal "${SOURCE_WORK_ROOT}/alpine-fetch-journal.json" \
-              --expected-plan-sha256 "$alpine_sha256" \
-              --expected-plan-size "$alpine_size" \
-              >"${SOURCE_WORK_ROOT}/alpine-verification.json"
-          grant_parser_read_access "${SOURCE_ARTIFACT_ROOT}/alpine-store"
-
-          if ! [[ "$direct_sha256" =~ ^[0-9a-f]{64}$ ]] ||
-             ! [[ "$alpine_sha256" =~ ^[0-9a-f]{64}$ ]] ||
-             ! [[ "$direct_size" =~ ^[1-9][0-9]*$ ]] ||
-             ! [[ "$alpine_size" =~ ^[1-9][0-9]*$ ]]; then
-            echo "Verified source plan bindings are incomplete or invalid." >&2
-            exit 1
-          fi
-          if [ "$direct_size" -gt 4194304 ] || [ "$alpine_size" -gt 4194304 ]; then
-            echo "Verified source plan binding exceeds its fixed byte limit." >&2
-            exit 1
-          fi
-          test -d "${SOURCE_ARTIFACT_ROOT}/direct-store"
-          test -d "${SOURCE_ARTIFACT_ROOT}/alpine-store"
-          test -d "${SOURCE_ARTIFACT_ROOT}/native-wheelhouse-store"
-          {
-            printf 'direct-plan-sha256=%s\n' "$direct_sha256"
-            printf 'direct-plan-size=%s\n' "$direct_size"
-            printf 'alpine-plan-sha256=%s\n' "$alpine_sha256"
-            printf 'alpine-plan-size=%s\n' "$alpine_size"
-          } >>"$GITHUB_OUTPUT"
-
-      - name: Upload the shared verified source stores
-        id: upload
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: >-
-            verified-source-stores-${{ github.sha }}-attempt-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/verified-source-artifact/
-          if-no-files-found: error
-          retention-days: 5
-
-      - name: Require a complete verified source artifact identity
-        id: accept-artifact
-        env:
-          ARTIFACT_DIGEST: ${{ steps.upload.outputs.artifact-digest }}
-          ARTIFACT_ID: ${{ steps.upload.outputs.artifact-id }}
-        run: |
-          set -euo pipefail
-          if ! [[ "$ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]]; then
-            echo "Verified source upload returned an invalid artifact ID." >&2
-            exit 1
-          fi
-          if ! [[ "$ARTIFACT_DIGEST" =~ ^[0-9a-f]{64}$ ]]; then
-            echo "Verified source upload returned an invalid artifact digest." >&2
-            exit 1
-          fi
-          {
-            printf 'artifact-id=%s\n' "$ARTIFACT_ID"
-            printf 'artifact-digest=%s\n' "$ARTIFACT_DIGEST"
-          } >>"$GITHUB_OUTPUT"
-
-      - name: Upload bounded source-fetch diagnostics
-        if: ${{ always() && !cancelled() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: >-
-            verified-source-fetch-diagnostics-${{ github.sha }}-attempt-${{ github.run_attempt }}
-          path: |
-            ${{ runner.temp }}/verified-source-work/direct-fetch-journal.json
-            ${{ runner.temp }}/verified-source-work/alpine-fetch-journal.json
-            ${{ runner.temp }}/verified-source-work/native-wheelhouse/index.json
-            ${{ runner.temp }}/verified-source-work/native-wheelhouse/signature-verification.json
-          if-no-files-found: warn
-          retention-days: 2
+          /work/default.yaml /work/optional.yaml /work/credentials.yaml
+          /work/rolling-update.yaml
 
   container:
-    name: Container build (${{ matrix.architecture }})
-    needs:
-      - python-distribution
-      - verified-container-sources
-    if: ${{ always() }}
-    permissions:
-      contents: read
+    name: Container (${{ matrix.architecture }})
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 90
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -1249,451 +303,56 @@ jobs:
             machine: aarch64
             platform: linux/arm64
             runner: ubuntu-24.04-arm
-    services:
-      postgres:
-        image: postgres:17.7-alpine@sha256:bb377b7239d2774ac8cc76f481596ce96c5a6b5e9d141f6d0a0ee371a6e7c0f2
-        env:
-          POSTGRES_DB: extra_codeowners_test
-          POSTGRES_PASSWORD: extra_codeowners
-          POSTGRES_USER: extra_codeowners
-        options: >-
-          --health-cmd "pg_isready --username=extra_codeowners --dbname=extra_codeowners_test"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-        ports:
-          - 5432:5432
     steps:
-      - name: Require the native runner architecture
+      - name: Require native runner architecture
         env:
           EXPECTED_MACHINE: ${{ matrix.machine }}
-        run: |
-          set -euo pipefail
-          actual="$(uname -m)"
-          if [ "$actual" != "$EXPECTED_MACHINE" ]; then
-            echo "::error::Container runner is $actual, expected $EXPECTED_MACHINE"
-            exit 1
-          fi
-
-      - name: Require the selected Python distribution and verified sources
-        env:
-          DISTRIBUTION_RESULT: ${{ needs.python-distribution.result }}
-          SOURCE_ARTIFACT_DIGEST: >-
-            ${{ needs.verified-container-sources.outputs.artifact-digest }}
-          SOURCE_ARTIFACT_ID: ${{ needs.verified-container-sources.outputs.artifact-id }}
-          SOURCE_RESULT: ${{ needs.verified-container-sources.result }}
-          DIRECT_PLAN_SHA256: >-
-            ${{ needs.verified-container-sources.outputs.direct-plan-sha256 }}
-          DIRECT_PLAN_SIZE: ${{ needs.verified-container-sources.outputs.direct-plan-size }}
-          ALPINE_PLAN_SHA256: >-
-            ${{ needs.verified-container-sources.outputs.alpine-plan-sha256 }}
-          ALPINE_PLAN_SIZE: ${{ needs.verified-container-sources.outputs.alpine-plan-size }}
-        run: |
-          set -euo pipefail
-          if [ "$DISTRIBUTION_RESULT" != success ]; then
-            echo "Python distribution selection result was $DISTRIBUTION_RESULT, not success." >&2
-            exit 1
-          fi
-          if [ "$SOURCE_RESULT" != success ]; then
-            echo "Verified source fetch result was $SOURCE_RESULT, not success." >&2
-            exit 1
-          fi
-          if ! [[ "$SOURCE_ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]] ||
-             ! [[ "$SOURCE_ARTIFACT_DIGEST" =~ ^[0-9a-f]{64}$ ]]; then
-            echo "Verified source artifact identity is invalid." >&2
-            exit 1
-          fi
-          for digest in "$DIRECT_PLAN_SHA256" "$ALPINE_PLAN_SHA256"; do
-            if ! [[ "$digest" =~ ^[0-9a-f]{64}$ ]]; then
-              echo "Verified source plan digest is invalid." >&2
-              exit 1
-            fi
-          done
-          for size in "$DIRECT_PLAN_SIZE" "$ALPINE_PLAN_SIZE"; do
-            if ! [[ "$size" =~ ^[1-9][0-9]*$ ]] || [ "$size" -gt 4194304 ]; then
-              echo "Verified source plan size is invalid." >&2
-              exit 1
-            fi
-          done
+        run: test "$(uname -m)" = "${EXPECTED_MACHINE}"
 
       - name: Check out repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
 
-      - name: Set up Python for evidence collection
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version-file: .python-version
-
-      - name: Download the selected Python distribution
-        id: python-distribution
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          artifact-ids: ${{ needs.python-distribution.outputs.artifact-id }}
-          path: ${{ runner.temp }}/verified-python
-          digest-mismatch: error
-
-      - name: Download all verified source stores by immutable ID
-        id: verified-sources
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          artifact-ids: ${{ needs.verified-container-sources.outputs.artifact-id }}
-          path: ${{ runner.temp }}/verified-source-stores
-          digest-mismatch: error
-
-      - name: Verify the selected Python distribution
-        env:
-          DISTRIBUTION_DIRECTORY: ${{ steps.python-distribution.outputs.download-path }}
-          WHEEL_SHA256: ${{ needs.python-distribution.outputs.wheel-sha256 }}
-          SELECTION_RECORD_SHA256: >-
-            ${{ needs.python-distribution.outputs.selection-record-sha256 }}
-        run: >-
-          python .github/scripts/build_python_artifacts.py verify-selection
-          --directory "$DISTRIBUTION_DIRECTORY"
-          --source-revision "$GITHUB_SHA"
-          --wheel-sha256 "$WHEEL_SHA256"
-          --selection-record-sha256 "$SELECTION_RECORD_SHA256"
-
-      - name: Prepare fixed rootless parser read-only inputs
-        env:
-          PYTHON_DISTRIBUTION_DIRECTORY: ${{ steps.python-distribution.outputs.download-path }}
-          VERIFIED_SOURCE_DIRECTORY: ${{ steps.verified-sources.outputs.download-path }}
-        run: |
-          set -euo pipefail
-          test -d "${VERIFIED_SOURCE_DIRECTORY}/direct-store"
-          test -d "${VERIFIED_SOURCE_DIRECTORY}/alpine-store"
-          test -d "${VERIFIED_SOURCE_DIRECTORY}/native-wheelhouse-store"
-          for root in \
-            "$PYTHON_DISTRIBUTION_DIRECTORY" \
-            "${VERIFIED_SOURCE_DIRECTORY}/direct-store" \
-            "${VERIFIED_SOURCE_DIRECTORY}/alpine-store" \
-            "${VERIFIED_SOURCE_DIRECTORY}/native-wheelhouse-store"; do
-            find "$root" -xdev -type d \
-              -exec chmod 0755 -- {} +
-            find "$root" -xdev -type f \
-              -exec chmod 0644 -- {} +
-          done
-
-      - name: Set up uv for evidence collection
-        uses: astral-sh/setup-uv@6ee6290f1cbc4156c0bdd66691b2c144ef8df19a # v7.4.0
-        with:
-          version: "0.11.28" # uv runtime
-          enable-cache: false
-
-      - name: Install locked evidence dependencies
-        run: uv sync --only-group evidence --frozen
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
         with:
-          cache-binary: false
-          version: v0.35.0
+          buildkitd-flags: --debug
           driver-opts: >-
-            image=moby/buildkit:v0.30.0@sha256:0168606be2315b7c807a03b3d8aa79beefdb31c98740cebdffdfeebf31190c9f
+            image=moby/buildkit:v0.32.2@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8
+          version: v0.36.1 # buildx runtime
 
-      - name: Build container test target
+      - name: Build native container
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
-          build-contexts: |
-            verified-python=${{ steps.python-distribution.outputs.download-path }}
-          build-args: |
-            APPLICATION_SOURCE_REVISION=${{ github.sha }}
-            APPLICATION_WHEEL_SHA256=${{ needs.python-distribution.outputs.wheel-sha256 }}
-            APPLICATION_SELECTION_RECORD_SHA256=${{ needs.python-distribution.outputs.selection-record-sha256 }}
           context: .
           load: true
           platforms: ${{ matrix.platform }}
           push: false
-          target: test
-          tags: extra-codeowners:test-${{ matrix.architecture }}
-
-      - name: Run full suite in selected container runtime
-        env:
-          TEST_POSTGRES_URL: >-
-            postgresql+psycopg://extra_codeowners:extra_codeowners@127.0.0.1:5432/extra_codeowners_test
-        run: >-
-          docker run --rm
-          --platform ${{ matrix.platform }}
-          --network host
-          --env TEST_POSTGRES_URL
-          extra-codeowners:test-${{ matrix.architecture }}
-
-      - name: Build container without publishing
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
-        with:
-          build-contexts: |
-            verified-python=${{ steps.python-distribution.outputs.download-path }}
-          context: .
-          load: true
-          platforms: ${{ matrix.platform }}
-          push: false
+          provenance: false
+          sbom: false
           tags: extra-codeowners:ci-${{ matrix.architecture }}
           build-args: |
-            APPLICATION_SOURCE_REVISION=${{ github.sha }}
-            APPLICATION_WHEEL_SHA256=${{ needs.python-distribution.outputs.wheel-sha256 }}
-            APPLICATION_SELECTION_RECORD_SHA256=${{ needs.python-distribution.outputs.selection-record-sha256 }}
-            VERSION=0.0.0-ci
+            SOURCE_REVISION=${{ github.sha }}
+            VERSION=0.0.0+git.${{ github.sha }}
+          cache-from: type=gha,scope=container-${{ matrix.architecture }}
+          cache-to: type=gha,mode=max,scope=container-${{ matrix.architecture }},ignore-error=true,timeout=5m
 
       - name: Smoke test hardened container
         run: >-
-          bash .github/scripts/smoke-container.sh
+          .github/scripts/smoke-container.sh
           extra-codeowners:ci-${{ matrix.architecture }}
           ${{ matrix.architecture }}
           extra-codeowners-ci-smoke-${{ matrix.architecture }}
+          0.0.0+git.${{ github.sha }}
+          0.0.0+git.${{ github.sha }}
+          ${{ github.sha }}
 
-      - name: Export container bytes without parsing image layers
-        env:
-          ARCHITECTURE: ${{ matrix.architecture }}
-          PLATFORM: ${{ matrix.platform }}
-        run: |
-          set -euo pipefail
-          image="extra-codeowners:ci-${ARCHITECTURE}"
-          subject_digest="$(docker image inspect --format '{{.Id}}' "$image")"
-          export_root="${RUNNER_TEMP}/image-export-${ARCHITECTURE}"
-          timeout --signal=TERM --kill-after=30s 15m \
-            python .github/scripts/export_container_image.py \
-              --image "$image" \
-              --platform "$PLATFORM" \
-              --subject-digest "$subject_digest" \
-              --allow-config-digest-subject \
-              --output "$export_root" \
-              >/dev/null
-
-      - name: Inventory image layers in the offline parser sandbox
-        env:
-          ARCHITECTURE: ${{ matrix.architecture }}
-        run: |
-          set -euo pipefail
-          parser_image="extra-codeowners:test-${ARCHITECTURE}"
-          parser_image_id="$(docker image inspect --format '{{.Id}}' "$parser_image")"
-          if ! [[ "$parser_image_id" =~ ^sha256:[0-9a-f]{64}$ ]]; then
-            echo "Current-commit image parser has an invalid local image ID." >&2
-            exit 1
-          fi
-          parser_container_nonce="$(python -c 'import secrets; print(secrets.token_hex(16))')"
-          if ! [[ "$parser_container_nonce" =~ ^[0-9a-f]{32}$ ]]; then
-            echo "Cannot allocate a unique image parser container name." >&2
-            exit 1
-          fi
-          parser_container_name="extra-codeowners-image-inventory-${parser_container_nonce}"
-          export_root="${RUNNER_TEMP}/image-export-${ARCHITECTURE}"
-          output="${RUNNER_TEMP}/image-inventory-output-${ARCHITECTURE}"
-          destination="${GITHUB_WORKSPACE}/container-evidence"
-          if [ -e "$output" ] || [ -e "$destination" ]; then
-            echo "Refusing to reuse an image inventory output directory." >&2
-            exit 1
-          fi
-          install --directory --mode=0700 "$output" "$destination"
-          sudo mount \
-            --types tmpfs \
-            --options size=160m,nr_inodes=8192,nosuid,nodev,noexec,mode=0700,uid=65532,gid=65532 \
-            tmpfs "$output"
-          cleanup_image_inventory() {
-            env -i \
-              DOCKER_CONFIG=/nonexistent \
-              HOME=/nonexistent \
-              PATH=/usr/bin:/bin \
-              /usr/bin/timeout --signal=TERM --kill-after=5s 15s \
-              /usr/bin/docker rm --force "$parser_container_name" \
-              >/dev/null 2>&1 || true
-            if mountpoint --quiet "$output"; then
-              sudo umount "$output" || sudo umount --lazy "$output"
-            fi
-            rmdir "$output" 2>/dev/null || true
-            unlink "${export_root}/image-export.json" 2>/dev/null || true
-            unlink "${export_root}/image.tar" 2>/dev/null || true
-            rmdir "$export_root" 2>/dev/null || true
-          }
-          trap cleanup_image_inventory EXIT
-          timeout --signal=TERM --kill-after=30s 45m \
-            python .github/scripts/run_evidence_parser.py command \
-              --image "$parser_image_id" \
-              --container-name "$parser_container_name" \
-              --input "archive=${export_root}/image.tar" \
-              --input "export-record=${export_root}/image-export.json" \
-              --output "$output" \
-              --parser image-inventory \
-              --execute \
-              -- \
-              inventory-image-archive \
-              --archive /inputs/archive \
-              --export-record /inputs/export-record \
-              --output "/output/components-${ARCHITECTURE}.json" \
-              --files-output "/output/all-layer-files-${ARCHITECTURE}.json"
-          sudo chown "$(id -u):$(id -g)" "$output"
-          python .github/scripts/run_evidence_parser.py materialize-image-inventory \
-            --source "$output" \
-            --destination "$destination" \
-            --architecture "$ARCHITECTURE" \
-            >/dev/null
-          cleanup_image_inventory
-          trap - EXIT
-
-      - name: Verify generated container inventory
-        env:
-          ARCHITECTURE: ${{ matrix.architecture }}
-          EVENT_NAME: ${{ github.event_name }}
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
-          PR_HEAD_REPOSITORY_ID: >-
-            ${{ github.event.pull_request.head.repo.id || github.repository_id }}
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-          PR_NUMBER: ${{ github.event.number || 0 }}
-          PLATFORM: ${{ matrix.platform }}
-          REPOSITORY_ID: ${{ github.repository_id }}
-          WORKFLOW_REF: ${{ github.workflow_ref }}
-          WORKFLOW_SHA: ${{ github.workflow_sha }}
-          PYTHON_DISTRIBUTION_DIRECTORY: ${{ steps.python-distribution.outputs.download-path }}
-          PYTHON_DISTRIBUTION_ARTIFACT_ID: ${{ needs.python-distribution.outputs.artifact-id }}
-          PYTHON_DISTRIBUTION_ARTIFACT_DIGEST: ${{ needs.python-distribution.outputs.artifact-digest }}
-          APPLICATION_WHEEL_SHA256: ${{ needs.python-distribution.outputs.wheel-sha256 }}
-          APPLICATION_SELECTION_RECORD_SHA256: >-
-            ${{ needs.python-distribution.outputs.selection-record-sha256 }}
-        run: |
-          set -euo pipefail
-          inventory="container-evidence/components-${ARCHITECTURE}.json"
-          checkout_sha="$(git rev-parse HEAD)"
-          uv run --frozen --no-sync python .github/scripts/container_evidence.py run-metadata \
-            --inventory "$inventory" \
-            --output "container-evidence/run-metadata-${ARCHITECTURE}.json" \
-            --run-id "$GITHUB_RUN_ID" \
-            --run-attempt "$GITHUB_RUN_ATTEMPT" \
-            --event-name "$EVENT_NAME" \
-            --repository-id "$REPOSITORY_ID" \
-            --pr-number "$PR_NUMBER" \
-            --pr-head-sha "$PR_HEAD_SHA" \
-            --pr-base-sha "$PR_BASE_SHA" \
-            --pr-head-repository-id "$PR_HEAD_REPOSITORY_ID" \
-            --github-sha "$GITHUB_SHA" \
-            --checkout-sha "$checkout_sha" \
-            --workflow-ref "$WORKFLOW_REF" \
-            --workflow-sha "$WORKFLOW_SHA" \
-            --platform "$PLATFORM" \
-            --architecture "$ARCHITECTURE" \
-            --python-distribution-artifact-id "$PYTHON_DISTRIBUTION_ARTIFACT_ID" \
-            --python-distribution-artifact-digest "$PYTHON_DISTRIBUTION_ARTIFACT_DIGEST" \
-            --application-source-revision "$GITHUB_SHA" \
-            --application-wheel-sha256 "$APPLICATION_WHEEL_SHA256" \
-            --application-selection-record-sha256 \
-              "$APPLICATION_SELECTION_RECORD_SHA256"
-          uv run --frozen --no-sync python .github/scripts/container_evidence.py verify \
-            --inventory "$inventory"
-
-      - name: Build source evidence in the offline parser sandbox
-        env:
-          ALPINE_PLAN_SHA256: >-
-            ${{ needs.verified-container-sources.outputs.alpine-plan-sha256 }}
-          ALPINE_PLAN_SIZE: ${{ needs.verified-container-sources.outputs.alpine-plan-size }}
-          APPLICATION_SELECTION_RECORD_SHA256: >-
-            ${{ needs.python-distribution.outputs.selection-record-sha256 }}
-          APPLICATION_WHEEL_SHA256: ${{ needs.python-distribution.outputs.wheel-sha256 }}
-          ARCHITECTURE: ${{ matrix.architecture }}
-          DIRECT_PLAN_SHA256: >-
-            ${{ needs.verified-container-sources.outputs.direct-plan-sha256 }}
-          DIRECT_PLAN_SIZE: ${{ needs.verified-container-sources.outputs.direct-plan-size }}
-          PYTHON_DISTRIBUTION_DIRECTORY: ${{ steps.python-distribution.outputs.download-path }}
-          VERIFIED_SOURCE_DIRECTORY: ${{ steps.verified-sources.outputs.download-path }}
-        run: |
-          set -euo pipefail
-          parser_image="extra-codeowners:test-${ARCHITECTURE}"
-          parser_image_id="$(docker image inspect --format '{{.Id}}' "$parser_image")"
-          if ! [[ "$parser_image_id" =~ ^sha256:[0-9a-f]{64}$ ]]; then
-            echo "Current-commit evidence parser has an invalid local image ID." >&2
-            exit 1
-          fi
-          parser_container_nonce="$(python -c 'import secrets; print(secrets.token_hex(16))')"
-          if ! [[ "$parser_container_nonce" =~ ^[0-9a-f]{32}$ ]]; then
-            echo "Cannot allocate a unique evidence parser container name." >&2
-            exit 1
-          fi
-          parser_container_name="extra-codeowners-evidence-${parser_container_nonce}"
-          output="${RUNNER_TEMP}/evidence-output-${ARCHITECTURE}"
-          if [ -e "$output" ]; then
-            echo "Refusing to reuse an existing evidence output mount." >&2
-            exit 1
-          fi
-          install --directory --mode=0700 "$output"
-          sudo mount \
-            --types tmpfs \
-            --options size=1152m,nr_inodes=8192,nosuid,nodev,noexec,mode=0700,uid=65532,gid=65532 \
-            tmpfs "$output"
-          cleanup_evidence_output() {
-            env -i \
-              DOCKER_CONFIG=/nonexistent \
-              HOME=/nonexistent \
-              PATH=/usr/bin:/bin \
-              /usr/bin/timeout --signal=TERM --kill-after=5s 15s \
-              /usr/bin/docker rm --force "$parser_container_name" \
-              >/dev/null 2>&1 || true
-            if mountpoint --quiet "$output"; then
-              sudo umount "$output" || sudo umount --lazy "$output"
-            fi
-            rmdir "$output"
-          }
-          trap cleanup_evidence_output EXIT
-          bundle="extra-codeowners-ci-linux-${ARCHITECTURE}-evidence.tar.gz"
-          predicate="evidence-predicate-${ARCHITECTURE}.json"
-          source_date_epoch="$(git show -s --format=%ct HEAD)"
-          timeout --signal=TERM --kill-after=30s 60m \
-            python .github/scripts/run_evidence_parser.py command \
-              --image "$parser_image_id" \
-              --container-name "$parser_container_name" \
-              --input "alpine-store=${VERIFIED_SOURCE_DIRECTORY}/alpine-store" \
-              --input "direct-store=${VERIFIED_SOURCE_DIRECTORY}/direct-store" \
-              --input "wheelhouse-store=${VERIFIED_SOURCE_DIRECTORY}/native-wheelhouse-store" \
-              --input "files=${GITHUB_WORKSPACE}/container-evidence/all-layer-files-${ARCHITECTURE}.json" \
-              --input "inventory=${GITHUB_WORKSPACE}/container-evidence/components-${ARCHITECTURE}.json" \
-              --input "python=${PYTHON_DISTRIBUTION_DIRECTORY}" \
-              --input "repo=${GITHUB_WORKSPACE}" \
-              --output "$output" \
-              --parser evidence \
-              --execute \
-              -- \
-              bundle \
-              --inventory /inputs/inventory \
-              --files-inventory /inputs/files \
-              --policy /inputs/repo/.compliance/container-policy.json \
-              --uv-lock /inputs/repo/uv.lock \
-              --direct-source-store-root /inputs/direct-store \
-              --direct-source-plan-sha256 "$DIRECT_PLAN_SHA256" \
-              --direct-source-plan-size "$DIRECT_PLAN_SIZE" \
-              --alpine-source-store-root /inputs/alpine-store \
-              --alpine-source-plan-sha256 "$ALPINE_PLAN_SHA256" \
-              --alpine-source-plan-size "$ALPINE_PLAN_SIZE" \
-              --native-wheelhouse-store-root /inputs/wheelhouse-store \
-              --repo /inputs/repo \
-              --bundle-work-root /work \
-              --output "/output/${bundle}" \
-              --predicate-output "/output/${predicate}" \
-              --version 0.0.0-ci \
-              --source-date-epoch "$source_date_epoch" \
-              --selected-python-directory /inputs/python \
-              --application-source-revision "$GITHUB_SHA" \
-              --application-wheel-sha256 "$APPLICATION_WHEEL_SHA256" \
-              --application-selection-record-sha256 \
-                "$APPLICATION_SELECTION_RECORD_SHA256" \
-              --require-image-revision
-          sudo chown "$(id -u):$(id -g)" "$output"
-          python .github/scripts/run_evidence_parser.py materialize-evidence \
-            --source "$output" \
-            --destination "${GITHUB_WORKSPACE}/container-evidence" \
-            --architecture "$ARCHITECTURE"
-          cleanup_evidence_output
-          trap - EXIT
-
-      - name: Upload container distribution evidence
-        if: ${{ always() && !cancelled() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: >-
-            container-evidence-${{ matrix.architecture }}-${{ github.sha }}-attempt-${{ github.run_attempt }}
-          path: container-evidence/
-          if-no-files-found: warn
-          retention-days: 5
-
-      - name: Inventory all high-severity vulnerabilities
+      - name: Inventory high-severity vulnerabilities
         uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0
         with:
+          by-cve: true
+          config: .grype.yaml
           image: extra-codeowners:ci-${{ matrix.architecture }}
           fail-build: false
           only-fixed: false
@@ -1704,17 +363,52 @@ jobs:
       - name: Upload vulnerability inventory
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: vulnerability-report-${{ matrix.architecture }}
+          name: vulnerability-report-${{ matrix.architecture }}-${{ github.sha }}
           path: vulnerability-report-${{ matrix.architecture }}.json
           if-no-files-found: error
+          overwrite: true
           retention-days: 14
 
-      - name: Enforce fixable high-severity vulnerability gate
+      - name: Reject fixable high-severity vulnerabilities
         uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0
         with:
+          by-cve: true
+          config: .grype.yaml
           image: extra-codeowners:ci-${{ matrix.architecture }}
           fail-build: true
           only-fixed: true
           output-format: table
           severity-cutoff: high
-          vex: .openvex.json
+
+  required:
+    name: Required
+    if: ${{ always() }}
+    needs:
+      - lint
+      - test
+      - package
+      - docs
+      - helm
+      - container
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Require every CI job
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          for result in ${RESULTS}; do
+            test "${result}" = success
+          done
+
+  release:
+    name: Release
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: required
+    permissions:
+      artifact-metadata: write
+      attestations: write
+      contents: write
+      id-token: write
+      packages: write
+    uses: ./.github/workflows/release.yml

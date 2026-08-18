@@ -19,11 +19,11 @@ policy says which Apps may cover which owners and paths.
 
 > [!WARNING]
 > Extra CODEOWNERS is pre-release software. Alpha images and charts are for
-> non-required, shadow-mode testing only. They are not supported releases or
-> complete compliance evidence, and they must not enforce production merges.
-> Don't deploy, mirror, or redistribute the older `:main` preview. The
-> [project status](docs/reference/project-status.md) lists the remaining
-> enforcement and release blockers.
+> non-required, shadow-mode testing only. Don't use them to enforce production
+> merges. The older `:main` preview predates the current release pipeline;
+> don't deploy, mirror, or redistribute it. The
+> [project status](docs/reference/project-status.md) separates what is usable
+> today from what still blocks a supported release.
 
 ## Why this exists
 
@@ -118,10 +118,10 @@ validated files under [`examples/policy/`](examples/policy/) as your starting
 point. The [configuration guide](docs/how-to/configure.md) covers both scopes,
 path matching, labels, built-in protected files, and the insecure escape hatch.
 
-## Evaluate the source
+## Run the project locally
 
-There is no production install command yet. You can inspect the code and run
-the local suite from a clean checkout with Bash, Git, and
+You can inspect the code and run the local suite from a clean checkout with
+Bash, Git, and
 [`mise`](https://mise.jdx.dev/) installed:
 
 ```bash
@@ -137,9 +137,12 @@ Read `mise.toml` before `mise trust`; that command records a local trust
 decision. A successful run ends with the test suite passing. It doesn't
 register a GitHub App or prove the live GitHub contracts.
 
-To publish a check in a disposable organization, follow the
+To publish a check in a test repository, follow the
 [first-check tutorial](docs/tutorials/development-installation.md). Keep
-GitHub's native code-owner rule enabled anywhere that matters.
+GitHub's native code-owner rule enabled anywhere that matters. If you want to
+deploy an alpha image and chart, use the
+[shadow-mode deployment guide](docs/how-to/deploy.md) and pin the image by
+digest.
 
 ## Documentation
 
@@ -153,6 +156,7 @@ These are the shortest routes into the manual:
 | Enroll an App and delegate paths | [Configuration guide](docs/how-to/configure.md) |
 | Diagnose a check | [Troubleshooting guide](docs/how-to/troubleshoot-check.md) |
 | Review deployment and operations | [Deployment guide](docs/how-to/deploy.md) and [operations guide](docs/how-to/operate.md) |
+| Understand CI and releases | [Architecture](docs/explanation/architecture.md#ci-and-release-path) and [maintainer guide](docs/maintainers/index.md) |
 | Contribute | [Contributor guide](CONTRIBUTING.md) |
 
 The full manual is on

@@ -39,13 +39,16 @@ of implying that an independent review occurred.
 Normal changes use pull requests and required checks. Direct pushes to `main`
 are reserved for repository recovery.
 
-A future release will start from a `vMAJOR.MINOR.PATCH` tag on `main`. The
-release workflow contains the intended signing and attestation jobs, but an
-unconditional publication blocker currently keeps them unreachable. Once that
-block is removed through the reviewed release process, published artifacts
-will be signed and attested. The project follows semantic versioning where
-practical, but a minor release may contain a documented breaking change before
-1.0.
+On a push to `main`, the `Release` job runs after the required CI checks
+succeed. The reusable workflow derives the next tag for that exact commit,
+signs and attests the published artifacts, and stages the GitHub release last.
+It uploads the assets, publishes the release, and succeeds only when GitHub
+reports that release as immutable. Maintainers don't edit a version file or
+create the normal release tag.
+
+Alpha releases increment their numeric alpha suffix. Once the latest release
+is stable, conventional commits select a semantic major, minor, or patch bump.
+Before 1.0, a minor release may contain a documented breaking change.
 
 A credential, malicious artifact, or critical authorization flaw in a release
 is a security incident. Revoke or remove the affected artifact wherever the

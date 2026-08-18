@@ -86,16 +86,15 @@ If a Check Run is missing, pending, or failed, start with
 [Troubleshoot a check](how-to/troubleshoot-check.md). It follows the text
 shown in GitHub and says when an operator needs to step in.
 
-The repository also contains deployment and operations contracts for review:
+The repository also contains deployment and operations guides:
 
-- [prepare a future deployment](how-to/deploy.md)
+- [deploy an alpha in shadow mode](how-to/deploy.md)
 - [upgrade, back up, and restore](how-to/upgrade.md)
 - [operate and recover](how-to/operate.md)
 - [review the architecture](explanation/architecture.md).
 
-There is no supported image, chart package, or production deployment yet.
-Those pages describe the current source, alpha evaluation path, and intended
-operating boundary; they aren't a production-readiness claim.
+Alpha images and chart packages are available for shadow-mode testing. They
+aren't a production-readiness claim, and there is no hosted deployment.
 
 ## Look up exact behavior
 
