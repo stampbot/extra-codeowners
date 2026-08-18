@@ -14,6 +14,7 @@ from extra_codeowners.database import (
     EvaluationJob,
     JobRequest,
     QueueStore,
+    ReconciliationState,
     SchemaMetadata,
     ServiceLease,
     SharedHeadEpoch,
@@ -803,7 +804,7 @@ def test_direct_webhook_promotes_and_releases_a_leased_recovery_job(tmp_path: Pa
 
     # A stale completion cannot release or delete a newer generation even if
     # the same process-owner string is reused.
-    store.complete(leased_recovery, "recovery-worker")
+    assert store.complete(leased_recovery, "recovery-worker") is False
     assert store.pending_count() == 1
     assert store.renew_claim(foreground, 60)
 
@@ -844,6 +845,66 @@ def test_reconciliation_rechecks_unchanged_heads_on_a_bounded_cadence(tmp_path: 
     assert store.shared_head_generation(17, "example/project", "b" * 40) == 1
 
 
+def test_completed_direct_epoch_becomes_recovery_work_on_later_recheck(tmp_path: Path) -> None:
+    store = make_store(tmp_path)
+    direct = JobRequest(17, "example/project", 41, "pull_request.opened", "a" * 40)
+    store.enqueue(direct)
+    invalidation = store.claim_shared_head_invalidation("head-worker", 60, "interactive")
+    assert invalidation is not None
+    assert store.complete_shared_head_invalidation(invalidation)
+    claimed = store.claim("foreground-worker", 60, "interactive", require_shared_head_ready=True)
+    assert claimed is not None
+    assert store.complete(claimed, "foreground-worker") is True
+    with store.session() as session:
+        state = session.get(ReconciliationState, (17, "example/project", 41))
+        assert state is not None
+        state.completed_at = utcnow() - timedelta(seconds=601)
+
+    assert store.enqueue_reconciliation_if_due(
+        JobRequest(17, "example/project", 41, "periodic_reconciliation", "a" * 40),
+        recheck_seconds=600,
+    )
+    recheck_invalidation = store.claim_shared_head_invalidation("head-worker", 60, "recovery")
+    assert recheck_invalidation is not None
+    assert recheck_invalidation.work_class == "recovery"
+
+
+def test_reconciliation_does_not_replace_newer_interactive_head(tmp_path: Path) -> None:
+    store = make_store(tmp_path)
+    direct = JobRequest(17, "example/project", 41, "pull_request.synchronize", "b" * 40)
+    store.enqueue(direct)
+
+    assert (
+        store.enqueue_reconciliation_if_due(
+            JobRequest(17, "example/project", 41, "periodic_reconciliation", "a" * 40),
+            recheck_seconds=600,
+        )
+        is False
+    )
+    claimed = store.claim("foreground-worker", 60, "interactive")
+    assert claimed is not None
+    assert claimed.head_sha_hint == "b" * 40
+    assert store.shared_head_generation(17, "example/project", "a" * 40) == 0
+
+
+def test_reconciliation_states_are_pruned_after_retention(tmp_path: Path) -> None:
+    store = make_store(tmp_path)
+    request_to_complete = JobRequest(17, "example/project", 41, "pull_request.opened", "a" * 40)
+    store.enqueue(request_to_complete)
+    invalidation = store.claim_shared_head_invalidation("head-worker", 60)
+    assert invalidation is not None
+    assert store.complete_shared_head_invalidation(invalidation)
+    claimed = store.claim("worker", 60, require_shared_head_ready=True)
+    assert claimed is not None
+    assert store.complete(claimed, "worker") is True
+    with store.session() as session:
+        state = session.get(ReconciliationState, (17, "example/project", 41))
+        assert state is not None
+        state.observed_at = utcnow() - timedelta(days=31)
+
+    assert store.prune_reconciliation_states(utcnow() - timedelta(days=30)) == 1
+
+
 def test_provider_backpressure_is_shared_by_independent_queue_stores(tmp_path: Path) -> None:
     database_url = f"sqlite:///{tmp_path / 'shared-backpressure.db'}"
     upgrade_database(database_url)
@@ -866,6 +927,8 @@ def test_provider_backpressure_is_shared_by_independent_queue_stores(tmp_path: P
         first.record_provider_backpressure(None, "secondary rate limit", 60)
         assert second.provider_is_backpressured(18) is True
         assert second.claim("second-pod", 60) is None
+        first.record_provider_backpressure(None, "extended secondary rate limit", 120)
+        assert second.provider_is_backpressured(None) is True
     finally:
         first.close()
         second.close()

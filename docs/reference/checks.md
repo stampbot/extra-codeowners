@@ -112,11 +112,12 @@ The worker claims authority work from broadest scope to narrowest:
 2. Repository-wide jobs.
 3. Base-specific push jobs.
 
-Exact-head invalidation takes precedence over both authority and evaluation
-work. Once the invalidation queue is empty, the worker alternates authority
-fan-out and ordinary evaluation when both have ready jobs. If the preferred
-kind has no ready job, it claims the other kind. An evaluation still stays
-blocking while its own relevant authority fan-out is pending or retrying.
+Exact-head invalidation has two lanes. One takes direct work first; the other
+takes recovery work first. Either lane helps with the other class when its own
+queue is empty, so a sustained webhook stream cannot leave missed-event repair
+waiting forever. Authority fan-out and pull-request evaluations also have their
+own lanes. An evaluation still stays blocking while its relevant authority
+fan-out is pending or retrying.
 
 An installation-wide job creates a current repository-wide fence for each accessible, unarchived target. A repository-wide job removes older base-specific rows for that installation and repository because it covers every open pull request there.
 

@@ -21,6 +21,7 @@ from extra_codeowners.database import (
     ClaimedSharedHeadInvalidation,
     JobRequest,
     QueueStore,
+    WorkClass,
     normalize_repository_full_name,
     validate_head_sha,
 )
@@ -1799,7 +1800,17 @@ class Worker:
                 self.settings.worker_retry_max_seconds,
             )
         else:
-            await asyncio.to_thread(self.store.complete, job, owner)
+            completed = await asyncio.to_thread(self.store.complete, job, owner)
+            if not completed:
+                log.info(
+                    "evaluation_completion_superseded",
+                    job_id=job.id,
+                    work_class=job.work_class,
+                    repository=job.repository_full_name,
+                    pull_number=job.pull_number,
+                    generation=job.generation,
+                )
+                return
             completed_at = datetime.now(UTC)
             accepted_age_seconds = max(
                 0.0, (completed_at - _as_utc(job.requested_at)).total_seconds()
@@ -2002,24 +2013,30 @@ class Worker:
             with suppress(TimeoutError):
                 await asyncio.wait_for(stop.wait(), self.settings.worker_poll_seconds)
 
-    async def _run_invalidation_slot(self, stop: asyncio.Event, slot: int) -> None:
-        """Run exact-head resets, preferring direct evidence over recovery work."""
+    async def _run_invalidation_slot(
+        self,
+        stop: asyncio.Event,
+        slot: int,
+        *,
+        recovery_first: bool,
+    ) -> None:
+        """Run one exact-head lane with guaranteed capacity for its first class."""
         owner = self._slot_owner("invalidation", slot)
+        classes: tuple[WorkClass, WorkClass] = (
+            ("recovery", "interactive") if recovery_first else ("interactive", "recovery")
+        )
         while not stop.is_set():
             try:
-                job = await asyncio.to_thread(
-                    self.store.claim_shared_head_invalidation,
-                    owner,
-                    self.settings.worker_lease_seconds,
-                    "interactive",
-                )
-                if job is None:
+                job = None
+                for work_class in classes:
                     job = await asyncio.to_thread(
                         self.store.claim_shared_head_invalidation,
                         owner,
                         self.settings.worker_lease_seconds,
-                        "recovery",
+                        work_class,
                     )
+                    if job is not None:
+                        break
                 if job is not None:
                     log.info(
                         "shared_head_invalidation_started",
@@ -2175,8 +2192,12 @@ class Worker:
             tasks.create_task(self._sample_metrics(stop), name="worker-metrics")
             for slot in range(self.settings.worker_invalidation_concurrency):
                 tasks.create_task(
-                    self._run_invalidation_slot(stop, slot),
-                    name=f"shared-head-worker-{slot}",
+                    self._run_invalidation_slot(stop, slot, recovery_first=slot == 0),
+                    name=(
+                        f"shared-head-recovery-worker-{slot}"
+                        if slot == 0
+                        else f"shared-head-foreground-worker-{slot}"
+                    ),
                 )
             for slot in range(self.settings.worker_foreground_concurrency):
                 tasks.create_task(
@@ -2322,6 +2343,17 @@ class Reconciler:
         if pruned_epochs:
             log.info("shared_head_epochs_pruned", epochs=pruned_epochs)
         if interrupted():
+            return interruption_outcome()
+        pruned_states = await asyncio.to_thread(
+            self.store.prune_reconciliation_states,
+            retention_boundary,
+        )
+        if pruned_states:
+            log.info("reconciliation_states_pruned", states=pruned_states)
+        if interrupted():
+            return interruption_outcome()
+        if await asyncio.to_thread(self.store.provider_is_backpressured, None):
+            log.info("reconciliation_deferred_for_provider_backpressure", scope="global")
             return interruption_outcome()
         try:
             installation_records = await self.github.list_installations(stop=request_stop)

@@ -263,7 +263,7 @@ class Settings(BaseSettings):
     worker_foreground_concurrency: int = Field(default=2, ge=1, le=16)
     worker_recovery_concurrency: int = Field(default=1, ge=1, le=4)
     worker_authority_concurrency: int = Field(default=1, ge=1, le=4)
-    worker_invalidation_concurrency: int = Field(default=1, ge=1, le=4)
+    worker_invalidation_concurrency: int = Field(default=2, ge=2, le=4)
     authority_fanout_concurrency: int = Field(default=2, ge=1, le=8)
     webhook_invalidation_timeout_seconds: float = Field(default=5.0, ge=0.1, le=8.0)
     reconcile_enabled: bool = True

@@ -47,17 +47,20 @@ trigger also gets a short opportunity to move the managed check back to
 `in_progress`. Changes with wider authority impact—such as team membership,
 policy, repository identity, or installation scope—enter a fan-out queue.
 
-The durable worker drains exact-head invalidation first. That phase resets an
-existing managed check on the affected commit and queues every returned
-candidate that is still open on that commit. It then alternates authority
-fan-out and ordinary pull-request work while both queues have ready jobs. A
-repeating fan-out failure in one repository therefore cannot starve decisions
-for another repository. An evaluation with a relevant authority fence still
-waits to publish. Ordinary pull-request work fetches the current base, head,
-changed files, reviews, team state, CODEOWNERS, and both policy scopes. The
-pure evaluator returns a decision and explanation. The worker publishes only
-after proving that the revisions, queue generation, completed invalidation, and
-authority state are still current.
+The worker has separate lanes for direct evaluations, recovery evaluations,
+authority fan-out, and exact-head invalidation. Two invalidation lanes start
+with different work: one takes direct work first and one takes recovery work
+first. Either lane helps with the other class when its own lane is empty. That
+keeps a busy webhook stream from starving missed-event repair, without putting
+new webhooks behind an old recovery backlog.
+
+Invalidation resets an existing managed check on the affected commit and queues
+every returned candidate that is still open on that commit. An evaluation with
+a relevant authority fence still waits to publish. Ordinary evaluation fetches
+the current base, head, changed files, reviews, team state, CODEOWNERS, and
+both policy scopes. The pure evaluator returns a decision and explanation. The
+worker publishes only after proving that the revisions, queue generation,
+completed invalidation, and authority state are still current.
 
 The scheduled reconciler supplies work for accessible open pull requests that
 have gone idle. It is recovery for a missed event, not a source of stronger

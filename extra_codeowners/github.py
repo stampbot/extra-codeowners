@@ -427,8 +427,11 @@ class GitHubClient:
                 request_headers = {**request_headers, "Authorization": f"Bearer {token}"}
             self._raise_if_stopped(stop)
             try:
-                async with self._request_semaphore:
-                    async with asyncio.timeout(self._request_deadline_seconds):
+                # Include queueing for the shared request permit in the
+                # deadline. A full request pool must not turn a bounded API
+                # call into an unbounded wait.
+                async with asyncio.timeout(self._request_deadline_seconds):
+                    async with self._request_semaphore:
                         response = await self._http.request(
                             method,
                             path,
@@ -476,27 +479,34 @@ class GitHubClient:
         limit. A rejected response is closed before its cached token is
         evicted and retried.
         """
-        for attempt in range(2):
-            token = await self._installation_token(installation_id)
-            request = self._http.build_request(
-                method,
-                path,
-                params=params,
-                json=json,
-                headers={**(headers or {}), "Authorization": f"Bearer {token}"},
-            )
-            async with self._request_semaphore:
-                response = await self._http.send(request, stream=True)
-                if response.status_code != 401 or attempt > 0:
-                    try:
-                        yield response
-                    finally:
+        try:
+            for attempt in range(2):
+                token = await self._installation_token(installation_id)
+                request = self._http.build_request(
+                    method,
+                    path,
+                    params=params,
+                    json=json,
+                    headers={**(headers or {}), "Authorization": f"Bearer {token}"},
+                )
+                # The deadline covers permit acquisition, opening the stream,
+                # and consuming it. A server that keeps yielding small chunks
+                # cannot hold a permit forever.
+                async with asyncio.timeout(self._request_deadline_seconds):
+                    async with self._request_semaphore:
+                        response = await self._http.send(request, stream=True)
+                        if response.status_code != 401 or attempt > 0:
+                            try:
+                                yield response
+                            finally:
+                                await response.aclose()
+                            return
                         await response.aclose()
-                    return
-                await response.aclose()
-                cached = self._tokens.get(installation_id)
-                if cached is not None and cached.value == token:
-                    self._tokens.pop(installation_id, None)
+                        cached = self._tokens.get(installation_id)
+                        if cached is not None and cached.value == token:
+                            self._tokens.pop(installation_id, None)
+        except TimeoutError as error:
+            raise GitHubError("GitHub API request exceeded its wall-clock deadline") from error
         raise AssertionError("unreachable")  # pragma: no cover
 
     @staticmethod
