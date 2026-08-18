@@ -276,6 +276,76 @@ async def test_allowed_application_approval_satisfies_owned_lockfile(tmp_path: P
     assert github.checks[-1]["conclusion"] == "success"
 
 
+async def _claim_recovery_job(store: QueueStore, head_sha: str) -> ClaimedJob:
+    store.enqueue(
+        JobRequest(
+            installation_id=2,
+            repository_full_name="example/project",
+            pull_number=3,
+            reason="periodic_reconciliation",
+            head_sha_hint=head_sha,
+            work_class="recovery",
+        )
+    )
+    invalidation = store.claim_shared_head_invalidation("recovery-head", 60, "recovery")
+    assert invalidation is not None
+    assert store.complete_shared_head_invalidation(invalidation)
+    claimed = store.claim("recovery-evaluator", 60, "recovery")
+    assert claimed is not None
+    return claimed
+
+
+def _assert_recovery_requeue(store: QueueStore, head_sha: str) -> None:
+    assert store.claim_shared_head_invalidation("interactive-head", 60, "interactive") is None
+    invalidation = store.claim_shared_head_invalidation("recovery-head", 60, "recovery")
+    assert invalidation is not None
+    assert invalidation.head_sha == head_sha
+    assert store.complete_shared_head_invalidation(invalidation)
+    assert store.claim("interactive-evaluator", 60, "interactive") is None
+    replacement = store.claim("recovery-evaluator", 60, "recovery")
+    assert replacement is not None
+    assert replacement.head_sha_hint == head_sha
+    assert replacement.work_class == "recovery"
+
+
+@pytest.mark.asyncio
+async def test_recovery_head_rediscovery_before_evaluation_remains_recovery(
+    tmp_path: Path,
+) -> None:
+    github = FakeGitHub(changed_path="uv.lock")
+    store = migrated_store(f"sqlite:///{tmp_path / 'recovery-head-rediscovery.db'}")
+    claimed = await _claim_recovery_job(store, "c" * 40)
+
+    await EvaluationService(settings(), github, store).evaluate_job(claimed)  # type: ignore[arg-type]
+
+    _assert_recovery_requeue(store, HEAD)
+
+
+@pytest.mark.asyncio
+async def test_recovery_pull_change_during_evaluation_remains_recovery(tmp_path: Path) -> None:
+    github = FakeGitHub(changed_path="uv.lock")
+    original_get_pull = github.get_pull
+    reads = 0
+    next_head = "c" * 40
+
+    async def pull_with_late_head_change(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        nonlocal reads
+        reads += 1
+        pull = await original_get_pull(*args, **kwargs)
+        if reads == 2:
+            pull["head"]["sha"] = next_head
+        return pull
+
+    github.get_pull = pull_with_late_head_change  # type: ignore[method-assign]
+    store = migrated_store(f"sqlite:///{tmp_path / 'recovery-pull-change.db'}")
+    claimed = await _claim_recovery_job(store, HEAD)
+
+    await EvaluationService(settings(), github, store).evaluate_job(claimed)  # type: ignore[arg-type]
+
+    assert reads == 2
+    _assert_recovery_requeue(store, next_head)
+
+
 @pytest.mark.asyncio
 async def test_stale_repository_alias_is_discarded_before_policy_or_check_access(
     tmp_path: Path,
@@ -1795,12 +1865,12 @@ async def test_worker_does_not_record_completion_for_a_superseded_generation(
 async def test_invalidation_lanes_reserve_their_first_work_class(
     tmp_path: Path,
     recovery_first: bool,
-    expected_classes: list[str],
+    expected_classes: list[WorkClass],
 ) -> None:
     store = migrated_store(f"sqlite:///{tmp_path / 'invalidation-lanes.db'}")
     worker = Worker(settings(), store, MagicMock(), "worker")
     stop = asyncio.Event()
-    claimed_classes: list[str] = []
+    claimed_classes: list[WorkClass] = []
 
     def claim(
         owner: str,
@@ -1808,6 +1878,7 @@ async def test_invalidation_lanes_reserve_their_first_work_class(
         work_class: WorkClass | None,
     ) -> ClaimedSharedHeadInvalidation | None:
         del owner, lease_seconds
+        assert work_class is not None
         claimed_classes.append(work_class)
         if len(claimed_classes) == 2:
             stop.set()

@@ -2172,6 +2172,7 @@ class QueueStore:
                         pull_number=job.pull_number,
                         reason=job.reason,
                         head_sha_hint=head_sha,
+                        work_class=job.work_class,
                     ),
                 )
                 bound = session.execute(

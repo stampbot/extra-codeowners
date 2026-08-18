@@ -1015,6 +1015,7 @@ class EvaluationService:
                     pull_number=job.pull_number,
                     reason="head_changed_before_fast_invalidation",
                     head_sha_hint=head_sha,
+                    work_class=job.work_class,
                 ),
             )
             live_head_queued = True
@@ -1250,6 +1251,7 @@ class EvaluationService:
                         pull_number=job.pull_number,
                         reason="head_changed_before_evaluation",
                         head_sha_hint=head_sha,
+                        work_class=job.work_class,
                     ),
                 )
                 return
@@ -1382,6 +1384,7 @@ class EvaluationService:
                         pull_number=job.pull_number,
                         reason="pull_request_changed_during_evaluation",
                         head_sha_hint=current_head_sha,
+                        work_class=job.work_class,
                     ),
                 )
                 return
