@@ -15,9 +15,11 @@ from extra_codeowners.database import (
     AuthorityJob,
     AuthorityRequest,
     ClaimedJob,
+    ClaimedSharedHeadInvalidation,
     EvaluationJob,
     JobRequest,
     QueueStore,
+    WorkClass,
     utcnow,
 )
 from extra_codeowners.github import GitHubError, GitHubOperationStoppedError, GitHubRateLimitError
@@ -1267,7 +1269,7 @@ async def test_worker_defers_rate_limit_without_spending_backoff_attempt(tmp_pat
 
 
 @pytest.mark.asyncio
-async def test_authority_work_preempts_evaluations_and_fans_out_open_pulls(
+async def test_authority_work_fans_out_open_pulls_without_blocking_evaluations(
     tmp_path: Path,
 ) -> None:
     store = migrated_store(f"sqlite:///{tmp_path / 'authority-worker.db'}")
@@ -1322,11 +1324,12 @@ async def test_authority_work_preempts_evaluations_and_fans_out_open_pulls(
 
     assert calls[:2] == ["authority", "revoke-4"]
     assert store.claim_authority("observer", 60) is None
-    first = store.claim("observer", 60)
-    second = store.claim("observer", 60)
-    assert first is not None and second is not None
-    assert {first.pull_number, second.pull_number} == {3, 4}
-    fanout = first if first.pull_number == 4 else second
+    remaining: list[ClaimedJob] = []
+    while job := store.claim("observer", 60):
+        remaining.append(job)
+    assert any(job.pull_number == 4 for job in remaining)
+    assert {job.pull_number for job in remaining} <= {3, 4}
+    fanout = next(job for job in remaining if job.pull_number == 4)
     assert fanout.head_sha_hint == "c" * 40
     assert fanout.shared_head_generation == 1
     assert store.shared_head_generation(2, "example/project", "c" * 40) == 1
@@ -1756,6 +1759,68 @@ async def test_worker_keeps_deferred_or_failed_evaluation_pending(
 
 
 @pytest.mark.asyncio
+async def test_worker_does_not_record_completion_for_a_superseded_generation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = migrated_store(f"sqlite:///{tmp_path / 'superseded-completion.db'}")
+    initial = JobRequest(2, "example/project", 3, "pull_request.opened")
+    store.enqueue(initial)
+    claimed = store.claim("worker", 60)
+    assert claimed is not None
+
+    class Evaluator:
+        async def evaluate_job(self, job: ClaimedJob) -> None:
+            del job
+            store.enqueue(JobRequest(2, "example/project", 3, "pull_request.synchronize"))
+
+    completion_metric = MagicMock()
+    monkeypatch.setattr(service_module, "WEBHOOK_TO_CHECK_COMPLETION_SECONDS", completion_metric)
+    worker = Worker(settings(), store, Evaluator(), "worker")  # type: ignore[arg-type]
+
+    await worker._process(claimed)
+
+    completion_metric.labels.assert_not_called()
+    assert store.pending_count() == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("recovery_first", "expected_classes"),
+    [
+        (True, ["recovery", "interactive"]),
+        (False, ["interactive", "recovery"]),
+    ],
+)
+async def test_invalidation_lanes_reserve_their_first_work_class(
+    tmp_path: Path,
+    recovery_first: bool,
+    expected_classes: list[str],
+) -> None:
+    store = migrated_store(f"sqlite:///{tmp_path / 'invalidation-lanes.db'}")
+    worker = Worker(settings(), store, MagicMock(), "worker")
+    stop = asyncio.Event()
+    claimed_classes: list[str] = []
+
+    def claim(
+        owner: str,
+        lease_seconds: int,
+        work_class: WorkClass | None,
+    ) -> ClaimedSharedHeadInvalidation | None:
+        del owner, lease_seconds
+        claimed_classes.append(work_class)
+        if len(claimed_classes) == 2:
+            stop.set()
+        return None
+
+    worker.store.claim_shared_head_invalidation = claim  # type: ignore[assignment]
+
+    await worker._run_invalidation_slot(stop, 0, recovery_first=recovery_first)
+
+    assert claimed_classes == expected_classes
+
+
+@pytest.mark.asyncio
 async def test_reconciler_enqueues_open_pull_requests(tmp_path: Path) -> None:
     github = FakeGitHub(changed_path="uv.lock")
     github.list_installations = AsyncMock(  # type: ignore[attr-defined]
@@ -2063,6 +2128,7 @@ async def test_reconciliation_prunes_before_discovery_and_stops_after_lease_loss
     store = migrated_store(f"sqlite:///{tmp_path / 'reconcile-prune-order.db'}")
     original_delivery_prune = store.prune_deliveries
     original_shared_head_prune = store.prune_shared_head_epochs
+    original_state_prune = store.prune_reconciliation_states
 
     def record_delivery_prune(boundary: datetime) -> int:
         order.append("prune_deliveries")
@@ -2072,8 +2138,13 @@ async def test_reconciliation_prunes_before_discovery_and_stops_after_lease_loss
         order.append("prune_shared_head_epochs")
         return original_shared_head_prune(boundary)
 
+    def record_state_prune(boundary: datetime) -> int:
+        order.append("prune_reconciliation_states")
+        return original_state_prune(boundary)
+
     monkeypatch.setattr(store, "prune_deliveries", record_delivery_prune)
     monkeypatch.setattr(store, "prune_shared_head_epochs", record_shared_head_prune)
+    monkeypatch.setattr(store, "prune_reconciliation_states", record_state_prune)
     reconciler = Reconciler(settings(), github, store, "reconciler")  # type: ignore[arg-type]
 
     outcome = await reconciler._reconcile_owned(lost)
@@ -2082,6 +2153,7 @@ async def test_reconciliation_prunes_before_discovery_and_stops_after_lease_loss
     assert order == [
         "prune_deliveries",
         "prune_shared_head_epochs",
+        "prune_reconciliation_states",
         "discover_installations",
     ]
     github.list_installation_repositories.assert_not_awaited()  # type: ignore[attr-defined]
@@ -2139,6 +2211,20 @@ async def test_reconciliation_stop_after_installation_scan_prevents_repository_c
     assert outcome == ReconciliationOutcome(queued=0, stopped=True)
     github.list_installation_repositories.assert_not_awaited()  # type: ignore[attr-defined]
     assert store.pending_count() == 0
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_respects_global_backpressure_before_discovery(tmp_path: Path) -> None:
+    github = FakeGitHub(changed_path="uv.lock")
+    github.list_installations = AsyncMock()  # type: ignore[attr-defined]
+    store = migrated_store(f"sqlite:///{tmp_path / 'reconcile-global-circuit.db'}")
+    store.record_provider_backpressure(None, "secondary rate limit", 60)
+    reconciler = Reconciler(settings(), github, store, "reconciler")  # type: ignore[arg-type]
+
+    outcome = await reconciler._reconcile_owned(asyncio.Event(), asyncio.Event())
+
+    assert outcome == ReconciliationOutcome(queued=0)
+    github.list_installations.assert_not_awaited()  # type: ignore[attr-defined]
 
 
 @pytest.mark.asyncio

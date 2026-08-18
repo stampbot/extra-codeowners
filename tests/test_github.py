@@ -1302,6 +1302,41 @@ async def test_reconciliation_request_has_an_absolute_wall_clock_deadline(
 
 
 @pytest.mark.asyncio
+async def test_streaming_request_deadline_covers_the_full_response_body(private_key: str) -> None:
+    body_started = asyncio.Event()
+    body_release = asyncio.Event()
+
+    class SlowBody(httpx.AsyncByteStream):
+        async def __aiter__(self) -> AsyncIterator[bytes]:
+            body_started.set()
+            yield b"first chunk"
+            await body_release.wait()
+
+        async def aclose(self) -> None:
+            body_release.set()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/access_tokens"):
+            return httpx.Response(201, json=token_response())
+        return httpx.Response(200, stream=SlowBody())
+
+    client = GitHubClient(
+        1,
+        private_key,
+        timeout_seconds=0.01,
+        max_in_flight_requests=1,
+        transport=httpx.MockTransport(handler),
+    )
+    with pytest.raises(GitHubError, match="wall-clock deadline"):
+        await asyncio.wait_for(
+            client.get_file_text(2, "example/project", ".github/extra-codeowners.toml"),
+            timeout=0.5,
+        )
+    assert body_started.is_set()
+    await client.close()
+
+
+@pytest.mark.asyncio
 async def test_client_bounds_concurrent_github_requests(private_key: str) -> None:
     started = asyncio.Event()
     release = asyncio.Event()

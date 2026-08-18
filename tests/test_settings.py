@@ -26,6 +26,7 @@ def test_defaults_keep_insecure_escape_hatch_disabled() -> None:
     assert settings.authority_inaccessible_retry_max_seconds == 21600
     assert settings.worker_foreground_concurrency == 2
     assert settings.worker_recovery_concurrency == 1
+    assert settings.worker_invalidation_concurrency == 2
     assert settings.reconcile_recheck_seconds == 900
     assert settings.require_postgresql is False
     assert settings.github_identity_probe_interval_seconds == 30
@@ -34,6 +35,11 @@ def test_defaults_keep_insecure_escape_hatch_disabled() -> None:
     assert settings.authority_fanout_concurrency == 2
     assert settings.is_organization_config_repository("example/.github") is True
     assert settings.is_organization_config_repository("example/project") is False
+
+
+def test_invalidation_workers_reserve_one_lane_for_recovery() -> None:
+    with pytest.raises(ValidationError, match="greater than or equal to 2"):
+        Settings(_env_file=None, worker_invalidation_concurrency=1)
 
 
 def test_github_identity_freshness_covers_at_least_two_probe_intervals() -> None:

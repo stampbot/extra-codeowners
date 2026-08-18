@@ -269,12 +269,13 @@ zero. Migration `0002_retry_dead_jobs` reactivates terminal rows from the
 earlier pre-release retry contract. Treat a later terminal row as incompatible
 or manually introduced state and investigate it.
 
-Exact-head invalidation runs first. The worker then alternates ready authority
-work and ordinary pull-request evaluation, so a retrying fan-out cannot starve
-unrelated pull requests. An evaluation with a relevant authority fence still
-waits to publish. Installation-wide authority work splits into repository
-fences. Repository-wide work replaces older base-specific rows, and more than
-100 distinct base refs for one repository collapse into a conservative
+Exact-head invalidation has a direct-first lane and a recovery-first lane.
+Each lane helps with the other class only when its own queue is empty. Authority
+fan-out and pull-request evaluation have separate lanes, so a retrying fan-out
+cannot starve unrelated pull requests. An evaluation with a relevant authority
+fence still waits to publish. Installation-wide authority work splits into
+repository fences. Repository-wide work replaces older base-specific rows, and
+more than 100 distinct base refs for one repository collapse into a conservative
 repository-wide job.
 
 For a mapped pull-request, review, or check-rerequest delivery, ingress stores

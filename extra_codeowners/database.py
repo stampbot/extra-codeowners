@@ -21,6 +21,7 @@ from sqlalchemy import (
     Integer,
     String,
     UniqueConstraint,
+    and_,
     case,
     create_engine,
     delete,
@@ -521,23 +522,72 @@ class _EvaluationJobBindingLostError(Exception):
 _SCHEMA_EXPRESSION_TOKEN = re.compile(
     r"\s*(>=|<=|=|<|>|\(|\)|,|\"(?:[^\"]|\"\")*\"|'(?:[^']|'')*'|[A-Za-z_][A-Za-z0-9_]*|[0-9]+)"
 )
-_POSTGRESQL_ANY_ARRAY_CHECK = re.compile(
-    r"""
-    ^\s*
-    (?P<left>\"(?:[^\"]|\"\")*\"|[A-Za-z_][A-Za-z0-9_]*)
-    \s*::\s*[A-Za-z_][A-Za-z0-9_ ]*
-    \s*=\s*ANY\s*\(\s*ARRAY\s*\[
-    (?P<values>.+?)
-    \]\s*(?:::\s*[A-Za-z_][A-Za-z0-9_ ]*\[\])?\s*\)
-    \s*$
-    """,
-    re.VERBOSE | re.IGNORECASE,
-)
-_POSTGRESQL_ANY_ARRAY_VALUE = re.compile(
-    r"\s*'(?P<value>(?:[^']|'')*)'"
-    r"(?:\s*::\s*[A-Za-z_][A-Za-z0-9_ ]*)+(?P<comma>,|$)",
-    re.IGNORECASE,
-)
+
+
+def _postgresql_type_name_is_valid(value: str) -> bool:
+    """Accept one simple PostgreSQL type name emitted by constraint deparsing."""
+
+    parts = value.split()
+    return bool(parts) and all(
+        part.isascii()
+        and part[0].isalpha()
+        and all(character.isalnum() or character == "_" for character in part)
+        for part in parts
+    )
+
+
+def _postgresql_any_array_values(source: str) -> list[str] | None:
+    """Read string literals and their casts from PostgreSQL's ``ARRAY[...]`` text."""
+
+    values: list[str] = []
+    position = 0
+    while True:
+        while position < len(source) and source[position].isspace():
+            position += 1
+        if position >= len(source) or source[position] != "'":
+            return None
+        position += 1
+        literal: list[str] = []
+        while position < len(source):
+            character = source[position]
+            position += 1
+            if character != "'":
+                literal.append(character)
+                continue
+            if position < len(source) and source[position] == "'":
+                literal.append("''")
+                position += 1
+                continue
+            break
+        else:
+            return None
+        cast_count = 0
+        while True:
+            while position < len(source) and source[position].isspace():
+                position += 1
+            if not source.startswith("::", position):
+                break
+            position += 2
+            type_start = position
+            while (
+                position < len(source)
+                and source[position] != ","
+                and not source.startswith("::", position)
+            ):
+                position += 1
+            if not _postgresql_type_name_is_valid(source[type_start:position].strip()):
+                return None
+            cast_count += 1
+        if cast_count == 0:
+            return None
+        values.append("'" + "".join(literal) + "'")
+        while position < len(source) and source[position].isspace():
+            position += 1
+        if position == len(source):
+            return values
+        if source[position] != ",":
+            return None
+        position += 1
 
 
 def _normalize_postgresql_any_array_check(source: str) -> str | None:
@@ -549,23 +599,49 @@ def _normalize_postgresql_any_array_check(source: str) -> str | None:
     form rather than allowing arbitrary PostgreSQL expressions.
     """
 
-    match = _POSTGRESQL_ANY_ARRAY_CHECK.fullmatch(source)
-    if match is None:
+    left, separator, right = source.partition("=")
+    if not separator:
         return None
-    values_source = match.group("values")
-    values: list[str] = []
-    position = 0
-    while position < len(values_source):
-        value = _POSTGRESQL_ANY_ARRAY_VALUE.match(values_source, position)
-        if value is None:
+    column, cast, column_type = left.strip().partition("::")
+    if not cast or not _postgresql_type_name_is_valid(column_type.strip()):
+        return None
+    any_expression = right.strip()
+    if any_expression[:3].casefold() != "any":
+        return None
+    array_expression = any_expression[3:].strip()
+    if not (array_expression.startswith("(") and array_expression.endswith(")")):
+        return None
+    array_expression = array_expression[1:-1].strip()
+    if array_expression[:6].casefold() != "array[":
+        return None
+
+    in_string = False
+    array_end: int | None = None
+    for position, character in enumerate(array_expression[6:], start=6):
+        if character != "'":
+            if character == "]" and not in_string:
+                array_end = position
+                break
+            continue
+        if (
+            in_string
+            and position + 1 < len(array_expression)
+            and array_expression[position + 1] == "'"
+        ):
+            continue
+        in_string = not in_string
+    if array_end is None or in_string:
+        return None
+    array_type = array_expression[array_end + 1 :].strip()
+    if array_type:
+        if not (array_type.startswith("::") and array_type.endswith("[]")):
             return None
-        values.append("'" + value.group("value") + "'")
-        position = value.end()
-        if value.group("comma") == "":
-            break
-    if not values or position != len(values_source):
+        if not _postgresql_type_name_is_valid(array_type[2:-2].strip()):
+            return None
+    values = _postgresql_any_array_values(array_expression[6:array_end])
+    if not values:
         return None
-    return f"{match.group('left')} IN ({', '.join(values)})"
+    return f"{column} IN ({', '.join(values)})"
 
 
 def _normalize_schema_expression(value: object) -> tuple[object, ...] | None:
@@ -1365,11 +1441,15 @@ class QueueStore:
             .values(
                 generation=SharedHeadEpoch.generation + 1,
                 # A periodic scan must never downgrade an already accepted
-                # webhook trigger. A webhook promotes recovery work in the
-                # same durable transaction that advances its generation.
+                # webhook trigger that is still waiting for invalidation. A
+                # completed direct generation does not make a later periodic
+                # recheck foreground work forever.
                 work_class=case(
                     (
-                        SharedHeadEpoch.work_class == WORK_CLASS_INTERACTIVE,
+                        and_(
+                            SharedHeadEpoch.work_class == WORK_CLASS_INTERACTIVE,
+                            SharedHeadEpoch.invalidated_generation < SharedHeadEpoch.generation,
+                        ),
                         WORK_CLASS_INTERACTIVE,
                     ),
                     else_=request.work_class,
@@ -1403,6 +1483,21 @@ class QueueStore:
         # may defer the INSERT until a later evaluation-job statement.
         session.flush((epoch,))
         return 1
+
+    @staticmethod
+    def _lock_shared_head_epoch_in_session(session: Session, request: JobRequest) -> None:
+        """Take the exact-head row lock before the pull-request queue-row lock."""
+
+        head_sha = validate_head_sha(request.head_sha_hint or "")
+        session.scalar(
+            select(SharedHeadEpoch.installation_id)
+            .where(
+                SharedHeadEpoch.installation_id == request.installation_id,
+                SharedHeadEpoch.repository_full_name == request.repository_full_name,
+                SharedHeadEpoch.head_sha == head_sha,
+            )
+            .with_for_update()
+        )
 
     @staticmethod
     def _enqueue_in_session(
@@ -1695,10 +1790,22 @@ class QueueStore:
             try:
                 with self.session() as session:
                     now = utcnow()
+                    # Webhooks advance their exact-head fence before they
+                    # touch this PR row. Take that same lock first so a scan
+                    # cannot deadlock with delivery acceptance.
+                    self._lock_shared_head_epoch_in_session(session, request)
                     existing = session.scalar(select(EvaluationJob).where(*key).with_for_update())
                     state = session.get(ReconciliationState, state_key, with_for_update=True)
                     if existing is not None:
                         if existing.head_sha_hint == request.head_sha_hint:
+                            if state is not None:
+                                state.observed_at = now
+                            return False
+                        if existing.work_class == WORK_CLASS_INTERACTIVE:
+                            # This scan observed an older GitHub head while a
+                            # direct webhook has already recorded newer
+                            # evidence. Keep the foreground row intact; its
+                            # generation will re-read the PR before publishing.
                             if state is not None:
                                 state.observed_at = now
                             return False
@@ -2320,7 +2427,10 @@ class QueueStore:
                             )
                         )
                     else:
-                        row.blocked_until = max(row.blocked_until, blocked_until)
+                        existing_blocked_until = row.blocked_until
+                        if existing_blocked_until.tzinfo is None:
+                            existing_blocked_until = existing_blocked_until.replace(tzinfo=UTC)
+                        row.blocked_until = max(existing_blocked_until, blocked_until)
                         row.reason = error[:2000]
                         row.updated_at = now
                 return
@@ -2328,17 +2438,18 @@ class QueueStore:
                 continue
         raise RuntimeError("could not record provider backpressure after concurrent inserts")
 
-    def provider_is_backpressured(self, installation_id: int) -> bool:
+    def provider_is_backpressured(self, installation_id: int | None) -> bool:
         """Return whether App-wide or installation-scoped GitHub work must pause."""
-        if installation_id <= 0:
-            raise ValueError("installation_id must be positive")
+        if installation_id is not None and installation_id <= 0:
+            raise ValueError("installation_id must be positive or None")
         now = utcnow()
+        scopes = (0,) if installation_id is None else (0, installation_id)
         with self._sessions() as session:
             return bool(
                 session.scalar(
                     select(ProviderBackpressure.installation_id)
                     .where(
-                        ProviderBackpressure.installation_id.in_((0, installation_id)),
+                        ProviderBackpressure.installation_id.in_(scopes),
                         ProviderBackpressure.blocked_until > now,
                     )
                     .limit(1)
@@ -2856,8 +2967,8 @@ class QueueStore:
                 )
             return updated
 
-    def complete(self, job: ClaimedJob, owner: str) -> None:
-        """Delete completed work or release a superseded generation."""
+    def complete(self, job: ClaimedJob, owner: str) -> bool:
+        """Delete only the claimed generation and report whether it completed."""
         with self.session() as session:
             completed = session.scalar(
                 select(EvaluationJob)
@@ -2885,7 +2996,7 @@ class QueueStore:
                     )
                     .values(lease_owner=None, lease_until=None)
                 )
-                return
+                return False
             if completed is not None and completed.head_sha_hint is not None:
                 state_key = {
                     "installation_id": completed.installation_id,
@@ -2907,6 +3018,7 @@ class QueueStore:
                     state.head_sha = completed.head_sha_hint
                     state.completed_at = now
                     state.observed_at = now
+            return True
 
     def fail(
         self,
@@ -3205,6 +3317,15 @@ class QueueStore:
                     SharedHeadEpoch.lease_until.is_(None),
                     ~referenced,
                 )
+            )
+            return int(getattr(result, "rowcount", 0) or 0)
+
+    def prune_reconciliation_states(self, older_than: datetime) -> int:
+        """Remove old fingerprints once they can no longer suppress a recheck."""
+
+        with self.session() as session:
+            result = session.execute(
+                delete(ReconciliationState).where(ReconciliationState.observed_at < older_than)
             )
             return int(getattr(result, "rowcount", 0) or 0)
 
