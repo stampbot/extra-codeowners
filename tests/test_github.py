@@ -792,6 +792,32 @@ async def test_rate_limit_response_carries_provider_retry_delay(private_key: str
 
 
 @pytest.mark.asyncio
+async def test_app_token_primary_rate_limit_uses_the_global_circuit(private_key: str) -> None:
+    reset = int(datetime.now(UTC).timestamp()) + 300
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/access_tokens"):
+            return httpx.Response(
+                403,
+                headers={
+                    "X-RateLimit-Remaining": "0",
+                    "X-RateLimit-Reset": str(reset),
+                },
+                json={"message": "API rate limit exceeded"},
+            )
+        raise AssertionError("an App-token rate limit must stop before an installation call")
+
+    client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
+
+    with pytest.raises(GitHubRateLimitError) as caught:
+        await client.get_pull(2, "example/project", 3)
+    await client.close()
+
+    assert caught.value.global_scope is True
+    assert 290 <= caught.value.retry_after_seconds <= 300
+
+
+@pytest.mark.asyncio
 async def test_existing_check_run_is_updated(private_key: str) -> None:
     methods: list[str] = []
 

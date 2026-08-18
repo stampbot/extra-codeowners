@@ -395,7 +395,12 @@ class GitHubClient:
                 msg = f"expected object response from {method} {path}"
                 raise GitHubError(msg)
             return value
-        self._raise_api_error(response, method, path)
+        self._raise_api_error(
+            response,
+            method,
+            path,
+            app_authenticated=app_authenticated,
+        )
         raise AssertionError("unreachable")  # pragma: no cover
 
     async def _api_response(
@@ -586,7 +591,14 @@ class GitHubClient:
         )
 
     @classmethod
-    def _raise_api_error(cls, response: httpx.Response, method: str, path: str) -> NoReturn:
+    def _raise_api_error(
+        cls,
+        response: httpx.Response,
+        method: str,
+        path: str,
+        *,
+        app_authenticated: bool = False,
+    ) -> NoReturn:
         message = cls._response_message(response)
         retry_after = cls._retry_delay(response, message)
         if retry_after is not None:
@@ -597,7 +609,9 @@ class GitHubClient:
                 message,
                 retry_after,
                 global_scope=(
-                    response.status_code == 429 or response.headers.get("retry-after") is not None
+                    app_authenticated
+                    or response.status_code == 429
+                    or response.headers.get("retry-after") is not None
                 ),
             )
         raise GitHubAPIError(response.status_code, method, path, message)
@@ -1555,7 +1569,12 @@ class GitHubClient:
             )
             self._raise_if_stopped(stop)
             if not response.is_success:
-                self._raise_api_error(response, "GET", "/app/installations")
+                self._raise_api_error(
+                    response,
+                    "GET",
+                    "/app/installations",
+                    app_authenticated=True,
+                )
             values = response.json()
             if not isinstance(values, list):
                 msg = "expected list response from GET /app/installations"
