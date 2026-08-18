@@ -132,6 +132,30 @@ def test_concurrent_same_delivery_advances_shared_head_once(
     assert postgres_store.pending_count() == 2
 
 
+def test_postgres_serializes_an_absent_shared_head_before_a_pull_row(
+    postgres_store: QueueStore,
+) -> None:
+    pending = request(43)
+    started = threading.Event()
+    completed = threading.Event()
+
+    def enqueue_direct() -> None:
+        started.set()
+        postgres_store.enqueue_shared_head_trigger(pending)
+        completed.set()
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        with postgres_store.session() as session:
+            QueueStore._lock_shared_head_epoch_in_session(session, pending)
+            future = executor.submit(enqueue_direct)
+            assert started.wait(timeout=1)
+            assert completed.wait(timeout=0.1) is False
+        future.result(timeout=2)
+
+    assert completed.is_set()
+    assert postgres_store.shared_head_generation(17, "example/project", "a" * 40) == 1
+
+
 def test_new_generation_fences_prior_postgres_invalidation_lease(
     postgres_store: QueueStore,
 ) -> None:

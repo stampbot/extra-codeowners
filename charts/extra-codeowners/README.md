@@ -499,7 +499,7 @@ already applied the exact target head.
 > **Warning**
 >
 > The pre-upgrade hook runs before Helm applies the Deployment change. It does
-> not stop the old pods. Before an upgrade to `0004_responsive_work_queue`,
+> not stop the old pods. Before an upgrade that changes the database head,
 > stop public webhook
 > routing and suspend any GitOps controller for this release. Delete the
 > HorizontalPodAutoscaler before you scale the existing Deployment to zero;
@@ -531,7 +531,7 @@ helm upgrade extra-codeowners \
 ```
 
 After the migration Job logs
-`Database is at migration 0004_responsive_work_queue.` and the target Deployment
+`Database is at migration 0005_reconciliation_state_index.` and the target Deployment
 is healthy, apply the reviewed final autoscaling or high-availability settings
 in a separate update. Preserve the first migration Job log before you continue:
 the second hook's

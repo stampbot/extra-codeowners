@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine, inspect, text
 
 import extra_codeowners.database as database
@@ -31,6 +32,42 @@ def test_fresh_database_upgrades_to_packaged_head(tmp_path: Path) -> None:
     store = QueueStore(url)
     store.initialize()
     assert store.database_available() is True
+
+
+def test_all_migration_identifiers_fit_postgresql_alembic_storage() -> None:
+    """Keep every revision within Alembic's PostgreSQL VARCHAR(32) default."""
+    config = Config()
+    config.set_main_option(
+        "script_location",
+        str(Path(migrations.__file__).with_name("alembic")),
+    )
+
+    revisions = tuple(ScriptDirectory.from_config(config).walk_revisions())
+
+    assert revisions
+    assert all(len(revision.revision) <= 32 for revision in revisions)
+
+
+def test_alpha_eight_database_upgrades_to_the_retention_index(tmp_path: Path) -> None:
+    """Exercise the direct upgrade path from the previously released alpha."""
+    url = database_url(tmp_path)
+    upgrade_database(url, revision="0004_responsive_work_queue")
+    engine = create_engine(url)
+    before = inspect(engine)
+    assert "ix_reconciliation_states_observed_at" not in {
+        index["name"] for index in before.get_indexes("reconciliation_states")
+    }
+    engine.dispose()
+
+    upgrade_database(url)
+
+    engine = create_engine(url)
+    after = inspect(engine)
+    assert current_revision(url) == DATABASE_MIGRATION_HEAD
+    assert "ix_reconciliation_states_observed_at" in {
+        index["name"] for index in after.get_indexes("reconciliation_states")
+    }
+    engine.dispose()
 
 
 def test_current_head_schema_drift_blocks_migration_success(tmp_path: Path) -> None:
@@ -166,7 +203,7 @@ def test_retry_schema_upgrades_existing_jobs_to_fail_closed_shared_head_fences(
             ),
             {"head_sha": "b" * 40},
         ).one()
-    assert marker == 3
+    assert marker == 4
     assert queued_generations == {42: 0, 43: 1}
     assert tuple(migrated_epoch) == (1, 0)
     assert shared_generation["nullable"] is False
@@ -201,6 +238,9 @@ def test_retry_schema_upgrades_existing_jobs_to_fail_closed_shared_head_fences(
     }
     assert inspector.has_table("reconciliation_states")
     assert inspector.has_table("provider_backpressure")
+    assert {index["name"] for index in inspector.get_indexes("reconciliation_states")} >= {
+        "ix_reconciliation_states_observed_at",
+    }
     webhook_columns = {column["name"] for column in inspector.get_columns("webhook_deliveries")}
     assert {
         "installation_id",

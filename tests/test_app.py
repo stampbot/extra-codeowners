@@ -16,6 +16,7 @@ import extra_codeowners.app as app_module
 from extra_codeowners import __version__
 from extra_codeowners.build_identity import BuildIdentity
 from extra_codeowners.database import QueueStore
+from extra_codeowners.github import GitHubRateLimitError
 from extra_codeowners.manifest import ManifestService
 from extra_codeowners.migrations import upgrade_database
 from extra_codeowners.settings import Settings
@@ -707,6 +708,29 @@ def test_readiness_fails_closed_when_the_initial_app_identity_probe_fails(
     assert ready.json()["github_credentials"] is False
     assert live.status_code == 200
     assert live.headers["cache-control"] == "no-store, max-age=0"
+
+
+@pytest.mark.asyncio
+async def test_identity_probe_respects_and_records_the_global_rate_limit(
+    tmp_path: Path,
+) -> None:
+    store = migrated_store(f"sqlite:///{tmp_path / 'identity-rate-limit.db'}")
+    github = SequencedIdentityGitHub(
+        [GitHubRateLimitError(403, "GET", "/app", "limited", 60)],
+    )
+    probe = app_module.GitHubIdentityProbe(
+        github,  # type: ignore[arg-type]
+        store,
+        interval_seconds=30,
+        freshness_seconds=90,
+    )
+
+    assert await probe.refresh(stop=asyncio.Event()) is False
+    assert store.provider_is_backpressured(None) is True
+    assert github.identity_attempts == 1
+
+    assert await probe.refresh(stop=asyncio.Event()) is False
+    assert github.identity_attempts == 1
 
 
 def test_readiness_recovers_after_a_background_app_identity_probe(
