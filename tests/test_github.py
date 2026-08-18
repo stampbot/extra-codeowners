@@ -1356,6 +1356,38 @@ async def test_request_deadline_includes_a_contended_installation_token(
 
 
 @pytest.mark.asyncio
+async def test_request_deadline_is_shared_by_a_rejected_token_retry(private_key: str) -> None:
+    never_respond = asyncio.Event()
+    api_calls = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal api_calls
+        if request.url.path.endswith("/access_tokens"):
+            return httpx.Response(201, json=token_response())
+        api_calls += 1
+        if api_calls == 1:
+            await asyncio.sleep(0.025)
+            return httpx.Response(401, json={"message": "Bad credentials"})
+        await never_respond.wait()
+        return httpx.Response(200, json={"state": "open"})
+
+    client = GitHubClient(
+        1,
+        private_key,
+        timeout_seconds=0.04,
+        transport=httpx.MockTransport(handler),
+    )
+    started = asyncio.get_running_loop().time()
+    with pytest.raises(GitHubError, match="wall-clock deadline"):
+        await asyncio.wait_for(client.get_pull(2, "example/project", 3), timeout=0.5)
+    elapsed = asyncio.get_running_loop().time() - started
+    await client.close()
+
+    assert api_calls == 2
+    assert elapsed < 0.07
+
+
+@pytest.mark.asyncio
 async def test_streaming_request_deadline_covers_the_full_response_body(private_key: str) -> None:
     body_started = asyncio.Event()
     body_release = asyncio.Event()
@@ -1419,6 +1451,43 @@ async def test_streaming_request_deadline_includes_a_contended_installation_toke
             timeout=0.5,
         )
     await client.close()
+
+
+@pytest.mark.asyncio
+async def test_streaming_request_deadline_is_shared_by_a_rejected_token_retry(
+    private_key: str,
+) -> None:
+    never_respond = asyncio.Event()
+    api_calls = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal api_calls
+        if request.url.path.endswith("/access_tokens"):
+            return httpx.Response(201, json=token_response())
+        api_calls += 1
+        if api_calls == 1:
+            await asyncio.sleep(0.025)
+            return httpx.Response(401, stream=TrackingStream(b'{"message":"Bad credentials"}'))
+        await never_respond.wait()
+        return httpx.Response(200, stream=TrackingStream(b"enabled = true\n"))
+
+    client = GitHubClient(
+        1,
+        private_key,
+        timeout_seconds=0.04,
+        transport=httpx.MockTransport(handler),
+    )
+    started = asyncio.get_running_loop().time()
+    with pytest.raises(GitHubError, match="wall-clock deadline"):
+        await asyncio.wait_for(
+            client.get_file_text(2, "example/project", ".github/extra-codeowners.toml"),
+            timeout=0.5,
+        )
+    elapsed = asyncio.get_running_loop().time() - started
+    await client.close()
+
+    assert api_calls == 2
+    assert elapsed < 0.07
 
 
 @pytest.mark.asyncio

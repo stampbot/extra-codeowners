@@ -103,11 +103,17 @@ class ReconciliationOutcome:
     failed_installations: int = 0
     lease_lost: bool = False
     stopped: bool = False
+    deferred: bool = False
 
     @property
     def complete(self) -> bool:
         """Whether the reconciler inspected every visible, unsuspended installation."""
-        return self.failed_installations == 0 and not self.lease_lost and not self.stopped
+        return (
+            self.failed_installations == 0
+            and not self.lease_lost
+            and not self.stopped
+            and not self.deferred
+        )
 
 
 class _CombinedEvent(asyncio.Event):
@@ -1630,8 +1636,12 @@ class Worker:
         self,
         job: ClaimedSharedHeadInvalidation,
     ) -> None:
+        # Measure time spent ready for this attempt, not age since the
+        # generation was first accepted. Retries retain requested_at, so using
+        # it here would turn one delayed job into repeated, misleading SLO
+        # samples.
         QUEUE_WAIT_SECONDS.labels("invalidation", job.work_class).observe(
-            max(0.0, (datetime.now(UTC) - _as_utc(job.requested_at)).total_seconds())
+            max(0.0, (datetime.now(UTC) - _as_utc(job.available_at)).total_seconds())
         )
         done = asyncio.Event()
         lost = asyncio.Event()
@@ -1732,8 +1742,10 @@ class Worker:
 
     async def _process(self, job: ClaimedJob, owner: str | None = None) -> None:
         owner = self.owner if owner is None else owner
+        # See _process_shared_head: this histogram represents queue scheduling
+        # for each ready attempt rather than accumulated retry backoff.
         QUEUE_WAIT_SECONDS.labels("evaluation", job.work_class).observe(
-            max(0.0, (datetime.now(UTC) - _as_utc(job.requested_at)).total_seconds())
+            max(0.0, (datetime.now(UTC) - _as_utc(job.available_at)).total_seconds())
         )
         done = asyncio.Event()
         heartbeat = asyncio.create_task(self._renew_lease(job, done), name=f"job-lease-{job.id}")
@@ -2346,9 +2358,16 @@ class Reconciler:
 
         if interrupted():
             return interruption_outcome()
-        retention_boundary = datetime.now(UTC) - timedelta(
-            days=self.settings.webhook_delivery_retention_days
+        now = datetime.now(UTC)
+        retention_boundary = now - timedelta(days=self.settings.webhook_delivery_retention_days)
+        # A fingerprint must outlive both a full scan interval and the
+        # recheck interval. Otherwise a slow daily scan can prune state before
+        # it sees the same pull request again and refill the recovery queue.
+        state_retention_seconds = max(
+            self.settings.webhook_delivery_retention_days * 86_400,
+            self.settings.reconcile_interval_seconds + self.settings.reconcile_recheck_seconds,
         )
+        state_retention_boundary = now - timedelta(seconds=state_retention_seconds)
         pruned = await asyncio.to_thread(self.store.prune_deliveries, retention_boundary)
         if pruned:
             log.info("webhook_deliveries_pruned", deliveries=pruned)
@@ -2364,7 +2383,7 @@ class Reconciler:
             return interruption_outcome()
         pruned_states = await asyncio.to_thread(
             self.store.prune_reconciliation_states,
-            retention_boundary,
+            state_retention_boundary,
         )
         if pruned_states:
             log.info("reconciliation_states_pruned", states=pruned_states)
@@ -2372,7 +2391,13 @@ class Reconciler:
             return interruption_outcome()
         if await asyncio.to_thread(self.store.provider_is_backpressured, None):
             log.info("reconciliation_deferred_for_provider_backpressure", scope="global")
-            return interruption_outcome()
+            return ReconciliationOutcome(
+                queued=queued,
+                failed_installations=failed_installations,
+                lease_lost=lost.is_set(),
+                stopped=stop_event.is_set(),
+                deferred=True,
+            )
         try:
             installation_records = await self.github.list_installations(stop=request_stop)
         except GitHubOperationStoppedError:
@@ -2425,6 +2450,10 @@ class Reconciler:
                         continue
                     if self.settings.is_organization_config_repository(full_name):
                         continue
+                    # This boundary must precede every paginated API page. A
+                    # direct webhook accepted while the listing is in flight
+                    # is newer durable evidence than any page in its result.
+                    observed_at = datetime.now(UTC)
                     pull_records = await self.github.list_open_pulls(
                         installation_id,
                         full_name,
@@ -2432,7 +2461,6 @@ class Reconciler:
                     )
                     if interrupted():
                         return interruption_outcome()
-                    observed_at = datetime.now(UTC)
                     pulls = _reconciliation_pulls(pull_records)
                     for number, head_sha in pulls:
                         if interrupted():
@@ -2501,6 +2529,7 @@ class Reconciler:
                 failed_installations=outcome.failed_installations,
                 lease_lost=outcome.lease_lost,
                 stopped=outcome.stopped,
+                deferred=outcome.deferred,
             )
             return
         RECONCILIATIONS.labels("success").inc()

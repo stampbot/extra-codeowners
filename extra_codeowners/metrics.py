@@ -34,7 +34,7 @@ QUEUE_WORK_CLASS_OLDEST_AGE_SECONDS = Gauge(
 )
 QUEUE_WAIT_SECONDS = Histogram(
     "extra_codeowners_queue_wait_seconds",
-    "Accepted durable work wait before a worker starts it",
+    "Time a ready durable work attempt waits before a worker starts it",
     ("kind", "work_class"),
     buckets=(1, 2.5, 5, 10, 15, 30, 60, 120, 300, 600),
 )

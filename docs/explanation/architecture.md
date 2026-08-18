@@ -336,6 +336,11 @@ request receives a full evaluation. Neither setting makes the system strongly
 consistent. Merge queues add a separate `merge_group` state that this version
 does not evaluate.
 
+The reconciler keeps each completed-pull fingerprint for whichever is longer:
+delivery retention, or one scan interval plus one recheck interval. A slow
+scan therefore cannot erase the fingerprint before it reaches the same pull
+request again.
+
 ## Pure evaluator
 
 The evaluator imports no GitHub or database behavior. It accepts typed evidence

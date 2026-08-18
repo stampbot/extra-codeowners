@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from unittest.mock import ANY, AsyncMock, MagicMock
@@ -19,6 +19,7 @@ from extra_codeowners.database import (
     EvaluationJob,
     JobRequest,
     QueueStore,
+    ReconciliationState,
     WorkClass,
     utcnow,
 )
@@ -252,6 +253,38 @@ def job(store: QueueStore) -> ClaimedJob:
     claimed = store.claim("test-worker", 60)
     assert claimed is not None
     return claimed
+
+
+@pytest.mark.asyncio
+async def test_evaluation_queue_wait_measures_the_ready_retry_attempt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = migrated_store(f"sqlite:///{tmp_path / 'queue-wait-retry.db'}")
+    first = job(store)
+    assert store.defer(first, "test-worker", "retry later", 1)
+    with store.session() as session:
+        row = session.get(EvaluationJob, first.id)
+        assert row is not None
+        row.requested_at = utcnow() - timedelta(hours=1)
+        row.available_at = utcnow() - timedelta(seconds=1)
+    retried = store.claim("metric-worker", 60)
+    assert retried is not None
+    retried_id = retried.id
+
+    class Evaluator:
+        async def evaluate_job(self, claimed: ClaimedJob) -> None:
+            assert claimed.id == retried_id
+
+    histogram = MagicMock()
+    monkeypatch.setattr(service_module, "QUEUE_WAIT_SECONDS", histogram)
+    worker = Worker(settings(), store, Evaluator(), "metric-worker")  # type: ignore[arg-type]
+
+    await worker._process(retried)
+
+    histogram.labels.assert_called_once_with("evaluation", "interactive")
+    observed = histogram.labels.return_value.observe.call_args.args[0]
+    assert 0 <= observed < 5
 
 
 def record_guard_releases(store: QueueStore, events: list[str]) -> None:
@@ -1968,6 +2001,51 @@ async def test_reconciler_enqueues_open_pull_requests(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_reconciler_preserves_webhook_accepted_while_listing_pull_pages(
+    tmp_path: Path,
+) -> None:
+    github = FakeGitHub(changed_path="uv.lock")
+    github.list_installations = AsyncMock(  # type: ignore[attr-defined]
+        return_value=[{"id": 2, "suspended_at": None}]
+    )
+    github.list_installation_repositories = AsyncMock(  # type: ignore[attr-defined]
+        return_value=[{"full_name": "example/project", "archived": False}]
+    )
+    store = migrated_store(f"sqlite:///{tmp_path / 'reconcile-paginated-race.db'}")
+
+    async def list_open_pulls_while_webhook_arrives(
+        installation_id: int,
+        repository: str,
+        *,
+        stop: asyncio.Event | None = None,
+    ) -> list[dict[str, Any]]:
+        del installation_id, repository, stop
+        # The reconciler captured its listing boundary before this await. A
+        # synchronize delivery during later pages is newer evidence and must
+        # not be replaced by the stale page's head.
+        await asyncio.sleep(0.001)
+        store.enqueue(
+            JobRequest(
+                2,
+                "example/project",
+                3,
+                "pull_request.synchronize",
+                "b" * 40,
+            )
+        )
+        return [{"number": 3, "head": {"sha": HEAD}}]
+
+    github.list_open_pulls = list_open_pulls_while_webhook_arrives  # type: ignore[attr-defined]
+    reconciler = Reconciler(settings(), github, store, "reconciler")  # type: ignore[arg-type]
+
+    assert await reconciler.reconcile_once() == ReconciliationOutcome(queued=0)
+    claimed = store.claim("foreground-worker", 60, "interactive")
+    assert claimed is not None
+    assert claimed.head_sha_hint == "b" * 40
+    assert claimed.work_class == "interactive"
+
+
+@pytest.mark.asyncio
 async def test_unelected_reconciler_does_not_report_an_attempt(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2339,8 +2417,68 @@ async def test_reconciliation_respects_global_backpressure_before_discovery(tmp_
 
     outcome = await reconciler._reconcile_owned(asyncio.Event(), asyncio.Event())
 
-    assert outcome == ReconciliationOutcome(queued=0)
+    assert outcome == ReconciliationOutcome(queued=0, deferred=True)
+    assert outcome.complete is False
     github.list_installations.assert_not_awaited()  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_deferred_global_reconciliation_does_not_report_a_success(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    github = FakeGitHub(changed_path="uv.lock")
+    github.list_installations = AsyncMock()  # type: ignore[attr-defined]
+    store = migrated_store(f"sqlite:///{tmp_path / 'reconcile-global-metric.db'}")
+    store.record_provider_backpressure(None, "secondary rate limit", 60)
+    reconciler = Reconciler(settings(), github, store, "reconciler")  # type: ignore[arg-type]
+    attempts = MagicMock()
+    last_success = MagicMock()
+    monkeypatch.setattr(service_module, "RECONCILIATIONS", attempts)
+    monkeypatch.setattr(service_module, "RECONCILIATION_LAST_SUCCESS", last_success)
+
+    await reconciler.run_iteration()
+
+    attempts.labels.assert_called_once_with("partial")
+    last_success.set_to_current_time.assert_not_called()
+    github.list_installations.assert_not_awaited()  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_retains_fingerprints_through_scan_and_recheck_window(
+    tmp_path: Path,
+) -> None:
+    configured = Settings(
+        _env_file=None,
+        environment="test",
+        worker_enabled=False,
+        reconcile_enabled=False,
+        webhook_delivery_retention_days=1,
+        reconcile_interval_seconds=86_400,
+        reconcile_recheck_seconds=172_800,
+    )
+    store = migrated_store(f"sqlite:///{tmp_path / 'reconcile-retention-window.db'}")
+    with store.session() as session:
+        session.add(
+            ReconciliationState(
+                installation_id=2,
+                repository_full_name="example/project",
+                pull_number=3,
+                head_sha=HEAD,
+                completed_at=utcnow() - timedelta(days=2),
+                observed_at=utcnow() - timedelta(days=2),
+            )
+        )
+    store.record_provider_backpressure(None, "secondary rate limit", 60)
+    github = FakeGitHub(changed_path="uv.lock")
+    reconciler = Reconciler(configured, github, store, "reconciler")  # type: ignore[arg-type]
+
+    outcome = await reconciler._reconcile_owned(asyncio.Event(), asyncio.Event())
+
+    assert outcome == ReconciliationOutcome(queued=0, deferred=True)
+    with store.session() as session:
+        retained = session.get(ReconciliationState, (2, "example/project", 3))
+    assert retained is not None
 
 
 @pytest.mark.asyncio

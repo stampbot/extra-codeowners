@@ -169,13 +169,13 @@ The endpoint returns Prometheus text format. Extra CODEOWNERS defines these appl
 | `extra_codeowners_queue_depth` | gauge | Pending and leased exact-head invalidation, evaluation, and authority fan-out rows. |
 | `extra_codeowners_queue_work_class_depth` | gauge | Pending durable work, labeled by fixed `kind` and `work_class` values. Use it to distinguish foreground work from recovery backlog. |
 | `extra_codeowners_queue_work_class_oldest_age_seconds` | gauge | Age of the oldest pending row for the same fixed labels. |
-| `extra_codeowners_queue_wait_seconds` | histogram | Accepted work age when a worker starts it, labeled by kind and work class. |
+| `extra_codeowners_queue_wait_seconds` | histogram | Time a ready work attempt waits before a worker starts it, labeled by kind and work class. Retry backoff is not included. |
 | `extra_codeowners_webhook_to_check_completion_seconds` | histogram | Accepted work age when an evaluation finishes without a retry, labeled by work class. |
 | `extra_codeowners_shared_head_invalidation_depth` | gauge | Exact commit generations whose durable Check Run invalidation has not finished. |
 | `extra_codeowners_shared_head_invalidations_total` | counter | Durable exact-head invalidation attempts, labeled by `completed`, `failed`, `rate_limited`, or `superseded`. |
 | `extra_codeowners_dead_jobs` | gauge | Legacy or manually introduced terminal rows. Runtime failures remain pending, so this should remain `0`. |
 | `extra_codeowners_insecure_changes_enabled` | gauge | `1` while built-in non-delegable paths are disabled; otherwise `0`. |
-| `extra_codeowners_reconciliations_total` | counter | Reconciliation outcomes, labeled with `result="success"`, `result="partial"`, or `result="failure"`. A process that observes another lease owner does not increment the counter. An election error counts as a failure. |
+| `extra_codeowners_reconciliations_total` | counter | Reconciliation outcomes, labeled with `result="success"`, `result="partial"`, or `result="failure"`. A process that observes another lease owner does not increment the counter. An open provider circuit records a partial result; an election error counts as a failure. |
 | `extra_codeowners_reconciliation_last_success_timestamp_seconds` | gauge | Unix timestamp of the most recent complete reconciliation by this process. A partial or failed attempt does not update it. |
 
 Prometheus also publishes generated counter and histogram series, plus Python runtime and process collectors. Metric labels must never contain repository names, pull-request titles, actor names, paths, or delivery IDs. Those values would create unbounded cardinality and disclose private repository metadata.
