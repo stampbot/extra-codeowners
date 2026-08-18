@@ -527,14 +527,15 @@ _POSTGRESQL_ANY_ARRAY_CHECK = re.compile(
     (?P<left>\"(?:[^\"]|\"\")*\"|[A-Za-z_][A-Za-z0-9_]*)
     \s*::\s*[A-Za-z_][A-Za-z0-9_ ]*
     \s*=\s*ANY\s*\(\s*ARRAY\s*\[
-    (?P<values>.+)
-    \]\s*::\s*[A-Za-z_][A-Za-z0-9_ ]*\[\]\s*\)
+    (?P<values>.+?)
+    \]\s*(?:::\s*[A-Za-z_][A-Za-z0-9_ ]*\[\])?\s*\)
     \s*$
     """,
     re.VERBOSE | re.IGNORECASE,
 )
 _POSTGRESQL_ANY_ARRAY_VALUE = re.compile(
-    r"\s*'(?P<value>(?:[^']|'')*)'\s*::\s*[A-Za-z_][A-Za-z0-9_ ]*(?P<comma>,|$)",
+    r"\s*'(?P<value>(?:[^']|'')*)'"
+    r"(?:\s*::\s*[A-Za-z_][A-Za-z0-9_ ]*)+(?P<comma>,|$)",
     re.IGNORECASE,
 )
 

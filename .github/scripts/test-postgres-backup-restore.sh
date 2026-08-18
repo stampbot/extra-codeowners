@@ -66,6 +66,8 @@ TRUNCATE TABLE
   authority_jobs,
   evaluation_audits,
   evaluation_jobs,
+  provider_backpressure,
+  reconciliation_states,
   service_leases,
   shared_head_epochs,
   webhook_deliveries
@@ -74,24 +76,24 @@ RESTART IDENTITY;
 INSERT INTO evaluation_jobs (
   id, installation_id, repository_full_name, pull_number, head_sha_hint,
   last_delivery_id, reason, generation, authority_generation,
-  shared_head_generation, state, attempts, requested_at, available_at,
+  shared_head_generation, work_class, state, attempts, requested_at, available_at,
   lease_owner, lease_until, last_error
 ) VALUES (
   41, 1701, 'example/backup-contract', 314,
   'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'delivery-backup-contract',
-  'backup-contract', 7, 3, 11, 'pending', 2,
+  'backup-contract', 7, 3, 11, 'interactive', 'pending', 2,
   '2026-07-14 12:34:56.123456+00', '2026-07-14 12:35:56.654321+00',
   NULL, NULL, 'transient "quoted" error'
 );
 
 INSERT INTO shared_head_epochs (
   installation_id, repository_full_name, head_sha, generation,
-  invalidated_generation, changed_at, available_at, attempts,
+  invalidated_generation, work_class, changed_at, available_at, attempts,
   lease_owner, lease_until, last_error
 ) VALUES (
   1701, 'example/backup-contract',
   'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 11,
-  10, '2026-07-14 12:33:53.101112+00',
+  10, 'interactive', '2026-07-14 12:33:53.101112+00',
   '2026-07-14 12:34:53.121314+00', 3, 'head-worker-backup',
   '2026-07-14 12:44:53.151617+00', 'head reset retry'
 );
@@ -116,6 +118,22 @@ INSERT INTO evaluation_audits (
   'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', 'success',
   '{"apps":[{"id":123,"slug":"backup-bot"}],"approved":true,"nullable":null,"paths":["src/a.py","docs/space name.md"],"unicode":"caf\u00e9 \u2603"}',
   '2026-07-14 12:36:57.777888+00'
+);
+
+INSERT INTO reconciliation_states (
+  installation_id, repository_full_name, pull_number, head_sha,
+  completed_at, observed_at
+) VALUES (
+  1701, 'example/backup-contract', 314,
+  'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+  '2026-07-14 12:36:58.111222+00', '2026-07-14 12:36:59.333444+00'
+);
+
+INSERT INTO provider_backpressure (
+  installation_id, blocked_until, reason, updated_at
+) VALUES (
+  1701, '2026-07-14 12:45:00.111222+00', 'primary rate limit',
+  '2026-07-14 12:37:00.333444+00'
 );
 
 INSERT INTO service_leases (name, owner, lease_until) VALUES (
@@ -168,6 +186,8 @@ capture_state() {
         'authority_jobs', (SELECT jsonb_agg(to_jsonb(t) ORDER BY id) FROM authority_jobs AS t),
         'evaluation_audits', (SELECT jsonb_agg(to_jsonb(t) ORDER BY id) FROM evaluation_audits AS t),
         'evaluation_jobs', (SELECT jsonb_agg(to_jsonb(t) ORDER BY id) FROM evaluation_jobs AS t),
+        'provider_backpressure', (SELECT jsonb_agg(to_jsonb(t) ORDER BY installation_id) FROM provider_backpressure AS t),
+        'reconciliation_states', (SELECT jsonb_agg(to_jsonb(t) ORDER BY installation_id, repository_full_name, pull_number) FROM reconciliation_states AS t),
         'schema_metadata', (SELECT jsonb_agg(to_jsonb(t) ORDER BY singleton_id) FROM schema_metadata AS t),
         'service_leases', (SELECT jsonb_agg(to_jsonb(t) ORDER BY name) FROM service_leases AS t),
         'shared_head_epochs', (SELECT jsonb_agg(to_jsonb(t) ORDER BY installation_id, repository_full_name, head_sha) FROM shared_head_epochs AS t),
