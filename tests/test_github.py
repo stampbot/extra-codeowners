@@ -788,6 +788,7 @@ async def test_rate_limit_response_carries_provider_retry_delay(private_key: str
     await client.close()
 
     assert caught.value.retry_after_seconds == 37
+    assert caught.value.global_scope is True
 
 
 @pytest.mark.asyncio
@@ -1298,6 +1299,51 @@ async def test_reconciliation_request_has_an_absolute_wall_clock_deadline(
     with pytest.raises(GitHubError, match="wall-clock deadline"):
         await asyncio.wait_for(client.list_installations(), timeout=0.5)
     await client.close()
+
+
+@pytest.mark.asyncio
+async def test_client_bounds_concurrent_github_requests(private_key: str) -> None:
+    started = asyncio.Event()
+    release = asyncio.Event()
+    active_requests = 0
+    maximum_active = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal active_requests, maximum_active
+        if request.url.path.endswith("/access_tokens"):
+            return httpx.Response(201, json=token_response())
+        active_requests += 1
+        maximum_active = max(maximum_active, active_requests)
+        started.set()
+        await release.wait()
+        active_requests -= 1
+        return httpx.Response(200, json={"state": "open"})
+
+    client = GitHubClient(
+        1,
+        private_key,
+        max_in_flight_requests=1,
+        transport=httpx.MockTransport(handler),
+    )
+    first = asyncio.create_task(client.get_pull(2, "example/project", 3))
+    await started.wait()
+    second = asyncio.create_task(client.get_pull(2, "example/project", 4))
+    await asyncio.sleep(0)
+
+    assert maximum_active == 1
+    assert active_requests == 1
+
+    release.set()
+    assert await first == {"state": "open"}
+    assert await second == {"state": "open"}
+    assert active_requests == 0
+    await client.close()
+
+
+@pytest.mark.parametrize("maximum", [False, 0, 65, 1.5])
+def test_client_rejects_an_invalid_github_request_limit(private_key: str, maximum: object) -> None:
+    with pytest.raises(ValueError, match="integer from 1 through 64"):
+        GitHubClient(1, private_key, max_in_flight_requests=maximum)  # type: ignore[arg-type]
 
 
 @pytest.mark.asyncio
@@ -2165,6 +2211,7 @@ async def test_graphql_primary_rate_limit_preserves_reset_delay(private_key: str
     assert caught.value.method == "POST"
     assert caught.value.path == "/graphql"
     assert 290 <= caught.value.retry_after_seconds <= 300
+    assert caught.value.global_scope is False
     assert "provider detail" not in str(caught.value)
 
 
@@ -2204,6 +2251,7 @@ async def test_graphql_secondary_rate_limit_uses_bounded_delay(
     await client.close()
 
     assert caught.value.retry_after_seconds == expected_delay
+    assert caught.value.global_scope is (headers.get("Retry-After") is not None)
 
 
 @pytest.mark.asyncio

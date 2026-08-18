@@ -5,6 +5,7 @@
   "additionalProperties": false,
   "required": [
     "replicaCount",
+    "highAvailability",
     "revisionHistoryLimit",
     "deploymentStrategy",
     "deploymentAnnotations",
@@ -44,6 +45,28 @@
     "replicaCount": {
       "type": "integer",
       "minimum": 1
+    },
+    "highAvailability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "replicas",
+        "minAvailable"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "replicas": {
+          "type": "integer",
+          "minimum": 2
+        },
+        "minAvailable": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
     },
     "revisionHistoryLimit": {
       "type": "integer",

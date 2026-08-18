@@ -6,6 +6,8 @@ import asyncio
 import json as json_module
 import math
 import re
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
@@ -193,9 +195,15 @@ class GitHubRateLimitError(GitHubAPIError):
         path: str,
         message: str,
         retry_after_seconds: int,
+        *,
+        global_scope: bool = False,
     ) -> None:
         super().__init__(status_code, method, path, message)
         self.retry_after_seconds = retry_after_seconds
+        # Primary installation-token exhaustion is scoped to that
+        # installation. A Retry-After/429 response is treated as a shared
+        # secondary limit so every pod pauses conservatively.
+        self.global_scope = global_scope
 
 
 class PullRequestTooLargeError(GitHubError):
@@ -236,12 +244,20 @@ class GitHubClient:
         api_url: str = "https://api.github.com",
         api_version: str = "2026-03-10",
         timeout_seconds: float = 20,
+        max_in_flight_requests: int = 8,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self.app_id = app_id
         if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
             raise ValueError("timeout_seconds must be a finite positive number")
+        if (
+            not isinstance(max_in_flight_requests, int)
+            or isinstance(max_in_flight_requests, bool)
+            or not 1 <= max_in_flight_requests <= 64
+        ):
+            raise ValueError("max_in_flight_requests must be an integer from 1 through 64")
         self._request_deadline_seconds = timeout_seconds
+        self._request_semaphore = asyncio.Semaphore(max_in_flight_requests)
         try:
             loaded_key = serialization.load_pem_private_key(private_key.encode(), password=None)
         except (TypeError, ValueError) as error:
@@ -411,14 +427,15 @@ class GitHubClient:
                 request_headers = {**request_headers, "Authorization": f"Bearer {token}"}
             self._raise_if_stopped(stop)
             try:
-                async with asyncio.timeout(self._request_deadline_seconds):
-                    response = await self._http.request(
-                        method,
-                        path,
-                        params=params,
-                        json=json,
-                        headers=request_headers,
-                    )
+                async with self._request_semaphore:
+                    async with asyncio.timeout(self._request_deadline_seconds):
+                        response = await self._http.request(
+                            method,
+                            path,
+                            params=params,
+                            json=json,
+                            headers=request_headers,
+                        )
             except TimeoutError as error:
                 if stop is not None and stop.is_set():
                     raise GitHubOperationStoppedError(
@@ -440,6 +457,7 @@ class GitHubClient:
                 self._tokens.pop(installation_id, None)
         raise AssertionError("unreachable")  # pragma: no cover
 
+    @asynccontextmanager
     async def _authenticated_streaming_response(
         self,
         method: str,
@@ -449,11 +467,14 @@ class GitHubClient:
         params: dict[str, Any] | None = None,
         json: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,
-    ) -> httpx.Response:
+    ) -> AsyncIterator[httpx.Response]:
         """Return an open streamed response, refreshing a rejected token once.
 
-        The caller owns the returned response and must close it. A rejected
-        response is closed before its cached token is evicted and retried.
+        The context owns the returned response. It holds the client-wide
+        request permit until the caller has consumed and closed the body, so
+        bounded streamed reads cannot bypass the configured API concurrency
+        limit. A rejected response is closed before its cached token is
+        evicted and retried.
         """
         for attempt in range(2):
             token = await self._installation_token(installation_id)
@@ -464,13 +485,18 @@ class GitHubClient:
                 json=json,
                 headers={**(headers or {}), "Authorization": f"Bearer {token}"},
             )
-            response = await self._http.send(request, stream=True)
-            if response.status_code != 401 or attempt > 0:
-                return response
-            await response.aclose()
-            cached = self._tokens.get(installation_id)
-            if cached is not None and cached.value == token:
-                self._tokens.pop(installation_id, None)
+            async with self._request_semaphore:
+                response = await self._http.send(request, stream=True)
+                if response.status_code != 401 or attempt > 0:
+                    try:
+                        yield response
+                    finally:
+                        await response.aclose()
+                    return
+                await response.aclose()
+                cached = self._tokens.get(installation_id)
+                if cached is not None and cached.value == token:
+                    self._tokens.pop(installation_id, None)
         raise AssertionError("unreachable")  # pragma: no cover
 
     @staticmethod
@@ -560,6 +586,9 @@ class GitHubClient:
                 path,
                 message,
                 retry_after,
+                global_scope=(
+                    response.status_code == 429 or response.headers.get("retry-after") is not None
+                ),
             )
         raise GitHubAPIError(response.status_code, method, path, message)
 
@@ -771,14 +800,13 @@ class GitHubClient:
         max_bytes: int,
     ) -> _BoundedJsonResponse:
         """Read and parse one size-limited JSON response."""
-        response = await self._authenticated_streaming_response(
+        async with self._authenticated_streaming_response(
             method,
             path,
             installation_id,
             params=params,
             json=json,
-        )
-        try:
+        ) as response:
             if not response.is_success:
                 error_response = await self._bounded_error_response(response, 1000)
                 self._raise_api_error(error_response, method, path)
@@ -819,8 +847,6 @@ class GitHubClient:
                 rate_limit_remaining=response.headers.get("x-ratelimit-remaining"),
                 rate_limit_reset=response.headers.get("x-ratelimit-reset"),
             )
-        finally:
-            await response.aclose()
 
     async def _get_bounded_json(
         self,
@@ -908,6 +934,7 @@ class GitHubClient:
                     "/graphql",
                     f"GraphQL {operation} was rate limited",
                     retry_delay,
+                    global_scope=response.retry_after is not None,
                 )
             raise GitHubError(f"GraphQL {operation} returned errors")
         data = payload.get("data")
@@ -1208,7 +1235,7 @@ class GitHubClient:
         params = {"ref": ref} if ref is not None else None
         encoded_path = quote(path, safe="/")
         endpoint = f"/repos/{repository}/contents/{encoded_path}"
-        response = await self._authenticated_streaming_response(
+        async with self._authenticated_streaming_response(
             "GET",
             endpoint,
             installation_id,
@@ -1216,8 +1243,7 @@ class GitHubClient:
             headers={
                 "Accept": "application/vnd.github.raw+json",
             },
-        )
-        try:
+        ) as response:
             if response.status_code == 404:
                 return None
             if not response.is_success:
@@ -1247,8 +1273,6 @@ class GitHubClient:
             except UnicodeDecodeError as error:
                 msg = f"{repository}:{path} is not valid UTF-8"
                 raise GitHubError(msg) from error
-        finally:
-            await response.aclose()
 
     async def team_member(
         self,

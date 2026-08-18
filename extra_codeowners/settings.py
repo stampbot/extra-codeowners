@@ -250,16 +250,25 @@ class Settings(BaseSettings):
     github_api_version: str = "2026-03-10"
     github_identity_probe_interval_seconds: float = Field(default=30, ge=5, le=300)
     github_identity_freshness_seconds: float = Field(default=90, ge=10, le=900)
+    github_max_in_flight_requests: int = Field(default=8, ge=1, le=64)
     public_url: AnyHttpUrl | None = None
 
     database_url: SecretStr = SecretStr("sqlite:///./extra-codeowners.db")
+    require_postgresql: bool = False
     worker_enabled: bool = True
     worker_poll_seconds: float = Field(default=0.5, ge=0.05, le=60)
     worker_lease_seconds: int = Field(default=120, ge=30, le=3600)
     worker_retry_max_seconds: int = Field(default=60, ge=5, le=3600)
+    authority_inaccessible_retry_max_seconds: int = Field(default=21600, ge=300, le=86400)
+    worker_foreground_concurrency: int = Field(default=2, ge=1, le=16)
+    worker_recovery_concurrency: int = Field(default=1, ge=1, le=4)
+    worker_authority_concurrency: int = Field(default=1, ge=1, le=4)
+    worker_invalidation_concurrency: int = Field(default=1, ge=1, le=4)
+    authority_fanout_concurrency: int = Field(default=2, ge=1, le=8)
     webhook_invalidation_timeout_seconds: float = Field(default=5.0, ge=0.1, le=8.0)
     reconcile_enabled: bool = True
     reconcile_interval_seconds: int = Field(default=300, ge=60, le=86400)
+    reconcile_recheck_seconds: int = Field(default=900, ge=60, le=604800)
     webhook_delivery_retention_days: int = Field(default=30, ge=1, le=3650)
 
     org_config_repository: str = ".github"

@@ -244,6 +244,10 @@ def create_app(
             database_backend = queue_store.engine.dialect.name
             if database_backend not in {"postgresql", "sqlite"}:
                 raise RuntimeError(f"unsupported initialized database backend {database_backend!r}")
+            if runtime.require_postgresql and database_backend != "postgresql":
+                raise RuntimeError(
+                    "require_postgresql is enabled, but the configured database is not PostgreSQL"
+                )
             app.state.runtime_identity = RuntimeIdentityResponse(
                 environment=runtime.environment,
                 github_api_url=str(runtime.github_api_url),
@@ -266,6 +270,7 @@ def create_app(
                     runtime.private_key_value,
                     api_url=str(runtime.github_api_url),
                     api_version=runtime.github_api_version,
+                    max_in_flight_requests=runtime.github_max_in_flight_requests,
                 )
                 resources.push_async_callback(github_client.close)
             app.state.github = github_client

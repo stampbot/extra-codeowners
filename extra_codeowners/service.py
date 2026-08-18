@@ -28,6 +28,7 @@ from extra_codeowners.evaluator import evaluate
 from extra_codeowners.github import (
     MAX_CODEOWNERS_BYTES,
     MAX_PULL_FILES,
+    GitHubAPIError,
     GitHubClient,
     GitHubError,
     GitHubOperationStoppedError,
@@ -39,10 +40,14 @@ from extra_codeowners.metrics import (
     EVALUATION_SECONDS,
     EVALUATIONS,
     QUEUE_DEPTH,
+    QUEUE_WAIT_SECONDS,
+    QUEUE_WORK_CLASS_DEPTH,
+    QUEUE_WORK_CLASS_OLDEST_AGE_SECONDS,
     RECONCILIATION_LAST_SUCCESS,
     RECONCILIATIONS,
     SHARED_HEAD_INVALIDATION_DEPTH,
     SHARED_HEAD_INVALIDATIONS,
+    WEBHOOK_TO_CHECK_COMPLETION_SECONDS,
 )
 from extra_codeowners.models import (
     ActorKind,
@@ -206,6 +211,13 @@ def _reconciliation_suspended(value: Any) -> bool:
     if timestamp.tzinfo is None or timestamp.utcoffset() is None:
         raise _ReconciliationPayloadError("invalid_installation_suspended_at")
     return True
+
+
+def _as_utc(timestamp: datetime) -> datetime:
+    """Normalize SQLite's naive stored timestamps for elapsed-time metrics."""
+    if timestamp.tzinfo is None or timestamp.utcoffset() is None:
+        return timestamp.replace(tzinfo=UTC)
+    return timestamp.astimezone(UTC)
 
 
 def _reconciliation_installations(value: Any) -> tuple[tuple[int, bool], ...]:
@@ -640,7 +652,7 @@ class EvaluationService:
             if "/" in owner
             and owner.split("/", 1)[0].removeprefix("@").lower() == repository_owner.lower()
         }
-        semaphore = asyncio.Semaphore(10)
+        semaphore = asyncio.Semaphore(self.settings.authority_fanout_concurrency)
 
         async def is_member(owner: str) -> bool:
             async with semaphore:
@@ -1172,6 +1184,7 @@ class EvaluationService:
                     pull_number=number_value,
                     reason="shared_head_invalidation",
                     head_sha_hint=job.head_sha,
+                    work_class=job.work_class,
                 ),
                 job.generation,
             )
@@ -1564,12 +1577,12 @@ class Worker:
         self.store = store
         self.evaluator = evaluator
         self.owner = owner
-        # Shared-head invalidations always take priority because they fence a
-        # potentially stale successful check. Once that work is drained, share
-        # capacity between authority fan-out and ordinary PR evaluation. A
-        # failed fan-out must not indefinitely prevent a PR from being
-        # evaluated.
-        self._prefer_authority_work = True
+
+    def _slot_owner(self, lane: str, slot: int) -> str:
+        """Return a distinct durable lease owner for one logical consumer."""
+        # Lease owners are stored in a 128-character column. Keep enough
+        # room for the lane suffix even when a caller supplied a long base.
+        return f"{self.owner[:96]}:{lane}:{slot}"
 
     async def _renew_shared_head_lease(
         self,
@@ -1613,6 +1626,9 @@ class Worker:
         self,
         job: ClaimedSharedHeadInvalidation,
     ) -> None:
+        QUEUE_WAIT_SECONDS.labels("invalidation", job.work_class).observe(
+            max(0.0, (datetime.now(UTC) - _as_utc(job.requested_at)).total_seconds())
+        )
         done = asyncio.Event()
         lost = asyncio.Event()
         heartbeat = asyncio.create_task(
@@ -1630,6 +1646,12 @@ class Worker:
                 generation=job.generation,
             )
         except GitHubRateLimitError as error:
+            await asyncio.to_thread(
+                self.store.record_provider_backpressure,
+                None if error.global_scope else job.installation_id,
+                str(error),
+                error.retry_after_seconds,
+            )
             updated = await asyncio.to_thread(
                 self.store.defer_shared_head_invalidation,
                 job,
@@ -1704,12 +1726,22 @@ class Worker:
                 )
                 return
 
-    async def _process(self, job: ClaimedJob) -> None:
+    async def _process(self, job: ClaimedJob, owner: str | None = None) -> None:
+        owner = self.owner if owner is None else owner
+        QUEUE_WAIT_SECONDS.labels("evaluation", job.work_class).observe(
+            max(0.0, (datetime.now(UTC) - _as_utc(job.requested_at)).total_seconds())
+        )
         done = asyncio.Event()
         heartbeat = asyncio.create_task(self._renew_lease(job, done), name=f"job-lease-{job.id}")
         try:
             await self.evaluator.evaluate_job(job)
         except GitHubRateLimitError as error:
+            await asyncio.to_thread(
+                self.store.record_provider_backpressure,
+                None if error.global_scope else job.installation_id,
+                str(error),
+                error.retry_after_seconds,
+            )
             log.warning(
                 "evaluation_rate_limited",
                 repository=job.repository_full_name,
@@ -1719,7 +1751,7 @@ class Worker:
             await asyncio.to_thread(
                 self.store.defer,
                 job,
-                self.owner,
+                owner,
                 str(error),
                 error.retry_after_seconds,
             )
@@ -1732,7 +1764,7 @@ class Worker:
             await asyncio.to_thread(
                 self.store.defer,
                 job,
-                self.owner,
+                owner,
                 str(error),
                 max(5, int(self.settings.worker_poll_seconds * 10)),
             )
@@ -1745,7 +1777,7 @@ class Worker:
             await asyncio.to_thread(
                 self.store.defer,
                 job,
-                self.owner,
+                owner,
                 str(error),
                 max(1, int(self.settings.worker_poll_seconds * 2)),
             )
@@ -1762,12 +1794,28 @@ class Worker:
             await asyncio.to_thread(
                 self.store.fail,
                 job,
-                self.owner,
+                owner,
                 str(error),
                 self.settings.worker_retry_max_seconds,
             )
         else:
-            await asyncio.to_thread(self.store.complete, job, self.owner)
+            await asyncio.to_thread(self.store.complete, job, owner)
+            completed_at = datetime.now(UTC)
+            accepted_age_seconds = max(
+                0.0, (completed_at - _as_utc(job.requested_at)).total_seconds()
+            )
+            WEBHOOK_TO_CHECK_COMPLETION_SECONDS.labels(job.work_class).observe(accepted_age_seconds)
+            log.info(
+                "evaluation_completed",
+                job_id=job.id,
+                work_class=job.work_class,
+                repository=job.repository_full_name,
+                pull_number=job.pull_number,
+                head_sha=job.head_sha_hint,
+                generation=job.generation,
+                last_delivery_id=job.last_delivery_id,
+                accepted_age_seconds=accepted_age_seconds,
+            )
         finally:
             done.set()
             await asyncio.gather(heartbeat)
@@ -1844,7 +1892,7 @@ class Worker:
             await asyncio.to_thread(self.store.enqueue, request)
             requests.append(request)
 
-        semaphore = asyncio.Semaphore(10)
+        semaphore = asyncio.Semaphore(self.settings.authority_fanout_concurrency)
 
         async def revoke(request: JobRequest) -> None:
             async with semaphore:
@@ -1874,7 +1922,12 @@ class Worker:
             if rate_limits:
                 raise max(rate_limits, key=lambda error: error.retry_after_seconds)
 
-    async def _process_authority(self, job: ClaimedAuthorityJob) -> None:
+    async def _process_authority(
+        self,
+        job: ClaimedAuthorityJob,
+        owner: str | None = None,
+    ) -> None:
+        owner = self.owner if owner is None else owner
         done = asyncio.Event()
         heartbeat = asyncio.create_task(
             self._renew_authority_lease(job, done),
@@ -1884,14 +1937,45 @@ class Worker:
             await self._execute_authority(job)
         except GitHubRateLimitError as error:
             await asyncio.to_thread(
+                self.store.record_provider_backpressure,
+                None if error.global_scope else job.installation_id,
+                str(error),
+                error.retry_after_seconds,
+            )
+            await asyncio.to_thread(
                 self.store.defer_authority,
                 job,
-                self.owner,
+                owner,
                 str(error),
                 error.retry_after_seconds,
             )
         except asyncio.CancelledError:
             raise
+        except GitHubAPIError as error:
+            # A repository outside the installation returns 404. Keep the
+            # authority fence fail-closed, but retry it on an hours-scale
+            # cadence until an installation/repository event coalesces and
+            # wakes the same row immediately.
+            retry_max = (
+                self.settings.authority_inaccessible_retry_max_seconds
+                if error.status_code in {404, 410}
+                else self.settings.worker_retry_max_seconds
+            )
+            log.warning(
+                "authority_fanout_api_failure",
+                installation_id=job.installation_id,
+                scope=job.repository_full_name or "installation",
+                status_code=error.status_code,
+                retry_max_seconds=retry_max,
+            )
+            await asyncio.to_thread(
+                self.store.fail_authority,
+                job,
+                owner,
+                str(error),
+                retry_max,
+                300 if error.status_code in {404, 410} else 1,
+            )
         except Exception as error:
             log.exception(
                 "authority_fanout_failed",
@@ -1902,18 +1986,156 @@ class Worker:
             await asyncio.to_thread(
                 self.store.fail_authority,
                 job,
-                self.owner,
+                owner,
                 str(error),
                 self.settings.worker_retry_max_seconds,
             )
         else:
-            await asyncio.to_thread(self.store.complete_authority, job, self.owner)
+            await asyncio.to_thread(self.store.complete_authority, job, owner)
         finally:
             done.set()
             await asyncio.gather(heartbeat)
 
-    async def run(self, stop: asyncio.Event) -> None:
-        """Run the worker loop."""
+    async def _wait_for_work(self, stop: asyncio.Event) -> None:
+        """Sleep between empty durable claims without delaying shutdown."""
+        if not stop.is_set():
+            with suppress(TimeoutError):
+                await asyncio.wait_for(stop.wait(), self.settings.worker_poll_seconds)
+
+    async def _run_invalidation_slot(self, stop: asyncio.Event, slot: int) -> None:
+        """Run exact-head resets, preferring direct evidence over recovery work."""
+        owner = self._slot_owner("invalidation", slot)
+        while not stop.is_set():
+            try:
+                job = await asyncio.to_thread(
+                    self.store.claim_shared_head_invalidation,
+                    owner,
+                    self.settings.worker_lease_seconds,
+                    "interactive",
+                )
+                if job is None:
+                    job = await asyncio.to_thread(
+                        self.store.claim_shared_head_invalidation,
+                        owner,
+                        self.settings.worker_lease_seconds,
+                        "recovery",
+                    )
+                if job is not None:
+                    log.info(
+                        "shared_head_invalidation_started",
+                        slot=slot,
+                        work_class=job.work_class,
+                        repository=job.repository_full_name,
+                        head_sha=job.head_sha,
+                        generation=job.generation,
+                    )
+                    await self._process_shared_head(job)
+                    continue
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("shared_head_invalidation_slot_failed", slot=slot)
+            await self._wait_for_work(stop)
+
+    async def _run_foreground_slot(self, stop: asyncio.Event, slot: int) -> None:
+        """Run webhook-triggered evaluations without consuming recovery capacity."""
+        owner = self._slot_owner("foreground", slot)
+        while not stop.is_set():
+            try:
+                job = await asyncio.to_thread(
+                    self.store.claim,
+                    owner,
+                    self.settings.worker_lease_seconds,
+                    "interactive",
+                    require_shared_head_ready=True,
+                )
+                if job is not None:
+                    log.info(
+                        "evaluation_started",
+                        slot=slot,
+                        work_class=job.work_class,
+                        job_id=job.id,
+                        repository=job.repository_full_name,
+                        pull_number=job.pull_number,
+                        head_sha=job.head_sha_hint,
+                        generation=job.generation,
+                    )
+                    await self._process(job, owner)
+                    continue
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("foreground_evaluation_slot_failed", slot=slot)
+            await self._wait_for_work(stop)
+
+    async def _run_recovery_slot(self, stop: asyncio.Event, slot: int) -> None:
+        """Keep missed-webhook recovery moving, borrowing foreground work when idle."""
+        owner = self._slot_owner("recovery", slot)
+        while not stop.is_set():
+            try:
+                job = await asyncio.to_thread(
+                    self.store.claim,
+                    owner,
+                    self.settings.worker_lease_seconds,
+                    "recovery",
+                    require_shared_head_ready=True,
+                )
+                if job is None:
+                    job = await asyncio.to_thread(
+                        self.store.claim,
+                        owner,
+                        self.settings.worker_lease_seconds,
+                        "interactive",
+                        require_shared_head_ready=True,
+                    )
+                if job is not None:
+                    log.info(
+                        "evaluation_started",
+                        slot=slot,
+                        work_class=job.work_class,
+                        job_id=job.id,
+                        repository=job.repository_full_name,
+                        pull_number=job.pull_number,
+                        head_sha=job.head_sha_hint,
+                        generation=job.generation,
+                    )
+                    await self._process(job, owner)
+                    continue
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("recovery_evaluation_slot_failed", slot=slot)
+            await self._wait_for_work(stop)
+
+    async def _run_authority_slot(self, stop: asyncio.Event, slot: int) -> None:
+        """Run coalesced authority fan-out independently from PR evaluation."""
+        owner = self._slot_owner("authority", slot)
+        while not stop.is_set():
+            try:
+                job = await asyncio.to_thread(
+                    self.store.claim_authority,
+                    owner,
+                    self.settings.worker_lease_seconds,
+                )
+                if job is not None:
+                    log.info(
+                        "authority_fanout_started",
+                        slot=slot,
+                        installation_id=job.installation_id,
+                        scope=job.repository_full_name or "installation",
+                        generation=job.generation,
+                    )
+                    await self._process_authority(job, owner)
+                    continue
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("authority_fanout_slot_failed", slot=slot)
+            await self._wait_for_work(stop)
+
+    async def _sample_metrics(self, stop: asyncio.Event) -> None:
+        """Publish cheap queue gauges once per process instead of per worker slot."""
+        interval = max(1.0, self.settings.worker_poll_seconds * 10)
         while not stop.is_set():
             try:
                 QUEUE_DEPTH.set(await asyncio.to_thread(self.store.pending_count))
@@ -1921,58 +2143,57 @@ class Worker:
                 SHARED_HEAD_INVALIDATION_DEPTH.set(
                     await asyncio.to_thread(self.store.pending_shared_head_invalidation_count)
                 )
-                shared_head_job = await asyncio.to_thread(
-                    self.store.claim_shared_head_invalidation,
-                    self.owner,
-                    self.settings.worker_lease_seconds,
-                )
-                if shared_head_job is not None:
-                    await self._process_shared_head(shared_head_job)
-                    continue
-                if self._prefer_authority_work:
-                    authority_job = await asyncio.to_thread(
-                        self.store.claim_authority,
-                        self.owner,
-                        self.settings.worker_lease_seconds,
-                    )
-                    if authority_job is not None:
-                        self._prefer_authority_work = False
-                        await self._process_authority(authority_job)
-                        continue
-                    job = await asyncio.to_thread(
-                        self.store.claim, self.owner, self.settings.worker_lease_seconds
-                    )
-                    if job is not None:
-                        self._prefer_authority_work = True
-                        await self._process(job)
-                        continue
-                else:
-                    job = await asyncio.to_thread(
-                        self.store.claim, self.owner, self.settings.worker_lease_seconds
-                    )
-                    if job is not None:
-                        self._prefer_authority_work = True
-                        await self._process(job)
-                        continue
-                    authority_job = await asyncio.to_thread(
-                        self.store.claim_authority,
-                        self.owner,
-                        self.settings.worker_lease_seconds,
-                    )
-                    if authority_job is not None:
-                        self._prefer_authority_work = False
-                        await self._process_authority(authority_job)
-                        continue
+                snapshot = await asyncio.to_thread(self.store.pending_work_class_snapshot)
+                now = datetime.now(UTC)
+                for kind, work_class in (
+                    ("evaluation", "interactive"),
+                    ("evaluation", "recovery"),
+                    ("invalidation", "interactive"),
+                    ("invalidation", "recovery"),
+                    ("authority", "authority"),
+                ):
+                    count, oldest = snapshot.get((kind, work_class), (0, None))
+                    QUEUE_WORK_CLASS_DEPTH.labels(kind, work_class).set(count)
+                    age = 0.0 if oldest is None else max(0.0, (now - oldest).total_seconds())
+                    QUEUE_WORK_CLASS_OLDEST_AGE_SECONDS.labels(kind, work_class).set(age)
             except asyncio.CancelledError:
                 raise
             except Exception:
-                # A transient database failure must not silently kill the task
-                # while process liveness continues to report healthy.
-                log.exception("worker_loop_failed")
+                log.exception("worker_metrics_sample_failed")
+            with suppress(TimeoutError):
+                await asyncio.wait_for(stop.wait(), interval)
 
-            if not stop.is_set():
-                with suppress(TimeoutError):
-                    await asyncio.wait_for(stop.wait(), self.settings.worker_poll_seconds)
+    async def run(self, stop: asyncio.Event) -> None:
+        """Run bounded, replica-safe async worker lanes until stopped.
+
+        Every lane claims durable rows through the same database lease and
+        generation checks. More than one pod may run this method; PostgreSQL
+        ``SKIP LOCKED`` and the conditional claim update ensure a row still
+        belongs to only one active consumer.
+        """
+        async with asyncio.TaskGroup() as tasks:
+            tasks.create_task(self._sample_metrics(stop), name="worker-metrics")
+            for slot in range(self.settings.worker_invalidation_concurrency):
+                tasks.create_task(
+                    self._run_invalidation_slot(stop, slot),
+                    name=f"shared-head-worker-{slot}",
+                )
+            for slot in range(self.settings.worker_foreground_concurrency):
+                tasks.create_task(
+                    self._run_foreground_slot(stop, slot),
+                    name=f"foreground-evaluation-worker-{slot}",
+                )
+            for slot in range(self.settings.worker_recovery_concurrency):
+                tasks.create_task(
+                    self._run_recovery_slot(stop, slot),
+                    name=f"recovery-evaluation-worker-{slot}",
+                )
+            for slot in range(self.settings.worker_authority_concurrency):
+                tasks.create_task(
+                    self._run_authority_slot(stop, slot),
+                    name=f"authority-worker-{slot}",
+                )
+            await stop.wait()
 
 
 class Reconciler:
@@ -2106,6 +2327,24 @@ class Reconciler:
             installation_records = await self.github.list_installations(stop=request_stop)
         except GitHubOperationStoppedError:
             return interruption_outcome(operation_stopped=not interrupted())
+        except GitHubRateLimitError as error:
+            await asyncio.to_thread(
+                self.store.record_provider_backpressure,
+                None,
+                str(error),
+                error.retry_after_seconds,
+            )
+            log.warning(
+                "reconciliation_rate_limited",
+                scope="global",
+                retry_after_seconds=error.retry_after_seconds,
+            )
+            return ReconciliationOutcome(
+                queued=queued,
+                failed_installations=1,
+                lease_lost=lost.is_set(),
+                stopped=stop_event.is_set(),
+            )
         if interrupted():
             return interruption_outcome()
         installations = _reconciliation_installations(installation_records)
@@ -2113,6 +2352,13 @@ class Reconciler:
             if interrupted():
                 return interruption_outcome()
             if suspended:
+                continue
+            if await asyncio.to_thread(self.store.provider_is_backpressured, installation_id):
+                failed_installations += 1
+                log.info(
+                    "reconciliation_deferred_for_provider_backpressure",
+                    installation_id=installation_id,
+                )
                 continue
             try:
                 repository_records = await self.github.list_installation_repositories(
@@ -2141,18 +2387,33 @@ class Reconciler:
                         if interrupted():
                             return interruption_outcome()
                         added = await asyncio.to_thread(
-                            self.store.enqueue_if_absent,
+                            self.store.enqueue_reconciliation_if_due,
                             JobRequest(
                                 installation_id=installation_id,
                                 repository_full_name=full_name,
                                 pull_number=number,
                                 reason="periodic_reconciliation",
                                 head_sha_hint=head_sha,
+                                work_class="recovery",
                             ),
+                            self.settings.reconcile_recheck_seconds,
                         )
                         queued += int(added)
             except GitHubOperationStoppedError:
                 return interruption_outcome(operation_stopped=not interrupted())
+            except GitHubRateLimitError as error:
+                failed_installations += 1
+                await asyncio.to_thread(
+                    self.store.record_provider_backpressure,
+                    None if error.global_scope else installation_id,
+                    str(error),
+                    error.retry_after_seconds,
+                )
+                log.warning(
+                    "reconciliation_rate_limited",
+                    installation_id=installation_id,
+                    retry_after_seconds=error.retry_after_seconds,
+                )
             except _ReconciliationPayloadError as error:
                 failed_installations += 1
                 log.warning(

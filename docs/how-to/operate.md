@@ -22,6 +22,8 @@ pull-request activity.
 | `/health/live` | HTTP 200 on every serving instance |
 | `/health/ready` | HTTP 200, with recent exact-App authentication, database access, and configured background tasks ready |
 | `extra_codeowners_queue_depth` | Returns to the local baseline after webhook bursts |
+| `extra_codeowners_queue_work_class_oldest_age_seconds{kind="evaluation",work_class="interactive"}` | Stays below the direct-event objective; alert before a webhook can wait behind recovery work |
+| `extra_codeowners_queue_work_class_depth{work_class="recovery"}` | Can rise during a burst, but must fall between reconciliation passes |
 | `extra_codeowners_shared_head_invalidation_depth` | Returns to `0`; a sustained value means exact-commit revocations are waiting |
 | `extra_codeowners_shared_head_invalidations_total{result="failed"}` | No unexplained increase |
 | `extra_codeowners_dead_jobs` | `0` |
@@ -30,9 +32,17 @@ pull-request activity.
 | `extra_codeowners_reconciliation_last_success_timestamp_seconds` | A complete run on at least one replica falls within the reconciliation objective |
 | `extra_codeowners_insecure_changes_enabled` | `0` unless an approved exception is active |
 
-Also watch evaluation latency and failures, PostgreSQL latency, repeated GitHub
-API `403` or `429` responses, and every unexplained long-lived
-`in_progress` check.
+Also watch evaluation latency and failures, PostgreSQL latency, the durable
+rate-limit circuit, repeated GitHub API `403` or `429` responses, and every
+unexplained long-lived `in_progress` check.
+
+Queue gauges describe the shared database queue, so every replica reports the
+same value. Aggregate those gauges with `max`, not `sum`. Evaluation counters
+and histograms are local observations and should be aggregated normally across
+replicas. Structured `evaluation_started` and `evaluation_completed` logs carry
+the durable job ID, generation, repository, pull number, head, work class, and
+delivery ID when one exists; use those fields to follow one delayed check
+without turning pull requests into Prometheus labels.
 
 Read runtime identity through an operator-only route after every rollout.
 Official images report their verified source commit in `build_revision`;

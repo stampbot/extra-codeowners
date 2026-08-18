@@ -11,11 +11,22 @@ metadata:
     {{- include "extra-codeowners.labels" . | nindent 4 }}
 spec:
   {{- if not .Values.autoscaling.enabled }}
+  {{- if .Values.highAvailability.enabled }}
+  replicas: {{ .Values.highAvailability.replicas }}
+  {{- else }}
   replicas: {{ .Values.replicaCount }}
+  {{- end }}
   {{- end }}
   revisionHistoryLimit: {{ .Values.revisionHistoryLimit }}
   strategy:
+    {{- if .Values.highAvailability.enabled }}
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+    {{- else }}
     {{- toYaml .Values.deploymentStrategy | nindent 4 }}
+    {{- end }}
   selector:
     matchLabels:
       {{- include "extra-codeowners.selectorLabels" . | nindent 6 }}
@@ -65,6 +76,10 @@ spec:
               value: production
             - name: EXTRA_CODEOWNERS_ALLOW_INSECURE_CHANGES
               value: {{ .Values.allowInsecureChanges | quote }}
+            # The high-availability preset can run on multiple nodes. SQLite
+            # cannot coordinate durable work across Kubernetes nodes.
+            - name: EXTRA_CODEOWNERS_REQUIRE_POSTGRESQL
+              value: {{ ternary "true" "false" .Values.highAvailability.enabled | quote }}
             - name: PATH
               value: /opt/venv/bin:/usr/local/bin:/usr/bin:/bin
             - name: LD_PRELOAD
@@ -127,15 +142,41 @@ spec:
       nodeSelector:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- if .Values.highAvailability.enabled }}
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  {{- include "extra-codeowners.applicationSelectorLabels" . | nindent 18 }}
+              topologyKey: kubernetes.io/hostname
+      {{- else }}
       {{- with .Values.affinity }}
       affinity:
         {{- toYaml . | nindent 8 }}
+      {{- end }}
       {{- end }}
       {{- with .Values.tolerations }}
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- if .Values.highAvailability.enabled }}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              {{- include "extra-codeowners.applicationSelectorLabels" . | nindent 14 }}
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              {{- include "extra-codeowners.applicationSelectorLabels" . | nindent 14 }}
+      {{- else }}
       {{- with .Values.topologySpreadConstraints }}
       topologySpreadConstraints:
         {{- toYaml . | nindent 8 }}
+      {{- end }}
       {{- end }}

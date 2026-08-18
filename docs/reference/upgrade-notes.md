@@ -13,11 +13,11 @@ The alpha series establishes this compatibility contract:
 
 | Field | Contract |
 | --- | --- |
-| Database head | `0003_shared_head_epochs` |
-| Head change | Yes; this release line establishes the first versioned head. |
-| Supported source releases | None; this is the first versioned schema baseline. |
+| Database head | `0004_responsive_work_queue` |
+| Head change | Yes; this alpha revision adds durable scheduling and reconciliation state. |
+| Supported source releases | `0.1.0-alpha.8` after a controlled migration from `0003_shared_head_epochs`. |
 | Target application compatible before migration | No; startup requires the exact head. |
-| Required process state | Stop webhook ingress and every older worker before applying `0003_shared_head_epochs`. Suspend GitOps reconciliation and remove the HPA before scaling a Kubernetes Deployment to zero. |
+| Required process state | Stop webhook ingress and every older worker before applying `0004_responsive_work_queue`. Suspend GitOps reconciliation and remove the HPA before scaling a Kubernetes Deployment to zero. |
 | In-place database downgrade | Not supported. |
 | Rollback after head change | Restore the verified pre-migration backup. An older image rejects this head. |
 | Backup required | Yes, before deployment and before every pre-release schema adoption. |
@@ -49,10 +49,17 @@ the tentative generation. Existing delivery rows have no token and keep their
 pre-migration deduplication semantics. The revision changes the application
 compatibility marker from `1` to `2`.
 
+Revision `0004_responsive_work_queue` records whether an evaluation and
+exact-head invalidation came from a direct event or periodic recovery. Direct
+work promotes recovery work in place, so a later scan cannot downgrade it.
+The revision also adds a completion fingerprint for each reconciled pull
+request and a shared GitHub rate-limit circuit. The compatibility marker moves
+from `2` to `3`.
+
 An already-running process does not revalidate the Alembic head before every
 claim. Stop every older ingress, worker, and reconciler before this revision
 runs. Start only the target artifact after `database check` reports
-`0003_shared_head_epochs` and validates that artifact's
+`0004_responsive_work_queue` and validates that artifact's
 `required-release-contract`. Readiness removes an old process from webhook
 traffic after migration, but it does not cancel work that process already
 claimed. For Kubernetes, a zero-replica Deployment is not proof of a drain

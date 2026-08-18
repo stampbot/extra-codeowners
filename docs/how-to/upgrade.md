@@ -82,7 +82,7 @@ run_without_libpq_environment extra-codeowners database check
 For version 0.1.0, a compatible database prints:
 
 ```text
-Database migration 0003_shared_head_epochs is compatible.
+Database migration 0004_responsive_work_queue is compatible.
 ```
 
 Record the reported revision, current image digest, chart revision, PostgreSQL
@@ -105,13 +105,13 @@ restore, you will need to redeliver later GitHub events and reconcile every
 open pull request. Treat reconciliation as advisory and independently verify
 each current check before relying on it.
 
-Migration `0003_shared_head_epochs` requires the stronger option: stop webhook
+Migration `0004_responsive_work_queue` requires the stronger option: stop webhook
 ingress and every older worker before migration begins. An old process checks
 database compatibility at startup and readiness, not before every queue claim.
 Leaving one alive could let it publish without the new shared-head fence.
 
-For an upgrade from `0002_retry_dead_jobs` to
-`0003_shared_head_epochs`, keep this order:
+For an upgrade from `0003_shared_head_epochs` to
+`0004_responsive_work_queue`, keep this order:
 
 1. Stop webhook ingress.
 2. Stop every controller that can recreate an old worker, then stop every old
@@ -120,7 +120,7 @@ For an upgrade from `0002_retry_dead_jobs` to
    active.
 3. Create and verify the backup in steps 3 and 4.
 4. Run the target migration in step 5.
-5. Start only code that requires `0003_shared_head_epochs`.
+5. Start only code that requires `0004_responsive_work_queue`.
 6. Complete the health checks in step 6, then restore ingress.
 7. Treat startup reconciliation as advisory. Independently inventory
    accessible open pull requests and verify their current checks while native
@@ -385,7 +385,7 @@ run_without_libpq_environment \
 For version 0.1.0, success prints:
 
 ```text
-Database is at migration 0003_shared_head_epochs.
+Database is at migration 0004_responsive_work_queue.
 ```
 
 The migrator:
@@ -410,7 +410,7 @@ It runs the target image with migration-only database settings. It does not
 inherit runtime environment sources, GitHub credential volumes, or App
 secrets.
 
-Before an upgrade to `0003_shared_head_epochs`, complete the Kubernetes drain
+Before an upgrade to `0004_responsive_work_queue`, complete the Kubernetes drain
 in step 2. Confirm that no HPA, old worker, or reconciler remains. The
 pre-upgrade hook does not stop existing pods or suspend GitOps for you.
 
@@ -489,7 +489,7 @@ kubectl --namespace "$NAMESPACE" wait \
     "job/$DEPLOYMENT-migrate" --container=migrate >"$FIRST_MIGRATION_LOG"
 )
 grep --fixed-strings --line-regexp \
-  'Database is at migration 0003_shared_head_epochs.' \
+  'Database is at migration 0004_responsive_work_queue.' \
   "$FIRST_MIGRATION_LOG"
 kubectl --namespace "$NAMESPACE" rollout status \
   "deployment/$DEPLOYMENT" --timeout=10m
@@ -552,12 +552,12 @@ test ! -e "$SECOND_MIGRATION_LOG"
     "job/$DEPLOYMENT-migrate" --container=migrate >"$SECOND_MIGRATION_LOG"
 )
 grep --fixed-strings --line-regexp \
-  'Database is at migration 0003_shared_head_epochs.' \
+  'Database is at migration 0004_responsive_work_queue.' \
   "$SECOND_MIGRATION_LOG"
 ```
 
 The second migrator takes the same advisory lock and confirms that the database
-is already at `0003_shared_head_epochs`. Alembic makes no schema change, but
+is already at `0004_responsive_work_queue`. Alembic makes no schema change, but
 the migrator still validates the `required-release-contract` before it prints
 success.
 

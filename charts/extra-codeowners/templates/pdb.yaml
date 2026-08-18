@@ -1,4 +1,4 @@
-{{- if .Values.podDisruptionBudget.enabled }}
+{{- if or .Values.podDisruptionBudget.enabled .Values.highAvailability.enabled }}
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
@@ -6,7 +6,7 @@ metadata:
   labels:
     {{- include "extra-codeowners.labels" . | nindent 4 }}
 spec:
-  minAvailable: {{ .Values.podDisruptionBudget.minAvailable }}
+  minAvailable: {{ if .Values.highAvailability.enabled }}{{ .Values.highAvailability.minAvailable }}{{ else }}{{ .Values.podDisruptionBudget.minAvailable }}{{ end }}
   selector:
     matchLabels:
       {{- include "extra-codeowners.applicationSelectorLabels" . | nindent 6 }}
