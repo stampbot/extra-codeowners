@@ -297,6 +297,7 @@ def test_helm_chart_retains_hardening_without_image_specific_loader_paths() -> N
     assert "replicaCount greater than 1 requires highAvailability.enabled" in helpers
     assert "autoscaling.maxReplicas greater than 1 requires highAvailability.enabled" in helpers
     assert "highAvailability.minAvailable must be lower" in helpers
+    assert "EXTRA_CODEOWNERS_REQUIRE_POSTGRESQL" in helpers
     for field in (
         "path",
         "initialDelaySeconds",

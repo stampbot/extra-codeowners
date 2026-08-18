@@ -817,6 +817,7 @@ def test_reconciliation_rechecks_unchanged_heads_on_a_bounded_cadence(tmp_path: 
         41,
         "periodic_reconciliation",
         "a" * 40,
+        observed_at=utcnow(),
     )
 
     assert store.enqueue_reconciliation_if_due(original, recheck_seconds=600)
@@ -840,6 +841,7 @@ def test_reconciliation_rechecks_unchanged_heads_on_a_bounded_cadence(tmp_path: 
         41,
         "periodic_reconciliation",
         "b" * 40,
+        observed_at=utcnow(),
     )
     assert store.enqueue_reconciliation_if_due(changed, recheck_seconds=600)
     assert store.shared_head_generation(17, "example/project", "b" * 40) == 1
@@ -861,7 +863,14 @@ def test_completed_direct_epoch_becomes_recovery_work_on_later_recheck(tmp_path:
         state.completed_at = utcnow() - timedelta(seconds=601)
 
     assert store.enqueue_reconciliation_if_due(
-        JobRequest(17, "example/project", 41, "periodic_reconciliation", "a" * 40),
+        JobRequest(
+            17,
+            "example/project",
+            41,
+            "periodic_reconciliation",
+            "a" * 40,
+            observed_at=utcnow(),
+        ),
         recheck_seconds=600,
     )
     recheck_invalidation = store.claim_shared_head_invalidation("head-worker", 60, "recovery")
@@ -871,12 +880,20 @@ def test_completed_direct_epoch_becomes_recovery_work_on_later_recheck(tmp_path:
 
 def test_reconciliation_does_not_replace_newer_interactive_head(tmp_path: Path) -> None:
     store = make_store(tmp_path)
+    observed_at = utcnow()
     direct = JobRequest(17, "example/project", 41, "pull_request.synchronize", "b" * 40)
     store.enqueue(direct)
 
     assert (
         store.enqueue_reconciliation_if_due(
-            JobRequest(17, "example/project", 41, "periodic_reconciliation", "a" * 40),
+            JobRequest(
+                17,
+                "example/project",
+                41,
+                "periodic_reconciliation",
+                "a" * 40,
+                observed_at=observed_at,
+            ),
             recheck_seconds=600,
         )
         is False
@@ -885,6 +902,34 @@ def test_reconciliation_does_not_replace_newer_interactive_head(tmp_path: Path) 
     assert claimed is not None
     assert claimed.head_sha_hint == "b" * 40
     assert store.shared_head_generation(17, "example/project", "a" * 40) == 0
+
+
+def test_reconciliation_replaces_an_older_interactive_head_after_a_missed_webhook(
+    tmp_path: Path,
+) -> None:
+    store = make_store(tmp_path)
+    store.enqueue(JobRequest(17, "example/project", 41, "pull_request.opened", "a" * 40))
+    observed_at = utcnow()
+
+    assert store.enqueue_reconciliation_if_due(
+        JobRequest(
+            17,
+            "example/project",
+            41,
+            "periodic_reconciliation",
+            "b" * 40,
+            observed_at=observed_at,
+        ),
+        recheck_seconds=600,
+    )
+
+    invalidation = store.claim_shared_head_invalidation("recovery-head", 60, "recovery")
+    assert invalidation is not None
+    assert invalidation.head_sha == "b" * 40
+    assert store.complete_shared_head_invalidation(invalidation)
+    claimed = store.claim("recovery-worker", 60, "recovery", require_shared_head_ready=True)
+    assert claimed is not None
+    assert claimed.head_sha_hint == "b" * 40
 
 
 def test_reconciliation_states_are_pruned_after_retention(tmp_path: Path) -> None:

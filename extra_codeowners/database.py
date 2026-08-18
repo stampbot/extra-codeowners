@@ -404,6 +404,10 @@ class JobRequest:
     reason: str
     head_sha_hint: str | None = None
     work_class: WorkClass = WORK_CLASS_INTERACTIVE
+    # Reconciliation records when GitHub supplied this head. A direct webhook
+    # accepted after that instant is newer durable evidence and must win over
+    # the scan's eventually consistent listing.
+    observed_at: datetime | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -417,6 +421,10 @@ class JobRequest:
             object.__setattr__(self, "work_class", WORK_CLASS_RECOVERY)
         if self.work_class not in {WORK_CLASS_INTERACTIVE, WORK_CLASS_RECOVERY}:
             raise ValueError("work_class must be interactive or recovery")
+        if self.observed_at is not None:
+            if self.observed_at.tzinfo is None:
+                raise ValueError("observed_at must include a timezone")
+            object.__setattr__(self, "observed_at", self.observed_at.astimezone(UTC))
 
 
 @dataclass(frozen=True, slots=True)
@@ -1525,6 +1533,7 @@ class QueueStore:
         shared_head_generation: int | None = None,
         *,
         preserve_different_head: bool = False,
+        preserve_work_class: bool = True,
     ) -> None:
         now = utcnow()
         authority_generation = (
@@ -1544,15 +1553,20 @@ class QueueStore:
             )
         values: dict[str, Any] = {
             "generation": EvaluationJob.generation + 1,
-            # Work class is monotonic until the row completes: direct
-            # evidence promotes a recovery row, but periodic reconciliation
-            # cannot make a current webhook wait behind recovery work again.
-            "work_class": case(
-                (
-                    EvaluationJob.work_class == WORK_CLASS_INTERACTIVE,
-                    WORK_CLASS_INTERACTIVE,
-                ),
-                else_=request.work_class,
+            # Work class is monotonic until the row completes, except when a
+            # scan has proof that its different head is newer than an old
+            # interactive row. In that case the direct row is stale and the
+            # recovery scan replaces it at recovery priority.
+            "work_class": (
+                case(
+                    (
+                        EvaluationJob.work_class == WORK_CLASS_INTERACTIVE,
+                        WORK_CLASS_INTERACTIVE,
+                    ),
+                    else_=request.work_class,
+                )
+                if preserve_work_class
+                else request.work_class
             ),
             "authority_generation": authority_generation,
             "shared_head_generation": shared_head_generation,
@@ -1792,6 +1806,8 @@ class QueueStore:
             raise ValueError("reconciliation work must use the recovery class")
         if request.head_sha_hint is None:
             raise ValueError("reconciliation work requires an exact head SHA")
+        if request.observed_at is None:
+            raise ValueError("reconciliation work requires a GitHub observation timestamp")
         if recheck_seconds < 1:
             raise ValueError("recheck_seconds must be positive")
         key = (
@@ -1820,13 +1836,17 @@ class QueueStore:
                                 state.observed_at = now
                             return False
                         if existing.work_class == WORK_CLASS_INTERACTIVE:
-                            # This scan observed an older GitHub head while a
-                            # direct webhook has already recorded newer
-                            # evidence. Keep the foreground row intact; its
-                            # generation will re-read the PR before publishing.
-                            if state is not None:
-                                state.observed_at = now
-                            return False
+                            requested_at = existing.requested_at
+                            if requested_at.tzinfo is None:
+                                requested_at = requested_at.replace(tzinfo=UTC)
+                            if requested_at > request.observed_at:
+                                # The direct webhook arrived after GitHub
+                                # supplied this scan result. It is newer
+                                # durable evidence than an eventually
+                                # consistent listing, so preserve it.
+                                if state is not None:
+                                    state.observed_at = now
+                                return False
                         # GitHub shows a different current head than the job
                         # durable state. This is the missed-webhook repair
                         # case; advance the exact head fence now rather than
@@ -1840,6 +1860,7 @@ class QueueStore:
                             session,
                             request,
                             shared_head_generation=generation,
+                            preserve_work_class=existing.work_class != WORK_CLASS_INTERACTIVE,
                         )
                         if state is not None:
                             state.observed_at = now

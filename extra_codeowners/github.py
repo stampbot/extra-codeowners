@@ -420,22 +420,24 @@ class GitHubClient:
         attempts = 1 if app_authenticated or unauthenticated else 2
         for attempt in range(attempts):
             self._raise_if_stopped(stop)
-            request_headers = headers or {}
-            if unauthenticated:
-                pass
-            elif app_authenticated:
-                token = self._app_jwt()
-                request_headers = {**request_headers, "Authorization": f"Bearer {token}"}
-            else:
-                assert installation_id is not None
-                token = await self._installation_token(installation_id, stop=stop)
-                request_headers = {**request_headers, "Authorization": f"Bearer {token}"}
-            self._raise_if_stopped(stop)
+            token: str | None = None
             try:
-                # Include queueing for the shared request permit in the
-                # deadline. A full request pool must not turn a bounded API
-                # call into an unbounded wait.
+                # Include installation-token lock queueing, permit queueing,
+                # and the HTTP request in one deadline. A token refresh must
+                # not let a contending caller exceed its operation budget
+                # before it reaches the shared request permit.
                 async with asyncio.timeout(self._request_deadline_seconds):
+                    request_headers = headers or {}
+                    if unauthenticated:
+                        pass
+                    elif app_authenticated:
+                        token = self._app_jwt()
+                        request_headers = {**request_headers, "Authorization": f"Bearer {token}"}
+                    else:
+                        assert installation_id is not None
+                        token = await self._installation_token(installation_id, stop=stop)
+                        request_headers = {**request_headers, "Authorization": f"Bearer {token}"}
+                    self._raise_if_stopped(stop)
                     async with self._request_semaphore:
                         response = await self._http.request(
                             method,
@@ -460,6 +462,7 @@ class GitHubClient:
             if response.status_code != 401 or app_authenticated or unauthenticated or attempt > 0:
                 return response
             assert installation_id is not None
+            assert token is not None
             cached = self._tokens.get(installation_id)
             if cached is not None and cached.value == token:
                 self._tokens.pop(installation_id, None)
@@ -486,18 +489,20 @@ class GitHubClient:
         """
         try:
             for attempt in range(2):
-                token = await self._installation_token(installation_id)
-                request = self._http.build_request(
-                    method,
-                    path,
-                    params=params,
-                    json=json,
-                    headers={**(headers or {}), "Authorization": f"Bearer {token}"},
-                )
-                # The deadline covers permit acquisition, opening the stream,
-                # and consuming it. A server that keeps yielding small chunks
-                # cannot hold a permit forever.
+                # The deadline covers token acquisition, permit acquisition,
+                # opening the stream, and consuming it. A server that keeps
+                # yielding small chunks cannot hold a permit forever, and a
+                # contended token refresh cannot delay a later caller without
+                # bound.
                 async with asyncio.timeout(self._request_deadline_seconds):
+                    token = await self._installation_token(installation_id)
+                    request = self._http.build_request(
+                        method,
+                        path,
+                        params=params,
+                        json=json,
+                        headers={**(headers or {}), "Authorization": f"Bearer {token}"},
+                    )
                     async with self._request_semaphore:
                         response = await self._http.send(request, stream=True)
                         if response.status_code != 401 or attempt > 0:

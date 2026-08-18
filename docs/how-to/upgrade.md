@@ -420,15 +420,16 @@ pre-upgrade hook does not stop existing pods or suspend GitOps for you.
 Keep GitOps reconciliation suspended for both Helm updates below. Set
 `TARGET_CHART` to the reviewed chart path or immutable OCI reference, and set
 `TARGET_VALUES` to a complete reviewed values file. That file must name the
-target image by digest and explicitly declare the final autoscaling settings:
+target image by digest and explicitly declare the final autoscaling or
+high-availability settings:
 
 ```bash
 TARGET_CHART=/path/to/reviewed/extra-codeowners-chart
 TARGET_VALUES=/path/to/reviewed/target-values.yaml
 ```
 
-Run the migration upgrade with autoscaling forced off. One target pod starts
-after the pre-upgrade hook succeeds:
+Run the migration upgrade with autoscaling and high availability forced off.
+One target pod starts after the pre-upgrade hook succeeds:
 
 ```bash
 helm upgrade "$RELEASE" "$TARGET_CHART" \
@@ -436,6 +437,7 @@ helm upgrade "$RELEASE" "$TARGET_CHART" \
   --reset-values \
   --values "$TARGET_VALUES" \
   --set autoscaling.enabled=false \
+  --set highAvailability.enabled=false \
   --set replicaCount=1 \
   --wait \
   --timeout=10m
@@ -446,9 +448,9 @@ and the three-minute migration Job deadline. If you increase either chart
 budget, increase the Helm timeout too. Leave enough margin for scheduling and
 image startup.
 
-Do not remove the temporary autoscaling override during this first update.
-Verify the database head and target pod in step 6 before you restore the final
-autoscaling configuration.
+Do not remove the temporary autoscaling or high-availability overrides during
+this first update. Verify the database head and target pod in step 6 before you
+restore the final configuration.
 If a GitOps platform does not let an operator perform these two ordered Helm
 updates while its reconciliation is suspended, stop and write a
 platform-specific plan that preserves the same drain, migration, and

@@ -1634,6 +1634,51 @@ async def test_authority_rate_limit_defers_after_bounded_batch_and_keeps_fanout(
 
 
 @pytest.mark.asyncio
+async def test_authority_fanout_preserves_a_global_limit_beside_a_longer_installation_limit(
+    tmp_path: Path,
+) -> None:
+    store = migrated_store(f"sqlite:///{tmp_path / 'authority-global-rate.db'}")
+    store.accept_delivery(
+        "push-1",
+        "push",
+        AuthorityRequest(2, "example/project", "main", "push.repository_base"),
+    )
+    claimed = store.claim_authority("worker", 60)
+    assert claimed is not None
+
+    class AuthorityGitHub:
+        async def list_open_pulls(
+            self, installation_id: int, repository: str
+        ) -> list[dict[str, Any]]:
+            return [
+                {"number": 4, "head": {"sha": "c" * 40}, "base": {"ref": "main"}},
+                {"number": 5, "head": {"sha": "d" * 40}, "base": {"ref": "main"}},
+            ]
+
+    class Evaluator:
+        github = AuthorityGitHub()
+
+        async def invalidate_for_trigger(self, request: JobRequest) -> bool:
+            if request.pull_number == 4:
+                raise GitHubRateLimitError(
+                    429,
+                    "PATCH",
+                    "/check-runs/1",
+                    "secondary limit",
+                    15,
+                    global_scope=True,
+                )
+            raise GitHubRateLimitError(403, "PATCH", "/check-runs/2", "primary limit", 60)
+
+    worker = Worker(settings(), store, Evaluator(), "worker")  # type: ignore[arg-type]
+
+    await worker._process_authority(claimed)
+
+    assert store.provider_is_backpressured(None) is True
+    assert store.provider_is_backpressured(2) is True
+
+
+@pytest.mark.asyncio
 async def test_authority_fast_revocation_failure_keeps_durable_evaluation(
     tmp_path: Path,
 ) -> None:

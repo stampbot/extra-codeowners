@@ -1934,6 +1934,21 @@ class Worker:
                 outcome for outcome in outcomes if isinstance(outcome, GitHubRateLimitError)
             ]
             if rate_limits:
+                global_limits = [error for error in rate_limits if error.global_scope]
+                if global_limits:
+                    global_error = max(
+                        global_limits,
+                        key=lambda error: error.retry_after_seconds,
+                    )
+                    # The job's own retry can use the longest observed delay,
+                    # but a shorter App-wide secondary limit must still stop
+                    # other installations and pods immediately.
+                    await asyncio.to_thread(
+                        self.store.record_provider_backpressure,
+                        None,
+                        str(global_error),
+                        global_error.retry_after_seconds,
+                    )
                 raise max(rate_limits, key=lambda error: error.retry_after_seconds)
 
     async def _process_authority(
@@ -2417,6 +2432,7 @@ class Reconciler:
                     )
                     if interrupted():
                         return interruption_outcome()
+                    observed_at = datetime.now(UTC)
                     pulls = _reconciliation_pulls(pull_records)
                     for number, head_sha in pulls:
                         if interrupted():
@@ -2430,6 +2446,7 @@ class Reconciler:
                                 reason="periodic_reconciliation",
                                 head_sha_hint=head_sha,
                                 work_class="recovery",
+                                observed_at=observed_at,
                             ),
                             self.settings.reconcile_recheck_seconds,
                         )
