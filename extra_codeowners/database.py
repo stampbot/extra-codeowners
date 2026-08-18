@@ -467,6 +467,7 @@ class ClaimedJob:
     shared_head_generation: int
     attempts: int
     requested_at: datetime
+    available_at: datetime
     lease_owner: str
 
 
@@ -495,6 +496,7 @@ class ClaimedSharedHeadInvalidation:
     work_class: WorkClass
     attempts: int
     requested_at: datetime
+    available_at: datetime
     lease_owner: str
 
 
@@ -2576,6 +2578,7 @@ class QueueStore:
                     work_class=candidate.work_class,
                     attempts=claimed_attempts,
                     requested_at=candidate.changed_at,
+                    available_at=candidate.available_at,
                     lease_owner=owner,
                 )
         return None
@@ -2826,6 +2829,7 @@ class QueueStore:
                     shared_head_generation=row.shared_head_generation,
                     attempts=row.attempts,
                     requested_at=row.requested_at,
+                    available_at=row.available_at,
                     lease_owner=owner,
                 )
         return None

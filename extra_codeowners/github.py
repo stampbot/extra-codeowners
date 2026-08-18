@@ -418,15 +418,14 @@ class GitHubClient:
     ) -> httpx.Response:
         """Send a public, App, or installation request with bounded retries."""
         attempts = 1 if app_authenticated or unauthenticated else 2
-        for attempt in range(attempts):
-            self._raise_if_stopped(stop)
-            token: str | None = None
-            try:
-                # Include installation-token lock queueing, permit queueing,
-                # and the HTTP request in one deadline. A token refresh must
-                # not let a contending caller exceed its operation budget
-                # before it reaches the shared request permit.
-                async with asyncio.timeout(self._request_deadline_seconds):
+        try:
+            # Include both authentication attempts in one deadline. A 401
+            # retry must use only the time left from the original operation,
+            # rather than receiving a second full wall-clock budget.
+            async with asyncio.timeout(self._request_deadline_seconds):
+                for attempt in range(attempts):
+                    self._raise_if_stopped(stop)
+                    token: str | None = None
                     request_headers = headers or {}
                     if unauthenticated:
                         pass
@@ -446,26 +445,31 @@ class GitHubClient:
                             json=json,
                             headers=request_headers,
                         )
-            except TimeoutError as error:
-                if stop is not None and stop.is_set():
-                    raise GitHubOperationStoppedError(
-                        "GitHub operation stopped during a request"
-                    ) from error
-                raise GitHubError("GitHub API request exceeded its wall-clock deadline") from error
-            except httpx.TimeoutException as error:
-                if stop is not None and stop.is_set():
-                    raise GitHubOperationStoppedError(
-                        "GitHub operation stopped during a request"
-                    ) from error
-                raise
-            self._raise_if_stopped(stop)
-            if response.status_code != 401 or app_authenticated or unauthenticated or attempt > 0:
-                return response
-            assert installation_id is not None
-            assert token is not None
-            cached = self._tokens.get(installation_id)
-            if cached is not None and cached.value == token:
-                self._tokens.pop(installation_id, None)
+                    self._raise_if_stopped(stop)
+                    if (
+                        response.status_code != 401
+                        or app_authenticated
+                        or unauthenticated
+                        or attempt > 0
+                    ):
+                        return response
+                    assert installation_id is not None
+                    assert token is not None
+                    cached = self._tokens.get(installation_id)
+                    if cached is not None and cached.value == token:
+                        self._tokens.pop(installation_id, None)
+        except TimeoutError as error:
+            if stop is not None and stop.is_set():
+                raise GitHubOperationStoppedError(
+                    "GitHub operation stopped during a request"
+                ) from error
+            raise GitHubError("GitHub API request exceeded its wall-clock deadline") from error
+        except httpx.TimeoutException as error:
+            if stop is not None and stop.is_set():
+                raise GitHubOperationStoppedError(
+                    "GitHub operation stopped during a request"
+                ) from error
+            raise
         raise AssertionError("unreachable")  # pragma: no cover
 
     @asynccontextmanager
@@ -488,13 +492,12 @@ class GitHubClient:
         evicted and retried.
         """
         try:
-            for attempt in range(2):
-                # The deadline covers token acquisition, permit acquisition,
-                # opening the stream, and consuming it. A server that keeps
-                # yielding small chunks cannot hold a permit forever, and a
-                # contended token refresh cannot delay a later caller without
-                # bound.
-                async with asyncio.timeout(self._request_deadline_seconds):
+            # The deadline covers both authentication attempts, token
+            # acquisition, permit acquisition, opening the stream, and body
+            # consumption. A rejected token cannot grant a retry a second
+            # full operation budget.
+            async with asyncio.timeout(self._request_deadline_seconds):
+                for attempt in range(2):
                     token = await self._installation_token(installation_id)
                     request = self._http.build_request(
                         method,
