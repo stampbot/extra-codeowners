@@ -521,6 +521,50 @@ class _EvaluationJobBindingLostError(Exception):
 _SCHEMA_EXPRESSION_TOKEN = re.compile(
     r"\s*(>=|<=|=|<|>|\(|\)|,|\"(?:[^\"]|\"\")*\"|'(?:[^']|'')*'|[A-Za-z_][A-Za-z0-9_]*|[0-9]+)"
 )
+_POSTGRESQL_ANY_ARRAY_CHECK = re.compile(
+    r"""
+    ^\s*
+    (?P<left>\"(?:[^\"]|\"\")*\"|[A-Za-z_][A-Za-z0-9_]*)
+    \s*::\s*[A-Za-z_][A-Za-z0-9_ ]*
+    \s*=\s*ANY\s*\(\s*ARRAY\s*\[
+    (?P<values>.+)
+    \]\s*::\s*[A-Za-z_][A-Za-z0-9_ ]*\[\]\s*\)
+    \s*$
+    """,
+    re.VERBOSE | re.IGNORECASE,
+)
+_POSTGRESQL_ANY_ARRAY_VALUE = re.compile(
+    r"\s*'(?P<value>(?:[^']|'')*)'\s*::\s*[A-Za-z_][A-Za-z0-9_ ]*(?P<comma>,|$)",
+    re.IGNORECASE,
+)
+
+
+def _normalize_postgresql_any_array_check(source: str) -> str | None:
+    """Convert PostgreSQL's ``IN`` deparse form back to our narrow grammar.
+
+    PostgreSQL renders a ``CHECK (column IN (...))`` as a type-cast ``ANY
+    (ARRAY[...])`` expression.  The runtime schema verifier deliberately only
+    accepts a small predicate grammar, so recognize precisely that deparse
+    form rather than allowing arbitrary PostgreSQL expressions.
+    """
+
+    match = _POSTGRESQL_ANY_ARRAY_CHECK.fullmatch(source)
+    if match is None:
+        return None
+    values_source = match.group("values")
+    values: list[str] = []
+    position = 0
+    while position < len(values_source):
+        value = _POSTGRESQL_ANY_ARRAY_VALUE.match(values_source, position)
+        if value is None:
+            return None
+        values.append("'" + value.group("value") + "'")
+        position = value.end()
+        if value.group("comma") == "":
+            break
+    if not values or position != len(values_source):
+        return None
+    return f"{match.group('left')} IN ({', '.join(values)})"
 
 
 def _normalize_schema_expression(value: object) -> tuple[object, ...] | None:
@@ -529,6 +573,9 @@ def _normalize_schema_expression(value: object) -> tuple[object, ...] | None:
     if value is None:
         return None
     source = str(value).strip()
+    postgresql_in = _normalize_postgresql_any_array_check(source)
+    if postgresql_in is not None:
+        source = postgresql_in
     tokens: list[str] = []
     position = 0
     while position < len(source):
