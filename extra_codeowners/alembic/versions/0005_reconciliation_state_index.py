@@ -1,4 +1,4 @@
-"""Index reconciliation retention cleanup by observation time."""
+"""Classify carried recovery fences and bound reconciliation retention cleanup."""
 
 from __future__ import annotations
 
@@ -16,7 +16,36 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    """Keep bounded retention cleanup within the database statement timeout."""
+    """Keep carried recovery work out of foreground lanes and bound cleanup."""
+    # Revision 0004 had to classify carried jobs before it could add the
+    # work_class column to shared-head epochs. Finish that classification here:
+    # an epoch is recovery work only when at least one carried evaluation for
+    # the same head is recovery and none is direct evidence. Any ambiguity is
+    # intentionally interactive, which preserves the fail-closed fence.
+    op.execute(
+        sa.text(
+            """
+            UPDATE shared_head_epochs
+            SET work_class = 'recovery'
+            WHERE EXISTS (
+                SELECT 1
+                FROM evaluation_jobs
+                WHERE evaluation_jobs.installation_id = shared_head_epochs.installation_id
+                  AND evaluation_jobs.repository_full_name = shared_head_epochs.repository_full_name
+                  AND evaluation_jobs.head_sha_hint = shared_head_epochs.head_sha
+                  AND evaluation_jobs.work_class = 'recovery'
+            )
+              AND NOT EXISTS (
+                SELECT 1
+                FROM evaluation_jobs
+                WHERE evaluation_jobs.installation_id = shared_head_epochs.installation_id
+                  AND evaluation_jobs.repository_full_name = shared_head_epochs.repository_full_name
+                  AND evaluation_jobs.head_sha_hint = shared_head_epochs.head_sha
+                  AND evaluation_jobs.work_class = 'interactive'
+            )
+            """
+        )
+    )
     op.create_index(
         "ix_reconciliation_states_observed_at",
         "reconciliation_states",

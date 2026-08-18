@@ -96,7 +96,7 @@ app.kubernetes.io/component: application
 {{- fail "autoscaling.maxReplicas greater than 1 requires highAvailability.enabled so PostgreSQL coordination and scheduling safeguards are enabled" -}}
 {{- end -}}
 {{- range .Values.extraEnv -}}
-{{- if or (eq .name "EXTRA_CODEOWNERS_ENVIRONMENT") (eq .name "EXTRA_CODEOWNERS_ALLOW_INSECURE_CHANGES") -}}
+{{- if or (eq .name "EXTRA_CODEOWNERS_ENVIRONMENT") (eq .name "EXTRA_CODEOWNERS_ALLOW_INSECURE_CHANGES") (eq .name "EXTRA_CODEOWNERS_REQUIRE_POSTGRESQL") -}}
 {{- fail (printf "extraEnv must not override chart-managed variable %s" .name) -}}
 {{- end -}}
 {{- if hasPrefix "PG" .name -}}

@@ -1328,6 +1328,34 @@ async def test_reconciliation_request_has_an_absolute_wall_clock_deadline(
 
 
 @pytest.mark.asyncio
+async def test_request_deadline_includes_a_contended_installation_token(
+    private_key: str,
+) -> None:
+    token_release = asyncio.Event()
+
+    async def blocked_token(
+        installation_id: int,
+        *,
+        stop: asyncio.Event | None = None,
+    ) -> str:
+        del installation_id, stop
+        await token_release.wait()
+        return "installation-token"
+
+    client = GitHubClient(
+        1,
+        private_key,
+        timeout_seconds=0.01,
+        transport=httpx.MockTransport(unexpected_request),
+    )
+    client._installation_token = blocked_token  # type: ignore[method-assign]
+
+    with pytest.raises(GitHubError, match="wall-clock deadline"):
+        await asyncio.wait_for(client.get_pull(2, "example/project", 3), timeout=0.5)
+    await client.close()
+
+
+@pytest.mark.asyncio
 async def test_streaming_request_deadline_covers_the_full_response_body(private_key: str) -> None:
     body_started = asyncio.Event()
     body_release = asyncio.Event()
@@ -1359,6 +1387,37 @@ async def test_streaming_request_deadline_covers_the_full_response_body(private_
             timeout=0.5,
         )
     assert body_started.is_set()
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_streaming_request_deadline_includes_a_contended_installation_token(
+    private_key: str,
+) -> None:
+    token_release = asyncio.Event()
+
+    async def blocked_token(
+        installation_id: int,
+        *,
+        stop: asyncio.Event | None = None,
+    ) -> str:
+        del installation_id, stop
+        await token_release.wait()
+        return "installation-token"
+
+    client = GitHubClient(
+        1,
+        private_key,
+        timeout_seconds=0.01,
+        transport=httpx.MockTransport(unexpected_request),
+    )
+    client._installation_token = blocked_token  # type: ignore[method-assign]
+
+    with pytest.raises(GitHubError, match="wall-clock deadline"):
+        await asyncio.wait_for(
+            client.get_file_text(2, "example/project", ".github/extra-codeowners.toml"),
+            timeout=0.5,
+        )
     await client.close()
 
 

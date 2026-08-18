@@ -56,10 +56,13 @@ The revision also adds a completion fingerprint for each reconciled pull
 request and a shared GitHub rate-limit circuit. The compatibility marker moves
 from `2` to `3`.
 
-Revision `0005_reconciliation_state_index` adds an index on the timestamp
-used to prune stale reconciliation fingerprints. It keeps cleanup bounded as
-the history grows and moves the compatibility marker from `3` to `4`. It does
-not change queued work or evaluation policy.
+Revision `0005_reconciliation_state_index` finishes the carry-over
+classification for periodic work that was already queued when revision `0004`
+arrived. An exact-head fence becomes recovery work only when every carried job
+for that head was periodic; any direct evidence keeps it interactive. The
+revision also indexes the timestamp used to prune stale reconciliation
+fingerprints, so cleanup stays bounded as the history grows. It moves the
+compatibility marker from `3` to `4`.
 
 An already-running process does not revalidate the Alembic head before every
 claim. Stop every older ingress, worker, and reconciler before this revision

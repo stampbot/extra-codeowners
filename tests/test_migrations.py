@@ -70,6 +70,48 @@ def test_alpha_eight_database_upgrades_to_the_retention_index(tmp_path: Path) ->
     engine.dispose()
 
 
+def test_upgrade_classifies_carried_periodic_shared_head_work_as_recovery(
+    tmp_path: Path,
+) -> None:
+    url = database_url(tmp_path, "carried-recovery.db")
+    head = "c" * 40
+    upgrade_database(url, revision="0002_retry_dead_jobs")
+    engine = create_engine(url)
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                INSERT INTO evaluation_jobs (
+                    installation_id, repository_full_name, pull_number, reason,
+                    head_sha_hint, generation, authority_generation, state,
+                    attempts, requested_at, available_at
+                ) VALUES (
+                    17, 'example/project', 42, 'periodic_reconciliation',
+                    :head_sha, 1, 0, 'pending', 0,
+                    CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+                )
+                """
+            ),
+            {"head_sha": head},
+        )
+    engine.dispose()
+
+    upgrade_database(url, revision="0003_shared_head_epochs")
+    upgrade_database(url)
+
+    engine = create_engine(url)
+    with engine.connect() as connection:
+        evaluation_class = connection.scalar(
+            text("SELECT work_class FROM evaluation_jobs WHERE pull_number = 42")
+        )
+        invalidation_class = connection.scalar(
+            text("SELECT work_class FROM shared_head_epochs WHERE head_sha = :head_sha"),
+            {"head_sha": head},
+        )
+    engine.dispose()
+    assert evaluation_class == invalidation_class == "recovery"
+
+
 def test_current_head_schema_drift_blocks_migration_success(tmp_path: Path) -> None:
     url = database_url(tmp_path, "drift-at-head.db")
     upgrade_database(url)

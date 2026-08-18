@@ -91,6 +91,9 @@ reject_values() {
 reject_values 'insecure-mode environment override' \
   --set-string extraEnv[0].name=EXTRA_CODEOWNERS_ALLOW_INSECURE_CHANGES \
   --set-string extraEnv[0].value=true
+reject_values 'PostgreSQL enforcement environment override' \
+  --set-string extraEnv[0].name=EXTRA_CODEOWNERS_REQUIRE_POSTGRESQL \
+  --set-string extraEnv[0].value=false
 reject_values 'runtime ambient libpq environment' \
   --set-string extraEnv[0].name=PGHOST \
   --set-string extraEnv[0].value=database.example.com

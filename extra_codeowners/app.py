@@ -609,30 +609,68 @@ def create_app(
                     status.HTTP_503_SERVICE_UNAVAILABLE,
                     "delivery was stored, but check revocation is temporarily unavailable",
                 )
-            try:
-                invalidated = await asyncio.wait_for(
-                    evaluator.invalidate_for_trigger(
-                        job,
-                        acceptance.shared_head_generation,
-                    ),
-                    timeout=runtime.webhook_invalidation_timeout_seconds,
-                )
-                queued = queued or invalidated
-                await asyncio.to_thread(queue_store.mark_delivery_invalidated, webhook.delivery_id)
-            except Exception as error:
-                # Durable work is authoritative. GitHub terminates webhook
-                # requests after ten seconds and does not automatically retry
-                # failures, so the synchronous revocation is a bounded fast
-                # path rather than part of delivery acceptance.
-                WEBHOOK_FAILURES.labels("invalidation_fast_path").inc()
-                log.warning(
-                    "webhook_check_invalidation_deferred",
+            if await asyncio.to_thread(
+                queue_store.provider_is_backpressured,
+                job.installation_id,
+            ):
+                # Durable work remains queued. Do not turn every incoming
+                # webhook into another GitHub request while an installation or
+                # App-wide provider circuit is deliberately open.
+                log.info(
+                    "webhook_check_invalidation_deferred_for_provider_backpressure",
                     delivery_id=webhook.delivery_id,
-                    github_event=webhook.event,
-                    repository=job.repository_full_name,
-                    pull_number=job.pull_number,
-                    error_type=type(error).__name__,
+                    installation_id=job.installation_id,
                 )
+            else:
+                try:
+                    invalidated = await asyncio.wait_for(
+                        evaluator.invalidate_for_trigger(
+                            job,
+                            acceptance.shared_head_generation,
+                        ),
+                        timeout=runtime.webhook_invalidation_timeout_seconds,
+                    )
+                    queued = queued or invalidated
+                    await asyncio.to_thread(
+                        queue_store.mark_delivery_invalidated, webhook.delivery_id
+                    )
+                except GitHubRateLimitError as error:
+                    try:
+                        await asyncio.to_thread(
+                            queue_store.record_provider_backpressure,
+                            None if error.global_scope else job.installation_id,
+                            str(error),
+                            error.retry_after_seconds,
+                        )
+                    except Exception as record_error:
+                        log.warning(
+                            "webhook_provider_backpressure_record_failed",
+                            error_type=type(record_error).__name__,
+                        )
+                    # Durable work is authoritative. GitHub terminates
+                    # webhook requests after ten seconds and does not
+                    # automatically retry failures, so this synchronous reset
+                    # is a bounded fast path rather than delivery acceptance.
+                    WEBHOOK_FAILURES.labels("invalidation_fast_path").inc()
+                    log.warning(
+                        "webhook_check_invalidation_rate_limited",
+                        delivery_id=webhook.delivery_id,
+                        github_event=webhook.event,
+                        repository=job.repository_full_name,
+                        pull_number=job.pull_number,
+                        scope="global" if error.global_scope else "installation",
+                        retry_after_seconds=error.retry_after_seconds,
+                    )
+                except Exception as error:
+                    WEBHOOK_FAILURES.labels("invalidation_fast_path").inc()
+                    log.warning(
+                        "webhook_check_invalidation_deferred",
+                        delivery_id=webhook.delivery_id,
+                        github_event=webhook.event,
+                        repository=job.repository_full_name,
+                        pull_number=job.pull_number,
+                        error_type=type(error).__name__,
+                    )
         log.info(
             "webhook_accepted",
             delivery_id=webhook.delivery_id,

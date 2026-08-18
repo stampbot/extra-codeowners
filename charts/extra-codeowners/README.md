@@ -513,8 +513,8 @@ already applied the exact target head.
 > retain native enforcement for any current check you did not verify.
 
 Keep GitOps suspended and save the complete reviewed target settings, including
-the final autoscaling configuration, in `target-values.yaml`. The first target
-upgrade must force autoscaling off:
+the final autoscaling or high-availability configuration, in
+`target-values.yaml`. The first target upgrade must force both off:
 
 ```bash
 helm upgrade extra-codeowners \
@@ -525,6 +525,7 @@ helm upgrade extra-codeowners \
   --set-string image.repository="$IMAGE_REPOSITORY" \
   --set-string image.digest="$IMAGE_DIGEST" \
   --set autoscaling.enabled=false \
+  --set highAvailability.enabled=false \
   --set replicaCount=1 \
   --wait \
   --timeout=10m

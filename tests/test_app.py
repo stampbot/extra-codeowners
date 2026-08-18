@@ -533,6 +533,69 @@ def test_new_direct_delivery_enters_fast_invalidation_without_a_second_database_
     assert [check["status"] for check in github.checks] == ["in_progress"]
 
 
+def test_webhook_fast_path_skips_a_provider_backpressured_installation(tmp_path: Path) -> None:
+    store = migrated_store(f"sqlite:///{tmp_path / 'webhook-backpressure.db'}")
+    github = StubGitHub()
+    app = app_module.create_app(configured_settings(), github=github, store=store)  # type: ignore[arg-type]
+    body = json.dumps(
+        {
+            "action": "opened",
+            "installation": {"id": 10},
+            "repository": {"full_name": "example/project"},
+            "number": 7,
+            "pull_request": {"number": 7, "state": "open", "head": {"sha": HEAD}},
+        }
+    ).encode()
+
+    store.record_provider_backpressure(10, "primary limit", 60)
+    invalidation = AsyncMock()
+    with TestClient(app) as client:
+        evaluator = app.state.evaluator
+        assert evaluator is not None
+        evaluator.invalidate_for_trigger = invalidation
+        response = client.post("/webhooks/github", content=body, headers=webhook_headers(body))
+
+    assert response.status_code == 202
+    assert response.json() == {"accepted": True, "queued": True}
+    invalidation.assert_not_awaited()
+    assert store.delivery_needs_invalidation("delivery-1") is True
+
+
+def test_webhook_fast_path_records_a_global_rate_limit(tmp_path: Path) -> None:
+    store = migrated_store(f"sqlite:///{tmp_path / 'webhook-rate-limit.db'}")
+    github = StubGitHub()
+    app = app_module.create_app(configured_settings(), github=github, store=store)  # type: ignore[arg-type]
+    body = json.dumps(
+        {
+            "action": "opened",
+            "installation": {"id": 10},
+            "repository": {"full_name": "example/project"},
+            "number": 7,
+            "pull_request": {"number": 7, "state": "open", "head": {"sha": HEAD}},
+        }
+    ).encode()
+
+    with TestClient(app) as client:
+        evaluator = app.state.evaluator
+        assert evaluator is not None
+        evaluator.invalidate_for_trigger = AsyncMock(
+            side_effect=GitHubRateLimitError(
+                429,
+                "PATCH",
+                "/check-runs/1",
+                "secondary limit",
+                60,
+                global_scope=True,
+            )
+        )
+        response = client.post("/webhooks/github", content=body, headers=webhook_headers(body))
+
+    assert response.status_code == 202
+    assert response.json() == {"accepted": True, "queued": True}
+    assert store.provider_is_backpressured(None) is True
+    assert store.delivery_needs_invalidation("delivery-1") is True
+
+
 def test_webhook_fast_path_failure_is_durable_and_replayable(tmp_path: Path) -> None:
     store = migrated_store(f"sqlite:///{tmp_path / 'app.db'}")
     github = StubGitHub()
