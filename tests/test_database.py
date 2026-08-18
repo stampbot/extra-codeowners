@@ -102,6 +102,11 @@ def test_schema_expression_contract_accepts_postgresql_in_array_deparse() -> Non
         "work_class::text = ANY "
         "(ARRAY['interactive'::character varying, 'recovery'::character varying]::text[])"
     )
+    assert expected == _normalize_schema_expression(
+        "work_class::text = ANY "
+        "(ARRAY['interactive'::character varying::text, "
+        "'recovery'::character varying::text])"
+    )
 
 
 def test_isolated_postgresql_connect_args_neutralize_ambient_hostaddr(
