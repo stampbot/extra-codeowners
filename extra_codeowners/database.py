@@ -40,8 +40,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 from sqlalchemy.pool import NullPool
 
-SCHEMA_VERSION = 3
-DATABASE_MIGRATION_HEAD = "0004_responsive_work_queue"
+SCHEMA_VERSION = 4
+DATABASE_MIGRATION_HEAD = "0005_reconciliation_state_index"
 DATABASE_CONNECT_TIMEOUT_SECONDS = 3
 DATABASE_POOL_TIMEOUT_SECONDS = 2
 DATABASE_STATEMENT_TIMEOUT_MILLISECONDS = 3_000
@@ -364,6 +364,7 @@ class ReconciliationState(Base):
     """
 
     __tablename__ = "reconciliation_states"
+    __table_args__ = (Index("ix_reconciliation_states_observed_at", "observed_at"),)
 
     installation_id: Mapped[int] = mapped_column(Integer, primary_key=True)
     repository_full_name: Mapped[str] = mapped_column(String(512), primary_key=True)
@@ -1427,7 +1428,11 @@ class QueueStore:
     def _advance_shared_head_epoch_in_session(
         session: Session,
         request: JobRequest,
+        *,
+        shared_head_locked: bool = False,
     ) -> int:
+        if not shared_head_locked:
+            QueueStore._lock_shared_head_epoch_in_session(session, request)
         head_sha = validate_head_sha(request.head_sha_hint or "")
         now = utcnow()
         key = (
@@ -1486,9 +1491,22 @@ class QueueStore:
 
     @staticmethod
     def _lock_shared_head_epoch_in_session(session: Session, request: JobRequest) -> None:
-        """Take the exact-head row lock before the pull-request queue-row lock."""
+        """Serialize one head key before the pull-request queue-row lock.
+
+        A row lock alone cannot protect an absent epoch. PostgreSQL's
+        transaction-scoped advisory lock covers both the absent and present
+        cases, then the row lock orders a later epoch update with every other
+        operation on that head. SQLite is deliberately single-process only;
+        its write transaction provides the corresponding local ordering.
+        """
 
         head_sha = validate_head_sha(request.head_sha_hint or "")
+        if session.get_bind().dialect.name == "postgresql":
+            key = QueueStore._check_write_key(
+                "__extra_codeowners_shared_head_epoch__",
+                f"{request.installation_id}:{request.repository_full_name}:{head_sha}",
+            )
+            session.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": key})
         session.scalar(
             select(SharedHeadEpoch.installation_id)
             .where(
@@ -1813,7 +1831,11 @@ class QueueStore:
                         # durable state. This is the missed-webhook repair
                         # case; advance the exact head fence now rather than
                         # waiting for the old row to reach the evaluator.
-                        generation = self._advance_shared_head_epoch_in_session(session, request)
+                        generation = self._advance_shared_head_epoch_in_session(
+                            session,
+                            request,
+                            shared_head_locked=True,
+                        )
                         self._enqueue_in_session(
                             session,
                             request,
@@ -1833,7 +1855,11 @@ class QueueStore:
                     ):
                         state.observed_at = now
                         return False
-                    generation = self._advance_shared_head_epoch_in_session(session, request)
+                    generation = self._advance_shared_head_epoch_in_session(
+                        session,
+                        request,
+                        shared_head_locked=True,
+                    )
                     authority_generation = (
                         session.scalar(
                             select(AuthorityEpoch.generation).where(

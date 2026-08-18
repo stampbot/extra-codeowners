@@ -20,7 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from extra_codeowners import __version__
 from extra_codeowners.build_identity import load_build_identity
 from extra_codeowners.database import JobRequest, QueueStore
-from extra_codeowners.github import GitHubClient
+from extra_codeowners.github import GitHubClient, GitHubRateLimitError
 from extra_codeowners.logging import configure_logging
 from extra_codeowners.manifest import ManifestError, ManifestService
 from extra_codeowners.metrics import INSECURE_MODE, WEBHOOK_FAILURES, WEBHOOKS
@@ -160,11 +160,13 @@ class GitHubIdentityProbe:
     def __init__(
         self,
         github: GitHubClient,
+        store: QueueStore,
         *,
         interval_seconds: float,
         freshness_seconds: float,
     ) -> None:
         self._github = github
+        self._store = store
         self._interval_seconds = interval_seconds
         self._freshness_seconds = freshness_seconds
         self._last_success_monotonic: float | None = None
@@ -180,7 +182,29 @@ class GitHubIdentityProbe:
     async def refresh(self, *, stop: asyncio.Event) -> bool:
         """Attempt one identity proof without discarding a still-fresh prior proof."""
         try:
+            if await asyncio.to_thread(self._store.provider_is_backpressured, None):
+                log.info("github_app_identity_probe_deferred", scope="global")
+                return False
             await self._github.verify_app_identity(stop=stop)
+        except GitHubRateLimitError as error:
+            try:
+                await asyncio.to_thread(
+                    self._store.record_provider_backpressure,
+                    None,
+                    str(error),
+                    error.retry_after_seconds,
+                )
+            except Exception as record_error:
+                log.warning(
+                    "github_app_identity_probe_backpressure_record_failed",
+                    error_type=type(record_error).__name__,
+                )
+            log.warning(
+                "github_app_identity_probe_rate_limited",
+                scope="global",
+                retry_after_seconds=error.retry_after_seconds,
+            )
+            return False
         except Exception as error:
             log.warning(
                 "github_app_identity_probe_failed",
@@ -296,6 +320,7 @@ def create_app(
             if github_client is not None:
                 identity_probe = GitHubIdentityProbe(
                     github_client,
+                    queue_store,
                     interval_seconds=runtime.github_identity_probe_interval_seconds,
                     freshness_seconds=runtime.github_identity_freshness_seconds,
                 )

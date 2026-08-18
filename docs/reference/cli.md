@@ -96,7 +96,7 @@ The migration options are:
 On success, the final line names the bundled revision:
 
 ```text
-Database is at migration 0004_responsive_work_queue.
+Database is at migration 0005_reconciliation_state_index.
 ```
 
 Production mode applies the same PostgreSQL and transport checks as `serve`. A
@@ -123,7 +123,7 @@ uv run python -m extra_codeowners database check
 On success, the final line names the compatible revision:
 
 ```text
-Database migration 0004_responsive_work_queue is compatible.
+Database migration 0005_reconciliation_state_index is compatible.
 ```
 
 The command exits nonzero when it cannot connect or when the required release

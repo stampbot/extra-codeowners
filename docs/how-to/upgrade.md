@@ -79,11 +79,14 @@ secret:
 run_without_libpq_environment extra-codeowners database check
 ```
 
-For version 0.1.0, a compatible database prints:
+An `0.1.0-alpha.8` artifact prints:
 
 ```text
 Database migration 0004_responsive_work_queue is compatible.
 ```
+
+The target artifact prints `0005_reconciliation_state_index` after the
+migration in step 5.
 
 Record the reported revision, current image digest, chart revision, PostgreSQL
 major version, and UTC time in the change record. The check reads migration
@@ -382,10 +385,10 @@ run_without_libpq_environment \
   extra-codeowners database migrate --lock-timeout-seconds 60
 ```
 
-For version 0.1.0, success prints:
+For the target artifact, success prints:
 
 ```text
-Database is at migration 0004_responsive_work_queue.
+Database is at migration 0005_reconciliation_state_index.
 ```
 
 The migrator:
@@ -410,7 +413,7 @@ It runs the target image with migration-only database settings. It does not
 inherit runtime environment sources, GitHub credential volumes, or App
 secrets.
 
-Before an upgrade to `0004_responsive_work_queue`, complete the Kubernetes drain
+Before an upgrade that changes the database head, complete the Kubernetes drain
 in step 2. Confirm that no HPA, old worker, or reconciler remains. The
 pre-upgrade hook does not stop existing pods or suspend GitOps for you.
 
@@ -489,7 +492,7 @@ kubectl --namespace "$NAMESPACE" wait \
     "job/$DEPLOYMENT-migrate" --container=migrate >"$FIRST_MIGRATION_LOG"
 )
 grep --fixed-strings --line-regexp \
-  'Database is at migration 0004_responsive_work_queue.' \
+  'Database is at migration 0005_reconciliation_state_index.' \
   "$FIRST_MIGRATION_LOG"
 kubectl --namespace "$NAMESPACE" rollout status \
   "deployment/$DEPLOYMENT" --timeout=10m
@@ -552,12 +555,12 @@ test ! -e "$SECOND_MIGRATION_LOG"
     "job/$DEPLOYMENT-migrate" --container=migrate >"$SECOND_MIGRATION_LOG"
 )
 grep --fixed-strings --line-regexp \
-  'Database is at migration 0004_responsive_work_queue.' \
+  'Database is at migration 0005_reconciliation_state_index.' \
   "$SECOND_MIGRATION_LOG"
 ```
 
 The second migrator takes the same advisory lock and confirms that the database
-is already at `0004_responsive_work_queue`. Alembic makes no schema change, but
+is already at `0005_reconciliation_state_index`. Alembic makes no schema change, but
 the migrator still validates the `required-release-contract` before it prints
 success.
 
