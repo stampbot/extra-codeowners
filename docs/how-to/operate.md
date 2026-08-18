@@ -119,13 +119,16 @@ margin. Keep Helm and rollout wait timeouts higher still. Don't use a larger
 startup budget to hide a persistent schema, credential, mount, or network
 failure.
 
-Reconciliation requests work only for open pull requests that do not already
-have a queue row. When the response includes a canonical head, the database
-advances that head's shared generation in the same transaction that inserts
-the row. A reconciled check briefly returns to `in_progress` while the worker
-fetches current evidence. Choose an interval that balances that short merge
-interruption against stale-evidence exposure, GitHub API use, and your recovery
-objective.
+Each reconciliation scan reads every accessible open pull request. If GitHub
+reports a new head, the database advances that head's shared generation and
+queues recovery work in one transaction. If the head is unchanged, the service
+queues it again only after `EXTRA_CODEOWNERS_RECONCILE_RECHECK_SECONDS` has
+elapsed since the last successful evaluation. A current queue row stays put.
+
+A reconciled check briefly returns to `in_progress` while the worker fetches
+current evidence. Choose an interval and recheck period that balance that
+short merge interruption against stale-evidence exposure, GitHub API use, and
+your recovery objective.
 
 The service does not expose remaining GitHub rate-limit quota. Watch API
 failures instead, and keep the service limited to disposable repositories
