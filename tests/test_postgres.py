@@ -535,6 +535,37 @@ def test_claim_and_service_lease_election_are_atomic(postgres_store: QueueStore)
     assert postgres_store.release_service_lease("integration-reconciler", winner) is False
 
 
+def test_independent_postgres_stores_do_not_claim_the_same_ready_work(
+    postgres_store: QueueStore,
+) -> None:
+    """Two pods use independent engines but coordinate through PostgreSQL."""
+    peer = QueueStore(postgres_store.engine.url.render_as_string(hide_password=False))
+    peer.initialize()
+    try:
+        for pull_number in range(1, 9):
+            postgres_store.enqueue(request(pull_number))
+        while True:
+            invalidation = postgres_store.claim_shared_head_invalidation("seed", 60)
+            if invalidation is None:
+                break
+            assert postgres_store.complete_shared_head_invalidation(invalidation)
+
+        stores = (postgres_store, peer)
+        barrier = threading.Barrier(2)
+
+        def claim_from(index: int) -> ClaimedJob | None:
+            barrier.wait()
+            return stores[index].claim(f"pod-{index}", 60, require_shared_head_ready=True)
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            claims = list(executor.map(claim_from, range(2)))
+
+        assert all(claim is not None for claim in claims)
+        assert len({claim.id for claim in claims if claim is not None}) == 2
+    finally:
+        peer.close()
+
+
 def test_postgres_advisory_guard_orders_writers_and_survives_connection_loss(
     postgres_store: QueueStore,
 ) -> None:

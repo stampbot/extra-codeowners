@@ -83,6 +83,18 @@ app.kubernetes.io/component: application
 {{- if .Values.extraEnvFrom -}}
 {{- fail "extraEnvFrom is unsupported because EnvFromSource keys cannot be validated; use extraEnv with explicit names and valueFrom references" -}}
 {{- end -}}
+{{- if and .Values.highAvailability.enabled .Values.autoscaling.enabled (lt (int .Values.autoscaling.minReplicas) (int .Values.highAvailability.replicas)) -}}
+{{- fail "autoscaling.minReplicas must be at least highAvailability.replicas when highAvailability is enabled" -}}
+{{- end -}}
+{{- if and .Values.highAvailability.enabled (ge (int .Values.highAvailability.minAvailable) (int .Values.highAvailability.replicas)) -}}
+{{- fail "highAvailability.minAvailable must be lower than highAvailability.replicas so Kubernetes can perform a voluntary disruption" -}}
+{{- end -}}
+{{- if and (not .Values.highAvailability.enabled) (gt (int .Values.replicaCount) 1) -}}
+{{- fail "replicaCount greater than 1 requires highAvailability.enabled so PostgreSQL coordination and scheduling safeguards are enabled" -}}
+{{- end -}}
+{{- if and (not .Values.highAvailability.enabled) .Values.autoscaling.enabled (gt (int .Values.autoscaling.maxReplicas) 1) -}}
+{{- fail "autoscaling.maxReplicas greater than 1 requires highAvailability.enabled so PostgreSQL coordination and scheduling safeguards are enabled" -}}
+{{- end -}}
 {{- range .Values.extraEnv -}}
 {{- if or (eq .name "EXTRA_CODEOWNERS_ENVIRONMENT") (eq .name "EXTRA_CODEOWNERS_ALLOW_INSECURE_CHANGES") -}}
 {{- fail (printf "extraEnv must not override chart-managed variable %s" .name) -}}

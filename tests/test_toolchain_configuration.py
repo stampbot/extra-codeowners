@@ -253,10 +253,21 @@ def test_helm_chart_retains_hardening_without_image_specific_loader_paths() -> N
     assert image["tag"] == ""
     assert values["deploymentAnnotations"] == {}
     assert values["extraManifests"] == []
+    assert values["highAvailability"] == {
+        "enabled": False,
+        "replicas": 2,
+        "minAvailable": 1,
+    }
 
     schema = json.loads((ROOT / "charts" / "extra-codeowners" / "values.schema.json").read_text())
     assert "deploymentAnnotations" in schema["required"]
     assert schema["properties"]["deploymentAnnotations"] == {"$ref": "#/definitions/stringMap"}
+    assert "highAvailability" in schema["required"]
+    assert schema["properties"]["highAvailability"]["properties"]["replicas"]["minimum"] == 2
+    assert schema["properties"]["highAvailability"]["properties"]["minAvailable"] == {
+        "type": "integer",
+        "minimum": 1,
+    }
 
     probes = schema["properties"]["probes"]
     assert "startup" in probes["required"]
@@ -277,6 +288,15 @@ def test_helm_chart_retains_hardening_without_image_specific_loader_paths() -> N
         ROOT / "charts" / "extra-codeowners" / "templates" / "deployment.yaml"
     ).read_text()
     assert "{{- if .Values.probes.startup.enabled }}" in deployment
+    assert "EXTRA_CODEOWNERS_REQUIRE_POSTGRESQL" in deployment
+    assert 'ternary "true" "false" .Values.highAvailability.enabled' in deployment
+    assert ".Values.highAvailability.enabled" in deployment
+    assert "requiredDuringSchedulingIgnoredDuringExecution" in deployment
+    assert "topology.kubernetes.io/zone" in deployment
+    helpers = (ROOT / "charts" / "extra-codeowners" / "templates" / "_helpers.tpl").read_text()
+    assert "replicaCount greater than 1 requires highAvailability.enabled" in helpers
+    assert "autoscaling.maxReplicas greater than 1 requires highAvailability.enabled" in helpers
+    assert "highAvailability.minAvailable must be lower" in helpers
     for field in (
         "path",
         "initialDelaySeconds",

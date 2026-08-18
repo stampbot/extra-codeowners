@@ -22,6 +22,28 @@ EVALUATION_SECONDS = Histogram(
     "Time spent evaluating one pull request",
 )
 QUEUE_DEPTH = Gauge("extra_codeowners_queue_depth", "Pending durable work items")
+QUEUE_WORK_CLASS_DEPTH = Gauge(
+    "extra_codeowners_queue_work_class_depth",
+    "Pending durable work items by kind and scheduling class",
+    ("kind", "work_class"),
+)
+QUEUE_WORK_CLASS_OLDEST_AGE_SECONDS = Gauge(
+    "extra_codeowners_queue_work_class_oldest_age_seconds",
+    "Age of the oldest pending durable work item by kind and scheduling class",
+    ("kind", "work_class"),
+)
+QUEUE_WAIT_SECONDS = Histogram(
+    "extra_codeowners_queue_wait_seconds",
+    "Accepted durable work wait before a worker starts it",
+    ("kind", "work_class"),
+    buckets=(1, 2.5, 5, 10, 15, 30, 60, 120, 300, 600),
+)
+WEBHOOK_TO_CHECK_COMPLETION_SECONDS = Histogram(
+    "extra_codeowners_webhook_to_check_completion_seconds",
+    "Accepted work age when evaluation finishes without a retry",
+    ("work_class",),
+    buckets=(1, 2.5, 5, 10, 15, 30, 60, 120, 300, 600),
+)
 SHARED_HEAD_INVALIDATION_DEPTH = Gauge(
     "extra_codeowners_shared_head_invalidation_depth",
     "Exact commit generations awaiting durable Check Run invalidation",

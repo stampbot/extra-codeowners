@@ -10,7 +10,7 @@ from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, Final, Literal
 
 from sqlalchemy import (
     JSON,
@@ -39,12 +39,15 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 from sqlalchemy.pool import NullPool
 
-SCHEMA_VERSION = 2
-DATABASE_MIGRATION_HEAD = "0003_shared_head_epochs"
+SCHEMA_VERSION = 3
+DATABASE_MIGRATION_HEAD = "0004_responsive_work_queue"
 DATABASE_CONNECT_TIMEOUT_SECONDS = 3
 DATABASE_POOL_TIMEOUT_SECONDS = 2
 DATABASE_STATEMENT_TIMEOUT_MILLISECONDS = 3_000
 MAX_BASE_SCOPED_AUTHORITY_JOBS_PER_REPOSITORY = 100
+WORK_CLASS_INTERACTIVE: Final = "interactive"
+WORK_CLASS_RECOVERY: Final = "recovery"
+WorkClass = Literal["interactive", "recovery"]
 # ``sslmode=require`` normally skips server-certificate verification, but libpq
 # upgrades it to ``verify-ca`` when its default root certificate exists. Point
 # it at a child of the platform null device instead: the device cannot contain
@@ -166,7 +169,17 @@ class EvaluationJob(Base):
             "pull_number",
             name="uq_evaluation_job_pr",
         ),
-        Index("ix_evaluation_jobs_claim", "state", "available_at", "lease_until"),
+        CheckConstraint(
+            "work_class IN ('interactive', 'recovery')",
+            name="ck_evaluation_jobs_work_class",
+        ),
+        Index(
+            "ix_evaluation_jobs_claim",
+            "state",
+            "work_class",
+            "available_at",
+            "lease_until",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -176,6 +189,9 @@ class EvaluationJob(Base):
     head_sha_hint: Mapped[str | None] = mapped_column(String(64))
     last_delivery_id: Mapped[str | None] = mapped_column(String(128))
     reason: Mapped[str] = mapped_column(String(255), nullable=False)
+    work_class: Mapped[WorkClass] = mapped_column(
+        String(16), nullable=False, default=WORK_CLASS_INTERACTIVE
+    )
     generation: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     authority_generation: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     shared_head_generation: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -302,9 +318,14 @@ class SharedHeadEpoch(Base):
             "attempts >= 0",
             name="ck_shared_head_epochs_attempts_nonnegative",
         ),
+        CheckConstraint(
+            "work_class IN ('interactive', 'recovery')",
+            name="ck_shared_head_epochs_work_class",
+        ),
         Index("ix_shared_head_epochs_changed_at", "changed_at"),
         Index(
             "ix_shared_head_epochs_claim",
+            "work_class",
             "available_at",
             "lease_until",
             postgresql_where=text("invalidated_generation < generation"),
@@ -317,6 +338,9 @@ class SharedHeadEpoch(Base):
     head_sha: Mapped[str] = mapped_column(String(64), primary_key=True)
     generation: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     invalidated_generation: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    work_class: Mapped[WorkClass] = mapped_column(
+        String(16), nullable=False, default=WORK_CLASS_INTERACTIVE
+    )
     changed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utcnow
     )
@@ -329,6 +353,45 @@ class SharedHeadEpoch(Base):
     last_error: Mapped[str | None] = mapped_column(String(2000))
 
 
+class ReconciliationState(Base):
+    """Last successful evaluation observed for one open pull request.
+
+    This is intentionally separate from the human-facing evaluation audit.
+    A successful no-policy or closed-pull evaluation still proves that the
+    reconciler saw the requested head and should not immediately refill the
+    queue on its next scan.
+    """
+
+    __tablename__ = "reconciliation_states"
+
+    installation_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    repository_full_name: Mapped[str] = mapped_column(String(512), primary_key=True)
+    pull_number: Mapped[int] = mapped_column(Integer, primary_key=True)
+    head_sha: Mapped[str] = mapped_column(String(64), nullable=False)
+    completed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
+    observed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
+
+
+class ProviderBackpressure(Base):
+    """A durable GitHub rate-limit circuit shared by every application pod."""
+
+    __tablename__ = "provider_backpressure"
+
+    # ``0`` is the App-wide circuit; positive values are GitHub installation
+    # IDs. A numeric key keeps every claim query portable across PostgreSQL
+    # and SQLite without building dynamic scope strings in SQL.
+    installation_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    blocked_until: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    reason: Mapped[str] = mapped_column(String(2000), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class JobRequest:
     """Input used to enqueue or coalesce an evaluation."""
@@ -338,6 +401,7 @@ class JobRequest:
     pull_number: int
     reason: str
     head_sha_hint: str | None = None
+    work_class: WorkClass = WORK_CLASS_INTERACTIVE
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -345,6 +409,12 @@ class JobRequest:
             "repository_full_name",
             normalize_repository_full_name(self.repository_full_name),
         )
+        if self.reason == "periodic_reconciliation" and self.work_class == WORK_CLASS_INTERACTIVE:
+            # Keep the public request type safe for older call sites. Periodic
+            # work is never allowed to impersonate a webhook-triggered job.
+            object.__setattr__(self, "work_class", WORK_CLASS_RECOVERY)
+        if self.work_class not in {WORK_CLASS_INTERACTIVE, WORK_CLASS_RECOVERY}:
+            raise ValueError("work_class must be interactive or recovery")
 
 
 @dataclass(frozen=True, slots=True)
@@ -379,12 +449,14 @@ class ClaimedJob:
     repository_full_name: str
     pull_number: int
     reason: str
+    work_class: WorkClass
     head_sha_hint: str | None
     last_delivery_id: str | None
     generation: int
     authority_generation: int
     shared_head_generation: int
     attempts: int
+    requested_at: datetime
     lease_owner: str
 
 
@@ -410,7 +482,9 @@ class ClaimedSharedHeadInvalidation:
     repository_full_name: str
     head_sha: str
     generation: int
+    work_class: WorkClass
     attempts: int
+    requested_at: datetime
     lease_owner: str
 
 
@@ -445,7 +519,7 @@ class _EvaluationJobBindingLostError(Exception):
 
 
 _SCHEMA_EXPRESSION_TOKEN = re.compile(
-    r'\s*(>=|<=|=|<|>|\(|\)|"(?:[^"]|"")*"|[A-Za-z_][A-Za-z0-9_]*|[0-9]+)'
+    r"\s*(>=|<=|=|<|>|\(|\)|,|\"(?:[^\"]|\"\")*\"|'(?:[^']|'')*'|[A-Za-z_][A-Za-z0-9_]*|[0-9]+)"
 )
 
 
@@ -472,6 +546,8 @@ def _normalize_schema_expression(value: object) -> tuple[object, ...] | None:
         token = tokens[cursor]
         if token.startswith('"') and token.endswith('"'):
             token = token[1:-1].replace('""', '"')
+        elif token.startswith("'") and token.endswith("'"):
+            token = token[1:-1].replace("''", "'")
         if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*|[0-9]+", token) is None:
             raise RuntimeError("database schema contains an unsupported SQL operand")
         cursor += 1
@@ -480,7 +556,22 @@ def _normalize_schema_expression(value: object) -> tuple[object, ...] | None:
     def comparison() -> tuple[object, ...]:
         nonlocal cursor
         left = operand()
-        if cursor >= len(tokens) or tokens[cursor] not in {">=", "<=", "=", "<", ">"}:
+        if cursor >= len(tokens):
+            raise RuntimeError("database schema contains an unsupported SQL comparison")
+        if tokens[cursor].lower() == "in":
+            cursor += 1
+            if cursor >= len(tokens) or tokens[cursor] != "(":
+                raise RuntimeError("database schema contains an invalid SQL IN expression")
+            cursor += 1
+            values = [operand()]
+            while cursor < len(tokens) and tokens[cursor] == ",":
+                cursor += 1
+                values.append(operand())
+            if cursor >= len(tokens) or tokens[cursor] != ")" or len(values) < 1:
+                raise RuntimeError("database schema contains an invalid SQL IN expression")
+            cursor += 1
+            return ("in", left, *values)
+        if tokens[cursor] not in {">=", "<=", "=", "<", ">"}:
             raise RuntimeError("database schema contains an unsupported SQL comparison")
         operator = tokens[cursor]
         cursor += 1
@@ -1225,6 +1316,16 @@ class QueueStore:
             .where(*key)
             .values(
                 generation=SharedHeadEpoch.generation + 1,
+                # A periodic scan must never downgrade an already accepted
+                # webhook trigger. A webhook promotes recovery work in the
+                # same durable transaction that advances its generation.
+                work_class=case(
+                    (
+                        SharedHeadEpoch.work_class == WORK_CLASS_INTERACTIVE,
+                        WORK_CLASS_INTERACTIVE,
+                    ),
+                    else_=request.work_class,
+                ),
                 changed_at=now,
                 available_at=now,
                 attempts=0,
@@ -1244,6 +1345,7 @@ class QueueStore:
             head_sha=head_sha,
             generation=1,
             invalidated_generation=0,
+            work_class=request.work_class,
             changed_at=now,
             available_at=now,
         )
@@ -1281,6 +1383,16 @@ class QueueStore:
             )
         values: dict[str, Any] = {
             "generation": EvaluationJob.generation + 1,
+            # Work class is monotonic until the row completes: direct
+            # evidence promotes a recovery row, but periodic reconciliation
+            # cannot make a current webhook wait behind recovery work again.
+            "work_class": case(
+                (
+                    EvaluationJob.work_class == WORK_CLASS_INTERACTIVE,
+                    WORK_CLASS_INTERACTIVE,
+                ),
+                else_=request.work_class,
+            ),
             "authority_generation": authority_generation,
             "shared_head_generation": shared_head_generation,
             "reason": request.reason,
@@ -1289,6 +1401,12 @@ class QueueStore:
             "available_at": now,
             "state": "pending",
             "attempts": 0,
+            # A newer durable trigger fences any old claimant by generation.
+            # Release its lease too, so a direct webhook can be claimed by a
+            # foreground lane immediately instead of waiting for a recovery
+            # lease to expire.
+            "lease_owner": None,
+            "lease_until": None,
             "last_error": None,
         }
         if delivery_id is not None:
@@ -1319,6 +1437,7 @@ class QueueStore:
                 repository_full_name=request.repository_full_name,
                 pull_number=request.pull_number,
                 reason=request.reason,
+                work_class=request.work_class,
                 head_sha_hint=request.head_sha_hint,
                 last_delivery_id=delivery_id,
                 authority_generation=authority_generation,
@@ -1448,6 +1567,7 @@ class QueueStore:
                         "repository_full_name": request.repository_full_name,
                         "pull_number": request.pull_number,
                         "reason": request.reason,
+                        "work_class": request.work_class,
                         "head_sha_hint": request.head_sha_hint,
                         "generation": 1,
                         "authority_generation": authority_generation,
@@ -1494,6 +1614,126 @@ class QueueStore:
                 # losing epoch transaction is not mistaken for durable work.
                 continue
         raise RuntimeError("could not reconcile evaluation after concurrent inserts")
+
+    def enqueue_reconciliation_if_due(
+        self,
+        request: JobRequest,
+        recheck_seconds: int,
+    ) -> bool:
+        """Revalidate one visible pull request without continuously refilling work.
+
+        The scan still compares every open pull request returned by GitHub.
+        A changed head is queued immediately, even when an older row is
+        pending. An unchanged head is queued only when it has never completed
+        or its successful evaluation is older than ``recheck_seconds``.
+        """
+        if request.work_class != WORK_CLASS_RECOVERY:
+            raise ValueError("reconciliation work must use the recovery class")
+        if request.head_sha_hint is None:
+            raise ValueError("reconciliation work requires an exact head SHA")
+        if recheck_seconds < 1:
+            raise ValueError("recheck_seconds must be positive")
+        key = (
+            EvaluationJob.installation_id == request.installation_id,
+            EvaluationJob.repository_full_name == request.repository_full_name,
+            EvaluationJob.pull_number == request.pull_number,
+        )
+        state_key = {
+            "installation_id": request.installation_id,
+            "repository_full_name": request.repository_full_name,
+            "pull_number": request.pull_number,
+        }
+        for _ in range(5):
+            try:
+                with self.session() as session:
+                    now = utcnow()
+                    existing = session.scalar(select(EvaluationJob).where(*key).with_for_update())
+                    state = session.get(ReconciliationState, state_key, with_for_update=True)
+                    if existing is not None:
+                        if existing.head_sha_hint == request.head_sha_hint:
+                            if state is not None:
+                                state.observed_at = now
+                            return False
+                        # GitHub shows a different current head than the job
+                        # durable state. This is the missed-webhook repair
+                        # case; advance the exact head fence now rather than
+                        # waiting for the old row to reach the evaluator.
+                        generation = self._advance_shared_head_epoch_in_session(session, request)
+                        self._enqueue_in_session(
+                            session,
+                            request,
+                            shared_head_generation=generation,
+                        )
+                        if state is not None:
+                            state.observed_at = now
+                        return True
+                    completed_at = state.completed_at if state is not None else None
+                    if completed_at is not None and completed_at.tzinfo is None:
+                        completed_at = completed_at.replace(tzinfo=UTC)
+                    if (
+                        state is not None
+                        and state.head_sha == request.head_sha_hint
+                        and completed_at is not None
+                        and completed_at > now - timedelta(seconds=recheck_seconds)
+                    ):
+                        state.observed_at = now
+                        return False
+                    generation = self._advance_shared_head_epoch_in_session(session, request)
+                    authority_generation = (
+                        session.scalar(
+                            select(AuthorityEpoch.generation).where(
+                                AuthorityEpoch.installation_id == request.installation_id
+                            )
+                        )
+                        or 0
+                    )
+                    values: dict[str, Any] = {
+                        **state_key,
+                        "reason": request.reason,
+                        "work_class": request.work_class,
+                        "head_sha_hint": request.head_sha_hint,
+                        "generation": 1,
+                        "authority_generation": authority_generation,
+                        "shared_head_generation": generation,
+                        "state": "pending",
+                        "attempts": 0,
+                        "requested_at": now,
+                        "available_at": now,
+                    }
+                    index_elements = (
+                        "installation_id",
+                        "repository_full_name",
+                        "pull_number",
+                    )
+                    dialect_name = session.get_bind().dialect.name
+                    if dialect_name == "postgresql":
+                        inserted_id = session.scalar(
+                            postgresql_insert(EvaluationJob)
+                            .values(**values)
+                            .on_conflict_do_nothing(index_elements=index_elements)
+                            .returning(EvaluationJob.id)
+                        )
+                    elif dialect_name == "sqlite":
+                        inserted_id = session.scalar(
+                            sqlite_insert(EvaluationJob)
+                            .values(**values)
+                            .on_conflict_do_nothing(index_elements=index_elements)
+                            .returning(EvaluationJob.id)
+                        )
+                    else:  # pragma: no cover - QueueStore supports SQLite and PostgreSQL
+                        raise RuntimeError(
+                            f"reconciliation insert does not support {dialect_name!r}"
+                        )
+                    if inserted_id is None:
+                        # The exact-head update above must roll back if a
+                        # webhook won the unique-row race.
+                        raise _EvaluationJobAlreadyPresentError
+                return True
+            except _EvaluationJobAlreadyPresentError:
+                return False
+            except IntegrityError:
+                continue
+        raise RuntimeError("could not enqueue due reconciliation work after concurrent inserts")
 
     @staticmethod
     def _enqueue_authority_in_session(
@@ -1571,6 +1811,11 @@ class QueueStore:
                 available_at=now,
                 state="pending",
                 attempts=0,
+                # A newer authority event fences an in-flight fan-out. Make
+                # the new generation available immediately instead of waiting
+                # for the old worker's lease to expire.
+                lease_owner=None,
+                lease_until=None,
                 last_error=None,
             )
         )
@@ -1982,26 +2227,105 @@ class QueueStore:
             )
             return getattr(renewed, "rowcount", 0) == 1
 
+    @staticmethod
+    def _provider_available_condition(installation_id: int | Any, now: datetime) -> Any:
+        """Build a portable predicate for App-wide and installation rate circuits."""
+        return ~exists(
+            select(ProviderBackpressure.installation_id).where(
+                ProviderBackpressure.installation_id.in_((0, installation_id)),
+                ProviderBackpressure.blocked_until > now,
+            )
+        )
+
+    def record_provider_backpressure(
+        self,
+        installation_id: int | None,
+        error: str,
+        delay_seconds: int,
+    ) -> None:
+        """Open or extend a durable GitHub rate-limit circuit.
+
+        A global App-authenticated limit uses installation ID zero. A worker
+        never shortens a circuit another replica has already observed.
+        """
+        key = 0 if installation_id is None else installation_id
+        if key < 0:
+            raise ValueError("installation_id must be positive or None")
+        delay_seconds = max(1, min(delay_seconds, 86_400))
+        now = utcnow()
+        blocked_until = now + timedelta(seconds=delay_seconds)
+        for _ in range(3):
+            try:
+                with self.session() as session:
+                    row = session.get(
+                        ProviderBackpressure,
+                        key,
+                        with_for_update=True,
+                    )
+                    if row is None:
+                        session.add(
+                            ProviderBackpressure(
+                                installation_id=key,
+                                blocked_until=blocked_until,
+                                reason=error[:2000],
+                                updated_at=now,
+                            )
+                        )
+                    else:
+                        row.blocked_until = max(row.blocked_until, blocked_until)
+                        row.reason = error[:2000]
+                        row.updated_at = now
+                return
+            except IntegrityError:
+                continue
+        raise RuntimeError("could not record provider backpressure after concurrent inserts")
+
+    def provider_is_backpressured(self, installation_id: int) -> bool:
+        """Return whether App-wide or installation-scoped GitHub work must pause."""
+        if installation_id <= 0:
+            raise ValueError("installation_id must be positive")
+        now = utcnow()
+        with self._sessions() as session:
+            return bool(
+                session.scalar(
+                    select(ProviderBackpressure.installation_id)
+                    .where(
+                        ProviderBackpressure.installation_id.in_((0, installation_id)),
+                        ProviderBackpressure.blocked_until > now,
+                    )
+                    .limit(1)
+                )
+                is not None
+            )
+
     def claim_shared_head_invalidation(
         self,
         owner: str,
         lease_seconds: int,
+        work_class: WorkClass | None = None,
     ) -> ClaimedSharedHeadInvalidation | None:
-        """Lease the oldest exact-head reset that has not completed."""
+        """Lease the oldest available exact-head reset in an optional work class."""
         now = utcnow()
         lease_until = now + timedelta(seconds=lease_seconds)
         for _ in range(3):
             with self.session() as session:
+                conditions = [
+                    SharedHeadEpoch.invalidated_generation < SharedHeadEpoch.generation,
+                    SharedHeadEpoch.available_at <= now,
+                    or_(
+                        SharedHeadEpoch.lease_until.is_(None),
+                        SharedHeadEpoch.lease_until < now,
+                    ),
+                    self._provider_available_condition(
+                        SharedHeadEpoch.installation_id,
+                        now,
+                    ),
+                ]
+                if work_class is not None:
+                    conditions.append(SharedHeadEpoch.work_class == work_class)
                 candidate = session.scalar(
                     select(SharedHeadEpoch)
-                    .where(
-                        SharedHeadEpoch.invalidated_generation < SharedHeadEpoch.generation,
-                        SharedHeadEpoch.available_at <= now,
-                        or_(
-                            SharedHeadEpoch.lease_until.is_(None),
-                            SharedHeadEpoch.lease_until < now,
-                        ),
-                    )
+                    .where(*conditions)
                     .order_by(
                         SharedHeadEpoch.available_at,
                         SharedHeadEpoch.changed_at,
@@ -2042,7 +2366,9 @@ class QueueStore:
                     repository_full_name=candidate.repository_full_name,
                     head_sha=candidate.head_sha,
                     generation=candidate.generation,
+                    work_class=candidate.work_class,
                     attempts=claimed_attempts,
+                    requested_at=candidate.changed_at,
                     lease_owner=owner,
                 )
         return None
@@ -2192,29 +2518,61 @@ class QueueStore:
             )
             return getattr(result, "rowcount", 0) == 1
 
-    def claim(self, owner: str, lease_seconds: int) -> ClaimedJob | None:
-        """Atomically lease the oldest available job."""
+    def claim(
+        self,
+        owner: str,
+        lease_seconds: int,
+        work_class: WorkClass | None = None,
+        *,
+        require_shared_head_ready: bool = False,
+    ) -> ClaimedJob | None:
+        """Atomically lease the oldest available job in an optional work class."""
         now = utcnow()
         lease_until = now + timedelta(seconds=lease_seconds)
         for _ in range(3):
             with self.session() as session:
+                conditions = [
+                    EvaluationJob.state == "pending",
+                    EvaluationJob.available_at <= now,
+                    or_(EvaluationJob.lease_until.is_(None), EvaluationJob.lease_until < now),
+                    ~exists(
+                        select(AuthorityJob.id).where(
+                            AuthorityJob.installation_id == EvaluationJob.installation_id,
+                            or_(
+                                AuthorityJob.scope_key == "*",
+                                AuthorityJob.scope_key == EvaluationJob.repository_full_name,
+                            ),
+                        )
+                    ),
+                    self._provider_available_condition(EvaluationJob.installation_id, now),
+                ]
+                if require_shared_head_ready:
+                    # A bounded concurrent worker must not spend API budget
+                    # evaluating a row whose own exact-head reset is still
+                    # pending. The public default stays compatible with the
+                    # lower-level claim contract used by recovery tooling.
+                    conditions.append(
+                        ~exists(
+                            select(SharedHeadEpoch.installation_id).where(
+                                EvaluationJob.shared_head_generation > 0,
+                                SharedHeadEpoch.installation_id == EvaluationJob.installation_id,
+                                SharedHeadEpoch.repository_full_name
+                                == EvaluationJob.repository_full_name,
+                                SharedHeadEpoch.head_sha == EvaluationJob.head_sha_hint,
+                                SharedHeadEpoch.invalidated_generation
+                                < EvaluationJob.shared_head_generation,
+                            )
+                        )
+                    )
+                if work_class is not None:
+                    conditions.append(EvaluationJob.work_class == work_class)
                 candidate = session.scalar(
                     select(EvaluationJob.id)
-                    .where(
-                        EvaluationJob.state == "pending",
-                        EvaluationJob.available_at <= now,
-                        or_(EvaluationJob.lease_until.is_(None), EvaluationJob.lease_until < now),
-                        ~exists(
-                            select(AuthorityJob.id).where(
-                                AuthorityJob.installation_id == EvaluationJob.installation_id,
-                                or_(
-                                    AuthorityJob.scope_key == "*",
-                                    AuthorityJob.scope_key == EvaluationJob.repository_full_name,
-                                ),
-                            )
-                        ),
+                    .where(*conditions)
+                    .order_by(
+                        EvaluationJob.available_at,
+                        EvaluationJob.id,
                     )
-                    .order_by(EvaluationJob.available_at, EvaluationJob.id)
                     .limit(1)
                     .with_for_update(skip_locked=True)
                 )
@@ -2253,12 +2611,14 @@ class QueueStore:
                     repository_full_name=row.repository_full_name,
                     pull_number=row.pull_number,
                     reason=row.reason,
+                    work_class=row.work_class,
                     head_sha_hint=row.head_sha_hint,
                     last_delivery_id=row.last_delivery_id,
                     generation=row.generation,
                     authority_generation=row.authority_generation,
                     shared_head_generation=row.shared_head_generation,
                     attempts=row.attempts,
+                    requested_at=row.requested_at,
                     lease_owner=owner,
                 )
         return None
@@ -2275,6 +2635,7 @@ class QueueStore:
                         AuthorityJob.state == "pending",
                         AuthorityJob.available_at <= now,
                         or_(AuthorityJob.lease_until.is_(None), AuthorityJob.lease_until < now),
+                        self._provider_available_condition(AuthorityJob.installation_id, now),
                     )
                     .order_by(
                         case(
@@ -2355,7 +2716,11 @@ class QueueStore:
             if getattr(removed, "rowcount", 0) == 0:
                 session.execute(
                     update(AuthorityJob)
-                    .where(AuthorityJob.id == job.id, AuthorityJob.lease_owner == owner)
+                    .where(
+                        AuthorityJob.id == job.id,
+                        AuthorityJob.generation == job.generation,
+                        AuthorityJob.lease_owner == owner,
+                    )
                     .values(lease_owner=None, lease_until=None)
                 )
 
@@ -2365,9 +2730,16 @@ class QueueStore:
         owner: str,
         error: str,
         max_delay_seconds: int,
+        minimum_delay_seconds: int = 1,
     ) -> None:
         """Retry authority fan-out indefinitely with bounded exponential backoff."""
-        delay_seconds = max(1, min(max_delay_seconds, 2 ** min(job.attempts, 30)))
+        delay_seconds = max(
+            1,
+            min(
+                max_delay_seconds,
+                max(minimum_delay_seconds, 2 ** min(job.attempts, 30)),
+            ),
+        )
         with self.session() as session:
             result = session.execute(
                 update(AuthorityJob)
@@ -2387,7 +2759,11 @@ class QueueStore:
             if getattr(result, "rowcount", 0) == 0:
                 session.execute(
                     update(AuthorityJob)
-                    .where(AuthorityJob.id == job.id, AuthorityJob.lease_owner == owner)
+                    .where(
+                        AuthorityJob.id == job.id,
+                        AuthorityJob.generation == job.generation,
+                        AuthorityJob.lease_owner == owner,
+                    )
                     .values(lease_owner=None, lease_until=None)
                 )
 
@@ -2423,7 +2799,11 @@ class QueueStore:
             if not updated:
                 session.execute(
                     update(AuthorityJob)
-                    .where(AuthorityJob.id == job.id, AuthorityJob.lease_owner == owner)
+                    .where(
+                        AuthorityJob.id == job.id,
+                        AuthorityJob.generation == job.generation,
+                        AuthorityJob.lease_owner == owner,
+                    )
                     .values(lease_owner=None, lease_until=None)
                 )
             return updated
@@ -2431,6 +2811,15 @@ class QueueStore:
     def complete(self, job: ClaimedJob, owner: str) -> None:
         """Delete completed work or release a superseded generation."""
         with self.session() as session:
+            completed = session.scalar(
+                select(EvaluationJob)
+                .where(
+                    EvaluationJob.id == job.id,
+                    EvaluationJob.generation == job.generation,
+                    EvaluationJob.lease_owner == owner,
+                )
+                .with_for_update()
+            )
             removed = session.execute(
                 delete(EvaluationJob).where(
                     EvaluationJob.id == job.id,
@@ -2441,9 +2830,35 @@ class QueueStore:
             if getattr(removed, "rowcount", 0) == 0:
                 session.execute(
                     update(EvaluationJob)
-                    .where(EvaluationJob.id == job.id, EvaluationJob.lease_owner == owner)
+                    .where(
+                        EvaluationJob.id == job.id,
+                        EvaluationJob.generation == job.generation,
+                        EvaluationJob.lease_owner == owner,
+                    )
                     .values(lease_owner=None, lease_until=None)
                 )
+                return
+            if completed is not None and completed.head_sha_hint is not None:
+                state_key = {
+                    "installation_id": completed.installation_id,
+                    "repository_full_name": completed.repository_full_name,
+                    "pull_number": completed.pull_number,
+                }
+                state = session.get(ReconciliationState, state_key, with_for_update=True)
+                now = utcnow()
+                if state is None:
+                    session.add(
+                        ReconciliationState(
+                            **state_key,
+                            head_sha=completed.head_sha_hint,
+                            completed_at=now,
+                            observed_at=now,
+                        )
+                    )
+                else:
+                    state.head_sha = completed.head_sha_hint
+                    state.completed_at = now
+                    state.observed_at = now
 
     def fail(
         self,
@@ -2473,7 +2888,11 @@ class QueueStore:
             if getattr(result, "rowcount", 0) == 0:
                 session.execute(
                     update(EvaluationJob)
-                    .where(EvaluationJob.id == job.id, EvaluationJob.lease_owner == owner)
+                    .where(
+                        EvaluationJob.id == job.id,
+                        EvaluationJob.generation == job.generation,
+                        EvaluationJob.lease_owner == owner,
+                    )
                     .values(lease_owner=None, lease_until=None)
                 )
 
@@ -2503,7 +2922,11 @@ class QueueStore:
             if not updated:
                 session.execute(
                     update(EvaluationJob)
-                    .where(EvaluationJob.id == job.id, EvaluationJob.lease_owner == owner)
+                    .where(
+                        EvaluationJob.id == job.id,
+                        EvaluationJob.generation == job.generation,
+                        EvaluationJob.lease_owner == owner,
+                    )
                     .values(lease_owner=None, lease_until=None)
                 )
             return updated
@@ -2578,6 +3001,50 @@ class QueueStore:
                 or 0
             )
             return evaluations + authorities + shared_heads
+
+    def pending_work_class_snapshot(self) -> dict[tuple[str, str], tuple[int, datetime | None]]:
+        """Return cheap, low-cardinality queue state for Prometheus sampling."""
+        snapshot: dict[tuple[str, str], tuple[int, datetime | None]] = {}
+        with self._sessions() as session:
+            evaluations = session.execute(
+                select(
+                    EvaluationJob.work_class,
+                    func.count(),
+                    func.min(EvaluationJob.requested_at),
+                )
+                .where(EvaluationJob.state == "pending")
+                .group_by(EvaluationJob.work_class)
+            )
+            for work_class, count, oldest in evaluations:
+                if oldest is not None and oldest.tzinfo is None:
+                    oldest = oldest.replace(tzinfo=UTC)
+                snapshot[("evaluation", str(work_class))] = (int(count), oldest)
+            invalidations = session.execute(
+                select(
+                    SharedHeadEpoch.work_class,
+                    func.count(),
+                    func.min(SharedHeadEpoch.changed_at),
+                )
+                .where(SharedHeadEpoch.invalidated_generation < SharedHeadEpoch.generation)
+                .group_by(SharedHeadEpoch.work_class)
+            )
+            for work_class, count, oldest in invalidations:
+                if oldest is not None and oldest.tzinfo is None:
+                    oldest = oldest.replace(tzinfo=UTC)
+                snapshot[("invalidation", str(work_class))] = (int(count), oldest)
+            authority_count, authority_oldest = session.execute(
+                select(func.count(), func.min(AuthorityJob.requested_at)).where(
+                    AuthorityJob.state == "pending"
+                )
+            ).one()
+            if authority_count:
+                if authority_oldest is not None and authority_oldest.tzinfo is None:
+                    authority_oldest = authority_oldest.replace(tzinfo=UTC)
+                snapshot[("authority", "authority")] = (
+                    int(authority_count),
+                    authority_oldest,
+                )
+        return snapshot
 
     def pending_shared_head_invalidation_count(self) -> int:
         """Return exact-head generations still awaiting a durable reset."""

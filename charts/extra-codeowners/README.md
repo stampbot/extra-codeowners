@@ -71,9 +71,10 @@ automounting disabled. The migration Job also disables token automounting; set
 `migrations.serviceAccountName` only when an external database identity
 needs a particular pre-existing ServiceAccount.
 
-The chart sets `EXTRA_CODEOWNERS_ENVIRONMENT=production`. The runtime
-Secret must replace the image's development-only SQLite default with an exact
-`postgresql+psycopg` URL.
+The chart sets `EXTRA_CODEOWNERS_ENVIRONMENT=production` and requires
+PostgreSQL in every application pod. The runtime Secret must replace the
+image's development-only SQLite default with an exact `postgresql+psycopg`
+URL.
 
 The chart fixes the executable search path, clears dynamic-loader injection
 variables, and disables TLS key logging. It leaves library, locale, character
@@ -92,9 +93,10 @@ with an empty value.
 
 Security-sensitive defaults also run as UID and GID 65532, drop every Linux
 capability, disable privilege escalation, use a read-only root filesystem, and
-select the runtime-default seccomp profile. The Deployment uses
+select the runtime-default seccomp profile. The default Deployment uses
 `Recreate`, the insecure override is off, and credential inputs remain
-outside chart-managed resources.
+outside chart-managed resources. Set `highAvailability.enabled: true` to
+select the reviewed two-replica rolling Deployment preset.
 
 ## Select an alpha release
 
@@ -496,9 +498,9 @@ already applied the exact target head.
 
 > **Warning**
 >
-> The pre-upgrade hook runs before Helm applies the `Recreate` Deployment
-> change. It does not stop the old pods. Before an upgrade from
-> `0002_retry_dead_jobs` to `0003_shared_head_epochs`, stop public webhook
+> The pre-upgrade hook runs before Helm applies the Deployment change. It does
+> not stop the old pods. Before an upgrade to `0004_responsive_work_queue`,
+> stop public webhook
 > routing and suspend any GitOps controller for this release. Delete the
 > HorizontalPodAutoscaler before you scale the existing Deployment to zero;
 > either controller could otherwise recreate an old worker. Prove that no
@@ -529,10 +531,10 @@ helm upgrade extra-codeowners \
 ```
 
 After the migration Job logs
-`Database is at migration 0003_shared_head_epochs.`, the target Deployment
-completes its rollout, and its single pod passes health checks, apply the
-reviewed final autoscaling settings in a separate update. Preserve the first
-migration Job log before you continue: the second hook's
+`Database is at migration 0004_responsive_work_queue.` and the target Deployment
+is healthy, apply the reviewed final autoscaling or high-availability settings
+in a separate update. Preserve the first migration Job log before you continue:
+the second hook's
 `before-hook-creation` policy deletes that Job and its cluster logs. The
 [upgrade runbook][upgrade] gives the evidence-capture commands.
 
@@ -618,32 +620,41 @@ back. Additive SQL does not create an exception.
 ## Scaling and disruption
 
 The application serves webhooks and executes leased work in the same process.
-PostgreSQL leases prevent duplicate ownership, but high availability has not
-been validated.
+Every pod shares PostgreSQL leases, claim generations, exact-head fences,
+authority fences, and GitHub rate-limit backpressure. It is safe to run more
+than one pod against the same PostgreSQL database. The high-availability preset
+refuses SQLite because a SQLite file cannot coordinate work across Kubernetes
+nodes; the chart also rejects a replica count or HPA maximum above one without
+that preset.
 
-Use these settings until your environment passes concurrency and failure
-tests:
+For the normal two-node deployment, use the built-in preset:
 
 ```yaml
-replicaCount: 1
+highAvailability:
+  enabled: true
 autoscaling:
-  enabled: false
-podDisruptionBudget:
   enabled: false
 ```
 
-Validation must cover reconciliation, PostgreSQL capacity, webhook routing,
-leases, and termination behavior.
+The preset runs two replicas, uses `RollingUpdate`, requires the replicas to
+land on different hosts, adds a zone-spread preference, and keeps one pod
+available during voluntary disruption. It does not invent extra nodes. On a
+one-node cluster, the second pod stays Pending, which is the safer failure
+than quietly scheduling both copies on the same host.
 
-With one replica, `podDisruptionBudget.minAvailable: 1` can block
-voluntary node maintenance. The CPU autoscaler also needs a working metrics API
-and meaningful CPU requests.
+With autoscaling, set `autoscaling.minReplicas` to at least
+`highAvailability.replicas`; chart validation rejects a smaller value. The CPU
+autoscaler still needs a working metrics API and meaningful CPU requests. Do
+not scale on CPU alone to chase queue depth: GitHub API capacity, not CPU, is
+the shared limit.
 
 The application has no separate worker command, so this chart creates one
 Deployment. Separate ingress and worker Deployments are not supported.
 
-Do not select `RollingUpdate` until the overlapping application versions,
-database head, leases, and shutdown behavior have been tested together.
+The preset protects ordinary pod, node, and voluntary-disruption failures. It
+does not make an incompatible database migration safe to roll back. Before an
+Alembic head change, follow the matching release's migration and rollback
+instructions.
 
 ## Understand the insecure policy override
 
@@ -724,6 +735,9 @@ descriptions.
 | Value | Type | Default | Constraints and effect |
 | --- | --- | --- | --- |
 | `replicaCount` | integer | `1` | At least 1; ignored when autoscaling is enabled. |
+| `highAvailability.enabled` | boolean | `false` | Enables the two-replica PostgreSQL preset. It overrides `replicaCount`, uses a rolling Deployment, creates a PDB, and supplies anti-affinity and topology spreading. |
+| `highAvailability.replicas` | integer | `2` | At least 2. Replica count when the HA preset is enabled and autoscaling is disabled. |
+| `highAvailability.minAvailable` | integer | `1` | Number of replicas that must remain available during a voluntary disruption. It must be lower than `replicas`. |
 | `revisionHistoryLimit` | integer | `3` | At least 0 old ReplicaSets. |
 | `deploymentStrategy.type` | enum | `Recreate` | `Recreate` or `RollingUpdate`. |
 | `deploymentStrategy.rollingUpdate.maxUnavailable` | integer or percentage | unset | Nonnegative; valid only with `RollingUpdate`. |

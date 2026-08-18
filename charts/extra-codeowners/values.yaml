@@ -1,6 +1,14 @@
 # replicaCount is the number of API/worker pods when autoscaling is disabled.
 replicaCount: 1
 
+# highAvailability applies a tested two-replica PostgreSQL deployment preset.
+# It uses a rolling Deployment, keeps one pod available during voluntary
+# disruption, and asks Kubernetes to spread pods across hosts and zones.
+highAvailability:
+  enabled: false
+  replicas: 2
+  minAvailable: 1
+
 # revisionHistoryLimit is the number of old ReplicaSets retained for rollback.
 revisionHistoryLimit: 3
 

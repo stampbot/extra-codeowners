@@ -91,7 +91,7 @@ def test_exact_head_requires_database_restore_across_rollback_boundary(
     upgrade_database(url, revision=BASELINE_REVISION)
 
     current_store = QueueStore(url)
-    with pytest.raises(RuntimeError, match="required revision '0003_shared_head_epochs'"):
+    with pytest.raises(RuntimeError, match=f"required revision '{DATABASE_MIGRATION_HEAD}'"):
         current_store.initialize()
     current_store.close()
 
@@ -166,7 +166,7 @@ def test_retry_schema_upgrades_existing_jobs_to_fail_closed_shared_head_fences(
             ),
             {"head_sha": "b" * 40},
         ).one()
-    assert marker == 2
+    assert marker == 3
     assert queued_generations == {42: 0, 43: 1}
     assert tuple(migrated_epoch) == (1, 0)
     assert shared_generation["nullable"] is False
@@ -189,15 +189,18 @@ def test_retry_schema_upgrades_existing_jobs_to_fail_closed_shared_head_fences(
     assert epoch_columns["attempts"]["nullable"] is False
     assert {
         constraint["name"] for constraint in inspector.get_check_constraints("shared_head_epochs")
-    } == {
+    } >= {
         "ck_shared_head_epochs_attempts_nonnegative",
         "ck_shared_head_epochs_generation_positive",
         "ck_shared_head_epochs_invalidation_bounds",
+        "ck_shared_head_epochs_work_class",
     }
     assert {index["name"] for index in inspector.get_indexes("shared_head_epochs")} >= {
         "ix_shared_head_epochs_changed_at",
         "ix_shared_head_epochs_claim",
     }
+    assert inspector.has_table("reconciliation_states")
+    assert inspector.has_table("provider_backpressure")
     webhook_columns = {column["name"] for column in inspector.get_columns("webhook_deliveries")}
     assert {
         "installation_id",

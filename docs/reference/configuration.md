@@ -230,6 +230,7 @@ Advisory-lock acquisition replaces the statement timeout with that operation's b
 | `EXTRA_CODEOWNERS_GITHUB_API_VERSION` | string | `2026-03-10` | Value of `X-GitHub-Api-Version`, currently a [supported GitHub REST API version](https://docs.github.com/en/rest/about-the-rest-api/api-versions). Change only after compatibility testing. |
 | `EXTRA_CODEOWNERS_GITHUB_IDENTITY_PROBE_INTERVAL_SECONDS` | number | `30` | Seconds between authenticated App identity probes; inclusive range `5` through `300`. Each probe calls `GET /app` with the configured private key and requires the returned App ID to equal `EXTRA_CODEOWNERS_GITHUB_APP_ID`. |
 | `EXTRA_CODEOWNERS_GITHUB_IDENTITY_FRESHNESS_SECONDS` | number | `90` | Maximum age in seconds of the last successful identity probe; inclusive range `10` through `900`. It must be at least twice the probe interval. Readiness fails after this window without a successful refresh. |
+| `EXTRA_CODEOWNERS_GITHUB_MAX_IN_FLIGHT_REQUESTS` | integer | `8` | Maximum GitHub requests in flight per process; inclusive range `1` through `64`. A durable rate-limit circuit pauses claims for the affected installation, or every installation for an App-wide limit, across all pods. |
 
 Secret-file readers support projected Kubernetes Secret symlinks while limiting
 resolution to 16 symlinks and 256 path operations. The resolved target must be
@@ -258,13 +259,21 @@ does not depend on this probe.
 
 | Environment variable | Type | Default | Constraints and effect |
 | --- | --- | --- | --- |
+| `EXTRA_CODEOWNERS_REQUIRE_POSTGRESQL` | boolean | `false` | Rejects startup unless the durable store is PostgreSQL. Enable it for a multi-pod deployment; SQLite is suitable only for one development or test process. The Helm high-availability preset enables it automatically. |
 | `EXTRA_CODEOWNERS_WORKER_ENABLED` | boolean | `true` | Runs the pull-request evaluation and authority fan-out worker in this service process. At least one worker must share the durable store. |
 | `EXTRA_CODEOWNERS_WORKER_POLL_SECONDS` | number | `0.5` | Queue poll interval in seconds; inclusive range `0.05` through `60`. |
 | `EXTRA_CODEOWNERS_WORKER_LEASE_SECONDS` | integer | `120` | Job lease in seconds; inclusive range `30` through `3600`. Must exceed normal evaluation time. |
 | `EXTRA_CODEOWNERS_WORKER_RETRY_MAX_SECONDS` | integer | `60` | Maximum ordinary exponential-backoff delay in seconds; inclusive range `5` through `3600`. Evaluation and authority failures retry indefinitely because abandoning invalidation or reevaluation work could leave a stale success visible. A GitHub rate-limit response instead uses the provider's bounded `Retry-After` delay and does not advance the ordinary backoff attempt. |
+| `EXTRA_CODEOWNERS_AUTHORITY_INACCESSIBLE_RETRY_MAX_SECONDS` | integer | `21600` | Maximum delay for a permanent-looking authority `404` or `410`; inclusive range `300` through `86400`. The first retry waits at least five minutes and later retries back off to this ceiling. A matching authority event coalesces the row and wakes it immediately. |
+| `EXTRA_CODEOWNERS_WORKER_FOREGROUND_CONCURRENCY` | integer | `2` | Foreground evaluation consumers per process; inclusive range `1` through `16`. They claim only direct webhook or operator work. |
+| `EXTRA_CODEOWNERS_WORKER_RECOVERY_CONCURRENCY` | integer | `1` | Recovery evaluation consumers per process; inclusive range `1` through `4`. They take periodic work first and borrow foreground work only when recovery is empty. |
+| `EXTRA_CODEOWNERS_WORKER_AUTHORITY_CONCURRENCY` | integer | `1` | Authority fan-out consumers per process; inclusive range `1` through `4`. Authority rows still block only their affected installation or repository scope. |
+| `EXTRA_CODEOWNERS_WORKER_INVALIDATION_CONCURRENCY` | integer | `1` | Exact-head invalidation consumers per process; inclusive range `1` through `4`. Direct invalidations are selected before recovery invalidations. |
+| `EXTRA_CODEOWNERS_AUTHORITY_FANOUT_CONCURRENCY` | integer | `2` | Concurrent GitHub membership lookups within one authority fan-out; inclusive range `1` through `8`. Keep it below the per-process GitHub request limit. |
 | `EXTRA_CODEOWNERS_WEBHOOK_INVALIDATION_TIMEOUT_SECONDS` | number | `5.0` | Inclusive range `0.1` through `8.0`. Bounds both the best-effort direct-trigger GitHub API fast path and the wait that orders authority-event acceptance against an in-flight Check Run, keeping both below GitHub's 10-second response deadline. A direct-trigger fast-path timeout does not discard the queued evaluation. An authority-guard timeout prevents acceptance and returns `503` so an operator can redeliver the event. |
-| `EXTRA_CODEOWNERS_RECONCILE_ENABLED` | boolean | `true` | Periodically requests absent evaluation work for open pull requests visible to the installation. Disabling it also disables automatic delivery-ID pruning. |
+| `EXTRA_CODEOWNERS_RECONCILE_ENABLED` | boolean | `true` | Periodically reads every visible open pull request. It queues a changed head immediately and queues an unchanged head again after its recheck deadline. Disabling it also disables automatic delivery-ID pruning. |
 | `EXTRA_CODEOWNERS_RECONCILE_INTERVAL_SECONDS` | integer | `300` | Reconciliation interval in seconds; inclusive range `60` through `86400`. |
+| `EXTRA_CODEOWNERS_RECONCILE_RECHECK_SECONDS` | integer | `900` | Minimum age of a successful unchanged-head evaluation before reconciliation queues it again; inclusive range `60` through `604800`. Every scan still compares GitHub's visible open-PR head, so a head change is queued immediately. |
 | `EXTRA_CODEOWNERS_WEBHOOK_DELIVERY_RETENTION_DAYS` | integer | `30` | Retain accepted GitHub delivery IDs for replay deduplication; inclusive range `1` through `3650` days. The elected reconciler prunes older IDs on each run. |
 
 ### Policy and security settings

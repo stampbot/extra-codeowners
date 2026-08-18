@@ -96,7 +96,7 @@ The migration options are:
 On success, the final line names the bundled revision:
 
 ```text
-Database is at migration 0003_shared_head_epochs.
+Database is at migration 0004_responsive_work_queue.
 ```
 
 Production mode applies the same PostgreSQL and transport checks as `serve`. A
@@ -123,7 +123,7 @@ uv run python -m extra_codeowners database check
 On success, the final line names the compatible revision:
 
 ```text
-Database migration 0003_shared_head_epochs is compatible.
+Database migration 0004_responsive_work_queue is compatible.
 ```
 
 The command exits nonzero when it cannot connect or when the required release

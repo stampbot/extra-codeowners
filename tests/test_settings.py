@@ -23,8 +23,15 @@ def test_defaults_keep_insecure_escape_hatch_disabled() -> None:
     assert settings.setup_bootstrap_mode is False
     assert settings.check_name == "Extra CODEOWNERS / approval"
     assert settings.worker_retry_max_seconds == 60
+    assert settings.authority_inaccessible_retry_max_seconds == 21600
+    assert settings.worker_foreground_concurrency == 2
+    assert settings.worker_recovery_concurrency == 1
+    assert settings.reconcile_recheck_seconds == 900
+    assert settings.require_postgresql is False
     assert settings.github_identity_probe_interval_seconds == 30
     assert settings.github_identity_freshness_seconds == 90
+    assert settings.github_max_in_flight_requests == 8
+    assert settings.authority_fanout_concurrency == 2
     assert settings.is_organization_config_repository("example/.github") is True
     assert settings.is_organization_config_repository("example/project") is False
 

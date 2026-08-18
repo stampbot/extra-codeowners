@@ -167,6 +167,10 @@ The endpoint returns Prometheus text format. Extra CODEOWNERS defines these appl
 | `extra_codeowners_evaluations_total` | counter | Completed evaluations, labeled by conclusion. |
 | `extra_codeowners_evaluation_seconds` | histogram | Evaluation latency. |
 | `extra_codeowners_queue_depth` | gauge | Pending and leased exact-head invalidation, evaluation, and authority fan-out rows. |
+| `extra_codeowners_queue_work_class_depth` | gauge | Pending durable work, labeled by fixed `kind` and `work_class` values. Use it to distinguish foreground work from recovery backlog. |
+| `extra_codeowners_queue_work_class_oldest_age_seconds` | gauge | Age of the oldest pending row for the same fixed labels. |
+| `extra_codeowners_queue_wait_seconds` | histogram | Accepted work age when a worker starts it, labeled by kind and work class. |
+| `extra_codeowners_webhook_to_check_completion_seconds` | histogram | Accepted work age when an evaluation finishes without a retry, labeled by work class. |
 | `extra_codeowners_shared_head_invalidation_depth` | gauge | Exact commit generations whose durable Check Run invalidation has not finished. |
 | `extra_codeowners_shared_head_invalidations_total` | counter | Durable exact-head invalidation attempts, labeled by `completed`, `failed`, `rate_limited`, or `superseded`. |
 | `extra_codeowners_dead_jobs` | gauge | Legacy or manually introduced terminal rows. Runtime failures remain pending, so this should remain `0`. |

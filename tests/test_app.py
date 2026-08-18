@@ -186,6 +186,19 @@ async def test_lifespan_closes_an_owned_store_when_initialization_fails(
 
 
 @pytest.mark.asyncio
+async def test_lifespan_rejects_sqlite_when_postgresql_is_required(tmp_path: Path) -> None:
+    store = migrated_store(f"sqlite:///{tmp_path / 'ha-requires-postgresql.db'}")
+    settings = configured_settings().model_copy(update={"require_postgresql": True})
+    app = app_module.create_app(settings, github=StubGitHub(), store=store)  # type: ignore[arg-type]
+
+    with pytest.raises(RuntimeError, match=r"require_postgresql.*not PostgreSQL"):
+        async with app.router.lifespan_context(app):
+            pass
+
+    store.close()
+
+
+@pytest.mark.asyncio
 async def test_lifespan_startup_failure_stops_tasks_and_closes_owned_resources(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

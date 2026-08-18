@@ -1320,7 +1320,7 @@ async def test_authority_work_preempts_evaluations_and_fans_out_open_pulls(
 
     await worker.run(stop)
 
-    assert calls == ["authority", "revoke-4"]
+    assert calls[:2] == ["authority", "revoke-4"]
     assert store.claim_authority("observer", 60) is None
     first = store.claim("observer", 60)
     second = store.claim("observer", 60)
@@ -1383,7 +1383,10 @@ async def test_worker_does_not_starve_evaluations_behind_authority_retries(
 
     await worker.run(stop)
 
-    assert calls == ["authority:example/authority-one", "evaluation:3"]
+    # Authority work for another repository may run in parallel now. The
+    # important contract is that its retry cannot occupy the only evaluation
+    # lane or starve the unrelated pull request.
+    assert set(calls) == {"authority:example/authority-one", "evaluation:3"}
     assert store.claim("observer", 60) is None
     assert store.pending_count() == 2
     assert store.claim_authority("observer", 60) is not None
@@ -1778,6 +1781,9 @@ async def test_reconciler_enqueues_open_pull_requests(tmp_path: Path) -> None:
     assert store.pending_count() == 2
     assert store.pending_shared_head_invalidation_count() == 1
     assert store.shared_head_generation(2, "example/project", HEAD) == 1
+    # A quiet queue does not replace reconciliation: the second scan reads
+    # GitHub again so a missed webhook is repaired from the observed head.
+    assert github.list_open_pulls.await_count == 2  # type: ignore[attr-defined]
 
 
 @pytest.mark.asyncio
@@ -2297,7 +2303,7 @@ async def test_reconciliation_stops_pull_loop_when_lease_loss_becomes_visible(
         ]
     )
     store = migrated_store(f"sqlite:///{tmp_path / 'reconcile-pull-loop-loss.db'}")
-    original_enqueue = store.enqueue_if_absent
+    original_enqueue = store.enqueue_reconciliation_if_due
 
     class EnqueueResult:
         def __init__(self, added: bool) -> None:
@@ -2307,8 +2313,12 @@ async def test_reconciliation_stops_pull_loop_when_lease_loss_becomes_visible(
             lost.set()
             return int(self.added)
 
-    enqueue = MagicMock(side_effect=lambda request: EnqueueResult(original_enqueue(request)))
-    monkeypatch.setattr(store, "enqueue_if_absent", enqueue)
+    enqueue = MagicMock(
+        side_effect=lambda request, recheck_seconds: EnqueueResult(
+            original_enqueue(request, recheck_seconds)
+        )
+    )
+    monkeypatch.setattr(store, "enqueue_reconciliation_if_due", enqueue)
     reconciler = Reconciler(settings(), github, store, "reconciler")  # type: ignore[arg-type]
 
     outcome = await reconciler._reconcile_owned(lost)
@@ -2366,6 +2376,8 @@ async def test_partial_reconciliation_queues_healthy_installations_and_recovers(
         ]
     )
 
+    pull_lookups: list[str] = []
+
     async def open_pulls(
         installation_id: int,
         repository: str,
@@ -2373,6 +2385,7 @@ async def test_partial_reconciliation_queues_healthy_installations_and_recovers(
         stop: asyncio.Event | None = None,
     ) -> list[dict[str, Any]]:
         del installation_id, stop
+        pull_lookups.append(repository)
         number = 2 if repository == "example/recovered" else 3
         return [{"number": number, "head": {"sha": HEAD}}]
 
@@ -2403,15 +2416,15 @@ async def test_partial_reconciliation_queues_healthy_installations_and_recovers(
     attempts.labels.assert_called_once_with("success")
     attempts.labels.return_value.inc.assert_called_once_with()
     last_success.set_to_current_time.assert_called_once_with()
-    assert store.pending_count() == 4
+    # The successful healthy PR is still read from GitHub, but it does not
+    # immediately refill the durable queue with the same head.
+    assert pull_lookups == ["example/healthy", "example/recovered", "example/healthy"]
+    assert store.pending_count() == 3
     assert store.pending_shared_head_invalidation_count() == 2
-    repositories: set[str] = set()
-    for _ in range(2):
-        claimed = store.claim("test-worker", 60)
-        assert claimed is not None
-        repositories.add(claimed.repository_full_name)
-        store.complete(claimed, claimed.lease_owner)
-    assert repositories == {"example/healthy", "example/recovered"}
+    claimed = store.claim("test-worker", 60)
+    assert claimed is not None
+    assert claimed.repository_full_name == "example/recovered"
+    store.complete(claimed, claimed.lease_owner)
 
 
 @pytest.mark.parametrize(

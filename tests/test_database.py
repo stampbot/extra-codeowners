@@ -707,6 +707,156 @@ def test_reconciliation_epoch_and_missing_job_roll_back_together(tmp_path: Path)
     assert store.shared_head_generation(17, "example/project", "a" * 40) == 0
 
 
+def test_direct_work_is_selected_ahead_of_large_recovery_backlog(tmp_path: Path) -> None:
+    store = make_store(tmp_path)
+    for pull_number in range(1, 101):
+        assert store.enqueue_if_absent(
+            JobRequest(
+                17,
+                "example/project",
+                pull_number,
+                "periodic_reconciliation",
+                f"{pull_number:040x}",
+            )
+        )
+
+    direct = JobRequest(
+        17,
+        "example/project",
+        101,
+        "pull_request_review.submitted",
+        "f" * 40,
+    )
+    store.enqueue(direct)
+
+    invalidation = store.claim_shared_head_invalidation("head-worker", 60, "interactive")
+    assert invalidation is not None
+    assert invalidation.head_sha == direct.head_sha_hint
+    assert invalidation.work_class == "interactive"
+    assert store.complete_shared_head_invalidation(invalidation)
+
+    claimed = store.claim(
+        "foreground-worker",
+        60,
+        "interactive",
+        require_shared_head_ready=True,
+    )
+    assert claimed is not None
+    assert claimed.pull_number == direct.pull_number
+    assert claimed.work_class == "interactive"
+    assert store.pending_count() >= 200
+
+
+def test_direct_webhook_promotes_and_releases_a_leased_recovery_job(tmp_path: Path) -> None:
+    store = make_store(tmp_path)
+    recovery = JobRequest(
+        17,
+        "example/project",
+        41,
+        "periodic_reconciliation",
+        "a" * 40,
+    )
+    store.enqueue(recovery)
+    first_reset = store.claim_shared_head_invalidation("reset-worker", 60, "recovery")
+    assert first_reset is not None
+    assert store.complete_shared_head_invalidation(first_reset)
+    leased_recovery = store.claim(
+        "recovery-worker", 600, "recovery", require_shared_head_ready=True
+    )
+    assert leased_recovery is not None
+
+    direct = JobRequest(
+        17,
+        "example/project",
+        41,
+        "pull_request_review.submitted",
+        "a" * 40,
+    )
+    store.enqueue(direct)
+
+    promoted_reset = store.claim_shared_head_invalidation("reset-worker", 60, "interactive")
+    assert promoted_reset is not None
+    assert store.complete_shared_head_invalidation(promoted_reset)
+    foreground = store.claim(
+        "recovery-worker",
+        60,
+        "interactive",
+        require_shared_head_ready=True,
+    )
+    assert foreground is not None
+    assert foreground.generation > leased_recovery.generation
+    assert foreground.work_class == "interactive"
+
+    # A stale completion cannot release or delete a newer generation even if
+    # the same process-owner string is reused.
+    store.complete(leased_recovery, "recovery-worker")
+    assert store.pending_count() == 1
+    assert store.renew_claim(foreground, 60)
+
+
+def test_reconciliation_rechecks_unchanged_heads_on_a_bounded_cadence(tmp_path: Path) -> None:
+    store = make_store(tmp_path)
+    original = JobRequest(
+        17,
+        "example/project",
+        41,
+        "periodic_reconciliation",
+        "a" * 40,
+    )
+
+    assert store.enqueue_reconciliation_if_due(original, recheck_seconds=600)
+    invalidation = store.claim_shared_head_invalidation("head-worker", 60, "recovery")
+    assert invalidation is not None
+    assert store.complete_shared_head_invalidation(invalidation)
+    claimed = store.claim("recovery-worker", 60, "recovery", require_shared_head_ready=True)
+    assert claimed is not None
+    store.complete(claimed, "recovery-worker")
+
+    # The next scan still observes the PR, but an identical recently checked
+    # head does not refill the queue.
+    assert store.enqueue_reconciliation_if_due(original, recheck_seconds=600) is False
+    assert store.pending_count() == 0
+
+    # A missed synchronize webhook changes the head and queues a new recovery
+    # generation immediately, without waiting for the periodic deadline.
+    changed = JobRequest(
+        17,
+        "example/project",
+        41,
+        "periodic_reconciliation",
+        "b" * 40,
+    )
+    assert store.enqueue_reconciliation_if_due(changed, recheck_seconds=600)
+    assert store.shared_head_generation(17, "example/project", "b" * 40) == 1
+
+
+def test_provider_backpressure_is_shared_by_independent_queue_stores(tmp_path: Path) -> None:
+    database_url = f"sqlite:///{tmp_path / 'shared-backpressure.db'}"
+    upgrade_database(database_url)
+    first = QueueStore(database_url)
+    second = QueueStore(database_url)
+    first.initialize()
+    second.initialize()
+    try:
+        first.enqueue(JobRequest(17, "example/project", 41, "pull_request.opened"))
+        first.enqueue(JobRequest(18, "example/other", 42, "pull_request.opened"))
+        first.record_provider_backpressure(17, "GitHub asked us to wait", 60)
+
+        claimed = second.claim("other-pod", 60)
+
+        assert claimed is not None
+        assert claimed.installation_id == 18
+        assert first.provider_is_backpressured(17) is True
+        assert second.provider_is_backpressured(17) is True
+
+        first.record_provider_backpressure(None, "secondary rate limit", 60)
+        assert second.provider_is_backpressured(18) is True
+        assert second.claim("second-pod", 60) is None
+    finally:
+        first.close()
+        second.close()
+
+
 def test_failed_evaluation_retries_indefinitely_with_bounded_backoff(tmp_path: Path) -> None:
     store = make_store(tmp_path)
     store.enqueue(request())

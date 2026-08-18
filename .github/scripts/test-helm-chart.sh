@@ -26,6 +26,7 @@ helm template extra-codeowners charts/extra-codeowners \
   --set existingSecret=extra-codeowners-runtime \
   --set ingress.enabled=true \
   --set ingress.className=nginx \
+  --set highAvailability.enabled=true \
   --set autoscaling.enabled=true \
   --set podDisruptionBudget.enabled=true \
   --set allowInsecureChanges=true \

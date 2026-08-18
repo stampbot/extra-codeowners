@@ -256,18 +256,28 @@ be unavailable, GitHub may not redeliver, and access loss can make an old check
 unreachable. The reconciler covers the recoverable middle ground.
 
 At each interval, one elected reconciler scans accessible open pull requests.
-When a pull request has no evaluation job and GitHub supplies a canonical head,
-one transaction advances that head's shared generation, makes its exact-head
-invalidation pending, and inserts the evaluation. If the internal job did not
-know its head when queued, its first authoritative pull-request read advances
-the head and binds the evaluation in one transaction. A lost claim rolls back
-that tentative advancement.
+It compares GitHub's current head with the durable completion record for that
+pull request. A head that changed since the last successful evaluation is
+queued immediately, because that is the missed-`synchronize`-webhook case. An
+unchanged head is also queued when its bounded recheck deadline arrives. This
+still repairs a missed review, label, or policy event that did not change the
+head, but it does not refill the whole queue every five minutes.
 
-If an evaluation row already exists, reconciliation changes neither row nor
-generation. This fences an in-flight evaluation when reconciliation recovers
-genuinely missing work without resetting active or backoff-delayed jobs. An
-idle pull request is reconsidered each interval, which temporarily moves its
-check to `in_progress`.
+When reconciliation needs work, one transaction advances that head's shared
+generation, makes its exact-head invalidation pending, and inserts a
+low-priority recovery evaluation. A direct webhook promotes an existing
+recovery row and its head invalidation in the same transaction. A later scan
+can never demote it again. If the internal job did not know its head when
+queued, its first authoritative pull-request read advances the head and binds
+the evaluation in one transaction. A lost claim rolls back that tentative
+advancement.
+
+The queue has separate foreground and recovery lanes. Foreground workers take
+accepted pull-request, review, label, and re-evaluate events. A recovery worker
+keeps periodic repair moving, but it may borrow foreground work when there is
+nothing to recover. Every evaluation still waits for its own exact-head reset
+and any relevant authority fence. Priority changes waiting time; it never lets
+a result pass a security fence.
 
 The same singleton lease controls pruning of delivery IDs and old shared-head
 rows. A shared-head row is eligible only after its latest generation was
@@ -318,7 +328,8 @@ installation, but later installations still run. A suspended installation or
 archived repository is skipped only after its record passes validation.
 
 A shorter interval narrows some missed-event windows but spends more GitHub API
-budget and causes more temporary blocking. It does not make the system strongly
+budget. `reconcile_recheck_seconds` sets how often an unchanged open pull
+request receives a full evaluation. Neither setting makes the system strongly
 consistent. Merge queues add a separate `merge_group` state that this version
 does not evaluate.
 
