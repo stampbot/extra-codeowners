@@ -204,6 +204,35 @@ required_labels = ["autoapprove"]
             }
         )
 
+    async def complete_check_run(
+        self,
+        installation_id: int,
+        repository: str,
+        check_run_id: int,
+        check_name: str,
+        *,
+        conclusion: str,
+        **values: Any,
+    ) -> None:
+        head_sha = next(
+            (
+                str(check["head_sha"])
+                for check in reversed(self.checks)
+                if isinstance(check.get("head_sha"), str)
+            ),
+            HEAD,
+        )
+        self.checks.append(
+            {
+                "repository": repository,
+                "head_sha": head_sha,
+                "name": check_name,
+                "status": "completed",
+                "conclusion": conclusion,
+                **values,
+            }
+        )
+
     async def list_commit_pulls(
         self,
         installation_id: int,
@@ -512,6 +541,136 @@ async def test_durable_invalidation_fans_out_current_pull_despite_stale_summary(
     assert {first.shared_head_generation, second.shared_head_generation} == {
         invalidation.generation
     }
+
+
+@pytest.mark.asyncio
+async def test_closed_pull_finishes_existing_check_after_durable_re_evaluation(
+    tmp_path: Path,
+) -> None:
+    """A close race must not strand a managed check in its blocking state."""
+    github = FakeGitHub(changed_path="uv.lock")
+    github.checks.append({"status": "in_progress", "head_sha": HEAD})
+    original_get_pull = github.get_pull
+
+    async def closed_pull(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        pull = await original_get_pull(*args, **kwargs)
+        pull["state"] = "closed"
+        return pull
+
+    github.get_pull = closed_pull  # type: ignore[method-assign]
+    github.list_commit_pulls = AsyncMock(  # type: ignore[method-assign]
+        return_value=[{"number": 3, "state": "closed", "head": {"sha": HEAD}}]
+    )
+    store = migrated_store(f"sqlite:///{tmp_path / 'closed-pull.db'}")
+    service = EvaluationService(settings(), github, store)  # type: ignore[arg-type]
+    accepted = store.accept_delivery(
+        "closed-pull",
+        "pull_request",
+        JobRequest(2, "example/project", 3, "pull_request.closed", HEAD),
+    )
+    assert accepted.accepted is True
+    invalidation = store.claim_shared_head_invalidation("head-worker", 60)
+    assert invalidation is not None
+
+    await service.invalidate_shared_head(invalidation, asyncio.Event())
+
+    # The revocation is deliberately fail-closed. The closed-pull evaluation
+    # below must turn this transient blocking state into a terminal result.
+    assert [check["status"] for check in github.checks] == ["in_progress", "in_progress"]
+    assert store.complete_shared_head_invalidation(invalidation)
+    claimed = store.claim("evaluation-worker", 60)
+    assert claimed is not None
+
+    await service.evaluate_job(claimed)
+
+    assert github.checks[-1]["status"] == "completed"
+    assert github.checks[-1]["conclusion"] == "cancelled"
+    assert github.checks[-1]["title"] == "Pull request closed"
+
+
+@pytest.mark.asyncio
+async def test_pull_closing_during_evaluation_finishes_its_blocking_check(
+    tmp_path: Path,
+) -> None:
+    """The final pull-request read receives the same closed-pull handling."""
+    github = FakeGitHub(changed_path="uv.lock")
+    original_get_pull = github.get_pull
+    pull_reads = 0
+
+    async def close_after_evaluation_starts(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        nonlocal pull_reads
+        pull_reads += 1
+        pull = await original_get_pull(*args, **kwargs)
+        if pull_reads >= 2:
+            pull["state"] = "closed"
+        return pull
+
+    github.get_pull = close_after_evaluation_starts  # type: ignore[method-assign]
+    store = migrated_store(f"sqlite:///{tmp_path / 'close-during-evaluation.db'}")
+
+    await EvaluationService(settings(), github, store).evaluate_job(job(store))  # type: ignore[arg-type]
+
+    assert pull_reads >= 3
+    assert [check["status"] for check in github.checks] == ["in_progress", "completed"]
+    assert github.checks[-1]["conclusion"] == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_closed_webhook_fast_path_does_not_reset_a_known_check(tmp_path: Path) -> None:
+    """The durable worker, rather than ingress, resolves a close event."""
+    github = FakeGitHub(changed_path="uv.lock")
+    github.checks.append({"status": "completed", "conclusion": "success", "head_sha": HEAD})
+    original_get_pull = github.get_pull
+
+    async def closed_pull(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        pull = await original_get_pull(*args, **kwargs)
+        pull["state"] = "closed"
+        return pull
+
+    github.get_pull = closed_pull  # type: ignore[method-assign]
+    github.existing_check_run_id = AsyncMock(  # type: ignore[method-assign]
+        side_effect=AssertionError("closed webhook reset a check")
+    )
+    store = migrated_store(f"sqlite:///{tmp_path / 'closed-fast-path.db'}")
+
+    invalidated = await EvaluationService(settings(), github, store).invalidate_for_trigger(  # type: ignore[arg-type]
+        JobRequest(2, "example/project", 3, "pull_request.closed", HEAD),
+        shared_head_generation=1,
+    )
+
+    assert invalidated is False
+    assert github.checks == [{"status": "completed", "conclusion": "success", "head_sha": HEAD}]
+
+
+@pytest.mark.asyncio
+async def test_closed_pull_does_not_cancel_a_shared_open_commit_check(tmp_path: Path) -> None:
+    """A check remains blocking while another open pull request shares its commit."""
+    github = FakeGitHub(changed_path="uv.lock")
+    github.checks.append({"status": "in_progress", "head_sha": HEAD})
+    original_get_pull = github.get_pull
+
+    async def pull_with_closed_first(
+        installation_id: int,
+        repository: str,
+        number: int,
+    ) -> dict[str, Any]:
+        pull = await original_get_pull(installation_id, repository, number)
+        if number == 3:
+            pull["state"] = "closed"
+        return pull
+
+    github.get_pull = pull_with_closed_first  # type: ignore[method-assign]
+    github.list_commit_pulls = AsyncMock(  # type: ignore[method-assign]
+        return_value=[
+            {"number": 3, "state": "closed", "head": {"sha": HEAD}},
+            {"number": 4, "state": "open", "head": {"sha": HEAD}},
+        ]
+    )
+    store = migrated_store(f"sqlite:///{tmp_path / 'closed-shared-pull.db'}")
+
+    await EvaluationService(settings(), github, store).evaluate_job(job(store))  # type: ignore[arg-type]
+
+    assert github.checks == [{"status": "in_progress", "head_sha": HEAD}]
 
 
 @pytest.mark.asyncio

@@ -587,6 +587,53 @@ class EvaluationService:
             raise cancellation
         return succeeded
 
+    async def _finish_closed_pull_check(
+        self,
+        job: ClaimedJob,
+        head_sha: str,
+        details_url: str | None,
+    ) -> None:
+        """Finish a known check when no open pull request still needs this commit.
+
+        A Check Run belongs to a commit rather than a pull request. Before
+        cancelling it, re-read every associated pull request while holding the
+        same cross-replica writer guard used for normal check publication. This
+        prevents a closed pull request from cancelling a shared commit's check
+        while another pull request is still open.
+        """
+        async with self._check_write_guard(job.installation_id, head_sha):
+            current_associated = await self._current_associated_pulls(
+                job.installation_id,
+                job.repository_full_name,
+                head_sha,
+            )
+            if any(
+                state_value == "open" and associated_sha == head_sha
+                for state_value, associated_sha in current_associated.values()
+            ):
+                return
+            check_run_id = await self.github.existing_check_run_id(
+                job.installation_id,
+                job.repository_full_name,
+                head_sha,
+                self.settings.check_name,
+            )
+            if check_run_id is None:
+                return
+            await self.github.complete_check_run(
+                job.installation_id,
+                job.repository_full_name,
+                check_run_id,
+                self.settings.check_name,
+                conclusion="cancelled",
+                title="Pull request closed",
+                summary=(
+                    "The pull request closed before Extra CODEOWNERS finished evaluating approvals."
+                ),
+                details_url=details_url,
+                external_id=f"{job.repository_full_name}#{job.pull_number}@{head_sha}",
+            )
+
     async def _find_codeowners(
         self, installation_id: int, repository: str, base_sha: str
     ) -> tuple[str, str] | None:
@@ -1007,9 +1054,13 @@ class EvaluationService:
         pull_state = _required_string(pull.get("state"), "pull_request.state")
         if pull_state not in {"open", "closed"}:
             raise GitHubError(f"GitHub returned unknown pull request state {pull_state!r}")
+        if pull_state == "closed":
+            # The durable evaluation finishes a known blocking check if one
+            # exists. Never create or reset a check for a closed pull request.
+            return False
 
         live_head_queued = False
-        if pull_state == "open" and job.head_sha_hint is not None and job.head_sha_hint != head_sha:
+        if job.head_sha_hint is not None and job.head_sha_hint != head_sha:
             # The exact webhook head remains durable in its own invalidation
             # row. Independently fence the live head instead of replacing that
             # recovery with a latest-PR-only queue row.
@@ -1096,9 +1147,6 @@ class EvaluationService:
                         external_id=f"{job.repository_full_name}@{accepted_head}",
                     )
             return True
-
-        if pull_state == "closed":
-            return False
 
         managed_check = await self.github.has_check_run(
             job.installation_id,
@@ -1246,6 +1294,11 @@ class EvaluationService:
             if pull_state not in {"open", "closed"}:
                 raise GitHubError(f"GitHub returned unknown pull request state {pull_state!r}")
             if pull_state == "closed":
+                check_head = validate_head_sha(job.head_sha_hint or head_sha)
+                details_url = (
+                    pull.get("html_url") if isinstance(pull.get("html_url"), str) else None
+                )
+                await self._finish_closed_pull_check(job, check_head, details_url)
                 return
 
             if job.head_sha_hint is not None and job.head_sha_hint != head_sha:
@@ -1371,6 +1424,7 @@ class EvaluationService:
             if current_state not in {"open", "closed"}:
                 raise GitHubError(f"GitHub returned unknown pull request state {current_state!r}")
             if current_state == "closed":
+                await self._finish_closed_pull_check(job, head_sha, details_url)
                 return
             if (
                 current_head_sha != head_sha

@@ -92,8 +92,9 @@ separate work for the live head and keeps the accepted head's revocation.
 
 The fast path updates an existing managed check even when policy has
 disappeared. It creates a check only when the accepted head is still the
-current head of an open pull request and policy exists. A closed or historical
-head with no managed check stays untouched.
+current head of an open pull request and policy exists. It leaves a closed pull
+request alone: the durable worker resolves any existing blocking check. A
+closed or historical head never causes a new check to be created.
 
 The fast path is best effort. Its timeout is bounded by
 `EXTRA_CODEOWNERS_WEBHOOK_INVALIDATION_TIMEOUT_SECONDS` and remains below
@@ -153,7 +154,9 @@ malformed or contradictory responses. It fetches every returned candidate and
 confirms its current number, state, head, and base repository. The worker
 queues only candidates that are now open on the exact commit, at the same
 shared generation. A pull request that has moved to another head keeps its
-newer work.
+newer work. If every associated pull request is now closed, its queued
+evaluation ends an existing blocking check as `cancelled` once it confirms that
+no other open pull request shares the commit.
 
 The client paginates the commit-to-pulls endpoint and fails closed if GitHub
 returns a 101st candidate. GitHub does not provide a completeness marker, so
