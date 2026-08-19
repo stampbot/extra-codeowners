@@ -253,6 +253,26 @@ def test_helm_chart_retains_hardening_without_image_specific_loader_paths() -> N
     assert image["tag"] == ""
     assert values["deploymentAnnotations"] == {}
     assert values["extraManifests"] == []
+    assert values["monitoring"] == {
+        "serviceMonitor": {
+            "enabled": False,
+            "labels": {},
+            "interval": "30s",
+            "scrapeTimeout": "10s",
+            "sampleLimit": 10000,
+        },
+        "prometheusRule": {
+            "enabled": False,
+            "labels": {"severity": "warning"},
+            "interactiveQueueStalledSeconds": 60,
+            "reconciliationStalledSeconds": 900,
+        },
+        "dashboard": {
+            "enabled": False,
+            "labels": {"grafana_dashboard": "1"},
+            "annotations": {"grafana_folder": "Extra CODEOWNERS"},
+        },
+    }
     assert values["highAvailability"] == {
         "enabled": False,
         "replicas": 2,
@@ -283,6 +303,15 @@ def test_helm_chart_retains_hardening_without_image_specific_loader_paths() -> N
     assert "extraManifests" in schema["required"]
     assert extra_manifests_schema["items"]["required"] == ["apiVersion", "kind", "metadata"]
     assert extra_manifests_schema["items"]["properties"]["metadata"]["required"] == ["name"]
+
+    monitoring_schema = schema["properties"]["monitoring"]
+    assert "monitoring" in schema["required"]
+    assert monitoring_schema["required"] == ["serviceMonitor", "prometheusRule", "dashboard"]
+    assert monitoring_schema["properties"]["serviceMonitor"]["properties"]["sampleLimit"] == {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 100000,
+    }
 
     deployment = (
         ROOT / "charts" / "extra-codeowners" / "templates" / "deployment.yaml"
@@ -345,6 +374,23 @@ def test_helm_chart_retains_hardening_without_image_specific_loader_paths() -> N
     ).read_text()
     assert "{{ toYaml . }}" in extra_manifests_template
     assert "tpl" not in extra_manifests_template
+
+    service_monitor = (
+        ROOT / "charts" / "extra-codeowners" / "templates" / "servicemonitor.yaml"
+    ).read_text()
+    assert ".Values.monitoring.serviceMonitor.enabled" in service_monitor
+    assert "path: /metrics" in service_monitor
+    assert "port: http" in service_monitor
+    prometheus_rule = (
+        ROOT / "charts" / "extra-codeowners" / "templates" / "prometheusrule.yaml"
+    ).read_text()
+    assert ".Values.monitoring.prometheusRule.enabled" in prometheus_rule
+    assert "ExtraCodeownersInteractiveQueueStalled" in prometheus_rule
+    dashboard = (ROOT / "charts" / "extra-codeowners" / "templates" / "dashboard.yaml").read_text()
+    assert ".Values.monitoring.dashboard.enabled" in dashboard
+    assert ".Values.monitoring.dashboard.labels" in dashboard
+    ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    assert "-skip ServiceMonitor,PrometheusRule" in ci
 
 
 def test_chart_release_placeholders_and_public_image_are_automatic() -> None:

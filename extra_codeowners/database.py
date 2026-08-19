@@ -2914,8 +2914,8 @@ class QueueStore:
             )
             return getattr(result, "rowcount", 0) == 1
 
-    def complete_authority(self, job: ClaimedAuthorityJob, owner: str) -> None:
-        """Delete completed authority work or release a superseded generation."""
+    def complete_authority(self, job: ClaimedAuthorityJob, owner: str) -> bool:
+        """Delete one current authority generation and report whether it completed."""
         with self.session() as session:
             removed = session.execute(
                 delete(AuthorityJob).where(
@@ -2934,6 +2934,8 @@ class QueueStore:
                     )
                     .values(lease_owner=None, lease_until=None)
                 )
+                return False
+            return True
 
     def fail_authority(
         self,

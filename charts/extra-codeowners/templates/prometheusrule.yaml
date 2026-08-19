@@ -1,0 +1,39 @@
+{{- if .Values.monitoring.prometheusRule.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "extra-codeowners.fullname" . }}
+  labels:
+    {{- include "extra-codeowners.labels" . | nindent 4 }}
+    {{- with .Values.monitoring.prometheusRule.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+    - name: {{ include "extra-codeowners.fullname" . }}.availability
+      rules:
+        - alert: ExtraCodeownersInteractiveQueueStalled
+          expr: >-
+            max by (namespace) (extra_codeowners_queue_work_class_oldest_age_seconds{kind=~"evaluation|invalidation",work_class="interactive"})
+            > {{ .Values.monitoring.prometheusRule.interactiveQueueStalledSeconds }}
+          for: 5m
+          labels:
+            severity: {{ default "warning" .Values.monitoring.prometheusRule.labels.severity | quote }}
+          annotations:
+            summary: Extra CODEOWNERS interactive work is waiting too long
+            description: >-
+              The oldest interactive evaluation or invalidation has waited for
+              more than {{ .Values.monitoring.prometheusRule.interactiveQueueStalledSeconds }} seconds.
+        - alert: ExtraCodeownersReconciliationStalled
+          expr: >-
+            time() - max by (namespace) (extra_codeowners_reconciliation_last_success_timestamp_seconds)
+            > {{ .Values.monitoring.prometheusRule.reconciliationStalledSeconds }}
+          for: 10m
+          labels:
+            severity: {{ default "warning" .Values.monitoring.prometheusRule.labels.severity | quote }}
+          annotations:
+            summary: Extra CODEOWNERS reconciliation is stale
+            description: >-
+              No complete reconciliation has finished for more than
+              {{ .Values.monitoring.prometheusRule.reconciliationStalledSeconds }} seconds.
+{{- end }}

@@ -154,6 +154,29 @@ service:
   # service.annotations adds annotations to the Service.
   annotations: {}
 
+# monitoring creates optional Prometheus Operator and Grafana resources. The
+# application always exposes /metrics; leave these disabled for clusters that
+# do not install those APIs.
+monitoring:
+  serviceMonitor:
+    enabled: false
+    labels: {}
+    interval: 30s
+    scrapeTimeout: 10s
+    sampleLimit: 10000
+  prometheusRule:
+    enabled: false
+    labels:
+      severity: warning
+    interactiveQueueStalledSeconds: 60
+    reconciliationStalledSeconds: 900
+  dashboard:
+    enabled: false
+    labels:
+      grafana_dashboard: "1"
+    annotations:
+      grafana_folder: Extra CODEOWNERS
+
 # ingress optionally exposes the HTTP service outside the cluster.
 ingress:
   # ingress.enabled creates an Ingress resource.

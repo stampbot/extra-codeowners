@@ -422,6 +422,27 @@ Bound request size and rate before traffic reaches the service. Metrics and
 health endpoints are operator surfaces; keep them on a controlled network or
 behind authenticated monitoring.
 
+## Observability and privacy
+
+The service exposes Prometheus metrics on `/metrics` and can export
+OpenTelemetry traces over OTLP/HTTP. Metrics are the fleet view: they expose
+queue age, worker-attempt duration, GitHub API duration, rate-limit events, and
+reconciliation progress using fixed labels only. They never use a repository,
+pull request, actor, path, SHA, or delivery ID as a label.
+
+Tracing is off by default. When enabled, it creates a root span for a webhook
+acceptance, elected reconciliation scan, or leased worker attempt. GitHub API
+calls become child spans. This makes a trace useful on any replica without
+changing the durable queue's cross-replica coordination rules. The service
+does not join a caller-provided webhook trace: GitHub has not authenticated
+that context for the application.
+
+The normal trace mode records fixed operational attributes. An explicit
+private-metadata mode adds repository and work identifiers for a short,
+access-controlled investigation. Operators should use metrics to select the
+incident window, enable detailed tracing only when necessary, and keep trace
+retention no longer than the repository metadata policy allows.
+
 ## The remaining consistency boundary
 
 GitHub stores a Check Run on a commit, while Extra CODEOWNERS evaluates one

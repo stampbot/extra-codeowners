@@ -253,6 +253,14 @@ class Settings(BaseSettings):
     github_max_in_flight_requests: int = Field(default=8, ge=1, le=64)
     public_url: AnyHttpUrl | None = None
 
+    # Tracing is opt-in because traces can reveal operational metadata to the
+    # configured backend. The application itself never accepts trace context
+    # from an unauthenticated GitHub webhook.
+    tracing_enabled: bool = False
+    tracing_otlp_endpoint: AnyHttpUrl | None = None
+    tracing_sample_ratio: float = Field(default=0.1, ge=0, le=1)
+    tracing_include_private_metadata: bool = False
+
     database_url: SecretStr = SecretStr("sqlite:///./extra-codeowners.db")
     require_postgresql: bool = False
     worker_enabled: bool = True
@@ -290,6 +298,22 @@ class Settings(BaseSettings):
             or value.fragment is not None
         ):
             raise ValueError("github_api_url must not contain credentials, a query, or a fragment")
+        return value
+
+    @field_validator("tracing_otlp_endpoint")
+    @classmethod
+    def validate_tracing_otlp_endpoint(cls, value: AnyHttpUrl | None) -> AnyHttpUrl | None:
+        if value is None:
+            return None
+        if (
+            value.username is not None
+            or value.password is not None
+            or value.query is not None
+            or value.fragment is not None
+        ):
+            raise ValueError(
+                "tracing_otlp_endpoint must not contain credentials, a query, or a fragment"
+            )
         return value
 
     @field_validator("org_config_repository")
@@ -330,6 +354,8 @@ class Settings(BaseSettings):
                 "github_identity_freshness_seconds must be at least twice "
                 "github_identity_probe_interval_seconds"
             )
+        if self.tracing_enabled and self.tracing_otlp_endpoint is None:
+            raise ValueError("tracing_otlp_endpoint is required when tracing_enabled is true")
         pairs = (
             ("github_private_key", self.github_private_key, self.github_private_key_file),
             (

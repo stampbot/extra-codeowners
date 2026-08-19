@@ -30,6 +30,10 @@ helm template extra-codeowners charts/extra-codeowners \
   --set autoscaling.enabled=true \
   --set podDisruptionBudget.enabled=true \
   --set allowInsecureChanges=true \
+  --set monitoring.serviceMonitor.enabled=true \
+  --set-string 'monitoring.serviceMonitor.labels.release=kube-prometheus-stack' \
+  --set monitoring.prometheusRule.enabled=true \
+  --set monitoring.dashboard.enabled=true \
   --set-string 'deploymentAnnotations.reloader\.stakater\.com/auto=true' \
   >"${output}/optional.yaml"
 helm template extra-codeowners charts/extra-codeowners \
@@ -62,6 +66,10 @@ helm template extra-codeowners charts/extra-codeowners \
   >"${output}/rolling-update.yaml"
 
 grep -Fq 'reloader.stakater.com/auto: "true"' "${output}/optional.yaml"
+grep -Fq 'kind: ServiceMonitor' "${output}/optional.yaml"
+grep -Fq 'kind: PrometheusRule' "${output}/optional.yaml"
+grep -Fq 'name: extra-codeowners-dashboard' "${output}/optional.yaml"
+grep -Fq 'grafana_dashboard: "1"' "${output}/optional.yaml"
 grep -Fq 'argocd.argoproj.io/sync-wave: "-1"' "${output}/controller-migration.yaml"
 grep -Fq '"argocd.argoproj.io/hook": Sync' "${output}/controller-migration.yaml"
 grep -Fq 'kind: ExternalSecret' "${output}/extra-manifests.yaml"

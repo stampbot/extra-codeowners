@@ -1,0 +1,94 @@
+{{- if .Values.monitoring.dashboard.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "extra-codeowners.fullname" . }}-dashboard
+  labels:
+    {{- include "extra-codeowners.labels" . | nindent 4 }}
+    {{- with .Values.monitoring.dashboard.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- with .Values.monitoring.dashboard.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+data:
+  extra-codeowners-overview.json: |
+    {
+      "title": "Extra CODEOWNERS",
+      "uid": "extra-codeowners",
+      "schemaVersion": 41,
+      "tags": ["github", "codeowners"],
+      "time": {"from": "now-6h", "to": "now"},
+      "templating": {
+        "list": [
+          {
+            "name": "namespace",
+            "type": "query",
+            "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+            "query": "label_values(extra_codeowners_queue_depth, namespace)",
+            "refresh": 2,
+            "includeAll": false,
+            "multi": false
+          }
+        ]
+      },
+      "panels": [
+        {
+          "id": 1,
+          "title": "Ready work by class",
+          "type": "timeseries",
+          "targets": [
+            {
+              "expr": "sum by (kind, work_class) (extra_codeowners_queue_work_class_depth{namespace=\"$namespace\"})",
+              "legendFormat": "{{ "{{kind}}" }} / {{ "{{work_class}}" }}",
+              "refId": "A"
+            }
+          ],
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0}
+        },
+        {
+          "id": 2,
+          "title": "Oldest ready work",
+          "type": "timeseries",
+          "targets": [
+            {
+              "expr": "max by (kind, work_class) (extra_codeowners_queue_work_class_oldest_age_seconds{namespace=\"$namespace\"})",
+              "legendFormat": "{{ "{{kind}}" }} / {{ "{{work_class}}" }}",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []},
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0}
+        },
+        {
+          "id": 3,
+          "title": "p95 queue wait",
+          "type": "timeseries",
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.95, sum by (le, kind, work_class) (rate(extra_codeowners_queue_wait_seconds_bucket{namespace=\"$namespace\"}[5m])))",
+              "legendFormat": "{{ "{{kind}}" }} / {{ "{{work_class}}" }}",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []},
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8}
+        },
+        {
+          "id": 4,
+          "title": "p95 GitHub API time",
+          "type": "timeseries",
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.95, sum by (le, operation) (rate(extra_codeowners_github_api_request_seconds_bucket{namespace=\"$namespace\"}[5m])))",
+              "legendFormat": "{{ "{{operation}}" }}",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []},
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8}
+        }
+      ]
+    }
+{{- end }}
