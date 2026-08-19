@@ -165,7 +165,12 @@ The endpoint returns Prometheus text format. Extra CODEOWNERS defines these appl
 | `extra_codeowners_webhooks_total` | counter | Verified GitHub deliveries, labeled by event and action. |
 | `extra_codeowners_webhook_failures_total` | counter | Rejected or failed deliveries, labeled by reason. |
 | `extra_codeowners_evaluations_total` | counter | Completed evaluations, labeled by conclusion. |
-| `extra_codeowners_evaluation_seconds` | histogram | Evaluation latency. |
+| `extra_codeowners_evaluation_seconds` | histogram | End-to-end evaluation latency, with explicit buckets through ten minutes. |
+| `extra_codeowners_work_attempts_total` | counter | Durable worker attempts, labeled by fixed work kind, work class, and outcome. |
+| `extra_codeowners_work_attempt_seconds` | histogram | Wall-clock duration of the same worker attempts. |
+| `extra_codeowners_github_api_requests_total` | counter | Logical GitHub API requests, labeled by fixed operation family, authentication mode, and outcome. |
+| `extra_codeowners_github_api_request_seconds` | histogram | Wall-clock duration of the same GitHub API requests. It includes token acquisition and a bounded rejected-token retry. |
+| `extra_codeowners_github_rate_limit_events_total` | counter | GitHub rate-limit responses, labeled as installation-scoped or global. |
 | `extra_codeowners_queue_depth` | gauge | Pending and leased exact-head invalidation, evaluation, and authority fan-out rows. |
 | `extra_codeowners_queue_work_class_depth` | gauge | Pending durable work, labeled by fixed `kind` and `work_class` values. Use it to distinguish foreground work from recovery backlog. |
 | `extra_codeowners_queue_work_class_oldest_age_seconds` | gauge | Age of the oldest pending row for the same fixed labels. |
@@ -176,9 +181,18 @@ The endpoint returns Prometheus text format. Extra CODEOWNERS defines these appl
 | `extra_codeowners_dead_jobs` | gauge | Legacy or manually introduced terminal rows. Runtime failures remain pending, so this should remain `0`. |
 | `extra_codeowners_insecure_changes_enabled` | gauge | `1` while built-in non-delegable paths are disabled; otherwise `0`. |
 | `extra_codeowners_reconciliations_total` | counter | Reconciliation outcomes, labeled with `result="success"`, `result="partial"`, or `result="failure"`. A process that observes another lease owner does not increment the counter. An open provider circuit records a partial result; an election error counts as a failure. |
+| `extra_codeowners_reconciliation_seconds` | histogram | Wall-clock duration of a reconciliation attempt, including the explicit `not_elected` outcome for a replica that did not own the scan lease. |
 | `extra_codeowners_reconciliation_last_success_timestamp_seconds` | gauge | Unix timestamp of the most recent complete reconciliation by this process. A partial or failed attempt does not update it. |
+| `extra_codeowners_trace_exports_total` | counter | Trace exporter batches, labeled by success or failure. A failure does not change the approval decision or worker retry behavior. |
 
 Prometheus also publishes generated counter and histogram series, plus Python runtime and process collectors. Metric labels must never contain repository names, pull-request titles, actor names, paths, or delivery IDs. Those values would create unbounded cardinality and disclose private repository metadata.
+
+For a slow check, compare queue wait, worker-attempt, and GitHub API histograms
+in that order. A long queue wait points to scheduling or provider backpressure;
+a long worker attempt with ordinary API timing points to policy work or a
+database guard; a long API family points to GitHub or the network. When OTLP
+tracing is enabled, use the sampled `trace_id` in the corresponding structured
+logs to inspect the same operation without adding private values to Prometheus.
 
 `success` means the elected process completed the scan of every visible,
 unsuspended installation and validated every repository and open pull request

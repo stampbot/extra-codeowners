@@ -686,6 +686,50 @@ Clusters with an egress proxy or gateway may set
 and the migration Job fail. The migration pod still receives no GitHub
 credentials even when a shared rule permits GitHub traffic.
 
+## Observe queue latency
+
+The application always exposes Prometheus metrics at `/metrics`. The chart can
+also create a `ServiceMonitor`, two focused `PrometheusRule` alerts, and a
+Grafana dashboard ConfigMap. All three integrations are disabled by default,
+so clusters without Prometheus Operator or Grafana CRDs can install the chart
+unchanged.
+
+For a cluster whose Prometheus instance selects `release:
+kube-prometheus-stack` and whose Grafana sidecar watches
+`grafana_dashboard: "1"`, enable the integrations alongside the high
+availability preset:
+
+```yaml
+highAvailability:
+  enabled: true
+monitoring:
+  serviceMonitor:
+    enabled: true
+    labels:
+      release: kube-prometheus-stack
+  prometheusRule:
+    enabled: true
+    labels:
+      release: kube-prometheus-stack
+      severity: warning
+  dashboard:
+    enabled: true
+```
+
+The ServiceMonitor scrapes the chart's named `http` Service port at
+`/metrics`. The alerts cover an old interactive queue item and a stalled
+reconciliation; tune their thresholds to the deployment's webhook and
+recovery objectives. The dashboard uses only bounded metric labels, so it
+does not list repositories or pull requests.
+
+For a slow-check investigation, enable the application's optional OTLP tracing
+with `extraEnv`. Start at the default ten-percent sample ratio and leave
+private trace metadata disabled. Traces contain repository or pull-request
+identifiers only when the explicit private-metadata setting is enabled. See
+the [operations runbook][operate] for the settings, privacy boundary, and
+investigation sequence. If egress isolation is enabled, allow traffic to the
+chosen OTLP collector as well as GitHub, PostgreSQL, and DNS.
+
 ## Uninstall without dropping enforcement
 
 > [!WARNING]
@@ -783,6 +827,18 @@ descriptions.
 | `service.type` | enum | `ClusterIP` | `ClusterIP`, `NodePort`, or `LoadBalancer`. |
 | `service.port` | integer | `80` | 1 through 65535. |
 | `service.annotations` | string map | `{}` | Adds Service annotations. |
+| `monitoring.serviceMonitor.enabled` | boolean | `false` | Creates a Prometheus Operator `ServiceMonitor` for `/metrics`. |
+| `monitoring.serviceMonitor.labels` | string map | `{}` | Extra labels used by a Prometheus instance to select the ServiceMonitor. |
+| `monitoring.serviceMonitor.interval` | duration | `30s` | Prometheus scrape interval. |
+| `monitoring.serviceMonitor.scrapeTimeout` | duration | `10s` | Per-scrape timeout. |
+| `monitoring.serviceMonitor.sampleLimit` | integer | `10000` | Maximum samples from one scrape; 0 leaves the Prometheus default. |
+| `monitoring.prometheusRule.enabled` | boolean | `false` | Creates interactive-queue and reconciliation-staleness alerts. |
+| `monitoring.prometheusRule.labels` | string map | `severity: warning` | Labels used to select the rule; `severity` is also applied to both alerts. |
+| `monitoring.prometheusRule.interactiveQueueStalledSeconds` | integer | `60` | Alert threshold for the oldest interactive evaluation or invalidation. |
+| `monitoring.prometheusRule.reconciliationStalledSeconds` | integer | `900` | Alert threshold for the last successful reconciliation. |
+| `monitoring.dashboard.enabled` | boolean | `false` | Creates the Grafana dashboard ConfigMap. |
+| `monitoring.dashboard.labels` | string map | `grafana_dashboard: "1"` | Labels expected by the Grafana dashboard sidecar. |
+| `monitoring.dashboard.annotations` | string map | `grafana_folder: Extra CODEOWNERS` | Dashboard-sidecar annotations, including the default folder. |
 | `ingress.enabled` | boolean | `false` | Creates an Ingress when true. |
 | `ingress.className` | string | empty | Selects the ingress controller. |
 | `ingress.annotations` | string map | `{}` | Adds controller-specific annotations. |
@@ -827,4 +883,5 @@ descriptions.
 
 [upgrade]: https://extra-codeowners.readthedocs.io/en/latest/how-to/upgrade/
 [upgrade-notes]: https://extra-codeowners.readthedocs.io/en/latest/reference/upgrade-notes/
+[operate]: https://extra-codeowners.readthedocs.io/en/latest/how-to/operate/
 [toolchain]: https://github.com/stampbot/extra-codeowners/blob/main/mise.toml

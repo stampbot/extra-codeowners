@@ -26,6 +26,7 @@ from extra_codeowners.manifest import ManifestError, ManifestService
 from extra_codeowners.metrics import INSECURE_MODE, WEBHOOK_FAILURES, WEBHOOKS
 from extra_codeowners.service import EvaluationService, Reconciler, Worker
 from extra_codeowners.settings import Settings, get_settings
+from extra_codeowners.tracing import Tracing
 from extra_codeowners.webhooks import (
     MAX_WEBHOOK_BYTES,
     WebhookError,
@@ -243,6 +244,7 @@ def create_app(
         manifest_service: ManifestService | None = None
         stop = asyncio.Event()
         tasks: list[asyncio.Task[None]] = []
+        tracing = Tracing.from_settings(runtime)
 
         app.state.github = github_client
         app.state.stop = stop
@@ -253,6 +255,7 @@ def create_app(
         app.state.github_identity_probe = None
         app.state.evaluator = None
         app.state.manifest = manifest_service
+        app.state.tracing = tracing
 
         async def stop_background_tasks() -> None:
             stop.set()
@@ -260,6 +263,7 @@ def create_app(
                 await asyncio.gather(*tasks, return_exceptions=True)
 
         async with AsyncExitStack() as resources:
+            resources.callback(tracing.shutdown)
             queue_store = store or QueueStore(runtime.database_url.get_secret_value())
             if owned_store:
                 resources.push_async_callback(asyncio.to_thread, queue_store.close)
@@ -295,6 +299,7 @@ def create_app(
                     api_url=str(runtime.github_api_url),
                     api_version=runtime.github_api_version,
                     max_in_flight_requests=runtime.github_max_in_flight_requests,
+                    tracing=tracing,
                 )
                 resources.push_async_callback(github_client.close)
             app.state.github = github_client
@@ -337,12 +342,18 @@ def create_app(
                 evaluator = EvaluationService(runtime, github_client, queue_store)
                 app.state.evaluator = evaluator
                 if runtime.worker_enabled:
-                    worker = Worker(runtime, queue_store, evaluator, owner)
+                    worker = Worker(runtime, queue_store, evaluator, owner, tracing=tracing)
                     worker_task = asyncio.create_task(worker.run(stop), name="evaluation-worker")
                     app.state.worker_task = worker_task
                     tasks.append(worker_task)
                 if runtime.reconcile_enabled:
-                    reconciler = Reconciler(runtime, github_client, queue_store, owner)
+                    reconciler = Reconciler(
+                        runtime,
+                        github_client,
+                        queue_store,
+                        owner,
+                        tracing=tracing,
+                    )
                     reconciler_task = asyncio.create_task(
                         reconciler.run(stop), name="open-pr-reconciler"
                     )
@@ -361,6 +372,7 @@ def create_app(
         openapi_url="/api/openapi.json",
     )
     app.state.settings = runtime
+    app.state.tracing = Tracing(enabled=False)
 
     @app.get("/", include_in_schema=False)
     async def index() -> JSONResponse:
@@ -569,14 +581,34 @@ def create_app(
                 status_code=status.HTTP_202_ACCEPTED,
             )
         queue_store: QueueStore = request.app.state.store
+        tracing: Tracing = request.app.state.tracing
         try:
-            acceptance = await asyncio.to_thread(
-                queue_store.accept_delivery,
-                webhook.delivery_id,
-                webhook.event,
-                job,
-                runtime.webhook_invalidation_timeout_seconds,
-            )
+            with tracing.span(
+                "webhook.accept",
+                attributes={
+                    "github.event": webhook.event,
+                    "github.action": webhook.action or "received",
+                },
+                private_attributes=(
+                    {
+                        "github.delivery_id": webhook.delivery_id,
+                        "github.repository": job.repository_full_name,
+                        "github.pull_number": job.pull_number,
+                    }
+                    if isinstance(job, JobRequest)
+                    else {
+                        "github.delivery_id": webhook.delivery_id,
+                        "github.scope": job.scope_key,
+                    }
+                ),
+            ):
+                acceptance = await asyncio.to_thread(
+                    queue_store.accept_delivery,
+                    webhook.delivery_id,
+                    webhook.event,
+                    job,
+                    runtime.webhook_invalidation_timeout_seconds,
+                )
         except Exception as error:
             WEBHOOK_FAILURES.labels("durable_acceptance").inc()
             log.exception(

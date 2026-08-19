@@ -2077,8 +2077,7 @@ async def test_worker_does_not_record_completion_for_a_superseded_generation(
     assert claimed is not None
 
     class Evaluator:
-        async def evaluate_job(self, job: ClaimedJob) -> None:
-            del job
+        async def evaluate_job(self, _job: ClaimedJob) -> None:
             store.enqueue(JobRequest(2, "example/project", 3, "pull_request.synchronize"))
 
     completion_metric = MagicMock()
@@ -2088,6 +2087,69 @@ async def test_worker_does_not_record_completion_for_a_superseded_generation(
     await worker._process(claimed)
 
     completion_metric.labels.assert_not_called()
+    assert store.pending_count() == 1
+
+
+@pytest.mark.asyncio
+async def test_worker_does_not_record_completion_when_durable_acknowledgement_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A correct Check Run is not a completed durable queue attempt."""
+    store = migrated_store(f"sqlite:///{tmp_path / 'completion-ack-failure.db'}")
+    store.enqueue(JobRequest(2, "example/project", 3, "pull_request.opened"))
+    claimed = store.claim("worker", 60)
+    assert claimed is not None
+
+    class Evaluator:
+        async def evaluate_job(self, _job: ClaimedJob) -> None:
+            return None
+
+    def fail_complete(*args: Any, **kwargs: Any) -> bool:
+        del args, kwargs
+        raise OSError("database unavailable")
+
+    completion_metric = MagicMock()
+    monkeypatch.setattr(service_module, "WEBHOOK_TO_CHECK_COMPLETION_SECONDS", completion_metric)
+    monkeypatch.setattr(store, "complete", fail_complete)
+    worker = Worker(settings(), store, Evaluator(), "worker")  # type: ignore[arg-type]
+
+    with pytest.raises(OSError, match="database unavailable"):
+        await worker._process(claimed)
+
+    completion_metric.labels.assert_not_called()
+    assert store.pending_count() == 1
+
+
+@pytest.mark.asyncio
+async def test_authority_completion_acknowledgement_failure_stays_retryable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An authority fence remains durable when deleting its row fails."""
+    store = migrated_store(f"sqlite:///{tmp_path / 'authority-ack-failure.db'}")
+    store.accept_delivery(
+        "membership-1",
+        "membership",
+        AuthorityRequest(2, "example/project", None, "membership.removed"),
+    )
+    claimed = store.claim_authority("worker", 60)
+    assert claimed is not None
+
+    class Evaluator:
+        github = MagicMock()
+
+    def fail_complete(*args: Any, **kwargs: Any) -> bool:
+        del args, kwargs
+        raise OSError("database unavailable")
+
+    worker = Worker(settings(), store, Evaluator(), "worker")  # type: ignore[arg-type]
+    worker._execute_authority = AsyncMock()  # type: ignore[method-assign]
+    monkeypatch.setattr(store, "complete_authority", fail_complete)
+
+    with pytest.raises(OSError, match="database unavailable"):
+        await worker._process_authority(claimed)
+
     assert store.pending_count() == 1
 
 

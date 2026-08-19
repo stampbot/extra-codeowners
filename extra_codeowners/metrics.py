@@ -20,6 +20,34 @@ EVALUATIONS = Counter(
 EVALUATION_SECONDS = Histogram(
     "extra_codeowners_evaluation_seconds",
     "Time spent evaluating one pull request",
+    buckets=(0.1, 0.5, 1, 2.5, 5, 10, 15, 30, 60, 120, 300, 600),
+)
+WORK_ATTEMPTS = Counter(
+    "extra_codeowners_work_attempts_total",
+    "Durable worker attempts by work kind, scheduling class, and outcome",
+    ("kind", "work_class", "outcome"),
+)
+WORK_ATTEMPT_SECONDS = Histogram(
+    "extra_codeowners_work_attempt_seconds",
+    "Wall-clock time spent on one durable worker attempt",
+    ("kind", "work_class", "outcome"),
+    buckets=(0.1, 0.5, 1, 2.5, 5, 10, 15, 30, 60, 120, 300, 600),
+)
+GITHUB_API_REQUESTS = Counter(
+    "extra_codeowners_github_api_requests_total",
+    "Logical GitHub API requests by fixed operation, authentication mode, and outcome",
+    ("operation", "authentication", "outcome"),
+)
+GITHUB_API_REQUEST_SECONDS = Histogram(
+    "extra_codeowners_github_api_request_seconds",
+    "Wall-clock time for one logical GitHub API request",
+    ("operation", "authentication", "outcome"),
+    buckets=(0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 15, 30, 60),
+)
+GITHUB_RATE_LIMIT_EVENTS = Counter(
+    "extra_codeowners_github_rate_limit_events_total",
+    "GitHub API rate-limit responses observed by authentication scope",
+    ("scope",),
 )
 QUEUE_DEPTH = Gauge("extra_codeowners_queue_depth", "Pending durable work items")
 QUEUE_WORK_CLASS_DEPTH = Gauge(
@@ -66,7 +94,18 @@ RECONCILIATIONS = Counter(
     "Open pull request reconciliation outcomes",
     ("result",),
 )
+RECONCILIATION_SECONDS = Histogram(
+    "extra_codeowners_reconciliation_seconds",
+    "Wall-clock time for one elected reconciliation scan",
+    ("outcome",),
+    buckets=(1, 2.5, 5, 10, 30, 60, 120, 300, 600, 1800),
+)
 RECONCILIATION_LAST_SUCCESS = Gauge(
     "extra_codeowners_reconciliation_last_success_timestamp_seconds",
     "Unix timestamp of the latest complete open pull request reconciliation",
+)
+TRACE_EXPORTS = Counter(
+    "extra_codeowners_trace_exports_total",
+    "OpenTelemetry trace export batches by result",
+    ("outcome",),
 )

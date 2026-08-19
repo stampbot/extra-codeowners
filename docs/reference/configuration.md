@@ -248,6 +248,27 @@ inactivity timeout. The client also applies a 20-second wall-clock deadline to
 each non-streaming request, including the reconciliation requests used during
 graceful shutdown. These limits are not runtime settings.
 
+### Tracing settings
+
+Tracing is disabled unless an operator enables it. When enabled, Extra
+CODEOWNERS exports OpenTelemetry spans over OTLP/HTTP. The service starts a new
+trace for its own work; it does not accept a `traceparent` value from an
+unauthenticated GitHub webhook.
+
+| Environment variable | Type | Default | Constraints and effect |
+| --- | --- | --- | --- |
+| `EXTRA_CODEOWNERS_TRACING_ENABLED` | boolean | `false` | Enables OTLP trace export. It requires `EXTRA_CODEOWNERS_TRACING_OTLP_ENDPOINT`. |
+| `EXTRA_CODEOWNERS_TRACING_OTLP_ENDPOINT` | absolute HTTP(S) URL or null | null | OTLP/HTTP traces endpoint, such as `http://opentelemetry-collector.observability.svc:4318/v1/traces`. Credentials, query strings, and fragments are rejected. Treat the destination as an operator-controlled telemetry boundary. |
+| `EXTRA_CODEOWNERS_TRACING_SAMPLE_RATIO` | number | `0.1` | Fraction from `0` through `1` of new traces to record. Start with `0.1` in a busy production installation; use `1` temporarily while investigating a performance incident. |
+| `EXTRA_CODEOWNERS_TRACING_INCLUDE_PRIVATE_METADATA` | boolean | `false` | Adds repository, pull-request, delivery, queue, and API-path details to traces and records exception events. Leave disabled unless the trace backend has suitable access control and retention. |
+
+Every trace has fixed service, version, environment, operation, queue-kind, and
+work-class attributes. With private metadata disabled, it omits repository
+names, pull numbers, commit SHAs, delivery IDs, API paths, payloads, headers,
+tokens, and exception text. Sampled spans bind `trace_id` and `span_id` to the
+structured logs emitted inside that span. Unsampled work does not add those
+fields, so logs do not imply that a trace exists.
+
 The service attempts an identity probe during startup and continues in the
 background. A failed refresh does not erase a still-fresh success, which
 avoids dropping readiness for one transient request. Once the freshness window

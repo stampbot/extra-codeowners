@@ -9,6 +9,9 @@ import httpx
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from opentelemetry.trace import StatusCode
 from pydantic import ValidationError
 
 from extra_codeowners.dco import (
@@ -26,6 +29,7 @@ from extra_codeowners.github import (
     GitHubRateLimitError,
     PullRequestTooLargeError,
 )
+from extra_codeowners.tracing import Tracing
 
 
 def token_response() -> dict[str, str]:
@@ -213,6 +217,95 @@ async def test_app_identity_probe_requires_the_exact_numeric_app_id(
     assert requests[0].method == "GET"
     assert requests[0].url.path == "/app"
     assert requests[0].headers["authorization"].startswith("Bearer ")
+
+
+@pytest.mark.asyncio
+async def test_github_request_trace_uses_a_safe_operation_name(private_key: str) -> None:
+    exporter = InMemorySpanExporter()
+    tracing = Tracing(
+        enabled=True,
+        endpoint="http://tempo.example.test/v1/traces",
+        sample_ratio=1,
+        processor=SimpleSpanProcessor(exporter),
+    )
+    client = GitHubClient(
+        1,
+        private_key,
+        transport=httpx.MockTransport(lambda _: httpx.Response(200, json={"id": 1})),
+        tracing=tracing,
+    )
+
+    await client.verify_app_identity()
+    await client.close()
+    tracing.shutdown()
+
+    [span] = exporter.get_finished_spans()
+    assert span.name == "github.request"
+    assert span.attributes is not None
+    assert span.attributes["github.operation"] == "app.identity"
+    assert span.attributes["github.authentication"] == "app"
+    assert span.attributes["http.request.method"] == "GET"
+    assert "github.path" not in span.attributes
+
+
+@pytest.mark.asyncio
+async def test_non_streaming_github_http_errors_mark_the_trace_as_failed(private_key: str) -> None:
+    exporter = InMemorySpanExporter()
+    tracing = Tracing(
+        enabled=True,
+        endpoint="http://tempo.example.test/v1/traces",
+        sample_ratio=1,
+        processor=SimpleSpanProcessor(exporter),
+    )
+    client = GitHubClient(
+        1,
+        private_key,
+        transport=httpx.MockTransport(
+            lambda _: httpx.Response(503, json={"message": "temporarily unavailable"})
+        ),
+        tracing=tracing,
+    )
+
+    with pytest.raises(GitHubAPIError):
+        await client.verify_app_identity()
+    await client.close()
+    tracing.shutdown()
+
+    [span] = exporter.get_finished_spans()
+    assert span.status.status_code is StatusCode.ERROR
+    assert span.status.description == "HTTP 503"
+
+
+@pytest.mark.asyncio
+async def test_expected_content_not_found_does_not_mark_a_trace_as_failed(private_key: str) -> None:
+    exporter = InMemorySpanExporter()
+    tracing = Tracing(
+        enabled=True,
+        endpoint="http://tempo.example.test/v1/traces",
+        sample_ratio=1,
+        processor=SimpleSpanProcessor(exporter),
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/access_tokens"):
+            return httpx.Response(201, json=token_response())
+        return httpx.Response(404, json={"message": "Not Found"})
+
+    client = GitHubClient(
+        1,
+        private_key,
+        transport=httpx.MockTransport(handler),
+        tracing=tracing,
+    )
+
+    assert await client.get_file_text(2, "private/project", ".github/extra-codeowners.toml") is None
+    await client.close()
+    tracing.shutdown()
+
+    content_span = next(
+        span for span in exporter.get_finished_spans() if span.name == "github.stream_request"
+    )
+    assert content_span.status.status_code is StatusCode.UNSET
 
 
 @pytest.mark.asyncio

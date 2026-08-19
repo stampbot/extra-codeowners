@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
+from functools import partial
 from typing import Any, Final, Literal
 
 import structlog
@@ -45,10 +47,13 @@ from extra_codeowners.metrics import (
     QUEUE_WORK_CLASS_DEPTH,
     QUEUE_WORK_CLASS_OLDEST_AGE_SECONDS,
     RECONCILIATION_LAST_SUCCESS,
+    RECONCILIATION_SECONDS,
     RECONCILIATIONS,
     SHARED_HEAD_INVALIDATION_DEPTH,
     SHARED_HEAD_INVALIDATIONS,
     WEBHOOK_TO_CHECK_COMPLETION_SECONDS,
+    WORK_ATTEMPT_SECONDS,
+    WORK_ATTEMPTS,
 )
 from extra_codeowners.models import (
     ActorKind,
@@ -68,6 +73,7 @@ from extra_codeowners.models import (
 )
 from extra_codeowners.policy import BUILTIN_NON_DELEGABLE_PATHS
 from extra_codeowners.settings import Settings
+from extra_codeowners.tracing import Tracing
 
 CODEOWNERS_LOCATIONS: Final = (
     ".github/CODEOWNERS",
@@ -1636,17 +1642,53 @@ class Worker:
         store: QueueStore,
         evaluator: EvaluationService,
         owner: str,
+        *,
+        tracing: Tracing | None = None,
     ) -> None:
         self.settings = settings
         self.store = store
         self.evaluator = evaluator
         self.owner = owner
+        self.tracing = tracing or Tracing(enabled=False)
 
     def _slot_owner(self, lane: str, slot: int) -> str:
         """Return a distinct durable lease owner for one logical consumer."""
         # Lease owners are stored in a 128-character column. Keep enough
         # room for the lane suffix even when a caller supplied a long base.
         return f"{self.owner[:96]}:{lane}:{slot}"
+
+    async def _run_work_attempt(
+        self,
+        *,
+        kind: Literal["authority", "evaluation", "invalidation"],
+        work_class: str,
+        private_attributes: dict[str, int | str],
+        operation: Callable[[], Awaitable[str]],
+    ) -> str:
+        """Trace and measure one durable attempt without high-cardinality metrics.
+
+        The durable queue remains the coordination point across replicas. The
+        private trace attributes make one sampled attempt diagnosable, while
+        Prometheus receives only fixed class and outcome labels.
+        """
+        started = time.perf_counter()
+        outcome = "failed"
+        with self.tracing.span(
+            f"worker.{kind}",
+            attributes={"queue.kind": kind, "queue.work_class": work_class},
+            private_attributes=private_attributes,
+        ):
+            try:
+                outcome = await operation()
+                return outcome
+            except asyncio.CancelledError:
+                outcome = "cancelled"
+                raise
+            finally:
+                WORK_ATTEMPTS.labels(kind, work_class, outcome).inc()
+                WORK_ATTEMPT_SECONDS.labels(kind, work_class, outcome).observe(
+                    time.perf_counter() - started
+                )
 
     async def _renew_shared_head_lease(
         self,
@@ -1689,7 +1731,7 @@ class Worker:
     async def _process_shared_head(
         self,
         job: ClaimedSharedHeadInvalidation,
-    ) -> None:
+    ) -> str:
         # Measure time spent ready for this attempt, not age since the
         # generation was first accepted. Retries retain requested_at, so using
         # it here would turn one delayed job into repeated, misleading SLO
@@ -1713,6 +1755,7 @@ class Worker:
                 repository=job.repository_full_name,
                 generation=job.generation,
             )
+            return "superseded"
         except GitHubRateLimitError as error:
             await asyncio.to_thread(
                 self.store.record_provider_backpressure,
@@ -1726,7 +1769,9 @@ class Worker:
                 str(error),
                 error.retry_after_seconds,
             )
-            SHARED_HEAD_INVALIDATIONS.labels("rate_limited" if updated else "superseded").inc()
+            outcome = "rate_limited" if updated else "superseded"
+            SHARED_HEAD_INVALIDATIONS.labels(outcome).inc()
+            return outcome
         except asyncio.CancelledError:
             raise
         except Exception as error:
@@ -1743,7 +1788,9 @@ class Worker:
                 str(error),
                 self.settings.worker_retry_max_seconds,
             )
-            SHARED_HEAD_INVALIDATIONS.labels("failed" if updated else "superseded").inc()
+            outcome = "failed" if updated else "superseded"
+            SHARED_HEAD_INVALIDATIONS.labels(outcome).inc()
+            return outcome
         else:
             completed = False
             if not lost.is_set():
@@ -1751,7 +1798,8 @@ class Worker:
                     self.store.complete_shared_head_invalidation,
                     job,
                 )
-            SHARED_HEAD_INVALIDATIONS.labels("completed" if completed else "superseded").inc()
+            outcome = "completed" if completed else "superseded"
+            SHARED_HEAD_INVALIDATIONS.labels(outcome).inc()
             if completed:
                 log.info(
                     "shared_head_invalidation_completed",
@@ -1759,6 +1807,7 @@ class Worker:
                     repository=job.repository_full_name,
                     generation=job.generation,
                 )
+            return outcome
         finally:
             done.set()
             await asyncio.gather(heartbeat)
@@ -1794,7 +1843,7 @@ class Worker:
                 )
                 return
 
-    async def _process(self, job: ClaimedJob, owner: str | None = None) -> None:
+    async def _process(self, job: ClaimedJob, owner: str | None = None) -> str:
         owner = self.owner if owner is None else owner
         # See _process_shared_head: this histogram represents queue scheduling
         # for each ready attempt rather than accumulated retry backoff.
@@ -1825,6 +1874,7 @@ class Worker:
                 str(error),
                 error.retry_after_seconds,
             )
+            return "rate_limited"
         except AuthorityChangePendingError as error:
             log.info(
                 "evaluation_deferred_for_authority",
@@ -1838,6 +1888,7 @@ class Worker:
                 str(error),
                 max(5, int(self.settings.worker_poll_seconds * 10)),
             )
+            return "authority_deferred"
         except SharedHeadInvalidationPendingError as error:
             log.info(
                 "evaluation_deferred_for_shared_head_invalidation",
@@ -1851,6 +1902,7 @@ class Worker:
                 str(error),
                 max(1, int(self.settings.worker_poll_seconds * 2)),
             )
+            return "invalidation_deferred"
         except asyncio.CancelledError:
             raise
         except Exception as error:
@@ -1868,8 +1920,23 @@ class Worker:
                 str(error),
                 self.settings.worker_retry_max_seconds,
             )
+            return "failed"
         else:
-            completed = await asyncio.to_thread(self.store.complete, job, owner)
+            try:
+                completed = await asyncio.to_thread(self.store.complete, job, owner)
+            except Exception:
+                # A Check Run can be correct while a database outage prevents
+                # the durable acknowledgment. Do not claim completion in logs
+                # or metrics: a later lease holder must retry the work.
+                log.exception(
+                    "evaluation_completion_persistence_failed",
+                    job_id=job.id,
+                    work_class=job.work_class,
+                    repository=job.repository_full_name,
+                    pull_number=job.pull_number,
+                    generation=job.generation,
+                )
+                raise
             if not completed:
                 log.info(
                     "evaluation_completion_superseded",
@@ -1879,7 +1946,7 @@ class Worker:
                     pull_number=job.pull_number,
                     generation=job.generation,
                 )
-                return
+                return "superseded"
             completed_at = datetime.now(UTC)
             accepted_age_seconds = max(
                 0.0, (completed_at - _as_utc(job.requested_at)).total_seconds()
@@ -1896,6 +1963,7 @@ class Worker:
                 last_delivery_id=job.last_delivery_id,
                 accepted_age_seconds=accepted_age_seconds,
             )
+            return "completed"
         finally:
             done.set()
             await asyncio.gather(heartbeat)
@@ -2021,7 +2089,7 @@ class Worker:
         self,
         job: ClaimedAuthorityJob,
         owner: str | None = None,
-    ) -> None:
+    ) -> str:
         owner = self.owner if owner is None else owner
         done = asyncio.Event()
         heartbeat = asyncio.create_task(
@@ -2044,6 +2112,7 @@ class Worker:
                 str(error),
                 error.retry_after_seconds,
             )
+            return "rate_limited"
         except asyncio.CancelledError:
             raise
         except GitHubAPIError as error:
@@ -2071,6 +2140,7 @@ class Worker:
                 retry_max,
                 300 if error.status_code in {404, 410} else 1,
             )
+            return "inaccessible" if error.status_code in {404, 410} else "failed"
         except Exception as error:
             log.exception(
                 "authority_fanout_failed",
@@ -2085,8 +2155,36 @@ class Worker:
                 str(error),
                 self.settings.worker_retry_max_seconds,
             )
+            return "failed"
         else:
-            await asyncio.to_thread(self.store.complete_authority, job, owner)
+            try:
+                completed = await asyncio.to_thread(self.store.complete_authority, job, owner)
+            except Exception:
+                log.exception(
+                    "authority_completion_persistence_failed",
+                    authority_job_id=job.id,
+                    installation_id=job.installation_id,
+                    scope=job.repository_full_name or "installation",
+                    generation=job.generation,
+                )
+                raise
+            if not completed:
+                log.info(
+                    "authority_completion_superseded",
+                    authority_job_id=job.id,
+                    installation_id=job.installation_id,
+                    scope=job.repository_full_name or "installation",
+                    generation=job.generation,
+                )
+                return "superseded"
+            log.info(
+                "authority_fanout_completed",
+                authority_job_id=job.id,
+                installation_id=job.installation_id,
+                scope=job.repository_full_name or "installation",
+                generation=job.generation,
+            )
+            return "completed"
         finally:
             done.set()
             await asyncio.gather(heartbeat)
@@ -2130,7 +2228,17 @@ class Worker:
                         head_sha=job.head_sha,
                         generation=job.generation,
                     )
-                    await self._process_shared_head(job)
+                    await self._run_work_attempt(
+                        kind="invalidation",
+                        work_class=job.work_class,
+                        private_attributes={
+                            "queue.installation_id": job.installation_id,
+                            "queue.repository": job.repository_full_name,
+                            "queue.head_sha": job.head_sha,
+                            "queue.generation": job.generation,
+                        },
+                        operation=partial(self._process_shared_head, job),
+                    )
                     continue
             except asyncio.CancelledError:
                 raise
@@ -2161,7 +2269,18 @@ class Worker:
                         head_sha=job.head_sha_hint,
                         generation=job.generation,
                     )
-                    await self._process(job, owner)
+                    await self._run_work_attempt(
+                        kind="evaluation",
+                        work_class=job.work_class,
+                        private_attributes={
+                            "queue.job_id": job.id,
+                            "queue.installation_id": job.installation_id,
+                            "queue.repository": job.repository_full_name,
+                            "queue.pull_number": job.pull_number,
+                            "queue.generation": job.generation,
+                        },
+                        operation=partial(self._process, job, owner),
+                    )
                     continue
             except asyncio.CancelledError:
                 raise
@@ -2200,7 +2319,18 @@ class Worker:
                         head_sha=job.head_sha_hint,
                         generation=job.generation,
                     )
-                    await self._process(job, owner)
+                    await self._run_work_attempt(
+                        kind="evaluation",
+                        work_class=job.work_class,
+                        private_attributes={
+                            "queue.job_id": job.id,
+                            "queue.installation_id": job.installation_id,
+                            "queue.repository": job.repository_full_name,
+                            "queue.pull_number": job.pull_number,
+                            "queue.generation": job.generation,
+                        },
+                        operation=partial(self._process, job, owner),
+                    )
                     continue
             except asyncio.CancelledError:
                 raise
@@ -2226,7 +2356,17 @@ class Worker:
                         scope=job.repository_full_name or "installation",
                         generation=job.generation,
                     )
-                    await self._process_authority(job, owner)
+                    await self._run_work_attempt(
+                        kind="authority",
+                        work_class="authority",
+                        private_attributes={
+                            "queue.authority_job_id": job.id,
+                            "queue.installation_id": job.installation_id,
+                            "queue.scope": job.repository_full_name or "installation",
+                            "queue.generation": job.generation,
+                        },
+                        operation=partial(self._process_authority, job, owner),
+                    )
                     continue
             except asyncio.CancelledError:
                 raise
@@ -2305,12 +2445,19 @@ class Reconciler:
     """Periodically enqueue every open pull request to recover missed webhooks."""
 
     def __init__(
-        self, settings: Settings, github: GitHubClient, store: QueueStore, owner: str
+        self,
+        settings: Settings,
+        github: GitHubClient,
+        store: QueueStore,
+        owner: str,
+        *,
+        tracing: Tracing | None = None,
     ) -> None:
         self.settings = settings
         self.github = github
         self.store = store
         self.owner = owner
+        self.tracing = tracing or Tracing(enabled=False)
 
     async def _renew_lease(
         self,
@@ -2567,28 +2714,45 @@ class Reconciler:
 
     async def run_iteration(self, stop: asyncio.Event | None = None) -> None:
         """Run and report one scheduled reconciliation attempt."""
+        started = time.perf_counter()
+        result = "failure"
         try:
-            outcome = await self.reconcile_once(stop)
-        except Exception:
-            RECONCILIATIONS.labels("failure").inc()
-            log.exception("reconciliation_failed")
-            return
-        if outcome is None:
-            return
-        if not outcome.complete:
-            RECONCILIATIONS.labels("partial").inc()
-            log.warning(
-                "reconciliation_partial",
-                pull_requests_queued=outcome.queued,
-                failed_installations=outcome.failed_installations,
-                lease_lost=outcome.lease_lost,
-                stopped=outcome.stopped,
-                deferred=outcome.deferred,
-            )
-            return
-        RECONCILIATIONS.labels("success").inc()
-        RECONCILIATION_LAST_SUCCESS.set_to_current_time()
-        log.info("reconciliation_complete", pull_requests_queued=outcome.queued)
+            with self.tracing.span(
+                "reconciliation.run",
+                attributes={"reconciliation.component": "open_pull_scan"},
+            ) as span:
+                try:
+                    outcome = await self.reconcile_once(stop)
+                except Exception as error:
+                    result = "failure"
+                    self.tracing.mark_error(span, type(error).__name__)
+                    RECONCILIATIONS.labels(result).inc()
+                    log.exception("reconciliation_failed")
+                    return
+                if outcome is None:
+                    result = "not_elected"
+                    return
+                if not outcome.complete:
+                    result = "partial"
+                    RECONCILIATIONS.labels(result).inc()
+                    log.warning(
+                        "reconciliation_partial",
+                        pull_requests_queued=outcome.queued,
+                        failed_installations=outcome.failed_installations,
+                        lease_lost=outcome.lease_lost,
+                        stopped=outcome.stopped,
+                        deferred=outcome.deferred,
+                    )
+                    return
+                result = "success"
+                RECONCILIATIONS.labels(result).inc()
+                RECONCILIATION_LAST_SUCCESS.set_to_current_time()
+                log.info("reconciliation_complete", pull_requests_queued=outcome.queued)
+        finally:
+            # A non-elected replica is intentionally a distinct, low-cost
+            # outcome rather than a failed scan. This finally also preserves
+            # the duration sample when shutdown interrupts an in-flight scan.
+            RECONCILIATION_SECONDS.labels(result).observe(time.perf_counter() - started)
 
     async def run(self, stop: asyncio.Event) -> None:
         """Reconcile immediately and then at the configured interval."""

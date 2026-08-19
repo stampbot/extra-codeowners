@@ -6,6 +6,7 @@ import asyncio
 import json as json_module
 import math
 import re
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -28,6 +29,12 @@ from extra_codeowners.dco import (
     PullRequestSnapshot,
     RepositoryIdentity,
 )
+from extra_codeowners.metrics import (
+    GITHUB_API_REQUEST_SECONDS,
+    GITHUB_API_REQUESTS,
+    GITHUB_RATE_LIMIT_EVENTS,
+)
+from extra_codeowners.tracing import Tracing
 
 MAX_PULL_FILES: Final = 3000
 MAX_PULL_REVIEWS: Final = 1000
@@ -44,6 +51,73 @@ _LINK_PARAMETER_RE = re.compile(
     r""";\s*([!#$%&'*+\-.^_`|~0-9A-Za-z]+)\s*=\s*"""
     r"""(?:"((?:\\.|[^"\\])*)"|([^;,\s]+))\s*"""
 )
+
+
+def _request_operation(method: str, path: str) -> str:
+    """Return a fixed, non-sensitive name for a GitHub API operation.
+
+    Repository names, pull numbers, file paths, and GraphQL arguments are
+    deliberately excluded from trace and metric labels. This narrow taxonomy
+    is enough to identify a slow API family without turning telemetry into an
+    inventory of customer repositories.
+    """
+    if path == "/graphql":
+        return "graphql"
+    if path == "/app":
+        return "app.identity"
+    if path == "/app/installations":
+        return "app.installations"
+    if re.fullmatch(r"/app/installations/\d+/access_tokens", path):
+        return "installation.token"
+    if path == "/installation/repositories":
+        return "installation.repositories"
+    if re.fullmatch(r"/repos/[^/]+/[^/]+/pulls/\d+/files", path):
+        return "pull.files"
+    if re.fullmatch(r"/repos/[^/]+/[^/]+/pulls/\d+/reviews", path):
+        return "pull.reviews"
+    if re.fullmatch(r"/repos/[^/]+/[^/]+/pulls/\d+", path):
+        return "pull.get"
+    if re.fullmatch(r"/repos/[^/]+/[^/]+/pulls/\d+/commits", path):
+        return "pull.commits"
+    if re.fullmatch(r"/repos/[^/]+/[^/]+/commits/[^/]+/pulls", path):
+        return "commit.pulls"
+    if re.fullmatch(r"/repos/[^/]+/[^/]+/commits/[^/]+/check-runs", path):
+        return "check.list"
+    if re.fullmatch(r"/repos/[^/]+/[^/]+/check-runs/\d+", path):
+        return "check.update"
+    if re.fullmatch(r"/repos/[^/]+/[^/]+/check-runs", path):
+        return "check.create"
+    if re.fullmatch(r"/repos/[^/]+/[^/]+/contents/.+", path):
+        return "content.get"
+    if re.fullmatch(r"/repos/[^/]+/[^/]+/codeowners/errors", path):
+        return "codeowners.errors"
+    if re.fullmatch(r"/repos/[^/]+/[^/]+/collaborators/[^/]+/permission", path):
+        return "repository.permission"
+    if re.fullmatch(r"/orgs/[^/]+/teams/[^/]+/memberships/[^/]+", path):
+        return "team.membership"
+    if re.fullmatch(r"/orgs/[^/]+/teams/[^/]+/repos/[^/]+/[^/]+", path):
+        return "team.repository"
+    if re.fullmatch(r"/orgs/[^/]+/teams/[^/]+", path):
+        return "team.get"
+    if re.fullmatch(r"/users/[^/]+", path):
+        return "user.get"
+    return f"{method.lower()}.other"
+
+
+def _request_outcome(response: httpx.Response, *, allow_not_found: bool) -> str:
+    """Classify one final HTTP response with bounded metric cardinality."""
+    if response.is_success:
+        return "success"
+    if allow_not_found and response.status_code == 404:
+        return "not_found"
+    if response.status_code == 429:
+        return "rate_limited"
+    if 400 <= response.status_code < 500:
+        return "client_error"
+    if 500 <= response.status_code < 600:
+        return "server_error"
+    return "unexpected_status"
+
 
 _DCO_PULL_COMMITS_QUERY: Final = """\
 query DcoPullCommits(
@@ -246,6 +320,7 @@ class GitHubClient:
         timeout_seconds: float = 20,
         max_in_flight_requests: int = 8,
         transport: httpx.AsyncBaseTransport | None = None,
+        tracing: Tracing | None = None,
     ) -> None:
         self.app_id = app_id
         if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
@@ -258,6 +333,7 @@ class GitHubClient:
             raise ValueError("max_in_flight_requests must be an integer from 1 through 64")
         self._request_deadline_seconds = timeout_seconds
         self._request_semaphore = asyncio.Semaphore(max_in_flight_requests)
+        self._tracing = tracing or Tracing(enabled=False)
         try:
             loaded_key = serialization.load_pem_private_key(private_key.encode(), password=None)
         except (TypeError, ValueError) as error:
@@ -383,6 +459,7 @@ class GitHubClient:
             params=params,
             json=json,
             headers=headers,
+            allow_not_found=allow_not_found,
             stop=stop,
         )
         if allow_not_found and response.status_code == 404:
@@ -414,62 +491,111 @@ class GitHubClient:
         params: dict[str, Any] | None = None,
         json: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,
+        allow_not_found: bool = False,
         stop: asyncio.Event | None = None,
     ) -> httpx.Response:
         """Send a public, App, or installation request with bounded retries."""
         attempts = 1 if app_authenticated or unauthenticated else 2
+        authentication = (
+            "public" if unauthenticated else "app" if app_authenticated else "installation"
+        )
+        operation = _request_operation(method, path)
+        outcome = "exception"
+        started = time.perf_counter()
         try:
-            # Include both authentication attempts in one deadline. A 401
-            # retry must use only the time left from the original operation,
-            # rather than receiving a second full wall-clock budget.
-            async with asyncio.timeout(self._request_deadline_seconds):
-                for attempt in range(attempts):
-                    self._raise_if_stopped(stop)
-                    token: str | None = None
-                    request_headers = headers or {}
-                    if unauthenticated:
-                        pass
-                    elif app_authenticated:
-                        token = self._app_jwt()
-                        request_headers = {**request_headers, "Authorization": f"Bearer {token}"}
-                    else:
-                        assert installation_id is not None
-                        token = await self._installation_token(installation_id, stop=stop)
-                        request_headers = {**request_headers, "Authorization": f"Bearer {token}"}
-                    self._raise_if_stopped(stop)
-                    async with self._request_semaphore:
-                        response = await self._http.request(
-                            method,
-                            path,
-                            params=params,
-                            json=json,
-                            headers=request_headers,
-                        )
-                    self._raise_if_stopped(stop)
-                    if (
-                        response.status_code != 401
-                        or app_authenticated
-                        or unauthenticated
-                        or attempt > 0
-                    ):
+            with self._tracing.span(
+                "github.request",
+                attributes={
+                    "github.operation": operation,
+                    "github.authentication": authentication,
+                    "http.request.method": method,
+                },
+                private_attributes={"github.path": path},
+            ) as span:
+                # Include both authentication attempts in one deadline. A 401
+                # retry must use only the time left from the original operation,
+                # rather than receiving a second full wall-clock budget.
+                async with asyncio.timeout(self._request_deadline_seconds):
+                    for attempt in range(attempts):
+                        self._raise_if_stopped(stop)
+                        token: str | None = None
+                        request_headers = headers or {}
+                        if unauthenticated:
+                            pass
+                        elif app_authenticated:
+                            token = self._app_jwt()
+                            request_headers = {
+                                **request_headers,
+                                "Authorization": f"Bearer {token}",
+                            }
+                        else:
+                            assert installation_id is not None
+                            token = await self._installation_token(installation_id, stop=stop)
+                            request_headers = {
+                                **request_headers,
+                                "Authorization": f"Bearer {token}",
+                            }
+                        self._raise_if_stopped(stop)
+                        async with self._request_semaphore:
+                            response = await self._http.request(
+                                method,
+                                path,
+                                params=params,
+                                json=json,
+                                headers=request_headers,
+                            )
+                        self._raise_if_stopped(stop)
+                        if (
+                            response.status_code == 401
+                            and not app_authenticated
+                            and not unauthenticated
+                            and attempt == 0
+                        ):
+                            assert installation_id is not None
+                            assert token is not None
+                            cached = self._tokens.get(installation_id)
+                            if cached is not None and cached.value == token:
+                                self._tokens.pop(installation_id, None)
+                            continue
+                        outcome = _request_outcome(response, allow_not_found=allow_not_found)
+                        span.set_attribute("http.response.status_code", response.status_code)
+                        span.set_attribute("github.retry_count", attempt)
+                        if outcome not in {"success", "not_found"}:
+                            # `_api_response` is also used directly by paginated
+                            # callers, so the final non-success response must
+                            # become an error span before a later helper raises.
+                            self._tracing.mark_error(span, f"HTTP {response.status_code}")
                         return response
-                    assert installation_id is not None
-                    assert token is not None
-                    cached = self._tokens.get(installation_id)
-                    if cached is not None and cached.value == token:
-                        self._tokens.pop(installation_id, None)
         except TimeoutError as error:
+            outcome = "timeout"
             if stop is not None and stop.is_set():
+                outcome = "stopped"
                 raise GitHubOperationStoppedError(
                     "GitHub operation stopped during a request"
                 ) from error
             raise GitHubError("GitHub API request exceeded its wall-clock deadline") from error
         except httpx.TimeoutException as error:
+            outcome = "timeout"
             if stop is not None and stop.is_set():
+                outcome = "stopped"
                 raise GitHubOperationStoppedError(
                     "GitHub operation stopped during a request"
                 ) from error
             raise
+        except httpx.HTTPError:
+            outcome = "transport_error"
+            raise
+        except GitHubOperationStoppedError:
+            outcome = "stopped"
+            raise
+        except Exception:
+            outcome = "exception"
+            raise
+        finally:
+            GITHUB_API_REQUESTS.labels(operation, authentication, outcome).inc()
+            GITHUB_API_REQUEST_SECONDS.labels(operation, authentication, outcome).observe(
+                time.perf_counter() - started
+            )
         raise AssertionError("unreachable")  # pragma: no cover
 
     @asynccontextmanager
@@ -482,6 +608,7 @@ class GitHubClient:
         params: dict[str, Any] | None = None,
         json: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,
+        allow_not_found: bool = False,
     ) -> AsyncIterator[httpx.Response]:
         """Return an open streamed response, refreshing a rejected token once.
 
@@ -491,35 +618,71 @@ class GitHubClient:
         limit. A rejected response is closed before its cached token is
         evicted and retried.
         """
+        operation = _request_operation(method, path)
+        outcome = "exception"
+        started = time.perf_counter()
         try:
-            # The deadline covers both authentication attempts, token
-            # acquisition, permit acquisition, opening the stream, and body
-            # consumption. A rejected token cannot grant a retry a second
-            # full operation budget.
-            async with asyncio.timeout(self._request_deadline_seconds):
-                for attempt in range(2):
-                    token = await self._installation_token(installation_id)
-                    request = self._http.build_request(
-                        method,
-                        path,
-                        params=params,
-                        json=json,
-                        headers={**(headers or {}), "Authorization": f"Bearer {token}"},
-                    )
-                    async with self._request_semaphore:
-                        response = await self._http.send(request, stream=True)
-                        if response.status_code != 401 or attempt > 0:
+            with self._tracing.span(
+                "github.stream_request",
+                attributes={
+                    "github.operation": operation,
+                    "github.authentication": "installation",
+                    "http.request.method": method,
+                },
+                private_attributes={"github.path": path},
+            ) as span:
+                # The deadline covers both authentication attempts, token
+                # acquisition, permit acquisition, opening the stream, and body
+                # consumption. A rejected token cannot grant a retry a second
+                # full operation budget.
+                async with asyncio.timeout(self._request_deadline_seconds):
+                    for attempt in range(2):
+                        token = await self._installation_token(installation_id)
+                        request = self._http.build_request(
+                            method,
+                            path,
+                            params=params,
+                            json=json,
+                            headers={**(headers or {}), "Authorization": f"Bearer {token}"},
+                        )
+                        async with self._request_semaphore:
+                            response = await self._http.send(request, stream=True)
+                            if response.status_code == 401 and attempt == 0:
+                                await response.aclose()
+                                cached = self._tokens.get(installation_id)
+                                if cached is not None and cached.value == token:
+                                    self._tokens.pop(installation_id, None)
+                                continue
+                            outcome = _request_outcome(
+                                response,
+                                allow_not_found=allow_not_found,
+                            )
+                            span.set_attribute("http.response.status_code", response.status_code)
+                            span.set_attribute("github.retry_count", attempt)
+                            if outcome not in {"success", "not_found"}:
+                                self._tracing.mark_error(span, f"HTTP {response.status_code}")
                             try:
                                 yield response
                             finally:
                                 await response.aclose()
                             return
-                        await response.aclose()
-                        cached = self._tokens.get(installation_id)
-                        if cached is not None and cached.value == token:
-                            self._tokens.pop(installation_id, None)
         except TimeoutError as error:
+            outcome = "timeout"
             raise GitHubError("GitHub API request exceeded its wall-clock deadline") from error
+        except httpx.TimeoutException:
+            outcome = "timeout"
+            raise
+        except httpx.HTTPError:
+            outcome = "transport_error"
+            raise
+        except Exception:
+            outcome = "exception"
+            raise
+        finally:
+            GITHUB_API_REQUESTS.labels(operation, "installation", outcome).inc()
+            GITHUB_API_REQUEST_SECONDS.labels(operation, "installation", outcome).observe(
+                time.perf_counter() - started
+            )
         raise AssertionError("unreachable")  # pragma: no cover
 
     @staticmethod
@@ -610,17 +773,19 @@ class GitHubClient:
         message = cls._response_message(response)
         retry_after = cls._retry_delay(response, message)
         if retry_after is not None:
+            global_scope = (
+                app_authenticated
+                or response.status_code == 429
+                or response.headers.get("retry-after") is not None
+            )
+            GITHUB_RATE_LIMIT_EVENTS.labels("global" if global_scope else "installation").inc()
             raise GitHubRateLimitError(
                 response.status_code,
                 method,
                 path,
                 message,
                 retry_after,
-                global_scope=(
-                    app_authenticated
-                    or response.status_code == 429
-                    or response.headers.get("retry-after") is not None
-                ),
+                global_scope=global_scope,
             )
         raise GitHubAPIError(response.status_code, method, path, message)
 
@@ -956,6 +1121,9 @@ class GitHubClient:
                 retry_after=response.retry_after,
                 rate_limit_remaining=response.rate_limit_remaining,
             ):
+                GITHUB_RATE_LIMIT_EVENTS.labels(
+                    "global" if response.retry_after is not None else "installation"
+                ).inc()
                 retry_delay = self._bounded_retry_delay(
                     response.retry_after,
                     response.rate_limit_reset,
@@ -1275,6 +1443,7 @@ class GitHubClient:
             headers={
                 "Accept": "application/vnd.github.raw+json",
             },
+            allow_not_found=True,
         ) as response:
             if response.status_code == 404:
                 return None

@@ -28,8 +28,11 @@ pull-request activity.
 | `extra_codeowners_shared_head_invalidations_total{result="failed"}` | No unexplained increase |
 | `extra_codeowners_dead_jobs` | `0` |
 | `extra_codeowners_webhook_failures_total` | No unexplained increase |
+| `extra_codeowners_github_api_request_seconds` | Its p95 stays near the provider and network baseline; compare it with worker-attempt time before raising worker concurrency |
+| `extra_codeowners_github_rate_limit_events_total` | No sustained increase; a rate limit opens shared backpressure for the affected installation or the App |
 | `extra_codeowners_reconciliations_total{result!="success"}` | No unexplained increase |
 | `extra_codeowners_reconciliation_last_success_timestamp_seconds` | A complete run on at least one replica falls within the reconciliation objective |
+| `extra_codeowners_trace_exports_total{outcome="failure"}` | `0`; otherwise traces cannot be used as incident evidence |
 | `extra_codeowners_insecure_changes_enabled` | `0` unless an approved exception is active |
 
 Also watch evaluation latency and failures, PostgreSQL latency, the durable
@@ -43,6 +46,45 @@ replicas. Structured `evaluation_started` and `evaluation_completed` logs carry
 the durable job ID, generation, repository, pull number, head, work class, and
 delivery ID when one exists; use those fields to follow one delayed check
 without turning pull requests into Prometheus labels.
+
+## Trace a slow check
+
+Metrics establish which stage is slow; a sampled trace explains the work in
+that stage. Enable OTLP tracing only after choosing a telemetry backend with
+access control and retention suitable for repository metadata. Keep private
+metadata disabled for the normal baseline:
+
+```yaml
+extraEnv:
+  - name: EXTRA_CODEOWNERS_TRACING_ENABLED
+    value: "true"
+  - name: EXTRA_CODEOWNERS_TRACING_OTLP_ENDPOINT
+    value: http://opentelemetry-collector.observability.svc:4318/v1/traces
+  - name: EXTRA_CODEOWNERS_TRACING_SAMPLE_RATIO
+    value: "0.1"
+  - name: EXTRA_CODEOWNERS_TRACING_INCLUDE_PRIVATE_METADATA
+    value: "false"
+```
+
+The service creates root spans for webhook acceptance, reconciliation, and
+each leased worker attempt. GitHub calls are child spans with a fixed operation
+name such as `pull.get`, `content.get`, or `check.update`. A sampled span adds
+`trace_id` and `span_id` to structured logs emitted inside it. It never trusts
+the webhook's trace headers.
+
+For a short incident window, raise the sample ratio to `1`. Do not turn on
+private metadata casually: it adds repositories, pull numbers, delivery IDs,
+commit IDs, and API paths to Tempo. It still never exports secrets, request
+bodies, authorization headers, or tokens.
+
+Use this order when a check is late:
+
+1. Check `queue_wait_seconds` and oldest interactive queue age. A high value means the job waited before evaluation.
+2. Check `work_attempt_seconds`. If it is also high, open a sampled worker trace.
+3. Compare the child GitHub spans and `github_api_request_seconds`. Slow API spans point to GitHub or the network; ordinary API spans point to policy work, a database guard, or a local resource limit.
+
+Do not use a trace as the only source of truth. Sampling intentionally omits
+some work, and a failed exporter does not affect the approval decision.
 
 Read runtime identity through an operator-only route after every rollout.
 Official images report their verified source commit in `build_revision`;

@@ -32,6 +32,10 @@ def test_defaults_keep_insecure_escape_hatch_disabled() -> None:
     assert settings.github_identity_probe_interval_seconds == 30
     assert settings.github_identity_freshness_seconds == 90
     assert settings.github_max_in_flight_requests == 8
+    assert settings.tracing_enabled is False
+    assert settings.tracing_otlp_endpoint is None
+    assert settings.tracing_sample_ratio == 0.1
+    assert settings.tracing_include_private_metadata is False
     assert settings.authority_fanout_concurrency == 2
     assert settings.is_organization_config_repository("example/.github") is True
     assert settings.is_organization_config_repository("example/project") is False
@@ -88,6 +92,24 @@ def test_github_api_url_allows_a_github_enterprise_api_path() -> None:
     )
 
     assert str(settings.github_api_url) == "https://github.example.test/api/v3"
+
+
+@pytest.mark.parametrize(
+    "tracing_otlp_endpoint",
+    [
+        "https://user:password@tempo.example.test/v1/traces",
+        "https://tempo.example.test/v1/traces?token=secret",
+        "https://tempo.example.test/v1/traces#secret",
+    ],
+)
+def test_tracing_endpoint_rejects_secret_bearing_components(tracing_otlp_endpoint: str) -> None:
+    with pytest.raises(ValidationError, match="tracing_otlp_endpoint must not contain credentials"):
+        Settings(_env_file=None, tracing_otlp_endpoint=tracing_otlp_endpoint)
+
+
+def test_tracing_requires_an_endpoint_when_enabled() -> None:
+    with pytest.raises(ValidationError, match="tracing_otlp_endpoint is required"):
+        Settings(_env_file=None, tracing_enabled=True)
 
 
 def test_secret_files_are_loaded_without_model_exposure(tmp_path: Path) -> None:
