@@ -17,5 +17,7 @@ spec:
       path: /metrics
       interval: {{ .Values.monitoring.serviceMonitor.interval | quote }}
       scrapeTimeout: {{ .Values.monitoring.serviceMonitor.scrapeTimeout | quote }}
+      {{- if ne .Values.monitoring.serviceMonitor.sampleLimit nil }}
       sampleLimit: {{ .Values.monitoring.serviceMonitor.sampleLimit }}
+      {{- end }}
 {{- end }}

@@ -831,7 +831,7 @@ descriptions.
 | `monitoring.serviceMonitor.labels` | string map | `{}` | Extra labels used by a Prometheus instance to select the ServiceMonitor. |
 | `monitoring.serviceMonitor.interval` | duration | `30s` | Prometheus scrape interval. |
 | `monitoring.serviceMonitor.scrapeTimeout` | duration | `10s` | Per-scrape timeout. |
-| `monitoring.serviceMonitor.sampleLimit` | integer | `10000` | Maximum samples from one scrape; 0 leaves the Prometheus default. |
+| `monitoring.serviceMonitor.sampleLimit` | integer or null | `null` | Optional maximum samples from one scrape. Set it only when the installed ServiceMonitor CRD supports `sampleLimit`; `0` leaves the Prometheus default. |
 | `monitoring.prometheusRule.enabled` | boolean | `false` | Creates interactive-queue and reconciliation-staleness alerts. |
 | `monitoring.prometheusRule.labels` | string map | `severity: warning` | Labels used to select the rule; `severity` is also applied to both alerts. |
 | `monitoring.prometheusRule.interactiveQueueStalledSeconds` | integer | `60` | Alert threshold for the oldest interactive evaluation or invalidation. |

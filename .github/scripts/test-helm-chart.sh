@@ -23,6 +23,9 @@ helm lint charts/extra-codeowners
 
 helm template extra-codeowners charts/extra-codeowners >"${output}/default.yaml"
 helm template extra-codeowners charts/extra-codeowners \
+  --set monitoring.serviceMonitor.enabled=true \
+  >"${output}/service-monitor-default.yaml"
+helm template extra-codeowners charts/extra-codeowners \
   --set existingSecret=extra-codeowners-runtime \
   --set ingress.enabled=true \
   --set ingress.className=nginx \
@@ -32,6 +35,7 @@ helm template extra-codeowners charts/extra-codeowners \
   --set allowInsecureChanges=true \
   --set monitoring.serviceMonitor.enabled=true \
   --set-string 'monitoring.serviceMonitor.labels.release=kube-prometheus-stack' \
+  --set monitoring.serviceMonitor.sampleLimit=10000 \
   --set monitoring.prometheusRule.enabled=true \
   --set monitoring.dashboard.enabled=true \
   --set-string 'deploymentAnnotations.reloader\.stakater\.com/auto=true' \
@@ -67,6 +71,12 @@ helm template extra-codeowners charts/extra-codeowners \
 
 grep -Fq 'reloader.stakater.com/auto: "true"' "${output}/optional.yaml"
 grep -Fq 'kind: ServiceMonitor' "${output}/optional.yaml"
+grep -Fq 'sampleLimit: 10000' "${output}/optional.yaml"
+grep -Fq 'kind: ServiceMonitor' "${output}/service-monitor-default.yaml"
+if grep -Fq 'sampleLimit:' "${output}/service-monitor-default.yaml"; then
+  printf 'Default ServiceMonitor must omit unsupported sampleLimit.\n' >&2
+  exit 1
+fi
 grep -Fq 'kind: PrometheusRule' "${output}/optional.yaml"
 grep -Fq 'name: extra-codeowners-dashboard' "${output}/optional.yaml"
 grep -Fq 'grafana_dashboard: "1"' "${output}/optional.yaml"
