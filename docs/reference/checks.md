@@ -31,7 +31,8 @@ and ordinary pull-request evaluation:
    updates it by ID to `in_progress`. Exact-head invalidation never creates a
    check.
 3. It fetches current state for every pull-request candidate GitHub reports and
-   queues each one that remains open on the commit.
+   queues each one that remains open on the commit. A closed-pull evaluation
+   finishes the existing check instead of leaving it in progress.
 4. It marks that exact generation invalidated only after the reset and fan-out
    finish. A lost lease or newer generation leaves the work pending.
 
@@ -41,7 +42,10 @@ in an enrolled repository:
 1. Fetches the pull request and records its current base and head revisions.
    The authoritative `base.repo.full_name` must match the queued repository. A
    mismatch is discarded before any policy read or Check Run write, so a
-   delayed old-name delivery cannot revive work after a rename or transfer.
+   delayed old-name delivery cannot revive work after a rename or transfer. If
+   the pull request is closed and no open pull request shares the queued head,
+   the service finishes its existing managed Check Run as `cancelled` by ID. It
+   never creates a Check Run for a closed pull request.
 2. Creates or updates the App's named Check Run on the current pull-request
    head as `in_progress`. This revokes an earlier success before mutable
    approval evidence is collected. A repository with no policy and no existing
@@ -57,8 +61,9 @@ in an enrolled repository:
 8. Accepts a qualifying human's latest effective approval only when that review targets the exact current head.
 9. Otherwise, considers application approvals for the current head. The review actor and independently fetched App metadata must match organization enrollment. The delegation must match the path and owner set, and its label restrictions must all pass.
 10. Rejects application substitution for every effective non-delegable path.
-11. Fetches the pull request again before publication. A closed pull request
-    stops here. If the pull request remains open but its base ref, base commit,
+11. Fetches the pull request again before publication. If it closed during the
+    evaluation, the service follows the same terminal-cancellation rule as in
+    step 1. If the pull request remains open but its base ref, base commit,
     head commit, changed-file count, or label set changed, the worker discards
     the result. It advances the current head's shared generation and queues
     another evaluation in the same transaction.

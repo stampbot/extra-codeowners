@@ -1893,6 +1893,53 @@ async def test_existing_check_id_and_reset_never_post_a_new_check(private_key: s
 
 
 @pytest.mark.asyncio
+async def test_complete_known_check_never_posts_a_new_check(private_key: str) -> None:
+    methods: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/access_tokens"):
+            return httpx.Response(201, json=token_response())
+        methods.append(request.method)
+        assert request.method == "PATCH"
+        assert request.url.path.endswith("/check-runs/99")
+        payload = json.loads(request.content)
+        assert payload["name"] == "check"
+        assert payload["status"] == "completed"
+        assert payload["conclusion"] == "cancelled"
+        assert "head_sha" not in payload
+        return httpx.Response(200, json={"id": 99})
+
+    client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
+    await client.complete_check_run(
+        2,
+        "example/project",
+        99,
+        "check",
+        conclusion="cancelled",
+        title="Pull request closed",
+        summary="The pull request closed before the check finished.",
+    )
+    assert methods == ["PATCH"]
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_complete_check_rejects_unsupported_conclusion(private_key: str) -> None:
+    client = GitHubClient(1, private_key, transport=httpx.MockTransport(unexpected_request))
+    with pytest.raises(ValueError, match="unsupported check-run conclusion"):
+        await client.complete_check_run(
+            2,
+            "example/project",
+            99,
+            "check",
+            conclusion="unsupported",
+            title="title",
+            summary="summary",
+        )
+    await client.close()
+
+
+@pytest.mark.asyncio
 async def test_reset_check_rejects_changed_response_id(private_key: str) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path.endswith("/access_tokens"):

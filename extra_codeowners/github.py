@@ -1484,6 +1484,59 @@ class GitHubClient:
         if candidate != check_run_id:
             raise GitHubError("check-run response changed the requested check ID")
 
+    async def complete_check_run(
+        self,
+        installation_id: int,
+        repository: str,
+        check_run_id: int,
+        check_name: str,
+        *,
+        conclusion: str,
+        title: str,
+        summary: str,
+        text: str = "",
+        details_url: str | None = None,
+        external_id: str | None = None,
+    ) -> None:
+        """PATCH one known App check to a terminal state without a POST fallback."""
+        if conclusion not in {
+            "action_required",
+            "cancelled",
+            "failure",
+            "neutral",
+            "skipped",
+            "stale",
+            "success",
+            "timed_out",
+        }:
+            raise ValueError("unsupported check-run conclusion")
+        payload: dict[str, Any] = {
+            "name": check_name,
+            "status": "completed",
+            "conclusion": conclusion,
+            "completed_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+            "output": {
+                "title": title[:255],
+                "summary": summary[:65535],
+                "text": text[:65535],
+            },
+        }
+        if details_url is not None:
+            payload["details_url"] = details_url
+        if external_id is not None:
+            payload["external_id"] = external_id[:255]
+        result = await self._request(
+            "PATCH",
+            f"/repos/{repository}/check-runs/{check_run_id}",
+            installation_id=installation_id,
+            json=payload,
+        )
+        candidate = result.get("id")
+        if not isinstance(candidate, int) or isinstance(candidate, bool):
+            raise GitHubError("check-run response omitted its integer ID")
+        if candidate != check_run_id:
+            raise GitHubError("check-run response changed the requested check ID")
+
     async def upsert_check_run(
         self,
         installation_id: int,
