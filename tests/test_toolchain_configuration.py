@@ -259,7 +259,7 @@ def test_helm_chart_retains_hardening_without_image_specific_loader_paths() -> N
             "labels": {},
             "interval": "30s",
             "scrapeTimeout": "10s",
-            "sampleLimit": 10000,
+            "sampleLimit": None,
         },
         "prometheusRule": {
             "enabled": False,
@@ -307,8 +307,14 @@ def test_helm_chart_retains_hardening_without_image_specific_loader_paths() -> N
     monitoring_schema = schema["properties"]["monitoring"]
     assert "monitoring" in schema["required"]
     assert monitoring_schema["required"] == ["serviceMonitor", "prometheusRule", "dashboard"]
+    assert monitoring_schema["properties"]["serviceMonitor"]["required"] == [
+        "enabled",
+        "labels",
+        "interval",
+        "scrapeTimeout",
+    ]
     assert monitoring_schema["properties"]["serviceMonitor"]["properties"]["sampleLimit"] == {
-        "type": "integer",
+        "type": ["integer", "null"],
         "minimum": 0,
         "maximum": 100000,
     }
@@ -381,6 +387,7 @@ def test_helm_chart_retains_hardening_without_image_specific_loader_paths() -> N
     assert ".Values.monitoring.serviceMonitor.enabled" in service_monitor
     assert "path: /metrics" in service_monitor
     assert "port: http" in service_monitor
+    assert "if ne .Values.monitoring.serviceMonitor.sampleLimit nil" in service_monitor
     prometheus_rule = (
         ROOT / "charts" / "extra-codeowners" / "templates" / "prometheusrule.yaml"
     ).read_text()

@@ -478,8 +478,7 @@
             "enabled",
             "labels",
             "interval",
-            "scrapeTimeout",
-            "sampleLimit"
+            "scrapeTimeout"
           ],
           "properties": {
             "enabled": {
@@ -497,7 +496,10 @@
               "minLength": 1
             },
             "sampleLimit": {
-              "type": "integer",
+              "type": [
+                "integer",
+                "null"
+              ],
               "minimum": 0,
               "maximum": 100000
             }

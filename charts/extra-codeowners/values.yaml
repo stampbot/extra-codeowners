@@ -163,7 +163,9 @@ monitoring:
     labels: {}
     interval: 30s
     scrapeTimeout: 10s
-    sampleLimit: 10000
+    # sampleLimit is emitted only when set. Leave it null for Prometheus
+    # Operator versions whose ServiceMonitor CRD does not support this field.
+    sampleLimit: null
   prometheusRule:
     enabled: false
     labels:
