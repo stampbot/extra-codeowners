@@ -54,31 +54,35 @@ in an enrolled repository:
    generation. The captured shared generation must be current and its
    exact-head invalidation must have finished. A newer direct trigger on any
    pull request using that head leaves the check blocking.
-4. Loads and validates repository policy. When policy is enabled, it also loads organization policy and standard `CODEOWNERS` from their defined revisions. Disabled policy finishes with a diagnostic failure instead of collecting approval evidence.
-5. For enabled policy, checks the reported changed-file count, then paginates GitHub's pull-files API. API or transport failures leave the check blocking while the durable job retries. A count of 3,000 or more produces a diagnostic failure because GitHub cannot prove that the list is complete.
-6. Evaluates both the old and new path of every rename.
-7. Applies last-match-wins `CODEOWNERS` precedence and groups changed paths by their effective owner set. Every distinct owner set is a separate requirement.
-8. Accepts a qualifying human's latest effective approval only when that review targets the exact current head.
-9. Otherwise, considers application approvals for the current head. The review actor and independently fetched App metadata must match organization enrollment. The delegation must match the path and owner set, and its label restrictions must all pass.
-10. Rejects application substitution for every effective non-delegable path.
-11. Fetches the pull request again before publication. If it closed during the
+4. For enabled policy, checks the reported changed-file count. A count of 3,000 or more produces a diagnostic failure because GitHub cannot prove that the list is complete.
+
+5. Loads and validates repository policy. When policy is enabled, it first confirms that the configured organization-policy repository belongs to the current GitHub App installation. If that repository is missing or outside a selected-repositories installation, the check finishes with `organization_policy_repository_unavailable`.
+
+   An available repository with no policy file remains a supported empty policy. If the policy request returns no file, the service checks installation membership again before accepting that state. It then loads organization policy and standard `CODEOWNERS` from their defined revisions. Disabled policy finishes with a diagnostic failure instead of collecting approval evidence.
+6. Paginates GitHub's pull-files API. API or transport failures leave the check blocking while the durable job retries.
+7. Evaluates both the old and new path of every rename.
+8. Applies last-match-wins `CODEOWNERS` precedence and groups changed paths by their effective owner set. Every distinct owner set is a separate requirement.
+9. Accepts a qualifying human's latest effective approval only when that review targets the exact current head.
+10. Otherwise, considers application approvals for the current head. The review actor and independently fetched App metadata must match organization enrollment. The delegation must match the path and owner set, and its label restrictions must all pass.
+11. Rejects application substitution for every effective non-delegable path.
+12. Fetches the pull request again before publication. If it closed during the
     evaluation, the service follows the same terminal-cancellation rule as in
     step 1. If the pull request remains open but its base ref, base commit,
     head commit, changed-file count, or label set changed, the worker discards
     the result. It advances the current head's shared generation and queues
     another evaluation in the same transaction.
-12. Under the publication guards, rechecks the pull-request generation, the
+13. Under the publication guards, rechecks the pull-request generation, the
     shared-head generation, its completed exact-head invalidation, and the
     installation authority epoch stored when the row was enqueued. It also
     refuses to finish while relevant authority fan-out is pending, including
     during retry backoff.
-13. Before publishing success, confirms that the head belongs to exactly this one open pull request. A shared head produces failure because GitHub Check Runs belong to commits, not individual pull requests.
-14. Rechecks the evaluation claim immediately before the completed Check Run
+14. Before publishing success, confirms that the head belongs to exactly this one open pull request. A shared head produces failure because GitHub Check Runs belong to commits, not individual pull requests.
+15. Rechecks the evaluation claim immediately before the completed Check Run
     write. It treats an exception or cancellation during that write as an
     uncertain outcome because GitHub may already have applied it. The service
     attempts a shielded reset to `in_progress` before releasing the head writer
     guard, then preserves the original failure.
-15. Checks the pull-request claim, shared-head generation, and completed
+16. Checks the pull-request claim, shared-head generation, and completed
     invalidation again after a completed write returns. A lost claim, changed
     generation, database error, or task cancellation also triggers the
     shielded reset. Database errors remain pending for retry.

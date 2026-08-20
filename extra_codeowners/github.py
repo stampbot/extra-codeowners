@@ -46,6 +46,11 @@ MAX_DCO_DETAIL_CONCURRENCY: Final = 2
 MAX_JSON_RESPONSE_DEPTH: Final = 64
 MAX_CONFIG_BYTES: Final = 1_000_000
 MAX_CODEOWNERS_BYTES: Final = 3 * 1024 * 1024
+# Repository-installation membership is an App-authenticated lookup, so it
+# consumes the App-wide quota rather than an installation-specific budget.
+# Bound a missed lifecycle-delivery repair window without putting that lookup
+# on every enabled pull-request evaluation.
+REPOSITORY_INSTALLATION_MEMBERSHIP_CACHE_TTL: Final = timedelta(minutes=15)
 
 _REPOSITORY_FULL_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 _LINK_PARAMETER_RE = re.compile(
@@ -78,6 +83,8 @@ def _request_operation(method: str, path: str) -> str:
         return "installation.token"
     if path == "/installation/repositories":
         return "installation.repositories"
+    if re.fullmatch(r"/repos/[^/]+/[^/]+/installation", path):
+        return "repository.installation"
     if re.fullmatch(r"/repos/[^/]+/[^/]+/pulls/\d+/files", path):
         return "pull.files"
     if re.fullmatch(r"/repos/[^/]+/[^/]+/pulls/\d+/reviews", path):
@@ -311,6 +318,15 @@ class InstallationToken:
 
 
 @dataclass(frozen=True, slots=True)
+class _RepositoryInstallationMembership:
+    """One generation-bound policy-repository membership observation."""
+
+    authority_generation: int
+    included: bool
+    checked_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
 class _BoundedJsonResponse:
     """Parsed JSON plus the bounded retry metadata needed after HTTP 200."""
 
@@ -363,6 +379,15 @@ class GitHubClient:
         self._private_key = loaded_key
         self._tokens: dict[int, InstallationToken] = {}
         self._token_locks: dict[int, asyncio.Lock] = {}
+        # ``authority_generation`` comes from the durable PostgreSQL fence on
+        # each claimed job. A repository-selection or identity webhook bumps
+        # that generation, so every replica naturally bypasses its local cache
+        # for the new generation. The short TTL repairs a missed delivery
+        # without charging the App-wide quota for every evaluation.
+        self._repository_installation_memberships: dict[
+            tuple[int, str], _RepositoryInstallationMembership
+        ] = {}
+        self._repository_installation_membership_locks: dict[tuple[int, str], asyncio.Lock] = {}
         self._http = httpx.AsyncClient(
             base_url=api_url.rstrip("/"),
             timeout=httpx.Timeout(timeout_seconds),
@@ -1090,6 +1115,109 @@ class GitHubClient:
         return await self._request(
             "GET", f"/repos/{repository}/pulls/{number}", installation_id=installation_id
         )
+
+    async def installation_includes_repository(
+        self,
+        installation_id: int,
+        repository: str,
+        *,
+        authority_generation: int = 0,
+    ) -> bool:
+        """Return whether a repository is in this installation's current selection.
+
+        A public repository can be readable with an installation token even when it
+        is outside a selected-repositories installation. Query the App's repository
+        installation instead, then bind its returned ID to the current installation.
+
+        The App-authenticated endpoint uses one App-wide rate-limit budget. Cache a
+        result by the caller's durable authority generation: a lifecycle webhook
+        invalidates every replica's old result by advancing that generation, while
+        the TTL bounds recovery if a delivery is missed. A stale claimant can never
+        publish because its authority generation is independently fenced by the
+        queue store.
+        """
+        if (
+            isinstance(authority_generation, bool)
+            or not isinstance(authority_generation, int)
+            or authority_generation < 0
+        ):
+            raise ValueError("authority_generation must be a nonnegative integer")
+        cache_key = (installation_id, repository)
+        now = datetime.now(UTC)
+        cached = self._repository_installation_memberships.get(cache_key)
+        if self._repository_membership_is_fresh(cached, authority_generation, now):
+            assert cached is not None  # Narrowed by _repository_membership_is_fresh.
+            return cached.included
+
+        lock = self._repository_installation_membership_locks.setdefault(cache_key, asyncio.Lock())
+        async with lock:
+            now = datetime.now(UTC)
+            cached = self._repository_installation_memberships.get(cache_key)
+            if self._repository_membership_is_fresh(cached, authority_generation, now):
+                assert cached is not None  # Narrowed by _repository_membership_is_fresh.
+                return cached.included
+            included = await self._lookup_repository_installation_membership(
+                installation_id,
+                repository,
+            )
+            # A stale claimant may finish after a newer generation. Never let
+            # it replace that newer cache entry; it may still use its direct
+            # result, but the durable claim fence prevents publication.
+            cached = self._repository_installation_memberships.get(cache_key)
+            if cached is None or cached.authority_generation <= authority_generation:
+                self._repository_installation_memberships[cache_key] = (
+                    _RepositoryInstallationMembership(
+                        authority_generation=authority_generation,
+                        included=included,
+                        checked_at=now,
+                    )
+                )
+            return included
+
+    @staticmethod
+    def _repository_membership_is_fresh(
+        membership: _RepositoryInstallationMembership | None,
+        authority_generation: int,
+        now: datetime,
+    ) -> bool:
+        """Return whether one cache entry can serve this durable generation."""
+        return bool(
+            membership is not None
+            and membership.authority_generation == authority_generation
+            and membership.checked_at + REPOSITORY_INSTALLATION_MEMBERSHIP_CACHE_TTL > now
+        )
+
+    async def _lookup_repository_installation_membership(
+        self,
+        installation_id: int,
+        repository: str,
+    ) -> bool:
+        """Perform one uncached App-authenticated repository-installation lookup."""
+        path = f"/repos/{repository}/installation"
+        response = await self._api_response(
+            "GET",
+            path,
+            app_authenticated=True,
+            allow_not_found=True,
+        )
+        # GitHub redirects an old repository route after a rename. Do not
+        # follow it: the configured old name is unavailable and accepting the
+        # new route would silently read a policy source the operator did not
+        # configure.
+        if response.status_code in {301, 308, 404}:
+            return False
+        if not response.is_success:
+            self._raise_api_error(response, "GET", path, app_authenticated=True)
+        try:
+            result = response.json()
+        except ValueError as error:
+            raise GitHubError(f"expected object response from GET {path}") from error
+        if not isinstance(result, dict):
+            raise GitHubError(f"expected object response from GET {path}")
+        result_id = result.get("id")
+        if isinstance(result_id, bool) or not isinstance(result_id, int):
+            raise GitHubError("repository installation response omitted its integer ID")
+        return result_id == installation_id
 
     async def get_pull_files(
         self, installation_id: int, repository: str, number: int

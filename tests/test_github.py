@@ -374,6 +374,131 @@ async def test_reads_raw_content_at_exact_ref(private_key: str) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status_code", "payload", "expected"),
+    [
+        (200, {"id": 2}, True),
+        (200, {"id": 3}, False),
+        (404, {"message": "Not Found"}, False),
+    ],
+    ids=["selected", "different-installation", "not-selected"],
+)
+async def test_installation_repository_membership_uses_app_installation_scope(
+    private_key: str,
+    status_code: int,
+    payload: dict[str, int | str],
+    expected: bool,
+) -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        assert request.url.path == "/repos/example/.github/installation"
+        assert request.headers["authorization"].startswith("Bearer ey")
+        return httpx.Response(status_code, json=payload)
+
+    client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
+
+    assert (
+        await client.installation_includes_repository(
+            2,
+            "example/.github",
+            authority_generation=3,
+        )
+        is expected
+    )
+    await client.close()
+
+    assert requests[-1].headers["accept"] == "application/vnd.github+json"
+    assert len(requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_installation_repository_membership_rejects_malformed_response(
+    private_key: str,
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={})
+
+    client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
+
+    with pytest.raises(GitHubError, match="omitted its integer ID"):
+        await client.installation_includes_repository(
+            2,
+            "example/.github",
+            authority_generation=3,
+        )
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_installation_repository_membership_cache_uses_authority_generation(
+    private_key: str,
+) -> None:
+    requests: list[httpx.Request] = []
+    responses = iter(({"id": 2}, {"id": 3}))
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json=next(responses))
+
+    client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
+
+    assert await client.installation_includes_repository(
+        2,
+        "example/.github",
+        authority_generation=7,
+    )
+    assert await client.installation_includes_repository(
+        2,
+        "example/.github",
+        authority_generation=7,
+    )
+    assert not await client.installation_includes_repository(
+        2,
+        "example/.github",
+        authority_generation=8,
+    )
+    await client.close()
+
+    # A durable authority event advances the generation, invalidating the
+    # process-local cache on every replica's next claimed job. The ordinary
+    # hot path makes one App-authenticated request, not one per PR.
+    assert len(requests) == 2
+
+
+@pytest.mark.asyncio
+async def test_installation_repository_membership_redirect_is_unavailable(
+    private_key: str,
+) -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        assert request.url.path == "/repos/example/.github/installation"
+        return httpx.Response(
+            301,
+            headers={"Location": "https://api.github.com/repos/example/policy/installation"},
+        )
+
+    client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
+
+    assert (
+        await client.installation_includes_repository(
+            2,
+            "example/.github",
+            authority_generation=3,
+        )
+        is False
+    )
+    await client.close()
+
+    # Do not follow a renamed route to a policy source the configuration did
+    # not name.
+    assert len(requests) == 1
+
+
+@pytest.mark.asyncio
 async def test_raw_content_enforces_caller_limit(private_key: str) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path.endswith("/access_tokens"):

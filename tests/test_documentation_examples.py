@@ -14,6 +14,8 @@ ROOT = Path(__file__).resolve().parents[1]
 POLICY_EXAMPLES = ROOT / "examples" / "policy"
 BETA_PREFLIGHT_EXAMPLE = ROOT / "examples" / "evaluation-beta" / "preflight.toml"
 FIRST_CHECK_TUTORIAL = ROOT / "docs" / "tutorials" / "development-installation.md"
+CONFIGURATION_GUIDE = ROOT / "docs" / "how-to" / "configure.md"
+TROUBLESHOOT_CHECK = ROOT / "docs" / "how-to" / "troubleshoot-check.md"
 UPGRADE_RUNBOOK = ROOT / "docs" / "how-to" / "upgrade.md"
 CLOUDFLARED_VERSION = "2026.7.2"
 CLOUDFLARED_CONFIG = ROOT / "mise.tutorial.toml"
@@ -166,6 +168,16 @@ def test_first_check_tutorial_uses_the_checksum_pinned_tunnel_config() -> None:
     assert "mise exec -E tutorial --" in tutorial
     assert CLOUDFLARED_VERSION in tutorial
     assert "smee-client" not in tutorial
+
+
+def test_selected_repository_installations_document_the_policy_repository_requirement() -> None:
+    configuration = CONFIGURATION_GUIDE.read_text(encoding="utf-8")
+    troubleshooting = TROUBLESHOOT_CHECK.read_text(encoding="utf-8")
+
+    assert "organization_policy_repository_unavailable" in configuration
+    assert "organization_policy_repository_unavailable" in troubleshooting
+    assert "selected repositories" in configuration
+    assert "Re-evaluate" in troubleshooting
 
 
 def test_relay_probe_accepts_exact_hmac_and_rejects_another_secret(

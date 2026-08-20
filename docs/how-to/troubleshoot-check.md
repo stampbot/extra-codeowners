@@ -67,6 +67,7 @@ Open **Details** beside the check. Match the summary to the next action.
 | The approval names an older commit | Pushes make earlier approval evidence stale. Ask the owner or App to approve the new head. |
 | A path is non-delegable | An App cannot substitute on that path. Ask an eligible human CODEOWNER to approve. |
 | Policy is disabled or missing after enrollment | Restore valid enabled policy, or follow the safe disablement order below. |
+| `organization_policy_repository_unavailable` | Confirm that the configured organization policy repository exists, then add it—`.github` by default—to the checker App's selected repositories. Select **Re-evaluate** on the check afterward. An accessible policy repository may intentionally have no policy file. |
 | Policy or CODEOWNERS is invalid | Validate both policy files and inspect GitHub's CODEOWNERS errors. |
 | Several open pull requests share the head | Give each pull request a distinct commit, then wait for reevaluation. |
 | The changed-file limit was reached | Split or reduce the pull request. Extra CODEOWNERS will not authorize a truncated file list. |
