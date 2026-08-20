@@ -73,6 +73,7 @@ from extra_codeowners.models import (
 )
 from extra_codeowners.policy import BUILTIN_NON_DELEGABLE_PATHS
 from extra_codeowners.settings import Settings
+from extra_codeowners.trace_context import TrustedTraceContext
 from extra_codeowners.tracing import Tracing
 
 CODEOWNERS_LOCATIONS: Final = (
@@ -1682,6 +1683,7 @@ class Worker:
         work_class: str,
         private_attributes: dict[str, int | str],
         operation: Callable[[], Awaitable[str]],
+        producer_trace_context: TrustedTraceContext | None = None,
     ) -> str:
         """Trace and measure one durable attempt without high-cardinality metrics.
 
@@ -1693,8 +1695,14 @@ class Worker:
         outcome = "failed"
         with self.tracing.span(
             f"worker.{kind}",
-            attributes={"queue.kind": kind, "queue.work_class": work_class},
+            attributes={
+                "queue.kind": kind,
+                "queue.work_class": work_class,
+                "queue.producer_trace_linked": producer_trace_context is not None,
+            },
             private_attributes=private_attributes,
+            links=(producer_trace_context,) if producer_trace_context is not None else (),
+            root=True,
         ):
             try:
                 outcome = await operation()
@@ -1861,12 +1869,28 @@ class Worker:
                 )
                 return
 
-    async def _process(self, job: ClaimedJob, owner: str | None = None) -> str:
+    async def _process(
+        self,
+        job: ClaimedJob,
+        owner: str | None = None,
+        slot: int | None = None,
+    ) -> str:
         owner = self.owner if owner is None else owner
         # See _process_shared_head: this histogram represents queue scheduling
         # for each ready attempt rather than accumulated retry backoff.
         QUEUE_WAIT_SECONDS.labels("evaluation", job.work_class).observe(
             max(0.0, (datetime.now(UTC) - _as_utc(job.available_at)).total_seconds())
+        )
+        log.info(
+            "evaluation_started",
+            slot=slot,
+            work_class=job.work_class,
+            job_id=job.id,
+            repository=job.repository_full_name,
+            pull_number=job.pull_number,
+            head_sha=job.head_sha_hint,
+            generation=job.generation,
+            last_delivery_id=job.last_delivery_id,
         )
         done = asyncio.Event()
         heartbeat = asyncio.create_task(self._renew_lease(job, done), name=f"job-lease-{job.id}")
@@ -2277,16 +2301,6 @@ class Worker:
                     require_shared_head_ready=True,
                 )
                 if job is not None:
-                    log.info(
-                        "evaluation_started",
-                        slot=slot,
-                        work_class=job.work_class,
-                        job_id=job.id,
-                        repository=job.repository_full_name,
-                        pull_number=job.pull_number,
-                        head_sha=job.head_sha_hint,
-                        generation=job.generation,
-                    )
                     await self._run_work_attempt(
                         kind="evaluation",
                         work_class=job.work_class,
@@ -2297,7 +2311,8 @@ class Worker:
                             "queue.pull_number": job.pull_number,
                             "queue.generation": job.generation,
                         },
-                        operation=partial(self._process, job, owner),
+                        operation=partial(self._process, job, owner, slot),
+                        producer_trace_context=job.webhook_trace_context,
                     )
                     continue
             except asyncio.CancelledError:
@@ -2327,16 +2342,6 @@ class Worker:
                         require_shared_head_ready=True,
                     )
                 if job is not None:
-                    log.info(
-                        "evaluation_started",
-                        slot=slot,
-                        work_class=job.work_class,
-                        job_id=job.id,
-                        repository=job.repository_full_name,
-                        pull_number=job.pull_number,
-                        head_sha=job.head_sha_hint,
-                        generation=job.generation,
-                    )
                     await self._run_work_attempt(
                         kind="evaluation",
                         work_class=job.work_class,
@@ -2347,7 +2352,8 @@ class Worker:
                             "queue.pull_number": job.pull_number,
                             "queue.generation": job.generation,
                         },
-                        operation=partial(self._process, job, owner),
+                        operation=partial(self._process, job, owner, slot),
+                        producer_trace_context=job.webhook_trace_context,
                     )
                     continue
             except asyncio.CancelledError:

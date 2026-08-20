@@ -582,6 +582,7 @@ def create_app(
             )
         queue_store: QueueStore = request.app.state.store
         tracing: Tracing = request.app.state.tracing
+        producer_trace_context = None
         try:
             with tracing.span(
                 "webhook.accept",
@@ -601,13 +602,18 @@ def create_app(
                         "github.scope": job.scope_key,
                     }
                 ),
-            ):
+                root=True,
+            ) as span:
+                # This context is generated only after HMAC verification. The
+                # service never accepts GitHub's inbound trace headers.
+                producer_trace_context = tracing.capture_trusted_context(span)
                 acceptance = await asyncio.to_thread(
                     queue_store.accept_delivery,
                     webhook.delivery_id,
                     webhook.event,
                     job,
                     runtime.webhook_invalidation_timeout_seconds,
+                    trace_context=producer_trace_context,
                 )
         except Exception as error:
             WEBHOOK_FAILURES.labels("durable_acceptance").inc()
@@ -712,6 +718,14 @@ def create_app(
             pull_number=job.pull_number if isinstance(job, JobRequest) else None,
             accepted=accepted,
             queued=queued,
+            **(
+                {
+                    "trace_id": producer_trace_context.trace_id,
+                    "span_id": producer_trace_context.span_id,
+                }
+                if producer_trace_context is not None
+                else {}
+            ),
         )
         WEBHOOKS.labels(webhook.event, webhook.action or "received").inc()
         return JSONResponse(

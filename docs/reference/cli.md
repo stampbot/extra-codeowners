@@ -96,7 +96,7 @@ The migration options are:
 On success, the final line names the bundled revision:
 
 ```text
-Database is at migration 0005_reconciliation_state_index.
+Database is at migration 0006_webhook_trace_links.
 ```
 
 Production mode applies the same PostgreSQL and transport checks as `serve`. A
@@ -123,7 +123,7 @@ uv run python -m extra_codeowners database check
 On success, the final line names the compatible revision:
 
 ```text
-Database migration 0005_reconciliation_state_index is compatible.
+Database migration 0006_webhook_trace_links is compatible.
 ```
 
 The command exits nonzero when it cannot connect or when the required release

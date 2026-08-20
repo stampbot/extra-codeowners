@@ -1,9 +1,10 @@
 """Opt-in, privacy-aware OpenTelemetry tracing for operations diagnosis.
 
-Tracing is deliberately process-local. Durable queue rows and structured logs
-already carry the identifiers needed to follow work across replicas, while a
-trace shows where one request or worker attempt spent its time. The default
-attributes are fixed-cardinality and safe for a shared tracing backend.
+Tracing stays process-local. A retained direct delivery can carry a trusted
+local producer identity, so a later worker attempt can link back across
+replicas without making either trace a remote parent. Structured logs still
+carry durable identifiers. The default attributes are fixed-cardinality and
+safe for a shared tracing backend.
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ from contextlib import contextmanager
 from typing import TYPE_CHECKING
 
 import structlog
+from opentelemetry import context as otel_context
 from opentelemetry import trace
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.resources import Resource
@@ -23,10 +25,11 @@ from opentelemetry.sdk.trace.export import (
     SpanExportResult,
 )
 from opentelemetry.sdk.trace.sampling import ParentBased, TraceIdRatioBased
-from opentelemetry.trace import Span, Status, StatusCode, TraceFlags, Tracer
+from opentelemetry.trace import Link, Span, SpanContext, Status, StatusCode, TraceFlags, Tracer
 
 from extra_codeowners import __version__
 from extra_codeowners.metrics import TRACE_EXPORTS
+from extra_codeowners.trace_context import TrustedTraceContext
 
 if TYPE_CHECKING:
     from extra_codeowners.settings import Settings
@@ -125,19 +128,36 @@ class Tracing:
         *,
         attributes: Mapping[str, TraceAttribute] | None = None,
         private_attributes: Mapping[str, TraceAttribute] | None = None,
+        links: Sequence[TrustedTraceContext] = (),
+        root: bool = False,
     ) -> Iterator[Span]:
         """Record a span and bind IDs into logs only when it is sampled.
 
         GitHub does not authenticate external trace context on webhook
-        deliveries, so callers always create their own root span. This avoids
+        deliveries. Webhook ingress therefore requests a root span rather than
         accepting an attacker-selected trace identifier into trusted logs.
+        Durable worker attempts use a link to a separately persisted local
+        producer span; a link preserves causality without becoming a parent.
         """
         span_attributes = dict(attributes or {})
         if self.include_private_metadata and private_attributes is not None:
             span_attributes.update(private_attributes)
+        otel_links = tuple(
+            Link(
+                SpanContext(
+                    trace_id=int(link.trace_id, 16),
+                    span_id=int(link.span_id, 16),
+                    is_remote=True,
+                    trace_flags=TraceFlags(link.trace_flags),
+                )
+            )
+            for link in links
+        )
         with self._tracer.start_as_current_span(
             name,
+            context=otel_context.Context() if root else None,
             attributes=span_attributes,
+            links=otel_links or None,
             record_exception=False,
             set_status_on_exception=False,
         ) as span:
@@ -155,6 +175,23 @@ class Tracing:
             else:
                 with self._error_status(span):
                     yield span
+
+    @staticmethod
+    def capture_trusted_context(span: Span) -> TrustedTraceContext | None:
+        """Capture a sampled span identity created by this local tracer only."""
+
+        context = span.get_span_context()
+        if not (
+            span.is_recording()
+            and context.is_valid
+            and bool(context.trace_flags & TraceFlags.SAMPLED)
+        ):
+            return None
+        return TrustedTraceContext(
+            trace_id=f"{context.trace_id:032x}",
+            span_id=f"{context.span_id:016x}",
+            trace_flags=int(context.trace_flags),
+        )
 
     @staticmethod
     def mark_error(span: Span, description: str) -> None:

@@ -79,13 +79,13 @@ secret:
 run_without_libpq_environment extra-codeowners database check
 ```
 
-An `0.1.0-alpha.8` artifact prints:
+An `0.1.0-alpha.14` artifact prints:
 
 ```text
-Database migration 0004_responsive_work_queue is compatible.
+Database migration 0005_reconciliation_state_index is compatible.
 ```
 
-The target artifact prints `0005_reconciliation_state_index` after the
+The target artifact prints `0006_webhook_trace_links` after the
 migration in step 5.
 
 Record the reported revision, current image digest, chart revision, PostgreSQL
@@ -388,7 +388,7 @@ run_without_libpq_environment \
 For the target artifact, success prints:
 
 ```text
-Database is at migration 0005_reconciliation_state_index.
+Database is at migration 0006_webhook_trace_links.
 ```
 
 The migrator:
@@ -482,7 +482,7 @@ now:
 
 ```bash
 CHANGE_RECORD_DIR=/path/to/access-controlled/change-record
-FIRST_MIGRATION_LOG="$CHANGE_RECORD_DIR/extra-codeowners-0003-first-migration.log"
+FIRST_MIGRATION_LOG="$CHANGE_RECORD_DIR/extra-codeowners-0006-first-migration.log"
 test -d "$CHANGE_RECORD_DIR"
 test ! -e "$FIRST_MIGRATION_LOG"
 kubectl --namespace "$NAMESPACE" wait \
@@ -494,7 +494,7 @@ kubectl --namespace "$NAMESPACE" wait \
     "job/$DEPLOYMENT-migrate" --container=migrate >"$FIRST_MIGRATION_LOG"
 )
 grep --fixed-strings --line-regexp \
-  'Database is at migration 0005_reconciliation_state_index.' \
+  'Database is at migration 0006_webhook_trace_links.' \
   "$FIRST_MIGRATION_LOG"
 kubectl --namespace "$NAMESPACE" rollout status \
   "deployment/$DEPLOYMENT" --timeout=10m
@@ -549,7 +549,7 @@ cluster logs before this second hook starts. Preserve and verify the second
 hook's evidence too:
 
 ```bash
-SECOND_MIGRATION_LOG="$CHANGE_RECORD_DIR/extra-codeowners-0003-final-migration.log"
+SECOND_MIGRATION_LOG="$CHANGE_RECORD_DIR/extra-codeowners-0006-final-migration.log"
 test ! -e "$SECOND_MIGRATION_LOG"
 (
   umask 077
@@ -557,12 +557,12 @@ test ! -e "$SECOND_MIGRATION_LOG"
     "job/$DEPLOYMENT-migrate" --container=migrate >"$SECOND_MIGRATION_LOG"
 )
 grep --fixed-strings --line-regexp \
-  'Database is at migration 0005_reconciliation_state_index.' \
+  'Database is at migration 0006_webhook_trace_links.' \
   "$SECOND_MIGRATION_LOG"
 ```
 
 The second migrator takes the same advisory lock and confirms that the database
-is already at `0005_reconciliation_state_index`. Alembic makes no schema change, but
+is already at `0006_webhook_trace_links`. Alembic makes no schema change, but
 the migrator still validates the `required-release-contract` before it prints
 success.
 

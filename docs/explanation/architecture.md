@@ -441,6 +441,14 @@ changing the durable queue's cross-replica coordination rules. The service
 does not join a caller-provided webhook trace: GitHub has not authenticated
 that context for the application.
 
+For a sampled, verified direct webhook, ingress keeps its own opaque span
+identity with the delivery record. The corresponding worker attempt starts a
+separate root trace and links back to that acceptance span. It is a link, not a
+parent-child relationship, because the database queue may hand work to another
+replica minutes later or retry it after a failure. The link carries no GitHub
+payload fields. An unsampled, expired, or recovery-only delivery has no link,
+so logs and durable queue identifiers remain the fallback path.
+
 The normal trace mode records fixed operational attributes. An explicit
 private-metadata mode adds repository and work identifiers for a short,
 access-controlled investigation. Operators should use metrics to select the

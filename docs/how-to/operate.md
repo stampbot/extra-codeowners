@@ -68,9 +68,20 @@ extraEnv:
 
 The service creates root spans for webhook acceptance, reconciliation, and
 each leased worker attempt. GitHub calls are child spans with a fixed operation
-name such as `pull.get`, `content.get`, or `check.update`. A sampled span adds
-`trace_id` and `span_id` to structured logs emitted inside it. It never trusts
-the webhook's trace headers.
+name such as `pull.get`, `content.get`, or `check.update`.
+
+When a verified direct webhook is sampled, Extra CODEOWNERS stores its local
+span identity with the retained delivery. The later evaluation starts its own
+root span and links back to that webhook span. This still works when another
+replica handles the job or the worker retries it, and GitHub's untrusted trace
+headers never become a parent. In Tempo, open the linked webhook span from the
+worker attempt to see when ingress accepted the work. Recovery work, expired
+deliveries, and unsampled acceptance spans have no link; follow their durable
+delivery ID in the logs instead.
+
+A sampled span adds `trace_id` and `span_id` to structured logs emitted inside
+it. The `webhook_accepted` record repeats the locally generated IDs after the
+fast path finishes, so it remains useful when that path took several seconds.
 
 For a short incident window, raise the sample ratio to `1`. Do not turn on
 private metadata casually: it adds repositories, pull numbers, delivery IDs,
@@ -80,7 +91,7 @@ bodies, authorization headers, or tokens.
 Use this order when a check is late:
 
 1. Check `queue_wait_seconds` and oldest interactive queue age. A high value means the job waited before evaluation.
-2. Check `work_attempt_seconds`. If it is also high, open a sampled worker trace.
+2. Check `work_attempt_seconds`. If it is also high, open a sampled worker trace and follow its webhook link when it has one.
 3. Compare the child GitHub spans and `github_api_request_seconds`. Slow API spans point to GitHub or the network; ordinary API spans point to policy work, a database guard, or a local resource limit.
 
 Do not use a trace as the only source of truth. Sampling intentionally omits

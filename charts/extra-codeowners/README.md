@@ -532,7 +532,7 @@ helm upgrade extra-codeowners \
 ```
 
 After the migration Job logs
-`Database is at migration 0005_reconciliation_state_index.` and the target Deployment
+`Database is at migration 0006_webhook_trace_links.` and the target Deployment
 is healthy, apply the reviewed final autoscaling or high-availability settings
 in a separate update. Preserve the first migration Job log before you continue:
 the second hook's
