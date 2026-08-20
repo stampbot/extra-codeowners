@@ -12,7 +12,7 @@ The App registration requests these repository permissions:
 | Contents | Read | Read policy and `CODEOWNERS` at an exact commit. The service does not check out or write repository content. |
 | Pull requests | Read | Fetch the current pull request, changed files, labels, and reviews; receive pull-request and review webhooks. |
 | Commit statuses (`statuses`) | Read and write | Make the App available as an expected source for organization-level required-check rulesets. Runtime installation tokens omit this permission. |
-| Metadata | Read | Read repository metadata and direct-collaborator permissions; receive label, collaborator, and repository-lifecycle webhooks. GitHub grants this baseline permission with repository access. |
+| Metadata | Read | Read direct-collaborator permissions and receive label, collaborator, and repository-lifecycle webhooks. GitHub grants this baseline permission with repository access. |
 
 The **Commit statuses** permission is required at App registration so GitHub can list the App as an expected source in organization rulesets. `statuses` is the App Manifest key. Extra CODEOWNERS never calls the commit-status API. GitHub documents the organization-ruleset requirement under [Require status checks to pass before merging](https://docs.github.com/en/enterprise-cloud@latest/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/available-rules-for-rulesets#require-status-checks-to-pass-before-merging).
 

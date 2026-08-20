@@ -34,6 +34,14 @@ The examples use the default policy location,
 `EXTRA_CODEOWNERS_POLICY_PATH`, use the configured repository and path in both
 scopes.
 
+If the checker App is installed on selected repositories, select both the
+target repository and the organization-policy repository. The default policy
+repository is `<organization>/.github`. If the check reports
+`organization_policy_repository_unavailable`, first confirm that configured
+repository still exists. Then restore its selection and use **Re-evaluate** on
+the check. An available policy repository may intentionally have no policy
+file; the service does not mistake missing App access for that empty policy.
+
 ## 1. Record the App's immutable identity
 
 Find the App ID in the App's GitHub settings. Obtain the bot account's numeric

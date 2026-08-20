@@ -101,6 +101,10 @@ class SharedHeadInvalidationPendingError(RuntimeError):
     """A current evaluation must wait for its exact-head reset and fan-out."""
 
 
+class OrganizationPolicyRepositoryUnavailableError(ValueError):
+    """The installation cannot safely read its configured policy repository."""
+
+
 @dataclass(frozen=True, slots=True)
 class ReconciliationOutcome:
     """Result of one elected open-pull-request reconciliation."""
@@ -659,9 +663,20 @@ class EvaluationService:
         self,
         installation_id: int,
         repository: str,
+        authority_generation: int,
     ) -> OrganizationPolicy:
         owner = repository.split("/", 1)[0]
         organization_repository = f"{owner}/{self.settings.org_config_repository}"
+        if not await self.github.installation_includes_repository(
+            installation_id,
+            organization_repository,
+            authority_generation=authority_generation,
+        ):
+            raise OrganizationPolicyRepositoryUnavailableError(
+                f"the configured organization policy repository {organization_repository} is not "
+                "available to this GitHub App installation; confirm that it exists, add it to the "
+                "installation's repository selection, and re-evaluate"
+            )
         org_text = await self.github.get_file_text(
             installation_id,
             organization_repository,
@@ -945,7 +960,10 @@ class EvaluationService:
             organization = await self._load_organization_policy(
                 job.installation_id,
                 job.repository_full_name,
+                job.authority_generation,
             )
+        except OrganizationPolicyRepositoryUnavailableError as error:
+            return _failure("organization_policy_repository_unavailable", str(error))
         except (ValidationError, ValueError) as error:
             return _failure("invalid_policy", str(error))
 

@@ -59,6 +59,15 @@ class FakeGitHub:
             "labels": [{"name": "autoapprove"}],
         }
 
+    async def installation_includes_repository(
+        self,
+        installation_id: int,
+        repository: str,
+        *,
+        authority_generation: int = 0,
+    ) -> bool:
+        return True
+
     async def get_file_text(
         self,
         installation_id: int,
@@ -1175,6 +1184,99 @@ async def test_missing_codeowners_fails_closed(tmp_path: Path) -> None:
 
     assert github.checks[-1]["conclusion"] == "failure"
     assert "no CODEOWNERS" in github.checks[-1]["text"]
+
+
+@pytest.mark.asyncio
+async def test_public_unselected_organization_policy_repository_has_actionable_failure(
+    tmp_path: Path,
+) -> None:
+    github = FakeGitHub(changed_path="uv.lock")
+    github.installation_includes_repository = AsyncMock(return_value=False)  # type: ignore[method-assign]
+    original = github.get_file_text
+
+    async def never_read_unselected_public_policy(
+        installation_id: int,
+        repository: str,
+        path: str,
+        **kwargs: Any,
+    ) -> str | None:
+        if repository == "example/.github":
+            raise AssertionError("the unselected public organization policy was read")
+        return await original(installation_id, repository, path, **kwargs)
+
+    github.get_file_text = never_read_unselected_public_policy  # type: ignore[method-assign]
+    store = migrated_store(f"sqlite:///{tmp_path / 'organization-policy-access.db'}")
+
+    await EvaluationService(settings(), github, store).evaluate_job(job(store))  # type: ignore[arg-type]
+
+    github.installation_includes_repository.assert_awaited_once_with(
+        2,
+        "example/.github",
+        authority_generation=0,
+    )
+    assert github.checks[-1]["conclusion"] == "failure"
+    assert "organization_policy_repository_unavailable" in github.checks[-1]["text"]
+    assert "configured organization policy repository" in github.checks[-1]["text"]
+    assert "confirm that it exists" in github.checks[-1]["text"]
+    assert "add it to the installation" in github.checks[-1]["text"]
+
+
+@pytest.mark.asyncio
+async def test_empty_accessible_organization_policy_still_allows_human_approval(
+    tmp_path: Path,
+) -> None:
+    github = FakeGitHub(changed_path="uv.lock", reviewer_type="User")
+    original = github.get_file_text
+
+    async def empty_organization_policy(
+        installation_id: int,
+        repository: str,
+        path: str,
+        **kwargs: Any,
+    ) -> str | None:
+        if repository == "example/.github" and path.endswith("extra-codeowners.toml"):
+            return None
+        if repository == "example/project" and path.endswith("extra-codeowners.toml"):
+            return "schema_version = 1\nenabled = true\n"
+        return await original(installation_id, repository, path, **kwargs)
+
+    github.get_file_text = empty_organization_policy  # type: ignore[method-assign]
+    store = migrated_store(f"sqlite:///{tmp_path / 'empty-organization-policy.db'}")
+
+    await EvaluationService(settings(), github, store).evaluate_job(job(store))  # type: ignore[arg-type]
+
+    assert github.checks[-1]["conclusion"] == "success"
+
+
+@pytest.mark.asyncio
+async def test_empty_organization_policy_reads_cached_membership_once(
+    tmp_path: Path,
+) -> None:
+    github = FakeGitHub(changed_path="uv.lock")
+    github.installation_includes_repository = AsyncMock(return_value=True)  # type: ignore[method-assign]
+    original = github.get_file_text
+
+    async def empty_organization_policy(
+        installation_id: int,
+        repository: str,
+        path: str,
+        **kwargs: Any,
+    ) -> str | None:
+        if repository == "example/.github" and path.endswith("extra-codeowners.toml"):
+            return None
+        return await original(installation_id, repository, path, **kwargs)
+
+    github.get_file_text = empty_organization_policy  # type: ignore[method-assign]
+    store = migrated_store(f"sqlite:///{tmp_path / 'lost-organization-policy-access.db'}")
+
+    await EvaluationService(settings(), github, store).evaluate_job(job(store))  # type: ignore[arg-type]
+
+    github.installation_includes_repository.assert_awaited_once_with(
+        2,
+        "example/.github",
+        authority_generation=0,
+    )
+    assert github.checks[-1]["conclusion"] == "failure"
 
 
 @pytest.mark.asyncio
