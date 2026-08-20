@@ -171,6 +171,7 @@ The endpoint returns Prometheus text format. Extra CODEOWNERS defines these appl
 | `extra_codeowners_github_api_requests_total` | counter | Logical GitHub API requests, labeled by fixed operation family, authentication mode, and outcome. |
 | `extra_codeowners_github_api_request_seconds` | histogram | Wall-clock duration of the same GitHub API requests. It includes token acquisition and a bounded rejected-token retry. |
 | `extra_codeowners_github_rate_limit_events_total` | counter | GitHub rate-limit responses, labeled as installation-scoped or global. |
+| `extra_codeowners_github_pagination_endpoint_mismatches_total` | counter | Rejected pagination links whose scheme, host, port, credentials, fragment, or resource did not match the original request. The metric has no repository, pull-request, or URL labels. |
 | `extra_codeowners_queue_depth` | gauge | Pending and leased exact-head invalidation, evaluation, and authority fan-out rows. |
 | `extra_codeowners_queue_work_class_depth` | gauge | Pending durable work, labeled by fixed `kind` and `work_class` values. Use it to distinguish foreground work from recovery backlog. |
 | `extra_codeowners_queue_work_class_oldest_age_seconds` | gauge | Age of the oldest pending row for the same fixed labels. |

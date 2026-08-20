@@ -32,6 +32,7 @@ from extra_codeowners.dco import (
 from extra_codeowners.metrics import (
     GITHUB_API_REQUEST_SECONDS,
     GITHUB_API_REQUESTS,
+    GITHUB_PAGINATION_ENDPOINT_MISMATCHES,
     GITHUB_RATE_LIMIT_EVENTS,
 )
 from extra_codeowners.tracing import Tracing
@@ -51,6 +52,12 @@ _LINK_PARAMETER_RE = re.compile(
     r""";\s*([!#$%&'*+\-.^_`|~0-9A-Za-z]+)\s*=\s*"""
     r"""(?:"((?:\\.|[^"\\])*)"|([^;,\s]+))\s*"""
 )
+
+
+_NAMED_REPOSITORY_ENDPOINT_RE = re.compile(
+    r"^/repos/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?P<suffix>/.*)$"
+)
+_ID_REPOSITORY_ENDPOINT_RE = re.compile(r"^/repositories/[1-9][0-9]*(?P<suffix>/.*)$")
 
 
 def _request_operation(method: str, path: str) -> str:
@@ -200,6 +207,17 @@ def _dco_repository_path(repository: str) -> str:
     ):
         raise ValueError("repository must be a GitHub-safe ASCII owner/repository name")
     return repository
+
+
+def _is_github_repository_id_alias(request_path: str, next_path: str) -> bool:
+    """Whether GitHub's repository-ID route names the requested resource."""
+    request_match = _NAMED_REPOSITORY_ENDPOINT_RE.fullmatch(request_path)
+    next_match = _ID_REPOSITORY_ENDPOINT_RE.fullmatch(next_path)
+    return (
+        request_match is not None
+        and next_match is not None
+        and request_match.group("suffix") == next_match.group("suffix")
+    )
 
 
 def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -958,8 +976,12 @@ class GitHubClient:
             or request_url.hostname is None
             or next_url.hostname.casefold() != request_url.hostname.casefold()
             or next_port != request_port
-            or next_url.path != request_url.path
+            or (
+                next_url.path != request_url.path
+                and not _is_github_repository_id_alias(request_url.path, next_url.path)
+            )
         ):
+            GITHUB_PAGINATION_ENDPOINT_MISMATCHES.inc()
             raise GitHubError("GitHub pagination next link does not match the request endpoint")
         next_query = parse_qsl(next_url.query, keep_blank_values=True)
         request_query = parse_qsl(request_url.query, keep_blank_values=True)
