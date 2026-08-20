@@ -49,6 +49,10 @@ GITHUB_RATE_LIMIT_EVENTS = Counter(
     "GitHub API rate-limit responses observed by authentication scope",
     ("scope",),
 )
+GITHUB_PAGINATION_ENDPOINT_MISMATCHES = Counter(
+    "extra_codeowners_github_pagination_endpoint_mismatches_total",
+    "Rejected GitHub pagination links whose endpoint did not match the request",
+)
 QUEUE_DEPTH = Gauge("extra_codeowners_queue_depth", "Pending durable work items")
 QUEUE_WORK_CLASS_DEPTH = Gauge(
     "extra_codeowners_queue_work_class_depth",

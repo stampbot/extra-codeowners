@@ -293,15 +293,19 @@ installation list, so a discovery failure does not postpone cleanup. A
 background heartbeat renews the lease while a scan runs.
 
 GitHub's `Link` header controls pagination when it is present. The client
-validates that each `rel="next"` URL keeps the same origin, endpoint, and every
-query parameter except `page`, which must advance by exactly one. For array
-responses without a count, a 100-record page triggers a compatibility request
-only when GitHub omits the header. Repository discovery instead requires a
-nonnegative `total_count` that stays unchanged across pages. Without a next
-link, repository discovery requests another page only when the current page
-has 100 records and that count remains unsatisfied. The client rejects a
-terminal result that disagrees with the count. Duplicate installation IDs,
-repository names, or pull-request numbers also fail validation.
+validates each `rel="next"` URL against the original request: its scheme, host,
+port, and resource must match; it cannot add credentials or a fragment; and
+every query parameter except `page` must stay unchanged. The page must advance
+by exactly one. GitHub can rewrite a named `repos/{owner}/{repo}` path as
+`repositories/{id}`. The client accepts that one alias only when the remaining
+path is identical, then requests the next page through the named endpoint it
+already trusts. For array responses without a count, a 100-record page triggers
+a compatibility request only when GitHub omits the header. Repository discovery
+instead requires a nonnegative `total_count` that stays unchanged across pages.
+Without a next link, repository discovery requests another page only when the
+current page has 100 records and that count remains unsatisfied. The client
+rejects a terminal result that disagrees with the count. Duplicate installation
+IDs, repository names, or pull-request numbers also fail validation.
 
 If the heartbeat loses the lease, the service records a partial attempt. It
 does the same when it cannot safely scan an installation or queue its pull

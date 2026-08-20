@@ -29,6 +29,7 @@ from extra_codeowners.github import (
     GitHubRateLimitError,
     PullRequestTooLargeError,
 )
+from extra_codeowners.metrics import GITHUB_PAGINATION_ENDPOINT_MISMATCHES
 from extra_codeowners.tracing import Tracing
 
 
@@ -1185,6 +1186,98 @@ def test_pagination_next_link_accepts_an_explicit_default_port(
     )
 
     assert GitHubClient._response_has_next_page(response, 1, 1) is True
+
+
+def test_pagination_next_link_accepts_github_repository_id_alias() -> None:
+    response = pagination_response(
+        (
+            "<https://api.github.com/repositories/1300192/pulls/3/files?"
+            'per_page=100&page=2>; rel="next"'
+        ),
+        request_url=(
+            "https://api.github.com/repos/example/project/pulls/3/files?per_page=100&page=1"
+        ),
+    )
+
+    assert GitHubClient._response_has_next_page(response, 1, 1) is True
+
+
+@pytest.mark.asyncio
+async def test_pull_file_listing_keeps_the_named_endpoint_for_a_repository_id_next_link(
+    private_key: str,
+) -> None:
+    pages: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/access_tokens"):
+            return httpx.Response(201, json=token_response())
+        assert request.url.path == "/repos/example/project/pulls/3/files"
+        page = int(request.url.params["page"])
+        pages.append(page)
+        if page == 1:
+            return httpx.Response(
+                200,
+                json=[{"filename": "first.txt"}],
+                headers={
+                    "Link": (
+                        "<https://api.github.com/repositories/1300192/pulls/3/files?"
+                        'per_page=100&page=2>; rel="next"'
+                    )
+                },
+            )
+        assert page == 2
+        return httpx.Response(200, json=[{"filename": "second.txt"}])
+
+    client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
+    try:
+        files = await client.get_pull_files(2, "example/project", 3)
+    finally:
+        await client.close()
+
+    assert files == [{"filename": "first.txt"}, {"filename": "second.txt"}]
+    assert pages == [1, 2]
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        ("https://api.github.com/repositories/1300192/pulls/4/files?per_page=100&page=2"),
+        ("https://api.github.com/repositories/1300192/pulls/3/reviews?per_page=100&page=2"),
+    ],
+)
+def test_pagination_next_link_rejects_repository_id_alias_for_a_different_resource(
+    target: str,
+) -> None:
+    response = pagination_response(
+        f'<{target}>; rel="next"',
+        request_url=(
+            "https://api.github.com/repos/example/project/pulls/3/files?per_page=100&page=1"
+        ),
+    )
+
+    with pytest.raises(GitHubError, match="does not match the request endpoint"):
+        GitHubClient._response_has_next_page(response, 1, 1)
+
+
+def test_pagination_endpoint_mismatch_records_a_privacy_safe_metric() -> None:
+    before = next(
+        sample.value
+        for metric in GITHUB_PAGINATION_ENDPOINT_MISMATCHES.collect()
+        for sample in metric.samples
+        if sample.name == "extra_codeowners_github_pagination_endpoint_mismatches_total"
+    )
+    response = pagination_response('<https://api.github.com/other?per_page=100&page=2>; rel="next"')
+
+    with pytest.raises(GitHubError, match="does not match the request endpoint"):
+        GitHubClient._response_has_next_page(response, 1, 1)
+
+    after = next(
+        sample.value
+        for metric in GITHUB_PAGINATION_ENDPOINT_MISMATCHES.collect()
+        for sample in metric.samples
+        if sample.name == "extra_codeowners_github_pagination_endpoint_mismatches_total"
+    )
+    assert after == before + 1
 
 
 @pytest.mark.parametrize(
