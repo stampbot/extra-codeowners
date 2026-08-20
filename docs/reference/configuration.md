@@ -269,6 +269,12 @@ tokens, and exception text. Sampled spans bind `trace_id` and `span_id` to the
 structured logs emitted inside that span. Unsampled work does not add those
 fields, so logs do not imply that a trace exists.
 
+For sampled, verified direct webhooks, the service retains an opaque local span
+identity with the delivery and links the later worker attempt to it. This does
+not import a `traceparent` header from GitHub and does not add GitHub metadata
+to the normal trace attributes. Delivery retention limits how long the worker
+can create that link.
+
 The service attempts an identity probe during startup and continues in the
 background. A failed refresh does not erase a still-fresh success, which
 avoids dropping readiness for one transient request. Once the freshness window

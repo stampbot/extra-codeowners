@@ -18,12 +18,14 @@ from extra_codeowners.database import (
     SchemaMetadata,
     ServiceLease,
     SharedHeadEpoch,
+    WebhookDelivery,
     _normalize_schema_expression,
     isolated_postgresql_connect_args,
     utcnow,
     validate_database_schema,
 )
 from extra_codeowners.migrations import upgrade_database
+from extra_codeowners.trace_context import TrustedTraceContext
 
 
 def make_store(tmp_path: Path) -> QueueStore:
@@ -308,6 +310,38 @@ def test_duplicate_delivery_does_not_advance_shared_head_epoch(tmp_path: Path) -
     claimed = store.claim("worker", 60)
     assert claimed is not None
     assert claimed.shared_head_generation == 1
+
+
+def test_claimed_job_keeps_the_original_trusted_webhook_trace_context(tmp_path: Path) -> None:
+    store = make_store(tmp_path)
+    original = TrustedTraceContext("a" * 32, "b" * 16, 1)
+    replay = TrustedTraceContext("c" * 32, "d" * 16, 1)
+
+    assert store.accept_delivery(
+        "delivery-trace-link",
+        "pull_request",
+        request(),
+        trace_context=original,
+    ).accepted
+    assert not store.accept_delivery(
+        "delivery-trace-link",
+        "pull_request",
+        request(),
+        trace_context=replay,
+    ).accepted
+
+    with store.session() as session:
+        delivery = session.get(WebhookDelivery, "delivery-trace-link")
+        assert delivery is not None
+        assert (
+            delivery.producer_trace_id,
+            delivery.producer_span_id,
+            delivery.producer_trace_flags,
+        ) == (original.trace_id, original.span_id, original.trace_flags)
+
+    claimed = store.claim("worker", 60)
+    assert claimed is not None
+    assert claimed.webhook_trace_context == original
 
 
 def test_shared_head_invalidation_gates_publication_until_completion(

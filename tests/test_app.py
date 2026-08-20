@@ -11,6 +11,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 from fastapi.testclient import TestClient
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 import extra_codeowners.app as app_module
 from extra_codeowners import __version__
@@ -20,6 +22,7 @@ from extra_codeowners.github import GitHubRateLimitError
 from extra_codeowners.manifest import ManifestService
 from extra_codeowners.migrations import upgrade_database
 from extra_codeowners.settings import Settings
+from extra_codeowners.tracing import Tracing
 
 HEAD = "a" * 40
 
@@ -337,6 +340,51 @@ def test_health_and_signed_webhook_ingestion(tmp_path: Path) -> None:
     assert duplicate.json() == {"accepted": False, "queued": False}
     assert store.pending_count() == 2
     assert [check["status"] for check in github.checks] == ["in_progress"]
+
+
+def test_verified_webhook_persists_a_local_trace_context(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = migrated_store(f"sqlite:///{tmp_path / 'app-trace-link.db'}")
+    exporter = InMemorySpanExporter()
+    tracing = Tracing(
+        enabled=True,
+        endpoint="http://tempo.example.test/v1/traces",
+        sample_ratio=1,
+        processor=SimpleSpanProcessor(exporter),
+    )
+
+    def tracing_from_settings(_: type[Tracing], __: Settings) -> Tracing:
+        return tracing
+
+    monkeypatch.setattr(Tracing, "from_settings", classmethod(tracing_from_settings))
+    app = app_module.create_app(configured_settings(), github=StubGitHub(), store=store)  # type: ignore[arg-type]
+    body = json.dumps(
+        {
+            "action": "opened",
+            "installation": {"id": 10},
+            "repository": {"full_name": "example/project"},
+            "number": 7,
+            "pull_request": {"number": 7, "state": "open", "head": {"sha": HEAD}},
+        }
+    ).encode()
+    headers = webhook_headers(body, "trace-context-delivery")
+    headers["traceparent"] = f"00-{'f' * 32}-{'e' * 16}-01"
+
+    with TestClient(app) as client:
+        response = client.post("/webhooks/github", content=body, headers=headers)
+
+    assert response.status_code == 202
+    claimed = store.claim("trace-observer", 60)
+    assert claimed is not None
+    assert claimed.webhook_trace_context is not None
+    [webhook_span] = [
+        span for span in exporter.get_finished_spans() if span.name == "webhook.accept"
+    ]
+    assert claimed.webhook_trace_context.trace_id == f"{webhook_span.context.trace_id:032x}"
+    assert claimed.webhook_trace_context.span_id == f"{webhook_span.context.span_id:016x}"
+    assert webhook_span.context.trace_id != int("f" * 32, 16)
 
 
 def test_check_run_re_evaluate_action_only_queues_this_apps_check(tmp_path: Path) -> None:

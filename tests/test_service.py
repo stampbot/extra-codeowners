@@ -8,6 +8,8 @@ from typing import Any
 from unittest.mock import ANY, AsyncMock, MagicMock
 
 import pytest
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 import extra_codeowners.service as service_module
 from extra_codeowners.codeowners import parse_codeowners
@@ -27,6 +29,8 @@ from extra_codeowners.github import GitHubError, GitHubOperationStoppedError, Gi
 from extra_codeowners.migrations import upgrade_database
 from extra_codeowners.models import OrganizationPolicy
 from extra_codeowners.settings import Settings
+from extra_codeowners.trace_context import TrustedTraceContext
+from extra_codeowners.tracing import Tracing
 
 AuthorityChangePendingError = service_module.AuthorityChangePendingError
 EvaluationService = service_module.EvaluationService
@@ -323,6 +327,66 @@ async def test_evaluation_queue_wait_measures_the_ready_retry_attempt(
     histogram.labels.assert_called_once_with("evaluation", "interactive")
     observed = histogram.labels.return_value.observe.call_args.args[0]
     assert 0 <= observed < 5
+
+
+@pytest.mark.asyncio
+async def test_worker_links_the_claimed_webhook_context_without_exporting_private_metadata(
+    tmp_path: Path,
+) -> None:
+    store = migrated_store(f"sqlite:///{tmp_path / 'worker-trace-link.db'}")
+    producer = TrustedTraceContext("a" * 32, "b" * 16, 1)
+    accepted = store.accept_delivery(
+        "delivery-trace-link",
+        "pull_request",
+        JobRequest(2, "example/project", 3, "pull_request.opened", HEAD),
+        trace_context=producer,
+    )
+    assert accepted.accepted
+    invalidation = store.claim_shared_head_invalidation("head-worker", 60)
+    assert invalidation is not None
+    assert store.complete_shared_head_invalidation(invalidation)
+    claimed = store.claim("worker", 60)
+    assert claimed is not None
+    assert claimed.webhook_trace_context == producer
+
+    class Evaluator:
+        async def evaluate_job(self, job: ClaimedJob) -> None:
+            assert job == claimed
+
+    exporter = InMemorySpanExporter()
+    tracing = Tracing(
+        enabled=True,
+        endpoint="http://tempo.example.test/v1/traces",
+        sample_ratio=1,
+        processor=SimpleSpanProcessor(exporter),
+    )
+    worker = Worker(settings(), store, Evaluator(), "worker", tracing=tracing)  # type: ignore[arg-type]
+
+    async def process() -> str:
+        return await worker._process(claimed)
+
+    await worker._run_work_attempt(
+        kind="evaluation",
+        work_class=claimed.work_class,
+        private_attributes={
+            "queue.repository": claimed.repository_full_name,
+            "queue.pull_number": claimed.pull_number,
+        },
+        operation=process,
+        producer_trace_context=claimed.webhook_trace_context,
+    )
+
+    tracing.shutdown()
+    [span] = exporter.get_finished_spans()
+    assert span.name == "worker.evaluation"
+    assert span.attributes == {
+        "queue.kind": "evaluation",
+        "queue.work_class": "interactive",
+        "queue.producer_trace_linked": True,
+    }
+    assert len(span.links) == 1
+    assert span.links[0].context.trace_id == int(producer.trace_id, 16)
+    assert span.links[0].context.span_id == int(producer.span_id, 16)
 
 
 def record_guard_releases(store: QueueStore, events: list[str]) -> None:

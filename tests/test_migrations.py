@@ -70,6 +70,42 @@ def test_alpha_eight_database_upgrades_to_the_retention_index(tmp_path: Path) ->
     engine.dispose()
 
 
+def test_alpha_fourteen_database_upgrades_to_webhook_trace_links(tmp_path: Path) -> None:
+    """Exercise the direct upgrade path from the previously released alpha."""
+
+    url = database_url(tmp_path)
+    upgrade_database(url, revision="0005_reconciliation_state_index")
+    engine = create_engine(url)
+    before = {column["name"] for column in inspect(engine).get_columns("webhook_deliveries")}
+    assert "producer_trace_id" not in before
+    engine.dispose()
+
+    upgrade_database(url)
+
+    engine = create_engine(url)
+    columns = {
+        column["name"]: column for column in inspect(engine).get_columns("webhook_deliveries")
+    }
+    with engine.connect() as connection:
+        marker = connection.scalar(
+            text("SELECT version FROM schema_metadata WHERE singleton_id = 1")
+        )
+    engine.dispose()
+    assert current_revision(url) == DATABASE_MIGRATION_HEAD
+    assert marker == 5
+    expected_columns = {
+        "producer_trace_id": (32, True),
+        "producer_span_id": (16, True),
+        "producer_trace_flags": (None, True),
+    }
+    actual_columns = {
+        name: (getattr(column["type"], "length", None), bool(column["nullable"]))
+        for name, column in columns.items()
+        if name.startswith("producer_trace_") or name == "producer_span_id"
+    }
+    assert actual_columns == expected_columns
+
+
 def test_upgrade_classifies_carried_periodic_shared_head_work_as_recovery(
     tmp_path: Path,
 ) -> None:
@@ -245,7 +281,7 @@ def test_retry_schema_upgrades_existing_jobs_to_fail_closed_shared_head_fences(
             ),
             {"head_sha": "b" * 40},
         ).one()
-    assert marker == 4
+    assert marker == 5
     assert queued_generations == {42: 0, 43: 1}
     assert tuple(migrated_epoch) == (1, 0)
     assert shared_generation["nullable"] is False

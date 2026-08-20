@@ -40,8 +40,10 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 from sqlalchemy.pool import NullPool
 
-SCHEMA_VERSION = 4
-DATABASE_MIGRATION_HEAD = "0005_reconciliation_state_index"
+from extra_codeowners.trace_context import TrustedTraceContext
+
+SCHEMA_VERSION = 5
+DATABASE_MIGRATION_HEAD = "0006_webhook_trace_links"
 DATABASE_CONNECT_TIMEOUT_SECONDS = 3
 DATABASE_POOL_TIMEOUT_SECONDS = 2
 DATABASE_STATEMENT_TIMEOUT_MILLISECONDS = 3_000
@@ -210,7 +212,7 @@ class EvaluationJob(Base):
 
 
 class WebhookDelivery(Base):
-    """A GitHub delivery ID retained for replay-safe ingestion."""
+    """A GitHub delivery retained for replay-safe ingestion and trace linkage."""
 
     __tablename__ = "webhook_deliveries"
 
@@ -226,6 +228,9 @@ class WebhookDelivery(Base):
     pull_number: Mapped[int | None] = mapped_column(Integer)
     head_sha: Mapped[str | None] = mapped_column(String(64))
     shared_head_generation: Mapped[int | None] = mapped_column(Integer)
+    producer_trace_id: Mapped[str | None] = mapped_column(String(32))
+    producer_span_id: Mapped[str | None] = mapped_column(String(16))
+    producer_trace_flags: Mapped[int | None] = mapped_column(Integer)
 
 
 class EvaluationAudit(Base):
@@ -462,6 +467,7 @@ class ClaimedJob:
     work_class: WorkClass
     head_sha_hint: str | None
     last_delivery_id: str | None
+    webhook_trace_context: TrustedTraceContext | None
     generation: int
     authority_generation: int
     shared_head_generation: int
@@ -2062,6 +2068,8 @@ class QueueStore:
         event: str,
         request: JobRequest | AuthorityRequest | None,
         authority_guard_timeout_seconds: float = 5.0,
+        *,
+        trace_context: TrustedTraceContext | None = None,
     ) -> DeliveryAcceptance:
         """Record and enqueue one webhook atomically.
 
@@ -2119,6 +2127,15 @@ class QueueStore:
                             delivery_id=delivery_id,
                             event=event,
                             invalidation_required=isinstance(request, JobRequest),
+                            producer_trace_id=(
+                                trace_context.trace_id if trace_context is not None else None
+                            ),
+                            producer_span_id=(
+                                trace_context.span_id if trace_context is not None else None
+                            ),
+                            producer_trace_flags=(
+                                trace_context.trace_flags if trace_context is not None else None
+                            ),
                         )
                         session.add(delivery)
                         shared_head_generation: int | None = None
@@ -2815,6 +2832,11 @@ class QueueStore:
                 row = session.get(EvaluationJob, candidate)
                 if row is None:  # pragma: no cover - protected by the transaction
                     continue
+                delivery = (
+                    session.get(WebhookDelivery, row.last_delivery_id)
+                    if row.last_delivery_id is not None
+                    else None
+                )
                 return ClaimedJob(
                     id=row.id,
                     installation_id=row.installation_id,
@@ -2824,6 +2846,11 @@ class QueueStore:
                     work_class=row.work_class,
                     head_sha_hint=row.head_sha_hint,
                     last_delivery_id=row.last_delivery_id,
+                    webhook_trace_context=TrustedTraceContext.from_values(
+                        delivery.producer_trace_id if delivery is not None else None,
+                        delivery.producer_span_id if delivery is not None else None,
+                        delivery.producer_trace_flags if delivery is not None else None,
+                    ),
                     generation=row.generation,
                     authority_generation=row.authority_generation,
                     shared_head_generation=row.shared_head_generation,
@@ -3441,6 +3468,9 @@ class QueueStore:
                         WebhookDelivery.invalidation_required,
                         WebhookDelivery.invalidation_completed_at,
                         WebhookDelivery.shared_head_generation,
+                        WebhookDelivery.producer_trace_id,
+                        WebhookDelivery.producer_span_id,
+                        WebhookDelivery.producer_trace_flags,
                     )
                     .select_from(EvaluationJob)
                     .join(
