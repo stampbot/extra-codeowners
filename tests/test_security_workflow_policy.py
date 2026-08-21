@@ -316,7 +316,9 @@ def test_release_write_permissions_are_limited_to_build_and_publish_jobs() -> No
         "packages": "write",
     }
     for name, job in jobs.items():
-        if name not in {"image", "publish"}:
+        if name == "verify-existing":
+            assert _job_permissions(job) == {"attestations": "read", "contents": "read"}
+        elif name not in {"image", "publish"}:
             assert _job_permissions(job) is None, f"{name} unexpectedly overrides permissions"
 
     privileged = {
@@ -452,6 +454,7 @@ def test_release_publication_retry_verifies_the_completed_release_from_this_run(
 
     first_publish = create.rsplit('gh release edit "${TAG}" --draft=false', 1)[1]
     assert "verify_published_release" in first_publish
+    assert ".github/scripts/verify-release-provenance.sh" in create
 
 
 def _release_asset_metadata(name: str, contents: bytes) -> dict[str, object]:
@@ -549,6 +552,13 @@ else:
     fake_sleep = fake_bin / "sleep"
     fake_sleep.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
     fake_sleep.chmod(0o755)
+    provenance_script = repository / ".github" / "scripts" / "verify-release-provenance.sh"
+    provenance_script.parent.mkdir(parents=True)
+    provenance_script.write_text(
+        '#!/usr/bin/env bash\nprintf \'provenance %s\\n\' "$*" >>"${FAKE_GH_LOG}"\n',
+        encoding="utf-8",
+    )
+    provenance_script.chmod(0o755)
 
     assert BASH is not None
     result = subprocess.run(  # noqa: S603 - deliberately exercises the reviewed script
@@ -560,11 +570,18 @@ else:
             "FAKE_GH_RELEASE": str(release_record_path),
             "FAKE_GH_REMOTE": str(remote),
             "GH_TOKEN": "unused",
+            "IMAGE": "ghcr.io/example/extra-codeowners",
             "GITHUB_REPOSITORY": "example/extra-codeowners",
             "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
             "PRERELEASE": "true",
             "PREVIOUS_TAG": "v0.1.0-alpha.7",
+            "REVISION": "8ade2d8041bd9d2c21db602fe299aa55c53ae83b",
             "TAG": "v0.1.0-alpha.8",
+            "VERSION": "0.1.0-alpha.8",
+            "PYTHON_VERSION": "0.1.0a8",
+            "IMAGE_DIGEST": f"sha256:{'0' * 64}",
+            "CHART_REFERENCE": "ghcr.io/example/charts/extra-codeowners",
+            "CHART_DIGEST": f"sha256:{'1' * 64}",
         },
         check=False,
         capture_output=True,
@@ -592,6 +609,7 @@ def test_published_release_recovery_accepts_matching_immutable_release(
 
     assert result.returncode == 0, result.stderr
     assert any(operation.startswith("release download ") for operation in operations)
+    assert any(operation.startswith("provenance ") for operation in operations)
     assert not any(
         operation.startswith(
             ("release create ", "release edit ", "release delete ", "release upload ")
@@ -698,6 +716,11 @@ def test_completed_release_verification_covers_identity_and_required_assets() ->
     jobs = _workflow_jobs((WORKFLOWS / "release.yml").read_text(encoding="utf-8"))
     verify = _named_step(jobs["verify-existing"], "Verify published release surfaces")
 
+    assert _job_permissions(jobs["verify-existing"]) == {
+        "attestations": "read",
+        "contents": "read",
+    }
+    assert "Install Cosign" in jobs["verify-existing"]
     assert 'git cat-file -t "refs/tags/${TAG}"' in verify
     assert 'git rev-parse --verify "refs/tags/${TAG}^{commit}"' in verify
     assert ".draft == false and .immutable == true and .prerelease == $prerelease" in verify
@@ -724,6 +747,7 @@ def test_completed_release_verification_covers_identity_and_required_assets() ->
     assert "release-assets/chart-reference.txt" in verify
     assert 'retry helm pull "oci://${chart_reference}"' in verify
     assert '"release-assets/extra-codeowners-${VERSION}.tgz"' in verify
+    assert ".github/scripts/verify-release-provenance.sh" in verify
 
 
 def test_dco_uses_the_event_base_and_head_for_its_commit_range() -> None:

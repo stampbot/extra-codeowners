@@ -142,13 +142,12 @@ grandfathered predecessor; it predates this contract.
 Rerun a failed release job only in its original CI run. A retry may reuse a tag
 when it resolves to that same commit. When it detects a completed GitHub
 release, it verifies the required assets, image platforms and digests, and
-chart archive and digest instead of republishing them. A tag, image, or chart
-that conflicts with the original run stops the retry.
-
-[Issue #145](https://github.com/stampbot/extra-codeowners/issues/145) tracks
-cryptographic verification of attestations and Sigstore bundles in that
-pre-existing-release path. New publication still creates those attestations
-and signatures before it publishes the immutable completion record.
+chart archive and digest instead of republishing them. It then verifies GitHub
+provenance for the image, wheel, source distribution, and chart. It also checks
+the Sigstore bundles for the release files and keyless signatures for the image
+and OCI chart. Every proof must name this repository's release workflow and the
+original commit. Missing, invalid, or ambiguous evidence stops the retry; it
+never edits a published immutable release.
 
 Actions are pinned to full commit SHAs. The publishing job receives
 `contents`, `packages`, `id-token`, and `attestations` write access; ordinary CI
