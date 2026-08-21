@@ -54,7 +54,7 @@ a disposable organization. It uses a human approval first, which separates App
 setup problems from delegation problems.
 
 If you prefer GitHub's App Manifest flow, use the
-[setup URL registration guide](how-to/register-app.md) instead of the tutorial's
+[App Manifest registration guide](how-to/register-app.md) instead of the tutorial's
 manual registration steps.
 
 After the first check works, continue with the pieces you need:

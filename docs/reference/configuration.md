@@ -175,7 +175,7 @@ ignored, except for the libpq connection variables listed below.
 | `EXTRA_CODEOWNERS_LOG_LEVEL` | string | `INFO` | One of `DEBUG`, `INFO`, `WARNING`, `ERROR`, or `CRITICAL`. Avoid debug logging for private production repositories unless its data handling has been reviewed. |
 | `EXTRA_CODEOWNERS_HOST` | string | `127.0.0.1` | Bind address. Use `0.0.0.0` only inside an appropriately isolated container or host. |
 | `EXTRA_CODEOWNERS_PORT` | integer | `8000` | Inclusive range `1` through `65535`. |
-| `EXTRA_CODEOWNERS_PUBLIC_URL` | absolute HTTP(S) URL or null | null | Public origin used to construct App Manifest webhook, callback, and completion URLs. Setup mode requires an `https://` origin with no credentials, no path other than `/`, and no query or fragment; otherwise this setting is optional. |
+| `EXTRA_CODEOWNERS_PUBLIC_URL` | absolute HTTP(S) URL or null | null | Public origin used to construct the App Manifest webhook and one-use callback URLs. Setup mode requires an `https://` origin with no credentials, no path other than `/`, and no query or fragment; otherwise this setting is optional. |
 | `EXTRA_CODEOWNERS_DATABASE_URL` | SQLAlchemy URL | `sqlite:///./extra-codeowners.db` | Durable queue and audit store. Production requires PostgreSQL through the exact `postgresql+psycopg` driver. The URL must contain one explicit host or Unix-socket path, database, username, and nonempty password. Treat the complete value as a secret. SQLite remains available for development and tests. |
 
 The production URL is the only database connection source. Percent-encode

@@ -30,6 +30,9 @@ def test_manifest_requests_only_required_permissions_and_events() -> None:
     assert manifest["hook_attributes"]["url"] == (
         "https://extra-codeowners.example.com/webhooks/github"
     )
+    assert manifest["redirect_url"] == "https://extra-codeowners.example.com/setup/callback"
+    assert "setup_url" not in manifest
+    assert "setup_on_update" not in manifest
     assert set(manifest["default_events"]) == {
         "check_run",
         "installation_target",

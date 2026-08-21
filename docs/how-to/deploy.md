@@ -273,8 +273,8 @@ delivery sizes. Rate limits must still accommodate normal GitHub bursts and
 manual redelivery.
 
 Disable query-string logging for `/setup/callback`. Its one-use App
-Manifest conversion code is sensitive. With setup disabled, `/setup` and
-`/setup/complete` return `404`. A callback request that includes
+Manifest conversion code is sensitive. With setup disabled, `/setup` returns
+`404`. A callback request that includes
 its required `code` and `state` parameters also returns `404`.
 
 Use path-level access control even when every route shares one HTTPS origin.

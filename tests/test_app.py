@@ -1102,7 +1102,7 @@ def test_setup_routes_are_hidden_when_disabled(tmp_path: Path) -> None:
 
     with TestClient(app) as client:
         assert client.get("/setup").status_code == 404
-        assert client.get("/setup/complete").status_code == 404
+        assert client.get("/setup/callback?code=test&state=test").status_code == 404
 
 
 def test_setup_manifest_flow_is_no_store_and_escapes_credentials(
@@ -1138,7 +1138,7 @@ def test_setup_manifest_flow_is_no_store_and_escapes_credentials(
     assert "organizations/example/settings/apps/new" in setup.text
     assert callback.status_code == 200
     assert "&lt;private&gt;" in callback.text
-    assert complete.status_code == 200
+    assert complete.status_code == 404
 
 
 def test_readiness_fails_without_github_credentials(tmp_path: Path) -> None:

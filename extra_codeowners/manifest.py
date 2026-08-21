@@ -96,8 +96,6 @@ class ManifestService:
             ),
             "public": False,
             "redirect_url": f"{base}/setup/callback",
-            "setup_url": f"{base}/setup/complete",
-            "setup_on_update": True,
             "request_oauth_on_install": False,
             "hook_attributes": {"url": f"{base}/webhooks/github", "active": True},
             "default_permissions": {

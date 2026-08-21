@@ -1,4 +1,4 @@
-# Register a GitHub App with the setup URL
+# Register a GitHub App with an App Manifest
 
 Use the optional App Manifest flow to create a private Extra CODEOWNERS GitHub
 App. The manifest proposes the webhook URL, permissions, and event
@@ -7,7 +7,8 @@ conversion.
 
 The callback displays credentials once. Run it from an operator-controlled
 browser, store the values immediately, and disable setup when registration is
-complete.
+complete. The manifest leaves GitHub's post-installation setup URL blank, so
+GitHub won't redirect an installer back to this short-lived service.
 
 ## Prerequisites
 
@@ -87,6 +88,9 @@ so review it before creating the App.
 - Confirm that the App is private.
 - Confirm that the webhook URL is the expected HTTPS origin followed by
   `/webhooks/github`.
+- Leave **Setup URL** blank and leave **Redirect on update** unselected. The
+  service only needs the one-use manifest callback; it has no post-installation
+  page.
 - Confirm that the App does not request user authorization.
 
 The final name identifies this checker deployment. It is not the name of an
@@ -178,11 +182,22 @@ Start the normal service and confirm `/health/ready` returns HTTP 200.
 Verify:
 
 - `/setup` returns `404`
-- `/setup/complete` returns `404`
 - `/setup/callback?code=test&state=test` returns `404`.
 
 The callback probe includes its required query parameters so FastAPI reaches
 the disabled route instead of returning a parameter-validation error.
+
+### Correct an App created by an older manifest
+
+Older Extra CODEOWNERS manifests set a GitHub **Setup URL** at
+`/setup/complete`. A normal production deployment exposes only the webhook,
+so GitHub sends installers to a 404 after installation or a scope update.
+
+Open the App's **General** settings. Under **Post installation**, clear
+**Setup URL**, turn off **Redirect on update**, and save the registration. This
+doesn't change the webhook URL, App permissions, or installed repositories.
+Change installation scope in GitHub's App settings after that. With no setup
+URL, GitHub does not call this service for the update.
 
 ## 5. Install the App and test least privilege
 
@@ -191,8 +206,8 @@ Install the private App on:
 - the organization-policy repository, `ORGANIZATION/.github` by default
 - one disposable target repository.
 
-GitHub may visit `/setup/complete` after installation. A `404` from
-the now-disabled setup process does not undo the installation.
+With no setup URL, GitHub does not call the production service after
+installation.
 
 In the App settings, open **Advanced**, find the
 `installation.created` delivery, and select **Redeliver**. Confirm that

@@ -755,19 +755,6 @@ def create_app(
             raise HTTPException(status.HTTP_400_BAD_REQUEST, str(error)) from error
         return HTMLResponse(service.credentials_page(credentials), headers=NO_STORE_HEADERS)
 
-    @app.get("/setup/complete", response_class=HTMLResponse, include_in_schema=False)
-    async def setup_complete() -> HTMLResponse:
-        """Confirm installation and point the operator to repository configuration."""
-        if not runtime.setup_enabled:
-            raise HTTPException(status.HTTP_404_NOT_FOUND)
-        body = """<!doctype html><html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width"><title>Extra CODEOWNERS installed</title></head>
-<body><main><h1>Extra CODEOWNERS is installed</h1>
-<p>Add <code>.github/extra-codeowners.toml</code> to each repository you want to enable.</p>
-<p><a href="https://extra-codeowners.readthedocs.io/">Read the configuration guide</a>.</p>
-</main></body></html>"""
-        return HTMLResponse(body, headers=NO_STORE_HEADERS)
-
     return app
 
 
