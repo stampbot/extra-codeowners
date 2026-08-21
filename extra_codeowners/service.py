@@ -1036,10 +1036,15 @@ class EvaluationService:
             document = CodeownersDocument(())
 
         changed_path_upper_bound = expected_changed_files * 2
+        built_in_policy_path_count = int(
+            not self.settings.allow_insecure_changes
+            and not repository_policy.allow_delegation_for_policy_file
+        )
         policy_pattern_count = (
             sum(len(delegation.paths) for delegation in repository_policy.delegations)
             + len(organization.guardrails.non_delegable_paths)
-            + (0 if self.settings.allow_insecure_changes else len(BUILTIN_NON_DELEGABLE_PATHS) + 1)
+            + (0 if self.settings.allow_insecure_changes else len(BUILTIN_NON_DELEGABLE_PATHS))
+            + built_in_policy_path_count
         )
         if (
             changed_path_upper_bound * (len(document.rules) + policy_pattern_count)

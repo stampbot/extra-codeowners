@@ -68,7 +68,7 @@ in an enrolled repository:
 8. Applies last-match-wins `CODEOWNERS` precedence and groups changed paths by their effective owner set. Every distinct owner set is a separate requirement.
 9. Accepts a qualifying human's latest effective approval only when that review targets the exact current head. When repository policy explicitly sets `allow_author_as_codeowner = true`, it may instead accept the pull-request author as human evidence for a matching owner set. The author must be a GitHub `User` with the same current direct-owner or eligible-team evidence required of a human reviewer. This does not create a GitHub review.
 10. Otherwise, considers application approvals for the current head. The review actor and independently fetched App metadata must match organization enrollment. The delegation must match the path and owner set, and its label restrictions must all pass.
-11. Rejects application substitution for every effective non-delegable path. An opted-in eligible author is human evidence, not application substitution.
+11. Rejects application substitution for every effective non-delegable path. A repository may opt only its configured policy file into ordinary App delegation with `allow_delegation_for_policy_file = true`; an organization guardrail still wins. An opted-in eligible author is human evidence, not application substitution.
 12. Fetches the pull request again before publication. If it closed during the
     evaluation, the service follows the same completed-result preservation and
     in-progress cancellation rule as in step 1. If the pull request remains
@@ -222,10 +222,11 @@ Unless `EXTRA_CODEOWNERS_ALLOW_INSECURE_CHANGES=true`, these built-in patterns a
 /stampbot.toml
 /.github/workflows/**
 /.github/actions/**
-/<configured repository policy path>
+/<configured repository policy path> (unless repository policy enables
+`allow_delegation_for_policy_file`)
 ```
 
-The last entry is the configured `EXTRA_CODEOWNERS_POLICY_PATH`, rooted for matching. The insecure-changes escape hatch removes only these built-ins; organization-defined non-delegable paths remain active. When the escape hatch is enabled, the Check Run includes a warning and `extra_codeowners_insecure_changes_enabled` reports `1`.
+The last entry is the configured `EXTRA_CODEOWNERS_POLICY_PATH`, rooted for matching. It is present by default. A repository can opt only that path into its existing App delegation with `allow_delegation_for_policy_file = true`; it must still supply an enrolled App, an explicit matching delegation, and current-head approval evidence. Organization-defined non-delegable paths remain active and override this opt-in. The insecure-changes escape hatch removes only these built-ins. When it is enabled, the Check Run includes a warning and `extra_codeowners_insecure_changes_enabled` reports `1`.
 
 ## Check results
 

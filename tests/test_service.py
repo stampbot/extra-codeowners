@@ -1261,6 +1261,38 @@ async def test_application_cannot_approve_builtin_workflow_path(tmp_path: Path) 
 
 
 @pytest.mark.asyncio
+async def test_application_can_approve_policy_file_after_explicit_base_policy_opt_in(
+    tmp_path: Path,
+) -> None:
+    github = FakeGitHub(changed_path=".github/extra-codeowners.toml")
+    original = github.get_file_text
+
+    async def policy_file_delegation(*args: Any, **kwargs: Any) -> str | None:
+        if args[1] == "example/project" and args[2] == ".github/extra-codeowners.toml":
+            assert kwargs["ref"] == BASE
+            return """
+schema_version = 1
+enabled = true
+allow_delegation_for_policy_file = true
+
+[[delegations]]
+app = "stampbot"
+paths = [".github/extra-codeowners.toml"]
+for_owners = ["@example/platform"]
+required_labels = ["autoapprove"]
+"""
+        return await original(*args, **kwargs)
+
+    github.get_file_text = policy_file_delegation  # type: ignore[method-assign]
+    store = migrated_store(f"sqlite:///{tmp_path / 'policy-file-delegation.db'}")
+
+    await EvaluationService(settings(), github, store).evaluate_job(job(store))  # type: ignore[arg-type]
+
+    assert github.checks[-1]["conclusion"] == "success"
+    assert "covered by approved application stampbot" in github.checks[-1]["text"]
+
+
+@pytest.mark.asyncio
 async def test_human_team_member_can_approve_non_delegable_path(tmp_path: Path) -> None:
     github = FakeGitHub(
         changed_path=".github/workflows/release.yml",

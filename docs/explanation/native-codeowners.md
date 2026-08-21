@@ -83,10 +83,12 @@ A workflow may invoke an App. Repository policy may list an enrolled App.
 request changes one of those protected files, an enrolled App can't stand in
 for the effective human owner.
 
-The built-in non-delegable set covers standard `CODEOWNERS` locations, the
-effective repository policy, Stampbot's root policy, GitHub workflows, and
-local actions. Organization policy should add the approving App's other
-control files and any transitive decision code. The
+The built-in non-delegable set covers standard `CODEOWNERS` locations,
+Stampbot's root policy, GitHub workflows, and local actions. It also covers the
+effective repository policy by default. A repository may deliberately opt only
+that policy file into its normal App delegation; organization guardrails can
+still keep it human-only. Organization policy should add the approving App's
+other control files and any transitive decision code. The
 [configuration reference](../reference/configuration.md#built-in-non-delegable-paths)
 lists the exact patterns and explains the process-wide insecure escape hatch.
 

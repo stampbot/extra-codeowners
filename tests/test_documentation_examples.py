@@ -1,6 +1,7 @@
 """Keep published documentation examples aligned with executable policy models."""
 
 import argparse
+import re
 import tomllib
 from pathlib import Path
 from threading import Thread
@@ -178,6 +179,21 @@ def test_selected_repository_installations_document_the_policy_repository_requir
     assert "organization_policy_repository_unavailable" in troubleshooting
     assert "selected repositories" in configuration
     assert "Re-evaluate" in troubleshooting
+
+
+def test_policy_file_delegation_example_is_a_complete_explicit_opt_in() -> None:
+    configuration = CONFIGURATION_GUIDE.read_text(encoding="utf-8")
+    match = re.search(
+        r"### Optional: let an enrolled App maintain the policy file\n.*?```toml\n(.*?)```",
+        configuration,
+        flags=re.DOTALL,
+    )
+
+    assert match is not None
+    policy = RepositoryPolicy.from_toml(match.group(1))
+    assert policy.allow_delegation_for_policy_file is True
+    assert policy.delegations[0].paths == (".github/extra-codeowners.toml",)
+    assert policy.delegations[0].for_owners == ("@example-org/platform",)
 
 
 def test_relay_probe_accepts_exact_hmac_and_rejects_another_secret(

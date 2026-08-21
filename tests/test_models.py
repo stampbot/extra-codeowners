@@ -66,12 +66,14 @@ def test_policy_rejects_unknown_fields_and_duplicate_app_identity() -> None:
 def test_repository_policy_is_explicit_opt_in_and_parses_delegation() -> None:
     assert RepositoryPolicy().enabled is False
     assert RepositoryPolicy().allow_author_as_codeowner is False
+    assert RepositoryPolicy().allow_delegation_for_policy_file is False
 
     policy = RepositoryPolicy.from_toml(
         """
         schema_version = 1
         enabled = true
         allow_author_as_codeowner = true
+        allow_delegation_for_policy_file = true
 
         [[delegations]]
         app = "StampBot"
@@ -84,6 +86,7 @@ def test_repository_policy_is_explicit_opt_in_and_parses_delegation() -> None:
 
     delegation = policy.delegations[0]
     assert policy.allow_author_as_codeowner is True
+    assert policy.allow_delegation_for_policy_file is True
     assert delegation.app == "stampbot"
     assert delegation.for_owners == ("@example/infrastructure",)
     assert delegation.required_labels == frozenset({"automated"})

@@ -17,7 +17,9 @@ from extra_codeowners.models import (
 
 # These paths define or execute the approval boundary. Application delegation
 # is disabled for them unless an operator explicitly enables the process-level
-# insecure escape hatch. Organization-added paths are never removed by it.
+# insecure escape hatch. The repository-policy path is intentionally separate:
+# a repository can make only that path delegable with an explicit, base-commit
+# policy opt-in. Organization-added paths are never removed by either choice.
 BUILTIN_NON_DELEGABLE_PATHS: tuple[str, ...] = (
     "/CODEOWNERS",
     "/.github/CODEOWNERS",
@@ -164,11 +166,12 @@ def compile_policy(
     runtime = options or EvaluationOptions()
     issues: list[PolicyIssue] = []
 
-    builtins = (
-        ()
-        if runtime.allow_insecure_changes
-        else (*BUILTIN_NON_DELEGABLE_PATHS, f"/{runtime.repository_policy_path}")
-    )
+    if runtime.allow_insecure_changes:
+        builtins: tuple[str, ...] = ()
+    else:
+        builtins = BUILTIN_NON_DELEGABLE_PATHS
+        if not repository.allow_delegation_for_policy_file:
+            builtins += (f"/{runtime.repository_policy_path}",)
     non_delegable_patterns = builtins + organization.guardrails.non_delegable_paths
     for pattern in non_delegable_patterns:
         try:

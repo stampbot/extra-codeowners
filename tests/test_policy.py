@@ -26,14 +26,20 @@ def organization(*, guardrails: tuple[str, ...] = ()) -> OrganizationPolicy:
     )
 
 
-def repository(**delegation_overrides: object) -> RepositoryPolicy:
+def repository(
+    *, allow_delegation_for_policy_file: bool = False, **delegation_overrides: object
+) -> RepositoryPolicy:
     values: dict[str, object] = {
         "app": "stampbot",
         "paths": ("**",),
         "for_owners": ("*",),
     }
     values.update(delegation_overrides)
-    return RepositoryPolicy(enabled=True, delegations=(Delegation.model_validate(values),))
+    return RepositoryPolicy(
+        enabled=True,
+        allow_delegation_for_policy_file=allow_delegation_for_policy_file,
+        delegations=(Delegation.model_validate(values),),
+    )
 
 
 def test_builtin_and_org_guardrails_are_non_delegable() -> None:
@@ -71,6 +77,19 @@ def test_configured_repository_policy_path_is_non_delegable() -> None:
 
     assert compiled.is_non_delegable("config/extra-codeowners.toml")
     assert not compiled.is_non_delegable(".github/extra-codeowners.toml")
+
+
+def test_policy_file_delegation_opt_in_leaves_other_builtins_and_org_guardrails_intact() -> None:
+    repository_policy = repository(allow_delegation_for_policy_file=True)
+    delegated = compile_policy(organization(), repository_policy)
+    organization_guarded = compile_policy(
+        organization(guardrails=("/.github/extra-codeowners.toml",)), repository_policy
+    )
+
+    assert not delegated.is_non_delegable(".github/extra-codeowners.toml")
+    assert delegated.is_non_delegable(".github/workflows/test.yml")
+    assert delegated.is_non_delegable("CODEOWNERS")
+    assert organization_guarded.is_non_delegable(".github/extra-codeowners.toml")
 
 
 def test_unenrolled_application_fails_policy_compilation() -> None:

@@ -69,7 +69,7 @@ of the security contract.
 
 | Threat | Control | Residual risk |
 | --- | --- | --- |
-| A pull-request author edits delegation policy to authorize that pull request | Load repository policy and CODEOWNERS from the exact base commit. Assign policy paths to humans in CODEOWNERS and make those paths non-delegable by default. | A merged policy change governs later pull requests, so human review of it remains critical. |
+| A pull-request author edits delegation policy to authorize that pull request | Load repository policy and CODEOWNERS from the exact base commit. Assign policy paths to humans in CODEOWNERS and make those paths non-delegable by default. | A merged policy change governs later pull requests, so human review of it remains critical. This also prevents the pull request that first enables policy-file delegation from using that new authority. |
 | A pull-request author edits the DCO checker that evaluates the same pull request | Keep the active workflow read-only and secretless. The replacement evaluator is pure, does not execute pull-request content, and is intended to run from an independently controlled GitHub App. | The independent caller and required context do not exist yet. Until issue #40 is complete, the active workflow remains review evidence rather than an enforcement boundary. |
 | A retarget or force-push changes the DCO commit range while evidence is collected | Select commit IDs through the GraphQL pull-request connection, require the exact repository, base, and head identity on every list and detail response, and require matching event, before, and after snapshots. | Publication-time revalidation is not implemented. Same-repository and private-fork commit-node reads still need live contract tests before rollout. |
 | Organization enrollment policy is changed maliciously | Keep enrollment in the separately governed organization-policy repository (`.github` by default), with native human CODEOWNER enforcement. | Compromise of that repository's merge authority can expand application trust across repositories. |
@@ -94,6 +94,7 @@ of the security contract.
 | An unenrolled bot copies a trusted App's name | Require the review bot's user ID, `Bot` type, and exact `<slug>[bot]` login. Fetch that bot user through the repository installation and require the returned immutable ID to match the organization enrollment. | GitHub review APIs do not expose the originating App ID. The protected organization policy binds the App ID, slug, and bot user ID, so changing that trust relationship still needs human review. |
 | Automation uses a normal GitHub user account | Govern CODEOWNERS users and team membership outside this service. Reserve application delegation for actors GitHub identifies as Apps. | Actor type `User` does not prove personhood. A machine user with owner authority is treated like any other user. |
 | An owner self-satisfies the Extra CODEOWNERS check | Default `allow_author_as_codeowner` to `false`. When a repository enables it, accept only the current pull-request author GitHub identifies as `User` after the same direct-owner or active-team repository-access checks used for a human reviewer. Keep ordinary review-count rules separate. | The option intentionally permits an eligible author to satisfy matching owner sets, including non-delegable paths. It is appropriate only when that small-team trade-off is explicitly accepted. |
+| A selected App approves a future change to its own repository policy | Default `allow_delegation_for_policy_file` to `false`. When a repository opts in, require the existing App identity, current-head review, matching owner set, and explicit policy-file delegation. Organization guardrails can still veto the path. | The selected App can approve a later edit that expands its own future scope. Bootstrap the option with human review. If the App is compromised, add an organization guardrail through human-controlled policy before relying on a repository-policy change. |
 | Human or team ownership eligibility changes after approval | Revalidate direct-user repository permission, team visibility, repository access, and active membership. Subscribe to repository and organization authority events and reconcile open pull requests. | Success may remain stale while event delivery and fan-out run, or until reconciliation recovers a missed event. |
 | Contributors mistake a successful required check for an ordinary GitHub review | Name the check clearly, configure its expected App source, retain the intended numeric review rule, and expose the evidence in the Check Run output and operating documentation. | GitHub presents reviews and required checks in different parts of the pull-request UI. A repository can still misconfigure or misunderstand its rules, especially during rollout. |
 | App access is suspended or an ordinary target repository is removed from its installation | Keep native human enforcement until access changes finish, and restore it before intentional removal. Acknowledge a well-formed ordinary-target removal without pretending revocation succeeded. | Once access is gone, Extra CODEOWNERS cannot revoke an existing check in that repository. |
@@ -156,15 +157,19 @@ own authority.
 Extra CODEOWNERS therefore has this built-in non-delegable set:
 
 - every standard CODEOWNERS location
-- the effective Extra CODEOWNERS policy path, which defaults to
-  `.github/extra-codeowners.toml`
 - Stampbot's root `/stampbot.toml`
 - `.github/workflows/**`
 - repository-local actions under `.github/actions/**`.
 
-Organization policy may add paths, and repository policy cannot remove them.
-When a changed, owned path matches the combined set, an App approval cannot
-replace approval from an eligible human.
+The effective Extra CODEOWNERS policy path, which defaults to
+`.github/extra-codeowners.toml`, is also non-delegable by default. A repository
+may set `allow_delegation_for_policy_file = true` to let an explicit matching
+delegation cover that one path. The option never affects the other built-ins,
+and an organization guardrail for the path still wins.
+
+Organization policy may add paths, and repository policy cannot remove those
+guardrails. When a changed, owned path matches the effective set, an App
+approval cannot replace approval from an eligible human.
 
 The service cannot discover every input used by a privileged workflow or an
 approving App. Stampbot is one known case, not a complete inventory. Use

@@ -187,6 +187,43 @@ the setting disabled for a review boundary that requires a different person.
 The policy is read from the base commit, so enabling the field in a pull request
 does not authorize that same pull request.
 
+### Optional: let an enrolled App maintain the policy file
+
+Use this only when you want a selected App to approve later changes to the
+repository's own Extra CODEOWNERS policy. The default remains human-only.
+
+!!! warning "This is a deliberate policy self-maintenance choice"
+    After the option takes effect, the selected App may approve a policy edit
+    that broadens what it may approve on a later pull request. The pull request
+    that first enables the option cannot use it, because Extra CODEOWNERS reads
+    policy from the base commit. Review that bootstrap change with the human
+    CODEOWNERS process you want to preserve.
+
+In that human-reviewed bootstrap pull request, add the option and an exact
+delegation for the configured policy path. Keep this delegation separate from
+broader routine-file rules so reviewers can see the extra authority:
+
+```toml
+schema_version = 1
+enabled = true
+allow_delegation_for_policy_file = true
+
+[[delegations]]
+app = "example-automation"
+paths = [".github/extra-codeowners.toml"]
+for_owners = ["@example-org/platform"]
+```
+
+If your deployment uses another `EXTRA_CODEOWNERS_POLICY_PATH`, replace the
+example path with that literal value. The option does not approve anything by
+itself: the App still needs an enrolled identity, a current-head review, and a
+matching delegation and CODEOWNERS owner set.
+
+An organization can keep this file human-only by adding its path to
+`guardrails.non_delegable_paths`. That guardrail wins even when a repository
+sets the option. It is also the quickest safe revocation path if the selected
+App is no longer trusted.
+
 ## 4. Protect the approval boundary
 
 Do not enable `EXTRA_CODEOWNERS_ALLOW_INSECURE_CHANGES` to get through a test.
@@ -196,7 +233,8 @@ process.
 The built-in list prevents App substitution on:
 
 - all standard `CODEOWNERS` locations
-- the effective Extra CODEOWNERS repository policy
+- the effective Extra CODEOWNERS repository policy, unless that repository
+  explicitly sets `allow_delegation_for_policy_file = true`
 - Stampbot's root `/stampbot.toml`
 - `.github/workflows/**`
 - `.github/actions/**`.
@@ -233,6 +271,12 @@ member of the owning team. Confirm the check identifies the author as its
 evidence, then confirm that the ordinary approval-count rule still needs the
 separate Stampbot or human review you intended. Test an author outside that
 team as a negative case.
+
+If you enabled `allow_delegation_for_policy_file`, first merge the human-reviewed
+bootstrap change. Then open a later pull request that changes only the policy
+file and obtain the selected App's approval. Confirm the check identifies the
+matching delegation. Add the policy path to an organization guardrail in a
+test environment and confirm the same App approval no longer satisfies it.
 
 Next, change a protected control file. For Stampbot, use `/stampbot.toml`; for
 another App, use one of the control paths you added to organization
