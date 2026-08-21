@@ -87,10 +87,11 @@ verify_github_attestation() {
     --arg subject_name "${subject_name}" \
     --arg subject_digest "${subject_digest}" \
     'type == "array" and
-      length == 1 and
-      .[0].verificationResult.signature.certificate.subjectAlternativeName == $certificate_identity and
-      ([.[] | .verificationResult.statement.subject[]? |
-        select(.name == $subject_name and .digest.sha256 == $subject_digest)] | length == 1)' \
+      length > 0 and
+      all(.[];
+        .verificationResult.signature.certificate.subjectAlternativeName == $certificate_identity and
+        ([.verificationResult.statement.subject[]? |
+          select(.name == $subject_name and .digest.sha256 == $subject_digest)] | length == 1))' \
     "${output}" >/dev/null
 }
 

@@ -92,8 +92,18 @@ record = {
         "statement": {"subject": [{"name": name, "digest": {"sha256": digest}}]},
     },
 }
-if os.environ.get("FAKE_AMBIGUOUS_ATTESTATION") == "true":
+if os.environ.get("FAKE_REPEATED_ATTESTATION") == "true":
     print(json.dumps([record, record]))
+elif os.environ.get("FAKE_CONFLICTING_ATTESTATION") == "true":
+    conflicting = {
+        "verificationResult": {
+            "signature": {"certificate": {"subjectAlternativeName": identity}},
+            "statement": {
+                "subject": [{"name": name, "digest": {"sha256": "0" * 64}}]
+            },
+        },
+    }
+    print(json.dumps([record, conflicting]))
 else:
     print(json.dumps([record]))
 """,
@@ -239,11 +249,19 @@ def _run_verifier(
     return result, operations
 
 
+@pytest.mark.parametrize(
+    "environment",
+    (
+        None,
+        {"FAKE_REPEATED_ATTESTATION": "true"},
+    ),
+)
 @pytest.mark.skipif(BASH is None or JQ is None, reason="Bash and jq are required")
-def test_release_provenance_verifier_accepts_only_expected_immutable_evidence(
+def test_release_provenance_verifier_accepts_equivalent_immutable_evidence(
+    environment: Mapping[str, str] | None,
     tmp_path: Path,
 ) -> None:
-    result, operations = _run_verifier(tmp_path)
+    result, operations = _run_verifier(tmp_path, environment=environment)
 
     assert result.returncode == 0, result.stderr
     gh_operations = [operation for operation in operations if operation.startswith("gh ")]
@@ -279,7 +297,7 @@ def test_release_provenance_verifier_accepts_only_expected_immutable_evidence(
         ),
         ("missing-bundle", None, _remove_chart_bundle),
         ("malformed-bundle", None, _malform_wheel_bundle),
-        ("ambiguous-attestation", {"FAKE_AMBIGUOUS_ATTESTATION": "true"}, None),
+        ("conflicting-attestation", {"FAKE_CONFLICTING_ATTESTATION": "true"}, None),
     ),
 )
 @pytest.mark.skipif(BASH is None or JQ is None, reason="Bash and jq are required")
