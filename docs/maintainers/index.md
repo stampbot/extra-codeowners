@@ -88,7 +88,9 @@ If publication stops halfway through, rerun the failed jobs in the original CI
 run. GitHub keeps that run on its original commit. A tag already on that commit
 is reused, and a completed GitHub release switches the workflow into
 verification mode. It verifies the required assets, both image architectures,
-and the exact image and chart digests. Conflicting state stops the retry.
+and the exact image and chart digests. It then verifies GitHub provenance and
+Sigstore evidence against the release workflow and original commit. Conflicting,
+missing, or ambiguous evidence stops the retry.
 
 If the postcondition reports a mutable release, first enable immutable releases
 and query that release again. If GitHub still reports it as mutable, delete only

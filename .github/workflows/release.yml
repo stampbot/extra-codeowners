@@ -873,10 +873,16 @@ jobs:
 
       - name: Create GitHub release
         env:
+          CHART_DIGEST: ${{ steps.chart.outputs.digest }}
+          CHART_REFERENCE: ghcr.io/${{ github.repository_owner }}/charts/extra-codeowners
           GH_TOKEN: ${{ github.token }}
+          IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
           PRERELEASE: ${{ needs.plan.outputs.prerelease }}
           PREVIOUS_TAG: ${{ needs.plan.outputs.previous_tag }}
+          PYTHON_VERSION: ${{ needs.plan.outputs.python_version }}
+          REVISION: ${{ needs.plan.outputs.revision }}
           TAG: ${{ needs.plan.outputs.tag }}
+          VERSION: ${{ needs.plan.outputs.version }}
         run: |
           set -euo pipefail
           mapfile -d '' artifacts < <(find release -type f -print0 | sort -z)
@@ -1057,6 +1063,15 @@ jobs:
               elif published.read_bytes() != local[name].read_bytes():
                   raise SystemExit(f"published release asset {name} does not match this run")
           PY
+          .github/scripts/verify-release-provenance.sh \
+            /tmp/published-release-assets \
+            "${IMAGE}" \
+            "${IMAGE_DIGEST}" \
+            "${CHART_REFERENCE}" \
+            "${CHART_DIGEST}" \
+            "${PYTHON_VERSION}" \
+            "${VERSION}" \
+            "${REVISION}"
           }
 
           release_state="$(lookup_release)"
@@ -1090,6 +1105,9 @@ jobs:
       needs.plan.outputs.superseded != 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    permissions:
+      attestations: read
+      contents: read
     steps:
       - name: Check out release commit and tags
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1111,6 +1129,11 @@ jobs:
         uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
         with:
           version: v3.19.0 # helm runtime
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.0.6
 
       - name: Verify published release surfaces
         env:
@@ -1214,6 +1237,15 @@ jobs:
           cmp --silent \
             "release-assets/extra-codeowners-${VERSION}.tgz" \
             "/tmp/published-chart-artifact/extra-codeowners-${VERSION}.tgz"
+          .github/scripts/verify-release-provenance.sh \
+            release-assets \
+            "${IMAGE}" \
+            "${image_digest}" \
+            "${chart_reference}" \
+            "${chart_digest}" \
+            "${PYTHON_VERSION}" \
+            "${VERSION}" \
+            "${REVISION}"
 
   complete:
     name: Release complete

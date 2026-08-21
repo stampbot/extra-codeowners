@@ -36,7 +36,7 @@ run = [
 [tasks."lint:workflows"]
 run = [
   "actionlint",
-  "shellcheck .github/scripts/smoke-container.sh .github/scripts/test-helm-chart.sh .github/scripts/test-postgres-backup-restore.sh",
+  "shellcheck .github/scripts/smoke-container.sh .github/scripts/test-helm-chart.sh .github/scripts/test-postgres-backup-restore.sh .github/scripts/verify-release-provenance.sh",
 ]
 
 [tasks."lint:yaml"]

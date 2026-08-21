@@ -554,8 +554,9 @@ The published immutable GitHub release is the completion record. If publication
 fails, rerunning the failed job in the original CI run keeps the original
 commit. The workflow reuses a valid tag that already points there. When the
 release already exists, it verifies the required assets, image digests, and
-chart artifact instead of publishing a second release. Conflicting state fails
-closed.
+chart artifact instead of publishing a second release. It also verifies GitHub
+provenance and Sigstore signatures against the release workflow and original
+commit. Conflicting, missing, or ambiguous evidence fails closed.
 
 These controls make releases repeatable, but they do not resolve the
 commit-scoped Check Run limitation above. Alpha releases remain suitable only
