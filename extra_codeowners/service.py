@@ -605,13 +605,15 @@ class EvaluationService:
         head_sha: str,
         details_url: str | None,
     ) -> None:
-        """Finish a known check when no open pull request still needs this commit.
+        """Finish only a blocking check when no open pull request needs its commit.
 
         A Check Run belongs to a commit rather than a pull request. Before
-        cancelling it, re-read every associated pull request while holding the
-        same cross-replica writer guard used for normal check publication. This
-        prevents a closed pull request from cancelling a shared commit's check
-        while another pull request is still open.
+        cancelling an in-progress run, re-read every associated pull request
+        while holding the same cross-replica writer guard used for normal check
+        publication. This prevents a closed pull request from cancelling a
+        shared commit's check while another pull request is still open. A
+        completed result is historical evidence, so closing the last pull
+        request never rewrites it.
         """
         async with self._check_write_guard(job.installation_id, head_sha):
             current_associated = await self._current_associated_pulls(
@@ -631,6 +633,12 @@ class EvaluationService:
                 self.settings.check_name,
             )
             if check_run_id is None:
+                return
+            if await self.github.check_run_is_completed(
+                job.installation_id,
+                job.repository_full_name,
+                check_run_id,
+            ):
                 return
             await self.github.complete_check_run(
                 job.installation_id,
@@ -1291,6 +1299,16 @@ class EvaluationService:
 
         async with self._check_write_guard(job.installation_id, job.head_sha):
             await require_current_claim()
+            current_associated = await self._current_associated_pulls(
+                job.installation_id,
+                job.repository_full_name,
+                job.head_sha,
+                before_github_read=require_current_claim,
+            )
+            has_open_associated_pull = any(
+                state_value == "open" and associated_sha == job.head_sha
+                for state_value, associated_sha in current_associated.values()
+            )
             check_run_id = await self.github.existing_check_run_id(
                 job.installation_id,
                 job.repository_full_name,
@@ -1301,7 +1319,7 @@ class EvaluationService:
             # mutating request. An expired lease must never reset a result
             # published by its replacement.
             await require_current_claim()
-            if check_run_id is not None:
+            if check_run_id is not None and has_open_associated_pull:
                 await self.github.reset_check_run(
                     job.installation_id,
                     job.repository_full_name,
@@ -1314,12 +1332,6 @@ class EvaluationService:
                     external_id=f"{job.repository_full_name}@{job.head_sha}",
                 )
 
-        current_associated = await self._current_associated_pulls(
-            job.installation_id,
-            job.repository_full_name,
-            job.head_sha,
-            before_github_read=require_current_claim,
-        )
         for number_value, (state_value, associated_sha) in current_associated.items():
             if state_value != "open" or associated_sha != job.head_sha:
                 continue

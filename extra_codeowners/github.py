@@ -1763,6 +1763,34 @@ class GitHubClient:
             check_name,
         )
 
+    async def check_run_is_completed(
+        self,
+        installation_id: int,
+        repository: str,
+        check_run_id: int,
+    ) -> bool:
+        """Return whether one known Check Run is terminal.
+
+        The caller obtains ``check_run_id`` from this App's name- and
+        commit-scoped lookup. A close path needs this separate state read so it
+        can leave a completed result intact while still ending a genuinely
+        in-progress run.
+        """
+
+        result = await self._request(
+            "GET",
+            f"/repos/{repository}/check-runs/{check_run_id}",
+            installation_id=installation_id,
+        )
+        status = result.get("status")
+        if not isinstance(status, str) or status not in {
+            "queued",
+            "in_progress",
+            "completed",
+        }:
+            raise GitHubError("check-run response omitted a supported status")
+        return status == "completed"
+
     async def reset_check_run(
         self,
         installation_id: int,
