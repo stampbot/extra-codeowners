@@ -21,7 +21,6 @@ The service registers these routes:
 | `POST` | `/webhooks/github` | GitHub webhook delivery | Verifies GitHub's HMAC-SHA256 signature over the raw request body. This is the only route that requires public HTTPS ingress. |
 | `GET` | `/setup` | GitHub App administrator | Disabled by default. Returns the development App Manifest setup form when setup mode is configured. |
 | `GET` | `/setup/callback` | GitHub App Manifest callback | Disabled by default. Validates short-lived state, exchanges GitHub's one-use code, and displays the returned credentials once. |
-| `GET` | `/setup/complete` | GitHub App administrator | Disabled by default. Receives GitHub's post-installation or permission-update redirect. |
 
 Public webhook ingress is not a reason to expose health, metrics, documentation, or setup routes. Route them separately or protect them with an authenticating reverse proxy. The application itself does not enforce a request-rate limit, so public ingress must provide suitable abuse controls.
 
@@ -334,7 +333,7 @@ Setup mode requires all three settings:
 - an HTTPS `EXTRA_CODEOWNERS_PUBLIC_URL` that contains only an origin
 - `EXTRA_CODEOWNERS_SETUP_STATE_SECRET` containing at least 32 bytes.
 
-When setup is disabled, all three setup routes return `404` and the other two
+When setup is disabled, both setup routes return `404` and the other two
 settings are optional. When setup is enabled, missing or invalid setup settings
 prevent configuration from loading. A production setup deployment may omit all
 three App credentials only while it is in bootstrap mode; a partial credential
@@ -367,10 +366,6 @@ Callback outcomes use these status codes:
 | Setup disabled, with both required query parameters present | `404` |
 
 The service does not retain the returned credentials. Copy them directly into a secret manager before closing the page. The callback query and result must not appear in proxy access logs, screenshots, browser synchronization, support tickets, terminal transcripts, or logs.
-
-### `GET /setup/complete`
-
-GitHub redirects here after installation or a permission update. The route returns `200 text/html` with a configuration pointer while setup is enabled, and `404` otherwise. It also uses no-store response headers.
 
 ### Manifest defaults
 
