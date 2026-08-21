@@ -62,9 +62,9 @@ in an enrolled repository:
 6. Paginates GitHub's pull-files API. API or transport failures leave the check blocking while the durable job retries.
 7. Evaluates both the old and new path of every rename.
 8. Applies last-match-wins `CODEOWNERS` precedence and groups changed paths by their effective owner set. Every distinct owner set is a separate requirement.
-9. Accepts a qualifying human's latest effective approval only when that review targets the exact current head.
+9. Accepts a qualifying human's latest effective approval only when that review targets the exact current head. When repository policy explicitly sets `allow_author_as_codeowner = true`, it may instead accept the pull-request author as human evidence for a matching owner set. The author must be a GitHub `User` with the same current direct-owner or eligible-team evidence required of a human reviewer. This does not create a GitHub review.
 10. Otherwise, considers application approvals for the current head. The review actor and independently fetched App metadata must match organization enrollment. The delegation must match the path and owner set, and its label restrictions must all pass.
-11. Rejects application substitution for every effective non-delegable path.
+11. Rejects application substitution for every effective non-delegable path. An opted-in eligible author is human evidence, not application substitution.
 12. Fetches the pull request again before publication. If it closed during the
     evaluation, the service follows the same terminal-cancellation rule as in
     step 1. If the pull request remains open but its base ref, base commit,
@@ -99,7 +99,7 @@ The service applies these limits before it can authorize a pull request:
 | Standard `CODEOWNERS` | 3 MiB | Reject the fetch and keep the managed check blocking while the worker retries. GitHub also ignores a `CODEOWNERS` file larger than 3 MiB. |
 | Changed files | Fewer than 3,000 | A reported or returned count of 3,000 or more produces a diagnostic failure because completeness cannot be proved. |
 | Reviews returned by GitHub | At most 1,000 | A 1,001st review exceeds the evidence budget and produces a diagnostic failure. |
-| Current human approvals multiplied by relevant same-organization CODEOWNER teams | At most 250 | A larger membership-query set produces a diagnostic failure instead of skipping teams. |
+| Current human approvals and one opted-in human pull-request author, multiplied by relevant same-organization CODEOWNER teams | At most 250 | A larger membership-query set produces a diagnostic failure instead of skipping teams. |
 | Conservative changed-path and policy-pattern estimate | At most 2,000,000 matches | A larger estimate produces a diagnostic failure before expensive matching. The estimate reserves two paths for every changed file to cover renames. |
 
 Changed-file, review, membership, and match-operation limits produce failure
@@ -168,6 +168,16 @@ Human review evidence follows these rules:
 - A direct `@user` owner qualifies only while GitHub reports `write`, `maintain`, or `admin` repository permission.
 - A team owner qualifies only while the reviewer is an active member, the team is visible rather than secret, and GitHub reports `push`, `maintain`, or `admin` repository access for the team.
 - A new commit invalidates both human and application approvals from the old head for this check, even if GitHub's native stale-review setting would keep them.
+
+Repository policy defaults to `allow_author_as_codeowner = false`. When it is
+`true`, the current pull-request author may satisfy a matching owner set without
+submitting a review, provided GitHub identifies the author as `User` and the
+same direct-owner or team-membership evidence above succeeds. Bots and Apps
+never qualify. This is evidence for this Check Run only: it does not create a
+GitHub approval or alter a repository's ordinary approval-count rule. It also
+applies to non-delegable paths because the author is intentionally treated as
+human evidence. Enable it only where an eligible owner is intentionally allowed
+to self-satisfy the Extra CODEOWNERS decision.
 
 For an application review, the immutable bot user ID, exact `<slug>[bot]` login, App ID, and App slug must match organization policy. Extra CODEOWNERS also fetches `GET /apps/{slug}` and requires GitHub to return the enrolled App ID and slug. Display names and review text never establish identity.
 

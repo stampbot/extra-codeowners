@@ -12,7 +12,8 @@
 Extra CODEOWNERS is a self-hosted GitHub App for teams that trust automation
 to approve routine pull requests. It publishes a required check that accepts
 either a human CODEOWNER approval or an approval from an explicitly enrolled
-GitHub App.
+GitHub App. A repository may also opt in to treating its eligible pull-request
+author as human CODEOWNER evidence for that check.
 
 People and teams stay in GitHub's standard `CODEOWNERS` file. A separate
 policy says which Apps may cover which owners and paths.
@@ -40,6 +41,8 @@ distinct effective owner set separately:
 
 ```text
 appropriate human CODEOWNER approval
+                  OR
+opt-in: eligible pull-request author
                   OR
 enrolled App approval + matching delegation
                   │
@@ -78,6 +81,22 @@ explains the open contract and links to the live probe.
 
 The App doesn't submit reviews, merge pull requests, grant another App access,
 or edit `CODEOWNERS`. It reads GitHub evidence and publishes one Check Run.
+
+### Read the check as a policy result, not a review
+
+Extra CODEOWNERS appears in GitHub's checks area, while GitHub's ordinary
+approval count appears in the review area. Keep a normal minimum-review rule
+when you need one; a successful Extra CODEOWNERS check is not itself a GitHub
+review. Review the check's expected source and its explanatory output with the
+same care as a required review rule, especially while contributors are learning
+the different UI.
+
+The check is asynchronous. When an approval is dismissed or changed, a prior
+success remains visible until GitHub delivers the event and the App resets and
+re-evaluates the check. That is normally short, but it cannot be made zero by a
+third-party App. Reconciliation repairs missed deliveries; it is not an
+instantaneous revocation mechanism. Keep GitHub's native code-owner rule for a
+boundary that cannot tolerate that stale-success window.
 
 This composition still needs live provider testing before production use.
 Check Runs belong to commits, while labels, changed paths, and reviews belong

@@ -357,7 +357,8 @@ and then:
 2. compiles organization enrollment and repository delegation policy
 3. reduces each actor's reviews to the latest opinionated review
 4. groups changed paths by effective owner set
-5. tests each group against eligible human and delegated App evidence.
+5. tests each group against eligible human, explicitly opted-in eligible-author,
+   and delegated App evidence.
 
 That network-free boundary makes property tests and adversarial fixtures
 practical. It also gives future distributions one semantic core to reuse.

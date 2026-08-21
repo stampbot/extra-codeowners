@@ -16,6 +16,7 @@ from extra_codeowners.models import (
     OrganizationPolicy,
     OwnerSetResult,
     PathEvidence,
+    PullRequestAuthor,
     PullRequestReview,
     RepositoryPolicy,
     ReviewActor,
@@ -64,11 +65,13 @@ def test_policy_rejects_unknown_fields_and_duplicate_app_identity() -> None:
 
 def test_repository_policy_is_explicit_opt_in_and_parses_delegation() -> None:
     assert RepositoryPolicy().enabled is False
+    assert RepositoryPolicy().allow_author_as_codeowner is False
 
     policy = RepositoryPolicy.from_toml(
         """
         schema_version = 1
         enabled = true
+        allow_author_as_codeowner = true
 
         [[delegations]]
         app = "StampBot"
@@ -80,6 +83,7 @@ def test_repository_policy_is_explicit_opt_in_and_parses_delegation() -> None:
     )
 
     delegation = policy.delegations[0]
+    assert policy.allow_author_as_codeowner is True
     assert delegation.app == "stampbot"
     assert delegation.for_owners == ("@example/infrastructure",)
     assert delegation.required_labels == frozenset({"automated"})
@@ -87,6 +91,22 @@ def test_repository_policy_is_explicit_opt_in_and_parses_delegation() -> None:
 
     with pytest.raises(ValidationError):
         RepositoryPolicy.model_validate({"enabled": "true"})
+
+
+def test_pull_request_author_is_human_owner_evidence_not_a_review() -> None:
+    author = PullRequestAuthor(
+        login=" Alice ",
+        user_id=4,
+        owner_aliases=("@Example/Platform",),
+        direct_owner_eligible=False,
+    )
+
+    assert author.login == "alice"
+    assert author.owner_aliases == frozenset({"@example/platform"})
+    assert author.direct_owner_eligible is False
+
+    with pytest.raises(ValidationError, match="author login"):
+        PullRequestAuthor(login=" ", user_id=4)
 
 
 def test_committed_toml_requires_explicit_schema_version() -> None:

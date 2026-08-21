@@ -123,11 +123,30 @@ def _human_approvals_by_owner(
     for review in approvals:
         if review.actor.kind is not ActorKind.HUMAN:
             continue
-        identities = set(review.actor.owner_aliases)
-        if review.actor.direct_owner_eligible:
-            identities.add(f"@{review.actor.login.lower()}")
-        resolved.append((review, frozenset(identities)))
+        resolved.append(
+            (
+                review,
+                _human_owner_identities(
+                    review.actor.login,
+                    review.actor.owner_aliases,
+                    review.actor.direct_owner_eligible,
+                ),
+            )
+        )
     return tuple(resolved)
+
+
+def _human_owner_identities(
+    login: str,
+    owner_aliases: frozenset[str],
+    direct_owner_eligible: bool,
+) -> frozenset[str]:
+    """Return the CODEOWNER identities established for one human account."""
+
+    identities = set(owner_aliases)
+    if direct_owner_eligible:
+        identities.add(f"@{login.lower()}")
+    return frozenset(identities)
 
 
 def _error_result(
@@ -200,6 +219,15 @@ def evaluate(data: EvaluationInput) -> EvaluationResult:
     approved_apps, app_warnings = _recognized_app_approvals(data, approvals)
     warnings.extend(app_warnings)
     human_approvals = _human_approvals_by_owner(approvals)
+    author_identities = (
+        _human_owner_identities(
+            data.author.login,
+            data.author.owner_aliases,
+            data.author.direct_owner_eligible,
+        )
+        if data.repository_policy.allow_author_as_codeowner and data.author is not None
+        else frozenset()
+    )
 
     owner_paths: dict[tuple[str, ...], list[str]] = {}
     unowned_paths: list[str] = []
@@ -235,6 +263,29 @@ def evaluate(data: EvaluationInput) -> EvaluationResult:
                             path=path,
                             non_delegable=policy.is_non_delegable(path),
                             explanation="covered by the human CODEOWNER approval",
+                        )
+                        for path in paths
+                    ),
+                )
+            )
+            continue
+
+        if author_identities & owner_set:
+            assert data.author is not None  # Narrowed by author_identities' construction above.
+            requirements.append(
+                OwnerSetResult(
+                    owners=owners,
+                    paths=tuple(paths),
+                    satisfied=True,
+                    satisfied_by=(f"author:@{data.author.login}",),
+                    explanation=(
+                        f"pull request author @{data.author.login} is an eligible human CODEOWNER"
+                    ),
+                    path_evidence=tuple(
+                        PathEvidence(
+                            path=path,
+                            non_delegable=policy.is_non_delegable(path),
+                            explanation="covered by eligible pull-request author evidence",
                         )
                         for path in paths
                     ),
