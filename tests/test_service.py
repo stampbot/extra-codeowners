@@ -213,6 +213,15 @@ required_labels = ["autoapprove"]
     ) -> int | None:
         return 99 if self.checks else None
 
+    async def check_run_is_completed(
+        self,
+        installation_id: int,
+        repository: str,
+        check_run_id: int,
+    ) -> bool:
+        del installation_id, repository, check_run_id
+        return bool(self.checks and self.checks[-1].get("status") == "completed")
+
     async def reset_check_run(
         self,
         installation_id: int,
@@ -669,9 +678,9 @@ async def test_closed_pull_finishes_existing_check_after_durable_re_evaluation(
 
     await service.invalidate_shared_head(invalidation, asyncio.Event())
 
-    # The revocation is deliberately fail-closed. The closed-pull evaluation
-    # below must turn this transient blocking state into a terminal result.
-    assert [check["status"] for check in github.checks] == ["in_progress", "in_progress"]
+    # Closing the last associated pull preserves an existing terminal result,
+    # but this check was already blocking and must still be finished.
+    assert [check["status"] for check in github.checks] == ["in_progress"]
     assert store.complete_shared_head_invalidation(invalidation)
     claimed = store.claim("evaluation-worker", 60)
     assert claimed is not None
@@ -681,6 +690,51 @@ async def test_closed_pull_finishes_existing_check_after_durable_re_evaluation(
     assert github.checks[-1]["status"] == "completed"
     assert github.checks[-1]["conclusion"] == "cancelled"
     assert github.checks[-1]["title"] == "Pull request closed"
+
+
+@pytest.mark.asyncio
+async def test_closed_pull_retains_completed_check_after_durable_re_evaluation(
+    tmp_path: Path,
+) -> None:
+    github = FakeGitHub(changed_path="uv.lock")
+    completed = {
+        "status": "completed",
+        "conclusion": "success",
+        "title": "CODEOWNER approval requirement satisfied",
+        "head_sha": HEAD,
+    }
+    github.checks.append(completed.copy())
+    original_get_pull = github.get_pull
+
+    async def closed_pull(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        pull = await original_get_pull(*args, **kwargs)
+        pull["state"] = "closed"
+        return pull
+
+    github.get_pull = closed_pull  # type: ignore[method-assign]
+    github.list_commit_pulls = AsyncMock(  # type: ignore[method-assign]
+        return_value=[{"number": 3, "state": "closed", "head": {"sha": HEAD}}]
+    )
+    store = migrated_store(f"sqlite:///{tmp_path / 'closed-completed-pull.db'}")
+    service = EvaluationService(settings(), github, store)  # type: ignore[arg-type]
+    accepted = store.accept_delivery(
+        "closed-completed-pull",
+        "pull_request",
+        JobRequest(2, "example/project", 3, "pull_request.closed", HEAD),
+    )
+    assert accepted.accepted is True
+    invalidation = store.claim_shared_head_invalidation("head-worker", 60)
+    assert invalidation is not None
+
+    await service.invalidate_shared_head(invalidation, asyncio.Event())
+    assert github.checks == [completed]
+    assert store.complete_shared_head_invalidation(invalidation)
+    claimed = store.claim("evaluation-worker", 60)
+    assert claimed is not None
+
+    await service.evaluate_job(claimed)
+
+    assert github.checks == [completed]
 
 
 @pytest.mark.asyncio

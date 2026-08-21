@@ -154,9 +154,10 @@ malformed or contradictory responses. It fetches every returned candidate and
 confirms its current number, state, head, and base repository. The worker
 queues only candidates that are now open on the exact commit, at the same
 shared generation. A pull request that has moved to another head keeps its
-newer work. If every associated pull request is now closed, its queued
-evaluation ends an existing blocking check as `cancelled` once it confirms that
-no other open pull request shares the commit.
+newer work. If every associated pull request is now closed, the worker preserves
+any completed check as historical evidence. It ends only an existing queued or
+in-progress check as `cancelled`, after confirming that no other open pull
+request shares the commit.
 
 The client paginates the commit-to-pulls endpoint and fails closed if GitHub
 returns a 101st candidate. GitHub does not provide a completeness marker, so

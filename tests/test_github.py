@@ -2204,6 +2204,45 @@ async def test_existing_check_id_and_reset_never_post_a_new_check(private_key: s
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "completed"),
+    [("queued", False), ("in_progress", False), ("completed", True)],
+)
+async def test_check_run_completion_state_is_read_without_a_mutation(
+    private_key: str,
+    status: str,
+    completed: bool,
+) -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/access_tokens"):
+            return httpx.Response(201, json=token_response())
+        requests.append(request)
+        assert request.method == "GET"
+        assert request.url.path.endswith("/check-runs/99")
+        return httpx.Response(200, json={"status": status})
+
+    client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
+    assert await client.check_run_is_completed(2, "example/project", 99) is completed
+    assert len(requests) == 1
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_check_run_completion_state_rejects_an_unknown_status(private_key: str) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/access_tokens"):
+            return httpx.Response(201, json=token_response())
+        return httpx.Response(200, json={"status": "unknown"})
+
+    client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
+    with pytest.raises(GitHubError, match="omitted a supported status"):
+        await client.check_run_is_completed(2, "example/project", 99)
+    await client.close()
+
+
+@pytest.mark.asyncio
 async def test_complete_known_check_never_posts_a_new_check(private_key: str) -> None:
     methods: list[str] = []
 

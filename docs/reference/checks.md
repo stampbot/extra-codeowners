@@ -27,12 +27,14 @@ Exact-head invalidation is a worker phase that runs before authority fan-out
 and ordinary pull-request evaluation:
 
 1. The worker claims one pending generation for an exact commit.
-2. If this App already owns its named Check Run on that commit, the worker
-   updates it by ID to `in_progress`. Exact-head invalidation never creates a
-   check.
+2. If an associated pull request is still open and this App already owns its
+   named Check Run on that commit, the worker updates it by ID to
+   `in_progress`. Exact-head invalidation never creates a check. If every
+   associated pull request is closed, it leaves a completed result unchanged.
 3. It fetches current state for every pull-request candidate GitHub reports and
    queues each one that remains open on the commit. A closed-pull evaluation
-   finishes the existing check instead of leaving it in progress.
+   cancels an existing queued or in-progress check instead of leaving it
+   blocking; it preserves a completed result.
 4. It marks that exact generation invalidated only after the reset and fan-out
    finish. A lost lease or newer generation leaves the work pending.
 
@@ -44,8 +46,10 @@ in an enrolled repository:
    mismatch is discarded before any policy read or Check Run write, so a
    delayed old-name delivery cannot revive work after a rename or transfer. If
    the pull request is closed and no open pull request shares the queued head,
-   the service finishes its existing managed Check Run as `cancelled` by ID. It
-   never creates a Check Run for a closed pull request.
+   the service leaves a completed managed Check Run unchanged. It finishes a
+   queued or in-progress managed Check Run as `cancelled` by ID, so unfinished
+   work is not left blocking. It never creates a Check Run for a closed pull
+   request.
 2. Creates or updates the App's named Check Run on the current pull-request
    head as `in_progress`. This revokes an earlier success before mutable
    approval evidence is collected. A repository with no policy and no existing
@@ -66,8 +70,9 @@ in an enrolled repository:
 10. Otherwise, considers application approvals for the current head. The review actor and independently fetched App metadata must match organization enrollment. The delegation must match the path and owner set, and its label restrictions must all pass.
 11. Rejects application substitution for every effective non-delegable path. An opted-in eligible author is human evidence, not application substitution.
 12. Fetches the pull request again before publication. If it closed during the
-    evaluation, the service follows the same terminal-cancellation rule as in
-    step 1. If the pull request remains open but its base ref, base commit,
+    evaluation, the service follows the same completed-result preservation and
+    in-progress cancellation rule as in step 1. If the pull request remains
+    open but its base ref, base commit,
     head commit, changed-file count, or label set changed, the worker discards
     the result. It advances the current head's shared generation and queues
     another evaluation in the same transaction.
