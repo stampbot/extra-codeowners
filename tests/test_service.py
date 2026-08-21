@@ -33,7 +33,9 @@ from extra_codeowners.trace_context import TrustedTraceContext
 from extra_codeowners.tracing import Tracing
 
 AuthorityChangePendingError = service_module.AuthorityChangePendingError
+EvidenceLimitError = service_module.EvidenceLimitError
 EvaluationService = service_module.EvaluationService
+MAX_TEAM_MEMBERSHIP_LOOKUPS = service_module.MAX_TEAM_MEMBERSHIP_LOOKUPS
 Reconciler = service_module.Reconciler
 ReconciliationOutcome = service_module.ReconciliationOutcome
 Worker = service_module.Worker
@@ -43,9 +45,19 @@ BASE = "b" * 40
 
 
 class FakeGitHub:
-    def __init__(self, *, changed_path: str, reviewer_type: str = "Bot") -> None:
+    def __init__(
+        self,
+        *,
+        changed_path: str,
+        reviewer_type: str = "Bot",
+        author_type: str = "User",
+        author_is_missing: bool = False,
+    ) -> None:
         self.changed_path = changed_path
         self.reviewer_type = reviewer_type
+        self.author_type = author_type
+        self.author_is_missing = author_is_missing
+        self.author_login = "pull-author"
         self.checks: list[dict[str, Any]] = []
 
     async def get_pull(self, installation_id: int, repository: str, number: int) -> dict[str, Any]:
@@ -61,6 +73,11 @@ class FakeGitHub:
             },
             "changed_files": 1,
             "labels": [{"name": "autoapprove"}],
+            "user": (
+                None
+                if self.author_is_missing
+                else {"id": 101, "login": self.author_login, "type": self.author_type}
+            ),
         }
 
     async def installation_includes_repository(
@@ -137,7 +154,10 @@ required_labels = ["autoapprove"]
         team_slug: str,
         username: str,
     ) -> bool:
-        return self.reviewer_type == "User" and team_slug == "platform"
+        return team_slug == "platform" and (
+            (self.reviewer_type == "User" and username == "human-reviewer")
+            or (self.author_type == "User" and username == self.author_login)
+        )
 
     async def user_can_own_repository(
         self,
@@ -145,7 +165,9 @@ required_labels = ["autoapprove"]
         repository: str,
         username: str,
     ) -> bool:
-        return self.reviewer_type == "User"
+        return (self.reviewer_type == "User" and username == "human-reviewer") or (
+            self.author_type == "User" and username == self.author_login
+        )
 
     async def team_can_own_repository(
         self,
@@ -1199,6 +1221,113 @@ async def test_human_team_member_can_approve_non_delegable_path(tmp_path: Path) 
 
 
 @pytest.mark.asyncio
+async def test_eligible_pull_request_author_can_satisfy_codeowner_when_opted_in(
+    tmp_path: Path,
+) -> None:
+    github = FakeGitHub(changed_path="README.md", reviewer_type="Bot")
+    original = github.get_file_text
+
+    async def author_policy(*args: Any, **kwargs: Any) -> str | None:
+        if args[1] == "example/project" and args[2].endswith("extra-codeowners.toml"):
+            return """
+schema_version = 1
+enabled = true
+allow_author_as_codeowner = true
+"""
+        return await original(*args, **kwargs)
+
+    github.get_file_text = author_policy  # type: ignore[method-assign]
+    store = migrated_store(f"sqlite:///{tmp_path / 'author-codeowner.db'}")
+
+    await EvaluationService(settings(), github, store).evaluate_job(job(store))  # type: ignore[arg-type]
+
+    assert github.checks[-1]["conclusion"] == "success"
+    assert "eligible human CODEOWNER" in github.checks[-1]["text"]
+
+
+@pytest.mark.asyncio
+async def test_bot_pull_request_author_never_satisfies_opted_in_author_evidence(
+    tmp_path: Path,
+) -> None:
+    github = FakeGitHub(changed_path="README.md", reviewer_type="Bot", author_type="Bot")
+    original = github.get_file_text
+
+    async def author_policy(*args: Any, **kwargs: Any) -> str | None:
+        if args[1] == "example/project" and args[2].endswith("extra-codeowners.toml"):
+            return """
+schema_version = 1
+enabled = true
+allow_author_as_codeowner = true
+"""
+        return await original(*args, **kwargs)
+
+    github.get_file_text = author_policy  # type: ignore[method-assign]
+    store = migrated_store(f"sqlite:///{tmp_path / 'bot-author-codeowner.db'}")
+
+    await EvaluationService(settings(), github, store).evaluate_job(job(store))  # type: ignore[arg-type]
+
+    assert github.checks[-1]["conclusion"] == "failure"
+
+
+@pytest.mark.asyncio
+async def test_missing_pull_request_author_is_ignored_when_author_evidence_is_opted_in(
+    tmp_path: Path,
+) -> None:
+    github = FakeGitHub(
+        changed_path="uv.lock",
+        reviewer_type="Bot",
+        author_is_missing=True,
+    )
+    original = github.get_file_text
+
+    async def author_policy(*args: Any, **kwargs: Any) -> str | None:
+        if args[1] == "example/project" and args[2].endswith("extra-codeowners.toml"):
+            return """
+schema_version = 1
+enabled = true
+allow_author_as_codeowner = true
+[[delegations]]
+app = "stampbot"
+paths = ["**/*.lock"]
+for_owners = ["@example/platform"]
+required_labels = ["autoapprove"]
+"""
+        return await original(*args, **kwargs)
+
+    github.get_file_text = author_policy  # type: ignore[method-assign]
+    store = migrated_store(f"sqlite:///{tmp_path / 'missing-author-codeowner.db'}")
+
+    await EvaluationService(settings(), github, store).evaluate_job(job(store))  # type: ignore[arg-type]
+
+    assert github.checks[-1]["conclusion"] == "success"
+    assert "covered by approved application stampbot" in github.checks[-1]["text"]
+
+
+@pytest.mark.asyncio
+async def test_author_team_membership_still_requires_team_repository_write(tmp_path: Path) -> None:
+    github = FakeGitHub(changed_path="README.md", reviewer_type="Bot")
+    original = github.get_file_text
+
+    async def author_policy(*args: Any, **kwargs: Any) -> str | None:
+        if args[1] == "example/project" and args[2].endswith("extra-codeowners.toml"):
+            return """
+schema_version = 1
+enabled = true
+allow_author_as_codeowner = true
+"""
+        return await original(*args, **kwargs)
+
+    github.get_file_text = author_policy  # type: ignore[method-assign]
+    github.user_can_own_repository = AsyncMock(return_value=False)  # type: ignore[method-assign]
+    github.team_can_own_repository = AsyncMock(return_value=False)  # type: ignore[method-assign]
+    store = migrated_store(f"sqlite:///{tmp_path / 'author-team-permission.db'}")
+
+    await EvaluationService(settings(), github, store).evaluate_job(job(store))  # type: ignore[arg-type]
+
+    assert github.checks[-1]["conclusion"] == "failure"
+
+
+@pytest.mark.asyncio
 async def test_runtime_escape_hatch_is_disclosed_in_check(tmp_path: Path) -> None:
     github = FakeGitHub(changed_path=".github/workflows/release.yml")
     store = migrated_store(f"sqlite:///{tmp_path / 'audit.db'}")
@@ -1642,6 +1771,23 @@ async def test_malformed_opinionated_review_fails_closed() -> None:
             OrganizationPolicy(),
             parse_codeowners("* @example/platform"),
             HEAD,
+        )
+
+
+@pytest.mark.asyncio
+async def test_author_evidence_counts_toward_team_membership_lookup_budget() -> None:
+    github = FakeGitHub(changed_path="README.md")
+    service = EvaluationService(settings(), github, QueueStore("sqlite:///:memory:"))  # type: ignore[arg-type]
+
+    with pytest.raises(EvidenceLimitError, match="human evidence"):
+        await service._reviews(
+            2,
+            "example/project",
+            [],
+            OrganizationPolicy(),
+            parse_codeowners("* @example/platform"),
+            HEAD,
+            additional_human_identity_count=MAX_TEAM_MEMBERSHIP_LOOKUPS + 1,
         )
 
 

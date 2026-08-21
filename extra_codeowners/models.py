@@ -275,6 +275,7 @@ class RepositoryPolicy(StrictModel):
 
     schema_version: Literal[1] = SCHEMA_VERSION
     enabled: StrictBool = False
+    allow_author_as_codeowner: StrictBool = False
     delegations: tuple[Delegation, ...] = Field(default=(), max_length=100)
 
     @field_validator("schema_version", mode="before")
@@ -396,6 +397,36 @@ class ReviewActor(StrictModel):
         return self
 
 
+class PullRequestAuthor(StrictModel):
+    """Trusted, caller-resolved ownership evidence for a human PR author.
+
+    This is deliberately distinct from :class:`ReviewActor`: opting into
+    author evidence does not manufacture a GitHub review.  The evaluator uses
+    it only when the repository policy explicitly permits an eligible author
+    to satisfy a CODEOWNER owner set.
+    """
+
+    login: str
+    user_id: StrictPositiveInt
+    owner_aliases: frozenset[str] = frozenset()
+    direct_owner_eligible: StrictBool = True
+
+    @field_validator("login")
+    @classmethod
+    def validate_login(cls, value: str) -> str:
+        login = value.strip().lower()
+        if not login:
+            raise ValueError("pull request author login must not be empty")
+        return login
+
+    @field_validator("owner_aliases", mode="before")
+    @classmethod
+    def normalize_owner_aliases(cls, value: Any) -> Any:
+        if not isinstance(value, (list, tuple, set, frozenset)):
+            return value
+        return frozenset(normalize_owner(str(owner)) for owner in value)
+
+
 class ReviewState(StrEnum):
     APPROVED = "APPROVED"
     CHANGES_REQUESTED = "CHANGES_REQUESTED"
@@ -460,6 +491,7 @@ class EvaluationInput(StrictModel):
     codeowners_text: str
     changed_files: tuple[ChangedFile, ...]
     reviews: tuple[PullRequestReview, ...] = ()
+    author: PullRequestAuthor | None = None
     labels: frozenset[str] = frozenset()
     organization_policy: OrganizationPolicy
     repository_policy: RepositoryPolicy

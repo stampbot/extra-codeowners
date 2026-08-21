@@ -152,6 +152,41 @@ compiles repository policy against organization enrollment. Live evaluation
 also checks App identity and repository access against GitHub, resolves
 `CODEOWNERS`, and evaluates current pull-request evidence.
 
+### Optional: let a trusted author satisfy this check
+
+Small, trusted teams sometimes want an owner to open a routine pull request,
+have Stampbot provide the repository's ordinary approval, and avoid waiting for
+a second person solely to satisfy the code-owner rule. Add this repository
+policy field only when that is the intended trust model:
+
+```toml
+allow_author_as_codeowner = true
+```
+
+The default is `false`. When enabled, Extra CODEOWNERS may satisfy one owner
+set with the pull-request author only if GitHub identifies that author as a
+`User` and current evidence shows either of the following:
+
+- the author is a direct `@user` owner with `write`, `maintain`, or `admin`
+  access to the repository
+- the author is an active member of a listed same-organization team and GitHub
+  reports that team has `push`, `maintain`, or `admin` access to the repository.
+
+The setting does not create a GitHub review or change a numeric approval rule.
+Your approving automation must still supply whatever ordinary GitHub approval
+your repository requires. It also does not give an arbitrary author authority:
+the author must match each effective CODEOWNERS owner set independently. A
+pull request from outside the owning team can still use Stampbot only for the
+paths and owners that its delegation permits.
+
+This is a deliberate small-team trade-off. It permits an eligible author to
+satisfy the Extra CODEOWNERS check for every matching owned path, including a
+non-delegable path. Non-delegable means an App cannot substitute for a human;
+this option intentionally treats the author as eligible human evidence. Keep
+the setting disabled for a review boundary that requires a different person.
+The policy is read from the base commit, so enabling the field in a pull request
+does not authorize that same pull request.
+
 ## 4. Protect the approval boundary
 
 Do not enable `EXTRA_CODEOWNERS_ALLOW_INSECURE_CHANGES` to get through a test.
@@ -192,6 +227,12 @@ label and have the enrolled App approve the current head. In GitHub, confirm:
    non-successful.
 5. Pushing another commit makes the approval stale until the App approves the
    new head.
+
+If you enabled `allow_author_as_codeowner`, also test one pull request from a
+member of the owning team. Confirm the check identifies the author as its
+evidence, then confirm that the ordinary approval-count rule still needs the
+separate Stampbot or human review you intended. Test an author outside that
+team as a negative case.
 
 Next, change a protected control file. For Stampbot, use `/stampbot.toml`; for
 another App, use one of the control paths you added to organization

@@ -66,6 +66,7 @@ from extra_codeowners.models import (
     EvaluationOptions,
     EvaluationResult,
     OrganizationPolicy,
+    PullRequestAuthor,
     PullRequestReview,
     RepositoryPolicy,
     ReviewActor,
@@ -756,6 +757,31 @@ class EvaluationService:
             if is_member
         )
 
+    async def _human_owner_evidence(
+        self,
+        installation_id: int,
+        repository: str,
+        repository_owner: str,
+        login: str,
+        document: CodeownersDocument,
+    ) -> tuple[bool, frozenset[str]]:
+        """Resolve direct and team CODEOWNER evidence for one GitHub user."""
+
+        return await asyncio.gather(
+            self.github.user_can_own_repository(
+                installation_id,
+                repository,
+                login,
+            ),
+            self._human_team_aliases(
+                installation_id,
+                repository,
+                repository_owner,
+                login,
+                document,
+            ),
+        )
+
     async def _validated_apps(
         self,
         installation_id: int,
@@ -791,6 +817,27 @@ class EvaluationService:
             validated[app.bot_user_id] = (alias, app, app.app_id, app.slug)
         return validated
 
+    @staticmethod
+    def _pull_request_author_identity(pull: dict[str, Any]) -> tuple[int, str] | None:
+        """Return a human PR author identity, never treating a bot as human evidence."""
+
+        user_value = pull.get("user")
+        # GitHub returns ``null`` for a pull request whose author account was
+        # deleted.  That author cannot establish evidence, but valid review or
+        # App evidence must remain usable.
+        if user_value is None:
+            return None
+        user = _required_object(user_value, "pull_request.user")
+        actor_type = user.get("type")
+        if actor_type == "Bot":
+            return None
+        if actor_type != "User":
+            raise GitHubError(f"pull request author has unsupported actor type {actor_type!r}")
+        return (
+            _required_positive_int(user.get("id"), "pull_request.user.id"),
+            _required_string(user.get("login"), "pull_request.user.login"),
+        )
+
     async def _reviews(
         self,
         installation_id: int,
@@ -799,6 +846,8 @@ class EvaluationService:
         organization: OrganizationPolicy,
         document: CodeownersDocument,
         head_sha: str,
+        *,
+        additional_human_identity_count: int = 0,
     ) -> tuple[PullRequestReview, ...]:
         reviews: list[PullRequestReview] = []
         repository_owner = repository.split("/", 1)[0]
@@ -858,9 +907,11 @@ class EvaluationService:
             for value in current
             if isinstance(value.get("user"), dict) and value["user"].get("type") == "User"
         )
-        if human_approvals * len(team_owners) > MAX_TEAM_MEMBERSHIP_LOOKUPS:
+        if (human_approvals + additional_human_identity_count) * len(
+            team_owners
+        ) > MAX_TEAM_MEMBERSHIP_LOOKUPS:
             raise EvidenceLimitError(
-                "current approvals and CODEOWNERS teams exceed the membership lookup budget"
+                "current human evidence and CODEOWNERS teams exceed the membership lookup budget"
             )
         current_bot_ids = frozenset(
             int(value["user"]["id"])
@@ -899,19 +950,12 @@ class EvaluationService:
                     app_slug=observed_slug,
                 )
             elif user.get("type") == "User":
-                direct_owner_eligible, aliases = await asyncio.gather(
-                    self.github.user_can_own_repository(
-                        installation_id,
-                        repository,
-                        login,
-                    ),
-                    self._human_team_aliases(
-                        installation_id,
-                        repository,
-                        repository_owner,
-                        login,
-                        document,
-                    ),
+                direct_owner_eligible, aliases = await self._human_owner_evidence(
+                    installation_id,
+                    repository,
+                    repository_owner,
+                    login,
+                    document,
                 )
                 actor = ReviewActor(
                     kind=ActorKind.HUMAN,
@@ -1028,6 +1072,11 @@ class EvaluationService:
             return _failure("github_codeowners_error", "; ".join(messages))
 
         try:
+            author_identity = (
+                self._pull_request_author_identity(pull)
+                if repository_policy.allow_author_as_codeowner
+                else None
+            )
             reviews = await self._reviews(
                 job.installation_id,
                 job.repository_full_name,
@@ -1035,7 +1084,24 @@ class EvaluationService:
                 organization,
                 document,
                 head_sha,
+                additional_human_identity_count=int(author_identity is not None),
             )
+            author = None
+            if author_identity is not None:
+                author_id, author_login = author_identity
+                direct_owner_eligible, aliases = await self._human_owner_evidence(
+                    job.installation_id,
+                    job.repository_full_name,
+                    job.repository_full_name.split("/", 1)[0],
+                    author_login,
+                    document,
+                )
+                author = PullRequestAuthor(
+                    login=author_login,
+                    user_id=author_id,
+                    owner_aliases=aliases,
+                    direct_owner_eligible=direct_owner_eligible,
+                )
             changed_files = self._changed_files(file_values)
         except EvidenceLimitError as error:
             return _failure("evidence_limit_exceeded", str(error))
@@ -1048,6 +1114,7 @@ class EvaluationService:
                 codeowners_text=codeowners_text,
                 changed_files=changed_files,
                 reviews=reviews,
+                author=author,
                 labels=labels,
                 organization_policy=organization,
                 repository_policy=repository_policy,

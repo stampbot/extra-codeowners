@@ -14,6 +14,7 @@ from extra_codeowners.models import (
     EvaluationOptions,
     Guardrails,
     OrganizationPolicy,
+    PullRequestAuthor,
     PullRequestReview,
     RepositoryPolicy,
     ReviewActor,
@@ -43,8 +44,16 @@ def organization(*, guardrails: tuple[str, ...] = ()) -> OrganizationPolicy:
     )
 
 
-def repository(*delegations: Delegation, enabled: bool = True) -> RepositoryPolicy:
-    return RepositoryPolicy(enabled=enabled, delegations=delegations)
+def repository(
+    *delegations: Delegation,
+    enabled: bool = True,
+    allow_author_as_codeowner: bool = False,
+) -> RepositoryPolicy:
+    return RepositoryPolicy(
+        enabled=enabled,
+        allow_author_as_codeowner=allow_author_as_codeowner,
+        delegations=delegations,
+    )
 
 
 def delegation(
@@ -113,11 +122,26 @@ def human_review(
     )
 
 
+def author(
+    *,
+    login: str = "alice",
+    owner_aliases: tuple[str, ...] = (),
+    direct_owner_eligible: bool = True,
+) -> PullRequestAuthor:
+    return PullRequestAuthor(
+        login=login,
+        user_id=777,
+        owner_aliases=frozenset(owner_aliases),
+        direct_owner_eligible=direct_owner_eligible,
+    )
+
+
 def evaluation(
     *,
     codeowners: str = "* @example/infra\n",
     files: tuple[ChangedFile, ...] = (ChangedFile(path="deps/lock.json"),),
     reviews: tuple[PullRequestReview, ...] = (),
+    author: PullRequestAuthor | None = None,
     repo: RepositoryPolicy | None = None,
     org: OrganizationPolicy | None = None,
     labels: tuple[str, ...] = (),
@@ -128,6 +152,7 @@ def evaluation(
         codeowners_text=codeowners,
         changed_files=files,
         reviews=reviews,
+        author=author,
         labels=frozenset(labels),
         organization_policy=org or organization(),
         repository_policy=repo or repository(delegation()),
@@ -198,6 +223,69 @@ def test_human_team_member_satisfies_non_delegable_workflow_path() -> None:
     assert result.conclusion is EvaluationConclusion.SUCCESS
     assert result.requirements[0].satisfied_by == ("human:@alice",)
     assert result.requirements[0].path_evidence[0].non_delegable is True
+
+
+def test_author_codeowner_evidence_is_disabled_by_default() -> None:
+    result = evaluate(
+        evaluation(
+            reviews=(),
+            author=author(owner_aliases=("@example/infra",)),
+        )
+    )
+
+    assert result.conclusion is EvaluationConclusion.FAILURE
+    assert result.requirements[0].satisfied_by == ()
+
+
+def test_eligible_author_can_satisfy_non_delegable_owner_set_when_opted_in() -> None:
+    result = evaluate(
+        evaluation(
+            files=(ChangedFile(path=".github/workflows/release.yml"),),
+            reviews=(),
+            author=author(owner_aliases=("@example/infra",)),
+            repo=repository(allow_author_as_codeowner=True),
+        )
+    )
+
+    assert result.conclusion is EvaluationConclusion.SUCCESS
+    requirement = result.requirements[0]
+    assert requirement.satisfied_by == ("author:@alice",)
+    assert "eligible human CODEOWNER" in requirement.explanation
+    assert requirement.path_evidence[0].non_delegable is True
+    assert (
+        requirement.path_evidence[0].explanation
+        == "covered by eligible pull-request author evidence"
+    )
+
+
+def test_author_evidence_only_satisfies_matching_owner_set() -> None:
+    result = evaluate(
+        evaluation(
+            codeowners="/infra/** @example/infra\n/security/** @example/security\n",
+            files=(ChangedFile(path="infra/main.tf"), ChangedFile(path="security/policy.md")),
+            reviews=(),
+            author=author(owner_aliases=("@example/infra",)),
+            repo=repository(allow_author_as_codeowner=True),
+        )
+    )
+
+    assert result.conclusion is EvaluationConclusion.FAILURE
+    requirements = {requirement.owners: requirement for requirement in result.requirements}
+    assert requirements[("@example/infra",)].satisfied_by == ("author:@alice",)
+    assert requirements[("@example/security",)].satisfied is False
+
+
+def test_ineligible_author_cannot_satisfy_direct_owner() -> None:
+    result = evaluate(
+        evaluation(
+            codeowners="* @alice\n",
+            reviews=(),
+            author=author(direct_owner_eligible=False),
+            repo=repository(allow_author_as_codeowner=True),
+        )
+    )
+
+    assert result.conclusion is EvaluationConclusion.FAILURE
 
 
 def test_application_cannot_approve_builtin_non_delegable_path() -> None:
