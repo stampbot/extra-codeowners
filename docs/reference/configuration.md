@@ -91,6 +91,7 @@ forbidden_labels = ["needs-security-review"]
 | `schema_version` | integer | yes | Policy schema. Version `1` is accepted. Unknown versions fail closed. |
 | `enabled` | boolean | yes | Explicitly opts the repository in or out. A committed policy that omits `enabled` is invalid. An absent file in a repository with no managed check produces no check and no noise. An explicitly disabled file produces failure; removing policy after a check exists also updates that managed check to failure when evaluated. |
 | `allow_author_as_codeowner` | boolean | no; `false` | When `true`, a pull-request author GitHub identifies as a `User` may satisfy a matching owner set without a separate Extra CODEOWNERS review. The service requires the same current direct-user or team membership and repository-access evidence used for a human reviewer. It does not create a GitHub review or change an ordinary review count. An eligible author may satisfy a non-delegable owner set because the option intentionally treats that author as human evidence. |
+| `allow_delegation_for_policy_file` | boolean | no; `false` | When `true`, an enrolled App may satisfy the configured repository-policy file through an explicit matching `delegations` entry. The App's current-head review, identity, labels, and effective CODEOWNERS owner set still have to match. This affects no other built-in path. The base policy controls this field, and an organization guardrail for the path still wins. Enabling it lets the selected App approve later policy edits that may expand its future scope, so bootstrap it with human review. |
 | `delegations` | array of tables | no | At most 100 application delegations. With no entries, only appropriate human approvals can satisfy owned paths. |
 | `delegations[].app` | string | yes | Alias from the organization's `apps` table. Repository policy cannot introduce an application. |
 | `delegations[].paths` | array of strings | yes | Between 1 and 100 eligible changed-file patterns. A repository policy may contain at most 1,000 patterns across all delegations. All changed paths remain subject to standard `CODEOWNERS` ownership. |
@@ -100,7 +101,7 @@ forbidden_labels = ["needs-security-review"]
 
 Multiple delegation entries are additive alternatives. For entries that overlap on an application, path, and owner set, any one entry with satisfied label conditions makes the application eligible. Restrictions from separate entries are not combined.
 
-Every condition that must apply together belongs in one entry. A broader overlapping entry is not constrained by a narrower entry. Each entry must independently identify an enrolled application, eligible path, applicable owner, and label conditions. No entry can override a non-delegable path.
+Every condition that must apply together belongs in one entry. A broader overlapping entry is not constrained by a narrower entry. Each entry must independently identify an enrolled application, eligible path, applicable owner, and label conditions. No entry can override an effective non-delegable path. The repository-policy file is an exception only when that repository explicitly enables `allow_delegation_for_policy_file`; an organization guardrail still overrides that choice.
 
 ## Path pattern rules
 
@@ -134,7 +135,7 @@ The following paths reject application substitution by default:
 /CODEOWNERS
 /.github/CODEOWNERS
 /docs/CODEOWNERS
-/.github/extra-codeowners.toml
+/<configured repository policy path>
 /stampbot.toml
 /.github/workflows/**
 /.github/actions/**
@@ -142,11 +143,14 @@ The following paths reject application substitution by default:
 
 The restriction controls who may satisfy review policy for a change. It does not restrict file contents. Policy may list applications. Workflows and local actions may invoke applications.
 
-The `.github/extra-codeowners.toml` entry above is the default value of `EXTRA_CODEOWNERS_POLICY_PATH`. If an operator configures another validated literal path, that actual repository-policy path replaces the default entry in the built-in list and remains non-delegable.
+The configured repository-policy path is non-delegable by default. Its default value is `.github/extra-codeowners.toml`; another validated `EXTRA_CODEOWNERS_POLICY_PATH` replaces it. A repository may set `allow_delegation_for_policy_file = true` to let a matching enrolled App cover only that path. The setting is read from the pull request's base commit, so the pull request that enables it cannot use it. An organization can veto the opt-in by adding the same path to `guardrails.non_delegable_paths`.
 
 Non-delegable patterns do not assign ownership. Standard `CODEOWNERS` must give these paths an effective human user or team owner. Otherwise, Extra CODEOWNERS reports the path as unowned and creates no code-owner requirement. The CODEOWNERS file itself must be protected. GitHub's CODEOWNERS error view reports ownership errors that would weaken this boundary.
 
-Organization `guardrails.non_delegable_paths` entries are added to this list. Repository policy cannot remove either list.
+Organization `guardrails.non_delegable_paths` entries are added to this list and
+cannot be removed by repository policy. A repository may opt in only to the
+configured-policy-path exception described above; it cannot remove any other
+built-in path.
 
 The built-in root `/stampbot.toml` entry protects Stampbot's repository policy because Stampbot is the first supported integration. Built-ins cannot discover every control file used by other enrolled applications. Organization policy must add these paths to `guardrails.non_delegable_paths` for each application:
 
@@ -309,7 +313,7 @@ does not depend on this probe.
 | Environment variable | Type | Default | Constraints and effect |
 | --- | --- | --- | --- |
 | `EXTRA_CODEOWNERS_ORG_CONFIG_REPOSITORY` | string | `.github` | Literal repository name used for organization policy: `1`–`100` characters, with no `/` or `\`, and not `.` or `..`. Changing it creates a different trust-policy location and changes which repository is excluded from evaluation. |
-| `EXTRA_CODEOWNERS_POLICY_PATH` | string | `.github/extra-codeowners.toml` | Literal relative POSIX path used for organization and repository policy. Empty, absolute, wildcard, backslash, `.`-segment, and `..`-segment forms are rejected. The effective path is automatically non-delegable unless insecure mode is enabled. Coordinate any change across both policy scopes. |
+| `EXTRA_CODEOWNERS_POLICY_PATH` | string | `.github/extra-codeowners.toml` | Literal relative POSIX path used for organization and repository policy. Empty, absolute, wildcard, backslash, `.`-segment, and `..`-segment forms are rejected. The effective path is non-delegable by default. A repository may opt only that path into normal App delegation with `allow_delegation_for_policy_file = true`; an organization guardrail still overrides it. Coordinate any change across both policy scopes. |
 | `EXTRA_CODEOWNERS_CHECK_NAME` | string | `Extra CODEOWNERS / approval` | Printable Check Run name after surrounding whitespace is removed; length `1` through `255`. A change must be coordinated with every required-check rule. |
 | `EXTRA_CODEOWNERS_ALLOW_INSECURE_CHANGES` | boolean | `false` | When `true`, suppresses only the built-in non-delegable path list for every installation served by that process. It emits a startup warning and sets the insecure-mode metric to `1`. Organization-added guardrails and normal delegation matching still apply. |
 

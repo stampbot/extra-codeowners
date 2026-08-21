@@ -276,6 +276,7 @@ class RepositoryPolicy(StrictModel):
     schema_version: Literal[1] = SCHEMA_VERSION
     enabled: StrictBool = False
     allow_author_as_codeowner: StrictBool = False
+    allow_delegation_for_policy_file: StrictBool = False
     delegations: tuple[Delegation, ...] = Field(default=(), max_length=100)
 
     @field_validator("schema_version", mode="before")

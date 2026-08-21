@@ -48,10 +48,12 @@ def repository(
     *delegations: Delegation,
     enabled: bool = True,
     allow_author_as_codeowner: bool = False,
+    allow_delegation_for_policy_file: bool = False,
 ) -> RepositoryPolicy:
     return RepositoryPolicy(
         enabled=enabled,
         allow_author_as_codeowner=allow_author_as_codeowner,
+        allow_delegation_for_policy_file=allow_delegation_for_policy_file,
         delegations=delegations,
     )
 
@@ -300,6 +302,24 @@ def test_application_cannot_approve_builtin_non_delegable_path() -> None:
     evidence = result.requirements[0].path_evidence[0]
     assert evidence.non_delegable is True
     assert "security-sensitive" in evidence.explanation
+
+
+def test_application_can_approve_explicitly_delegable_policy_file() -> None:
+    result = evaluate(
+        evaluation(
+            files=(ChangedFile(path=".github/extra-codeowners.toml"),),
+            reviews=(app_review(),),
+            repo=repository(
+                delegation(paths=(".github/extra-codeowners.toml",)),
+                allow_delegation_for_policy_file=True,
+            ),
+        )
+    )
+
+    assert result.conclusion is EvaluationConclusion.SUCCESS
+    evidence = result.requirements[0].path_evidence[0]
+    assert evidence.non_delegable is False
+    assert evidence.approved_apps == ("stampbot",)
 
 
 def test_insecure_escape_removes_builtin_but_not_organization_guardrails() -> None:
