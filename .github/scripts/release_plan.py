@@ -24,6 +24,8 @@ RELEVANT_TAG = re.compile(r"^v\d")
 BREAKING_SUBJECT = re.compile(r"^[A-Za-z]+(?:\([^)]+\))?!:")
 BREAKING_BODY = re.compile(r"^BREAKING(?: CHANGE|-CHANGE):", re.MULTILINE)
 FEATURE_SUBJECT = re.compile(r"^feat(?:\([^)]+\))?:")
+RELEASE_CHANNEL_TRAILER = "release-channel"
+RELEASE_CHANNELS = frozenset({"alpha", "stable"})
 _git_path = shutil.which("git")
 if _git_path is None:
     raise RuntimeError("git is required to calculate a release plan")
@@ -117,7 +119,7 @@ class ReleasePlan:
         return self.version.tag
 
 
-def _git(repository: Path, *arguments: str) -> str:
+def _git(repository: Path, *arguments: str, input_text: str | None = None) -> str:
     """Run a read-only Git command."""
     try:
         result: subprocess.CompletedProcess[str] = subprocess.run(  # noqa: S603
@@ -126,6 +128,7 @@ def _git(repository: Path, *arguments: str) -> str:
             check=True,
             capture_output=True,
             text=True,
+            input=input_text,
         )
     except subprocess.CalledProcessError as error:
         detail = error.stderr.strip() or error.stdout.strip() or "Git command failed"
@@ -197,9 +200,15 @@ def validate_linear_history(repository: Path, tags: Sequence[ReleaseTag]) -> Non
         )
 
 
-def read_commits(repository: Path, revision_range: str) -> list[Commit]:
+def read_commits(
+    repository: Path, revision_range: str, *, oldest_first: bool = False
+) -> list[Commit]:
     """Read commit subjects and bodies without line-oriented delimiters."""
-    raw = _git(repository, "log", revision_range, "--format=%x1e%s%x1f%b")
+    arguments = ["log"]
+    if oldest_first:
+        arguments.append("--reverse")
+    arguments.extend([revision_range, "--format=%x1e%s%x1f%b"])
+    raw = _git(repository, *arguments)
     commits: list[Commit] = []
     for record in raw.split("\x1e"):
         if not record:
@@ -208,6 +217,51 @@ def read_commits(repository: Path, revision_range: str) -> list[Commit]:
         if separator:
             commits.append(Commit(subject=subject.strip(), body=body.strip()))
     return commits
+
+
+def read_release_channel(repository: Path, commit: Commit) -> str | None:
+    """Read the one optional release-channel trailer from a commit message."""
+    message = f"{commit.subject}\n\n{commit.body}\n"
+    trailers = _git(repository, "interpret-trailers", "--parse", input_text=message)
+    channels: list[str] = []
+    for trailer in trailers.splitlines():
+        key, separator, value = trailer.partition(":")
+        if separator and key.casefold() == RELEASE_CHANNEL_TRAILER:
+            channels.append(value.strip())
+
+    if len(channels) > 1:
+        raise ReleasePlanError(
+            f"a commit may contain at most one Release-Channel trailer: {commit.subject}"
+        )
+    if not channels:
+        return None
+
+    channel = channels[0]
+    if channel not in RELEASE_CHANNELS:
+        choices = ", ".join(sorted(RELEASE_CHANNELS))
+        raise ReleasePlanError(
+            f"invalid Release-Channel trailer {channel!r} in {commit.subject}; "
+            f"expected one of: {choices}"
+        )
+    return channel
+
+
+def select_release_channel(
+    repository: Path, commits: Sequence[Commit], *, initial_channel: str
+) -> str:
+    """Replay meaningful, terminal Git-trailer transitions in commit order."""
+    channel = initial_channel
+    for commit in commits:
+        requested = read_release_channel(repository, commit)
+        if requested is None:
+            continue
+        if requested == channel:
+            raise ReleasePlanError(
+                f"Release-Channel: {requested} in {commit.subject} does not change the "
+                "current release channel"
+            )
+        channel = requested
+    return channel
 
 
 def bump_stable(version: Version, commits: Sequence[Commit]) -> Version:
@@ -264,7 +318,10 @@ def calculate_release_plan(repository: Path) -> ReleasePlan:
         )
 
     if not tags:
-        return ReleasePlan(version=Version(0, 1, 0, alpha=1), previous_tag=None)
+        commits = read_commits(repository, "HEAD", oldest_first=True)
+        channel = select_release_channel(repository, commits, initial_channel="alpha")
+        version = Version(0, 1, 0, alpha=1 if channel == "alpha" else None)
+        return ReleasePlan(version=version, previous_tag=None)
 
     latest = max(tags, key=lambda tag: tag.version.sort_key)
     if latest not in reachable:
@@ -278,18 +335,35 @@ def calculate_release_plan(repository: Path) -> ReleasePlan:
             "release tags exist outside the current release history: " + ", ".join(unreachable)
         )
 
+    commits = read_commits(repository, f"refs/tags/{latest.name}..HEAD", oldest_first=True)
+    if not commits:
+        raise ReleasePlanError(f"no commits follow {latest.name}")
+
+    initial_channel = "alpha" if latest.version.alpha is not None else "stable"
+    channel = select_release_channel(repository, commits, initial_channel=initial_channel)
     if latest.version.alpha is not None:
-        next_version = Version(
-            latest.version.major,
-            latest.version.minor,
-            latest.version.patch,
-            alpha=latest.version.alpha + 1,
+        next_version = (
+            Version(latest.version.major, latest.version.minor, latest.version.patch)
+            if channel == "stable"
+            else Version(
+                latest.version.major,
+                latest.version.minor,
+                latest.version.patch,
+                alpha=latest.version.alpha + 1,
+            )
         )
     else:
-        commits = read_commits(repository, f"refs/tags/{latest.name}..HEAD")
-        if not commits:
-            raise ReleasePlanError(f"no commits follow {latest.name}")
-        next_version = bump_stable(latest.version, commits)
+        stable_version = bump_stable(latest.version, commits)
+        next_version = (
+            Version(
+                stable_version.major,
+                stable_version.minor,
+                stable_version.patch,
+                alpha=1,
+            )
+            if channel == "alpha"
+            else stable_version
+        )
 
     collision = next((tag for tag in tags if tag.name == next_version.tag), None)
     if collision is not None:

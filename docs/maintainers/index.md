@@ -48,17 +48,35 @@ in advance. Instead, the publisher stages a draft release after the other
 artifacts are ready, uploads the assets, publishes the release, and requires
 GitHub to report it as immutable. Only then does `Release complete` succeed.
 
-While the latest release is an alpha, the planner increments its numeric alpha
-suffix. If the latest release is stable, commits since that tag select a
-semantic version bump:
+Release-channel changes are explicit, append-only Git history. An ordinary
+merge follows the latest release: an alpha increments its numeric suffix, while
+a stable release applies conventional-commit rules to the commits since its
+tag. To change that behavior, include one standard Git trailer in the commit
+that lands on `main`:
+
+```text
+Release-Channel: alpha
+```
+
+or:
+
+```text
+Release-Channel: stable
+```
+
+The planner replays those transitions in commit order. `alpha` starts the next
+semantic version as `.alpha.1`; `stable` promotes the current alpha base
+without another conventional bump. A repeated, malformed, or duplicated
+trailer fails the release rather than changing state implicitly. See the
+[contributor guide](https://github.com/stampbot/extra-codeowners/blob/main/CONTRIBUTING.md#choose-a-release-channel)
+for the merge-message procedure.
+
+While the release channel is stable, commits since that tag select a semantic
+version bump:
 
 - `BREAKING CHANGE`, `BREAKING-CHANGE`, or a conventional `!` bumps major
 - `feat` bumps minor
 - any other merged change bumps patch.
-
-The planner does not promote an alpha line to its first stable release. Until
-[issue #144](https://github.com/stampbot/extra-codeowners/issues/144) defines a
-reviewed promotion rule, each newly published release continues the alpha line.
 
 GitHub may start queued runs out of commit order. When a descendant run
 publishes first, an older untagged run succeeds only after it proves that the
