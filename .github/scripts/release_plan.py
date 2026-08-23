@@ -219,9 +219,33 @@ def read_commits(
     return commits
 
 
+def reject_malformed_release_channel_trailer(commit: Commit, message: str) -> None:
+    """Reject malformed release-channel fields in the terminal trailer block."""
+    lines = message.rstrip().splitlines()
+    start = len(lines)
+    while start and lines[start - 1].strip():
+        start -= 1
+
+    trailer_name = "Release-Channel"
+    for line in lines[start:]:
+        candidate = line.lstrip()
+        if not candidate.casefold().startswith(RELEASE_CHANNEL_TRAILER):
+            continue
+        remainder = candidate[len(trailer_name) :]
+        if remainder and (remainder[0].isalnum() or remainder[0] in {"-", "_"}):
+            continue
+        if remainder.startswith(":"):
+            continue
+        raise ReleasePlanError(
+            f"malformed Release-Channel trailer in {commit.subject}; use "
+            "Release-Channel: alpha or Release-Channel: stable"
+        )
+
+
 def read_release_channel(repository: Path, commit: Commit) -> str | None:
     """Read the one optional release-channel trailer from a commit message."""
     message = f"{commit.subject}\n\n{commit.body}\n"
+    reject_malformed_release_channel_trailer(commit, message)
     trailers = _git(repository, "interpret-trailers", "--parse", input_text=message)
     channels: list[str] = []
     for trailer in trailers.splitlines():

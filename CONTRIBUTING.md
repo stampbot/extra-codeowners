@@ -191,10 +191,11 @@ commit order, so a later trailer can reverse an earlier, unreleased transition.
 
 Use one `Release-Channel` trailer only when changing channels. Its value must
 be exactly `alpha` or `stable`; a repeated, malformed, or duplicated trailer
-fails release planning rather than silently guessing. Keep it in the final
-trailer block with any `Signed-off-by` line. For a squash merge, check the
-resulting commit message: a pull-request body is not a substitute unless
-GitHub includes the trailer in the squash commit.
+fails release planning rather than silently guessing. The colon is required:
+`Release-Channel=stable` is not valid. Keep the trailer in the final block with
+any `Signed-off-by` line. For a squash merge, check the resulting commit
+message: a pull-request body is not a substitute unless GitHub includes the
+trailer in the squash commit.
 
 When Extra CODEOWNERS evaluates a repository, its default protected-path list
 rejects App substitution for `CODEOWNERS`, Extra CODEOWNERS policy,

@@ -173,6 +173,13 @@ def test_bootstrap_can_promote_to_stable_with_a_trailer(repository: Path) -> Non
         ("v1.2.3-alpha.7", "Release-Channel: alpha", "does not change"),
         ("v1.2.3", "Release-Channel: candidate", "invalid Release-Channel"),
         (
+            "v1.2.3-alpha.7",
+            "Release-Channel=stable\n"
+            "Signed-off-by: Release Planner Tests <release-planner@example.invalid>",
+            "malformed Release-Channel",
+        ),
+        ("v1.2.3-alpha.7", "Release-Channel = stable", "malformed Release-Channel"),
+        (
             "v1.2.3",
             "Release-Channel: alpha\nRelease-Channel: stable",
             "at most one Release-Channel",
