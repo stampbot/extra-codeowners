@@ -528,11 +528,15 @@ successful CI on the exact commit
 ```
 
 The planner reads the reachable release tags and refuses malformed, ambiguous,
-nonlinear, or nonmonotonic history. While the latest release is an alpha, it
-increments the numeric alpha suffix. After a stable release exists, it applies
-conventional-commit rules: a breaking change bumps the major version, `feat`
-bumps the minor version, and everything else bumps the patch version. Python
-archive metadata uses the matching PEP 440 form.
+nonlinear, or nonmonotonic history. Release-channel transitions are terminal
+Git trailers in commits on `main`: `Release-Channel: alpha` starts an alpha
+line and `Release-Channel: stable` promotes its current base version. It
+replays meaningful transitions in commit order; a repeated, malformed, or
+duplicated transition fails closed. Without a transition, an alpha increments
+its numeric suffix and a stable release applies conventional-commit rules: a
+breaking change bumps the major version, `feat` bumps the minor version, and
+everything else bumps the patch version. Python archive metadata uses the
+matching PEP 440 form.
 
 A release that has not been superseded builds the Python wheel, source
 distribution, chart, and two native images in parallel from the exact commit

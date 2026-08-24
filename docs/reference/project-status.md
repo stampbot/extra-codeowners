@@ -51,12 +51,14 @@ GitHub reports it as immutable. That published immutable release is the
 completion record. Rerunning the failed job in the original CI run keeps the
 same commit, reuses matching immutable state, and refuses a collision.
 
-While the latest version is an alpha, each newly published release increments
-its numeric alpha suffix. Once the latest version is stable, conventional
-commits select major, minor, or patch bumps. There is no release pull request
-or manually maintained version file. The current planner does not promote the
-alpha line to its first stable release; [issue #144][issue-144] owns that
-decision.
+Release-channel trailers provide an audited, portable promotion control:
+`Release-Channel: alpha` starts the next semantic version as an alpha and
+`Release-Channel: stable` promotes the current alpha base. Without a trailer,
+an alpha increments its numeric suffix and stable releases use conventional
+commits to select major, minor, or patch bumps. There is no release pull
+request or manually maintained version file. See the
+[contributor guide](https://github.com/stampbot/extra-codeowners/blob/main/CONTRIBUTING.md#choose-a-release-channel)
+for the exact merge-message procedure.
 
 These controls describe what the workflow publishes. They do not make an alpha
 a supported production release. [Issue #18][issue-18] still tracks complete
@@ -122,4 +124,3 @@ whenever an availability or safety claim changes.
 [issue-40]: https://github.com/stampbot/extra-codeowners/issues/40
 [issue-74]: https://github.com/stampbot/extra-codeowners/issues/74
 [issue-131]: https://github.com/stampbot/extra-codeowners/issues/131
-[issue-144]: https://github.com/stampbot/extra-codeowners/issues/144

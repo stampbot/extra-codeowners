@@ -164,6 +164,39 @@ parallel, publishes the OCI image and Helm chart, and finishes with an immutable
 GitHub release. The Python wheel and source distribution are attached to that
 release; the project does not publish to PyPI.
 
+### Choose a release channel
+
+Ordinary pull requests need no release trailer. The default follows the latest
+release: an alpha release produces the next alpha; a stable release uses the
+conventional-commit bump rules.
+
+To enter an alpha line after a stable release, put this standard Git trailer in
+the commit that lands on `main`:
+
+```text
+Release-Channel: alpha
+```
+
+For example, a `fix:` commit after `v1.2.3` produces `v1.2.4-alpha.1`. To
+promote that alpha line, put this trailer in a later commit that lands on
+`main`:
+
+```text
+Release-Channel: stable
+```
+
+That commit produces `v1.2.4`; later ordinary commits again use the
+conventional-commit rules. The planner replays trailer transitions in merged
+commit order, so a later trailer can reverse an earlier, unreleased transition.
+
+Use one `Release-Channel` trailer only when changing channels. Its value must
+be exactly `alpha` or `stable`; a repeated, malformed, or duplicated trailer
+fails release planning rather than silently guessing. The colon is required:
+`Release-Channel=stable` is not valid. Keep the trailer in the final block with
+any `Signed-off-by` line. For a squash merge, check the resulting commit
+message: a pull-request body is not a substitute unless GitHub includes the
+trailer in the squash commit.
+
 When Extra CODEOWNERS evaluates a repository, its default protected-path list
 rejects App substitution for `CODEOWNERS`, Extra CODEOWNERS policy,
 `/stampbot.toml`, GitHub Actions workflows, and local actions under

@@ -98,6 +98,115 @@ def test_alpha_release_increments_numeric_suffix(repository: Path) -> None:
     }
 
 
+def test_release_channel_trailer_enters_alpha_from_a_stable_release(repository: Path) -> None:
+    tag(repository, "v1.2.3")
+    commit(
+        repository,
+        "fix: begin a shadow release line",
+        "Release-Channel: alpha\n"
+        "Signed-off-by: Release Planner Tests <release-planner@example.invalid>",
+    )
+
+    assert release_plan.calculate_release_plan(repository).tag == "v1.2.4-alpha.1"
+
+
+def test_release_channel_trailer_promotes_alpha_to_stable(repository: Path) -> None:
+    tag(repository, "v1.2.4-alpha.7")
+    commit(repository, "fix: promote the release line", "Release-Channel: stable")
+
+    assert release_plan.calculate_release_plan(repository).tag == "v1.2.4"
+
+
+def test_promoted_release_is_reused_on_retry(repository: Path) -> None:
+    tag(repository, "v1.2.4-alpha.7")
+    commit(repository, "fix: promote the release line", "Release-Channel: stable")
+    tag(repository, "v1.2.4")
+
+    plan = release_plan.calculate_release_plan(repository)
+
+    assert plan.tag == "v1.2.4"
+    assert plan.previous_tag == "v1.2.4-alpha.7"
+    assert plan.superseded is False
+
+
+def test_promoted_release_supersedes_an_older_queued_run(repository: Path) -> None:
+    tag(repository, "v1.2.4-alpha.7")
+    older_run = commit(repository, "fix: promote the release line", "Release-Channel: stable")
+    commit(repository, "fix: newer queued run")
+    tag(repository, "v1.2.4")
+    git(repository, "checkout", "--detach", older_run)
+
+    plan = release_plan.calculate_release_plan(repository)
+
+    assert plan.tag == "v1.2.4"
+    assert plan.previous_tag == "v1.2.4-alpha.7"
+    assert plan.superseded is True
+
+
+def test_promoted_stable_release_returns_to_conventional_bumps(repository: Path) -> None:
+    tag(repository, "v1.2.4-alpha.7")
+    commit(repository, "fix: promote the release line", "Release-Channel: stable")
+    tag(repository, "v1.2.4")
+    commit(repository, "feat: begin the next minor release")
+
+    assert release_plan.calculate_release_plan(repository).tag == "v1.3.0"
+
+
+def test_release_channel_trailers_replay_in_history_order(repository: Path) -> None:
+    tag(repository, "v1.2.3")
+    commit(repository, "fix: enter alpha", "Release-Channel: alpha")
+    commit(repository, "fix: leave alpha", "Release-Channel: stable")
+
+    assert release_plan.calculate_release_plan(repository).tag == "v1.2.4"
+
+
+def test_bootstrap_can_promote_to_stable_with_a_trailer(repository: Path) -> None:
+    commit(repository, "fix: first stable release", "Release-Channel: stable")
+
+    assert release_plan.calculate_release_plan(repository).tag == "v0.1.0"
+
+
+@pytest.mark.parametrize(
+    ("initial_tag", "body", "match"),
+    [
+        ("v1.2.3", "Release-Channel: stable", "does not change"),
+        ("v1.2.3-alpha.7", "Release-Channel: alpha", "does not change"),
+        ("v1.2.3", "Release-Channel: candidate", "invalid Release-Channel"),
+        (
+            "v1.2.3-alpha.7",
+            "Release-Channel=stable\n"
+            "Signed-off-by: Release Planner Tests <release-planner@example.invalid>",
+            "malformed Release-Channel",
+        ),
+        ("v1.2.3-alpha.7", "Release-Channel = stable", "malformed Release-Channel"),
+        (
+            "v1.2.3",
+            "Release-Channel: alpha\nRelease-Channel: stable",
+            "at most one Release-Channel",
+        ),
+    ],
+)
+def test_release_channel_rejects_ambiguous_or_noop_transitions(
+    repository: Path, initial_tag: str, body: str, match: str
+) -> None:
+    tag(repository, initial_tag)
+    commit(repository, "fix: change release channel", body)
+
+    with pytest.raises(release_plan.ReleasePlanError, match=match):
+        release_plan.calculate_release_plan(repository)
+
+
+def test_release_channel_ignores_prose_that_is_not_a_trailer(repository: Path) -> None:
+    tag(repository, "v1.2.3")
+    commit(
+        repository,
+        "fix: explain alpha",
+        "This prose mentions Release-Channel: alpha, but it is not a trailer.\n\nMore prose.",
+    )
+
+    assert release_plan.calculate_release_plan(repository).tag == "v1.2.4"
+
+
 def test_existing_head_tag_is_reused_even_when_newer_release_exists(repository: Path) -> None:
     old_commit = git(repository, "rev-parse", "HEAD")
     tag(repository, "v0.1.0-alpha.1")
