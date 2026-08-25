@@ -25,6 +25,36 @@ IMAGE = "ghcr.io/stampbot/extra-codeowners"
 IMAGE_DIGEST = "sha256:0c087da375c9894a8dbc25f97944a4d33461a13886afbf72c227c2eca52d543b"
 CHART_REFERENCE = "ghcr.io/stampbot/charts/extra-codeowners"
 CHART_DIGEST = "sha256:2b8d78d285e97e3cf9b390b5c0404a77f012703fa79e1d9c492dee857f295ae8"
+AMD64_PLATFORM_DIGEST = "sha256:" + "a" * 64
+ARM64_PLATFORM_DIGEST = "sha256:" + "b" * 64
+
+
+def _raw_container_inventory(architecture: str, platform_digest: str) -> bytes:
+    return (
+        json.dumps(
+            {
+                "debian": {
+                    "copyright_files": [],
+                    "packages": [{"package": "example-runtime"}],
+                    "shared_license_files": [],
+                    "status_path": "var/lib/dpkg/status",
+                    "status_sha256": "c" * 64,
+                },
+                "image": {
+                    "architecture": architecture,
+                    "platform_digest": platform_digest,
+                },
+                "python": {
+                    "distributions": [{"name": "example-package"}],
+                    "embedded_sboms": [],
+                    "native_files": [],
+                },
+                "schema_version": 1,
+            },
+            sort_keys=True,
+        )
+        + "\n"
+    ).encode()
 
 
 def _release_files() -> dict[str, bytes]:
@@ -32,6 +62,14 @@ def _release_files() -> dict[str, bytes]:
         f"extra_codeowners-{PYTHON_VERSION}-py3-none-any.whl": b"wheel artifact\n",
         f"extra_codeowners-{PYTHON_VERSION}.tar.gz": b"source artifact\n",
         f"extra-codeowners-{VERSION}.tgz": b"chart artifact\n",
+        "digest-amd64.txt": f"{AMD64_PLATFORM_DIGEST}\n".encode(),
+        "digest-arm64.txt": f"{ARM64_PLATFORM_DIGEST}\n".encode(),
+        "distribution-inventory-amd64.json": _raw_container_inventory(
+            "amd64", AMD64_PLATFORM_DIGEST
+        ),
+        "distribution-inventory-arm64.json": _raw_container_inventory(
+            "arm64", ARM64_PLATFORM_DIGEST
+        ),
     }
 
 
@@ -179,6 +217,17 @@ def _malform_wheel_bundle(asset_directory: Path) -> None:
     )
 
 
+def _invalidate_amd64_inventory_platform_binding(asset_directory: Path) -> None:
+    inventory = asset_directory / "distribution-inventory-amd64.json"
+    document = json.loads(inventory.read_text(encoding="utf-8"))
+    document["image"]["platform_digest"] = f"sha256:{'f' * 64}"
+    inventory.write_text(json.dumps(document, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _remove_arm64_inventory(asset_directory: Path) -> None:
+    (asset_directory / "distribution-inventory-arm64.json").unlink()
+
+
 def _run_verifier(
     tmp_path: Path,
     *,
@@ -188,13 +237,21 @@ def _run_verifier(
     asset_directory = tmp_path / "release-assets"
     asset_directory.mkdir()
     release_files = _release_files()
+    signed_files = {
+        f"extra_codeowners-{PYTHON_VERSION}-py3-none-any.whl",
+        f"extra_codeowners-{PYTHON_VERSION}.tar.gz",
+        f"extra-codeowners-{VERSION}.tgz",
+        "distribution-inventory-amd64.json",
+        "distribution-inventory-arm64.json",
+    }
     for name, contents in release_files.items():
         artifact = asset_directory / name
         artifact.write_bytes(contents)
-        artifact.with_name(f"{name}.sigstore.json").write_text(
-            '{"mediaType": "application/vnd.dev.sigstore.bundle+json"}\n',
-            encoding="utf-8",
-        )
+        if name in signed_files:
+            artifact.with_name(f"{name}.sigstore.json").write_text(
+                '{"mediaType": "application/vnd.dev.sigstore.bundle+json"}\n',
+                encoding="utf-8",
+            )
     expected_file_digests = {
         name: hashlib.sha256(contents).hexdigest() for name, contents in release_files.items()
     }
@@ -266,8 +323,8 @@ def test_release_provenance_verifier_accepts_equivalent_immutable_evidence(
     assert result.returncode == 0, result.stderr
     gh_operations = [operation for operation in operations if operation.startswith("gh ")]
     cosign_operations = [operation for operation in operations if operation.startswith("cosign ")]
-    assert len(gh_operations) == 4
-    assert len([operation for operation in cosign_operations if "verify-blob" in operation]) == 3
+    assert len(gh_operations) == 6
+    assert len([operation for operation in cosign_operations if "verify-blob" in operation]) == 5
     assert len([operation for operation in cosign_operations if "cosign verify " in operation]) == 2
     assert all("--repo stampbot/extra-codeowners" in operation for operation in gh_operations)
     assert all(
@@ -297,6 +354,8 @@ def test_release_provenance_verifier_accepts_equivalent_immutable_evidence(
         ),
         ("missing-bundle", None, _remove_chart_bundle),
         ("malformed-bundle", None, _malform_wheel_bundle),
+        ("wrong-inventory-platform-binding", None, _invalidate_amd64_inventory_platform_binding),
+        ("missing-inventory", None, _remove_arm64_inventory),
         ("conflicting-attestation", {"FAKE_CONFLICTING_ATTESTATION": "true"}, None),
     ),
 )

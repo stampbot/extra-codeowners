@@ -736,6 +736,10 @@ def test_completed_release_verification_covers_identity_and_required_assets() ->
         "digest-amd64.txt",
         "digest-arm64.txt",
         "image-reference.txt",
+        "distribution-inventory-amd64.json",
+        "distribution-inventory-amd64.json.sigstore.json",
+        "distribution-inventory-arm64.json",
+        "distribution-inventory-arm64.json.sigstore.json",
         "vulnerability-report-amd64.json",
         "vulnerability-report-arm64.json",
     ):
@@ -748,6 +752,23 @@ def test_completed_release_verification_covers_identity_and_required_assets() ->
     assert 'retry helm pull "oci://${chart_reference}"' in verify
     assert '"release-assets/extra-codeowners-${VERSION}.tgz"' in verify
     assert ".github/scripts/verify-release-provenance.sh" in verify
+
+
+def test_release_provenance_verifies_the_schema_and_platform_binding_of_raw_inventories() -> None:
+    source = (ROOT / ".github" / "scripts" / "verify-release-provenance.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert "verify_raw_container_inventory()" in source
+    assert ".schema_version == 1" in source
+    assert ".image == {" in source
+    assert '"architecture": $architecture' in source
+    assert '"platform_digest": $platform_digest' in source
+    assert "distribution-inventory-amd64.json" in source
+    assert "distribution-inventory-arm64.json" in source
+    assert '"${asset_directory}/digest-amd64.txt"' in source
+    assert '"${asset_directory}/digest-arm64.txt"' in source
+    assert 'verify_release_file "${inventory}"' in source
 
 
 def test_dco_uses_the_event_base_and_head_for_its_commit_range() -> None:

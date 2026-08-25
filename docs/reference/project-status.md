@@ -1,6 +1,6 @@
 # Project status
 
-Last verified: 2026-08-16.
+Last verified: 2026-08-24.
 
 Extra CODEOWNERS is ready for source review and non-required shadow-mode
 testing. It is not ready to replace GitHub's native code-owner enforcement on
@@ -11,7 +11,7 @@ production repositories.
 | Surface | Status |
 | --- | --- |
 | Source checkout | Available for development and evaluation |
-| GitHub App Manifest registration | Implemented; [issue #131][issue-131] tracks a stale post-install redirect |
+| GitHub App Manifest registration | Implemented |
 | Policy evaluation and Check Run | Implemented; production provider contracts remain open in [issue #1][issue-1] |
 | GitHub release | Published automatically by successful `main` CI; an interrupted run may leave a draft until that run is retried |
 | Container image | Signed, attested, multi-platform alpha image in GitHub Container Registry (GHCR) |
@@ -65,6 +65,31 @@ a supported production release. [Issue #18][issue-18] still tracks complete
 notices and corresponding-source delivery, and
 [issue #74][issue-74] tracks clean-client verification of a published release.
 
+### Raw container inventory
+
+Each new release includes `distribution-inventory-amd64.json` and
+`distribution-inventory-arm64.json`, plus a Sigstore bundle for each file. The
+collector exports the exact native image filesystem without starting the
+container. It records:
+
+- installed Debian package status and available Debian copyright and
+  shared-license entries
+- Python distribution metadata and license-file entries
+- embedded JSON SBOMs and native Python extension files.
+
+Regular files are hashed. Filesystem links are recorded as links rather than
+followed.
+
+The inventory names the exact platform digest from `digest-amd64.txt` or
+`digest-arm64.txt`. The release workflow attests and signs each inventory, then
+checks that binding again when it verifies an existing release.
+
+This is raw review evidence, not a notice bundle or a corresponding-source
+offer. It deliberately reports missing declared license files and does not
+decide whether a package's metadata, bundled material, or source availability
+satisfies a redistribution obligation. The recipient-facing notice and source
+delivery decision remains part of [issue #18][issue-18].
+
 ## Production enforcement blocker {#production-enforcement-blocker}
 
 GitHub attaches a Check Run to a commit, but Extra CODEOWNERS evaluates one
@@ -102,11 +127,11 @@ request can still modify the workflow that checks that pull request. Read the
 [DCO evidence contract](dco-evidence.md) for the implemented boundary.
 [Issue #40][issue-40] tracks independent execution.
 
-The release pipeline produces BuildKit software bills of materials,
-provenance, signatures, attestations, and vulnerability reports. It does not
-claim that those artifacts prove every open-source redistribution duty. The
-project also needs recurring scans of already-published digests because a clean
-release-day scan cannot see tomorrow's disclosure; [issue #22][issue-22]
+The release pipeline produces BuildKit software bills of materials, raw
+container inventories, provenance, signatures, attestations, and vulnerability
+reports. None of those artifacts alone proves every open-source redistribution
+duty. The project also needs recurring scans of already-published digests
+because a clean release-day scan cannot see tomorrow's disclosure; [issue #22][issue-22]
 tracks that work.
 
 ## Planned distributions
@@ -123,4 +148,3 @@ whenever an availability or safety claim changes.
 [issue-30]: https://github.com/stampbot/extra-codeowners/issues/30
 [issue-40]: https://github.com/stampbot/extra-codeowners/issues/40
 [issue-74]: https://github.com/stampbot/extra-codeowners/issues/74
-[issue-131]: https://github.com/stampbot/extra-codeowners/issues/131

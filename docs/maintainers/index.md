@@ -97,6 +97,14 @@ and stages the GitHub release. It uploads the assets and publishes that release
 last. The release includes the Python artifacts; it does not publish them to
 PyPI.
 
+Each image build exports its exact native filesystem without starting the
+container and writes a raw per-platform distribution inventory. The published
+release carries `distribution-inventory-amd64.json` and
+`distribution-inventory-arm64.json` with their Sigstore bundles. Each inventory
+is attested, signed, and bound to its matching child-image digest. It records
+available package and license material for review; it is not itself a notice
+package or a decision that source or notice duties have been met.
+
 Before allocating another version, the workflow requires the preceding release
 to be published and immutable. It accepts `v0.1.0-alpha.7` as the sole
 historical exception because that public release predates this policy. No later
@@ -107,8 +115,9 @@ run. GitHub keeps that run on its original commit. A tag already on that commit
 is reused, and a completed GitHub release switches the workflow into
 verification mode. It verifies the required assets, both image architectures,
 and the exact image and chart digests. It then verifies GitHub provenance and
-Sigstore evidence against the release workflow and original commit. Conflicting,
-missing, or ambiguous evidence stops the retry.
+Sigstore evidence against the release workflow and original commit, including
+the raw inventory's platform-digest binding. Conflicting, missing, or ambiguous
+evidence stops the retry.
 
 If the postcondition reports a mutable release, first enable immutable releases
 and query that release again. If GitHub still reports it as mutable, delete only
