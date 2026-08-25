@@ -59,6 +59,7 @@ nav:
       - Run the live GitHub contract: how-to/run-live-github-contract.md
       - Live GitHub evidence reports: reference/live-github-evidence-reports.md
       - Respond to dependency audit: how-to/respond-to-dependency-audit.md
+      - Review or recover a Renovate update: how-to/manage-renovate-updates.md
       - Review stacked pull requests: how-to/review-stacked-pull-requests.md
       - Update the tutorial webhook relay: maintainers/update-tutorial-relay.md
       - DCO evidence contract: reference/dco-evidence.md
