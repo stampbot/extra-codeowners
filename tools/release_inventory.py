@@ -141,7 +141,7 @@ def _read_auxiliary_member(archive: tarfile.TarFile, member: tarfile.TarInfo) ->
         return _Payload(kind="symlink", link_target=_link_target(member), sha256=None, size=None)
     if member.islnk():
         return _Payload(kind="hardlink", link_target=_link_target(member), sha256=None, size=None)
-    _fail(f"inventory member {member.name!r} is not a regular file or link")
+    return _fail(f"inventory member {member.name!r} is not a regular file or link")
 
 
 def _plain_header(message: Message, field: str, *, required: bool = False) -> str:
