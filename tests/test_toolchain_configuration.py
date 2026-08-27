@@ -21,6 +21,19 @@ from tools import readthedocs_bootstrap
 
 ROOT = Path(__file__).resolve().parents[1]
 TEST_INSTALLED_BETA_VERSION = "9.8.7.dev1+test"
+OPENSSL_VEX = ROOT / "security" / "vex" / "openssl-3.5.6.openvex.json"
+OPENSSL_VEX_VERSION = "3.5.6-1~deb13u2"
+OPENSSL_VEX_IMPACT_STATEMENTS = {
+    "CVE-2026-14456": "The service does not configure or use OpenSSL QUIC server listeners.",
+    "CVE-2026-14457": (
+        "The service does not enable RFC 7250 raw public keys or a key-only TLS endpoint."
+    ),
+    "CVE-2026-18798": "The service does not configure or use OpenSSL QUIC server listeners.",
+    "CVE-2026-54874": "The service does not use UDP or DTLS.",
+    "CVE-2026-63072": "The service does not process CMS messages or call OpenSSL CMS decryption.",
+    "CVE-2026-63075": "The service does not configure or use OpenSSL QUIC connections.",
+    "CVE-2026-63076": "The service does not configure or use an OpenSSL CMP client or server.",
+}
 SETUP_UV = re.compile(
     r"^(?P<indent>\s*)uses: astral-sh/setup-uv@(?P<sha>[0-9a-f]{40})(?:\s+#.*)?$",
     flags=re.MULTILINE,
@@ -62,6 +75,29 @@ def _workflow_job(workflow: str, name: str) -> str:
     )
     assert match is not None, f"workflow is missing the {name!r} job"
     return match.group(0)
+
+
+def _workflow_step(job: str, name: str) -> str:
+    marker = f"      - name: {name}\n"
+    _, separator, tail = job.partition(marker)
+    assert separator, f"workflow job is missing the {name!r} step"
+    next_step = re.search(r"(?m)^      - (?:name|uses):", tail)
+    return tail[: next_step.start()] if next_step is not None else tail
+
+
+def _openssl_vex_products() -> set[str]:
+    products: set[str] = set()
+    for architecture in ("amd64", "arm64"):
+        for package, upstream in (
+            ("libssl3t64", "&upstream=openssl"),
+            ("openssl", ""),
+            ("openssl-provider-legacy", "&upstream=openssl"),
+        ):
+            products.add(
+                f"pkg:deb/debian/{package}@{OPENSSL_VEX_VERSION}"
+                f"?arch={architecture}&distro=debian-13{upstream}"
+            )
+    return products
 
 
 def _assert_native_matrix(job: str) -> None:
@@ -212,6 +248,77 @@ def test_grype_policy_has_one_scoped_python_line_exception() -> None:
     }
     assert "CPython 3.14" in rules[0]["reason"]
     assert "Python 3.15" in rules[0]["reason"]
+
+
+def test_openssl_vex_is_exact_and_evidence_backed() -> None:
+    document = cast(dict[str, Any], json.loads(OPENSSL_VEX.read_text(encoding="utf-8")))
+
+    assert document["@context"] == "https://openvex.dev/ns/v0.2.0"
+    assert re.fullmatch(r"urn:uuid:[0-9a-f-]{36}", cast(str, document["@id"]))
+    assert document["author"] == "Extra CODEOWNERS maintainers"
+    assert document["role"] == "VEX document producer"
+    assert document["tooling"] == "Vexcalibur"
+    assert document["version"] == 1
+
+    statements = cast(list[dict[str, Any]], document["statements"])
+    assert len(statements) == len(OPENSSL_VEX_IMPACT_STATEMENTS)
+    assert {
+        cast(dict[str, str], statement["vulnerability"])["name"] for statement in statements
+    } == set(OPENSSL_VEX_IMPACT_STATEMENTS)
+    for statement in statements:
+        vulnerability = cast(dict[str, str], statement["vulnerability"])["name"]
+        impact_statement = OPENSSL_VEX_IMPACT_STATEMENTS[vulnerability]
+        assert statement["status"] == "not_affected"
+        assert statement["impact_statement"] == impact_statement
+        assert statement["status_notes"] == (
+            f"Analysis detail: {impact_statement}\n"
+            "Source: Debian Security Tracker "
+            f"(https://security-tracker.debian.org/tracker/{vulnerability})\n"
+            "Original Vexcalibur analysis state: not_affected"
+        )
+        products = cast(list[dict[str, Any]], statement["products"])
+        assert {cast(str, product["@id"]) for product in products} == _openssl_vex_products()
+        assert all(product["identifiers"] == {"purl": product["@id"]} for product in products)
+
+
+def test_openssl_vex_claims_match_the_service_protocol_contract() -> None:
+    application_source = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in sorted((ROOT / "extra_codeowners").glob("*.py"))
+    )
+    forbidden_capabilities = re.compile(
+        r"\b(?:quic|dtls|cms|cmp|ossl_cmp|cms_decrypt|raw public)\b",
+        flags=re.IGNORECASE,
+    )
+    assert forbidden_capabilities.search(application_source) is None
+    assert re.search(r"(?m)^\s*(?:from|import)\s+ssl\b", application_source) is None
+    assert "socket.socket" not in application_source
+    assert "SOCK_DGRAM" not in application_source
+
+    serve = (
+        (ROOT / "extra_codeowners" / "cli.py")
+        .read_text(encoding="utf-8")
+        .split("@cli.command()\ndef serve", 1)[1]
+        .split("\n\n@cli.command", 1)[0]
+    )
+    assert "ssl_" not in serve
+    assert "http2=" not in application_source
+    assert "http3" not in application_source
+
+    deployment = (ROOT / "charts" / "extra-codeowners" / "templates" / "deployment.yaml").read_text(
+        encoding="utf-8"
+    )
+    service = (ROOT / "charts" / "extra-codeowners" / "templates" / "service.yaml").read_text(
+        encoding="utf-8"
+    )
+    assert "protocol: UDP" not in deployment
+    assert "protocol: UDP" not in service
+    assert "protocol: TCP" in deployment
+    assert "protocol: TCP" in service
+
+    lock = _load_toml(ROOT / "uv.lock")
+    package_names = {package["name"] for package in cast(list[dict[str, Any]], lock["package"])}
+    assert "aioquic" not in package_names
 
 
 def test_dependency_audit_uses_locked_mode_without_frozen_mode() -> None:
@@ -1451,6 +1558,10 @@ def test_ci_builds_and_scans_both_architectures_natively() -> None:
     assert "only-fixed: false" in container
     assert "fail-build: true" in container
     assert "only-fixed: true" in container
+    inventory = _workflow_step(container, "Inventory high-severity vulnerabilities")
+    blocking = _workflow_step(container, "Reject fixable high-severity vulnerabilities")
+    assert "vex:" not in inventory
+    assert "vex: security/vex/openssl-3.5.6.openvex.json" in blocking
 
     required = _workflow_job(workflow, "required")
     assert "- container" in required
@@ -1516,6 +1627,10 @@ def test_release_builds_native_digests_then_publishes_the_exact_manifest() -> No
     assert image.count("config: .grype.yaml") == 2
     assert "only-fixed: false" in image
     assert "only-fixed: true" in image
+    inventory = _workflow_step(image, "Inventory high-severity vulnerabilities")
+    blocking = _workflow_step(image, "Reject fixable high-severity vulnerabilities")
+    assert "vex:" not in inventory
+    assert "vex: security/vex/openssl-3.5.6.openvex.json" in blocking
     assert "digest-${{ matrix.architecture }}.txt" in image
     assert "Collect raw native filesystem inventory" in image
     assert "python -I -S -B tools/release_inventory.py" in image

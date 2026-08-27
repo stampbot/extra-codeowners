@@ -377,6 +377,7 @@ jobs:
           by-cve: true
           config: .grype.yaml
           image: extra-codeowners:ci-${{ matrix.architecture }}
+          vex: security/vex/openssl-3.5.6.openvex.json
           fail-build: true
           only-fixed: true
           output-format: table

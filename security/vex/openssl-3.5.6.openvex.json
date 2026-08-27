@@ -1,0 +1,333 @@
+{
+  "@context": "https://openvex.dev/ns/v0.2.0",
+  "@id": "urn:uuid:0f047758-ac87-598a-9b30-4de38cfc6cb7",
+  "author": "Extra CODEOWNERS maintainers",
+  "role": "VEX document producer",
+  "statements": [
+    {
+      "impact_statement": "The service does not configure or use OpenSSL QUIC server listeners.",
+      "products": [
+        {
+          "@id": "pkg:deb/debian/libssl3t64@3.5.6-1~deb13u2?arch=amd64&distro=debian-13&upstream=openssl",
+          "identifiers": {
+            "purl": "pkg:deb/debian/libssl3t64@3.5.6-1~deb13u2?arch=amd64&distro=debian-13&upstream=openssl"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/libssl3t64@3.5.6-1~deb13u2?arch=arm64&distro=debian-13&upstream=openssl",
+          "identifiers": {
+            "purl": "pkg:deb/debian/libssl3t64@3.5.6-1~deb13u2?arch=arm64&distro=debian-13&upstream=openssl"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/openssl-provider-legacy@3.5.6-1~deb13u2?arch=amd64&distro=debian-13&upstream=openssl",
+          "identifiers": {
+            "purl": "pkg:deb/debian/openssl-provider-legacy@3.5.6-1~deb13u2?arch=amd64&distro=debian-13&upstream=openssl"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/openssl-provider-legacy@3.5.6-1~deb13u2?arch=arm64&distro=debian-13&upstream=openssl",
+          "identifiers": {
+            "purl": "pkg:deb/debian/openssl-provider-legacy@3.5.6-1~deb13u2?arch=arm64&distro=debian-13&upstream=openssl"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/openssl@3.5.6-1~deb13u2?arch=amd64&distro=debian-13",
+          "identifiers": {
+            "purl": "pkg:deb/debian/openssl@3.5.6-1~deb13u2?arch=amd64&distro=debian-13"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/openssl@3.5.6-1~deb13u2?arch=arm64&distro=debian-13",
+          "identifiers": {
+            "purl": "pkg:deb/debian/openssl@3.5.6-1~deb13u2?arch=arm64&distro=debian-13"
+          }
+        }
+      ],
+      "status": "not_affected",
+      "status_notes": "Analysis detail: The service does not configure or use OpenSSL QUIC server listeners.\nSource: Debian Security Tracker (https://security-tracker.debian.org/tracker/CVE-2026-14456)\nOriginal Vexcalibur analysis state: not_affected",
+      "vulnerability": {
+        "name": "CVE-2026-14456"
+      }
+    },
+    {
+      "impact_statement": "The service does not enable RFC 7250 raw public keys or a key-only TLS endpoint.",
+      "products": [
+        {
+          "@id": "pkg:deb/debian/libssl3t64@3.5.6-1~deb13u2?arch=amd64&distro=debian-13&upstream=openssl",
+          "identifiers": {
+            "purl": "pkg:deb/debian/libssl3t64@3.5.6-1~deb13u2?arch=amd64&distro=debian-13&upstream=openssl"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/libssl3t64@3.5.6-1~deb13u2?arch=arm64&distro=debian-13&upstream=openssl",
+          "identifiers": {
+            "purl": "pkg:deb/debian/libssl3t64@3.5.6-1~deb13u2?arch=arm64&distro=debian-13&upstream=openssl"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/openssl-provider-legacy@3.5.6-1~deb13u2?arch=amd64&distro=debian-13&upstream=openssl",
+          "identifiers": {
+            "purl": "pkg:deb/debian/openssl-provider-legacy@3.5.6-1~deb13u2?arch=amd64&distro=debian-13&upstream=openssl"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/openssl-provider-legacy@3.5.6-1~deb13u2?arch=arm64&distro=debian-13&upstream=openssl",
+          "identifiers": {
+            "purl": "pkg:deb/debian/openssl-provider-legacy@3.5.6-1~deb13u2?arch=arm64&distro=debian-13&upstream=openssl"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/openssl@3.5.6-1~deb13u2?arch=amd64&distro=debian-13",
+          "identifiers": {
+            "purl": "pkg:deb/debian/openssl@3.5.6-1~deb13u2?arch=amd64&distro=debian-13"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/openssl@3.5.6-1~deb13u2?arch=arm64&distro=debian-13",
+          "identifiers": {
+            "purl": "pkg:deb/debian/openssl@3.5.6-1~deb13u2?arch=arm64&distro=debian-13"
+          }
+        }
+      ],
+      "status": "not_affected",
+      "status_notes": "Analysis detail: The service does not enable RFC 7250 raw public keys or a key-only TLS endpoint.\nSource: Debian Security Tracker (https://security-tracker.debian.org/tracker/CVE-2026-14457)\nOriginal Vexcalibur analysis state: not_affected",
+      "vulnerability": {
+        "name": "CVE-2026-14457"
+      }
+    },
+    {
+      "impact_statement": "The service does not configure or use OpenSSL QUIC server listeners.",
+      "products": [
+        {
+          "@id": "pkg:deb/debian/libssl3t64@3.5.6-1~deb13u2?arch=amd64&distro=debian-13&upstream=openssl",
+          "identifiers": {
+            "purl": "pkg:deb/debian/libssl3t64@3.5.6-1~deb13u2?arch=amd64&distro=debian-13&upstream=openssl"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/libssl3t64@3.5.6-1~deb13u2?arch=arm64&distro=debian-13&upstream=openssl",
+          "identifiers": {
+            "purl": "pkg:deb/debian/libssl3t64@3.5.6-1~deb13u2?arch=arm64&distro=debian-13&upstream=openssl"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/openssl-provider-legacy@3.5.6-1~deb13u2?arch=amd64&distro=debian-13&upstream=openssl",
+          "identifiers": {
+            "purl": "pkg:deb/debian/openssl-provider-legacy@3.5.6-1~deb13u2?arch=amd64&distro=debian-13&upstream=openssl"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/openssl-provider-legacy@3.5.6-1~deb13u2?arch=arm64&distro=debian-13&upstream=openssl",
+          "identifiers": {
+            "purl": "pkg:deb/debian/openssl-provider-legacy@3.5.6-1~deb13u2?arch=arm64&distro=debian-13&upstream=openssl"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/openssl@3.5.6-1~deb13u2?arch=amd64&distro=debian-13",
+          "identifiers": {
+            "purl": "pkg:deb/debian/openssl@3.5.6-1~deb13u2?arch=amd64&distro=debian-13"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/openssl@3.5.6-1~deb13u2?arch=arm64&distro=debian-13",
+          "identifiers": {
+            "purl": "pkg:deb/debian/openssl@3.5.6-1~deb13u2?arch=arm64&distro=debian-13"
+          }
+        }
+      ],
+      "status": "not_affected",
+      "status_notes": "Analysis detail: The service does not configure or use OpenSSL QUIC server listeners.\nSource: Debian Security Tracker (https://security-tracker.debian.org/tracker/CVE-2026-18798)\nOriginal Vexcalibur analysis state: not_affected",
+      "vulnerability": {
+        "name": "CVE-2026-18798"
+      }
+    },
+    {
+      "impact_statement": "The service does not use UDP or DTLS.",
+      "products": [
+        {
+          "@id": "pkg:deb/debian/libssl3t64@3.5.6-1~deb13u2?arch=amd64&distro=debian-13&upstream=openssl",
+          "identifiers": {
+            "purl": "pkg:deb/debian/libssl3t64@3.5.6-1~deb13u2?arch=amd64&distro=debian-13&upstream=openssl"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/libssl3t64@3.5.6-1~deb13u2?arch=arm64&distro=debian-13&upstream=openssl",
+          "identifiers": {
+            "purl": "pkg:deb/debian/libssl3t64@3.5.6-1~deb13u2?arch=arm64&distro=debian-13&upstream=openssl"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/openssl-provider-legacy@3.5.6-1~deb13u2?arch=amd64&distro=debian-13&upstream=openssl",
+          "identifiers": {
+            "purl": "pkg:deb/debian/openssl-provider-legacy@3.5.6-1~deb13u2?arch=amd64&distro=debian-13&upstream=openssl"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/openssl-provider-legacy@3.5.6-1~deb13u2?arch=arm64&distro=debian-13&upstream=openssl",
+          "identifiers": {
+            "purl": "pkg:deb/debian/openssl-provider-legacy@3.5.6-1~deb13u2?arch=arm64&distro=debian-13&upstream=openssl"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/openssl@3.5.6-1~deb13u2?arch=amd64&distro=debian-13",
+          "identifiers": {
+            "purl": "pkg:deb/debian/openssl@3.5.6-1~deb13u2?arch=amd64&distro=debian-13"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/openssl@3.5.6-1~deb13u2?arch=arm64&distro=debian-13",
+          "identifiers": {
+            "purl": "pkg:deb/debian/openssl@3.5.6-1~deb13u2?arch=arm64&distro=debian-13"
+          }
+        }
+      ],
+      "status": "not_affected",
+      "status_notes": "Analysis detail: The service does not use UDP or DTLS.\nSource: Debian Security Tracker (https://security-tracker.debian.org/tracker/CVE-2026-54874)\nOriginal Vexcalibur analysis state: not_affected",
+      "vulnerability": {
+        "name": "CVE-2026-54874"
+      }
+    },
+    {
+      "impact_statement": "The service does not process CMS messages or call OpenSSL CMS decryption.",
+      "products": [
+        {
+          "@id": "pkg:deb/debian/libssl3t64@3.5.6-1~deb13u2?arch=amd64&distro=debian-13&upstream=openssl",
+          "identifiers": {
+            "purl": "pkg:deb/debian/libssl3t64@3.5.6-1~deb13u2?arch=amd64&distro=debian-13&upstream=openssl"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/libssl3t64@3.5.6-1~deb13u2?arch=arm64&distro=debian-13&upstream=openssl",
+          "identifiers": {
+            "purl": "pkg:deb/debian/libssl3t64@3.5.6-1~deb13u2?arch=arm64&distro=debian-13&upstream=openssl"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/openssl-provider-legacy@3.5.6-1~deb13u2?arch=amd64&distro=debian-13&upstream=openssl",
+          "identifiers": {
+            "purl": "pkg:deb/debian/openssl-provider-legacy@3.5.6-1~deb13u2?arch=amd64&distro=debian-13&upstream=openssl"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/openssl-provider-legacy@3.5.6-1~deb13u2?arch=arm64&distro=debian-13&upstream=openssl",
+          "identifiers": {
+            "purl": "pkg:deb/debian/openssl-provider-legacy@3.5.6-1~deb13u2?arch=arm64&distro=debian-13&upstream=openssl"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/openssl@3.5.6-1~deb13u2?arch=amd64&distro=debian-13",
+          "identifiers": {
+            "purl": "pkg:deb/debian/openssl@3.5.6-1~deb13u2?arch=amd64&distro=debian-13"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/openssl@3.5.6-1~deb13u2?arch=arm64&distro=debian-13",
+          "identifiers": {
+            "purl": "pkg:deb/debian/openssl@3.5.6-1~deb13u2?arch=arm64&distro=debian-13"
+          }
+        }
+      ],
+      "status": "not_affected",
+      "status_notes": "Analysis detail: The service does not process CMS messages or call OpenSSL CMS decryption.\nSource: Debian Security Tracker (https://security-tracker.debian.org/tracker/CVE-2026-63072)\nOriginal Vexcalibur analysis state: not_affected",
+      "vulnerability": {
+        "name": "CVE-2026-63072"
+      }
+    },
+    {
+      "impact_statement": "The service does not configure or use OpenSSL QUIC connections.",
+      "products": [
+        {
+          "@id": "pkg:deb/debian/libssl3t64@3.5.6-1~deb13u2?arch=amd64&distro=debian-13&upstream=openssl",
+          "identifiers": {
+            "purl": "pkg:deb/debian/libssl3t64@3.5.6-1~deb13u2?arch=amd64&distro=debian-13&upstream=openssl"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/libssl3t64@3.5.6-1~deb13u2?arch=arm64&distro=debian-13&upstream=openssl",
+          "identifiers": {
+            "purl": "pkg:deb/debian/libssl3t64@3.5.6-1~deb13u2?arch=arm64&distro=debian-13&upstream=openssl"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/openssl-provider-legacy@3.5.6-1~deb13u2?arch=amd64&distro=debian-13&upstream=openssl",
+          "identifiers": {
+            "purl": "pkg:deb/debian/openssl-provider-legacy@3.5.6-1~deb13u2?arch=amd64&distro=debian-13&upstream=openssl"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/openssl-provider-legacy@3.5.6-1~deb13u2?arch=arm64&distro=debian-13&upstream=openssl",
+          "identifiers": {
+            "purl": "pkg:deb/debian/openssl-provider-legacy@3.5.6-1~deb13u2?arch=arm64&distro=debian-13&upstream=openssl"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/openssl@3.5.6-1~deb13u2?arch=amd64&distro=debian-13",
+          "identifiers": {
+            "purl": "pkg:deb/debian/openssl@3.5.6-1~deb13u2?arch=amd64&distro=debian-13"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/openssl@3.5.6-1~deb13u2?arch=arm64&distro=debian-13",
+          "identifiers": {
+            "purl": "pkg:deb/debian/openssl@3.5.6-1~deb13u2?arch=arm64&distro=debian-13"
+          }
+        }
+      ],
+      "status": "not_affected",
+      "status_notes": "Analysis detail: The service does not configure or use OpenSSL QUIC connections.\nSource: Debian Security Tracker (https://security-tracker.debian.org/tracker/CVE-2026-63075)\nOriginal Vexcalibur analysis state: not_affected",
+      "vulnerability": {
+        "name": "CVE-2026-63075"
+      }
+    },
+    {
+      "impact_statement": "The service does not configure or use an OpenSSL CMP client or server.",
+      "products": [
+        {
+          "@id": "pkg:deb/debian/libssl3t64@3.5.6-1~deb13u2?arch=amd64&distro=debian-13&upstream=openssl",
+          "identifiers": {
+            "purl": "pkg:deb/debian/libssl3t64@3.5.6-1~deb13u2?arch=amd64&distro=debian-13&upstream=openssl"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/libssl3t64@3.5.6-1~deb13u2?arch=arm64&distro=debian-13&upstream=openssl",
+          "identifiers": {
+            "purl": "pkg:deb/debian/libssl3t64@3.5.6-1~deb13u2?arch=arm64&distro=debian-13&upstream=openssl"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/openssl-provider-legacy@3.5.6-1~deb13u2?arch=amd64&distro=debian-13&upstream=openssl",
+          "identifiers": {
+            "purl": "pkg:deb/debian/openssl-provider-legacy@3.5.6-1~deb13u2?arch=amd64&distro=debian-13&upstream=openssl"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/openssl-provider-legacy@3.5.6-1~deb13u2?arch=arm64&distro=debian-13&upstream=openssl",
+          "identifiers": {
+            "purl": "pkg:deb/debian/openssl-provider-legacy@3.5.6-1~deb13u2?arch=arm64&distro=debian-13&upstream=openssl"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/openssl@3.5.6-1~deb13u2?arch=amd64&distro=debian-13",
+          "identifiers": {
+            "purl": "pkg:deb/debian/openssl@3.5.6-1~deb13u2?arch=amd64&distro=debian-13"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/openssl@3.5.6-1~deb13u2?arch=arm64&distro=debian-13",
+          "identifiers": {
+            "purl": "pkg:deb/debian/openssl@3.5.6-1~deb13u2?arch=arm64&distro=debian-13"
+          }
+        }
+      ],
+      "status": "not_affected",
+      "status_notes": "Analysis detail: The service does not configure or use an OpenSSL CMP client or server.\nSource: Debian Security Tracker (https://security-tracker.debian.org/tracker/CVE-2026-63076)\nOriginal Vexcalibur analysis state: not_affected",
+      "vulnerability": {
+        "name": "CVE-2026-63076"
+      }
+    }
+  ],
+  "timestamp": "2026-08-27T00:00:00Z",
+  "tooling": "Vexcalibur",
+  "version": 1
+}
