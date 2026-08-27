@@ -373,6 +373,11 @@ jobs:
           persist-credentials: false
           ref: ${{ needs.plan.outputs.revision }}
 
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version-file: .python-version
+
       - name: Log in to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
@@ -443,6 +448,30 @@ jobs:
           printf '%s\n' "${DIGEST}" >"build-index-${ARCHITECTURE}.txt"
           printf '%s\n' "${platform_digest}" >"digest-${ARCHITECTURE}.txt"
 
+      - name: Collect raw native filesystem inventory
+        env:
+          ARCHITECTURE: ${{ matrix.architecture }}
+          CONTAINER_NAME: extra-codeowners-release-inventory-${{ matrix.architecture }}
+        run: |
+          set -euo pipefail
+          platform_digest="$(<"digest-${ARCHITECTURE}.txt")"
+          created=false
+          cleanup() {
+            if [[ "${created}" == true ]]; then
+              docker container rm "${CONTAINER_NAME}" >/dev/null
+            fi
+          }
+          trap cleanup EXIT
+          # create/export reads the exact filesystem without starting its workload.
+          docker create --name "${CONTAINER_NAME}" "${IMAGE}@${platform_digest}" >/dev/null
+          created=true
+          docker export "${CONTAINER_NAME}" |
+            python -I -S -B tools/release_inventory.py \
+              --architecture "${ARCHITECTURE}" \
+              --platform-digest "${platform_digest}" \
+              --rootfs-tar - \
+              --output "distribution-inventory-${ARCHITECTURE}.json"
+
       - name: Pull exact native image
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
@@ -505,6 +534,7 @@ jobs:
           path: |
             build-index-${{ matrix.architecture }}.txt
             digest-${{ matrix.architecture }}.txt
+            distribution-inventory-${{ matrix.architecture }}.json
             vulnerability-report-${{ matrix.architecture }}.json
           if-no-files-found: error
           overwrite: true
@@ -771,13 +801,19 @@ jobs:
         with:
           subject-path: release/chart/*.tgz
 
+      - name: Attest raw container distribution inventories
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: release/image/*/distribution-inventory-*.json
+
       - name: Sign release files
         run: |
           set -euo pipefail
           while IFS= read -r -d '' artifact; do
             cosign sign-blob --yes --bundle "${artifact}.sigstore.json" "${artifact}"
-          done < <(find release/python release/chart -type f \
-            \( -name '*.whl' -o -name '*.tar.gz' -o -name '*.tgz' \) -print0)
+          done < <(find release/python release/chart release/image -type f \
+            \( -name '*.whl' -o -name '*.tar.gz' -o -name '*.tgz' \
+            -o -name 'distribution-inventory-*.json' \) -print0)
 
       - name: Publish or verify Helm chart
         id: chart
@@ -1184,6 +1220,10 @@ jobs:
             digest-amd64.txt
             digest-arm64.txt
             image-reference.txt
+            distribution-inventory-amd64.json
+            distribution-inventory-amd64.json.sigstore.json
+            distribution-inventory-arm64.json
+            distribution-inventory-arm64.json.sigstore.json
             vulnerability-report-amd64.json
             vulnerability-report-arm64.json
           )

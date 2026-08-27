@@ -1138,10 +1138,11 @@ def test_evaluation_beta_entrypoints_use_the_isolated_bootstrap() -> None:
     assert "export PYTHONDONTWRITEBYTECODE=1" in how_to
 
 
-def test_evaluation_beta_tools_are_in_every_python_type_check_entrypoint() -> None:
+def test_standalone_python_tools_are_in_every_type_check_entrypoint() -> None:
     required = {
         "tools/evaluation_beta.py",
         "tools/evaluation_beta_bootstrap.py",
+        "tools/release_inventory.py",
     }
     sources = {
         "mise": (ROOT / "mise.toml").read_text(encoding="utf-8"),
@@ -1516,6 +1517,11 @@ def test_release_builds_native_digests_then_publishes_the_exact_manifest() -> No
     assert "only-fixed: false" in image
     assert "only-fixed: true" in image
     assert "digest-${{ matrix.architecture }}.txt" in image
+    assert "Collect raw native filesystem inventory" in image
+    assert "python -I -S -B tools/release_inventory.py" in image
+    assert 'docker export "${CONTAINER_NAME}"' in image
+    assert '"${IMAGE}@${platform_digest}"' in image
+    assert "distribution-inventory-${{ matrix.architecture }}.json" in image
 
     assert "release-image-amd64-" in publish
     assert "release-image-arm64-" in publish
@@ -1530,6 +1536,8 @@ def test_release_builds_native_digests_then_publishes_the_exact_manifest() -> No
     assert 'cosign sign --yes "${IMAGE}@${DIGEST}"' in publish
     assert "subject-path: release/python/*" in publish
     assert "subject-path: release/chart/*.tgz" in publish
+    assert "subject-path: release/image/*/distribution-inventory-*.json" in publish
+    assert "-name 'distribution-inventory-*.json'" in publish
 
 
 def test_release_retries_are_idempotent_and_keep_versions_in_one_place() -> None:

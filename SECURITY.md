@@ -126,11 +126,12 @@ image, and verifies that the result contains only `linux/amd64` and
 Release images carry BuildKit provenance and software bills of materials. The
 publisher adds a GitHub provenance attestation and a keyless Sigstore signature
 for the multi-platform image. It also attests and signs the Python wheel,
-source distribution, and Helm chart, then signs the OCI chart. It stages a
-draft GitHub release, uploads the assets, and publishes it. The run succeeds
-only after GitHub reports that release as published and immutable. That release
-is the completion record. Python artifacts remain GitHub release assets; they
-are not uploaded to PyPI.
+source distribution, Helm chart, and the raw `amd64` and `arm64` container
+inventories, then signs the OCI chart. Each inventory names its child-image
+digest. It stages a draft GitHub release, uploads the assets, and publishes it.
+The run succeeds only after GitHub reports that release as published and
+immutable. That release is the completion record. Python artifacts remain
+GitHub release assets; they are not uploaded to PyPI.
 
 Repository administrators must enable GitHub's **Immutable releases** setting.
 The workflow's `GITHUB_TOKEN` cannot read that setting before publication, so
@@ -143,11 +144,12 @@ Rerun a failed release job only in its original CI run. A retry may reuse a tag
 when it resolves to that same commit. When it detects a completed GitHub
 release, it verifies the required assets, image platforms and digests, and
 chart archive and digest instead of republishing them. It then verifies GitHub
-provenance for the image, wheel, source distribution, and chart. It also checks
-the Sigstore bundles for the release files and keyless signatures for the image
-and OCI chart. Every proof must name this repository's release workflow and the
-original commit. Missing, invalid, or ambiguous evidence stops the retry; it
-never edits a published immutable release.
+provenance for the image, wheel, source distribution, chart, and raw container
+inventories. It checks that each inventory names the released platform digest.
+It also checks the Sigstore bundles for the release files and keyless signatures
+for the image and OCI chart. Every proof must name this repository's release
+workflow and the original commit. Missing, invalid, or ambiguous evidence stops
+the retry; it never edits a published immutable release.
 
 Actions are pinned to full commit SHAs. The publishing job receives
 `contents`, `packages`, `id-token`, and `attestations` write access; ordinary CI

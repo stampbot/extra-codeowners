@@ -23,6 +23,11 @@ publishes one immutable release. Use the same version everywhere:
 - Python wheel, source distribution, signatures, and scan reports: the matching
   GitHub release.
 
+You don't need the raw per-platform distribution inventories to deploy the
+App. New releases include them in the matching GitHub release for component
+review. They are not a notice package or a source offer; see
+[project status](../reference/project-status.md) for their scope and limits.
+
 Replace `VERSION` with an exact value such as `0.1.0-alpha.8`. Don't use a
 floating tag. Resolve and record the multi-platform image digest before you
 change the cluster; the chart also accepts that digest through `image.digest`.
@@ -396,6 +401,8 @@ Each successful release workflow publishes:
 - a signed OCI chart at
   `oci://ghcr.io/stampbot/charts/extra-codeowners`
 - Python wheel and source distribution as GitHub release assets
+- signed raw distribution inventories for `amd64` and `arm64`, each bound to
+  its image child digest
 - BuildKit provenance and software bill of materials for each native image
 - GitHub provenance attestations and Sigstore signatures for published
   artifacts

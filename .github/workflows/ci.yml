@@ -60,7 +60,7 @@ jobs:
         run: >-
           uv run mypy extra_codeowners tests tools/evaluation_beta.py
           tools/evaluation_beta_bootstrap.py tools/readthedocs_bootstrap.py
-          .github/scripts/release_plan.py
+          tools/release_inventory.py .github/scripts/release_plan.py
 
       - name: Lint YAML
         run: uv run yamllint .

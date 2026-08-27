@@ -111,13 +111,56 @@ verify_release_file() {
     "${artifact}"
 }
 
+verify_raw_container_inventory() {
+  local inventory="$1"
+  local architecture="$2"
+  local platform_digest="$3"
+
+  if ! [[ "${platform_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+    printf 'Raw container inventory has an invalid %s platform digest.\n' "${architecture}" >&2
+    exit 2
+  fi
+  test -s "${inventory}"
+  jq -e \
+    --arg architecture "${architecture}" \
+    --arg platform_digest "${platform_digest}" \
+    'type == "object" and
+      .schema_version == 1 and
+      .image == {
+        "architecture": $architecture,
+        "platform_digest": $platform_digest
+      } and
+      (.debian | type == "object") and
+      .debian.status_path == "var/lib/dpkg/status" and
+      (.debian.status_sha256 | type == "string" and test("^[0-9a-f]{64}$")) and
+      (.debian.packages | type == "array" and length > 0) and
+      (.debian.copyright_files | type == "array") and
+      (.debian.shared_license_files | type == "array") and
+      (.python | type == "object") and
+      (.python.distributions | type == "array" and length > 0) and
+      (.python.embedded_sboms | type == "array") and
+      (.python.native_files | type == "array")' \
+    "${inventory}" >/dev/null
+  verify_release_file "${inventory}"
+}
+
 wheel="${asset_directory}/extra_codeowners-${python_version}-py3-none-any.whl"
 sdist="${asset_directory}/extra_codeowners-${python_version}.tar.gz"
 chart="${asset_directory}/extra-codeowners-${version}.tgz"
+amd64_inventory="${asset_directory}/distribution-inventory-amd64.json"
+arm64_inventory="${asset_directory}/distribution-inventory-arm64.json"
 
 verify_release_file "${wheel}"
 verify_release_file "${sdist}"
 verify_release_file "${chart}"
+verify_raw_container_inventory \
+  "${amd64_inventory}" \
+  amd64 \
+  "$(<"${asset_directory}/digest-amd64.txt")"
+verify_raw_container_inventory \
+  "${arm64_inventory}" \
+  arm64 \
+  "$(<"${asset_directory}/digest-arm64.txt")"
 verify_github_attestation \
   "oci://${image}@${image_digest}" \
   "${image}" \
