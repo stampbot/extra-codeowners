@@ -104,5 +104,12 @@ maintainer to read the new report and remove or renew the rule for that exact
 patch version. A regression test keeps the version in `.grype.yaml` tied to
 the Dockerfile.
 
+The project also has a reviewed OpenVEX statement for current OpenSSL CVEs that
+do not affect the service. The [security policy](https://github.com/stampbot/extra-codeowners/blob/main/SECURITY.md)
+explains why and links to the exact statement. CI consumes it when it scans the
+matching image, while the raw inventory keeps every finding. A base-image
+update changes the package URL and makes the VEX stop matching; it cannot
+silently carry an old conclusion into a new image.
+
 Those controls make changes visible and repeatable. They do not turn an alpha
 image into a supported production release.

@@ -185,6 +185,8 @@ The full manual is on
 
 Use the [support policy](SUPPORT.md) for questions and operational incidents.
 Report vulnerabilities privately under the [security policy](SECURITY.md).
+The container includes OpenSSL. The security policy records known CVEs that do
+not affect this service and links to the current VEX.
 The project also publishes its [governance](GOVERNANCE.md),
 [changelog](CHANGELOG.md), and
 [maintainer documentation](docs/maintainers/index.md).

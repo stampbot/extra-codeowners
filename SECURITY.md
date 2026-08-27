@@ -78,6 +78,18 @@ The [deployment guide](docs/how-to/deploy.md) and
 operator also accepts that interfaces and database compatibility may change
 before 1.0.
 
+## Known non-exploitable vulnerabilities
+
+The current container includes Debian OpenSSL packages with known CVEs. We
+reviewed the affected code paths, and they do not affect Extra CODEOWNERS. The
+[OpenVEX statement](security/vex/openssl-3.5.6.openvex.json) names the exact
+package versions, architectures, and CVEs. It remains valid until we upgrade
+those packages or enable a relevant protocol or API.
+
+This is a project security statement. CI consumes the same file when it scans
+the image. The raw report retains every scanner finding, and a package-version
+change stops the VEX from matching.
+
 ## Container policy
 
 The runtime dependency graph is locked in `uv.lock`. The Docker build installs
@@ -102,6 +114,7 @@ Each container job runs two vulnerability scans:
 
 The raw report keeps unfixed findings visible. The blocking policy makes an
 available fix actionable without pretending that an unfixed finding is safe.
+
 Scanner results can lag disclosures, so
 [issue #22](https://github.com/stampbot/extra-codeowners/issues/22) tracks
 recurring scans of published digests.
