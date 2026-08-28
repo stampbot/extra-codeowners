@@ -19,7 +19,7 @@ from email.parser import BytesParser
 from pathlib import Path, PurePosixPath
 from typing import BinaryIO, Final, NoReturn
 
-SCHEMA_VERSION: Final = 1
+SCHEMA_VERSION: Final = 2
 _PLATFORM_DIGEST_PATTERN: Final = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _ARCHITECTURES: Final = frozenset(("amd64", "arm64"))
 _SITE_PACKAGES_PATTERN: Final = re.compile(r"\Aopt/venv/lib/python\d+\.\d+/site-packages/")
@@ -38,6 +38,7 @@ _NATIVE_LIBRARY_PATTERN: Final = re.compile(r"\.so(?:\..+)?\Z")
 _COPYRIGHT_PATTERN: Final = re.compile(r"\Ausr/share/doc/(?P<package>[^/]+)/copyright\Z")
 _COMMON_LICENSE_PATTERN: Final = re.compile(r"\Ausr/share/common-licenses/(?P<name>[^/]+)\Z")
 _MAX_STATUS_BYTES: Final = 4 * 1024 * 1024
+_MAX_OS_RELEASE_BYTES: Final = 64 * 1024
 _MAX_METADATA_BYTES: Final = 1024 * 1024
 _MAX_AUXILIARY_FILE_BYTES: Final = 64 * 1024 * 1024
 _MAX_COMPONENTS: Final = 10_000
@@ -252,6 +253,47 @@ def _parse_debian_status(status: bytes) -> list[dict[str, str]]:
     return packages
 
 
+def _os_release_value(value: str, field: str) -> str:
+    value = value.strip()
+    if value.startswith('"'):
+        if len(value) < 2 or not value.endswith('"'):
+            _fail(f"os-release has an unterminated {field} value")
+        value = value[1:-1]
+    elif value.startswith("'"):
+        if len(value) < 2 or not value.endswith("'"):
+            _fail(f"os-release has an unterminated {field} value")
+        value = value[1:-1]
+    if not value or "\\" in value or "\x00" in value or "\n" in value or "\r" in value:
+        _fail(f"os-release has an unsafe {field} value")
+    return value
+
+
+def _parse_debian_distro(os_release: bytes) -> str:
+    try:
+        content = os_release.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise InventoryError(f"could not decode os-release: {error}") from error
+
+    fields: dict[str, str] = {}
+    for line in content.splitlines():
+        if not line or line.startswith("#"):
+            continue
+        key, separator, value = line.partition("=")
+        if key not in {"ID", "VERSION_ID"}:
+            continue
+        if not separator or key in fields:
+            _fail(f"os-release has an invalid {key or 'required'} field")
+        fields[key] = _os_release_value(value, key)
+
+    distribution_id = fields.get("ID")
+    version_id = fields.get("VERSION_ID")
+    if distribution_id != "debian":
+        _fail(f"release inventory requires Debian os-release ID, got {distribution_id!r}")
+    if version_id is None or re.fullmatch(r"[0-9]+", version_id) is None:
+        _fail("os-release has an invalid VERSION_ID")
+    return f"{distribution_id}-{version_id}"
+
+
 def _payload_record(path: str, payload: _Payload) -> dict[str, object]:
     return {
         "kind": payload.kind,
@@ -275,6 +317,7 @@ def collect_inventory(
         _fail("platform digest must be a lowercase sha256 digest")
 
     status: tuple[int, str, bytes] | None = None
+    os_release: tuple[int, str, bytes] | None = None
     distributions: dict[str, _Distribution] = {}
     pending_licenses: dict[str, dict[str, _Payload]] = {}
     pending_sboms: dict[str, dict[str, _Payload]] = {}
@@ -301,6 +344,7 @@ def collect_inventory(
                     copyright_match is not None,
                     common_license_match is not None,
                     native,
+                    path == "usr/lib/os-release",
                     path == "var/lib/dpkg/status",
                 )
             )
@@ -310,7 +354,16 @@ def collect_inventory(
                 _fail(f"root filesystem tar contains duplicate inventory path {path!r}")
             seen_selected_paths.add(path)
 
-            if path == "var/lib/dpkg/status":
+            if path == "usr/lib/os-release":
+                if os_release is not None:
+                    _fail("root filesystem tar contains more than one os-release file")
+                size, digest, contents = _read_member(
+                    archive, member, limit=_MAX_OS_RELEASE_BYTES, contents=True
+                )
+                if contents is None:  # pragma: no cover - requested contents always returns bytes.
+                    _fail("could not read os-release file")
+                os_release = (size, digest, contents)
+            elif path == "var/lib/dpkg/status":
                 if status is not None:
                     _fail("root filesystem tar contains more than one Debian status file")
                 size, digest, contents = _read_member(
@@ -377,6 +430,8 @@ def collect_inventory(
 
     if status is None:
         _fail("root filesystem tar omitted var/lib/dpkg/status")
+    if os_release is None:
+        _fail("root filesystem tar omitted usr/lib/os-release")
     orphaned_directories = sorted(set(pending_licenses) | set(pending_sboms))
     if orphaned_directories:
         _fail(
@@ -459,6 +514,7 @@ def collect_inventory(
     native_files.sort(key=lambda item: str(item["path"]))
     copyright_files.sort(key=lambda item: (str(item["package"]), str(item["path"])))
     common_license_files.sort(key=lambda item: str(item["name"]))
+    os_release_size, os_release_sha256, os_release_contents = os_release
     status_size, status_sha256, status_contents = status
 
     return {
@@ -470,7 +526,14 @@ def collect_inventory(
             "status_sha256": status_sha256,
             "status_size": status_size,
         },
-        "image": {"architecture": architecture, "platform_digest": platform_digest},
+        "image": {
+            "architecture": architecture,
+            "distro": _parse_debian_distro(os_release_contents),
+            "os_release_path": "usr/lib/os-release",
+            "os_release_sha256": os_release_sha256,
+            "os_release_size": os_release_size,
+            "platform_digest": platform_digest,
+        },
         "python": {
             "distributions": distribution_records,
             "embedded_sboms": embedded_sboms,

@@ -103,7 +103,27 @@ release carries `distribution-inventory-amd64.json` and
 `distribution-inventory-arm64.json` with their Sigstore bundles. Each inventory
 is attested, signed, and bound to its matching child-image digest. It records
 available package and license material for review; it is not itself a notice
-package or a decision that source or notice duties have been met.
+package or a decision that source or notice duties have been met. It also
+records the Debian distribution derived from the image's hashed
+canonical `/usr/lib/os-release` file.
+
+### Update a VEX claim
+
+The reviewed source statement lives under `security/vex/`. Use Vexcalibur as an
+analysis aid when a vulnerability needs review, then check the affected package
+URLs and impact statement in the pull request. The statement is a security
+conclusion, not a way to hide a scanner result.
+
+The publisher copies the reviewed bytes only when every product URL matches the
+signed native inventories. Debian URLs must identify the released architecture
+and distribution; an `upstream` qualifier, when present, must match the
+installed package's source. Unknown qualifiers stop the release. This check
+runs before the workflow creates an immutable tag or a versioned image
+reference. The publisher then signs that release asset and attaches an OpenVEX
+attestation to the final multi-platform image digest. If a package update or a
+change in reachable behavior invalidates a conclusion, update or remove the
+source statement and release the correction. Never try to rewrite a published
+VEX asset.
 
 Before allocating another version, the workflow requires the preceding release
 to be published and immutable. It accepts `v0.1.0-alpha.7` as the sole
@@ -116,8 +136,8 @@ is reused, and a completed GitHub release switches the workflow into
 verification mode. It verifies the required assets, both image architectures,
 and the exact image and chart digests. It then verifies GitHub provenance and
 Sigstore evidence against the release workflow and original commit, including
-the raw inventory's platform-digest binding. Conflicting, missing, or ambiguous
-evidence stops the retry.
+the raw inventory's platform-digest binding and the OpenVEX statement's image
+binding. Conflicting, missing, or ambiguous evidence stops the retry.
 
 If the postcondition reports a mutable release, first enable immutable releases
 and query that release again. If GitHub still reports it as mutable, delete only

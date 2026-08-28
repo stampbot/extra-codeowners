@@ -109,7 +109,10 @@ do not affect the service. The [security policy](https://github.com/stampbot/ext
 explains why and links to the exact statement. CI consumes it when it scans the
 matching image, while the raw inventory keeps every finding. A base-image
 update changes the package URL and makes the VEX stop matching; it cannot
-silently carry an old conclusion into a new image.
+silently carry an old conclusion into a new image. At release time, the
+workflow checks the statement against both native inventories before it creates
+an immutable tag or versioned image. It then signs the statement as a release
+asset and attaches it to the final multi-platform image digest.
 
 Those controls make changes visible and repeatable. They do not turn an alpha
 image into a supported production release.

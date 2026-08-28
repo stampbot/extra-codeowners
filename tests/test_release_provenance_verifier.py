@@ -35,21 +35,67 @@ def _raw_container_inventory(architecture: str, platform_digest: str) -> bytes:
             {
                 "debian": {
                     "copyright_files": [],
-                    "packages": [{"package": "example-runtime"}],
+                    "packages": [
+                        {
+                            "architecture": architecture,
+                            "package": "libssl3t64",
+                            "source": "openssl",
+                            "version": "3.5.6-1~deb13u2",
+                        }
+                    ],
                     "shared_license_files": [],
                     "status_path": "var/lib/dpkg/status",
                     "status_sha256": "c" * 64,
                 },
                 "image": {
                     "architecture": architecture,
+                    "distro": "debian-13",
+                    "os_release_path": "usr/lib/os-release",
+                    "os_release_sha256": "d" * 64,
+                    "os_release_size": 128,
                     "platform_digest": platform_digest,
                 },
                 "python": {
-                    "distributions": [{"name": "example-package"}],
+                    "distributions": [
+                        {
+                            "name": "example-package",
+                            "normalized_name": "example-package",
+                            "version": "1.0.0",
+                        }
+                    ],
                     "embedded_sboms": [],
                     "native_files": [],
                 },
-                "schema_version": 1,
+                "schema_version": 2,
+            },
+            sort_keys=True,
+        )
+        + "\n"
+    ).encode()
+
+
+def _release_vex() -> bytes:
+    products = []
+    for architecture in ("amd64", "arm64"):
+        purl = (
+            "pkg:deb/debian/libssl3t64@3.5.6-1~deb13u2?"
+            f"arch={architecture}&distro=debian-13&upstream=openssl"
+        )
+        products.append({"@id": purl, "identifiers": {"purl": purl}})
+    return (
+        json.dumps(
+            {
+                "@context": "https://openvex.dev/ns/v0.2.0",
+                "@id": "urn:uuid:8b0d4df6-cb7e-4d27-8970-e1b4db0d2a4f",
+                "author": "Extra CODEOWNERS maintainers",
+                "statements": [
+                    {
+                        "impact_statement": "The service does not expose the affected feature.",
+                        "products": products,
+                        "status": "not_affected",
+                        "vulnerability": {"name": "CVE-2026-0001"},
+                    }
+                ],
             },
             sort_keys=True,
         )
@@ -70,6 +116,7 @@ def _release_files() -> dict[str, bytes]:
         "distribution-inventory-arm64.json": _raw_container_inventory(
             "arm64", ARM64_PLATFORM_DIGEST
         ),
+        f"extra-codeowners-{VERSION}.openvex.json": _release_vex(),
     }
 
 
@@ -152,6 +199,7 @@ else:
     fake_cosign = fake_bin / "cosign"
     fake_cosign.write_text(
         """#!/usr/bin/env python3
+import base64
 import json
 import os
 import sys
@@ -160,7 +208,7 @@ from pathlib import Path
 arguments = sys.argv[1:]
 with Path(os.environ["FAKE_OPERATION_LOG"]).open("a", encoding="utf-8") as log:
     print("cosign " + " ".join(arguments), file=log)
-if arguments[0] not in {"verify", "verify-blob"}:
+if arguments[0] not in {"verify", "verify-attestation", "verify-blob"}:
     print("unexpected cosign command", file=sys.stderr)
     raise SystemExit(97)
 actual_identity = arguments[arguments.index("--certificate-identity") + 1]
@@ -181,6 +229,37 @@ actual_revision = arguments[arguments.index("--certificate-github-workflow-sha")
 if actual_revision != os.environ["FAKE_EXPECTED_REVISION"]:
     print("unexpected workflow revision", file=sys.stderr)
     raise SystemExit(15)
+if arguments[0] == "verify-attestation":
+    if arguments[arguments.index("--type") + 1] != "openvex":
+        print("unexpected attestation predicate type", file=sys.stderr)
+        raise SystemExit(16)
+    if arguments[-1] != (
+        f"{os.environ['FAKE_EXPECTED_IMAGE']}@{os.environ['FAKE_EXPECTED_IMAGE_DIGEST']}"
+    ):
+        print("unexpected attestation image", file=sys.stderr)
+        raise SystemExit(17)
+    statement = {
+        "_type": "https://in-toto.io/Statement/v0.1",
+        "predicate": json.loads(os.environ["FAKE_EXPECTED_VEX_DOCUMENT"]),
+        "predicateType": "https://openvex.dev/ns",
+        "subject": [
+            {
+                "digest": {
+                    "sha256": os.environ["FAKE_EXPECTED_IMAGE_DIGEST"].removeprefix("sha256:")
+                },
+                "name": os.environ["FAKE_EXPECTED_IMAGE"],
+            }
+        ],
+    }
+    if os.environ.get("FAKE_BAD_OPENVEX_ATTESTATION") == "true":
+        statement["predicate"] = {"unexpected": "predicate"}
+    payload = base64.b64encode(json.dumps(statement, sort_keys=True).encode()).decode()
+    records = [{"payload": payload}]
+    if os.environ.get("FAKE_REPEATED_OPENVEX_ATTESTATION") == "true":
+        records.append({"payload": payload})
+    for record in records:
+        print(json.dumps(record))
+    raise SystemExit(0)
 if arguments[0] == "verify-blob":
     bundle = Path(arguments[arguments.index("--bundle") + 1])
     try:
@@ -224,6 +303,13 @@ def _invalidate_amd64_inventory_platform_binding(asset_directory: Path) -> None:
     inventory.write_text(json.dumps(document, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def _invalidate_amd64_inventory_distro(asset_directory: Path) -> None:
+    inventory = asset_directory / "distribution-inventory-amd64.json"
+    document = json.loads(inventory.read_text(encoding="utf-8"))
+    document["image"]["distro"] = "ubuntu-24.04"
+    inventory.write_text(json.dumps(document, sort_keys=True) + "\n", encoding="utf-8")
+
+
 def _remove_arm64_inventory(asset_directory: Path) -> None:
     (asset_directory / "distribution-inventory-arm64.json").unlink()
 
@@ -243,6 +329,7 @@ def _run_verifier(
         f"extra-codeowners-{VERSION}.tgz",
         "distribution-inventory-amd64.json",
         "distribution-inventory-arm64.json",
+        f"extra-codeowners-{VERSION}.openvex.json",
     }
     for name, contents in release_files.items():
         artifact = asset_directory / name
@@ -270,9 +357,12 @@ def _run_verifier(
     verifier_environment = os.environ | {
         "FAKE_CERTIFICATE_IDENTITY": certificate_identity,
         "FAKE_EXPECTED_FILE_DIGESTS": json.dumps(expected_file_digests),
+        "FAKE_EXPECTED_IMAGE": IMAGE,
+        "FAKE_EXPECTED_IMAGE_DIGEST": IMAGE_DIGEST,
         "FAKE_EXPECTED_REPOSITORY": REPOSITORY,
         "FAKE_EXPECTED_REVISION": REVISION,
         "FAKE_EXPECTED_SIGNER_WORKFLOW": f"{REPOSITORY}/.github/workflows/release.yml",
+        "FAKE_EXPECTED_VEX_DOCUMENT": _release_vex().decode(),
         "FAKE_OPERATION_LOG": str(operation_log),
         "GITHUB_REPOSITORY": REPOSITORY,
         "GH_TOKEN": "unused",
@@ -311,6 +401,7 @@ def _run_verifier(
     (
         None,
         {"FAKE_REPEATED_ATTESTATION": "true"},
+        {"FAKE_REPEATED_OPENVEX_ATTESTATION": "true"},
     ),
 )
 @pytest.mark.skipif(BASH is None or JQ is None, reason="Bash and jq are required")
@@ -323,9 +414,13 @@ def test_release_provenance_verifier_accepts_equivalent_immutable_evidence(
     assert result.returncode == 0, result.stderr
     gh_operations = [operation for operation in operations if operation.startswith("gh ")]
     cosign_operations = [operation for operation in operations if operation.startswith("cosign ")]
-    assert len(gh_operations) == 6
-    assert len([operation for operation in cosign_operations if "verify-blob" in operation]) == 5
+    assert len(gh_operations) == 7
+    assert len([operation for operation in cosign_operations if "verify-blob" in operation]) == 6
     assert len([operation for operation in cosign_operations if "cosign verify " in operation]) == 2
+    assert (
+        len([operation for operation in cosign_operations if "verify-attestation" in operation])
+        == 1
+    )
     assert all("--repo stampbot/extra-codeowners" in operation for operation in gh_operations)
     assert all(
         "--source-digest 8ade2d8041bd9d2c21db602fe299aa55c53ae83b" in operation
@@ -355,8 +450,10 @@ def test_release_provenance_verifier_accepts_equivalent_immutable_evidence(
         ("missing-bundle", None, _remove_chart_bundle),
         ("malformed-bundle", None, _malform_wheel_bundle),
         ("wrong-inventory-platform-binding", None, _invalidate_amd64_inventory_platform_binding),
+        ("wrong-inventory-distro", None, _invalidate_amd64_inventory_distro),
         ("missing-inventory", None, _remove_arm64_inventory),
         ("conflicting-attestation", {"FAKE_CONFLICTING_ATTESTATION": "true"}, None),
+        ("wrong-openvex-attestation", {"FAKE_BAD_OPENVEX_ATTESTATION": "true"}, None),
     ),
 )
 @pytest.mark.skipif(BASH is None or JQ is None, reason="Bash and jq are required")
