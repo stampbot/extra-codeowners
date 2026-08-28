@@ -352,7 +352,12 @@ def test_release_creates_an_immutable_tag_without_update_or_delete_paths() -> No
 def test_release_pushes_native_digests_before_assembling_the_manifest() -> None:
     jobs = _workflow_jobs((WORKFLOWS / "release.yml").read_text(encoding="utf-8"))
     image = _named_step(jobs["image"], "Build and push native image by digest")
-    publish = _named_step(jobs["publish"], "Publish or verify multiarch image")
+    publish_job = jobs["publish"]
+    publish = _named_step(publish_job, "Publish or verify multiarch image")
+    stage_vex = _named_step(publish_job, "Stage reviewed OpenVEX release evidence")
+    attach_vex = _named_step(publish_job, "Attach OpenVEX to multiarch image")
+    attest_vex = _named_step(publish_job, "Attest OpenVEX release evidence")
+    sign_files = _named_step(publish_job, "Sign release files")
 
     assert "push-by-digest=true" in image
     assert "name-canonical=true" in image
@@ -371,9 +376,29 @@ def test_release_pushes_native_digests_before_assembling_the_manifest() -> None:
     assert "linux/amd64" in publish and "linux/arm64" in publish
 
     assert "${{ env.IMAGE }}@${{ steps.build.outputs.digest }}" in jobs["image"]
-    assert jobs["publish"].index("Publish or verify multiarch image") < jobs["publish"].index(
-        "Attest multiarch image"
+    assert (
+        publish_job.index("Stage reviewed OpenVEX release evidence")
+        < publish_job.index("Create immutable Git tag")
+        < publish_job.index("Publish or verify multiarch image")
+        < publish_job.index("Attest multiarch image")
     )
+    assert (
+        publish_job.index("Sign multiarch image")
+        < publish_job.index("Attach OpenVEX to multiarch image")
+        < publish_job.index("Attest OpenVEX release evidence")
+    )
+    assert "python -I -S -B tools/release_vex.py stage" in stage_vex
+    assert "security/vex/openssl-3.5.6.openvex.json" in stage_vex
+    assert "release/image/amd64/distribution-inventory-amd64.json" in stage_vex
+    assert "release/image/arm64/distribution-inventory-arm64.json" in stage_vex
+    assert '"release/image/extra-codeowners-${VERSION}.openvex.json"' in stage_vex
+    assert "cosign attest --yes --type openvex" in attach_vex
+    assert '"${IMAGE}@${DIGEST}"' in attach_vex
+    assert (
+        "subject-path: release/image/extra-codeowners-"
+        "${{ needs.plan.outputs.version }}.openvex.json" in attest_vex
+    )
+    assert "-name 'extra-codeowners-*.openvex.json'" in sign_files
 
 
 def test_release_state_lookups_retry_unavailable_apis_and_treat_only_404_as_missing() -> None:
@@ -736,6 +761,8 @@ def test_completed_release_verification_covers_identity_and_required_assets() ->
         "digest-amd64.txt",
         "digest-arm64.txt",
         "image-reference.txt",
+        "extra-codeowners-${VERSION}.openvex.json",
+        "extra-codeowners-${VERSION}.openvex.json.sigstore.json",
         "distribution-inventory-amd64.json",
         "distribution-inventory-amd64.json.sigstore.json",
         "distribution-inventory-arm64.json",
@@ -760,15 +787,24 @@ def test_release_provenance_verifies_the_schema_and_platform_binding_of_raw_inve
     )
 
     assert "verify_raw_container_inventory()" in source
-    assert ".schema_version == 1" in source
-    assert ".image == {" in source
-    assert '"architecture": $architecture' in source
-    assert '"platform_digest": $platform_digest' in source
+    assert ".schema_version == 2" in source
+    assert ".image.architecture == $architecture" in source
+    assert ".image.distro" in source
+    assert 'test("^debian-[0-9]+$")' in source
+    assert '.image.os_release_path == "usr/lib/os-release"' in source
+    assert ".image.os_release_sha256" in source
+    assert ".image.os_release_size" in source
+    assert ".image.platform_digest == $platform_digest" in source
     assert "distribution-inventory-amd64.json" in source
     assert "distribution-inventory-arm64.json" in source
     assert '"${asset_directory}/digest-amd64.txt"' in source
     assert '"${asset_directory}/digest-arm64.txt"' in source
     assert 'verify_release_file "${inventory}"' in source
+    assert "verify_openvex_image_attestation()" in source
+    assert "cosign verify-attestation --type openvex" in source
+    assert "tools/release_vex.py stage" in source
+    assert "tools/release_vex.py verify-attestation" in source
+    assert 'vex="${asset_directory}/extra-codeowners-${version}.openvex.json"' in source
 
 
 def test_dco_uses_the_event_base_and_head_for_its_commit_range() -> None:

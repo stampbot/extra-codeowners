@@ -125,11 +125,22 @@ verify_raw_container_inventory() {
     --arg architecture "${architecture}" \
     --arg platform_digest "${platform_digest}" \
     'type == "object" and
-      .schema_version == 1 and
-      .image == {
-        "architecture": $architecture,
-        "platform_digest": $platform_digest
-      } and
+      .schema_version == 2 and
+      (.image | type == "object") and
+      (.image.architecture == $architecture) and
+      (.image.distro | type == "string" and test("^debian-[0-9]+$")) and
+      (.image.os_release_path == "usr/lib/os-release") and
+      (.image.os_release_sha256 | type == "string" and test("^[0-9a-f]{64}$")) and
+      (.image.os_release_size | type == "number" and . > 0 and floor == .) and
+      (.image.platform_digest == $platform_digest) and
+      ((.image | keys | sort) == [
+        "architecture",
+        "distro",
+        "os_release_path",
+        "os_release_sha256",
+        "os_release_size",
+        "platform_digest"
+      ]) and
       (.debian | type == "object") and
       .debian.status_path == "var/lib/dpkg/status" and
       (.debian.status_sha256 | type == "string" and test("^[0-9a-f]{64}$")) and
@@ -144,11 +155,26 @@ verify_raw_container_inventory() {
   verify_release_file "${inventory}"
 }
 
+verify_openvex_image_attestation() {
+  local vex="$1"
+  local attestations="${temporary_directory}/openvex-attestations.json"
+
+  retry_to_file "${attestations}" cosign verify-attestation --type openvex \
+    "${cosign_identity[@]}" \
+    "${image}@${image_digest}"
+  python -I -S -B tools/release_vex.py verify-attestation \
+    --vex "${vex}" \
+    --attestations "${attestations}" \
+    --image "${image}" \
+    --image-digest "${image_digest}"
+}
+
 wheel="${asset_directory}/extra_codeowners-${python_version}-py3-none-any.whl"
 sdist="${asset_directory}/extra_codeowners-${python_version}.tar.gz"
 chart="${asset_directory}/extra-codeowners-${version}.tgz"
 amd64_inventory="${asset_directory}/distribution-inventory-amd64.json"
 arm64_inventory="${asset_directory}/distribution-inventory-arm64.json"
+vex="${asset_directory}/extra-codeowners-${version}.openvex.json"
 
 verify_release_file "${wheel}"
 verify_release_file "${sdist}"
@@ -161,6 +187,12 @@ verify_raw_container_inventory \
   "${arm64_inventory}" \
   arm64 \
   "$(<"${asset_directory}/digest-arm64.txt")"
+verify_release_file "${vex}"
+python -I -S -B tools/release_vex.py stage \
+  --source "${vex}" \
+  --inventory "${amd64_inventory}" \
+  --inventory "${arm64_inventory}"
+verify_openvex_image_attestation "${vex}"
 verify_github_attestation \
   "oci://${image}@${image_digest}" \
   "${image}" \

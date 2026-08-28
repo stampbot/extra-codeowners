@@ -30,7 +30,7 @@ depends = ["lint:python", "lint:workflows", "lint:yaml", "lint:markdown"]
 run = [
   "uv run ruff format --check .",
   "uv run ruff check .",
-  "uv run mypy extra_codeowners tests tools/evaluation_beta.py tools/evaluation_beta_bootstrap.py tools/readthedocs_bootstrap.py tools/release_inventory.py .github/scripts/release_plan.py",
+  "uv run mypy extra_codeowners tests tools/evaluation_beta.py tools/evaluation_beta_bootstrap.py tools/readthedocs_bootstrap.py tools/release_inventory.py tools/release_vex.py .github/scripts/release_plan.py",
 ]
 
 [tasks."lint:workflows"]

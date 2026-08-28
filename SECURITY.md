@@ -83,12 +83,25 @@ before 1.0.
 The current container includes Debian OpenSSL packages with known CVEs. We
 reviewed the affected code paths, and they do not affect Extra CODEOWNERS. The
 [OpenVEX statement](security/vex/openssl-3.5.6.openvex.json) names the exact
-package versions, architectures, and CVEs. It remains valid until we upgrade
-those packages or enable a relevant protocol or API.
+package versions, architectures, Debian distribution, and CVEs. It remains
+valid until we upgrade those packages or enable a relevant protocol or API.
 
 This is a project security statement. CI consumes the same file when it scans
 the image. The raw report retains every scanner finding, and a package-version
 change stops the VEX from matching.
+
+Before it creates an immutable tag or a versioned image reference, the
+workflow checks every product URL against signed `amd64` and `arm64`
+inventories. Those inventories include the Debian distribution derived from
+the image's hashed canonical `/usr/lib/os-release` file. The workflow then
+publishes the reviewed bytes as `extra-codeowners-VERSION.openvex.json`, signs
+the file, and attaches a keyless OpenVEX attestation to the exact
+multi-platform image digest. The release process records the reviewed
+conclusion; it does not make a new vulnerability decision.
+
+If a package version or reachable behavior changes, update or remove the source
+statement before the next release. Do not replace a VEX asset on an existing
+release. GitHub releases are immutable, so a later release is the correction.
 
 ## Container policy
 
@@ -131,20 +144,22 @@ refuses malformed, ambiguous, divergent, or nonmonotonic release history.
 
 The release builds a Python wheel and source distribution, the Helm chart, and
 native images in parallel. Native image jobs receive only package-write
-permission and push by digest. The publisher runs after every build succeeds,
-creates the immutable Git tag, joins the native digests into one versioned
-image, and verifies that the result contains only `linux/amd64` and
-`linux/arm64`.
+permission and push by digest. The publisher checks the reviewed VEX statement
+after every build succeeds. It creates the immutable Git tag only when that
+check passes, then joins the native digests into one versioned image and
+verifies that the result contains only `linux/amd64` and `linux/arm64`.
 
 Release images carry BuildKit provenance and software bills of materials. The
 publisher adds a GitHub provenance attestation and a keyless Sigstore signature
 for the multi-platform image. It also attests and signs the Python wheel,
 source distribution, Helm chart, and the raw `amd64` and `arm64` container
-inventories, then signs the OCI chart. Each inventory names its child-image
-digest. It stages a draft GitHub release, uploads the assets, and publishes it.
-The run succeeds only after GitHub reports that release as published and
-immutable. That release is the completion record. Python artifacts remain
-GitHub release assets; they are not uploaded to PyPI.
+inventories. The publisher validates the reviewed OpenVEX statement against
+those inventories, signs it as a release asset, and attaches it to the
+multi-platform image digest. It then signs the OCI chart. Each inventory names
+its child-image digest. It stages a draft GitHub release, uploads the assets,
+and publishes it. The run succeeds only after GitHub reports that release as
+published and immutable. That release is the completion record. Python
+artifacts remain GitHub release assets; they are not uploaded to PyPI.
 
 Repository administrators must enable GitHub's **Immutable releases** setting.
 The workflow's `GITHUB_TOKEN` cannot read that setting before publication, so
@@ -158,11 +173,13 @@ when it resolves to that same commit. When it detects a completed GitHub
 release, it verifies the required assets, image platforms and digests, and
 chart archive and digest instead of republishing them. It then verifies GitHub
 provenance for the image, wheel, source distribution, chart, and raw container
-inventories. It checks that each inventory names the released platform digest.
-It also checks the Sigstore bundles for the release files and keyless signatures
-for the image and OCI chart. Every proof must name this repository's release
-workflow and the original commit. Missing, invalid, or ambiguous evidence stops
-the retry; it never edits a published immutable release.
+inventories. It checks that each inventory names the released platform digest,
+then validates the release OpenVEX file against those inventories and its OCI
+attestation against that multi-platform digest. It also checks the Sigstore
+bundles for the release files and keyless signatures for the image and OCI
+chart. Every proof must name this repository's release workflow and the
+original commit. Missing, invalid, or ambiguous evidence stops the retry; it
+never edits a published immutable release.
 
 Actions are pinned to full commit SHAs. The publishing job receives
 `contents`, `packages`, `id-token`, and `attestations` write access; ordinary CI

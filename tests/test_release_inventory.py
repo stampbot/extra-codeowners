@@ -49,6 +49,15 @@ Version: 9.9.9
 """
 
 
+def _os_release() -> bytes:
+    return b"""PRETTY_NAME="Debian GNU/Linux 13 (trixie)"
+NAME="Debian GNU/Linux"
+VERSION_ID="13"
+VERSION="13 (trixie)"
+ID=debian
+"""
+
+
 def _metadata(
     name: str,
     version: str,
@@ -67,6 +76,7 @@ def _metadata(
 
 def _members() -> list[tuple[str, bytes]]:
     return [
+        ("usr/lib/os-release", _os_release()),
         ("var/lib/dpkg/status", _status()),
         (f"{SITE}/example_pkg-1.0.dist-info/licenses/LICENSE", b"example license\n"),
         (
@@ -86,9 +96,13 @@ def test_collect_inventory_records_raw_os_python_and_native_evidence() -> None:
         _rootfs_tar(_members()), architecture="amd64", platform_digest=PLATFORM_DIGEST
     )
 
-    assert inventory["schema_version"] == 1
+    assert inventory["schema_version"] == 2
     assert inventory["image"] == {
         "architecture": "amd64",
+        "distro": "debian-13",
+        "os_release_path": "usr/lib/os-release",
+        "os_release_sha256": hashlib.sha256(_os_release()).hexdigest(),
+        "os_release_size": len(_os_release()),
         "platform_digest": PLATFORM_DIGEST,
     }
     debian = inventory["debian"]
@@ -175,6 +189,22 @@ def test_collector_records_links_without_resolving_them() -> None:
     }
 
 
+def test_collector_uses_the_canonical_os_release_file_when_etc_is_a_symlink() -> None:
+    inventory = collect_inventory(
+        _rootfs_tar(
+            _members(),
+            links=(("etc/os-release", "../usr/lib/os-release"),),
+        ),
+        architecture="amd64",
+        platform_digest=PLATFORM_DIGEST,
+    )
+
+    image = inventory["image"]
+    assert isinstance(image, dict)
+    assert image["distro"] == "debian-13"
+    assert image["os_release_path"] == "usr/lib/os-release"
+
+
 def test_inventory_output_is_stable_when_tar_member_order_changes() -> None:
     first = collect_inventory(
         _rootfs_tar(_members()), architecture="amd64", platform_digest=PLATFORM_DIGEST
@@ -212,6 +242,14 @@ def test_collector_rejects_missing_or_duplicate_status_files() -> None:
             _rootfs_tar(missing), architecture="amd64", platform_digest=PLATFORM_DIGEST
         )
 
+    missing_os_release = [member for member in _members() if member[0] != "usr/lib/os-release"]
+    with pytest.raises(InventoryError, match="omitted usr/lib/os-release"):
+        collect_inventory(
+            _rootfs_tar(missing_os_release),
+            architecture="amd64",
+            platform_digest=PLATFORM_DIGEST,
+        )
+
     duplicate = [*_members(), ("var/lib/dpkg/status", _status())]
     with pytest.raises(InventoryError, match="duplicate inventory path"):
         collect_inventory(
@@ -239,6 +277,28 @@ Version: 9.9.9
         )
 
 
+@pytest.mark.parametrize(
+    ("os_release", "message"),
+    (
+        (b"ID=ubuntu\nVERSION_ID=24.04\n", "requires Debian"),
+        (b"ID=debian\nVERSION_ID=trixie\n", "invalid VERSION_ID"),
+        (b"ID=debian\nID=debian\nVERSION_ID=13\n", "invalid ID field"),
+    ),
+)
+def test_collector_rejects_an_invalid_debian_distribution_identity(
+    os_release: bytes, message: str
+) -> None:
+    members = [
+        (path, os_release if path == "usr/lib/os-release" else contents)
+        for path, contents in _members()
+    ]
+
+    with pytest.raises(InventoryError, match=message):
+        collect_inventory(
+            _rootfs_tar(members), architecture="amd64", platform_digest=PLATFORM_DIGEST
+        )
+
+
 def test_collector_rejects_unsafe_tar_and_metadata_paths() -> None:
     traversal = [*_members(), ("../outside", b"not selected\n")]
     with pytest.raises(InventoryError, match="unsafe member path"):
@@ -263,6 +323,7 @@ def test_collector_rejects_unsafe_tar_and_metadata_paths() -> None:
 
 def test_collector_rejects_auxiliary_files_without_distribution_metadata() -> None:
     members = [
+        ("usr/lib/os-release", _os_release()),
         ("var/lib/dpkg/status", _status()),
         (f"{SITE}/missing-1.0.dist-info/licenses/LICENSE", b"license\n"),
     ]

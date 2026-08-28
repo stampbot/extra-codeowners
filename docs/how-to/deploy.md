@@ -28,6 +28,11 @@ App. New releases include them in the matching GitHub release for component
 review. They are not a notice package or a source offer; see
 [project status](../reference/project-status.md) for their scope and limits.
 
+If the release contains a reviewed VEX claim, the same release includes
+`extra-codeowners-VERSION.openvex.json` and its Sigstore bundle. Its OpenVEX
+attestation binds that statement to the multi-platform image digest. Use that
+asset with the released digest, not a statement from a newer source checkout.
+
 Replace `VERSION` with an exact value such as `0.1.0-alpha.8`. Don't use a
 floating tag. Resolve and record the multi-platform image digest before you
 change the cluster; the chart also accepts that digest through `image.digest`.
@@ -403,6 +408,7 @@ Each successful release workflow publishes:
 - Python wheel and source distribution as GitHub release assets
 - signed raw distribution inventories for `amd64` and `arm64`, each bound to
   its image child digest
+- a signed OpenVEX release asset, bound to the multi-platform image digest
 - BuildKit provenance and software bill of materials for each native image
 - GitHub provenance attestations and Sigstore signatures for published
   artifacts

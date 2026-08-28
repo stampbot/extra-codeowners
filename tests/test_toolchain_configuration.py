@@ -1250,6 +1250,7 @@ def test_standalone_python_tools_are_in_every_type_check_entrypoint() -> None:
         "tools/evaluation_beta.py",
         "tools/evaluation_beta_bootstrap.py",
         "tools/release_inventory.py",
+        "tools/release_vex.py",
     }
     sources = {
         "mise": (ROOT / "mise.toml").read_text(encoding="utf-8"),

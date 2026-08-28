@@ -43,13 +43,16 @@ run publishes first, the older run proves that the descendant release is on
 artifacts. One release may therefore contain more than one closely spaced
 merge.
 
-The two image jobs push content-addressed native images. The publisher joins
-them into one versioned multi-platform image, signs and attests the released
-artifacts, publishes the OCI chart, and stages a draft GitHub release. It
-uploads the release assets, publishes the release, and succeeds only when
-GitHub reports it as immutable. That published immutable release is the
-completion record. Rerunning the failed job in the original CI run keeps the
-same commit, reuses matching immutable state, and refuses a collision.
+The two image jobs push content-addressed native images. The publisher validates
+the reviewed OpenVEX statement against both raw inventories before it creates a
+versioned image or immutable tag. It then joins the native images into one
+multi-platform image and signs and attests the released artifacts. It publishes
+the OCI chart and stages a draft GitHub release. The VEX release asset carries
+a keyless attestation for that multi-platform digest. The job uploads the
+release assets, publishes the release, and succeeds only when GitHub reports it
+as immutable. That published immutable release is the completion record.
+Rerunning the failed job in the original CI run keeps the same commit, reuses
+matching immutable state, and refuses a collision.
 
 Release-channel trailers provide an audited, portable promotion control:
 `Release-Channel: alpha` starts the next semantic version as an alpha and
@@ -74,6 +77,8 @@ container. It records:
 
 - installed Debian package status and available Debian copyright and
   shared-license entries
+- the Debian distribution derived from the image's hashed canonical
+  `/usr/lib/os-release` file
 - Python distribution metadata and license-file entries
 - embedded JSON SBOMs and native Python extension files.
 
@@ -83,6 +88,12 @@ followed.
 The inventory names the exact platform digest from `digest-amd64.txt` or
 `digest-arm64.txt`. The release workflow attests and signs each inventory, then
 checks that binding again when it verifies an existing release.
+
+When a reviewed OpenVEX statement is present, the publisher accepts it only if
+its product URLs match the pair of signed inventories, including the Debian
+distribution for Debian package URLs. The resulting release asset is signed and
+attached to the multi-platform image digest. It records the reviewed conclusion
+for that image; it does not replace the raw scanner report.
 
 This is raw review evidence, not a notice bundle or a corresponding-source
 offer. It deliberately reports missing declared license files and does not

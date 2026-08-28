@@ -589,6 +589,19 @@ jobs:
           name: release-image-arm64-${{ needs.plan.outputs.revision }}
           path: release/image/arm64
 
+      # Fail before allocating a tag or a versioned image reference. A stale VEX
+      # statement must not leave immutable release state behind for a retry.
+      - name: Stage reviewed OpenVEX release evidence
+        env:
+          VERSION: ${{ needs.plan.outputs.version }}
+        run: |
+          set -euo pipefail
+          python -I -S -B tools/release_vex.py stage \
+            --source security/vex/openssl-3.5.6.openvex.json \
+            --inventory release/image/amd64/distribution-inventory-amd64.json \
+            --inventory release/image/arm64/distribution-inventory-arm64.json \
+            --output "release/image/extra-codeowners-${VERSION}.openvex.json"
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
         with:
@@ -792,6 +805,15 @@ jobs:
           DIGEST: ${{ steps.image.outputs.digest }}
         run: cosign sign --yes "${IMAGE}@${DIGEST}"
 
+      - name: Attach OpenVEX to multiarch image
+        env:
+          DIGEST: ${{ steps.image.outputs.digest }}
+          VERSION: ${{ needs.plan.outputs.version }}
+        run: >-
+          cosign attest --yes --type openvex
+          --predicate "release/image/extra-codeowners-${VERSION}.openvex.json"
+          "${IMAGE}@${DIGEST}"
+
       - name: Attest Python distributions
         uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
@@ -807,6 +829,11 @@ jobs:
         with:
           subject-path: release/image/*/distribution-inventory-*.json
 
+      - name: Attest OpenVEX release evidence
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: release/image/extra-codeowners-${{ needs.plan.outputs.version }}.openvex.json
+
       - name: Sign release files
         run: |
           set -euo pipefail
@@ -814,7 +841,8 @@ jobs:
             cosign sign-blob --yes --bundle "${artifact}.sigstore.json" "${artifact}"
           done < <(find release/python release/chart release/image -type f \
             \( -name '*.whl' -o -name '*.tar.gz' -o -name '*.tgz' \
-            -o -name 'distribution-inventory-*.json' \) -print0)
+            -o -name 'distribution-inventory-*.json' -o -name 'extra-codeowners-*.openvex.json' \
+            \) -print0)
 
       - name: Publish or verify Helm chart
         id: chart
@@ -1221,6 +1249,8 @@ jobs:
             digest-amd64.txt
             digest-arm64.txt
             image-reference.txt
+            "extra-codeowners-${VERSION}.openvex.json"
+            "extra-codeowners-${VERSION}.openvex.json.sigstore.json"
             distribution-inventory-amd64.json
             distribution-inventory-amd64.json.sigstore.json
             distribution-inventory-arm64.json
