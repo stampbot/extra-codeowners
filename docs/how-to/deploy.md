@@ -10,8 +10,9 @@ merge.
     repositories. The commit-scoped Check Run behavior still has an open
     provider contract in
     [issue #1](https://github.com/stampbot/extra-codeowners/issues/1). Do not
-    deploy, mirror, or redistribute the older `:main` preview; it predates the
-    current release pipeline.
+    deploy, mirror, or redistribute legacy preview images: `:main` and its
+    `sha-*` and `sha256-*` companion tags. They are unsupported and unsafe for
+    deployment because they predate the immutable release pipeline.
 
 ## Choose one release
 

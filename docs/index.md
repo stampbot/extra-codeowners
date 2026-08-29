@@ -14,9 +14,10 @@ Regular pull requests keep going to their human owners.
 
     Extra CODEOWNERS is pre-release software. An alpha artifact is for
     non-required, shadow-mode testing, not production enforcement or supported
-    distribution. Don't deploy, mirror, or redistribute the older `:main`
-    preview. Read the [project status](reference/project-status.md) before
-    testing the App.
+    distribution. Legacy preview images — `:main` and its `sha-*` and
+    `sha256-*` companion tags — are unsupported and unsafe for deployment.
+    Don't deploy, mirror, or redistribute them. Read the
+    [project status](reference/project-status.md) before testing the App.
 
 ## Start with the decision
 

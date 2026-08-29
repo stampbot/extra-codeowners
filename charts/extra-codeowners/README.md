@@ -7,9 +7,9 @@ release workflow publishes it as an OCI chart at
 > [!CAUTION]
 > Alpha images and charts are for non-required shadow-mode testing. Never use
 > one to authorize production merges; keep GitHub's native **Require review
-> from Code Owners** rule in place. The older
-> `ghcr.io/stampbot/extra-codeowners:main` image predates the current release
-> pipeline and must not be deployed.
+> from Code Owners** rule in place. Legacy preview images — `:main` and its
+> `sha-*` and `sha256-*` companion tags — are unsupported and unsafe for
+> deployment. They must not be deployed, mirrored, or redistributed.
 
 The current Check Run design has a documented commit-to-pull-request
 inheritance window, tracked in
