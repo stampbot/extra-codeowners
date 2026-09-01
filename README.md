@@ -21,8 +21,12 @@ policy says which Apps may cover which owners and paths.
 > [!WARNING]
 > Extra CODEOWNERS is pre-release software. Alpha images and charts are for
 > non-required, shadow-mode testing only. Don't use them to enforce production
-> merges. The older `:main` preview predates the current release pipeline;
-> don't deploy, mirror, or redistribute it. The
+> merges. Legacy preview images — `:main` and its `sha-*` and `sha256-*`
+> companion tags — are unsupported and unsafe for deployment. They predate the
+> immutable release pipeline and lack the release, provenance, and
+> corresponding-source evidence required for a supported artifact. Don't
+> deploy, mirror, or redistribute them. This is not a claim of a known
+> vulnerability. The
 > [project status](docs/reference/project-status.md) separates what is usable
 > today from what still blocks a supported release.
 

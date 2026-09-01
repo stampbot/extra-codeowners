@@ -30,8 +30,11 @@ promise a response or remediation time.
 ## Supported versions
 
 There is no supported stable release yet. Alpha GitHub releases, images, and
-charts are for non-required shadow-mode testing. Builds from pull requests and
-the older public `:main` image are not releases. The
+charts are for non-required shadow-mode testing. Builds from pull requests are
+not releases. Legacy preview images — `:main` and its `sha-*` and `sha256-*`
+companion tags — are unsupported and unsafe for deployment. They are not
+approved distribution evidence, but this warning does not assert a known
+vulnerability. The
 [project status](docs/reference/project-status.md) records the remaining
 production and distribution work.
 

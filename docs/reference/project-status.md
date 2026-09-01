@@ -25,9 +25,13 @@ Current alpha releases are complete enough to run the App in shadow mode. Pin
 the image by digest, use the chart from the same version, and leave the check
 non-required. The [deployment guide](../how-to/deploy.md) covers that path.
 
-The old `ghcr.io/stampbot/extra-codeowners:main` preview predates the current
-pipeline. Don't deploy, mirror, or redistribute it. [Issue #30][issue-30]
-tracks its final disposition.
+Legacy preview images — `ghcr.io/stampbot/extra-codeowners:main` and its
+`sha-*` and `sha256-*` companion tags — are unsupported and unsafe for
+deployment. They predate the immutable release pipeline and lack the release,
+provenance, and corresponding-source evidence required for a supported
+artifact. Don't deploy, mirror, or redistribute them. This is not a claim of a
+known vulnerability. [Issue #30][issue-30] holds the public tag-and-digest
+inventory and the retention record.
 
 ## Release behavior
 
