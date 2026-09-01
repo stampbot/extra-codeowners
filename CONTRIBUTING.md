@@ -120,12 +120,16 @@ git commit --signoff
 The sign-off says you have the right to submit the contribution under the
 project's license. It is separate from cryptographic commit signing.
 
-The only alternate identity accepted by CI is GitHub's canonical
-`dependabot[bot] <support@github.com>` trailer on an official, same-repository
-Dependabot update. CI verifies the bot account, branch and repository identity,
-single-commit history, parent and head SHAs, author and committer identities,
-and GitHub signature before accepting that trailer. This narrow exception is
-DCO handling only; it does not approve or authorize the dependency change.
+Renovate is configured to add an ordinary DCO sign-off. Its first pull request
+must prove that the trailer matches its Git author before Renovate takes over a
+new update class; [issue #160](https://github.com/stampbot/extra-codeowners/issues/160)
+tracks that check. The only alternate identity accepted by CI is GitHub's
+canonical `dependabot[bot] <support@github.com>` trailer on an official,
+same-repository Dependabot update. CI verifies the bot account, branch and
+repository identity, single-commit history, parent and head SHAs, author and
+committer identities, and GitHub signature before accepting that trailer. This
+narrow exception is DCO handling only; it does not approve or authorize the
+dependency change.
 
 ## Open a pull request
 

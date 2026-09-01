@@ -110,6 +110,8 @@ contract. The setup action reads it, while `mise.toml` installs the same local
 version and the Dockerfile pins the matching uv image by digest.
 
 Renovate groups the project version, local tool, and container image as one
-`uv toolchain` update. Dependabot updates the setup action itself. Review the
-upstream release notes and image digest before merging, and don't bypass
+`uv toolchain` update. Dependabot still owns GitHub Action updates while
+[#160](https://github.com/stampbot/extra-codeowners/issues/160) verifies the
+Renovate handoff. Review the upstream release notes and image digest before
+merging, and don't bypass
 `test_toolchain_configuration.py` when it reports drift.
