@@ -101,11 +101,15 @@ Each image build exports its exact native filesystem without starting the
 container and writes a raw per-platform distribution inventory. The published
 release carries `distribution-inventory-amd64.json` and
 `distribution-inventory-arm64.json` with their Sigstore bundles. Each inventory
-is attested, signed, and bound to its matching child-image digest. It records
-available package and license material for review; it is not itself a notice
-package or a decision that source or notice duties have been met. It also
-records the Debian distribution derived from the image's hashed
-canonical `/usr/lib/os-release` file.
+is attested, signed, and bound to its matching child-image digest. The same
+export produces `recipient-notices-amd64.tar.gz` and
+`recipient-notices-arm64.tar.gz`; the publisher verifies them again after
+artifact download and before allocating immutable release state. Read
+[recipient notice bundles](../reference/recipient-notices.md) for their exact
+contents and limits. They preserve available notice material; they do not
+decide that source or notice duties have been met. The inventory also records
+the Debian distribution derived from the image's hashed canonical
+`/usr/lib/os-release` file.
 
 ### Update a VEX claim
 

@@ -155,6 +155,21 @@ verify_raw_container_inventory() {
   verify_release_file "${inventory}"
 }
 
+verify_recipient_notice_bundle() {
+  local bundle="$1"
+  local inventory="$2"
+  local architecture="$3"
+  local platform_digest="$4"
+
+  test -s "${bundle}"
+  verify_release_file "${bundle}"
+  python -I -S -B tools/release_notices.py verify \
+    --architecture "${architecture}" \
+    --platform-digest "${platform_digest}" \
+    --inventory "${inventory}" \
+    --bundle "${bundle}"
+}
+
 verify_openvex_image_attestation() {
   local vex="$1"
   local attestations="${temporary_directory}/openvex-attestations.json"
@@ -174,6 +189,8 @@ sdist="${asset_directory}/extra_codeowners-${python_version}.tar.gz"
 chart="${asset_directory}/extra-codeowners-${version}.tgz"
 amd64_inventory="${asset_directory}/distribution-inventory-amd64.json"
 arm64_inventory="${asset_directory}/distribution-inventory-arm64.json"
+amd64_notices="${asset_directory}/recipient-notices-amd64.tar.gz"
+arm64_notices="${asset_directory}/recipient-notices-arm64.tar.gz"
 vex="${asset_directory}/extra-codeowners-${version}.openvex.json"
 
 verify_release_file "${wheel}"
@@ -183,7 +200,17 @@ verify_raw_container_inventory \
   "${amd64_inventory}" \
   amd64 \
   "$(<"${asset_directory}/digest-amd64.txt")"
+verify_recipient_notice_bundle \
+  "${amd64_notices}" \
+  "${amd64_inventory}" \
+  amd64 \
+  "$(<"${asset_directory}/digest-amd64.txt")"
 verify_raw_container_inventory \
+  "${arm64_inventory}" \
+  arm64 \
+  "$(<"${asset_directory}/digest-arm64.txt")"
+verify_recipient_notice_bundle \
+  "${arm64_notices}" \
   "${arm64_inventory}" \
   arm64 \
   "$(<"${asset_directory}/digest-arm64.txt")"

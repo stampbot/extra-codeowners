@@ -30,6 +30,13 @@ _LICENSE_PATTERN: Final = re.compile(
     r"\Aopt/venv/lib/python\d+\.\d+/site-packages/(?P<distribution>[^/]+\.dist-info)/"
     r"licenses/(?P<license_path>.+)\Z"
 )
+_LEGACY_LICENSE_PATTERN: Final = re.compile(
+    r"\Aopt/venv/lib/python\d+\.\d+/site-packages/(?P<distribution>[^/]+\.dist-info)/"
+    r"(?P<license_path>[^/]+)\Z"
+)
+_LEGACY_NOTICE_FILENAME_PATTERN: Final = re.compile(
+    r"\A(?:licen[cs]e|copying|copyright|notice)(?:[._-].*)?\Z", re.IGNORECASE
+)
 _SBOM_PATTERN: Final = re.compile(
     r"\Aopt/venv/lib/python\d+\.\d+/site-packages/(?P<distribution>[^/]+\.dist-info)/"
     r"sboms/(?P<sbom_path>.+\.json)\Z"
@@ -42,6 +49,7 @@ _MAX_OS_RELEASE_BYTES: Final = 64 * 1024
 _MAX_METADATA_BYTES: Final = 1024 * 1024
 _MAX_AUXILIARY_FILE_BYTES: Final = 64 * 1024 * 1024
 _MAX_COMPONENTS: Final = 10_000
+_MAX_LEGACY_LICENSE_CANDIDATES: Final = 128
 
 
 class InventoryError(ValueError):
@@ -71,6 +79,7 @@ class _Distribution:
     license_expressions: tuple[str, ...]
     legacy_licenses: tuple[str, ...]
     declared_license_files: tuple[str, ...]
+    legacy_license_candidates: dict[str, _Payload] = field(default_factory=dict)
     licenses: dict[str, _Payload] = field(default_factory=dict)
     sboms: dict[str, _Payload] = field(default_factory=dict)
 
@@ -187,9 +196,19 @@ def _normalized_distribution_name(name: str) -> str:
 
 def _license_file_path(value: str) -> str:
     path = PurePosixPath(value)
-    if path.is_absolute() or not path.parts or any(part in {".", ".."} for part in path.parts):
+    if (
+        path.is_absolute()
+        or not path.parts
+        or any(part in {".", ".."} or part.endswith((".", " ")) for part in path.parts)
+    ):
         _fail(f"Python distribution metadata has an unsafe License-File path: {value!r}")
     return "/".join(path.parts)
+
+
+def _is_recognized_legacy_notice_filename(value: str) -> bool:
+    """Return whether a direct dist-info filename conventionally holds notice text."""
+
+    return _LEGACY_NOTICE_FILENAME_PATTERN.fullmatch(value) is not None
 
 
 def _parse_distribution(
@@ -320,6 +339,7 @@ def collect_inventory(
     os_release: tuple[int, str, bytes] | None = None
     distributions: dict[str, _Distribution] = {}
     pending_licenses: dict[str, dict[str, _Payload]] = {}
+    pending_legacy_license_candidates: dict[str, dict[str, _Payload]] = {}
     pending_sboms: dict[str, dict[str, _Payload]] = {}
     native_files: list[dict[str, object]] = []
     copyright_files: list[dict[str, object]] = []
@@ -331,15 +351,28 @@ def collect_inventory(
             path = _normalize_member_path(member.name)
             metadata_match = _METADATA_PATTERN.fullmatch(path)
             license_match = _LICENSE_PATTERN.fullmatch(path)
+            legacy_license_match = _LEGACY_LICENSE_PATTERN.fullmatch(path)
             sbom_match = _SBOM_PATTERN.fullmatch(path)
             copyright_match = _COPYRIGHT_PATTERN.fullmatch(path)
             common_license_match = _COMMON_LICENSE_PATTERN.fullmatch(path)
             site_match = _SITE_PACKAGES_PATTERN.match(path)
             native = site_match is not None and _NATIVE_LIBRARY_PATTERN.search(path) is not None
+            legacy_license_candidate = False
+            if legacy_license_match is not None and metadata_match is None:
+                candidate_path = legacy_license_match.group("license_path")
+                known_distribution = distributions.get(legacy_license_match.group("distribution"))
+                legacy_license_candidate = (
+                    member.isfile() or member.issym() or member.islnk()
+                ) and (
+                    known_distribution is None
+                    or candidate_path in known_distribution.declared_license_files
+                    or _is_recognized_legacy_notice_filename(candidate_path)
+                )
             selected = any(
                 (
                     metadata_match is not None,
                     license_match is not None,
+                    legacy_license_candidate,
                     sbom_match is not None,
                     copyright_match is not None,
                     common_license_match is not None,
@@ -389,6 +422,9 @@ def collect_inventory(
                     metadata_sha256=digest,
                 )
                 distribution.licenses.update(pending_licenses.pop(directory, {}))
+                distribution.legacy_license_candidates.update(
+                    pending_legacy_license_candidates.pop(directory, {})
+                )
                 distribution.sboms.update(pending_sboms.pop(directory, {}))
                 distributions[directory] = distribution
             else:
@@ -402,6 +438,23 @@ def collect_inventory(
                         ] = payload
                     else:
                         licenses.licenses[license_match.group("license_path")] = payload
+                elif legacy_license_match is not None and legacy_license_candidate:
+                    directory = legacy_license_match.group("distribution")
+                    candidate_path = legacy_license_match.group("license_path")
+                    existing_distribution = distributions.get(directory)
+                    candidates = (
+                        pending_legacy_license_candidates.setdefault(directory, {})
+                        if existing_distribution is None
+                        else existing_distribution.legacy_license_candidates
+                    )
+                    if (
+                        candidate_path not in candidates
+                        and len(candidates) >= _MAX_LEGACY_LICENSE_CANDIDATES
+                    ):
+                        _fail(
+                            "root filesystem tar exceeds the legacy Python license candidate limit"
+                        )
+                    candidates[candidate_path] = payload
                 elif sbom_match is not None:
                     directory = sbom_match.group("distribution")
                     sboms = distributions.get(directory)
@@ -432,7 +485,9 @@ def collect_inventory(
         _fail("root filesystem tar omitted var/lib/dpkg/status")
     if os_release is None:
         _fail("root filesystem tar omitted usr/lib/os-release")
-    orphaned_directories = sorted(set(pending_licenses) | set(pending_sboms))
+    orphaned_directories = sorted(
+        set(pending_licenses) | set(pending_legacy_license_candidates) | set(pending_sboms)
+    )
     if orphaned_directories:
         _fail(
             f"Python distributions have licenses or SBOMs but no METADATA: {orphaned_directories}"
@@ -453,11 +508,19 @@ def collect_inventory(
     for distribution in complete_distributions:
         distribution_root = distribution.metadata_path.rsplit("/", maxsplit=1)[0]
         license_files: list[dict[str, object]] = []
+        used_legacy_license_paths: set[str] = set()
         for declared_path in distribution.declared_license_files:
             installed = distribution.licenses.get(declared_path)
+            installed_path = f"{distribution_root}/licenses/{declared_path}"
+            if installed is None and "/" not in declared_path:
+                legacy_installed = distribution.legacy_license_candidates.get(declared_path)
+                if legacy_installed is not None:
+                    installed = legacy_installed
+                    installed_path = f"{distribution_root}/{declared_path}"
+                    used_legacy_license_paths.add(declared_path)
             record: dict[str, object] = {
                 "declared_path": declared_path,
-                "installed_path": f"{distribution_root}/licenses/{declared_path}",
+                "installed_path": installed_path,
                 "kind": "missing",
                 "link_target": None,
                 "sha256": None,
@@ -478,6 +541,22 @@ def collect_inventory(
             for path in distribution.licenses
             if path not in distribution.declared_license_files
         )
+        extra_legacy_license_files = sorted(
+            path
+            for path in distribution.legacy_license_candidates
+            if (
+                path not in used_legacy_license_paths
+                and _is_recognized_legacy_notice_filename(path)
+            )
+        )
+        unreferenced_license_files = [
+            (f"{distribution_root}/licenses/{path}", distribution.licenses[path])
+            for path in extra_license_files
+        ]
+        unreferenced_license_files.extend(
+            (f"{distribution_root}/{path}", distribution.legacy_license_candidates[path])
+            for path in extra_legacy_license_files
+        )
         distribution_records.append(
             {
                 "directory": distribution.directory,
@@ -491,10 +570,10 @@ def collect_inventory(
                 "name": distribution.name,
                 "normalized_name": distribution.normalized_name,
                 "unreferenced_license_files": [
-                    _payload_record(
-                        f"{distribution_root}/licenses/{path}", distribution.licenses[path]
+                    _payload_record(path, payload)
+                    for path, payload in sorted(
+                        unreferenced_license_files, key=lambda item: item[0]
                     )
-                    for path in extra_license_files
                 ],
                 "version": distribution.version,
             }

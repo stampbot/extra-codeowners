@@ -1,6 +1,6 @@
 # Project status
 
-Last verified: 2026-08-24.
+Last verified: 2026-08-31.
 
 Extra CODEOWNERS is ready for source review and non-required shadow-mode
 testing. It is not ready to replace GitHub's native code-owner enforcement on
@@ -68,8 +68,11 @@ request or manually maintained version file. See the
 for the exact merge-message procedure.
 
 These controls describe what the workflow publishes. They do not make an alpha
-a supported production release. [Issue #18][issue-18] still tracks complete
-notices and corresponding-source delivery, and
+a supported production release. Starting with the first release containing the
+notice-bundle workflow, it also publishes signed, attested per-platform
+[recipient notice bundles](recipient-notices.md). [Issue #18][issue-18] still
+tracks complete corresponding-source delivery and approval of the distribution
+mechanism, and
 [issue #74][issue-74] tracks clean-client verification of a published release.
 
 ### Raw container inventory
@@ -99,11 +102,12 @@ distribution for Debian package URLs. The resulting release asset is signed and
 attached to the multi-platform image digest. It records the reviewed conclusion
 for that image; it does not replace the raw scanner report.
 
-This is raw review evidence, not a notice bundle or a corresponding-source
-offer. It deliberately reports missing declared license files and does not
-decide whether a package's metadata, bundled material, or source availability
-satisfies a redistribution obligation. The recipient-facing notice and source
-delivery decision remains part of [issue #18][issue-18].
+This is raw review evidence. The release workflow uses it to construct and
+verify the accompanying [recipient notice bundle](recipient-notices.md), while
+keeping missing declared license files visible. Neither artifact decides
+whether package metadata, bundled material, or source availability satisfies a
+redistribution obligation. Corresponding-source delivery and approval remain
+part of [issue #18][issue-18].
 
 ## Production enforcement blocker {#production-enforcement-blocker}
 

@@ -765,8 +765,12 @@ def test_completed_release_verification_covers_identity_and_required_assets() ->
         "extra-codeowners-${VERSION}.openvex.json.sigstore.json",
         "distribution-inventory-amd64.json",
         "distribution-inventory-amd64.json.sigstore.json",
+        "recipient-notices-amd64.tar.gz",
+        "recipient-notices-amd64.tar.gz.sigstore.json",
         "distribution-inventory-arm64.json",
         "distribution-inventory-arm64.json.sigstore.json",
+        "recipient-notices-arm64.tar.gz",
+        "recipient-notices-arm64.tar.gz.sigstore.json",
         "vulnerability-report-amd64.json",
         "vulnerability-report-arm64.json",
     ):
@@ -797,6 +801,10 @@ def test_release_provenance_verifies_the_schema_and_platform_binding_of_raw_inve
     assert ".image.platform_digest == $platform_digest" in source
     assert "distribution-inventory-amd64.json" in source
     assert "distribution-inventory-arm64.json" in source
+    assert "recipient-notices-amd64.tar.gz" in source
+    assert "recipient-notices-arm64.tar.gz" in source
+    assert "verify_recipient_notice_bundle()" in source
+    assert "tools/release_notices.py verify" in source
     assert '"${asset_directory}/digest-amd64.txt"' in source
     assert '"${asset_directory}/digest-arm64.txt"' in source
     assert 'verify_release_file "${inventory}"' in source

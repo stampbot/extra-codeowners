@@ -179,6 +179,7 @@ These are the shortest routes into the manual:
 | Enroll an App and delegate paths | [Configuration guide](docs/how-to/configure.md) |
 | Diagnose a check | [Troubleshooting guide](docs/how-to/troubleshoot-check.md) |
 | Review deployment and operations | [Deployment guide](docs/how-to/deploy.md) and [operations guide](docs/how-to/operate.md) |
+| Inspect release notice evidence | [Recipient notice bundles](docs/reference/recipient-notices.md) |
 | Understand CI and releases | [Architecture](docs/explanation/architecture.md#ci-and-release-path) and [maintainer guide](docs/maintainers/index.md) |
 | Contribute | [Contributor guide](CONTRIBUTING.md) |
 
