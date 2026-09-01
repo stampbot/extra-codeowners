@@ -238,7 +238,23 @@ def _sha256(value: object, description: str) -> str:
 
 
 def _normalize_member_path(name: str) -> str:
-    return _safe_relative_path(name, "root filesystem member path")
+    """Normalize a POSIX rootfs member without treating it as bundle output.
+
+    A root filesystem can contain names that would be unsafe to emit in a
+    portable recipient archive. Those names are not evidence unless the signed
+    inventory selects them, so preserve the collector's POSIX-only
+    normalization here and apply archive-safe validation only to selected
+    paths while interpreting the inventory.
+    """
+    if "\x00" in name:
+        _fail("root filesystem tar contains a NUL in a member path")
+    path = PurePosixPath(name)
+    if path.is_absolute():
+        _fail(f"root filesystem tar contains an absolute member path: {name!r}")
+    parts = tuple(part for part in path.parts if part != ".")
+    if not parts or any(part == ".." for part in parts):
+        _fail(f"root filesystem tar contains an unsafe member path: {name!r}")
+    return "/".join(parts)
 
 
 def _read_member(archive: tarfile.TarFile, member: tarfile.TarInfo) -> bytes:
@@ -586,11 +602,16 @@ def _expected_from_inventory(
                     )
                     modern_path = f"{distribution_root}/licenses/{license_path}"
                     legacy_path = f"{distribution_root}/{license_path}"
-                    if source_path != modern_path and (
-                        "/" in license_path or source_path != legacy_path
-                    ):
+                    if source_path == modern_path:
+                        # Keep every modern license under an outer namespace.
+                        # A License-File may itself begin with "legacy-direct",
+                        # so no direct-file namespace alone could avoid a
+                        # collision with arbitrary valid modern subpaths.
+                        archive_suffix = f"licenses/{license_path}"
+                    elif "/" not in license_path and source_path == legacy_path:
+                        archive_suffix = f"legacy-direct/{license_path}"
+                    else:
                         _fail("release inventory has an unsupported Python license path")
-                    archive_suffix = license_path
                 else:
                     modern_prefix = f"{distribution_root}/licenses/"
                     legacy_prefix = f"{distribution_root}/"
@@ -598,7 +619,7 @@ def _expected_from_inventory(
                         license_path = _safe_relative_path(
                             source_path.removeprefix(modern_prefix), "Python license path"
                         )
-                        archive_suffix = license_path
+                        archive_suffix = f"licenses/{license_path}"
                     elif source_path.startswith(legacy_prefix):
                         license_path = _safe_relative_path(
                             source_path.removeprefix(legacy_prefix), "Python legacy license path"
@@ -622,6 +643,22 @@ def _expected_from_inventory(
                         {
                             "component": component,
                             "reason": "declared-license-file-missing-from-image",
+                            "source_path": source_path,
+                        }
+                    )
+                    continue
+                if kind in {"symlink", "hardlink"}:
+                    # Python package links can point anywhere in the image. Do
+                    # not follow them while producing an evidence archive; make
+                    # their omission explicit instead.
+                    _string(
+                        record.get("link_target"),
+                        "release inventory Python linked license target",
+                    )
+                    unresolved.append(
+                        {
+                            "component": component,
+                            "reason": "linked-python-license-file-not-preserved",
                             "source_path": source_path,
                         }
                     )

@@ -196,17 +196,19 @@ def test_notice_bundle_is_deterministic_and_verifiably_covers_inventory(tmp_path
         "pypi:example-pkg@1.0",
     }
     assert any(
-        isinstance(item, dict) and item["archive_path"] == "notices/python/odd/1%212+build/LICENSE"
+        isinstance(item, dict)
+        and item["archive_path"] == "notices/python/odd/1%212+build/licenses/LICENSE"
         for item in files
     )
     assert any(
         isinstance(item, dict)
-        and item["archive_path"] == "notices/python/example-pkg/1.0/vendor/licenses/LICENSE"
+        and item["archive_path"]
+        == "notices/python/example-pkg/1.0/licenses/vendor/licenses/LICENSE"
         for item in files
     )
     assert any(
         isinstance(item, dict)
-        and item["archive_path"] == "notices/python/legacy/2.0/LICENSE"
+        and item["archive_path"] == "notices/python/legacy/2.0/legacy-direct/LICENSE"
         and item["source_path"] == f"{SITE}/legacy-2.0.dist-info/LICENSE"
         for item in files
     )
@@ -267,7 +269,7 @@ def test_notice_bundle_preserves_direct_legacy_copy_when_modern_license_exists(
     assert isinstance(files, list)
     assert any(
         isinstance(item, dict)
-        and item["archive_path"] == "notices/python/example-pkg/1.0/LICENSE"
+        and item["archive_path"] == "notices/python/example-pkg/1.0/licenses/LICENSE"
         and item["source_path"] == f"{SITE}/example_pkg-1.0.dist-info/licenses/LICENSE"
         for item in files
     )
@@ -276,6 +278,97 @@ def test_notice_bundle_preserves_direct_legacy_copy_when_modern_license_exists(
         and item["archive_path"] == "notices/python/example-pkg/1.0/legacy-direct/LICENSE"
         and item["source_path"] == direct_path
         for item in files
+    )
+
+
+def test_notice_bundle_separates_direct_legacy_files_from_modern_subpaths(
+    tmp_path: Path,
+) -> None:
+    metadata_path = f"{SITE}/example_pkg-1.0.dist-info/METADATA"
+    direct_path = f"{SITE}/example_pkg-1.0.dist-info/LICENSE"
+    modern_path = f"{SITE}/example_pkg-1.0.dist-info/licenses/legacy-direct/LICENSE"
+    members = [
+        member
+        if member[0] != metadata_path
+        else (
+            member[0],
+            _metadata("Example_Pkg", "1.0", license_files=("legacy-direct/LICENSE",)),
+        )
+        for member in _members()
+    ]
+    members.extend(((direct_path, b"legacy direct copy\n"), (modern_path, b"modern copy\n")))
+
+    inventory, bundle = _bundle(members)
+    bundle_path = tmp_path / "recipient-notices-amd64.tar.gz"
+    bundle_path.write_bytes(bundle)
+    verify_notice_bundle(
+        bundle_path, inventory, architecture="amd64", platform_digest=PLATFORM_DIGEST
+    )
+
+    files = _manifest(bundle)["files"]
+    assert isinstance(files, list)
+    archive_paths = {
+        item["archive_path"] for item in files if isinstance(item, dict) and "archive_path" in item
+    }
+    assert {
+        "notices/python/example-pkg/1.0/legacy-direct/LICENSE",
+        "notices/python/example-pkg/1.0/licenses/legacy-direct/LICENSE",
+    } <= archive_paths
+
+
+@pytest.mark.parametrize("link_kind", ("symlink", "hardlink"))
+def test_notice_bundle_reports_linked_python_license_as_unresolved(
+    tmp_path: Path,
+    link_kind: str,
+) -> None:
+    linked_path = f"{SITE}/linked-1.0.dist-info/licenses/LICENSE"
+    members = [
+        *_members(),
+        (f"{SITE}/linked-1.0.dist-info/METADATA", _metadata("linked", "1.0")),
+    ]
+    common_link = (("usr/share/common-licenses/GPL", "GPL-3"),)
+    links = (*common_link, (linked_path, "LICENSE.real")) if link_kind == "symlink" else common_link
+    hardlinks = ((linked_path, "LICENSE.real"),) if link_kind == "hardlink" else ()
+
+    inventory = _inventory_bytes(members, hardlinks=hardlinks, links=links)
+    bundle = build_notice_bundle(
+        _rootfs_tar(members, hardlinks=hardlinks, links=links),
+        inventory,
+        architecture="amd64",
+        platform_digest=PLATFORM_DIGEST,
+    )
+    bundle_path = tmp_path / "recipient-notices-amd64.tar.gz"
+    bundle_path.write_bytes(bundle)
+    verify_notice_bundle(
+        bundle_path, inventory, architecture="amd64", platform_digest=PLATFORM_DIGEST
+    )
+
+    unresolved = _manifest(bundle)["unresolved_notice_evidence"]
+    assert isinstance(unresolved, list)
+    assert {
+        "component": "pypi:linked@1.0",
+        "reason": "linked-python-license-file-not-preserved",
+        "source_path": linked_path,
+    } in unresolved
+
+
+@pytest.mark.parametrize("unselected_path", (r"app/irrelevant\name", "app/trailing. "))
+def test_notice_bundle_ignores_unselected_posix_rootfs_names(
+    tmp_path: Path,
+    unselected_path: str,
+) -> None:
+    members = [*_members(), (unselected_path, b"ignore me\n")]
+
+    inventory, bundle = _bundle(members)
+    assert _manifest(bundle)["image"] == {
+        "architecture": "amd64",
+        "distro": "debian-13",
+        "platform_digest": PLATFORM_DIGEST,
+    }
+    bundle_path = tmp_path / "recipient-notices-amd64.tar.gz"
+    bundle_path.write_bytes(bundle)
+    verify_notice_bundle(
+        bundle_path, inventory, architecture="amd64", platform_digest=PLATFORM_DIGEST
     )
 
 

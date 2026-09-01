@@ -32,8 +32,10 @@ archive includes available:
 - Extra CODEOWNERS' Apache-2.0 license.
 
 When package metadata declares a Python license file that is absent from the
-image, the manifest records it under `unresolved_notice_evidence`. That makes
-the gap reviewable; it does not silently turn the missing file into evidence.
+image, or whose entry is a filesystem link, the manifest records it under
+`unresolved_notice_evidence`. The bundle does not follow Python package links;
+the raw inventory retains their link record for review. That makes the gap
+reviewable without silently turning a missing or indirect file into evidence.
 
 `NOTICE-README.txt` repeats the platform identity and the evidence boundary
 inside the archive so the context remains with a copied bundle.
