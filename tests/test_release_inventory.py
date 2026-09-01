@@ -17,10 +17,17 @@ SITE = "opt/venv/lib/python3.14/site-packages"
 
 
 def _rootfs_tar(
-    members: list[tuple[str, bytes]], *, links: tuple[tuple[str, str], ...] = ()
+    members: list[tuple[str, bytes]],
+    *,
+    directories: tuple[str, ...] = (),
+    links: tuple[tuple[str, str], ...] = (),
 ) -> io.BytesIO:
     stream = io.BytesIO()
     with tarfile.open(fileobj=stream, mode="w") as archive:
+        for path in directories:
+            member = tarfile.TarInfo(path)
+            member.type = tarfile.DIRTYPE
+            archive.addfile(member)
         for path, contents in members:
             member = tarfile.TarInfo(path)
             member.size = len(contents)
@@ -63,14 +70,16 @@ def _metadata(
     version: str,
     *,
     license_expression: str = "MIT",
-    license_file: str = "LICENSE",
+    license_file: str | None = "LICENSE",
+    metadata_version: str = "2.4",
 ) -> bytes:
+    license_file_header = "" if license_file is None else f"License-File: {license_file}\n"
     return (
-        "Metadata-Version: 2.4\n"
+        f"Metadata-Version: {metadata_version}\n"
         f"Name: {name}\n"
         f"Version: {version}\n"
         f"License-Expression: {license_expression}\n"
-        f"License-File: {license_file}\n"
+        f"{license_file_header}"
     ).encode()
 
 
@@ -85,6 +94,7 @@ def _members() -> list[tuple[str, bytes]]:
         ),
         (f"{SITE}/example_pkg/native-extension.so", b"native payload\n"),
         (f"{SITE}/example_pkg-1.0.dist-info/METADATA", _metadata("Example_Pkg", "1.0")),
+        (f"{SITE}/legacy-2.0.dist-info/LICENSE", b"legacy license\n"),
         (f"{SITE}/legacy-2.0.dist-info/METADATA", _metadata("legacy", "2.0")),
         ("usr/share/doc/example-runtime/copyright", b"Copyright example\n"),
         ("usr/share/common-licenses/GPL-3", b"GPL text\n"),
@@ -137,11 +147,11 @@ def test_collect_inventory_records_raw_os_python_and_native_evidence() -> None:
     assert legacy["license_files"] == [
         {
             "declared_path": "LICENSE",
-            "installed_path": f"{SITE}/legacy-2.0.dist-info/licenses/LICENSE",
-            "kind": "missing",
+            "installed_path": f"{SITE}/legacy-2.0.dist-info/LICENSE",
+            "kind": "regular",
             "link_target": None,
-            "sha256": None,
-            "size": None,
+            "sha256": hashlib.sha256(b"legacy license\n").hexdigest(),
+            "size": len(b"legacy license\n"),
         }
     ]
     assert python["embedded_sboms"] == [
@@ -217,6 +227,98 @@ def test_inventory_output_is_stable_when_tar_member_order_changes() -> None:
 
     assert render_inventory(first) == render_inventory(second)
     assert json.loads(render_inventory(first)) == first
+
+
+def test_collector_ignores_legacy_license_directories_before_metadata() -> None:
+    expected = collect_inventory(
+        _rootfs_tar(_members()), architecture="amd64", platform_digest=PLATFORM_DIGEST
+    )
+    actual = collect_inventory(
+        _rootfs_tar(
+            _members(),
+            directories=(
+                f"{SITE}/example_pkg-1.0.dist-info/licenses/",
+                f"{SITE}/legacy-2.0.dist-info/licenses/",
+            ),
+        ),
+        architecture="amd64",
+        platform_digest=PLATFORM_DIGEST,
+    )
+
+    assert render_inventory(actual) == render_inventory(expected)
+
+
+@pytest.mark.parametrize("metadata_first", (False, True))
+def test_collector_preserves_undeclared_legacy_license_files(metadata_first: bool) -> None:
+    license_path = f"{SITE}/legacy-2.0.dist-info/LICENSE"
+    metadata_path = f"{SITE}/legacy-2.0.dist-info/METADATA"
+    members = [
+        member
+        if member[0] != metadata_path
+        else (
+            member[0],
+            _metadata("legacy", "2.0", license_file=None, metadata_version="2.1"),
+        )
+        for member in _members()
+    ]
+    members.append((f"{SITE}/legacy-2.0.dist-info/RECORD", b"not notice material\n"))
+    if metadata_first:
+        metadata = next(member for member in members if member[0] == metadata_path)
+        license_file = next(member for member in members if member[0] == license_path)
+        members = [
+            member for member in members if member[0] not in {metadata_path, license_path}
+        ] + [metadata, license_file]
+
+    inventory = collect_inventory(
+        _rootfs_tar(members), architecture="amd64", platform_digest=PLATFORM_DIGEST
+    )
+    python = inventory["python"]
+    assert isinstance(python, dict)
+    distributions = python["distributions"]
+    assert isinstance(distributions, list)
+    legacy = next(item for item in distributions if item["normalized_name"] == "legacy")
+    assert legacy["license_files"] == []
+    assert legacy["unreferenced_license_files"] == [
+        {
+            "kind": "regular",
+            "link_target": None,
+            "path": license_path,
+            "sha256": hashlib.sha256(b"legacy license\n").hexdigest(),
+            "size": len(b"legacy license\n"),
+        }
+    ]
+
+
+def test_collector_preserves_direct_legacy_copy_when_modern_license_exists() -> None:
+    direct_path = f"{SITE}/example_pkg-1.0.dist-info/LICENSE"
+    members = [*_members(), (direct_path, b"legacy copy\n")]
+    inventory = collect_inventory(
+        _rootfs_tar(members), architecture="amd64", platform_digest=PLATFORM_DIGEST
+    )
+    reordered_inventory = collect_inventory(
+        _rootfs_tar(list(reversed(members))),
+        architecture="amd64",
+        platform_digest=PLATFORM_DIGEST,
+    )
+    assert render_inventory(inventory) == render_inventory(reordered_inventory)
+
+    python = inventory["python"]
+    assert isinstance(python, dict)
+    distributions = python["distributions"]
+    assert isinstance(distributions, list)
+    example = next(item for item in distributions if item["normalized_name"] == "example-pkg")
+    assert example["license_files"][0]["installed_path"] == (
+        f"{SITE}/example_pkg-1.0.dist-info/licenses/LICENSE"
+    )
+    assert example["unreferenced_license_files"] == [
+        {
+            "kind": "regular",
+            "link_target": None,
+            "path": direct_path,
+            "sha256": hashlib.sha256(b"legacy copy\n").hexdigest(),
+            "size": len(b"legacy copy\n"),
+        }
+    ]
 
 
 @pytest.mark.parametrize(
@@ -318,6 +420,26 @@ def test_collector_rejects_unsafe_tar_and_metadata_paths() -> None:
     with pytest.raises(InventoryError, match="unsafe License-File path"):
         collect_inventory(
             _rootfs_tar(unsafe_license), architecture="amd64", platform_digest=PLATFORM_DIGEST
+        )
+
+    windows_normalized_license = [
+        member
+        if member[0] != f"{SITE}/example_pkg-1.0.dist-info/METADATA"
+        else (
+            member[0],
+            _metadata(
+                "Example_Pkg",
+                "1.0",
+                license_file=".. /.. /recipient-overwrite.txt",
+            ),
+        )
+        for member in _members()
+    ]
+    with pytest.raises(InventoryError, match="unsafe License-File path"):
+        collect_inventory(
+            _rootfs_tar(windows_normalized_license),
+            architecture="amd64",
+            platform_digest=PLATFORM_DIGEST,
         )
 
 

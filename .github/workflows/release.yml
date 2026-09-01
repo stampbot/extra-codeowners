@@ -460,17 +460,30 @@ jobs:
             if [[ "${created}" == true ]]; then
               docker container rm "${CONTAINER_NAME}" >/dev/null
             fi
+            rm -f "rootfs-${ARCHITECTURE}.tar"
           }
           trap cleanup EXIT
           # create/export reads the exact filesystem without starting its workload.
-          docker create --name "${CONTAINER_NAME}" "${IMAGE}@${platform_digest}" >/dev/null
+          docker create --platform "linux/${ARCHITECTURE}" --name "${CONTAINER_NAME}" \
+            "${IMAGE}@${platform_digest}" >/dev/null
           created=true
-          docker export "${CONTAINER_NAME}" |
-            python -I -S -B tools/release_inventory.py \
-              --architecture "${ARCHITECTURE}" \
-              --platform-digest "${platform_digest}" \
-              --rootfs-tar - \
-              --output "distribution-inventory-${ARCHITECTURE}.json"
+          docker export "${CONTAINER_NAME}" >"rootfs-${ARCHITECTURE}.tar"
+          python -I -S -B tools/release_inventory.py \
+            --architecture "${ARCHITECTURE}" \
+            --platform-digest "${platform_digest}" \
+            --rootfs-tar "rootfs-${ARCHITECTURE}.tar" \
+            --output "distribution-inventory-${ARCHITECTURE}.json"
+          python -I -S -B tools/release_notices.py build \
+            --architecture "${ARCHITECTURE}" \
+            --platform-digest "${platform_digest}" \
+            --inventory "distribution-inventory-${ARCHITECTURE}.json" \
+            --rootfs-tar "rootfs-${ARCHITECTURE}.tar" \
+            --output "recipient-notices-${ARCHITECTURE}.tar.gz"
+          python -I -S -B tools/release_notices.py verify \
+            --architecture "${ARCHITECTURE}" \
+            --platform-digest "${platform_digest}" \
+            --inventory "distribution-inventory-${ARCHITECTURE}.json" \
+            --bundle "recipient-notices-${ARCHITECTURE}.tar.gz"
 
       - name: Pull exact native image
         env:
@@ -536,6 +549,7 @@ jobs:
             build-index-${{ matrix.architecture }}.txt
             digest-${{ matrix.architecture }}.txt
             distribution-inventory-${{ matrix.architecture }}.json
+            recipient-notices-${{ matrix.architecture }}.tar.gz
             vulnerability-report-${{ matrix.architecture }}.json
           if-no-files-found: error
           overwrite: true
@@ -588,6 +602,20 @@ jobs:
         with:
           name: release-image-arm64-${{ needs.plan.outputs.revision }}
           path: release/image/arm64
+
+      # Validate the bytes recovered from the artifact service before this run
+      # allocates any immutable release state.
+      - name: Verify recipient notice release evidence
+        run: |
+          set -euo pipefail
+          for architecture in amd64 arm64; do
+            platform_digest="$(<"release/image/${architecture}/digest-${architecture}.txt")"
+            python -I -S -B tools/release_notices.py verify \
+              --architecture "${architecture}" \
+              --platform-digest "${platform_digest}" \
+              --inventory "release/image/${architecture}/distribution-inventory-${architecture}.json" \
+              --bundle "release/image/${architecture}/recipient-notices-${architecture}.tar.gz"
+          done
 
       # Fail before allocating a tag or a versioned image reference. A stale VEX
       # statement must not leave immutable release state behind for a retry.
@@ -829,6 +857,11 @@ jobs:
         with:
           subject-path: release/image/*/distribution-inventory-*.json
 
+      - name: Attest recipient notice bundles
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: release/image/*/recipient-notices-*.tar.gz
+
       - name: Attest OpenVEX release evidence
         uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
@@ -840,7 +873,8 @@ jobs:
           while IFS= read -r -d '' artifact; do
             cosign sign-blob --yes --bundle "${artifact}.sigstore.json" "${artifact}"
           done < <(find release/python release/chart release/image -type f \
-            \( -name '*.whl' -o -name '*.tar.gz' -o -name '*.tgz' \
+            \( -name '*.whl' -o -name 'extra_codeowners-*.tar.gz' \
+            -o -name 'recipient-notices-*.tar.gz' -o -name '*.tgz' \
             -o -name 'distribution-inventory-*.json' -o -name 'extra-codeowners-*.openvex.json' \
             \) -print0)
 
@@ -1253,8 +1287,12 @@ jobs:
             "extra-codeowners-${VERSION}.openvex.json.sigstore.json"
             distribution-inventory-amd64.json
             distribution-inventory-amd64.json.sigstore.json
+            recipient-notices-amd64.tar.gz
+            recipient-notices-amd64.tar.gz.sigstore.json
             distribution-inventory-arm64.json
             distribution-inventory-arm64.json.sigstore.json
+            recipient-notices-arm64.tar.gz
+            recipient-notices-arm64.tar.gz.sigstore.json
             vulnerability-report-amd64.json
             vulnerability-report-arm64.json
           )

@@ -41,6 +41,7 @@ nav:
       - Operate and recover: how-to/operate.md
   - Reference:
       - Project status: reference/project-status.md
+      - Recipient notice bundles: reference/recipient-notices.md
       - Configuration: reference/configuration.md
       - Checks and evaluation: reference/checks.md
       - Command line: reference/cli.md

@@ -1250,6 +1250,7 @@ def test_standalone_python_tools_are_in_every_type_check_entrypoint() -> None:
         "tools/evaluation_beta.py",
         "tools/evaluation_beta_bootstrap.py",
         "tools/release_inventory.py",
+        "tools/release_notices.py",
         "tools/release_vex.py",
     }
     sources = {
@@ -1635,9 +1636,13 @@ def test_release_builds_native_digests_then_publishes_the_exact_manifest() -> No
     assert "digest-${{ matrix.architecture }}.txt" in image
     assert "Collect raw native filesystem inventory" in image
     assert "python -I -S -B tools/release_inventory.py" in image
+    assert "python -I -S -B tools/release_notices.py build" in image
+    assert "python -I -S -B tools/release_notices.py verify" in image
     assert 'docker export "${CONTAINER_NAME}"' in image
+    assert 'docker create --platform "linux/${ARCHITECTURE}"' in image
     assert '"${IMAGE}@${platform_digest}"' in image
     assert "distribution-inventory-${{ matrix.architecture }}.json" in image
+    assert "recipient-notices-${{ matrix.architecture }}.tar.gz" in image
 
     assert "release-image-amd64-" in publish
     assert "release-image-arm64-" in publish
@@ -1653,7 +1658,9 @@ def test_release_builds_native_digests_then_publishes_the_exact_manifest() -> No
     assert "subject-path: release/python/*" in publish
     assert "subject-path: release/chart/*.tgz" in publish
     assert "subject-path: release/image/*/distribution-inventory-*.json" in publish
+    assert "subject-path: release/image/*/recipient-notices-*.tar.gz" in publish
     assert "-name 'distribution-inventory-*.json'" in publish
+    assert "-name 'recipient-notices-*.tar.gz'" in publish
 
 
 def test_release_retries_are_idempotent_and_keep_versions_in_one_place() -> None:

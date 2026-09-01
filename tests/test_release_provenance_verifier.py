@@ -3,14 +3,18 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import os
 import shutil
 import subprocess
+import tarfile
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
 import pytest
+
+from tools.release_notices import build_notice_bundle
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / ".github" / "scripts" / "verify-release-provenance.sh"
@@ -58,8 +62,14 @@ def _raw_container_inventory(architecture: str, platform_digest: str) -> bytes:
                 "python": {
                     "distributions": [
                         {
+                            "license_files": [],
+                            "metadata_path": (
+                                "opt/venv/lib/python3.14/site-packages/"
+                                "example_package-1.0.0.dist-info/METADATA"
+                            ),
                             "name": "example-package",
                             "normalized_name": "example-package",
+                            "unreferenced_license_files": [],
                             "version": "1.0.0",
                         }
                     ],
@@ -72,6 +82,25 @@ def _raw_container_inventory(architecture: str, platform_digest: str) -> bytes:
         )
         + "\n"
     ).encode()
+
+
+def _recipient_notices(architecture: str, platform_digest: str) -> bytes:
+    rootfs = io.BytesIO()
+    with tarfile.open(fileobj=rootfs, mode="w") as archive:
+        for path, contents in (
+            ("usr/local/lib/python3.14/LICENSE.txt", b"CPython license\n"),
+            ("usr/share/licenses/extra-codeowners/LICENSE", b"Apache-2.0\n"),
+        ):
+            member = tarfile.TarInfo(path)
+            member.size = len(contents)
+            archive.addfile(member, io.BytesIO(contents))
+    rootfs.seek(0)
+    return build_notice_bundle(
+        rootfs,
+        _raw_container_inventory(architecture, platform_digest),
+        architecture=architecture,
+        platform_digest=platform_digest,
+    )
 
 
 def _release_vex() -> bytes:
@@ -116,6 +145,8 @@ def _release_files() -> dict[str, bytes]:
         "distribution-inventory-arm64.json": _raw_container_inventory(
             "arm64", ARM64_PLATFORM_DIGEST
         ),
+        "recipient-notices-amd64.tar.gz": _recipient_notices("amd64", AMD64_PLATFORM_DIGEST),
+        "recipient-notices-arm64.tar.gz": _recipient_notices("arm64", ARM64_PLATFORM_DIGEST),
         f"extra-codeowners-{VERSION}.openvex.json": _release_vex(),
     }
 
@@ -329,6 +360,8 @@ def _run_verifier(
         f"extra-codeowners-{VERSION}.tgz",
         "distribution-inventory-amd64.json",
         "distribution-inventory-arm64.json",
+        "recipient-notices-amd64.tar.gz",
+        "recipient-notices-arm64.tar.gz",
         f"extra-codeowners-{VERSION}.openvex.json",
     }
     for name, contents in release_files.items():
@@ -366,7 +399,7 @@ def _run_verifier(
         "FAKE_OPERATION_LOG": str(operation_log),
         "GITHUB_REPOSITORY": REPOSITORY,
         "GH_TOKEN": "unused",
-        "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
+        "PATH": f"{fake_bin}{os.pathsep}{ROOT / '.venv' / 'bin'}{os.pathsep}{os.environ['PATH']}",
         "RUNNER_TEMP": str(runner_temp),
     }
     if environment is not None:
@@ -414,8 +447,8 @@ def test_release_provenance_verifier_accepts_equivalent_immutable_evidence(
     assert result.returncode == 0, result.stderr
     gh_operations = [operation for operation in operations if operation.startswith("gh ")]
     cosign_operations = [operation for operation in operations if operation.startswith("cosign ")]
-    assert len(gh_operations) == 7
-    assert len([operation for operation in cosign_operations if "verify-blob" in operation]) == 6
+    assert len(gh_operations) == 9
+    assert len([operation for operation in cosign_operations if "verify-blob" in operation]) == 8
     assert len([operation for operation in cosign_operations if "cosign verify " in operation]) == 2
     assert (
         len([operation for operation in cosign_operations if "verify-attestation" in operation])
