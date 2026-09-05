@@ -175,6 +175,25 @@ def test_project_owned_uv_version_drives_local_container_and_action_setup() -> N
     assert found_steps > 0
 
 
+def test_codeql_actions_update_together() -> None:
+    references = set()
+    for path in (ROOT / ".github" / "workflows").glob("*.yml"):
+        references.update(
+            re.findall(
+                r"uses: github/codeql-action/[\w-]+@([0-9a-f]{40})",
+                path.read_text(encoding="utf-8"),
+            )
+        )
+    assert len(references) == 1
+    dependabot = yaml.safe_load((ROOT / ".github" / "dependabot.yml").read_text())
+    actions = next(
+        update
+        for update in dependabot["updates"]
+        if update["package-ecosystem"] == "github-actions"
+    )
+    assert "github/codeql-action/*" in actions["groups"]["codeql"]["patterns"]
+
+
 def test_debian_container_uses_only_locked_binary_dependencies() -> None:
     project = _load_toml(ROOT / "pyproject.toml")
     lock = _load_toml(ROOT / "uv.lock")
