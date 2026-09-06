@@ -105,11 +105,18 @@ private index URLs, and environment dumps.
 
 ## When the uv audit interface changes
 
-`[tool.uv].required-version` in `pyproject.toml` is the project-wide uv
-contract. The setup action reads it, while `mise.toml` installs the same local
-version and the Dockerfile pins the matching uv image by digest.
+The `tooling` dependency group pins uv, and `uv.lock` records its exact version
+and package hashes. CI's setup action and Read the Docs read that lockfile.
+`mise.toml` installs the same local version, and the Dockerfile pins the matching
+uv image by digest. The tooling group isn't installed in the application image.
 
-Renovate groups the project version, local tool, and container image as one
+`[tool.uv].required-version` is a compatibility minimum, not a build-version
+selector. Dependabot runs its own uv version to update the lockfile. An exact
+compatibility requirement would reject that updater before it could propose a
+security fix. A newer updater still has to produce a lockfile that passes CI
+with our pinned toolchain; CI doesn't silently adopt the updater's version.
+
+Renovate groups the tooling dependency, local tool, and container image as one
 `uv toolchain` update. Dependabot still owns GitHub Action updates while
 [#160](https://github.com/stampbot/extra-codeowners/issues/160) verifies the
 Renovate handoff. Review the upstream release notes and image digest before
