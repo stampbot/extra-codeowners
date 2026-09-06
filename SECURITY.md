@@ -81,15 +81,19 @@ The [deployment guide](docs/how-to/deploy.md) and
 operator also accepts that interfaces and database compatibility may change
 before 1.0.
 
-## Known non-exploitable vulnerabilities
+## Vulnerability statements
 
-The current container includes Debian OpenSSL packages with known CVEs. We
-reviewed the affected code paths, and they do not affect Extra CODEOWNERS. The
-[OpenVEX statement](security/vex/openssl-3.5.6.openvex.json) names the exact
-package versions, architectures, Debian distribution, and CVEs. It remains
-valid until we upgrade those packages or enable a relevant protocol or API.
+The [current OpenVEX statement](security/vex/openssl-3.5.7.openvex.json)
+records Debian's fixes for CVE-2026-63073 and CVE-2026-75803 in OpenSSL
+`3.5.7-1~deb13u2`. It names the exact packages, architectures, and Debian
+distribution. These are fixed-package claims, not exceptions for reachable
+vulnerabilities.
 
-This is a project security statement. CI consumes the same file when it scans
+The [older statement](security/vex/openssl-3.5.6.openvex.json) records our
+non-exploitability analysis for specific CVEs in the previous packages. It is
+historical evidence and does not describe the current image.
+
+This is a project security statement. CI consumes the current file when it scans
 the image. The raw report retains every scanner finding, and a package-version
 change stops the VEX from matching.
 
