@@ -1300,6 +1300,7 @@ def test_standalone_python_tools_are_in_every_type_check_entrypoint() -> None:
         "tools/release_inventory.py",
         "tools/release_notices.py",
         "tools/release_vex.py",
+        "tools/release_rescan.py",
     }
     sources = {
         "mise": (ROOT / "mise.toml").read_text(encoding="utf-8"),
@@ -1559,6 +1560,7 @@ def test_container_builds_pin_one_consistent_buildx_and_buildkit_runtime() -> No
         "ci.yml": 1,
         "cold-container.yml": 1,
         "release.yml": 3,
+        "rescan-release.yml": 1,
     }
     runtime_pins: set[tuple[str, str, str]] = set()
 

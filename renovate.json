@@ -12,6 +12,19 @@
   "customManagers": [
     {
       "customType": "regex",
+      "description": "Update the digest-pinned release rescan image",
+      "managerFilePatterns": [
+        "/^\\.github/workflows/rescan-release\\.yml$/"
+      ],
+      "matchStrings": [
+        "anchore/grype:(?<currentValue>v\\d+\\.\\d+\\.\\d+)@(?<currentDigest>sha256:[a-f0-9]{64})"
+      ],
+      "depNameTemplate": "anchore/grype",
+      "datasourceTemplate": "docker",
+      "versioningTemplate": "docker"
+    },
+    {
+      "customType": "regex",
       "description": "Update PostgreSQL test service images",
       "managerFilePatterns": [
         "/^\\.github/workflows/(?:ci|coverage-pages)\\.yml$/"
@@ -54,7 +67,8 @@
       "customType": "regex",
       "description": "Update the pinned Buildx runtime",
       "managerFilePatterns": [
-        "/^\\.github/workflows/(?:ci|cold-container|release)\\.yml$/"
+        "/^\\.github/workflows/(?:ci|cold-container|release)\\.yml$/",
+        "/^\\.github/workflows/rescan-release\\.yml$/"
       ],
       "matchStrings": [
         "version: v(?<currentValue>\\d+\\.\\d+\\.\\d+) # buildx runtime"
@@ -67,7 +81,8 @@
       "customType": "regex",
       "description": "Update digest-pinned Docker build runtime images",
       "managerFilePatterns": [
-        "/^\\.github/workflows/(?:ci|cold-container|release)\\.yml$/"
+        "/^\\.github/workflows/(?:ci|cold-container|release)\\.yml$/",
+        "/^\\.github/workflows/rescan-release\\.yml$/"
       ],
       "matchStrings": [
         "(?<depName>moby/buildkit):v(?<currentValue>\\d+\\.\\d+\\.\\d+)@(?<currentDigest>sha256:[a-f0-9]{64})",
@@ -93,7 +108,8 @@
       "customType": "regex",
       "description": "Keep the Cosign runtime current",
       "managerFilePatterns": [
-        "/^\\.github/workflows/release\\.yml$/"
+        "/^\\.github/workflows/release\\.yml$/",
+        "/^\\.github/workflows/rescan-release\\.yml$/"
       ],
       "matchStrings": [
         "cosign-release: v(?<currentValue>\\d+\\.\\d+\\.\\d+)"

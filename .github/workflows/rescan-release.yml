@@ -1,0 +1,162 @@
+name: Rescan published release
+
+on:
+  schedule:
+    - cron: "43 8 * * *"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Exact published tag (blank selects newest published alpha or stable)
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  packages: read
+  attestations: read
+
+concurrency:
+  group: rescan-release
+  cancel-in-progress: false
+
+jobs:
+  select:
+    name: Select release
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+      version: ${{ steps.release.outputs.version }}
+      python_version: ${{ steps.release.outputs.python_version }}
+    steps:
+      - name: Check out trusted verification code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version-file: .python-version
+
+      - name: Select an immutable release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED_TAG: ${{ inputs.tag }}
+        run: |
+          gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=100" >releases.json
+          python -I -S -B tools/release_rescan.py select \
+            --releases releases.json --tag "${REQUESTED_TAG}" --output "${GITHUB_OUTPUT}"
+
+  rescan:
+    name: Rescan (${{ matrix.architecture }})
+    needs: select
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      GRYPE_IMAGE: anchore/grype:v0.118.0@sha256:8a93fc48da96bd6ec5981279d099b69de11541dc68fdf222fb9161f8ff284af7
+    strategy:
+      fail-fast: false
+      matrix:
+        architecture: [amd64, arm64]
+    steps:
+      - name: Check out trusted verification code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version-file: .python-version
+
+      - name: Download published evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.select.outputs.tag }}
+        run: |
+          gh release verify "${TAG}" --repo "${GITHUB_REPOSITORY}"
+          gh release download "${TAG}" --repo "${GITHUB_REPOSITORY}" --dir release-assets
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+        with:
+          buildkitd-flags: --debug
+          cache-binary: false
+          driver-opts: >-
+            image=moby/buildkit:v0.32.2@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8
+          version: v0.36.1 # buildx runtime
+
+      - name: Bind the platform to the published image
+        id: image
+        env:
+          ARCHITECTURE: ${{ matrix.architecture }}
+        run: |
+          image_reference="$(<release-assets/image-reference.txt)"
+          [[ "${image_reference}" =~ ^ghcr.io/stampbot/extra-codeowners@sha256:[0-9a-f]{64}$ ]]
+          docker buildx imagetools inspect --raw "${image_reference}" >image-manifest.json
+          python -I -S -B tools/release_rescan.py prepare \
+            --directory release-assets --manifest image-manifest.json \
+            --architecture "${ARCHITECTURE}" --output "${GITHUB_OUTPUT}"
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.0.6
+
+      - name: Verify signatures and release evidence before scanning
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.select.outputs.tag }}
+          VERSION: ${{ needs.select.outputs.version }}
+          PYTHON_VERSION: ${{ needs.select.outputs.python_version }}
+          IMAGE: ${{ steps.image.outputs.image }}
+          IMAGE_DIGEST: ${{ steps.image.outputs.image_digest }}
+          CHART: ${{ steps.image.outputs.chart }}
+          CHART_DIGEST: ${{ steps.image.outputs.chart_digest }}
+        run: |
+          revision="$(git rev-parse --verify "refs/tags/${TAG}^{commit}")"
+          .github/scripts/verify-release-provenance.sh \
+            release-assets "${IMAGE}" "${IMAGE_DIGEST}" "${CHART}" "${CHART_DIGEST}" \
+            "${PYTHON_VERSION}" "${VERSION}" "${revision}"
+
+      - name: Inventory current vulnerabilities in the released image
+        env:
+          SCAN_IMAGE: ${{ steps.image.outputs.scan_image }}
+          ARCHITECTURE: ${{ matrix.architecture }}
+        run: |
+          mkdir "${RUNNER_TEMP}/grype-db"
+          docker run --rm --read-only --cap-drop=ALL --security-opt=no-new-privileges \
+            --user "$(id -u):$(id -g)" --tmpfs /tmp:rw,nosuid,nodev,mode=1777 \
+            --mount "type=bind,src=${GITHUB_WORKSPACE},dst=/work,readonly" \
+            --mount "type=bind,src=${RUNNER_TEMP}/grype-db,dst=/cache" \
+            --env GRYPE_DB_CACHE_DIR=/cache \
+            "${GRYPE_IMAGE}" "registry:${SCAN_IMAGE}" --by-cve \
+            --config /work/.github/grype-inventory.yaml --output json \
+            >"rescan-${ARCHITECTURE}.json"
+
+      - name: Retain the unfiltered report
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rescan-${{ needs.select.outputs.tag }}-${{ matrix.architecture }}
+          path: rescan-${{ matrix.architecture }}.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Reject fixable high-severity vulnerabilities
+        env:
+          SCAN_IMAGE: ${{ steps.image.outputs.scan_image }}
+          VERSION: ${{ needs.select.outputs.version }}
+        run: |
+          docker run --rm --read-only --cap-drop=ALL --security-opt=no-new-privileges \
+            --user "$(id -u):$(id -g)" --tmpfs /tmp:rw,nosuid,nodev,mode=1777 \
+            --mount "type=bind,src=${GITHUB_WORKSPACE},dst=/work,readonly" \
+            --mount "type=bind,src=${RUNNER_TEMP}/grype-db,dst=/cache" \
+            --env GRYPE_DB_CACHE_DIR=/cache --env GRYPE_DB_AUTO_UPDATE=false \
+            "${GRYPE_IMAGE}" "registry:${SCAN_IMAGE}" --by-cve \
+            --config /work/.grype.yaml --only-fixed --fail-on high \
+            --vex "/work/release-assets/extra-codeowners-${VERSION}.openvex.json" --output table

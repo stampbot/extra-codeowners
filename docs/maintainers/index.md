@@ -166,6 +166,7 @@ hid a missing or mutable input.
 - [Review current project status](../reference/project-status.md)
 - [Review the runtime base decision](../explanation/runtime-base.md)
 - [Respond to a dependency audit](../how-to/respond-to-dependency-audit.md)
+- [Rescan a published image](../how-to/rescan-published-image.md)
 - [Review or recover a Renovate update](../how-to/manage-renovate-updates.md)
 - [Review stacked pull requests](../how-to/review-stacked-pull-requests.md)
 - [Run the live GitHub contract](../how-to/run-live-github-contract.md)
