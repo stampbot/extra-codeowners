@@ -62,6 +62,7 @@ jobs:
           uv run mypy extra_codeowners tests tools/evaluation_beta.py
           tools/evaluation_beta_bootstrap.py tools/readthedocs_bootstrap.py
           tools/release_inventory.py tools/release_notices.py tools/release_vex.py
+          tools/release_rescan.py
           .github/scripts/release_plan.py
 
       - name: Lint YAML

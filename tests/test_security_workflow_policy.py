@@ -24,6 +24,7 @@ PINNED_ACTION_WORKFLOWS = (
     *SECURITY_WORKFLOWS,
     "ci.yml",
     "cold-container.yml",
+    "rescan-release.yml",
     "release.yml",
 )
 PULL_REQUEST_TYPES = "    types: [opened, reopened, synchronize, edited]"
