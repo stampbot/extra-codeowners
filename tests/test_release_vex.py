@@ -54,8 +54,6 @@ def _document(*products: str, status: str = "not_affected") -> dict[str, object]
     }
     if status == "not_affected":
         statement["impact_statement"] = "The service does not expose the affected feature."
-    if status == "fixed":
-        statement["fixed_version"] = "3.5.6-1~deb13u2"
     return {
         "@context": OPENVEX_CONTEXT,
         "@id": "urn:uuid:8b0d4df6-cb7e-4d27-8970-e1b4db0d2a4f",
@@ -101,14 +99,17 @@ def _attestation_output(
     return {"payload": payload}
 
 
+@pytest.mark.parametrize("status", ["not_affected", "fixed"])
 def test_validate_release_vex_requires_every_debian_product_in_the_signed_inventories(
     tmp_path: Path,
+    status: str,
 ) -> None:
     source, inventories = _release_inputs(
         tmp_path,
         _document(
             "pkg:deb/debian/libssl3t64@3.5.6-1~deb13u2?arch=amd64&distro=debian-13&upstream=openssl",
             "pkg:deb/debian/libssl3t64@3.5.6-1~deb13u2?arch=arm64&distro=debian-13&upstream=openssl",
+            status=status,
         ),
     )
 

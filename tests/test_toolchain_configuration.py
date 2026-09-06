@@ -300,6 +300,25 @@ def test_openssl_vex_is_exact_and_evidence_backed() -> None:
         assert all(product["identifiers"] == {"purl": product["@id"]} for product in products)
 
 
+def test_current_openssl_vex_records_debian_fixes() -> None:
+    path = ROOT / "security" / "vex" / "openssl-3.5.7.openvex.json"
+    document = json.loads(path.read_text(encoding="utf-8"))
+    assert document["tooling"] == "Vexcalibur"
+    assert document["author"] == "Extra CODEOWNERS maintainers"
+    assert {item["vulnerability"]["name"] for item in document["statements"]} == {
+        "CVE-2026-63073",
+        "CVE-2026-75803",
+    }
+    products = {
+        purl.replace("3.5.6-1~deb13u2", "3.5.7-1~deb13u2") for purl in _openssl_vex_products()
+    }
+    for statement in document["statements"]:
+        assert statement["status"] == "fixed"
+        assert "Confirmed fixed product version: 3.5.7-1~deb13u2" in statement["status_notes"]
+        assert {product["@id"] for product in statement["products"]} == products
+        assert "https://security-tracker.debian.org/tracker/" in statement["status_notes"]
+
+
 def test_openssl_vex_claims_match_the_service_protocol_contract() -> None:
     application_source = "\n".join(
         path.read_text(encoding="utf-8")
@@ -1582,7 +1601,7 @@ def test_ci_builds_and_scans_both_architectures_natively() -> None:
     inventory = _workflow_step(container, "Inventory high-severity vulnerabilities")
     blocking = _workflow_step(container, "Reject fixable high-severity vulnerabilities")
     assert "vex:" not in inventory
-    assert "vex: security/vex/openssl-3.5.6.openvex.json" in blocking
+    assert "vex: security/vex/openssl-3.5.7.openvex.json" in blocking
 
     required = _workflow_job(workflow, "required")
     assert "- container" in required
@@ -1651,7 +1670,7 @@ def test_release_builds_native_digests_then_publishes_the_exact_manifest() -> No
     inventory = _workflow_step(image, "Inventory high-severity vulnerabilities")
     blocking = _workflow_step(image, "Reject fixable high-severity vulnerabilities")
     assert "vex:" not in inventory
-    assert "vex: security/vex/openssl-3.5.6.openvex.json" in blocking
+    assert "vex: security/vex/openssl-3.5.7.openvex.json" in blocking
     assert "digest-${{ matrix.architecture }}.txt" in image
     assert "Collect raw native filesystem inventory" in image
     assert "python -I -S -B tools/release_inventory.py" in image

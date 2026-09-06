@@ -1,0 +1,101 @@
+{
+  "@context": "https://openvex.dev/ns/v0.2.0",
+  "@id": "urn:uuid:0143fb65-1c5c-5821-9986-1d1dd8f1b1c6",
+  "author": "Extra CODEOWNERS maintainers",
+  "role": "VEX document producer",
+  "statements": [
+    {
+      "products": [
+        {
+          "@id": "pkg:deb/debian/libssl3t64@3.5.7-1~deb13u2?arch=amd64&distro=debian-13&upstream=openssl",
+          "identifiers": {
+            "purl": "pkg:deb/debian/libssl3t64@3.5.7-1~deb13u2?arch=amd64&distro=debian-13&upstream=openssl"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/libssl3t64@3.5.7-1~deb13u2?arch=arm64&distro=debian-13&upstream=openssl",
+          "identifiers": {
+            "purl": "pkg:deb/debian/libssl3t64@3.5.7-1~deb13u2?arch=arm64&distro=debian-13&upstream=openssl"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/openssl-provider-legacy@3.5.7-1~deb13u2?arch=amd64&distro=debian-13&upstream=openssl",
+          "identifiers": {
+            "purl": "pkg:deb/debian/openssl-provider-legacy@3.5.7-1~deb13u2?arch=amd64&distro=debian-13&upstream=openssl"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/openssl-provider-legacy@3.5.7-1~deb13u2?arch=arm64&distro=debian-13&upstream=openssl",
+          "identifiers": {
+            "purl": "pkg:deb/debian/openssl-provider-legacy@3.5.7-1~deb13u2?arch=arm64&distro=debian-13&upstream=openssl"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/openssl@3.5.7-1~deb13u2?arch=amd64&distro=debian-13",
+          "identifiers": {
+            "purl": "pkg:deb/debian/openssl@3.5.7-1~deb13u2?arch=amd64&distro=debian-13"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/openssl@3.5.7-1~deb13u2?arch=arm64&distro=debian-13",
+          "identifiers": {
+            "purl": "pkg:deb/debian/openssl@3.5.7-1~deb13u2?arch=arm64&distro=debian-13"
+          }
+        }
+      ],
+      "status": "fixed",
+      "status_notes": "Analysis detail: Debian marks 3.5.7-1~deb13u2 as fixed for this vulnerability.\nSource: Debian Security Tracker (https://security-tracker.debian.org/tracker/CVE-2026-63073)\nOriginal Vexcalibur analysis state: resolved\nConfirmed fixed product version: 3.5.7-1~deb13u2",
+      "vulnerability": {
+        "name": "CVE-2026-63073"
+      }
+    },
+    {
+      "products": [
+        {
+          "@id": "pkg:deb/debian/libssl3t64@3.5.7-1~deb13u2?arch=amd64&distro=debian-13&upstream=openssl",
+          "identifiers": {
+            "purl": "pkg:deb/debian/libssl3t64@3.5.7-1~deb13u2?arch=amd64&distro=debian-13&upstream=openssl"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/libssl3t64@3.5.7-1~deb13u2?arch=arm64&distro=debian-13&upstream=openssl",
+          "identifiers": {
+            "purl": "pkg:deb/debian/libssl3t64@3.5.7-1~deb13u2?arch=arm64&distro=debian-13&upstream=openssl"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/openssl-provider-legacy@3.5.7-1~deb13u2?arch=amd64&distro=debian-13&upstream=openssl",
+          "identifiers": {
+            "purl": "pkg:deb/debian/openssl-provider-legacy@3.5.7-1~deb13u2?arch=amd64&distro=debian-13&upstream=openssl"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/openssl-provider-legacy@3.5.7-1~deb13u2?arch=arm64&distro=debian-13&upstream=openssl",
+          "identifiers": {
+            "purl": "pkg:deb/debian/openssl-provider-legacy@3.5.7-1~deb13u2?arch=arm64&distro=debian-13&upstream=openssl"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/openssl@3.5.7-1~deb13u2?arch=amd64&distro=debian-13",
+          "identifiers": {
+            "purl": "pkg:deb/debian/openssl@3.5.7-1~deb13u2?arch=amd64&distro=debian-13"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/openssl@3.5.7-1~deb13u2?arch=arm64&distro=debian-13",
+          "identifiers": {
+            "purl": "pkg:deb/debian/openssl@3.5.7-1~deb13u2?arch=arm64&distro=debian-13"
+          }
+        }
+      ],
+      "status": "fixed",
+      "status_notes": "Analysis detail: Debian marks 3.5.7-1~deb13u2 as fixed for this vulnerability.\nSource: Debian Security Tracker (https://security-tracker.debian.org/tracker/CVE-2026-75803)\nOriginal Vexcalibur analysis state: resolved\nConfirmed fixed product version: 3.5.7-1~deb13u2",
+      "vulnerability": {
+        "name": "CVE-2026-75803"
+      }
+    }
+  ],
+  "timestamp": "2026-09-06T00:00:00Z",
+  "tooling": "Vexcalibur",
+  "version": 1
+}

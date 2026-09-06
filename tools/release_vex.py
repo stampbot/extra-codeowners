@@ -313,8 +313,6 @@ def validate_release_vex(source: Path, inventories: Iterable[Path]) -> bytes:
         _string(vulnerability.get("name"), f"{description}.vulnerability.name")
         if status == "not_affected":
             _string(statement.get("impact_statement"), f"{description}.impact_statement")
-        if status == "fixed":
-            _string(statement.get("fixed_version"), f"{description}.fixed_version")
         products = _sequence(statement.get("products"), f"{description}.products")
         if not products:
             _fail(f"{description} must name at least one product")

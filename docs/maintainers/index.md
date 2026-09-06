@@ -129,6 +129,11 @@ change in reachable behavior invalidates a conclusion, update or remove the
 source statement and release the correction. Never try to rewrite a published
 VEX asset.
 
+The current statement records Debian's fixes for CVE-2026-63073 and
+CVE-2026-75803 in `3.5.7-1~deb13u2`. The older `openssl-3.5.6.openvex.json`
+remains as historical evidence; current builds don't use its exceptions.
+The Python version is unchanged by this base-image digest refresh.
+
 Before allocating another version, the workflow requires the preceding release
 to be published and immutable. It accepts `v0.1.0-alpha.7` as the sole
 historical exception because that public release predates this policy. No later
