@@ -126,3 +126,6 @@ def test_rescan_workflow_is_read_only_and_verifies_before_scanning() -> None:
     assert "--env GRYPE_DB_AUTO_UPDATE=false" in workflow
     assert "docker.sock" not in workflow
     assert "architecture: [amd64, arm64]" in workflow
+    assert "needs: select" in workflow
+    assert workflow.count("gh api ") == 1
+    assert "TAG: ${{ needs.select.outputs.tag }}" in workflow

@@ -20,16 +20,15 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  rescan:
-    name: Rescan (${{ matrix.architecture }})
+  select:
+    name: Select release
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    env:
-      GRYPE_IMAGE: anchore/grype:v0.110.0@sha256:af65fbc0c664691067788fe95ff88760b435543e45595eb2ca6f102fc476fbe1
-    strategy:
-      fail-fast: false
-      matrix:
-        architecture: [amd64, arm64]
+    timeout-minutes: 5
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+      version: ${{ steps.release.outputs.version }}
+      python_version: ${{ steps.release.outputs.python_version }}
     steps:
       - name: Check out trusted verification code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -52,10 +51,33 @@ jobs:
           python -I -S -B tools/release_rescan.py select \
             --releases releases.json --tag "${REQUESTED_TAG}" --output "${GITHUB_OUTPUT}"
 
+  rescan:
+    name: Rescan (${{ matrix.architecture }})
+    needs: select
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      GRYPE_IMAGE: anchore/grype:v0.118.0@sha256:8a93fc48da96bd6ec5981279d099b69de11541dc68fdf222fb9161f8ff284af7
+    strategy:
+      fail-fast: false
+      matrix:
+        architecture: [amd64, arm64]
+    steps:
+      - name: Check out trusted verification code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version-file: .python-version
+
       - name: Download published evidence
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.release.outputs.tag }}
+          TAG: ${{ needs.select.outputs.tag }}
         run: |
           gh release verify "${TAG}" --repo "${GITHUB_REPOSITORY}"
           gh release download "${TAG}" --repo "${GITHUB_REPOSITORY}" --dir release-assets
@@ -89,9 +111,9 @@ jobs:
       - name: Verify signatures and release evidence before scanning
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.release.outputs.tag }}
-          VERSION: ${{ steps.release.outputs.version }}
-          PYTHON_VERSION: ${{ steps.release.outputs.python_version }}
+          TAG: ${{ needs.select.outputs.tag }}
+          VERSION: ${{ needs.select.outputs.version }}
+          PYTHON_VERSION: ${{ needs.select.outputs.python_version }}
           IMAGE: ${{ steps.image.outputs.image }}
           IMAGE_DIGEST: ${{ steps.image.outputs.image_digest }}
           CHART: ${{ steps.image.outputs.chart }}
@@ -120,7 +142,7 @@ jobs:
       - name: Retain the unfiltered report
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: rescan-${{ steps.release.outputs.tag }}-${{ matrix.architecture }}
+          name: rescan-${{ needs.select.outputs.tag }}-${{ matrix.architecture }}
           path: rescan-${{ matrix.architecture }}.json
           if-no-files-found: error
           retention-days: 14
@@ -128,7 +150,7 @@ jobs:
       - name: Reject fixable high-severity vulnerabilities
         env:
           SCAN_IMAGE: ${{ steps.image.outputs.scan_image }}
-          VERSION: ${{ steps.release.outputs.version }}
+          VERSION: ${{ needs.select.outputs.version }}
         run: |
           docker run --rm --read-only --cap-drop=ALL --security-opt=no-new-privileges \
             --user "$(id -u):$(id -g)" --tmpfs /tmp:rw,nosuid,nodev,mode=1777 \

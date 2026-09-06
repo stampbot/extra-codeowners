@@ -11,7 +11,8 @@ The workflow is scheduled daily at 08:43 UTC. It selects the most recently
 published release, including alphas. GitHub can delay scheduled runs, so use a
 manual run when you need a result now.
 
-With repository Actions write access and an authenticated GitHub CLI:
+With repository Actions write access and an authenticated GitHub CLI, run it
+from `main` (other branches are skipped):
 
 ```bash
 gh workflow run rescan-release.yml --repo stampbot/extra-codeowners
@@ -61,6 +62,6 @@ without the required evidence need separate handling under
 [issue #22](https://github.com/stampbot/extra-codeowners/issues/22).
 
 The scanner container is pinned by digest and updated by Renovate. It runs
-without GitHub credentials or a Docker socket, and can read only the mounted
-checkout and downloaded release evidence. Its database cache is job-local;
+without GitHub credentials or a Docker socket. The checkout and downloaded
+release evidence are mounted read-only. Its database cache is job-local;
 the first scan downloads the current database and the blocking scan reuses it.
