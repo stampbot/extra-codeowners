@@ -128,6 +128,7 @@ RUN groupadd --gid 65532 extra-codeowners && \
       extra-codeowners && \
     install -d -o 0 -g 0 -m 0755 \
       /usr/share/licenses \
+      /usr/share/licenses/cpython \
       /usr/share/licenses/extra-codeowners && \
     rm -rf \
       /usr/local/bin/pip \
