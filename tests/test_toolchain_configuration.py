@@ -175,6 +175,25 @@ def test_project_owned_uv_version_drives_local_container_and_action_setup() -> N
     assert found_steps > 0
 
 
+def test_codeql_actions_update_together() -> None:
+    references = set()
+    for path in (ROOT / ".github" / "workflows").glob("*.yml"):
+        references.update(
+            re.findall(
+                r"uses: github/codeql-action/[\w-]+@([0-9a-f]{40})",
+                path.read_text(encoding="utf-8"),
+            )
+        )
+    assert len(references) == 1
+    dependabot = yaml.safe_load((ROOT / ".github" / "dependabot.yml").read_text())
+    actions = next(
+        update
+        for update in dependabot["updates"]
+        if update["package-ecosystem"] == "github-actions"
+    )
+    assert "github/codeql-action/*" in actions["groups"]["codeql"]["patterns"]
+
+
 def test_debian_container_uses_only_locked_binary_dependencies() -> None:
     project = _load_toml(ROOT / "pyproject.toml")
     lock = _load_toml(ROOT / "uv.lock")
@@ -279,6 +298,25 @@ def test_openssl_vex_is_exact_and_evidence_backed() -> None:
         products = cast(list[dict[str, Any]], statement["products"])
         assert {cast(str, product["@id"]) for product in products} == _openssl_vex_products()
         assert all(product["identifiers"] == {"purl": product["@id"]} for product in products)
+
+
+def test_current_openssl_vex_records_debian_fixes() -> None:
+    path = ROOT / "security" / "vex" / "openssl-3.5.7.openvex.json"
+    document = json.loads(path.read_text(encoding="utf-8"))
+    assert document["tooling"] == "Vexcalibur"
+    assert document["author"] == "Extra CODEOWNERS maintainers"
+    assert {item["vulnerability"]["name"] for item in document["statements"]} == {
+        "CVE-2026-63073",
+        "CVE-2026-75803",
+    }
+    products = {
+        purl.replace("3.5.6-1~deb13u2", "3.5.7-1~deb13u2") for purl in _openssl_vex_products()
+    }
+    for statement in document["statements"]:
+        assert statement["status"] == "fixed"
+        assert "Confirmed fixed product version: 3.5.7-1~deb13u2" in statement["status_notes"]
+        assert {product["@id"] for product in statement["products"]} == products
+        assert "https://security-tracker.debian.org/tracker/" in statement["status_notes"]
 
 
 def test_openssl_vex_claims_match_the_service_protocol_contract() -> None:
@@ -1563,7 +1601,7 @@ def test_ci_builds_and_scans_both_architectures_natively() -> None:
     inventory = _workflow_step(container, "Inventory high-severity vulnerabilities")
     blocking = _workflow_step(container, "Reject fixable high-severity vulnerabilities")
     assert "vex:" not in inventory
-    assert "vex: security/vex/openssl-3.5.6.openvex.json" in blocking
+    assert "vex: security/vex/openssl-3.5.7.openvex.json" in blocking
 
     required = _workflow_job(workflow, "required")
     assert "- container" in required
@@ -1632,7 +1670,7 @@ def test_release_builds_native_digests_then_publishes_the_exact_manifest() -> No
     inventory = _workflow_step(image, "Inventory high-severity vulnerabilities")
     blocking = _workflow_step(image, "Reject fixable high-severity vulnerabilities")
     assert "vex:" not in inventory
-    assert "vex: security/vex/openssl-3.5.6.openvex.json" in blocking
+    assert "vex: security/vex/openssl-3.5.7.openvex.json" in blocking
     assert "digest-${{ matrix.architecture }}.txt" in image
     assert "Collect raw native filesystem inventory" in image
     assert "python -I -S -B tools/release_inventory.py" in image
