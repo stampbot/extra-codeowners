@@ -428,6 +428,33 @@ def _expected_from_inventory(
     expected: dict[str, _ExpectedFile] = {}
     pending_debian_links: list[_PendingDebianLink] = []
     unresolved: list[dict[str, str]] = []
+    if "cpython" in inventory:
+        cpython = _mapping(inventory["cpython"], "release inventory.cpython")
+        for field, filename, role in (
+            ("license", "LICENSE.txt", "cpython-license"),
+            ("source_metadata", "source.json", "cpython-source-metadata"),
+        ):
+            record = _mapping(cpython.get(field), f"release inventory.cpython.{field}")
+            source_path = f"usr/share/licenses/cpython/{filename}"
+            if field == "license":
+                version = _string(cpython.get("version"), "release inventory.cpython.version")
+                if re.fullmatch(r"3\.\d+\.\d+", version) is None:
+                    _fail("invalid CPython version in release inventory")
+                source_path = f"usr/local/lib/python{version.rsplit('.', 1)[0]}/LICENSE.txt"
+            if record.get("path") != source_path or record.get("kind") != "regular":
+                _fail("CPython notice evidence must name its canonical regular file")
+            digest, size = _payload_expectation(record, f"release inventory.cpython.{field}")
+            _append_expected_file(
+                expected,
+                _ExpectedFile(
+                    archive_path=f"notices/cpython/{filename}",
+                    component="cpython-runtime",
+                    expected_sha256=digest,
+                    expected_size=size,
+                    role=role,
+                    source_path=source_path,
+                ),
+            )
     debian = _mapping(inventory.get("debian"), "release inventory.debian")
     for index, raw_file in enumerate(
         _sequence(debian.get("copyright_files"), "release inventory.debian.copyright_files")
@@ -1026,10 +1053,10 @@ def _expected_manifest_files(
             selected = _automatic_file(source_path)
             if selected is None:
                 _fail(f"notice bundle manifest includes unrecognized source path {source_path!r}")
-            if selected.role == "cpython-license":
-                if cpython_source is not None:
-                    _fail("notice bundle manifest contains multiple CPython license files")
-                cpython_source = source_path
+        if selected.role == "cpython-license":
+            if cpython_source is not None:
+                _fail("notice bundle manifest contains multiple CPython license files")
+            cpython_source = source_path
         archive_path = _safe_relative_path(
             _string(
                 record.get("archive_path"), f"notice bundle manifest.files[{index}].archive_path"

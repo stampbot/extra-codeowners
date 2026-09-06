@@ -89,6 +89,12 @@ container. It records:
 - Python distribution metadata and license-file entries
 - embedded JSON SBOMs and native Python extension files.
 
+For images containing CPython source metadata, the inventory also identifies
+the interpreter version, the source URL and SHA-256 declared by the pinned
+base image, and the matching runtime license. The notice bundle preserves the
+metadata and license. Source-archive delivery and full build-recipe evidence
+remain part of issue #18.
+
 Regular files are hashed. Filesystem links are recorded as links rather than
 followed.
 

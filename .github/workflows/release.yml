@@ -474,6 +474,8 @@ jobs:
             --platform-digest "${platform_digest}" \
             --rootfs-tar "rootfs-${ARCHITECTURE}.tar" \
             --output "distribution-inventory-${ARCHITECTURE}.json"
+          jq -e '.cpython | type == "object"' \
+            "distribution-inventory-${ARCHITECTURE}.json" >/dev/null
           python -I -S -B tools/release_notices.py build \
             --architecture "${ARCHITECTURE}" \
             --platform-digest "${platform_digest}" \

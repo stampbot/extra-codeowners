@@ -68,6 +68,7 @@ RUN SOURCE_REVISION="${SOURCE_REVISION}" python - <<'PY'
 import json
 import os
 import re
+import sys
 from pathlib import Path
 
 revision = os.environ["SOURCE_REVISION"]
@@ -81,6 +82,20 @@ content = json.dumps(
 path = Path("/build-identity.json")
 path.write_text(content, encoding="utf-8")
 path.chmod(0o444)
+
+version = os.environ["PYTHON_VERSION"]
+checksum = os.environ["PYTHON_SHA256"]
+if version != ".".join(map(str, sys.version_info[:3])):
+    raise SystemExit("CPython source version does not match the build interpreter")
+if re.fullmatch(r"[0-9a-f]{64}", checksum) is None:
+    raise SystemExit("CPython source checksum must be a SHA-256 digest")
+source = {
+    "schema_version": 1,
+    "version": version,
+    "source_sha256": checksum,
+    "source_url": f"https://www.python.org/ftp/python/{version}/Python-{version}.tar.xz",
+}
+Path("/cpython-source.json").write_text(json.dumps(source, sort_keys=True) + "\n")
 PY
 
 FROM python-base AS runtime
@@ -124,6 +139,7 @@ RUN groupadd --gid 65532 extra-codeowners && \
 
 COPY --from=builder /opt/venv /opt/venv
 COPY --from=builder --chown=0:0 --chmod=0444 /build-identity.json /app/build-identity.json
+COPY --from=builder --chown=0:0 --chmod=0444 /cpython-source.json /usr/share/licenses/cpython/source.json
 COPY --chown=0:0 --chmod=0644 LICENSE /usr/share/licenses/extra-codeowners/LICENSE
 
 USER 65532:65532

@@ -13,7 +13,72 @@ import pytest
 from tools.release_inventory import InventoryError, collect_inventory, main, render_inventory
 
 PLATFORM_DIGEST = "sha256:" + "a" * 64
+CPYTHON_SOURCE = "usr/share/licenses/cpython/source.json"
 SITE = "opt/venv/lib/python3.14/site-packages"
+
+
+def _cpython_source() -> dict[str, object]:
+    return {
+        "schema_version": 1,
+        "version": "3.14.7",
+        "source_sha256": "c" * 64,
+        "source_url": "https://www.python.org/ftp/python/3.14.7/Python-3.14.7.tar.xz",
+    }
+
+
+def _cpython_members(source: bytes) -> list[tuple[str, bytes]]:
+    return [
+        ("usr/lib/os-release", _os_release()),
+        ("var/lib/dpkg/status", _status()),
+        (f"{SITE}/example-1.0.dist-info/METADATA", _metadata("example", "1.0")),
+        ("usr/local/lib/python3.14/LICENSE.txt", b"CPython license"),
+        (CPYTHON_SOURCE, source),
+    ]
+
+
+def test_inventory_binds_cpython_source_metadata_and_runtime_license() -> None:
+    source = json.dumps(_cpython_source()).encode()
+    result = collect_inventory(
+        _rootfs_tar(_cpython_members(source)),
+        architecture="amd64",
+        platform_digest=PLATFORM_DIGEST,
+    )
+    cpython = result["cpython"]
+    assert isinstance(cpython, dict)
+    assert cpython["version"] == "3.14.7"
+    assert cpython["source_sha256"] == "c" * 64
+    assert cpython["source_metadata"]["sha256"] == hashlib.sha256(source).hexdigest()
+    assert cpython["license"]["sha256"] == hashlib.sha256(b"CPython license").hexdigest()
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("version", "3.13.1"),
+        ("source_sha256", "bad"),
+        ("source_url", "https://example.com/source.tar.xz"),
+        ("schema_version", True),
+    ],
+)
+def test_inventory_rejects_invalid_cpython_evidence(key: str, value: object) -> None:
+    source = _cpython_source()
+    source[key] = value
+    with pytest.raises(InventoryError, match="CPython"):
+        collect_inventory(
+            _rootfs_tar(_cpython_members(json.dumps(source).encode())),
+            architecture="amd64",
+            platform_digest=PLATFORM_DIGEST,
+        )
+
+
+def test_inventory_rejects_cpython_metadata_symlinks() -> None:
+    members = _cpython_members(b"{}")[0:-1]
+    with pytest.raises(InventoryError, match="regular file"):
+        collect_inventory(
+            _rootfs_tar(members, links=((CPYTHON_SOURCE, "elsewhere.json"),)),
+            architecture="amd64",
+            platform_digest=PLATFORM_DIGEST,
+        )
 
 
 def _rootfs_tar(
