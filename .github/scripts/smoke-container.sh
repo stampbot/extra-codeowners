@@ -95,6 +95,7 @@ docker exec \
   --env "EXPECTED_REVISION=${expected_revision}" \
   "${container_name}" /opt/venv/bin/python -c '
 import importlib.metadata
+import json
 import os
 import platform
 import stat
@@ -115,6 +116,9 @@ assert not os.access(Path(extra_codeowners.__file__), os.W_OK)
 assert not any(Path("/usr/local/bin").glob("pip*"))
 assert not Path("/usr/local/lib/python3.14/ensurepip").exists()
 assert "Apache License" in Path("/usr/share/licenses/extra-codeowners/LICENSE").read_text()
+cpython = json.loads(Path("/usr/share/licenses/cpython/source.json").read_text())
+assert cpython["version"] == platform.python_version()
+assert cpython["source_sha256"] == os.environ["PYTHON_SHA256"]
 identity = load_build_identity()
 assert identity is not None
 assert identity.source_revision == os.environ["EXPECTED_REVISION"]

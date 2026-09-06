@@ -31,6 +31,16 @@ archive includes available:
 - the CPython runtime license; and
 - Extra CODEOWNERS' Apache-2.0 license.
 
+New images also include `notices/cpython/source.json`. It records the CPython
+version, source archive URL, and SHA-256 declared by the pinned official Python
+base image. The build checks that the declared version matches its interpreter.
+The raw inventory records this metadata and the matching runtime license with
+their file hashes, so both are covered by the signed notice bundle.
+
+Older inventories omit the `cpython` record and remain verifiable. The new
+metadata identifies the expected upstream source; it does not contain the
+source archive or prove that rebuilding it reproduces the image's interpreter.
+
 When package metadata declares a Python license file that is absent from the
 image, or whose entry is a filesystem link, the manifest records it under
 `unresolved_notice_evidence`. The bundle does not follow Python package links;

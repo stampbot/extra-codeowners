@@ -21,6 +21,29 @@ PLATFORM_DIGEST = "sha256:" + "a" * 64
 SITE = "opt/venv/lib/python3.14/site-packages"
 
 
+def test_notice_bundle_preserves_cpython_source_metadata(tmp_path: Path) -> None:
+    source = json.dumps(
+        {
+            "schema_version": 1,
+            "version": "3.14.7",
+            "source_sha256": "c" * 64,
+            "source_url": "https://www.python.org/ftp/python/3.14.7/Python-3.14.7.tar.xz",
+        }
+    ).encode()
+    members = [*_members(), ("usr/share/licenses/cpython/source.json", source)]
+    inventory, bundle = _bundle(members)
+    bundle_path = tmp_path / "notices.tar.gz"
+    bundle_path.write_bytes(bundle)
+    verify_notice_bundle(
+        bundle_path, inventory, architecture="amd64", platform_digest=PLATFORM_DIGEST
+    )
+    with tarfile.open(fileobj=io.BytesIO(bundle), mode="r:gz") as archive:
+        evidence = archive.extractfile("notices/cpython/source.json")
+        assert evidence is not None
+        assert evidence.read() == source
+    assert _bundle(list(reversed(members)))[1] == bundle
+
+
 def _rootfs_tar(
     members: list[tuple[str, bytes]],
     *,

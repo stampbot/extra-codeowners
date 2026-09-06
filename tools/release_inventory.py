@@ -50,6 +50,8 @@ _MAX_METADATA_BYTES: Final = 1024 * 1024
 _MAX_AUXILIARY_FILE_BYTES: Final = 64 * 1024 * 1024
 _MAX_COMPONENTS: Final = 10_000
 _MAX_LEGACY_LICENSE_CANDIDATES: Final = 128
+_CPYTHON_SOURCE: Final = "usr/share/licenses/cpython/source.json"
+_CPYTHON_LICENSE_PATTERN: Final = re.compile(r"\Ausr/local/lib/python3\.\d+/LICENSE\.txt\Z")
 
 
 class InventoryError(ValueError):
@@ -337,6 +339,8 @@ def collect_inventory(
 
     status: tuple[int, str, bytes] | None = None
     os_release: tuple[int, str, bytes] | None = None
+    cpython_source: tuple[int, str, bytes] | None = None
+    cpython_licenses: dict[str, _Payload] = {}
     distributions: dict[str, _Distribution] = {}
     pending_licenses: dict[str, dict[str, _Payload]] = {}
     pending_legacy_license_candidates: dict[str, dict[str, _Payload]] = {}
@@ -379,6 +383,8 @@ def collect_inventory(
                     native,
                     path == "usr/lib/os-release",
                     path == "var/lib/dpkg/status",
+                    path == _CPYTHON_SOURCE,
+                    _CPYTHON_LICENSE_PATTERN.fullmatch(path) is not None,
                 )
             )
             if not selected:
@@ -387,7 +393,19 @@ def collect_inventory(
                 _fail(f"root filesystem tar contains duplicate inventory path {path!r}")
             seen_selected_paths.add(path)
 
-            if path == "usr/lib/os-release":
+            if path == _CPYTHON_SOURCE:
+                size, digest, contents = _read_member(
+                    archive, member, limit=_MAX_OS_RELEASE_BYTES, contents=True
+                )
+                if contents is None:  # pragma: no cover - contents was requested above.
+                    _fail("could not read CPython source metadata")
+                cpython_source = (size, digest, contents)
+            elif _CPYTHON_LICENSE_PATTERN.fullmatch(path) is not None:
+                size, digest, _ = _read_member(
+                    archive, member, limit=_MAX_METADATA_BYTES, contents=False
+                )
+                cpython_licenses[path] = _Payload("regular", None, digest, size)
+            elif path == "usr/lib/os-release":
                 if os_release is not None:
                     _fail("root filesystem tar contains more than one os-release file")
                 size, digest, contents = _read_member(
@@ -596,7 +614,7 @@ def collect_inventory(
     os_release_size, os_release_sha256, os_release_contents = os_release
     status_size, status_sha256, status_contents = status
 
-    return {
+    result: dict[str, object] = {
         "debian": {
             "copyright_files": copyright_files,
             "packages": _parse_debian_status(status_contents),
@@ -620,6 +638,42 @@ def collect_inventory(
         },
         "schema_version": SCHEMA_VERSION,
     }
+    if cpython_source is not None:
+        size, digest, contents = cpython_source
+        try:
+            source = json.loads(contents)
+        except (ValueError, UnicodeDecodeError) as error:
+            raise InventoryError("invalid CPython source metadata") from error
+        if (
+            not isinstance(source, dict)
+            or type(source.get("schema_version")) is not int
+            or source.get("schema_version") != 1
+            or set(source) != {"schema_version", "version", "source_sha256", "source_url"}
+        ):
+            _fail("invalid CPython source metadata schema")
+        version = source.get("version")
+        checksum = source.get("source_sha256")
+        if not isinstance(version, str) or re.fullmatch(r"3\.\d+\.\d+", version) is None:
+            _fail("invalid CPython source version")
+        license_path = f"usr/local/lib/python{version.rsplit('.', 1)[0]}/LICENSE.txt"
+        cpython_license = cpython_licenses.get(license_path)
+        if cpython_license is None or not cpython_license.size:
+            _fail("CPython evidence requires the matching nonempty runtime license")
+        if not isinstance(checksum, str) or re.fullmatch(r"[0-9a-f]{64}", checksum) is None:
+            _fail("invalid CPython source checksum")
+        expected_url = f"https://www.python.org/ftp/python/{version}/Python-{version}.tar.xz"
+        if source.get("source_url") != expected_url:
+            _fail("invalid CPython source URL")
+        result["cpython"] = {
+            "version": version,
+            "source_sha256": checksum,
+            "source_url": expected_url,
+            "source_metadata": _payload_record(
+                _CPYTHON_SOURCE, _Payload("regular", None, digest, size)
+            ),
+            "license": _payload_record(license_path, cpython_license),
+        }
+    return result
 
 
 def render_inventory(inventory: dict[str, object]) -> str:
