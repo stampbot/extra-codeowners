@@ -1468,8 +1468,10 @@ def test_readthedocs_bootstrap_rejects_a_nonexact_uv_version(tmp_path: Path) -> 
     [
         "",
         "package = []",
-        '[[package]]\nname = "uv"\nversion = "0.11.28"\n'
-        '[[package]]\nname = "uv"\nversion = "0.12.7"\n',
+        (
+            '[[package]]\nname = "uv"\nversion = "0.11.28"\n'
+            '[[package]]\nname = "uv"\nversion = "0.12.7"\n'
+        ),
     ],
 )
 def test_readthedocs_bootstrap_rejects_missing_or_ambiguous_uv(
