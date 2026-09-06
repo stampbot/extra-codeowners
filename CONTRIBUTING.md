@@ -36,6 +36,11 @@ mise run bootstrap
 The last command installs the dependencies recorded in `uv.lock` and creates
 `.venv/`.
 
+The `tooling` group pins uv for CI and documentation builds. Keep it aligned
+with mise and the digest-pinned Docker image; Renovate groups those updates.
+The project's uv compatibility minimum lets dependency bots use newer uv
+versions to propose changes. It doesn't select the version used for builds.
+
 ## Make and verify a change
 
 Add tests for behavior changes. Cover failure paths and authorization

@@ -14,6 +14,7 @@ from typing import Any, cast
 
 import pytest
 import yaml  # type: ignore[import-untyped]
+from packaging.specifiers import SpecifierSet
 
 import extra_codeowners
 from tools import evaluation_beta_bootstrap as beta_bootstrap
@@ -148,7 +149,15 @@ def test_project_uses_dynamic_vcs_version_and_a_locked_build_group() -> None:
 def test_project_owned_uv_version_drives_local_container_and_action_setup() -> None:
     project = _load_toml(ROOT / "pyproject.toml")
     reviewed_version = _mise_uv_version()
-    assert project["tool"]["uv"]["required-version"] == f"=={reviewed_version}"
+    compatible = SpecifierSet(project["tool"]["uv"]["required-version"])
+    assert reviewed_version in compatible
+    assert "0.12.7" in compatible
+    assert project["dependency-groups"]["tooling"] == [f"uv=={reviewed_version}"]
+    locked = [
+        package for package in _load_toml(ROOT / "uv.lock")["package"] if package["name"] == "uv"
+    ]
+    assert len(locked) == 1
+    assert locked[0]["version"] == reviewed_version
 
     dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
     uv_image = re.search(
@@ -169,8 +178,9 @@ def test_project_owned_uv_version_drives_local_container_and_action_setup() -> N
         )
         for step in steps:
             assert re.search(r"(?m)^\s+version:", step) is None, (
-                f"{path}: setup-uv must read tool.uv.required-version"
+                f"{path}: setup-uv must read the locked tool version"
             )
+            assert "version-file: uv.lock" in step
         found_steps += len(steps)
     assert found_steps > 0
 
@@ -1311,11 +1321,7 @@ def test_renovate_owns_ordinary_docker_uv_and_build_backend_updates() -> None:
         for manager in managers
         if manager.get("description") == "Keep the project-owned uv version current"
     ]
-    assert len(uv_managers) == 1
-    uv_manager = uv_managers[0]
-    assert uv_manager["managerFilePatterns"] == ["/^pyproject\\.toml$/"]
-    assert uv_manager["depNameTemplate"] == "astral-sh/uv"
-    assert uv_manager["datasourceTemplate"] == "github-releases"
+    assert uv_managers == []
 
     rules = cast(list[dict[str, Any]], config["packageRules"])
     uv_rules = [rule for rule in rules if rule.get("groupName") == "uv toolchain"]
@@ -1323,6 +1329,7 @@ def test_renovate_owns_ordinary_docker_uv_and_build_backend_updates() -> None:
     assert set(cast(list[str], uv_rules[0]["matchPackageNames"])) == {
         "astral-sh/uv",
         "ghcr.io/astral-sh/uv",
+        "uv",
     }
     backend_rules = [rule for rule in rules if rule.get("groupName") == "Python build backend"]
     assert len(backend_rules) == 1
@@ -1437,7 +1444,7 @@ def test_readthedocs_bootstraps_the_project_owned_uv_version() -> None:
     assert "uv sync --frozen --only-group docs" in sync
     assert "python" not in config
 
-    required = cast(str, _load_toml(ROOT / "pyproject.toml")["tool"]["uv"]["required-version"])
+    required = f"=={_mise_uv_version()}"
     assert readthedocs_bootstrap.required_uv_requirement() == f"uv{required}"
     command = readthedocs_bootstrap.install_command()
     assert command[-1] == f"uv{required}"
@@ -1446,14 +1453,33 @@ def test_readthedocs_bootstraps_the_project_owned_uv_version() -> None:
 
 
 def test_readthedocs_bootstrap_rejects_a_nonexact_uv_version(tmp_path: Path) -> None:
-    pyproject = tmp_path / "pyproject.toml"
-    pyproject.write_text(
-        '[tool.uv]\nrequired-version = ">=0.11"\n',
+    lockfile = tmp_path / "uv.lock"
+    lockfile.write_text(
+        '[[package]]\nname = "uv"\nversion = ">=0.11"\n',
         encoding="utf-8",
     )
 
     with pytest.raises(RuntimeError, match="must be one exact semantic version"):
-        readthedocs_bootstrap.install_command(pyproject)
+        readthedocs_bootstrap.install_command(lockfile)
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "",
+        "package = []",
+        '[[package]]\nname = "uv"\nversion = "0.11.28"\n'
+        '[[package]]\nname = "uv"\nversion = "0.12.7"\n',
+    ],
+)
+def test_readthedocs_bootstrap_rejects_missing_or_ambiguous_uv(
+    tmp_path: Path,
+    content: str,
+) -> None:
+    lockfile = tmp_path / "uv.lock"
+    lockfile.write_text(content, encoding="utf-8")
+    with pytest.raises(RuntimeError, match=r"uv\.lock"):
+        readthedocs_bootstrap.install_command(lockfile)
 
 
 def test_renovate_owns_every_duplicated_ci_tool_pin() -> None:
