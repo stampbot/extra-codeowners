@@ -1621,17 +1621,10 @@ def test_ci_builds_and_scans_both_architectures_natively() -> None:
         "ignore-error=true,timeout=5m"
     ) in container
     assert ".github/scripts/smoke-container.sh" in container
-    assert container.count("uses: anchore/scan-action@") == 2
-    assert container.count("by-cve: true") == 2
-    assert container.count("config: .grype.yaml") == 2
-    assert "fail-build: false" in container
-    assert "only-fixed: false" in container
-    assert "fail-build: true" in container
-    assert "only-fixed: true" in container
-    inventory = _workflow_step(container, "Inventory high-severity vulnerabilities")
-    blocking = _workflow_step(container, "Reject fixable high-severity vulnerabilities")
-    assert "vex:" not in inventory
-    assert "vex: security/vex/openssl-3.5.7.openvex.json" in blocking
+    scan = _workflow_step(container, "Scan native image")
+    assert "uses: ./.github/actions/scan-image" in scan
+    assert "image: extra-codeowners:ci-${{ matrix.architecture }}" in scan
+    assert "report-file: vulnerability-report-${{ matrix.architecture }}.json" in scan
 
     required = _workflow_job(workflow, "required")
     assert "- container" in required
@@ -1692,15 +1685,10 @@ def test_release_builds_native_digests_then_publishes_the_exact_manifest() -> No
         image,
     )
     assert "${IMAGE}@${DIGEST}" in image
-    assert image.count("image: ${{ env.IMAGE }}@${{ steps.build.outputs.digest }}") == 2
-    assert image.count("by-cve: true") == 2
-    assert image.count("config: .grype.yaml") == 2
-    assert "only-fixed: false" in image
-    assert "only-fixed: true" in image
-    inventory = _workflow_step(image, "Inventory high-severity vulnerabilities")
-    blocking = _workflow_step(image, "Reject fixable high-severity vulnerabilities")
-    assert "vex:" not in inventory
-    assert "vex: security/vex/openssl-3.5.7.openvex.json" in blocking
+    scan = _workflow_step(image, "Scan native image")
+    assert "uses: ./.github/actions/scan-image" in scan
+    assert "image: ${{ env.IMAGE }}@${{ steps.build.outputs.digest }}" in scan
+    assert "report-file: vulnerability-report-${{ matrix.architecture }}.json" in scan
     assert "digest-${{ matrix.architecture }}.txt" in image
     assert "Collect raw native filesystem inventory" in image
     assert "python -I -S -B tools/release_inventory.py" in image

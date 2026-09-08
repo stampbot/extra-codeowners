@@ -1,2 +1,2 @@
-# Keep the rescan inventory unfiltered; exceptions apply only to the gate.
+# Keep every inventory unfiltered; exceptions apply only to the gate.
 ignore: []

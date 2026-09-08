@@ -1666,8 +1666,29 @@ async def test_request_deadline_includes_a_contended_installation_token(
     await client.close()
 
 
+@pytest.fixture
+def controlled_deadlines(
+    monkeypatch: pytest.MonkeyPatch,
+) -> list[tuple[float | None, asyncio.Timeout]]:
+    deadlines: list[tuple[float | None, asyncio.Timeout]] = []
+    real_timeout = asyncio.timeout
+
+    def controlled_timeout(delay: float | None) -> asyncio.Timeout:
+        # Expire the real context at a known request phase, not after a short
+        # sleep that can consume the entire budget on a busy CI runner.
+        timeout = real_timeout(None)
+        deadlines.append((delay, timeout))
+        return timeout
+
+    monkeypatch.setattr(asyncio, "timeout", controlled_timeout)
+    return deadlines
+
+
 @pytest.mark.asyncio
-async def test_request_deadline_is_shared_by_a_rejected_token_retry(private_key: str) -> None:
+async def test_request_deadline_is_shared_by_a_rejected_token_retry(
+    private_key: str,
+    controlled_deadlines: list[tuple[float | None, asyncio.Timeout]],
+) -> None:
     never_respond = asyncio.Event()
     api_calls = 0
 
@@ -1677,8 +1698,8 @@ async def test_request_deadline_is_shared_by_a_rejected_token_retry(private_key:
             return httpx.Response(201, json=token_response())
         api_calls += 1
         if api_calls == 1:
-            await asyncio.sleep(0.025)
             return httpx.Response(401, json={"message": "Bad credentials"})
+        controlled_deadlines[0][1].reschedule(asyncio.get_running_loop().time())
         await never_respond.wait()
         return httpx.Response(200, json={"state": "open"})
 
@@ -1688,14 +1709,13 @@ async def test_request_deadline_is_shared_by_a_rejected_token_retry(private_key:
         timeout_seconds=0.04,
         transport=httpx.MockTransport(handler),
     )
-    started = asyncio.get_running_loop().time()
     with pytest.raises(GitHubError, match="wall-clock deadline"):
-        await asyncio.wait_for(client.get_pull(2, "example/project", 3), timeout=0.5)
-    elapsed = asyncio.get_running_loop().time() - started
+        await asyncio.wait_for(client.get_pull(2, "example/project", 3), timeout=5)
     await client.close()
 
     assert api_calls == 2
-    assert elapsed < 0.07
+    assert [delay for delay, _ in controlled_deadlines] == [0.04, 0.04, 0.04]
+    assert [deadline.expired() for _, deadline in controlled_deadlines] == [True, False, False]
 
 
 @pytest.mark.asyncio
@@ -1767,6 +1787,7 @@ async def test_streaming_request_deadline_includes_a_contended_installation_toke
 @pytest.mark.asyncio
 async def test_streaming_request_deadline_is_shared_by_a_rejected_token_retry(
     private_key: str,
+    controlled_deadlines: list[tuple[float | None, asyncio.Timeout]],
 ) -> None:
     never_respond = asyncio.Event()
     api_calls = 0
@@ -1777,8 +1798,8 @@ async def test_streaming_request_deadline_is_shared_by_a_rejected_token_retry(
             return httpx.Response(201, json=token_response())
         api_calls += 1
         if api_calls == 1:
-            await asyncio.sleep(0.025)
             return httpx.Response(401, stream=TrackingStream(b'{"message":"Bad credentials"}'))
+        controlled_deadlines[0][1].reschedule(asyncio.get_running_loop().time())
         await never_respond.wait()
         return httpx.Response(200, stream=TrackingStream(b"enabled = true\n"))
 
@@ -1788,17 +1809,16 @@ async def test_streaming_request_deadline_is_shared_by_a_rejected_token_retry(
         timeout_seconds=0.04,
         transport=httpx.MockTransport(handler),
     )
-    started = asyncio.get_running_loop().time()
     with pytest.raises(GitHubError, match="wall-clock deadline"):
         await asyncio.wait_for(
             client.get_file_text(2, "example/project", ".github/extra-codeowners.toml"),
-            timeout=0.5,
+            timeout=5,
         )
-    elapsed = asyncio.get_running_loop().time() - started
     await client.close()
 
     assert api_calls == 2
-    assert elapsed < 0.07
+    assert [delay for delay, _ in controlled_deadlines] == [0.04, 0.04, 0.04]
+    assert [deadline.expired() for _, deadline in controlled_deadlines] == [True, False, False]
 
 
 @pytest.mark.asyncio
