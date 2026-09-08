@@ -341,8 +341,9 @@ def test_release_creates_an_immutable_tag_without_update_or_delete_paths() -> No
     assert "Existing release ref %s is not an annotated tag." in tag
     assert 'if [[ "${existing}" != "${REVISION}" ]]' in tag
     assert "Tag %s already points to %s, not %s." in tag
-    assert '--method POST "repos/${GITHUB_REPOSITORY}/git/tags"' in tag
-    assert '--method POST "repos/${GITHUB_REPOSITORY}/git/refs"' in tag
+    assert 'gh api --include --method POST "$@"' in tag
+    assert 'tag_request "repos/${GITHUB_REPOSITORY}/git/tags"' in tag
+    assert 'tag_request "repos/${GITHUB_REPOSITORY}/git/refs"' in tag
     assert '-f ref="refs/tags/${TAG}"' in tag
     for forbidden in ("--method PATCH", "--method DELETE", "git push", "--force"):
         assert forbidden not in tag
