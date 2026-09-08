@@ -60,6 +60,13 @@ failure on one architecture cannot be hidden by a successful build on the
 other. CI also records a vulnerability inventory and rejects fixable High or
 Critical findings.
 
+PR builds, release builds, and scheduled cold builds use the same Grype
+container, pinned by digest and updated by Renovate. The scanner reads an
+exported image archive without access to the Docker socket. Each job downloads
+a fresh vulnerability database for its raw JSON report, uploads the report,
+then uses that same database for the VEX-aware blocking check. A failed scan
+or database download fails the job; it isn't treated as a clean result.
+
 After `Required` succeeds on a `main` push, the release job repeats the native
 builds with provenance and software bill of materials generation enabled. It
 joins the two resulting digests into one versioned multi-platform image, then
@@ -90,8 +97,8 @@ service normally reaches.
 
 The project manages that risk with locked dependencies, native smoke tests,
 complete vulnerability inventories, a fixable High/Critical gate, recurring
-cold builds, and release attestations. The JSON inventories retain suppressed
-matches, including the reason from `.grype.yaml`.
+cold builds, and release attestations. The JSON inventories include findings
+that the blocking check excludes through `.grype.yaml` or VEX.
 
 The policy has one scoped exception. Grype reports CVE-2026-15308 as fixable
 for the CPython 3.14 binary because Python 3.15 contains a fix. Moving to an

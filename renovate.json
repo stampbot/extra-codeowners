@@ -12,9 +12,10 @@
   "customManagers": [
     {
       "customType": "regex",
-      "description": "Update the digest-pinned release rescan image",
+      "description": "Update digest-pinned build and release scanners",
       "managerFilePatterns": [
-        "/^\\.github/workflows/rescan-release\\.yml$/"
+        "/^\\.github/workflows/rescan-release\\.yml$/",
+        "/^\\.github/actions/scan-image/action\\.yml$/"
       ],
       "matchStrings": [
         "anchore/grype:(?<currentValue>v\\d+\\.\\d+\\.\\d+)@(?<currentDigest>sha256:[a-f0-9]{64})"
@@ -135,6 +136,11 @@
   "minimumReleaseAge": "3 days",
   "osvVulnerabilityAlerts": true,
   "packageRules": [
+    {
+      "description": "Update build-time and published-image scanners together",
+      "matchPackageNames": ["anchore/grype"],
+      "groupName": "Grype scanner"
+    },
     {
       "description": "Group Python build-backend updates",
       "matchPackageNames": [

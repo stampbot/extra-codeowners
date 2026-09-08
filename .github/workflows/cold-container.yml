@@ -72,3 +72,10 @@ jobs:
           0.0.0+git.${{ github.sha }}
           0.0.0+git.${{ github.sha }}
           ${{ github.sha }}
+
+      - name: Scan native image
+        uses: ./.github/actions/scan-image
+        with:
+          image: extra-codeowners:cold-${{ matrix.architecture }}
+          report-file: vulnerability-report-${{ matrix.architecture }}.json
+          artifact-name: cold-vulnerabilities-${{ matrix.architecture }}-${{ github.sha }}

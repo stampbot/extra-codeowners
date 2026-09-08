@@ -1,0 +1,77 @@
+name: Scan a local image
+description: Retain raw findings and enforce the VEX-aware vulnerability policy.
+inputs:
+  image:
+    description: Exact image reference already loaded into the local Docker daemon.
+    required: true
+  report-file:
+    description: Workspace-relative JSON report filename.
+    required: true
+  artifact-name:
+    description: Unique name for the retained vulnerability report.
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Prepare scanner inputs
+      id: prepare
+      shell: bash
+      env:
+        SCAN_IMAGE: ${{ inputs.image }}
+      run: |
+        directory="$(mktemp -d "${RUNNER_TEMP}/image-scan.XXXXXX")"
+        printf 'directory=%s\n' "${directory}" >>"${GITHUB_OUTPUT}"
+        mkdir "${directory}/db"
+        image_id="$(docker image inspect --format '{{.Id}}' "${SCAN_IMAGE}")"
+        docker image save --output "${directory}/image.tar" "${image_id}"
+
+    - name: Inventory all vulnerabilities
+      shell: bash
+      env:
+        SCAN_DIRECTORY: ${{ steps.prepare.outputs.directory }}
+        REPORT_FILE: ${{ inputs.report-file }}
+        GRYPE_IMAGE: >-
+          anchore/grype:v0.118.0@sha256:8a93fc48da96bd6ec5981279d099b69de11541dc68fdf222fb9161f8ff284af7
+      run: |
+        docker run --rm --read-only --cap-drop=ALL --security-opt=no-new-privileges \
+          --user "$(id -u):$(id -g)" --tmpfs /tmp:rw,nosuid,nodev,mode=1777 \
+          --mount "type=bind,src=${GITHUB_WORKSPACE},dst=/work,readonly" \
+          --mount "type=bind,src=${SCAN_DIRECTORY}/image.tar,dst=/image.tar,readonly" \
+          --mount "type=bind,src=${SCAN_DIRECTORY}/db,dst=/cache" \
+          --env GRYPE_DB_CACHE_DIR=/cache \
+          "${GRYPE_IMAGE}" docker-archive:/image.tar --by-cve \
+          --config /work/.github/grype-inventory.yaml --output json \
+          >"${REPORT_FILE}"
+
+    - name: Retain the unfiltered report
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: ${{ inputs.report-file }}
+        if-no-files-found: error
+        overwrite: true
+        retention-days: 14
+
+    - name: Reject fixable high-severity vulnerabilities
+      shell: bash
+      env:
+        SCAN_DIRECTORY: ${{ steps.prepare.outputs.directory }}
+        GRYPE_IMAGE: >-
+          anchore/grype:v0.118.0@sha256:8a93fc48da96bd6ec5981279d099b69de11541dc68fdf222fb9161f8ff284af7
+      run: |
+        docker run --rm --read-only --cap-drop=ALL --security-opt=no-new-privileges \
+          --user "$(id -u):$(id -g)" --tmpfs /tmp:rw,nosuid,nodev,mode=1777 \
+          --mount "type=bind,src=${GITHUB_WORKSPACE},dst=/work,readonly" \
+          --mount "type=bind,src=${SCAN_DIRECTORY}/image.tar,dst=/image.tar,readonly" \
+          --mount "type=bind,src=${SCAN_DIRECTORY}/db,dst=/cache" \
+          --env GRYPE_DB_CACHE_DIR=/cache --env GRYPE_DB_AUTO_UPDATE=false \
+          "${GRYPE_IMAGE}" docker-archive:/image.tar --by-cve \
+          --config /work/.grype.yaml --only-fixed --fail-on high \
+          --vex /work/security/vex/openssl-3.5.7.openvex.json --output table
+
+    - name: Remove scanner inputs and database
+      if: ${{ always() && steps.prepare.outputs.directory != '' }}
+      shell: bash
+      env:
+        SCAN_DIRECTORY: ${{ steps.prepare.outputs.directory }}
+      run: rm -r -- "${SCAN_DIRECTORY}"
