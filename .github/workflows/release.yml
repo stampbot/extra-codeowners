@@ -667,7 +667,7 @@ jobs:
               "${REVISION}" "${latest}"
             {
               printf '### Release deferred\n\n'
-              printf 'No release was published by this run. Main advanced from `%s` to `%s`.\n\n' \
+              printf 'No release was published by this run. Main advanced from %s to %s.\n\n' \
                 "${REVISION}" "${latest}"
               printf 'The queued main run must pass CI and publish before these changes are released.\n'
             } >>"${GITHUB_STEP_SUMMARY}"
