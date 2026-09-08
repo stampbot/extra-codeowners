@@ -726,6 +726,11 @@ jobs:
             --jq .sha
           tag_object="$(tail -n 1 <<<"${response}")"
           [[ "${tag_object}" =~ ^[0-9a-f]{40}$ ]]
+          observe_main
+          if [[ "${latest}" != "${REVISION}" ]]; then
+            defer_release
+            exit 0
+          fi
           tag_request "repos/${GITHUB_REPOSITORY}/git/refs" \
             -f ref="refs/tags/${TAG}" \
             -f sha="${tag_object}"

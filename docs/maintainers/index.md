@@ -85,12 +85,14 @@ skips its own build and publication. This coalesces closely spaced merges into
 one release instead of failing the older run or publishing versions out of
 order.
 
-If `main` advances while an untagged run is building, that run defers publication
-before creating its tag. Its final job is **Release deferred**, not **Release
+The publisher refreshes `main` before each tag API write. If it observes a
+newer commit, it defers publication. Its final job is **Release deferred**, not **Release
 complete**, and its summary identifies the newer commit. No versioned image,
 chart, or GitHub release is published by the deferred run. Native images may
 already have been uploaded by digest for testing; those aren't a completed
-release.
+release. These checks and GitHub's writes aren't atomic: if the tag reference
+is successfully created, the run finishes that release even if `main` moves
+while GitHub handles the request.
 
 The newer push already has a queued CI run. It must pass the usual checks and
 publish before either change is released; the older run doesn't wait and block

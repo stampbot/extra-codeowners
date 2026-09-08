@@ -74,6 +74,9 @@ def release_env(tmp_path: Path) -> tuple[Path, dict[str, str]]:
         '  printf "HTTP/2 %s\\n\\nwrite rejected\\n" "${FAIL_STATUS:-403}"\n'
         "  exit 1\n"
         "fi\n"
+        'if [[ "${ADVANCE_ON_SUCCESS:-}" == "${phase}" ]]; then\n'
+        '  git -C "${TEST_ORIGIN}" update-ref refs/heads/main "${NEWER}"\n'
+        "fi\n"
         'printf "HTTP/2 201\\n\\n%s\\n" "${REVISION}"\n'
     )
     gh.chmod(0o755)
@@ -125,6 +128,30 @@ def test_advance_before_tagging_defers_without_api_writes(
     assert not Path(env["API_LOG"]).exists()
     assert Path(env["GITHUB_OUTPUT"]).read_text() == "deferred=true\n"
     assert "No release was published" in Path(env["GITHUB_STEP_SUMMARY"]).read_text()
+
+
+def test_advance_during_successful_object_creation_defers_before_creating_the_ref(
+    release_env: tuple[Path, dict[str, str]],
+) -> None:
+    repo, env = release_env
+    env["ADVANCE_ON_SUCCESS"] = "object"
+    result = _run(repo, env)
+    assert result.returncode == 0, result.stderr
+    assert Path(env["GITHUB_OUTPUT"]).read_text() == "deferred=true\n"
+    calls = Path(env["API_LOG"]).read_text().splitlines()
+    assert len(calls) == 1
+    assert "/git/tags" in calls[0]
+
+
+def test_a_successfully_created_ref_is_not_abandoned_when_main_advances(
+    release_env: tuple[Path, dict[str, str]],
+) -> None:
+    repo, env = release_env
+    env["ADVANCE_ON_SUCCESS"] = "ref"
+    result = _run(repo, env)
+    assert result.returncode == 0, result.stderr
+    assert not Path(env["GITHUB_OUTPUT"]).exists()
+    assert len(Path(env["API_LOG"]).read_text().splitlines()) == 2
 
 
 @pytest.mark.parametrize("phase", ["object", "ref"])
