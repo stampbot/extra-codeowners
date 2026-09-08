@@ -543,6 +543,8 @@ jobs:
 
   publish:
     name: Publish release
+    outputs:
+      deferred: ${{ steps.tag.outputs.deferred }}
     needs:
       - plan
       - package
@@ -643,12 +645,60 @@ jobs:
           cosign-release: v3.0.6
 
       - name: Create immutable Git tag
+        id: tag
         env:
           GH_TOKEN: ${{ github.token }}
           REVISION: ${{ needs.plan.outputs.revision }}
           TAG: ${{ needs.plan.outputs.tag }}
         run: |
           set -euo pipefail
+          observe_main() {
+            git fetch --no-tags origin refs/heads/main
+            latest="$(git rev-parse --verify 'FETCH_HEAD^{commit}')"
+            if ! git merge-base --is-ancestor "${REVISION}" "${latest}"; then
+              printf 'Release revision %s is no longer on main at %s.\n' \
+                "${REVISION}" "${latest}" >&2
+              exit 1
+            fi
+          }
+          defer_release() {
+            printf 'deferred=true\n' >>"${GITHUB_OUTPUT}"
+            printf 'Release deferred: main advanced from %s to %s before tagging.\n' \
+              "${REVISION}" "${latest}"
+            {
+              printf '### Release deferred\n\n'
+              printf 'No release was published by this run. Main advanced from `%s` to `%s`.\n\n' \
+                "${REVISION}" "${latest}"
+              printf 'The queued main run must pass CI and publish before these changes are released.\n'
+            } >>"${GITHUB_STEP_SUMMARY}"
+          }
+          tag_request() {
+            if response="$(gh api --include --method POST "$@" 2>&1)"; then
+              return
+            fi
+            status="$(sed -n 's#^HTTP/[^ ]* \([0-9][0-9][0-9]\).*#\1#p' <<<"${response}")"
+            if [[ "${status}" == 403 || "${status}" == 404 ]]; then
+              # Main can advance between our observation and either API write.
+              observe_main
+              if [[ "${latest}" != "${REVISION}" ]]; then
+                if ref_response="$(
+                  gh api --include "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" 2>&1
+                )"; then
+                  printf 'Tag %s exists after a failed write; refusing to defer.\n' "${TAG}" >&2
+                  exit 1
+                fi
+                ref_status="$(
+                  sed -n 's#^HTTP/[^ ]* \([0-9][0-9][0-9]\).*#\1#p' <<<"${ref_response}"
+                )"
+                if [[ "${ref_status}" == 404 ]]; then
+                  defer_release
+                  exit 0
+                fi
+              fi
+            fi
+            printf '%s\n' "${response}" >&2
+            exit 1
+          }
           if git show-ref --verify --quiet "refs/tags/${TAG}"; then
             if [[ "$(git cat-file -t "refs/tags/${TAG}")" != tag ]]; then
               printf 'Existing release ref %s is not an annotated tag.\n' "${TAG}" >&2
@@ -661,21 +711,27 @@ jobs:
             fi
             exit 0
           fi
-          tag_object="$(
-            gh api --method POST "repos/${GITHUB_REPOSITORY}/git/tags" \
-              -f tag="${TAG}" \
-              -f message="Release ${TAG}" \
-              -f object="${REVISION}" \
-              -f type=commit \
-              -f 'tagger[name]=github-actions[bot]' \
-              -f 'tagger[email]=41898282+github-actions[bot]@users.noreply.github.com' \
-              --jq .sha
-          )"
-          gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" \
+          observe_main
+          if [[ "${latest}" != "${REVISION}" ]]; then
+            defer_release
+            exit 0
+          fi
+          tag_request "repos/${GITHUB_REPOSITORY}/git/tags" \
+            -f tag="${TAG}" \
+            -f message="Release ${TAG}" \
+            -f object="${REVISION}" \
+            -f type=commit \
+            -f 'tagger[name]=github-actions[bot]' \
+            -f 'tagger[email]=41898282+github-actions[bot]@users.noreply.github.com' \
+            --jq .sha
+          tag_object="$(tail -n 1 <<<"${response}")"
+          [[ "${tag_object}" =~ ^[0-9a-f]{40}$ ]]
+          tag_request "repos/${GITHUB_REPOSITORY}/git/refs" \
             -f ref="refs/tags/${TAG}" \
-            -f sha="${tag_object}" >/dev/null
+            -f sha="${tag_object}"
 
       - name: Publish or verify multiarch image
+        if: steps.tag.outputs.deferred != 'true'
         id: image
         env:
           REVISION: ${{ needs.plan.outputs.revision }}
@@ -808,6 +864,7 @@ jobs:
           printf '%s@%s\n' "${IMAGE}" "${digest}" >release/image/image-reference.txt
 
       - name: Attest multiarch image
+        if: steps.tag.outputs.deferred != 'true'
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ${{ env.IMAGE }}
@@ -815,11 +872,13 @@ jobs:
           push-to-registry: true
 
       - name: Sign multiarch image
+        if: steps.tag.outputs.deferred != 'true'
         env:
           DIGEST: ${{ steps.image.outputs.digest }}
         run: cosign sign --yes "${IMAGE}@${DIGEST}"
 
       - name: Attach OpenVEX to multiarch image
+        if: steps.tag.outputs.deferred != 'true'
         env:
           DIGEST: ${{ steps.image.outputs.digest }}
           VERSION: ${{ needs.plan.outputs.version }}
@@ -829,31 +888,37 @@ jobs:
           "${IMAGE}@${DIGEST}"
 
       - name: Attest Python distributions
+        if: steps.tag.outputs.deferred != 'true'
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: release/python/*
 
       - name: Attest Helm chart
+        if: steps.tag.outputs.deferred != 'true'
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: release/chart/*.tgz
 
       - name: Attest raw container distribution inventories
+        if: steps.tag.outputs.deferred != 'true'
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: release/image/*/distribution-inventory-*.json
 
       - name: Attest recipient notice bundles
+        if: steps.tag.outputs.deferred != 'true'
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: release/image/*/recipient-notices-*.tar.gz
 
       - name: Attest OpenVEX release evidence
+        if: steps.tag.outputs.deferred != 'true'
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: release/image/extra-codeowners-${{ needs.plan.outputs.version }}.openvex.json
 
       - name: Sign release files
+        if: steps.tag.outputs.deferred != 'true'
         run: |
           set -euo pipefail
           while IFS= read -r -d '' artifact; do
@@ -865,6 +930,7 @@ jobs:
             \) -print0)
 
       - name: Publish or verify Helm chart
+        if: steps.tag.outputs.deferred != 'true'
         id: chart
         env:
           ACTOR: ${{ github.actor }}
@@ -957,6 +1023,7 @@ jobs:
           retry cosign sign --yes "${plain_reference}@${chart_digest}"
 
       - name: Create GitHub release
+        if: steps.tag.outputs.deferred != 'true'
         env:
           CHART_DIGEST: ${{ steps.chart.outputs.digest }}
           CHART_REFERENCE: ghcr.io/${{ github.repository_owner }}/charts/extra-codeowners
@@ -1343,7 +1410,7 @@ jobs:
             "${REVISION}"
 
   complete:
-    name: Release complete
+    name: ${{ needs.publish.outputs.deferred == 'true' && 'Release deferred' || 'Release complete' }}
     if: ${{ always() && needs.plan.result == 'success' }}
     needs:
       - plan
@@ -1359,13 +1426,23 @@ jobs:
         env:
           ALREADY_RELEASED: ${{ needs.plan.outputs.already_released }}
           CHART_RESULT: ${{ needs.chart.result }}
+          DEFERRED: ${{ needs.publish.outputs.deferred }}
           IMAGE_RESULT: ${{ needs.image.result }}
           PACKAGE_RESULT: ${{ needs.package.result }}
           PUBLISH_RESULT: ${{ needs.publish.result }}
           SUPERSEDED: ${{ needs.plan.outputs.superseded }}
           VERIFY_RESULT: ${{ needs.verify-existing.result }}
         run: |
-          if [[ "${SUPERSEDED}" == true ]]; then
+          if [[ "${DEFERRED}" == true ]]; then
+            test "${SUPERSEDED}" != true
+            test "${ALREADY_RELEASED}" != true
+            test "${PACKAGE_RESULT}" = success
+            test "${CHART_RESULT}" = success
+            test "${IMAGE_RESULT}" = success
+            test "${PUBLISH_RESULT}" = success
+            test "${VERIFY_RESULT}" = skipped
+            printf 'Publication deferred to a newer main run; no release is claimed.\n'
+          elif [[ "${SUPERSEDED}" == true ]]; then
             test "${ALREADY_RELEASED}" = true
             test "${PACKAGE_RESULT}" = skipped
             test "${CHART_RESULT}" = skipped

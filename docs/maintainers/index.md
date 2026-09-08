@@ -85,6 +85,19 @@ skips its own build and publication. This coalesces closely spaced merges into
 one release instead of failing the older run or publishing versions out of
 order.
 
+If `main` advances while an untagged run is building, that run defers publication
+before creating its tag. Its final job is **Release deferred**, not **Release
+complete**, and its summary identifies the newer commit. No versioned image,
+chart, or GitHub release is published by the deferred run. Native images may
+already have been uploaded by digest for testing; those aren't a completed
+release.
+
+The newer push already has a queued CI run. It must pass the usual checks and
+publish before either change is released; the older run doesn't wait and block
+that queue. If the newer run fails, fix or rerun it. Don't deploy the version
+printed by a deferred plan. An existing tag still follows the partial-release
+recovery procedure below rather than being abandoned or moved.
+
 That one calculated version feeds every artifact. The planner renders its
 matching PEP 440 form for Hatch, the container receives the semantic version as
 a build argument, and `helm package` overrides the chart's development
