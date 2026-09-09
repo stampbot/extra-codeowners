@@ -1,6 +1,7 @@
 # Project status
 
-Last verified: 2026-08-31.
+Legacy registry inventory verified: 2026-09-09. Other status last verified:
+2026-08-31.
 
 Extra CODEOWNERS is ready for source review and non-required shadow-mode
 testing. It is not ready to replace GitHub's native code-owner enforcement on
@@ -27,11 +28,12 @@ non-required. The [deployment guide](../how-to/deploy.md) covers that path.
 
 Legacy preview images — `ghcr.io/stampbot/extra-codeowners:main` and its
 `sha-*` and `sha256-*` companion tags — are unsupported and unsafe for
-deployment. They predate the immutable release pipeline and lack the release,
-provenance, and corresponding-source evidence required for a supported
-artifact. Don't deploy, mirror, or redistribute them. This is not a claim of a
-known vulnerability. [Issue #30][issue-30] holds the public tag-and-digest
-inventory and the retention record.
+deployment. They predate the immutable release pipeline. Their signatures and
+provenance verify, but they lack the complete release and corresponding-source
+evidence required for a supported artifact. Don't deploy, mirror, or
+redistribute them. This is not a claim of a known vulnerability. The
+[legacy inventory](legacy-preview-inventory.md) records all 81 retained objects;
+[issue #30][issue-30] holds the retention decision.
 
 ## Release behavior
 
