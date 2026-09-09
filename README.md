@@ -23,7 +23,7 @@ policy says which Apps may cover which owners and paths.
 > non-required, shadow-mode testing only. Don't use them to enforce production
 > merges. Legacy preview images — `:main` and its `sha-*` and `sha256-*`
 > companion tags — are unsupported and unsafe for deployment. They predate the
-> immutable release pipeline and lack the release, provenance, and
+> immutable release pipeline and lack the complete release and
 > corresponding-source evidence required for a supported artifact. Don't
 > deploy, mirror, or redistribute them. This is not a claim of a known
 > vulnerability. The
