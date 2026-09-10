@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 
 from tools.release_notices import build_notice_bundle
+from tools.release_sources import build_bundle as build_source_bundle
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / ".github" / "scripts" / "verify-release-provenance.sh"
@@ -149,6 +150,62 @@ def _release_files() -> dict[str, bytes]:
         "recipient-notices-arm64.tar.gz": _recipient_notices("arm64", ARM64_PLATFORM_DIGEST),
         f"extra-codeowners-{VERSION}.openvex.json": _release_vex(),
     }
+
+
+def _add_source_bundles(files: dict[str, bytes]) -> None:
+    source = b"upstream CPython archive"
+    source_metadata = json.dumps(
+        {
+            "schema_version": 1,
+            "version": "3.14.7",
+            "source_sha256": hashlib.sha256(source).hexdigest(),
+            "source_url": "https://www.python.org/ftp/python/3.14.7/Python-3.14.7.tar.xz",
+        }
+    ).encode()
+    license_text = b"CPython license\n"
+    metadata_path = "usr/share/licenses/cpython/source.json"
+    license_path = "usr/local/lib/python3.14/LICENSE.txt"
+    for architecture, digest in (
+        ("amd64", AMD64_PLATFORM_DIGEST),
+        ("arm64", ARM64_PLATFORM_DIGEST),
+    ):
+        inventory_name = f"distribution-inventory-{architecture}.json"
+        inventory = json.loads(files[inventory_name])
+        inventory["cpython"] = {
+            **json.loads(source_metadata),
+            "source_bundle": f"cpython-source-{architecture}.tar.gz",
+            **{
+                field: {
+                    "path": path,
+                    "kind": "regular",
+                    "link_target": None,
+                    "sha256": hashlib.sha256(contents).hexdigest(),
+                    "size": len(contents),
+                }
+                for field, path, contents in (
+                    ("license", license_path, license_text),
+                    ("source_metadata", metadata_path, source_metadata),
+                )
+            },
+        }
+        files[inventory_name] = json.dumps(inventory).encode()
+        rootfs = io.BytesIO()
+        with tarfile.open(fileobj=rootfs, mode="w") as archive:
+            for path, contents in (
+                (license_path, license_text),
+                (metadata_path, source_metadata),
+                ("usr/share/licenses/extra-codeowners/LICENSE", b"Apache-2.0\n"),
+            ):
+                member = tarfile.TarInfo(path)
+                member.size = len(contents)
+                archive.addfile(member, io.BytesIO(contents))
+        rootfs.seek(0)
+        files[f"recipient-notices-{architecture}.tar.gz"] = build_notice_bundle(
+            rootfs, files[inventory_name], architecture=architecture, platform_digest=digest
+        )
+        files[f"cpython-source-{architecture}.tar.gz"] = build_source_bundle(
+            files[inventory_name], source, architecture=architecture, platform_digest=digest
+        )
 
 
 def _write_fake_verifiers(fake_bin: Path) -> None:
@@ -350,10 +407,13 @@ def _run_verifier(
     *,
     environment: Mapping[str, str] | None = None,
     mutate_assets: Callable[[Path], None] | None = None,
+    source_delivery: bool = False,
 ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
     asset_directory = tmp_path / "release-assets"
     asset_directory.mkdir()
     release_files = _release_files()
+    if source_delivery:
+        _add_source_bundles(release_files)
     signed_files = {
         f"extra_codeowners-{PYTHON_VERSION}-py3-none-any.whl",
         f"extra_codeowners-{PYTHON_VERSION}.tar.gz",
@@ -363,6 +423,8 @@ def _run_verifier(
         "recipient-notices-amd64.tar.gz",
         "recipient-notices-arm64.tar.gz",
         f"extra-codeowners-{VERSION}.openvex.json",
+        "cpython-source-amd64.tar.gz",
+        "cpython-source-arm64.tar.gz",
     }
     for name, contents in release_files.items():
         artifact = asset_directory / name
@@ -464,6 +526,40 @@ def test_release_provenance_verifier_accepts_equivalent_immutable_evidence(
         for operation in operations
         for forbidden in (" sign", " release create", " release edit", " release delete")
     )
+
+
+@pytest.mark.skipif(BASH is None or JQ is None, reason="Bash and jq are required")
+def test_release_provenance_verifies_source_bundles_when_inventory_requires_them(
+    tmp_path: Path,
+) -> None:
+    result, operations = _run_verifier(tmp_path, source_delivery=True)
+    assert result.returncode == 0, result.stderr
+    for architecture in ("amd64", "arm64"):
+        assert any(
+            "gh attestation verify" in operation
+            and f"cpython-source-{architecture}.tar.gz" in operation
+            for operation in operations
+        )
+        assert any(
+            "cosign verify-blob" in operation
+            and f"cpython-source-{architecture}.tar.gz" in operation
+            for operation in operations
+        )
+
+
+@pytest.mark.parametrize("suffix", ["", ".sigstore.json"])
+@pytest.mark.skipif(BASH is None or JQ is None, reason="Bash and jq are required")
+def test_signed_inventory_prevents_silently_omitting_source_delivery(
+    tmp_path: Path, suffix: str
+) -> None:
+    result, _ = _run_verifier(
+        tmp_path,
+        source_delivery=True,
+        mutate_assets=lambda directory: (
+            directory / f"cpython-source-arm64.tar.gz{suffix}"
+        ).unlink(),
+    )
+    assert result.returncode != 0
 
 
 @pytest.mark.parametrize(

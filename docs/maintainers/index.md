@@ -126,6 +126,14 @@ decide that source or notice duties have been met. The inventory also records
 the Debian distribution derived from the image's hashed canonical
 `/usr/lib/os-release` file.
 
+The native jobs also download the CPython source archive identified by the
+image's version and SHA-256. Each platform gets a signed, attested
+[source bundle](../reference/source-archives.md), verified again before the
+publisher allocates release state. A failed download or checksum mismatch
+stops publication. There is no additional version pin to update when Renovate
+changes the Python base. This delivers CPython source only; it does not close
+the remaining container distribution work in #18.
+
 ### Update a VEX claim
 
 The reviewed source statement lives under `security/vex/`. Use Vexcalibur as an

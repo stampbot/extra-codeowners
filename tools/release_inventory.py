@@ -665,6 +665,7 @@ def collect_inventory(
         if source.get("source_url") != expected_url:
             _fail("invalid CPython source URL")
         result["cpython"] = {
+            "source_bundle": f"cpython-source-{architecture}.tar.gz",
             "version": version,
             "source_sha256": checksum,
             "source_url": expected_url,

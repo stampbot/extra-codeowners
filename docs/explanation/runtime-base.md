@@ -36,6 +36,11 @@ installation uses `--no-build`, so the build fails when any supported platform
 lacks a compatible wheel. The build backend and its transitive dependencies
 come from the lockfile as a separate group and never enter the runtime image.
 
+The builder disables bytecode generation both in uv and in Python itself. The
+second setting matters because the installation check starts Python, which
+would otherwise cache the virtual environment's startup helper. CI rejects
+`.pyc` and `.pyo` files anywhere in the installed virtual environment.
+
 Source code is copied only after the dependency layers. Most application
 changes can therefore reuse the expensive layers from the BuildKit cache. A
 scheduled cold-build workflow disables that cache on both architectures, which

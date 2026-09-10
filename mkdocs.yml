@@ -42,6 +42,7 @@ nav:
   - Reference:
       - Project status: reference/project-status.md
       - Recipient notice bundles: reference/recipient-notices.md
+      - Source archives: reference/source-archives.md
       - Retained legacy images: reference/legacy-preview-inventory.md
       - Configuration: reference/configuration.md
       - Checks and evaluation: reference/checks.md

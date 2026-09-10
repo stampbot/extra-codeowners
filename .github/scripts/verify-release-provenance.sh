@@ -214,6 +214,24 @@ verify_recipient_notice_bundle \
   "${arm64_inventory}" \
   arm64 \
   "$(<"${asset_directory}/digest-arm64.txt")"
+for architecture in amd64 arm64; do
+  inventory="${asset_directory}/distribution-inventory-${architecture}.json"
+  source_bundle="${asset_directory}/cpython-source-${architecture}.tar.gz"
+  # The signed inventory requires source delivery for new releases. Older
+  # inventories remain verifiable without claiming that source was delivered.
+  if jq -e '.cpython | objects | has("source_bundle")' "${inventory}" >/dev/null; then
+    jq -e --arg expected "cpython-source-${architecture}.tar.gz" \
+      '.cpython.source_bundle == $expected' "${inventory}" >/dev/null
+  elif [[ ! -e "${source_bundle}" && ! -e "${source_bundle}.sigstore.json" ]]; then
+    continue
+  fi
+  verify_release_file "${source_bundle}"
+  python -I -S -B tools/release_sources.py verify \
+    --architecture "${architecture}" \
+    --platform-digest "$(<"${asset_directory}/digest-${architecture}.txt")" \
+    --inventory "${inventory}" \
+    --bundle "${source_bundle}"
+done
 verify_release_file "${vex}"
 python -I -S -B tools/release_vex.py stage \
   --source "${vex}" \

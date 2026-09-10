@@ -40,6 +40,8 @@ their file hashes, so both are covered by the signed notice bundle.
 Older inventories omit the `cpython` record and remain verifiable. The new
 metadata identifies the expected upstream source; it does not contain the
 source archive or prove that rebuilding it reproduces the image's interpreter.
+Releases containing the [CPython source delivery workflow](source-archives.md)
+also publish that archive in a separate signed bundle.
 
 When package metadata declares a Python license file that is absent from the
 image, or whose entry is a filesystem link, the manifest records it under
