@@ -222,6 +222,11 @@ def test_debian_container_uses_only_locked_binary_dependencies() -> None:
     assert "apt-get" not in dockerfile
     assert "apk add" not in dockerfile
     assert "native-wheelhouse" not in dockerfile
+    builder = dockerfile.split("FROM python-base AS builder", 1)[1].split(
+        "FROM python-base AS runtime", 1
+    )[0]
+    assert "PYTHONDONTWRITEBYTECODE=1" in builder
+    assert "UV_COMPILE_BYTECODE=0" in builder
 
     sync_commands = re.findall(
         r"(?ms)^\s*uv sync \\\n(?P<arguments>.*?)(?=\n\n|\Z)",
@@ -1301,6 +1306,7 @@ def test_standalone_python_tools_are_in_every_type_check_entrypoint() -> None:
         "tools/release_notices.py",
         "tools/release_vex.py",
         "tools/release_rescan.py",
+        "tools/release_sources.py",
     }
     sources = {
         "mise": (ROOT / "mise.toml").read_text(encoding="utf-8"),
@@ -1694,11 +1700,13 @@ def test_release_builds_native_digests_then_publishes_the_exact_manifest() -> No
     assert "python -I -S -B tools/release_inventory.py" in image
     assert "python -I -S -B tools/release_notices.py build" in image
     assert "python -I -S -B tools/release_notices.py verify" in image
+    assert "python -I -S -B tools/release_sources.py fetch" in image
     assert 'docker export "${CONTAINER_NAME}"' in image
     assert 'docker create --platform "linux/${ARCHITECTURE}"' in image
     assert '"${IMAGE}@${platform_digest}"' in image
     assert "distribution-inventory-${{ matrix.architecture }}.json" in image
     assert "recipient-notices-${{ matrix.architecture }}.tar.gz" in image
+    assert "cpython-source-${{ matrix.architecture }}.tar.gz" in image
 
     assert "release-image-amd64-" in publish
     assert "release-image-arm64-" in publish
@@ -1717,6 +1725,13 @@ def test_release_builds_native_digests_then_publishes_the_exact_manifest() -> No
     assert "subject-path: release/image/*/recipient-notices-*.tar.gz" in publish
     assert "-name 'distribution-inventory-*.json'" in publish
     assert "-name 'recipient-notices-*.tar.gz'" in publish
+    assert "-name 'cpython-source-*.tar.gz'" in publish
+    assert "subject-path: release/image/*/cpython-source-*.tar.gz" in publish
+    source_verification = publish.index("python -I -S -B tools/release_sources.py verify")
+    assert source_verification < publish.index("id: tag")
+    recovery = _workflow_job(release, "verify-existing")
+    for architecture in ("amd64", "arm64"):
+        assert f"cpython-source-{architecture}.tar.gz.sigstore.json" in recovery
 
 
 def test_release_retries_are_idempotent_and_keep_versions_in_one_place() -> None:

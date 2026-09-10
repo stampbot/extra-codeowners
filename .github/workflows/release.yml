@@ -487,6 +487,11 @@ jobs:
             --platform-digest "${platform_digest}" \
             --inventory "distribution-inventory-${ARCHITECTURE}.json" \
             --bundle "recipient-notices-${ARCHITECTURE}.tar.gz"
+          python -I -S -B tools/release_sources.py fetch \
+            --architecture "${ARCHITECTURE}" \
+            --platform-digest "${platform_digest}" \
+            --inventory "distribution-inventory-${ARCHITECTURE}.json" \
+            --bundle "cpython-source-${ARCHITECTURE}.tar.gz"
 
       - name: Pull exact native image
         env:
@@ -536,6 +541,7 @@ jobs:
             digest-${{ matrix.architecture }}.txt
             distribution-inventory-${{ matrix.architecture }}.json
             recipient-notices-${{ matrix.architecture }}.tar.gz
+            cpython-source-${{ matrix.architecture }}.tar.gz
             vulnerability-report-${{ matrix.architecture }}.json
           if-no-files-found: error
           overwrite: true
@@ -603,6 +609,11 @@ jobs:
               --platform-digest "${platform_digest}" \
               --inventory "release/image/${architecture}/distribution-inventory-${architecture}.json" \
               --bundle "release/image/${architecture}/recipient-notices-${architecture}.tar.gz"
+            python -I -S -B tools/release_sources.py verify \
+              --architecture "${architecture}" \
+              --platform-digest "${platform_digest}" \
+              --inventory "release/image/${architecture}/distribution-inventory-${architecture}.json" \
+              --bundle "release/image/${architecture}/cpython-source-${architecture}.tar.gz"
           done
 
       # Fail before allocating a tag or a versioned image reference. A stale VEX
@@ -922,6 +933,12 @@ jobs:
         with:
           subject-path: release/image/extra-codeowners-${{ needs.plan.outputs.version }}.openvex.json
 
+      - name: Attest CPython source bundles
+        if: steps.tag.outputs.deferred != 'true'
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: release/image/*/cpython-source-*.tar.gz
+
       - name: Sign release files
         if: steps.tag.outputs.deferred != 'true'
         run: |
@@ -931,6 +948,7 @@ jobs:
           done < <(find release/python release/chart release/image -type f \
             \( -name '*.whl' -o -name 'extra_codeowners-*.tar.gz' \
             -o -name 'recipient-notices-*.tar.gz' -o -name '*.tgz' \
+            -o -name 'cpython-source-*.tar.gz' \
             -o -name 'distribution-inventory-*.json' -o -name 'extra-codeowners-*.openvex.json' \
             \) -print0)
 
@@ -1347,10 +1365,14 @@ jobs:
             distribution-inventory-amd64.json.sigstore.json
             recipient-notices-amd64.tar.gz
             recipient-notices-amd64.tar.gz.sigstore.json
+            cpython-source-amd64.tar.gz
+            cpython-source-amd64.tar.gz.sigstore.json
             distribution-inventory-arm64.json
             distribution-inventory-arm64.json.sigstore.json
             recipient-notices-arm64.tar.gz
             recipient-notices-arm64.tar.gz.sigstore.json
+            cpython-source-arm64.tar.gz
+            cpython-source-arm64.tar.gz.sigstore.json
             vulnerability-report-amd64.json
             vulnerability-report-arm64.json
           )
