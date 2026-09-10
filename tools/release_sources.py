@@ -136,7 +136,8 @@ def build_bundle(
 
 
 class _Reader(Protocol):
-    def read(self, size: int = -1, /) -> bytes: ...
+    def read(self, size: int = -1, /) -> bytes:
+        """Read at most size bytes from the stream."""
 
 
 def _bounded_read(stream: _Reader, limit: int) -> bytes:
