@@ -1,16 +1,21 @@
 # Source archives
 
-Releases containing the CPython source delivery workflow include
+Starting with alpha.40, releases include
 `cpython-source-amd64.tar.gz` and `cpython-source-arm64.tar.gz`. Each bundle
 contains the upstream CPython source archive identified by that platform's
 image metadata. The release retains the bytes, not just a download link.
 
-This is CPython source, not the complete container source. Debian packages and
-libraries bundled inside Python wheels still need source and notice review
-under [issue #18](https://github.com/stampbot/extra-codeowners/issues/18).
-These bundles do not establish distribution approval or reproducible builds.
+Releases containing the Debian source workflow also include `debian-source.tar`,
+shared by both platforms. These bundles retain version-matched upstream source
+and build recipes. They do not prove the exact inputs used by upstream binary
+builders, and the project does not rebuild dependencies to make that claim.
 
-## Contents and identity
+This is not yet the complete container source. Libraries inside Python wheels
+and other missing notice material remain under
+[issue #18](https://github.com/stampbot/extra-codeowners/issues/18).
+The bundles do not establish distribution approval.
+
+## CPython contents and identity
 
 Each bundle has two regular files:
 
@@ -29,7 +34,7 @@ Release verification fails if that asset or its signature is missing. Older
 inventories without this field remain verifiable; successful verification of
 an old release does not mean it delivered source.
 
-## Verify a source bundle
+## Verify a CPython source bundle
 
 Use Bash with Python 3.12 or newer, GitHub CLI, and Cosign installed. Start from
 a trusted checkout of the release tag. The commands below read files and
@@ -80,3 +85,68 @@ compressed source archive, not to extracting it yourself.
 
 For license texts already present in the runtime, use the separate
 [recipient notice bundle](recipient-notices.md).
+
+## Debian contents and identity
+
+`debian-source.tar` contains the source packages named by the installed Debian
+package metadata on both platforms. A source package used by both images appears
+once. The collector uses an explicit source version when the binary package
+records one, so an epoch or a binary-only rebuild suffix does not silently select
+a different source release.
+
+The archive contains `manifest.json` and a directory for each package under
+`sources/<package>/<URL-encoded-source-version>/`. Each directory holds the
+Debian `.dsc` descriptor and every source file listed in its `Checksums-Sha256`
+field. That includes the Debian patches and build recipes, whether they are in
+a separate Debian archive or part of a native source package. Files inside these
+source archives are not extracted or executed during collection or verification.
+
+The manifest records each file's name, size, SHA-256, and Debian Snapshot
+locator. Its `images` object binds both platform digests and the hashes of both
+distribution inventories. Each inventory's `debian.source_bundle` field names
+the required release asset. A missing bundle or signature fails release
+verification when either signed inventory requires it.
+
+Collection obtains descriptors over HTTPS from [Debian Snapshot][snapshot].
+Source archive bytes must match the descriptor's SHA-256 and size. Snapshot's
+SHA-1 addresses locate files; they are not a substitute for authenticating the
+release. The original descriptor signatures remain in the bundle, but this
+collector does not verify them against Debian developer keyrings.
+
+This bundle covers installed Debian packages, not libraries supplied by a Python
+wheel merely because they have the same name. For example, Debian's OpenSSL
+source does not stand in for Psycopg's bundled OpenSSL source.
+
+## Verify the Debian bundle
+
+Use the same Bash, Python, GitHub CLI, and Cosign prerequisites as above, from a
+trusted checkout of the release tag. Download `debian-source.tar` and its
+`.sigstore.json` file, both distribution inventories and their signatures, and
+both `digest-<architecture>.txt` files from that release into the checkout root.
+
+Run the attestation and signature verification loop above with these three
+artifact names: `distribution-inventory-amd64.json`,
+`distribution-inventory-arm64.json`, and `debian-source.tar`. Then check the
+contents against both inventories:
+
+```bash
+python -I -S -B tools/release_debian_sources.py verify \
+  --inventory-amd64 distribution-inventory-amd64.json \
+  --inventory-arm64 distribution-inventory-arm64.json \
+  --digest-amd64 "$(<digest-amd64.txt)" \
+  --digest-arm64 "$(<digest-arm64.txt)" \
+  --bundle debian-source.tar
+```
+
+Success is silent with exit status zero. The verifier requires every source
+package identified by either inventory and every archive named by its descriptor.
+It rejects wrong versions, altered bytes, links, duplicate paths, and extra or
+missing files. Verification does not extract anything.
+
+The bundle is limited to 512 MiB, each source file to 256 MiB, and each metadata
+document to 2 MiB. The current collector supports Debian 13 and at most 256
+source packages, with fewer than 32 source archives per descriptor. Other base
+distributions need an explicit collector update; a failed lookup never counts
+as a complete source bundle.
+
+[snapshot]: https://snapshot.debian.org/

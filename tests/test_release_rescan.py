@@ -66,6 +66,21 @@ def test_release_selection_bounds_discovery() -> None:
         select_release([_release()], "v0.1.0-alpha.1")
 
 
+def test_source_bundle_has_a_separate_bounded_download_allowance() -> None:
+    release = _release()
+    release["assets"] = [{"name": "debian-source.tar", "size": 512 * 1024 * 1024}]
+    assert select_release([release])["tag"] == release["tag_name"]
+    release["assets"][0]["size"] += 1
+    with pytest.raises(RescanError, match="size"):
+        select_release([release])
+    release["assets"] = [{"name": "other.tar", "size": 299 * 1024 * 1024}]
+    with pytest.raises(RescanError, match="size"):
+        select_release([release])
+    release["assets"] = [{"name": f"file-{i}", "size": 128 * 1024 * 1024} for i in range(5)]
+    with pytest.raises(RescanError, match="512 MiB"):
+        select_release([release])
+
+
 def _inputs(directory: Path) -> dict[str, Any]:
     (directory / "image-reference.txt").write_text(IMAGE + "@sha256:" + "a" * 64)
     (directory / "chart-reference.txt").write_text(CHART + "@sha256:" + "b" * 64)

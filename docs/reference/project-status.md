@@ -73,7 +73,8 @@ These controls describe what the workflow publishes. They do not make an alpha
 a supported production release. Starting with the first release containing the
 notice-bundle workflow, it also publishes signed, attested per-platform
 [recipient notice bundles](recipient-notices.md). Releases containing the
-source delivery workflow also retain [CPython source archives](source-archives.md).
+source delivery workflows also retain [source archives](source-archives.md)
+for CPython and installed Debian packages.
 [Issue #18][issue-18] still
 tracks complete corresponding-source delivery and approval of the distribution
 mechanism, and

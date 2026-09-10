@@ -233,6 +233,23 @@ for architecture in amd64 arm64; do
     --bundle "${source_bundle}"
 done
 verify_release_file "${vex}"
+debian_source_required=false
+for inventory in "${amd64_inventory}" "${arm64_inventory}"; do
+  if jq -e '.debian | has("source_bundle")' "${inventory}" >/dev/null; then
+    jq -e '.debian.source_bundle == "debian-source.tar"' "${inventory}" >/dev/null
+    debian_source_required=true
+  fi
+done
+debian_source="${asset_directory}/debian-source.tar"
+if [[ "${debian_source_required}" == true || -e "${debian_source}" || -e "${debian_source}.sigstore.json" ]]; then
+  verify_release_file "${debian_source}"
+  python -I -S -B tools/release_debian_sources.py verify \
+    --inventory-amd64 "${amd64_inventory}" \
+    --inventory-arm64 "${arm64_inventory}" \
+    --digest-amd64 "$(<"${asset_directory}/digest-amd64.txt")" \
+    --digest-arm64 "$(<"${asset_directory}/digest-arm64.txt")" \
+    --bundle "${debian_source}"
+fi
 python -I -S -B tools/release_vex.py stage \
   --source "${vex}" \
   --inventory "${amd64_inventory}" \

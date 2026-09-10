@@ -616,6 +616,7 @@ def collect_inventory(
 
     result: dict[str, object] = {
         "debian": {
+            "source_bundle": "debian-source.tar",
             "copyright_files": copyright_files,
             "packages": _parse_debian_status(status_contents),
             "shared_license_files": common_license_files,

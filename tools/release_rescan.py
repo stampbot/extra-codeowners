@@ -64,11 +64,15 @@ def select_release(releases: list[dict[str, Any]], requested: str = "") -> dict[
         if name in names:
             raise RescanError("release contains duplicate asset names")
         names.add(name)
-        if type(size) is not int or not 0 < size <= 128 * 1024 * 1024:
+        # Source archives have their own bounded allowance. Ordinary release
+        # evidence retains the existing per-file and aggregate limits.
+        limit = (512 if name == "debian-source.tar" else 128) * 1024 * 1024
+        if type(size) is not int or not 0 < size <= limit:
             raise RescanError("release asset size is outside its bound")
-        total += size
+        if name != "debian-source.tar":
+            total += size
     if total > 512 * 1024 * 1024:
-        raise RescanError("release download exceeds 512 MiB")
+        raise RescanError("release evidence excluding Debian source exceeds 512 MiB")
     return {"tag": tag, "version": tag[1:], "python_version": python_version}
 
 

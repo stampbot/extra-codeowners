@@ -547,6 +547,58 @@ jobs:
           overwrite: true
           retention-days: 14
 
+  debian-sources:
+    name: Retain Debian sources
+    needs: [plan, image]
+    if: needs.plan.outputs.already_released != 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out release commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ needs.plan.outputs.revision }}
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version-file: .python-version
+
+      - name: Download native image evidence
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: release-image-*-${{ needs.plan.outputs.revision }}
+          path: evidence
+          merge-multiple: true
+
+      - name: Restore verified source download cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .debian-source-cache
+          key: debian-sources-v1-${{ hashFiles('Dockerfile') }}
+          restore-keys: debian-sources-v1-
+
+      - name: Collect sources for both platforms
+        run: |
+          python -I -S -B tools/release_debian_sources.py fetch \
+            --inventory-amd64 evidence/distribution-inventory-amd64.json \
+            --inventory-arm64 evidence/distribution-inventory-arm64.json \
+            --digest-amd64 "$(<evidence/digest-amd64.txt)" \
+            --digest-arm64 "$(<evidence/digest-arm64.txt)" \
+            --cache .debian-source-cache \
+            --bundle debian-source.tar
+
+      - name: Upload Debian source bundle
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-debian-sources-${{ needs.plan.outputs.revision }}
+          path: debian-source.tar
+          compression-level: 0
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 14
+
   publish:
     name: Publish release
     outputs:
@@ -556,6 +608,7 @@ jobs:
       - package
       - chart
       - image
+      - debian-sources
     if: needs.plan.outputs.already_released != 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 25
@@ -597,6 +650,12 @@ jobs:
           name: release-image-arm64-${{ needs.plan.outputs.revision }}
           path: release/image/arm64
 
+      - name: Download Debian source bundle
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-debian-sources-${{ needs.plan.outputs.revision }}
+          path: release/image
+
       # Validate the bytes recovered from the artifact service before this run
       # allocates any immutable release state.
       - name: Verify recipient notice release evidence
@@ -615,6 +674,15 @@ jobs:
               --inventory "release/image/${architecture}/distribution-inventory-${architecture}.json" \
               --bundle "release/image/${architecture}/cpython-source-${architecture}.tar.gz"
           done
+
+      - name: Verify Debian sources before publication
+        run: |
+          python -I -S -B tools/release_debian_sources.py verify \
+            --inventory-amd64 release/image/amd64/distribution-inventory-amd64.json \
+            --inventory-arm64 release/image/arm64/distribution-inventory-arm64.json \
+            --digest-amd64 "$(<release/image/amd64/digest-amd64.txt)" \
+            --digest-arm64 "$(<release/image/arm64/digest-arm64.txt)" \
+            --bundle release/image/debian-source.tar
 
       # Fail before allocating a tag or a versioned image reference. A stale VEX
       # statement must not leave immutable release state behind for a retry.
@@ -939,6 +1007,12 @@ jobs:
         with:
           subject-path: release/image/*/cpython-source-*.tar.gz
 
+      - name: Attest Debian source bundle
+        if: steps.tag.outputs.deferred != 'true'
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: release/image/debian-source.tar
+
       - name: Sign release files
         if: steps.tag.outputs.deferred != 'true'
         run: |
@@ -949,6 +1023,7 @@ jobs:
             \( -name '*.whl' -o -name 'extra_codeowners-*.tar.gz' \
             -o -name 'recipient-notices-*.tar.gz' -o -name '*.tgz' \
             -o -name 'cpython-source-*.tar.gz' \
+            -o -name 'debian-source.tar' \
             -o -name 'distribution-inventory-*.json' -o -name 'extra-codeowners-*.openvex.json' \
             \) -print0)
 
@@ -1373,6 +1448,8 @@ jobs:
             recipient-notices-arm64.tar.gz.sigstore.json
             cpython-source-arm64.tar.gz
             cpython-source-arm64.tar.gz.sigstore.json
+            debian-source.tar
+            debian-source.tar.sigstore.json
             vulnerability-report-amd64.json
             vulnerability-report-arm64.json
           )

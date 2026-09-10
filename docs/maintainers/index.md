@@ -131,8 +131,20 @@ image's version and SHA-256. Each platform gets a signed, attested
 [source bundle](../reference/source-archives.md), verified again before the
 publisher allocates release state. A failed download or checksum mismatch
 stops publication. There is no additional version pin to update when Renovate
-changes the Python base. This delivers CPython source only; it does not close
-the remaining container distribution work in #18.
+changes the Python base.
+
+After both native builds finish, a separate job collects one Debian source
+bundle for their combined package list. It retains version-matched source and
+Debian build recipes without rebuilding dependencies. Source archives use a
+SHA-256-checked download cache; cached bytes are checked again before use, and
+unused entries are removed. The cache is optional: missing or corrupt entries
+are downloaded again. Descriptors are fetched from Debian Snapshot on each run.
+
+The publisher verifies `debian-source.tar` before allocating immutable release
+state, then signs and attests it alongside the other assets. Source collection
+fails if any installed Debian source package cannot be recovered or checked.
+The remaining native-wheel and notice work is tracked in #18; the source bundles
+do not claim exact upstream build provenance or legal approval.
 
 ### Update a VEX claim
 
