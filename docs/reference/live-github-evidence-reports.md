@@ -188,7 +188,8 @@ The diagnostic observations are:
 
 ### Repository creation recovery
 
-The fixture generates a 128-bit random repository suffix. Before the POST
+Repository names use `infra-extra-codeowners-contract-` followed by a 128-bit
+random suffix encoded as 32 hexadecimal characters. Before the POST
 request, it prints and flushes the owner, name, and URL, then verifies that the
 name is unused. The operator therefore has recovery coordinates even when
 GitHub accepts the request but the response is lost or malformed.

@@ -171,7 +171,8 @@ mise run bootstrap
 mise run test:github-contract
 ```
 
-Before creating anything, the fixture prints the generated repository's owner,
+Repository names start with `infra-extra-codeowners-contract-`, followed by a
+random suffix. Before creating anything, the fixture prints the repository's owner,
 name, and URL. It checks that the name is unused, then sends the create
 request. Keep that block until cleanup is confirmed. It is the recovery path
 if GitHub creates the repository but the response is lost or cannot be
