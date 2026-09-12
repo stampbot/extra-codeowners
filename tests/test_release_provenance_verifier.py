@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 
+from tools import release_debian_sources
 from tools.release_notices import build_notice_bundle
 from tools.release_sources import build_bundle as build_source_bundle
 
@@ -206,6 +207,57 @@ def _add_source_bundles(files: dict[str, bytes]) -> None:
         files[f"cpython-source-{architecture}.tar.gz"] = build_source_bundle(
             files[inventory_name], source, architecture=architecture, platform_digest=digest
         )
+
+
+def _add_debian_source_bundle(files: dict[str, bytes]) -> None:
+    inventories = {
+        arch: files[f"distribution-inventory-{arch}.json"] for arch in ("amd64", "arm64")
+    }
+    digests = {"amd64": AMD64_PLATFORM_DIGEST, "arm64": ARM64_PLATFORM_DIGEST}
+    images, identities = release_debian_sources.identities(inventories, digests)
+    assert identities == [("openssl", "3.5.6-1~deb13u2")]
+    contents = b"OpenSSL source and Debian recipes"
+    filename = "openssl_3.5.6.orig.tar.xz"
+    dsc = (
+        "Source: openssl\nVersion: 3.5.6-1~deb13u2\nChecksums-Sha256:\n"
+        f" {hashlib.sha256(contents).hexdigest()} {len(contents)} {filename}\n"
+    ).encode()
+
+    def record(name: str, data: bytes) -> dict[str, object]:
+        return {
+            "name": name,
+            "size": len(data),
+            "sha256": hashlib.sha256(data).hexdigest(),
+            "snapshot_sha1": hashlib.sha1(data, usedforsecurity=False).hexdigest(),
+        }
+
+    descriptor = record("openssl_3.5.6-1~deb13u2.dsc", dsc)
+    manifest = {
+        "schema_version": 1,
+        "images": images,
+        "provenance": release_debian_sources.PROVENANCE,
+        "scope": release_debian_sources.SCOPE,
+        "packages": [
+            {
+                "name": "openssl",
+                "version": identities[0][1],
+                "descriptor": descriptor,
+                "files": [record(filename, contents)],
+            }
+        ],
+    }
+    output = io.BytesIO()
+    prefix = "sources/openssl/3.5.6-1~deb13u2"
+    with tarfile.open(fileobj=output, mode="w", format=tarfile.USTAR_FORMAT) as archive:
+        for name, data in (
+            ("manifest.json", json.dumps(manifest).encode()),
+            (f"{prefix}/{descriptor['name']}", dsc),
+            (f"{prefix}/{filename}", contents),
+        ):
+            member = tarfile.TarInfo(name)
+            member.size = len(data)
+            archive.addfile(member, io.BytesIO(data))
+    files["debian-source.tar"] = output.getvalue()
 
 
 def _write_fake_verifiers(fake_bin: Path) -> None:
@@ -408,12 +460,21 @@ def _run_verifier(
     environment: Mapping[str, str] | None = None,
     mutate_assets: Callable[[Path], None] | None = None,
     source_delivery: bool = False,
+    debian_delivery: bool = False,
 ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
     asset_directory = tmp_path / "release-assets"
     asset_directory.mkdir()
     release_files = _release_files()
-    if source_delivery:
+    if debian_delivery:
+        for architecture in ("amd64", "arm64"):
+            filename = f"distribution-inventory-{architecture}.json"
+            inventory = json.loads(release_files[filename])
+            inventory["debian"]["source_bundle"] = "debian-source.tar"
+            release_files[filename] = json.dumps(inventory).encode()
+    if source_delivery or debian_delivery:
         _add_source_bundles(release_files)
+    if debian_delivery:
+        _add_debian_source_bundle(release_files)
     signed_files = {
         f"extra_codeowners-{PYTHON_VERSION}-py3-none-any.whl",
         f"extra_codeowners-{PYTHON_VERSION}.tar.gz",
@@ -425,6 +486,7 @@ def _run_verifier(
         f"extra-codeowners-{VERSION}.openvex.json",
         "cpython-source-amd64.tar.gz",
         "cpython-source-arm64.tar.gz",
+        "debian-source.tar",
     }
     for name, contents in release_files.items():
         artifact = asset_directory / name
@@ -558,6 +620,33 @@ def test_signed_inventory_prevents_silently_omitting_source_delivery(
         mutate_assets=lambda directory: (
             directory / f"cpython-source-arm64.tar.gz{suffix}"
         ).unlink(),
+    )
+    assert result.returncode != 0
+
+
+@pytest.mark.skipif(BASH is None or JQ is None, reason="Bash and jq are required")
+def test_release_provenance_verifies_shared_debian_source_bundle(tmp_path: Path) -> None:
+    result, operations = _run_verifier(tmp_path, debian_delivery=True)
+    assert result.returncode == 0, result.stderr
+    assert any(
+        "gh attestation verify" in operation and "debian-source.tar" in operation
+        for operation in operations
+    )
+    assert any(
+        "cosign verify-blob" in operation and "debian-source.tar" in operation
+        for operation in operations
+    )
+
+
+@pytest.mark.parametrize("suffix", ["", ".sigstore.json"])
+@pytest.mark.skipif(BASH is None or JQ is None, reason="Bash and jq are required")
+def test_release_provenance_requires_debian_source_and_signature(
+    tmp_path: Path, suffix: str
+) -> None:
+    result, _ = _run_verifier(
+        tmp_path,
+        debian_delivery=True,
+        mutate_assets=lambda directory: (directory / f"debian-source.tar{suffix}").unlink(),
     )
     assert result.returncode != 0
 

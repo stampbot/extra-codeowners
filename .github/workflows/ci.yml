@@ -63,6 +63,7 @@ jobs:
           tools/evaluation_beta_bootstrap.py tools/readthedocs_bootstrap.py
           tools/release_inventory.py tools/release_notices.py tools/release_vex.py
           tools/release_rescan.py tools/release_sources.py
+          tools/release_debian_sources.py
           .github/scripts/release_plan.py
 
       - name: Lint YAML

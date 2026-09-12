@@ -1307,6 +1307,7 @@ def test_standalone_python_tools_are_in_every_type_check_entrypoint() -> None:
         "tools/release_vex.py",
         "tools/release_rescan.py",
         "tools/release_sources.py",
+        "tools/release_debian_sources.py",
     }
     sources = {
         "mise": (ROOT / "mise.toml").read_text(encoding="utf-8"),
@@ -1732,6 +1733,24 @@ def test_release_builds_native_digests_then_publishes_the_exact_manifest() -> No
     recovery = _workflow_job(release, "verify-existing")
     for architecture in ("amd64", "arm64"):
         assert f"cpython-source-{architecture}.tar.gz.sigstore.json" in recovery
+
+
+def test_release_retains_one_cached_debian_source_bundle_before_publication() -> None:
+    workflow = (ROOT / ".github/workflows/release.yml").read_text()
+    sources = _workflow_job(workflow, "debian-sources")
+    publish = _workflow_job(workflow, "publish")
+    assert "needs: [plan, image]" in sources
+    assert "python -I -S -B tools/release_debian_sources.py fetch" in sources
+    assert "--inventory-amd64" in sources
+    assert "--inventory-arm64" in sources
+    assert "hashFiles('Dockerfile')" in sources
+    assert "restore-keys: debian-sources-v1-" in sources
+    assert "compression-level: 0" in sources
+    assert "- debian-sources" in publish
+    assert publish.index("tools/release_debian_sources.py verify") < publish.index("id: tag")
+    assert "subject-path: release/image/debian-source.tar" in publish
+    assert "-name 'debian-source.tar'" in publish
+    assert "debian-source.tar.sigstore.json" in _workflow_job(workflow, "verify-existing")
 
 
 def test_release_retries_are_idempotent_and_keep_versions_in_one_place() -> None:
