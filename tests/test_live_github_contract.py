@@ -1330,7 +1330,7 @@ def repository_creation_fixture(operator: StubClient) -> Fixture:
     return fixture
 
 
-def test_fixture_uses_a_128_bit_repository_suffix(
+def test_fixture_uses_infra_prefix_and_a_128_bit_repository_suffix(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -1351,7 +1351,11 @@ def test_fixture_uses_a_128_bit_repository_suffix(
     fixture = Fixture(runtime)
     try:
         assert requested_bytes == [16]
-        assert fixture.repository_name == f"extra-codeowners-contract-{'a' * 32}"
+        assert fixture.repository_name == f"infra-extra-codeowners-contract-{'a' * 32}"
+        assert fixture.repository == f"{runtime.organization}/{fixture.repository_name}"
+        assert fixture.organization_ruleset_name == (
+            f"Extra CODEOWNERS contract {fixture.repository_name}"
+        )
         assert fixture.report["fixture"]["repository_creation_state"] == "not_attempted"
     finally:
         cleanup_errors = fixture.close()
