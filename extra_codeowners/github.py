@@ -44,6 +44,7 @@ MAX_DCO_COMMIT_DETAIL_RESPONSE_BYTES: Final = 8 * 1024 * 1024
 MAX_DCO_AGGREGATE_MESSAGE_BYTES: Final = 16 * 1024 * 1024
 MAX_DCO_DETAIL_CONCURRENCY: Final = 2
 MAX_JSON_RESPONSE_DEPTH: Final = 64
+PENDING_CHECK_EXTERNAL_ID_PREFIX: Final = "extra-codeowners:pending:"
 MAX_CONFIG_BYTES: Final = 1_000_000
 MAX_CODEOWNERS_BYTES: Final = 3 * 1024 * 1024
 # Repository-installation membership is an App-authenticated lookup, so it
@@ -1769,12 +1770,12 @@ class GitHubClient:
         repository: str,
         check_run_id: int,
     ) -> bool:
-        """Return whether one known Check Run is terminal.
+        """Return whether one known Check Run contains a terminal evaluation result.
 
         The caller obtains ``check_run_id`` from this App's name- and
         commit-scoped lookup. A close path needs this separate state read so it
         can leave a completed result intact while still ending a genuinely
-        in-progress run.
+        in-progress run or an interim failure marked as pending by this client.
         """
 
         result = await self._request(
@@ -1789,7 +1790,13 @@ class GitHubClient:
             "completed",
         }:
             raise GitHubError("check-run response omitted a supported status")
-        return status == "completed"
+        external_id = result.get("external_id")
+        pending_failure = (
+            result.get("conclusion") == "failure"
+            and isinstance(external_id, str)
+            and external_id.startswith(PENDING_CHECK_EXTERNAL_ID_PREFIX)
+        )
+        return status == "completed" and not pending_failure
 
     async def reset_check_run(
         self,
@@ -1809,6 +1816,7 @@ class GitHubClient:
             "name": check_name,
             "status": "completed",
             "conclusion": "failure",
+            "external_id": (PENDING_CHECK_EXTERNAL_ID_PREFIX + (external_id or ""))[:255],
             "completed_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
             "output": {
                 "title": title[:255],
@@ -1818,8 +1826,6 @@ class GitHubClient:
         }
         if details_url is not None:
             payload["details_url"] = details_url
-        if external_id is not None:
-            payload["external_id"] = external_id[:255]
         result = await self._request(
             "PATCH",
             f"/repos/{repository}/check-runs/{check_run_id}",
@@ -1831,13 +1837,21 @@ class GitHubClient:
             raise GitHubError("check-run response omitted its integer ID")
         if candidate != check_run_id:
             raise GitHubError("check-run response changed the requested check ID")
-        self._validate_blocking_check_response(result, status="completed")
+        self._validate_blocking_check_response(
+            result, status="completed", external_id=payload["external_id"]
+        )
 
     @staticmethod
-    def _validate_blocking_check_response(result: dict[str, Any], *, status: str) -> None:
+    def _validate_blocking_check_response(
+        result: dict[str, Any], *, status: str, external_id: str
+    ) -> None:
         """Require GitHub to acknowledge the requested blocking state."""
         conclusion = "failure" if status == "completed" else None
-        if result.get("status") != status or result.get("conclusion") != conclusion:
+        if (
+            result.get("status") != status
+            or result.get("conclusion") != conclusion
+            or result.get("external_id") != external_id
+        ):
             raise GitHubError("check-run response did not confirm the requested blocking state")
 
     async def complete_check_run(
@@ -1870,6 +1884,7 @@ class GitHubClient:
             "name": check_name,
             "status": "completed",
             "conclusion": conclusion,
+            "external_id": (external_id or "")[:255],
             "completed_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
             "output": {
                 "title": title[:255],
@@ -1879,8 +1894,6 @@ class GitHubClient:
         }
         if details_url is not None:
             payload["details_url"] = details_url
-        if external_id is not None:
-            payload["external_id"] = external_id[:255]
         result = await self._request(
             "PATCH",
             f"/repos/{repository}/check-runs/{check_run_id}",
@@ -1931,6 +1944,10 @@ class GitHubClient:
         payload: dict[str, Any] = {
             "name": check_name,
             "status": status,
+            "external_id": (
+                (PENDING_CHECK_EXTERNAL_ID_PREFIX if status != "completed" else "")
+                + (external_id or "")
+            )[:255],
             "output": {"title": title[:255], "summary": summary[:65535], "text": text[:65535]},
         }
         if include_re_evaluate_action:
@@ -1948,8 +1965,6 @@ class GitHubClient:
             payload["started_at"] = datetime.now(UTC).isoformat().replace("+00:00", "Z")
         if details_url is not None:
             payload["details_url"] = details_url
-        if external_id is not None:
-            payload["external_id"] = external_id[:255]
         if check_id is None:
             payload["head_sha"] = head_sha
             result = await self._request(
@@ -1978,7 +1993,9 @@ class GitHubClient:
         if check_id is not None and result_id != check_id:
             raise GitHubError("check-run response changed the requested check ID")
         if status != "completed":
-            self._validate_blocking_check_response(result, status=payload["status"])
+            self._validate_blocking_check_response(
+                result, status=payload["status"], external_id=payload["external_id"]
+            )
         return result_id
 
     async def list_installations(

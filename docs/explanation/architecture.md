@@ -43,8 +43,8 @@ durable work and audit store <------ periodic reconciler
 ```
 
 In words, ingress authenticates and stores a trigger. A direct pull-request
-trigger also gets a short opportunity to move the managed check back to
-`in_progress`. Changes with wider authority impact—such as team membership,
+trigger also gets a short opportunity to make the managed check blocking.
+Existing checks receive an explicit `failure`. Changes with wider authority impact—such as team membership,
 policy, repository identity, or installation scope—enter a fan-out queue.
 
 The worker has separate lanes for direct evaluations, recovery evaluations,
@@ -85,7 +85,7 @@ evidence.
 
 Direct pull-request, review, and check-rerequest events use a bounded fast path.
 After the durable transaction commits, ingress fetches the current pull request
-and tries to reset the App's check on the accepted head to `in_progress`. The
+and tries to reset the App's check on the accepted head to a blocking result. The
 generation token prevents a delayed handler from resetting a newer completed
 result. If the pull request already moved to another head, ingress records
 separate work for the live head and keeps the accepted head's revocation.
@@ -155,9 +155,9 @@ confirms its current number, state, head, and base repository. The worker
 queues only candidates that are now open on the exact commit, at the same
 shared generation. A pull request that has moved to another head keeps its
 newer work. If every associated pull request is now closed, the worker preserves
-any completed check as historical evidence. It ends only an existing queued or
-in-progress check as `cancelled`, after confirming that no other open pull
-request shares the commit.
+any completed evaluation result as historical evidence. It ends an existing
+queued or in-progress check, or a marked interim failure, as `cancelled` after
+confirming that no other open pull request shares the commit.
 
 The client paginates the commit-to-pulls endpoint and fails closed if GitHub
 returns a 101st candidate. GitHub does not provide a completeness marker, so
@@ -211,7 +211,8 @@ pretending the App can update a repository it can no longer access.
 ## Pull-request worker
 
 For each job, the worker first fetches the current revisions and moves the
-named check on that head to `in_progress`. It then confirms that it owns the
+named check on that head to a blocking state: a new check starts `in_progress`,
+while an existing check receives an explicit `failure`. It then confirms that it owns the
 newest database generation before collecting mutable reviews, labels,
 membership, and policy.
 
@@ -236,7 +237,7 @@ A completed write can have an uncertain outcome when the client raises or is
 cancelled: GitHub may have applied the result before the response was lost.
 After a completed write returns, the worker rechecks both the claim and shared
 generation. An uncertain write, lost claim, changed generation, database error,
-or task cancellation triggers a shielded reset to `in_progress` before the
+or task cancellation triggers a shielded reset to a blocking result before the
 guard is released. The original error remains retryable.
 
 The queued head can be stale, and the final pull-request read can uncover a

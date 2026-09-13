@@ -608,11 +608,11 @@ class EvaluationService:
         """Finish only a blocking check when no open pull request needs its commit.
 
         A Check Run belongs to a commit rather than a pull request. Before
-        cancelling an in-progress run, re-read every associated pull request
+        cancelling an unfinished evaluation, re-read every associated pull request
         while holding the same cross-replica writer guard used for normal check
         publication. This prevents a closed pull request from cancelling a
         shared commit's check while another pull request is still open. A
-        completed result is historical evidence, so closing the last pull
+        completed evaluation result is historical evidence, so closing the last pull
         request never rewrites it.
         """
         async with self._check_write_guard(job.installation_id, head_sha):

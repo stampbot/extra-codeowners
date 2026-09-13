@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import threading
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from unittest.mock import ANY, AsyncMock, MagicMock
 
+import httpx
 import pytest
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
@@ -25,7 +27,12 @@ from extra_codeowners.database import (
     WorkClass,
     utcnow,
 )
-from extra_codeowners.github import GitHubError, GitHubOperationStoppedError, GitHubRateLimitError
+from extra_codeowners.github import (
+    GitHubClient,
+    GitHubError,
+    GitHubOperationStoppedError,
+    GitHubRateLimitError,
+)
 from extra_codeowners.migrations import upgrade_database
 from extra_codeowners.models import OrganizationPolicy
 from extra_codeowners.settings import Settings
@@ -762,6 +769,74 @@ async def test_pull_closing_during_evaluation_finishes_its_blocking_check(
     assert pull_reads >= 3
     assert [check["status"] for check in github.checks] == ["in_progress", "completed"]
     assert github.checks[-1]["conclusion"] == "cancelled"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("existing", [False, True])
+async def test_close_during_evaluation_cancels_real_adapter_pending_result(
+    tmp_path: Path, private_key: str, existing: bool
+) -> None:
+    """Exercise the wire state, including completed/failure used for pending work."""
+    github = FakeGitHub(changed_path="uv.lock")
+    remote: dict[str, Any] = (
+        {"id": 99, "status": "completed", "conclusion": "success"} if existing else {}
+    )
+    writes: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/access_tokens"):
+            return httpx.Response(
+                201,
+                json={
+                    "token": "test-token",
+                    "expires_at": (datetime.now(UTC) + timedelta(hours=1)).isoformat(),
+                },
+            )
+        if request.method == "GET":
+            if request.url.path.endswith("/check-runs"):
+                checks = (
+                    [{"id": 99, "name": settings().check_name, "app": {"id": 1}}] if remote else []
+                )
+                return httpx.Response(200, json={"check_runs": checks})
+            assert request.url.path.endswith("/check-runs/99")
+            return httpx.Response(200, json=remote)
+        assert request.method in {"POST", "PATCH"}
+        payload = json.loads(request.content)
+        remote.update(payload)
+        remote["id"] = 99
+        writes.append(payload)
+        return httpx.Response(200, json=remote)
+
+    client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
+    for method in (
+        "upsert_check_run",
+        "has_check_run",
+        "existing_check_run_id",
+        "check_run_is_completed",
+        "complete_check_run",
+    ):
+        setattr(github, method, getattr(client, method))
+    original_get_pull = github.get_pull
+
+    async def close_after_write(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        pull = await original_get_pull(*args, **kwargs)
+        if writes:
+            pull["state"] = "closed"
+        return pull
+
+    github.get_pull = close_after_write  # type: ignore[method-assign]
+    store = migrated_store(f"sqlite:///{tmp_path / 'close-adapter.db'}")
+    try:
+        await EvaluationService(settings(), github, store).evaluate_job(job(store))  # type: ignore[arg-type]
+    finally:
+        await client.close()
+    assert len(writes) == 2
+    assert writes[0]["status"] == ("completed" if existing else "in_progress")
+    if existing:
+        assert writes[0]["conclusion"] == "failure"
+    assert remote["conclusion"] == "cancelled"
+    assert remote["output"]["title"] == "Pull request closed"
+    assert remote["external_id"] == f"example/project#3@{HEAD}"
 
 
 @pytest.mark.asyncio

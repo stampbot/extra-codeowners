@@ -30,11 +30,11 @@ and ordinary pull-request evaluation:
 2. If an associated pull request is still open and this App already owns its
    named Check Run on that commit, the worker updates it by ID to
    `completed` with conclusion `failure`. Exact-head invalidation never creates a check. If every
-   associated pull request is closed, it leaves a completed result unchanged.
+   associated pull request is closed, it leaves a completed evaluation result unchanged.
 3. It fetches current state for every pull-request candidate GitHub reports and
    queues each one that remains open on the commit. A closed-pull evaluation
-   cancels an existing queued or in-progress check instead of leaving it
-   blocking; it preserves a completed result.
+   cancels an existing queued or in-progress check, or a marked interim failure,
+   instead of leaving it blocking; it preserves a completed evaluation result.
 4. It marks that exact generation invalidated only after the reset and fan-out
    finish. A lost lease or newer generation leaves the work pending.
 
@@ -46,8 +46,8 @@ in an enrolled repository:
    mismatch is discarded before any policy read or Check Run write, so a
    delayed old-name delivery cannot revive work after a rename or transfer. If
    the pull request is closed and no open pull request shares the queued head,
-   the service leaves a completed managed Check Run unchanged. It finishes a
-   queued or in-progress managed Check Run as `cancelled` by ID, so unfinished
+   the service leaves a completed evaluation result unchanged. It finishes a
+   queued or in-progress managed Check Run, or a marked interim failure, as `cancelled` by ID, so unfinished
    work is not left blocking. It never creates a Check Run for a closed pull
    request.
 2. Creates the App's named Check Run as `in_progress`, or updates an existing
@@ -71,7 +71,7 @@ in an enrolled repository:
 11. Rejects application substitution for every effective non-delegable path. A repository may opt only its configured policy file into ordinary App delegation with `allow_delegation_for_policy_file = true`; an organization guardrail still wins. An opted-in eligible author is human evidence, not application substitution.
 12. Fetches the pull request again before publication. If it closed during the
     evaluation, the service follows the same completed-result preservation and
-    in-progress cancellation rule as in step 1. If the pull request remains
+    unfinished-evaluation cancellation rule as in step 1. If the pull request remains
     open but its base ref, base commit,
     head commit, changed-file count, or label set changed, the worker discards
     the result. It advances the current head's shared generation and queues
@@ -237,9 +237,12 @@ unexpected response raises an error so the work can retry. HTTP success alone
 does not confirm that a previous approval was revoked.
 
 An interim `failure` does not mean evaluation has finished. GitHub's completed
-status describes the Check Run, not the worker job. The worker replaces this
-result when evaluation finishes. If the pull request closes first, the normal
-completed-result preservation rule applies.
+status describes the Check Run, not the worker job. The client marks pending
+work with an `extra-codeowners:pending:` prefix in the Check Run's `external_id`
+and removes that prefix when publishing the evaluation result. This lets the
+close handler distinguish an interim failure from a finished evaluation.
+If the last pull request using the commit closes first, the handler cancels
+the unfinished check. Finished evaluation results remain unchanged.
 
 The result for each terminal or retry condition is listed below.
 

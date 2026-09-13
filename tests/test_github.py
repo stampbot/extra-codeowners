@@ -3,7 +3,7 @@ import gzip
 import json
 from collections.abc import AsyncIterator, Callable
 from datetime import UTC, datetime, timedelta
-from typing import cast
+from typing import Any, cast
 
 import httpx
 import pytest
@@ -799,7 +799,7 @@ async def test_existing_check_is_made_explicitly_failing_for_pending_work(
                 200,
                 json={"check_runs": [{"id": 77, "name": "check", "app": {"id": 1}}]},
             )
-        return httpx.Response(200, json={"id": 77, "status": "completed", "conclusion": "failure"})
+        return httpx.Response(200, json={"id": 77, **json.loads(request.content)})
 
     client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
     await client.upsert_check_run(
@@ -837,7 +837,7 @@ async def test_new_pending_check_confirms_pending_state(private_key: str, status
         payload = json.loads(request.content)
         assert payload["status"] == status
         assert "conclusion" not in payload
-        return httpx.Response(201, json={"id": 99, "status": status, "conclusion": None})
+        return httpx.Response(201, json={"id": 99, "conclusion": None, **payload})
 
     client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
     assert (
@@ -2286,7 +2286,7 @@ async def test_existing_check_id_and_reset_never_post_a_new_check(private_key: s
         assert payload["conclusion"] == "failure"
         assert "started_at" not in payload
         assert "completed_at" in payload
-        return httpx.Response(200, json={"id": 99, "status": "completed", "conclusion": "failure"})
+        return httpx.Response(200, json={"id": 99, **payload})
 
     client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
     check_run_id = await client.existing_check_run_id(
@@ -2344,6 +2344,80 @@ async def test_check_run_completion_state_rejects_an_unknown_status(private_key:
     client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
     with pytest.raises(GitHubError, match="omitted a supported status"):
         await client.check_run_is_completed(2, "example/project", 99)
+    await client.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["reset", "update"])
+@pytest.mark.parametrize("terminal_operation", ["complete", "upsert"])
+@pytest.mark.parametrize("external_id", [None, "repository@head", "x" * 300])
+async def test_interim_failure_is_not_a_terminal_evaluation(
+    private_key: str, operation: str, terminal_operation: str, external_id: str | None
+) -> None:
+    remote: dict[str, Any] = {"id": 99, "status": "completed", "conclusion": "success"}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/access_tokens"):
+            return httpx.Response(201, json=token_response())
+        if request.method == "GET":
+            if request.url.path.endswith("/check-runs"):
+                return httpx.Response(
+                    200, json={"check_runs": [{"id": 99, "name": "check", "app": {"id": 1}}]}
+                )
+            return httpx.Response(200, json=remote)
+        assert request.method == "PATCH"
+        remote.update(json.loads(request.content))
+        return httpx.Response(200, json=remote)
+
+    client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
+    if operation == "reset":
+        await client.reset_check_run(
+            2,
+            "example/project",
+            99,
+            "check",
+            title="Pending",
+            summary="Waiting",
+            external_id=external_id,
+        )
+    else:
+        await client.upsert_check_run(
+            2,
+            "example/project",
+            "a" * 40,
+            "check",
+            status="in_progress",
+            title="Pending",
+            summary="Waiting",
+            external_id=external_id,
+        )
+    assert remote["status"] == "completed" and remote["conclusion"] == "failure"
+    assert len(remote["external_id"]) <= 255
+    assert not await client.check_run_is_completed(2, "example/project", 99)
+    if terminal_operation == "complete":
+        await client.complete_check_run(
+            2,
+            "example/project",
+            99,
+            "check",
+            conclusion="failure",
+            title="Approval required",
+            summary="Missing review",
+            external_id=external_id,
+        )
+    else:
+        await client.upsert_check_run(
+            2,
+            "example/project",
+            "a" * 40,
+            "check",
+            conclusion="failure",
+            title="Approval required",
+            summary="Missing review",
+            external_id=external_id,
+        )
+    assert remote["external_id"] == (external_id or "")[:255]
+    assert await client.check_run_is_completed(2, "example/project", 99)
     await client.close()
 
 
