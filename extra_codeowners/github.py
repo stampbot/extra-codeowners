@@ -1807,8 +1807,9 @@ class GitHubClient:
         """PATCH one known App check to blocking state without a POST fallback."""
         payload: dict[str, Any] = {
             "name": check_name,
-            "status": "in_progress",
-            "started_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+            "status": "completed",
+            "conclusion": "failure",
+            "completed_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
             "output": {
                 "title": title[:255],
                 "summary": summary[:65535],
@@ -1830,6 +1831,14 @@ class GitHubClient:
             raise GitHubError("check-run response omitted its integer ID")
         if candidate != check_run_id:
             raise GitHubError("check-run response changed the requested check ID")
+        self._validate_blocking_check_response(result, status="completed")
+
+    @staticmethod
+    def _validate_blocking_check_response(result: dict[str, Any], *, status: str) -> None:
+        """Require GitHub to acknowledge the requested blocking state."""
+        conclusion = "failure" if status == "completed" else None
+        if result.get("status") != status or result.get("conclusion") != conclusion:
+            raise GitHubError("check-run response did not confirm the requested blocking state")
 
     async def complete_check_run(
         self,
@@ -1900,7 +1909,12 @@ class GitHubClient:
         external_id: str | None = None,
         include_re_evaluate_action: bool = False,
     ) -> int:
-        """Create or update this App's latest named check on a commit."""
+        """Create or update this App's latest named check on a commit.
+
+        Pending work uses an explicit failure when updating an existing check.
+        GitHub can retain a completed conclusion when PATCH requests only a
+        pending status. New checks start queued or in progress as requested.
+        """
         if status not in {"queued", "in_progress", "completed"}:
             raise ValueError("unsupported check-run status")
         if status == "completed" and conclusion is None:
@@ -1945,6 +1959,11 @@ class GitHubClient:
                 json=payload,
             )
         else:
+            if status != "completed":
+                payload["status"] = "completed"
+                payload["conclusion"] = "failure"
+                payload["completed_at"] = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+                payload.pop("started_at", None)
             payload.pop("name")
             result = await self._request(
                 "PATCH",
@@ -1953,9 +1972,13 @@ class GitHubClient:
                 json=payload,
             )
         result_id = result.get("id")
-        if not isinstance(result_id, int):
+        if not isinstance(result_id, int) or isinstance(result_id, bool):
             msg = "check-run response omitted its integer ID"
             raise GitHubError(msg)
+        if check_id is not None and result_id != check_id:
+            raise GitHubError("check-run response changed the requested check ID")
+        if status != "completed":
+            self._validate_blocking_check_response(result, status=payload["status"])
         return result_id
 
     async def list_installations(

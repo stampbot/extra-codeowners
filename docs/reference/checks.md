@@ -29,7 +29,7 @@ and ordinary pull-request evaluation:
 1. The worker claims one pending generation for an exact commit.
 2. If an associated pull request is still open and this App already owns its
    named Check Run on that commit, the worker updates it by ID to
-   `in_progress`. Exact-head invalidation never creates a check. If every
+   `completed` with conclusion `failure`. Exact-head invalidation never creates a check. If every
    associated pull request is closed, it leaves a completed result unchanged.
 3. It fetches current state for every pull-request candidate GitHub reports and
    queues each one that remains open on the commit. A closed-pull evaluation
@@ -50,8 +50,8 @@ in an enrolled repository:
    queued or in-progress managed Check Run as `cancelled` by ID, so unfinished
    work is not left blocking. It never creates a Check Run for a closed pull
    request.
-2. Creates or updates the App's named Check Run on the current pull-request
-   head as `in_progress`. This revokes an earlier success before mutable
+2. Creates the App's named Check Run as `in_progress`, or updates an existing
+   check to `completed` with conclusion `failure`. This revokes an earlier success before mutable
    approval evidence is collected. A repository with no policy and no existing
    managed check remains unenrolled and gets no check.
 3. Confirms that the worker still owns the current leased pull-request
@@ -85,7 +85,7 @@ in an enrolled repository:
 15. Rechecks the evaluation claim immediately before the completed Check Run
     write. It treats an exception or cancellation during that write as an
     uncertain outcome because GitHub may already have applied it. The service
-    attempts a shielded reset to `in_progress` before releasing the head writer
+    attempts a shielded reset to a blocking result before releasing the head writer
     guard, then preserves the original failure.
 16. Checks the pull-request claim, shared-head generation, and completed
     invalidation again after a completed write returns. A lost claim, changed
@@ -100,7 +100,7 @@ The service applies these limits before it can authorize a pull request:
 
 | Evidence or operation | Accepted limit | Behavior beyond the limit |
 | --- | --- | --- |
-| Repository or organization policy file | 1,000,000 bytes | Reject the fetch. An existing managed check stays `in_progress` while the worker retries. A repository with no managed check remains without one because enrollment cannot be proved. |
+| Repository or organization policy file | 1,000,000 bytes | Reject the fetch. A managed check stays blocking while the worker retries. A repository with no managed check remains without one because enrollment cannot be proved. |
 | Standard `CODEOWNERS` | 3 MiB | Reject the fetch and keep the managed check blocking while the worker retries. GitHub also ignores a `CODEOWNERS` file larger than 3 MiB. |
 | Changed files | Fewer than 3,000 | A reported or returned count of 3,000 or more produces a diagnostic failure because completeness cannot be proved. |
 | Reviews returned by GitHub | At most 1,000 | A 1,001st review exceeds the evidence budget and produces a diagnostic failure. |
@@ -230,12 +230,23 @@ The last entry is the configured `EXTRA_CODEOWNERS_POLICY_PATH`, rooted for matc
 
 ## Check results
 
+During re-evaluation, an existing check shows `failure` with a re-evaluation
+title. New checks can show `queued` or `in_progress`. The GitHub client verifies
+that each blocking write returns the requested status and conclusion; an
+unexpected response raises an error so the work can retry. HTTP success alone
+does not confirm that a previous approval was revoked.
+
+An interim `failure` does not mean evaluation has finished. GitHub's completed
+status describes the Check Run, not the worker job. The worker replaces this
+result when evaluation finishes. If the pull request closes first, the normal
+completed-result preservation rule applies.
+
 The result for each terminal or retry condition is listed below.
 
 | Condition | Check behavior |
 | --- | --- |
-| Exact-head invalidation or evaluation is running, retrying after a dependency exception, or superseded by newer evidence | Keep the managed check `in_progress`. Pending work retries indefinitely with bounded delay. |
-| Relevant authority fan-out is pending or retrying | Keep the check `in_progress` until the fan-out succeeds. Do not bypass or manually complete it. |
+| Exact-head invalidation or evaluation is running, retrying after a dependency exception, or superseded by newer evidence | Keep the managed check blocking. Pending work retries indefinitely with bounded delay. |
+| Relevant authority fan-out is pending or retrying | Keep the check blocking until the fan-out succeeds. Do not bypass or manually complete it. |
 | Every owned path's owner set is satisfied and evidence remains current | Publish `success` for the evaluated head. |
 | A required human or application approval is missing or ineligible | Publish `failure` with the unresolved owner sets and paths. |
 | Checked-in policy or `CODEOWNERS` is invalid | Publish `failure` with a diagnostic. |
@@ -265,7 +276,7 @@ The GitHub adapter caps the output title at 255 characters. Summary and detail t
 Webhook processing and Check Run display are eventually consistent. For a
 mapped pull-request or review trigger, ingress records the delivery, exact-head
 invalidation, and evaluation together. It then makes a bounded attempt to set
-the managed check to `in_progress`. A repository with no policy and no previous
+the managed check to a blocking result. A repository with no policy and no previous
 managed check is skipped.
 
 A fast-path timeout or GitHub API error is logged and acknowledged after

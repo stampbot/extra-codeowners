@@ -101,7 +101,7 @@ Authority work is claimed from broadest scope to narrowest:
 
 Installation-wide work first creates durable repository fences. A repository-wide fence replaces older base-specific rows for the same repository. If one installation and repository would accumulate a 101st distinct base ref, all of those rows collapse into one conservative repository-wide row.
 
-Each repository job lists the affected open pull requests, creates or supersedes their evaluation jobs, and makes a bounded attempt to put managed checks back into `in_progress`. Failures stay pending and retry indefinitely with bounded backoff. Authority work cannot be abandoned safely because an earlier success may still be visible.
+Each repository job lists the affected open pull requests, creates or supersedes their evaluation jobs, and makes a bounded attempt to make managed checks blocking. Existing checks receive an explicit `failure` while evaluation is pending. Failed jobs stay pending and retry indefinitely with bounded backoff. Authority work cannot be abandoned safely because an earlier success may still be visible.
 
 Direct subscriptions shorten the stale-success window, but webhook delivery and GitHub API updates remain eventually consistent. Reconciliation periodically revisits otherwise idle open pull requests after a missed or unsupported change.
 

@@ -128,7 +128,7 @@ requests can share a head commit. A success from the first pull request can
 therefore appear on the second before Extra CODEOWNERS receives the event that
 should revoke it.
 
-The service resets its managed check to `in_progress`, asks GitHub for every
+The service resets its managed check to a blocking failure, asks GitHub for every
 current pull request using that commit, and reevaluates each one. Generation
 guards stop an older worker from overwriting newer evidence. Those controls
 start only after GitHub delivers an event.

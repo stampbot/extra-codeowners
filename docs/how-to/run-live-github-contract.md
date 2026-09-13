@@ -439,9 +439,9 @@ delayed event. Keep the worker and database available.
    request inherited the first success.
 4. Restore ingress before the next reconciliation run.
 5. In **Advanced → Recent deliveries**, redeliver the failed event.
-6. Confirm the service accepts it, moves the shared commit's check to
-   `in_progress`, and then fails it because two open pull requests share the
-   head.
+6. Confirm the service accepts it and replaces the shared commit's success
+   with a blocking failure. Evaluation should then report that two open pull
+   requests share the head.
 
 ### Lose and reconcile
 
@@ -451,7 +451,7 @@ Confirm:
 
 - `extra_codeowners_reconciliation_last_success_timestamp_seconds` advances
 - reconciliation enqueues both open pull requests
-- the inherited success moves to `in_progress` and then failure
+- the inherited success becomes a blocking failure
 - neither pull request is mergeable while the head remains shared
 - the queue returns to baseline without a dead job.
 
