@@ -19,7 +19,15 @@ import httpx
 import jwt
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
+from opentelemetry.trace import Span
 
+from extra_codeowners.api_budget import (
+    REQUEST_LANE,
+    CoreQuota,
+    ProviderQuotaExhaustedError,
+    RecoveryApiBudget,
+    RecoveryBudgetDeferredError,
+)
 from extra_codeowners.dco import (
     MAX_COMMIT_MESSAGE_BYTES,
     MAX_PULL_COMMITS,
@@ -33,7 +41,9 @@ from extra_codeowners.metrics import (
     GITHUB_API_REQUEST_SECONDS,
     GITHUB_API_REQUESTS,
     GITHUB_PAGINATION_ENDPOINT_MISMATCHES,
+    GITHUB_PHYSICAL_REQUESTS,
     GITHUB_RATE_LIMIT_EVENTS,
+    GITHUB_RECOVERY_BUDGET_DEFERRALS,
 )
 from extra_codeowners.tracing import Tracing
 
@@ -356,6 +366,7 @@ class GitHubClient:
         max_in_flight_requests: int = 8,
         transport: httpx.AsyncBaseTransport | None = None,
         tracing: Tracing | None = None,
+        recovery_budget: RecoveryApiBudget | None = None,
     ) -> None:
         self.app_id = app_id
         if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
@@ -369,6 +380,7 @@ class GitHubClient:
         self._request_deadline_seconds = timeout_seconds
         self._request_semaphore = asyncio.Semaphore(max_in_flight_requests)
         self._tracing = tracing or Tracing(enabled=False)
+        self._recovery_budget = recovery_budget
         try:
             loaded_key = serialization.load_pem_private_key(private_key.encode(), password=None)
         except (TypeError, ValueError) as error:
@@ -524,6 +536,36 @@ class GitHubClient:
         )
         raise AssertionError("unreachable")  # pragma: no cover
 
+    async def _admit_request(self, installation_id: int | None, method: str, path: str) -> None:
+        if installation_id is not None and path != "/graphql" and self._recovery_budget is not None:
+            try:
+                await asyncio.to_thread(
+                    self._recovery_budget.admit,
+                    installation_id,
+                    recovery=REQUEST_LANE.get() == "recovery",
+                )
+            except ProviderQuotaExhaustedError as error:
+                raise GitHubRateLimitError(
+                    403,
+                    method,
+                    path,
+                    "installation REST core quota is exhausted",
+                    error.retry_after_seconds,
+                ) from error
+
+    async def _observe_quota(
+        self, installation_id: int | None, response: httpx.Response, span: Span
+    ) -> None:
+        quota = CoreQuota.from_headers(response.headers)
+        span.set_attribute("github.quota.core_headers_valid", quota is not None)
+        if quota is None:
+            return
+        span.set_attribute("github.quota.limit", quota.limit)
+        span.set_attribute("github.quota.remaining", quota.remaining)
+        span.set_attribute("github.quota.reset_at", int(quota.reset_at.timestamp()))
+        if installation_id is not None and self._recovery_budget is not None:
+            await asyncio.to_thread(self._recovery_budget.observe, installation_id, quota)
+
     async def _api_response(
         self,
         method: str,
@@ -552,6 +594,7 @@ class GitHubClient:
                 attributes={
                     "github.operation": operation,
                     "github.authentication": authentication,
+                    "queue.work_class": REQUEST_LANE.get(),
                     "http.request.method": method,
                 },
                 private_attributes={"github.path": path},
@@ -581,6 +624,13 @@ class GitHubClient:
                             }
                         self._raise_if_stopped(stop)
                         async with self._request_semaphore:
+                            budget_installation = (
+                                installation_id if authentication == "installation" else None
+                            )
+                            await self._admit_request(budget_installation, method, path)
+                            GITHUB_PHYSICAL_REQUESTS.labels(
+                                operation, authentication, REQUEST_LANE.get()
+                            ).inc()
                             response = await self._http.request(
                                 method,
                                 path,
@@ -588,6 +638,7 @@ class GitHubClient:
                                 json=json,
                                 headers=request_headers,
                             )
+                            await self._observe_quota(budget_installation, response, span)
                         self._raise_if_stopped(stop)
                         if (
                             response.status_code == 401
@@ -610,6 +661,10 @@ class GitHubClient:
                             # become an error span before a later helper raises.
                             self._tracing.mark_error(span, f"HTTP {response.status_code}")
                         return response
+        except RecoveryBudgetDeferredError:
+            outcome = "budget_deferred"
+            GITHUB_RECOVERY_BUDGET_DEFERRALS.labels(operation).inc()
+            raise
         except TimeoutError as error:
             outcome = "timeout"
             if stop is not None and stop.is_set():
@@ -671,6 +726,7 @@ class GitHubClient:
                 attributes={
                     "github.operation": operation,
                     "github.authentication": "installation",
+                    "queue.work_class": REQUEST_LANE.get(),
                     "http.request.method": method,
                 },
                 private_attributes={"github.path": path},
@@ -690,7 +746,16 @@ class GitHubClient:
                             headers={**(headers or {}), "Authorization": f"Bearer {token}"},
                         )
                         async with self._request_semaphore:
+                            await self._admit_request(installation_id, method, path)
+                            GITHUB_PHYSICAL_REQUESTS.labels(
+                                operation, "installation", REQUEST_LANE.get()
+                            ).inc()
                             response = await self._http.send(request, stream=True)
+                            try:
+                                await self._observe_quota(installation_id, response, span)
+                            except BaseException:
+                                await response.aclose()
+                                raise
                             if response.status_code == 401 and attempt == 0:
                                 await response.aclose()
                                 cached = self._tokens.get(installation_id)
@@ -710,6 +775,10 @@ class GitHubClient:
                             finally:
                                 await response.aclose()
                             return
+        except RecoveryBudgetDeferredError:
+            outcome = "budget_deferred"
+            GITHUB_RECOVERY_BUDGET_DEFERRALS.labels(operation).inc()
+            raise
         except TimeoutError as error:
             outcome = "timeout"
             raise GitHubError("GitHub API request exceeded its wall-clock deadline") from error

@@ -42,8 +42,8 @@ from sqlalchemy.pool import NullPool
 
 from extra_codeowners.trace_context import TrustedTraceContext
 
-SCHEMA_VERSION = 6
-DATABASE_MIGRATION_HEAD = "0007_reconciliation_completion"
+SCHEMA_VERSION = 7
+DATABASE_MIGRATION_HEAD = "0008_recovery_api_budget"
 DATABASE_CONNECT_TIMEOUT_SECONDS = 3
 DATABASE_POOL_TIMEOUT_SECONDS = 2
 DATABASE_STATEMENT_TIMEOUT_MILLISECONDS = 3_000
@@ -384,6 +384,19 @@ class ReconciliationState(Base):
     observed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utcnow
     )
+
+
+class InstallationApiBudget(Base):
+    """REST core quota and discovery position shared by installation replicas."""
+
+    __tablename__ = "installation_api_budgets"
+
+    installation_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    request_limit: Mapped[int] = mapped_column(Integer, nullable=False)
+    remaining: Mapped[int] = mapped_column(Integer, nullable=False)
+    reset_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    probe_after: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    repository_cursor: Mapped[str] = mapped_column(String(512), nullable=False)
 
 
 class ProviderBackpressure(Base):

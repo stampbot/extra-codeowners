@@ -236,6 +236,7 @@ Advisory-lock acquisition replaces the statement timeout with that operation's b
 | `EXTRA_CODEOWNERS_GITHUB_IDENTITY_PROBE_INTERVAL_SECONDS` | number | `30` | Seconds between authenticated App identity probes; inclusive range `5` through `300`. Each probe calls `GET /app` with the configured private key and requires the returned App ID to equal `EXTRA_CODEOWNERS_GITHUB_APP_ID`. |
 | `EXTRA_CODEOWNERS_GITHUB_IDENTITY_FRESHNESS_SECONDS` | number | `90` | Maximum age in seconds of the last successful identity probe; inclusive range `10` through `900`. It must be at least twice the probe interval. Readiness fails after this window without a successful refresh. |
 | `EXTRA_CODEOWNERS_GITHUB_MAX_IN_FLIGHT_REQUESTS` | integer | `8` | Maximum GitHub requests in flight per process; inclusive range `1` through `64`. A durable rate-limit circuit pauses claims for the affected installation, or every installation for an App-wide limit, across all pods. |
+| `EXTRA_CODEOWNERS_GITHUB_RECOVERY_RESERVE_PERCENT` | integer | `20` | Percentage of each installation's observed REST core limit reserved for direct events and authority work; inclusive range `1` through `90`. Recovery pauses at this threshold until the provider's reset time. Replicas share the budget in the database. This does not increase GitHub's quota or reserve GraphQL points. |
 
 Secret-file readers support projected Kubernetes Secret symlinks while limiting
 resolution to 16 symlinks and 256 path operations. The resolved target must be

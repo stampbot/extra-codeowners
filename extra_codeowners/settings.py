@@ -251,6 +251,7 @@ class Settings(BaseSettings):
     github_identity_probe_interval_seconds: float = Field(default=30, ge=5, le=300)
     github_identity_freshness_seconds: float = Field(default=90, ge=10, le=900)
     github_max_in_flight_requests: int = Field(default=8, ge=1, le=64)
+    github_recovery_reserve_percent: int = Field(default=20, ge=1, le=90)
     public_url: AnyHttpUrl | None = None
 
     # Tracing is opt-in because traces can reveal operational metadata to the

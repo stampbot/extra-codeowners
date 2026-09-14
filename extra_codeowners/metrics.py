@@ -49,6 +49,16 @@ GITHUB_RATE_LIMIT_EVENTS = Counter(
     "GitHub API rate-limit responses observed by authentication scope",
     ("scope",),
 )
+GITHUB_PHYSICAL_REQUESTS = Counter(
+    "extra_codeowners_github_physical_requests_total",
+    "Physical GitHub request attempts, including retries and pages",
+    ("operation", "authentication", "work_class"),
+)
+GITHUB_RECOVERY_BUDGET_DEFERRALS = Counter(
+    "extra_codeowners_github_recovery_budget_deferrals_total",
+    "Recovery requests deferred to preserve installation REST core quota",
+    ("operation",),
+)
 GITHUB_PAGINATION_ENDPOINT_MISMATCHES = Counter(
     "extra_codeowners_github_pagination_endpoint_mismatches_total",
     "Rejected GitHub pagination links whose endpoint did not match the request",
