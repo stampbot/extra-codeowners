@@ -148,15 +148,40 @@ do not claim exact upstream build provenance or legal approval.
 
 ### Update a VEX claim
 
-The reviewed source statement lives under `security/vex/`. Use Vexcalibur as an
+The reviewed source statement is `security/vex/runtime.openvex.json`. Use Vexcalibur as an
 analysis aid when a vulnerability needs review, then check the affected package
 URLs and impact statement in the pull request. The statement is a security
 conclusion, not a way to hide a scanner result.
 
+The VEX file also records hashes of the reviewed runtime inputs. CI rejects it
+after a change to application files, `uv.lock`, `pyproject.toml`, `Dockerfile`,
+or `.dockerignore`. Review the changed behavior against each existing claim
+before refreshing the binding. Docs and tests do not require a refresh.
+
+After that review, run this from the repository root with Python 3.12 or later.
+Set `REVIEW_RATIONALE` to your explanation of the runtime changes and why the
+claims still hold. The command updates the source VEX file; it does not change
+a published release or decide whether a vulnerability is reachable.
+
+```bash
+python -I -S -B tools/release_vex.py bind-runtime \
+  --source security/vex/runtime.openvex.json --runtime-root . \
+  --review "$REVIEW_RATIONALE"
+python -I -S -B tools/release_vex.py check-runtime \
+  --source security/vex/runtime.openvex.json --runtime-root .
+```
+
+The check succeeds silently when the recorded inputs match. Commit the updated
+statement with the runtime change so reviewers can inspect both. If a claim no
+longer holds, change or remove it before rebinding. Never add an automatic
+rebind step to CI.
+
 The publisher copies the reviewed bytes only when every product URL matches the
 signed native inventories. Debian URLs must identify the released architecture
-and distribution; an `upstream` qualifier, when present, must match the
-installed package's source. Unknown qualifiers stop the release. This check
+and distribution. For Grype, use the inventory's `distro_full` identity, which
+comes from `DEBIAN_VERSION_FULL` in the hashed `os-release` file, falling back
+to `VERSION_ID` when that field is absent. An `upstream` qualifier must match the
+installed package's source when present. Unknown qualifiers stop the release. This check
 runs before the workflow creates an immutable tag or a versioned image
 reference. The publisher then signs that release asset and attaches an OpenVEX
 attestation to the final multi-platform image digest. If a package update or a
@@ -164,9 +189,11 @@ change in reachable behavior invalidates a conclusion, update or remove the
 source statement and release the correction. Never try to rewrite a published
 VEX asset.
 
-The current statement records Debian's fixes for CVE-2026-63073 and
-CVE-2026-75803 in `3.5.7-1~deb13u2`. The older `openssl-3.5.6.openvex.json`
-remains as historical evidence; current builds don't use its exceptions.
+The [runtime review](https://github.com/stampbot/extra-codeowners/blob/main/security/vex/runtime-review.md)
+records the package versions, native-library checks, and limits of the current
+assessment. `under_investigation` is not an exemption: the finding still blocks
+the High/Critical gate. The older OpenSSL-only files remain as historical
+evidence; current builds use the combined runtime statement.
 The Python version is unchanged by this base-image digest refresh.
 
 Before allocating another version, the workflow requires the preceding release

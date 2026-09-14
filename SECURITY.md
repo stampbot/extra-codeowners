@@ -83,24 +83,39 @@ before 1.0.
 
 ## Vulnerability statements
 
-The [current OpenVEX statement](security/vex/openssl-3.5.7.openvex.json)
-records Debian's fixes for CVE-2026-63073 and CVE-2026-75803 in OpenSSL
-`3.5.7-1~deb13u2`. It names the exact packages, architectures, and Debian
-distribution. These are fixed-package claims, not exceptions for reachable
-vulnerabilities.
+The [current OpenVEX statement](security/vex/runtime.openvex.json) records which
+reported vulnerabilities affect the shipped service. Our
+[runtime review](security/vex/runtime-review.md) covers both image architectures:
+the 18 CVEs blocking the September 14 scan are not reachable through supported
+application behavior. For glibc CVE-2026-5450, the review follows native call
+sites and their format arguments; it does not rely on a string search alone.
 
-The [older statement](security/vex/openssl-3.5.6.openvex.json) records our
-non-exploitability analysis for specific CVEs in the previous packages. It is
-historical evidence and does not describe the current image.
+The file also retains Debian's fixed-package claims for CVE-2026-63073 and
+CVE-2026-75803 in OpenSSL `3.5.7-1~deb13u2`. Every claim names exact package
+versions, architectures, and the Debian distribution. These conclusions do not
+cover arbitrary commands run inside the container or custom application code.
+
+The OpenSSL-only statements for [3.5.6](security/vex/openssl-3.5.6.openvex.json)
+and [3.5.7](security/vex/openssl-3.5.7.openvex.json) remain as historical evidence.
+Current builds use `runtime.openvex.json`.
 
 This is a project security statement. CI consumes the current file when it scans
 the image. The raw report retains every scanner finding, and a package-version
 change stops the VEX from matching.
 
+Reachability claims also contain a hash manifest of the reviewed application
+source, dependency lock, package configuration, and Docker build inputs. CI
+checks that manifest before using VEX, and the publisher checks it again before
+allocating a release. A runtime change requires another review even when the
+Debian package versions stay the same. Documentation-only edits do not change
+the binding. Rebinding records a maintainer's assessment; it does not perform one.
+
 Before it creates an immutable tag or a versioned image reference, the
 workflow checks every product URL against signed `amd64` and `arm64`
-inventories. Those inventories include the Debian distribution derived from
-the image's hashed canonical `/usr/lib/os-release` file. The workflow then
+inventories. Those inventories include Debian's major and full distribution
+versions from the image's hashed canonical `/usr/lib/os-release` file. The
+full version makes the package URLs match Grype's identities, such as
+`debian-13.6`, without guessing a point release from `VERSION_ID=13`. The workflow then
 publishes the reviewed bytes as `extra-codeowners-VERSION.openvex.json`, signs
 the file, and attaches a keyless OpenVEX attestation to the exact
 multi-platform image digest. The release process records the reviewed

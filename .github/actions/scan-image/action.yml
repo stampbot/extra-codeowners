@@ -59,6 +59,8 @@ runs:
         GRYPE_IMAGE: >-
           anchore/grype:v0.118.0@sha256:8a93fc48da96bd6ec5981279d099b69de11541dc68fdf222fb9161f8ff284af7
       run: |
+        python -I -S -B tools/release_vex.py check-runtime \
+          --source security/vex/runtime.openvex.json --runtime-root .
         docker run --rm --read-only --cap-drop=ALL --security-opt=no-new-privileges \
           --user "$(id -u):$(id -g)" --tmpfs /tmp:rw,nosuid,nodev,mode=1777 \
           --mount "type=bind,src=${GITHUB_WORKSPACE},dst=/work,readonly" \
@@ -67,7 +69,7 @@ runs:
           --env GRYPE_DB_CACHE_DIR=/cache --env GRYPE_DB_AUTO_UPDATE=false \
           "${GRYPE_IMAGE}" docker-archive:/image.tar --by-cve \
           --config /work/.grype.yaml --only-fixed --fail-on high \
-          --vex /work/security/vex/openssl-3.5.7.openvex.json --output table
+          --vex /work/security/vex/runtime.openvex.json --output table
 
     - name: Remove scanner inputs and database
       if: ${{ always() && steps.prepare.outputs.directory != '' }}

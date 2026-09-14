@@ -175,6 +175,7 @@ def test_collect_inventory_records_raw_os_python_and_native_evidence() -> None:
     assert inventory["image"] == {
         "architecture": "amd64",
         "distro": "debian-13",
+        "distro_full": "debian-13",
         "os_release_path": "usr/lib/os-release",
         "os_release_sha256": hashlib.sha256(_os_release()).hexdigest(),
         "os_release_size": len(_os_release()),
@@ -450,6 +451,13 @@ Version: 9.9.9
         (b"ID=ubuntu\nVERSION_ID=24.04\n", "requires Debian"),
         (b"ID=debian\nVERSION_ID=trixie\n", "invalid VERSION_ID"),
         (b"ID=debian\nID=debian\nVERSION_ID=13\n", "invalid ID field"),
+        (b"ID=debian\nVERSION_ID=13\nDEBIAN_VERSION_FULL=14.1\n", "invalid DEBIAN_VERSION_FULL"),
+        (b"ID=debian\nVERSION_ID=13\nDEBIAN_VERSION_FULL=13.x\n", "invalid DEBIAN_VERSION_FULL"),
+        (b"ID=debian\nVERSION_ID=13\nDEBIAN_VERSION_FULL=\n", "unsafe DEBIAN_VERSION_FULL"),
+        (
+            b"ID=debian\nVERSION_ID=13\nDEBIAN_VERSION_FULL=13.6\nDEBIAN_VERSION_FULL=13.6\n",
+            "invalid DEBIAN_VERSION_FULL field",
+        ),
     ),
 )
 def test_collector_rejects_an_invalid_debian_distribution_identity(
@@ -464,6 +472,23 @@ def test_collector_rejects_an_invalid_debian_distribution_identity(
         collect_inventory(
             _rootfs_tar(members), architecture="amd64", platform_digest=PLATFORM_DIGEST
         )
+
+
+def test_collector_records_full_debian_version_from_hashed_os_release() -> None:
+    contents = _os_release() + b"DEBIAN_VERSION_FULL=13.6\n"
+    members = [
+        (path, contents if path == "usr/lib/os-release" else payload)
+        for path, payload in _members()
+    ]
+    inventory = collect_inventory(
+        _rootfs_tar(members), architecture="amd64", platform_digest=PLATFORM_DIGEST
+    )
+    image = inventory["image"]
+    assert isinstance(image, dict)
+    assert image["distro"] == "debian-13"
+    assert image["distro_full"] == "debian-13.6"
+    assert image["os_release_sha256"] == hashlib.sha256(contents).hexdigest()
+    assert image["os_release_size"] == len(contents)
 
 
 def test_collector_rejects_unsafe_tar_and_metadata_paths() -> None:

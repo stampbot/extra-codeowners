@@ -5,9 +5,11 @@ from __future__ import annotations
 import argparse
 import base64
 import binascii
+import hashlib
 import json
 import re
 import sys
+import uuid
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -24,6 +26,7 @@ _SHA256_DIGEST_PATTERN: Final = re.compile(r"\Asha256:[0-9a-f]{64}\Z")
 _DEBIAN_DISTRO_PATTERN: Final = re.compile(r"\Adebian-[0-9]+\Z")
 _OPENVEX_PREDICATE_TYPE: Final = "https://openvex.dev/ns"
 _IN_TOTO_STATEMENT_TYPE: Final = "https://in-toto.io/Statement/v0.1"
+_RUNTIME_BINDING: Final = "x_extra_codeowners_runtime"
 
 
 class ReleaseVexError(ValueError):
@@ -34,6 +37,7 @@ class ReleaseVexError(ValueError):
 class _DebianPackage:
     architecture: str
     distro: str
+    distro_full: str
     name: str
     source: str
     version: str
@@ -83,6 +87,59 @@ def _read_bytes(path: Path, description: str) -> bytes:
 
 def _read_json(path: Path, description: str) -> object:
     return _load_json(_read_bytes(path, description), f"{description} {path}")
+
+
+def _runtime_files(root: Path) -> dict[str, str]:
+    paths = [root / name for name in ("Dockerfile", ".dockerignore", "pyproject.toml", "uv.lock")]
+    package = root / "extra_codeowners"
+    if package.is_symlink() or not package.is_dir():
+        _fail("runtime binding requires an extra_codeowners source directory")
+    for path in sorted(package.rglob("*")):
+        if path.is_symlink():
+            _fail(f"runtime binding does not accept source symlinks: {path}")
+        if "__pycache__" in path.parts or path.suffix in {".pyc", ".pyo"}:
+            continue
+        if not path.is_dir():
+            paths.append(path)
+    if len(paths) == 4:
+        _fail("runtime binding requires application source files")
+    result = {}
+    for path in paths:
+        if path.is_symlink() or not path.is_file():
+            _fail(f"runtime binding requires a regular source file: {path}")
+        result[path.relative_to(root).as_posix()] = hashlib.sha256(
+            _read_bytes(path, "runtime source")
+        ).hexdigest()
+    return dict(sorted(result.items()))
+
+
+def validate_runtime_binding(source: Path, root: Path) -> None:
+    """Reject reachability claims after changes to their reviewed runtime inputs."""
+    document = _mapping(_read_json(source, "reviewed VEX"), "reviewed VEX")
+    binding = _mapping(document.get(_RUNTIME_BINDING), "VEX runtime binding")
+    if binding.get("schema_version") != 1:
+        _fail("VEX runtime binding has an unsupported schema version")
+    _string(binding.get("review"), "VEX runtime binding review")
+    if binding.get("files") != _runtime_files(root):
+        _fail("VEX runtime binding is stale; review reachable behavior before rebinding the VEX")
+
+
+def bind_runtime(source: Path, root: Path, review: str) -> None:
+    """Record a maintainer's completed review; this command does not perform the review."""
+    document = dict(_mapping(_read_json(source, "reviewed VEX"), "reviewed VEX"))
+    if document.get("@context") != _OPENVEX_CONTEXT:
+        _fail("runtime binding requires an OpenVEX v0.2.0 document")
+    document[_RUNTIME_BINDING] = {
+        "schema_version": 1,
+        "files": _runtime_files(root),
+        "review": _string(review, "runtime review rationale"),
+    }
+    document["tooling"] = "Vexcalibur + Extra CODEOWNERS runtime binding"
+    document.pop("@id", None)
+    document["@id"] = uuid.uuid5(
+        uuid.NAMESPACE_URL, json.dumps(document, sort_keys=True, separators=(",", ":"))
+    ).urn
+    source.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
 def _read_attestation_records(path: Path) -> Sequence[object]:
@@ -169,6 +226,14 @@ def _inventory_components(
         distro = _string(image.get("distro"), f"release inventory {path}.image.distro")
         if _DEBIAN_DISTRO_PATTERN.fullmatch(distro) is None:
             _fail(f"release inventory {path}.image has an invalid Debian distro")
+        distro_full = _string(
+            image.get("distro_full", distro), f"release inventory {path}.image.distro_full"
+        )
+        if (
+            re.fullmatch(r"debian-[0-9]+(?:\.[0-9]+)*", distro_full) is None
+            or distro_full.partition(".")[0] != distro
+        ):
+            _fail(f"release inventory {path}.image has an invalid full Debian distro")
         if image.get("os_release_path") != "usr/lib/os-release":
             _fail(f"release inventory {path}.image has an unsupported os-release path")
         os_release_sha256 = _string(
@@ -199,6 +264,7 @@ def _inventory_components(
                         f"release inventory {path}.debian.packages[{index}].architecture",
                     ),
                     distro=distro,
+                    distro_full=distro_full,
                     name=_string(
                         package.get("package"),
                         f"release inventory {path}.debian.packages[{index}].package",
@@ -268,7 +334,7 @@ def _validate_product(
             if package.name == name
             and package.version == version
             and package.architecture == architecture
-            and package.distro == distro
+            and distro in {package.distro, package.distro_full}
             and (upstream is None or package.source == upstream)
         ]
         if len(package_candidates) != 1:
@@ -377,6 +443,9 @@ def _parser() -> argparse.ArgumentParser:
     stage = commands.add_parser("stage", help="validate and copy reviewed OpenVEX data")
     stage.add_argument("--source", type=Path, required=True, help="Reviewed OpenVEX document")
     stage.add_argument(
+        "--runtime-root", type=Path, help="Check runtime binding before publishing a new release"
+    )
+    stage.add_argument(
         "--inventory",
         type=Path,
         action="append",
@@ -388,6 +457,14 @@ def _parser() -> argparse.ArgumentParser:
         type=Path,
         help="Optional release-asset path. The validated source bytes are copied unchanged.",
     )
+    for command in ("bind-runtime", "check-runtime"):
+        runtime = commands.add_parser(command, help="record or check the reviewed runtime inputs")
+        runtime.add_argument("--source", type=Path, required=True)
+        runtime.add_argument("--runtime-root", type=Path, required=True)
+        if command == "bind-runtime":
+            runtime.add_argument(
+                "--review", required=True, help="Rationale for the completed review"
+            )
     verify = commands.add_parser(
         "verify-attestation", help="verify an OpenVEX OCI attestation's subject and predicate"
     )
@@ -408,6 +485,8 @@ def main(arguments: Sequence[str] | None = None) -> int:
     parsed = _parser().parse_args(arguments)
     try:
         if parsed.command == "stage":
+            if parsed.runtime_root is not None:
+                validate_runtime_binding(parsed.source, parsed.runtime_root)
             source_bytes = validate_release_vex(parsed.source, parsed.inventory)
             if parsed.output is not None:
                 if parsed.output.resolve() == parsed.source.resolve():
@@ -416,6 +495,10 @@ def main(arguments: Sequence[str] | None = None) -> int:
                     _fail(f"release VEX output parent does not exist: {parsed.output.parent}")
                 parsed.output.write_bytes(source_bytes)
                 parsed.output.chmod(0o444)
+        elif parsed.command == "bind-runtime":
+            bind_runtime(parsed.source, parsed.runtime_root, parsed.review)
+        elif parsed.command == "check-runtime":
+            validate_runtime_binding(parsed.source, parsed.runtime_root)
         else:
             verify_openvex_image_attestation(
                 parsed.vex,

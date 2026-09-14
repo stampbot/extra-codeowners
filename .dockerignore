@@ -6,3 +6,6 @@
 !uv.lock
 !extra_codeowners/
 !extra_codeowners/**
+**/__pycache__/
+**/*.pyc
+**/*.pyo
