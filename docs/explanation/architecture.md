@@ -294,6 +294,18 @@ nothing to recover. Every evaluation still waits for its own exact-head reset
 and any relevant authority fence. Priority changes waiting time; it never lets
 a result pass a security fence.
 
+Authority fan-out revokes affected checks in its own lane, then leaves the
+follow-up evaluations and exact-head work in recovery. A real PR webhook
+promotes that PR's pending work to foreground priority; a bulk refresh cannot
+demote it. If fast revocation fails, its retry is promoted too, so preserving
+the recovery reserve does not postpone an unsuccessful revocation. Failure to
+store that promotion leaves the authority fence pending.
+
+This limits duplicate evaluation work after broad events. The authority
+revocations themselves can still consume the reserve, so a large installation
+rename or policy change can still exhaust GitHub's quota. It is not a promise
+that direct events will always have capacity.
+
 The same singleton lease controls pruning of delivery IDs and old shared-head
 rows. A shared-head row is eligible only after its latest generation was
 invalidated, no evaluation references it, and no invalidation lease remains.

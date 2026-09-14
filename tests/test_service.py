@@ -2618,7 +2618,8 @@ async def test_authority_rate_limit_defers_after_bounded_batch_and_keeps_fanout(
 
     assert store.pending_count() == 5
     assert store.shared_head_generation(2, "example/project", "c" * 40) == 1
-    assert store.shared_head_generation(2, "example/project", "d" * 40) == 1
+    # Failed revocation gets a new foreground invalidation generation.
+    assert store.shared_head_generation(2, "example/project", "d" * 40) == 2
     assert store.dead_count() == 0
     assert store.claim("observer", 60) is None
     assert store.claim_authority("observer", 60) is None
@@ -2701,6 +2702,7 @@ async def test_authority_fast_revocation_failure_keeps_durable_evaluation(
     evaluation = store.claim("observer", 60)
     assert evaluation is not None
     assert evaluation.pull_number == 4
+    assert evaluation.work_class == "interactive"
     assert store.dead_count() == 0
 
 
@@ -2902,6 +2904,71 @@ async def test_public_repository_addition_does_not_use_readability_as_membership
     )
     evaluator.github.get_repository.assert_not_awaited()
     evaluator.github.list_open_pulls.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("direct_arrival", ["before", "during", "none"])
+@pytest.mark.parametrize("managed", [False, True])
+async def test_authority_followup_uses_recovery_without_downgrading_direct_events(
+    tmp_path: Path, direct_arrival: str, managed: bool
+) -> None:
+    store = migrated_store(f"sqlite:///{tmp_path / 'fanout-class.db'}")
+    direct = JobRequest(2, "example/project", 4, "pull_request.opened", HEAD)
+    if direct_arrival == "before":
+        store.accept_delivery("direct", "pull_request", direct)
+    store.enqueue_authority(AuthorityRequest(2, "example/project", None, "member.removed"))
+    claimed = store.claim_authority("worker", 60)
+    assert claimed is not None
+    evaluator = MagicMock()
+    evaluator.github.list_open_pulls = AsyncMock(
+        return_value=[{"number": 4, "head": {"sha": HEAD}}]
+    )
+
+    async def revoke(request: JobRequest) -> bool:
+        assert request.work_class == "recovery"
+        assert REQUEST_LANE.get() == "authority"
+        if direct_arrival == "during":
+            store.accept_delivery("direct", "pull_request", direct)
+        return managed
+
+    evaluator.invalidate_for_trigger = AsyncMock(side_effect=revoke)
+    worker = Worker(settings(), store, evaluator, "worker")
+    with request_lane("authority"):
+        assert await worker._process_authority(claimed) == "completed"
+
+    expected_class = "recovery" if direct_arrival == "none" else "interactive"
+    evaluation = store.claim("observer", 60)
+    assert evaluation is not None and evaluation.work_class == expected_class
+    assert evaluation.last_delivery_id == (None if direct_arrival == "none" else "direct")
+    invalidation = store.claim_shared_head_invalidation("observer", 60)
+    assert invalidation is not None and invalidation.work_class == expected_class
+
+
+@pytest.mark.asyncio
+async def test_failed_revocation_promotion_cannot_complete_authority_work(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = migrated_store(f"sqlite:///{tmp_path / 'fanout-promotion-failure.db'}")
+    store.enqueue_authority(AuthorityRequest(2, "example/project", None, "member.removed"))
+    claimed = store.claim_authority("worker", 60)
+    assert claimed is not None
+    evaluator = MagicMock()
+    evaluator.github.list_open_pulls = AsyncMock(
+        return_value=[{"number": 4, "head": {"sha": HEAD}}]
+    )
+    evaluator.invalidate_for_trigger = AsyncMock(side_effect=GitHubError("write failed"))
+    original = store.enqueue
+
+    def enqueue(request: JobRequest) -> None:
+        if request.work_class == "interactive":
+            raise OSError("database unavailable during promotion")
+        original(request)
+
+    monkeypatch.setattr(store, "enqueue", enqueue)
+    worker = Worker(settings(), store, evaluator, "worker")
+    assert await worker._process_authority(claimed) == "failed"
+    with store.session() as session:
+        assert session.get(AuthorityJob, claimed.id) is not None
 
 
 @pytest.mark.asyncio

@@ -1,6 +1,6 @@
 {
   "@context": "https://openvex.dev/ns/v0.2.0",
-  "@id": "urn:uuid:f4c3c239-3a4a-5433-a44e-406391be85ae",
+  "@id": "urn:uuid:7c4d9968-35f1-590e-956c-8bf6c703d090",
   "author": "Extra CODEOWNERS maintainers",
   "role": "VEX document producer",
   "statements": [
@@ -552,7 +552,7 @@
       "extra_codeowners/models.py": "dc59959f56e35111fae00f8f60ef054ba80eb839eb2dae5b09165d4cdc349a48",
       "extra_codeowners/policy.py": "844abb482a7c9cc3190d624cc92ece2476128644718e4096f98bfa8a0abedf8a",
       "extra_codeowners/py.typed": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "extra_codeowners/service.py": "17b537af628eb3a5315ded28de0acca8d4795e19223e44aad7eff3efe63dc827",
+      "extra_codeowners/service.py": "6908328a2dc3e4a1918113f10ba7020c44f8468114663c440dd5dc8f3bfa473f",
       "extra_codeowners/settings.py": "bd1d3cd0acf23ea4b26869fc1e024438aba7b9acf43f3850c4e6be2e9a5b5437",
       "extra_codeowners/trace_context.py": "f79ca91baa1dd615c80546c66a6b370ba78ec7106dece3feb201d10250078532",
       "extra_codeowners/tracing.py": "62c730c8bdf4d632dace5b79232f968d871a28d8724a162aa52ba6b4ed2c6db1",
@@ -560,7 +560,7 @@
       "pyproject.toml": "4164e19c10e620b1cae1db22dab5728b4e80eb0f5a9dd768484b6f12de73fc96",
       "uv.lock": "029f0fe5b12940d2f8c4f36c5702f5e92f4aac1dc3bff75f2e90660a50dfdcc4"
     },
-    "review": "Reviewed scoped addition routing, uncached current installation membership, archive metadata, and verified retirement of removed or renamed routes. No new native-library entry points or OpenSSL reachability changes.",
+    "review": "Reviewed scoped additions and bulk follow-up budgeting. Native-library entry points and OpenSSL reachability remain unchanged.",
     "schema_version": 1
   }
 }
