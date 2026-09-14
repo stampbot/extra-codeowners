@@ -206,12 +206,15 @@ async def test_request_lane_is_task_local_and_restored() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize("rejected_remaining", [0, 1, 60])
 async def test_client_counts_retry_and_reserves_next_request(
     budget_store: QueueStore,
     private_key: str,
     streaming: bool,
+    rejected_remaining: int,
 ) -> None:
     budget = RecoveryApiBudget(budget_store)
+    budget.observe(17, quota(22))
     attempts = 0
 
     def handle(request: httpx.Request) -> httpx.Response:
@@ -225,7 +228,14 @@ async def test_client_counts_retry_and_reserves_next_request(
                 },
             )
         attempts += 1
-        return httpx.Response(401 if attempts == 1 else 200, json={}, headers=headers(21))
+        if attempts == 1:
+            rejected_headers = {
+                **headers(),
+                "x-ratelimit-limit": "60",
+                "x-ratelimit-remaining": str(rejected_remaining),
+            }
+            return httpx.Response(401, json={}, headers=rejected_headers)
+        return httpx.Response(200, json={}, headers=headers(21))
 
     client = GitHubClient(
         1, private_key, recovery_budget=budget, transport=httpx.MockTransport(handle)

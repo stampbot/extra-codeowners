@@ -556,6 +556,12 @@ class GitHubClient:
     async def _observe_quota(
         self, installation_id: int | None, response: httpx.Response, span: Span
     ) -> None:
+        # A rejected token may expose the unauthenticated/IP quota. The
+        # attempt stays charged, but its headers cannot replace this budget.
+        if response.status_code == 401:
+            span.set_attribute("github.quota.core_headers_valid", False)
+            span.set_attribute("github.quota.ignored_rejected_token", True)
+            return
         quota = CoreQuota.from_headers(response.headers)
         span.set_attribute("github.quota.core_headers_valid", quota is not None)
         if quota is None:

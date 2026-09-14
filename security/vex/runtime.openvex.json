@@ -1,6 +1,6 @@
 {
   "@context": "https://openvex.dev/ns/v0.2.0",
-  "@id": "urn:uuid:e4807059-817d-5788-9299-ad1890545c88",
+  "@id": "urn:uuid:fe412073-9a21-59b9-b069-a6e23c020b72",
   "author": "Extra CODEOWNERS maintainers",
   "role": "VEX document producer",
   "statements": [
@@ -544,7 +544,7 @@
       "extra_codeowners/database.py": "39b4a8e6ab9b25b9e0781803ad0e9d00002b3a021bafe7a63c6b090a1fa7dc4a",
       "extra_codeowners/dco.py": "8c3a0b541fe021fb9f05500ca9278306901010c219e7e1199ca5e205c138e68d",
       "extra_codeowners/evaluator.py": "b81b9d1c6fe81d591867b0993d413030caab8af48703c4725f14c04fe2e3f9a6",
-      "extra_codeowners/github.py": "1dad6657157e2d54669fa0a265cc165c325bb7459349850cc8884658379c673e",
+      "extra_codeowners/github.py": "4034cb95ebc393e3aa38fd5fa1dab67d89076249f1fd44d0d83c980f8e3bfc35",
       "extra_codeowners/logging.py": "a59227e76ec7809ff8bb88fee997abb9b99f32e81a4c8d16bcfc72c0c0abf33f",
       "extra_codeowners/manifest.py": "02cb7f73bc5a6f9901eff2160d61e15a37e307f42a07863e3716d9bd60acee80",
       "extra_codeowners/metrics.py": "5817664d5fec676eecd0e60a84499061e6bf9e0403cd02e1b2a2c86b3611e2ef",
@@ -560,7 +560,7 @@
       "pyproject.toml": "4164e19c10e620b1cae1db22dab5728b4e80eb0f5a9dd768484b6f12de73fc96",
       "uv.lock": "029f0fe5b12940d2f8c4f36c5702f5e92f4aac1dc3bff75f2e90660a50dfdcc4"
     },
-    "review": "Reviewed installation REST budgeting, context-local scheduling lanes, and the additive SQL migration. Changes use bounded Python header parsing and SQLAlchemy transactions; no new native calls, subprocesses, FFI, scanf, SQLite FTS, or certificate parsing paths are introduced. Existing reviewed native vulnerability reachability conclusions remain applicable.",
+    "review": "Reviewed shared REST budgeting, request scheduling, rejected-token quota exclusion, and the additive SQL migration. The code adds bounded Python header parsing and SQLAlchemy transactions, without new native calls, subprocesses, FFI, scanf, SQLite FTS, or certificate parsing paths. Existing package reachability findings remain applicable.",
     "schema_version": 1
   }
 }
