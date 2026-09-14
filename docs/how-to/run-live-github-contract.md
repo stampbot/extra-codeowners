@@ -213,7 +213,7 @@ schema, completed observation, cleanup, and configured probe coverage:
 
 ```bash
 jq -e '
-  .schema_version == 2 and
+  .schema_version == 3 and
   .result == "observed" and
   .cleanup_succeeded == true and
   .evidence_completeness.configured_run_complete == true and

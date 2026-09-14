@@ -451,6 +451,19 @@ def test_legacy_status_only_observation_cannot_satisfy_failure_reset_probe() -> 
     assert not contract_interpretation(assertions)["github_contract_fail_closed"]
 
 
+@pytest.mark.parametrize(
+    "path",
+    [
+        "docs/how-to/run-live-github-contract.md",
+        "docs/reference/live-github-evidence-reports.md",
+    ],
+)
+def test_documented_fixture_verification_requires_the_emitted_schema(path: str) -> None:
+    assert (
+        f".schema_version == {contract_module.REPORT_SCHEMA_VERSION} and" in Path(path).read_text()
+    )
+
+
 def test_accepted_merge_uses_replacement_pull_and_remains_observed() -> None:
     fixture, replacements = fixture_for_merge_probe(200)
 
