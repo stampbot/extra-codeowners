@@ -54,7 +54,7 @@ first. Either lane helps with the other class when its own lane is empty. That
 keeps a busy webhook stream from starving missed-event repair, without putting
 new webhooks behind an old recovery backlog.
 
-Invalidation resets an existing managed check on the affected commit and queues
+When a managed check exists, invalidation resets it on the affected commit and queues
 every returned candidate that is still open on that commit. An evaluation with
 a relevant authority fence still waits to publish. Ordinary evaluation fetches
 the current base, head, changed files, reviews, team state, CODEOWNERS, and
@@ -119,7 +119,7 @@ worker.
 
 Each shared-head row carries two generation values. `generation` is the newest
 accepted work. `invalidated_generation` is the newest generation whose exact
-Check Run reset and pull-request fan-out finished. A gap between them is
+Check Run invalidation finished, including fan-out when a check exists. A gap between them is
 durable queue work.
 
 ```text
@@ -132,7 +132,11 @@ accept trigger
 leased exact generation -----------------+
       |
       v
-reset existing check and fan out
+look up existing check
+      |
+      +-- absent: no reset or fan-out needed
+      |
+      +-- present: inspect associated PRs, reset if open, and fan out
       |
       v
 generation invalidated; evaluations may publish
@@ -144,16 +148,19 @@ it checks the lease owner, expiry, and generation while holding the
 installation-and-head writer guard. A replacement owner or newer generation
 therefore fences the old worker before its reset.
 
-The worker looks up the existing Check Run by App, name, repository, and exact
-head, then updates that run by ID. It never creates a check while processing a
-historical head. If no managed check exists, the revocation finishes without a
-GitHub write. There is nothing to reset.
+The worker first looks up the existing Check Run by App, name, repository, and head. If none exists, it finishes invalidation without discovering associated pull requests or writing to GitHub. Queued PRs still receive their normal evaluation; this is not a decision to skip the repository.
 
-Next, the worker asks GitHub which pull requests use the commit. It rejects
+A later PR can advance the shared-head generation before an earlier enrolled PR is evaluated. The earlier evaluation requeues itself at the current generation instead of completing without a result. This also works if the later PR has moved to another commit. Rebinding uses the existing generation-fenced queue operation: it preserves newer different-head work and retries if the epoch advances again. The next attempt still requires completed invalidation and fresh shared-head evidence before success.
+
+Reconciliation also checks who recorded a completion. New workers confirm the completion timestamp; records from older workers lack a matching confirmation and are rechecked on the next scan. This prevents an old worker's discarded evaluation from suppressing a PR for the full recheck interval. The [database upgrade notes](../reference/upgrade-notes.md) cover the migration and required worker drain.
+
+The lookup and the following lease check run under the same cross-replica writer guard used to publish results. A newer event or lost lease prevents the worker from completing its old generation. The evaluator still fetches current repository policy and, before publishing any success, checks whether another open PR shares the head. No policy or approval evidence is cached by this shortcut.
+
+If a check exists, the worker asks GitHub which pull requests use the commit. It rejects
 malformed or contradictory responses. It fetches every returned candidate and
 confirms its current number, state, head, and base repository. The worker
 queues only candidates that are now open on the exact commit, at the same
-shared generation. A pull request that has moved to another head keeps its
+shared generation. When at least one is open, it resets the existing check by ID before queuing those evaluations. It never creates a check for a historical head. A pull request that has moved to another head keeps its
 newer work. If every associated pull request is now closed, the worker preserves
 any completed evaluation result as historical evidence. It ends an existing
 queued or in-progress check, or a marked interim failure, as `cancelled` after

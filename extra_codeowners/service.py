@@ -1304,6 +1304,17 @@ class EvaluationService:
 
         async with self._check_write_guard(job.installation_id, job.head_sha):
             await require_current_claim()
+            check_run_id = await self.github.existing_check_run_id(
+                job.installation_id,
+                job.repository_full_name,
+                job.head_sha,
+                self.settings.check_name,
+            )
+            await require_current_claim()
+            if check_run_id is None:
+                # There is no result to revoke. Evaluations rebind stale
+                # same-head work before attempting any publication.
+                return
             current_associated = await self._current_associated_pulls(
                 job.installation_id,
                 job.repository_full_name,
@@ -1314,17 +1325,11 @@ class EvaluationService:
                 state_value == "open" and associated_sha == job.head_sha
                 for state_value, associated_sha in current_associated.values()
             )
-            check_run_id = await self.github.existing_check_run_id(
-                job.installation_id,
-                job.repository_full_name,
-                job.head_sha,
-                self.settings.check_name,
-            )
             # Recheck after the GitHub read and immediately before the only
             # mutating request. An expired lease must never reset a result
             # published by its replacement.
             await require_current_claim()
-            if check_run_id is not None and has_open_associated_pull:
+            if has_open_associated_pull:
                 await self.github.reset_check_run(
                     job.installation_id,
                     job.repository_full_name,
@@ -1457,6 +1462,31 @@ class EvaluationService:
                     job,
                     head_sha,
                 ):
+                    # Another PR may have advanced this head's generation
+                    # without creating a check. Preserve this enrolled job
+                    # instead of completing it without an evaluation.
+                    current_generation = await asyncio.to_thread(
+                        self.store.shared_head_generation,
+                        job.installation_id,
+                        job.repository_full_name,
+                        head_sha,
+                    )
+                    rebound = await asyncio.to_thread(
+                        self.store.enqueue_for_shared_head_generation,
+                        JobRequest(
+                            installation_id=job.installation_id,
+                            repository_full_name=job.repository_full_name,
+                            pull_number=job.pull_number,
+                            reason="shared_head_generation_changed",
+                            head_sha_hint=head_sha,
+                            work_class=job.work_class,
+                        ),
+                        current_generation,
+                    )
+                    if not rebound:
+                        raise SharedHeadInvalidationPendingError(
+                            "shared-head generation changed while rebinding evaluation"
+                        )
                     return
                 await self.github.upsert_check_run(
                     job.installation_id,

@@ -42,8 +42,8 @@ from sqlalchemy.pool import NullPool
 
 from extra_codeowners.trace_context import TrustedTraceContext
 
-SCHEMA_VERSION = 5
-DATABASE_MIGRATION_HEAD = "0006_webhook_trace_links"
+SCHEMA_VERSION = 6
+DATABASE_MIGRATION_HEAD = "0007_reconciliation_completion"
 DATABASE_CONNECT_TIMEOUT_SECONDS = 3
 DATABASE_POOL_TIMEOUT_SECONDS = 2
 DATABASE_STATEMENT_TIMEOUT_MILLISECONDS = 3_000
@@ -378,6 +378,9 @@ class ReconciliationState(Base):
     completed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utcnow
     )
+    # Older workers can complete a discarded stale-generation evaluation.
+    # Trust a completion only when its writer also confirmed this timestamp.
+    confirmed_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     observed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utcnow
     )
@@ -1879,6 +1882,7 @@ class QueueStore:
                     if (
                         state is not None
                         and state.head_sha == request.head_sha_hint
+                        and state.confirmed_completed_at == state.completed_at
                         and completed_at is not None
                         and completed_at > now - timedelta(seconds=recheck_seconds)
                     ):
@@ -3092,12 +3096,14 @@ class QueueStore:
                             **state_key,
                             head_sha=completed.head_sha_hint,
                             completed_at=now,
+                            confirmed_completed_at=now,
                             observed_at=now,
                         )
                     )
                 else:
                     state.head_sha = completed.head_sha_hint
                     state.completed_at = now
+                    state.confirmed_completed_at = now
                     state.observed_at = now
             return True
 

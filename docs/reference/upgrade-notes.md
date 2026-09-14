@@ -13,11 +13,11 @@ The alpha series establishes this compatibility contract:
 
 | Field | Contract |
 | --- | --- |
-| Database head | `0006_webhook_trace_links` |
-| Head change | Yes; this alpha revision retains optional webhook trace links. |
-| Supported source releases | `0.1.0-alpha.14` after a controlled migration from `0005_reconciliation_state_index`. |
+| Database head | `0007_reconciliation_completion` |
+| Head change | Yes; completions from older workers must be rechecked. |
+| Supported source releases | `0.1.0-alpha.42` at `0006_webhook_trace_links`, or `0.1.0-alpha.14` at `0005_reconciliation_state_index`, after a controlled migration. |
 | Target application compatible before migration | No; startup requires the exact head. |
-| Required process state | Stop webhook ingress and every older worker before applying `0006_webhook_trace_links`. Suspend GitOps reconciliation and remove the HPA before scaling a Kubernetes Deployment to zero. |
+| Required process state | Stop webhook ingress and every older worker before applying `0007_reconciliation_completion`. Suspend GitOps reconciliation and remove the HPA before scaling a Kubernetes Deployment to zero. |
 | In-place database downgrade | Not supported. |
 | Rollback after head change | Restore the verified pre-migration backup. An older image rejects this head. |
 | Backup required | Yes, before deployment and before every pre-release schema adoption. |
@@ -71,10 +71,27 @@ The link is diagnostic only: it does not change queue ordering, evaluation, or
 Check Run publication. Existing and unsampled deliveries remain unlinked. The
 compatibility marker moves from `4` to `5`.
 
+Revision `0007_reconciliation_completion` adds a nullable confirmation timestamp
+to each retained reconciliation completion. New workers write it together with
+the completion time. The reconciler honors the usual recheck interval only
+when the two timestamps match. The compatibility marker moves from `5` to `6`.
+
+Older workers could discard a stale evaluation and still record its completion.
+The migration leaves those records unconfirmed, so the next scan queues them
+even if their configured recheck interval hasn't elapsed. An older writer that
+inserts or updates a completion cannot supply the matching confirmation. This
+also prevents its records from suppressing recovery after an interrupted
+upgrade. The marker is cache validation, not approval evidence.
+
+Expect one additional evaluation of each retained open PR after migration.
+GitHub backpressure and the recovery queue still apply; this is not a promise
+that all checks refresh during the first scan. Follow the independent check
+inventory in the [upgrade procedure](../how-to/upgrade.md#6-deploy-and-verify).
+
 An already-running process does not revalidate the Alembic head before every
 claim. Stop every older ingress, worker, and reconciler before this revision
 runs. Start only the target artifact after `database check` reports
-`0006_webhook_trace_links` and validates that artifact's
+`0007_reconciliation_completion` and validates that artifact's
 `required-release-contract`. Readiness removes an old process from webhook
 traffic after migration, but it does not cancel work that process already
 claimed. For Kubernetes, a zero-replica Deployment is not proof of a drain

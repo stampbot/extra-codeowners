@@ -48,6 +48,44 @@ def test_all_migration_identifiers_fit_postgresql_alembic_storage() -> None:
     assert all(len(revision.revision) <= 32 for revision in revisions)
 
 
+def test_alpha_forty_two_completion_is_rechecked_after_upgrade(tmp_path: Path) -> None:
+    url = database_url(tmp_path)
+    upgrade_database(url, revision="0006_webhook_trace_links")
+    engine = create_engine(url)
+    with engine.begin() as connection:
+        connection.execute(
+            text("""
+                INSERT INTO reconciliation_states
+                (installation_id, repository_full_name, pull_number,
+                 head_sha, completed_at, observed_at)
+                VALUES (17, 'example/project', 41, :head, :now, :now)
+            """),
+            {"head": "a" * 40, "now": database.utcnow()},
+        )
+    engine.dispose()
+    upgrade_database(url)
+    store = QueueStore(url)
+    try:
+        store.initialize()
+        with store.session() as session:
+            state = session.get(database.ReconciliationState, (17, "example/project", 41))
+            assert state is not None
+            assert state.confirmed_completed_at is None
+        assert store.enqueue_reconciliation_if_due(
+            database.JobRequest(
+                17,
+                "example/project",
+                41,
+                "periodic_reconciliation",
+                "a" * 40,
+                observed_at=database.utcnow(),
+            ),
+            recheck_seconds=604800,
+        )
+    finally:
+        store.close()
+
+
 def test_alpha_eight_database_upgrades_to_the_retention_index(tmp_path: Path) -> None:
     """Exercise the direct upgrade path from the previously released alpha."""
     url = database_url(tmp_path)
@@ -92,7 +130,7 @@ def test_alpha_fourteen_database_upgrades_to_webhook_trace_links(tmp_path: Path)
         )
     engine.dispose()
     assert current_revision(url) == DATABASE_MIGRATION_HEAD
-    assert marker == 5
+    assert marker == database.SCHEMA_VERSION
     expected_columns = {
         "producer_trace_id": (32, True),
         "producer_span_id": (16, True),
@@ -281,7 +319,7 @@ def test_retry_schema_upgrades_existing_jobs_to_fail_closed_shared_head_fences(
             ),
             {"head_sha": "b" * 40},
         ).one()
-    assert marker == 5
+    assert marker == database.SCHEMA_VERSION
     assert queued_generations == {42: 0, 43: 1}
     assert tuple(migrated_epoch) == (1, 0)
     assert shared_generation["nullable"] is False

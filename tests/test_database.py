@@ -881,6 +881,51 @@ def test_reconciliation_rechecks_unchanged_heads_on_a_bounded_cadence(tmp_path: 
     assert store.shared_head_generation(17, "example/project", "b" * 40) == 1
 
 
+@pytest.mark.parametrize("old_writer_updates_existing", [False, True])
+def test_reconciliation_rechecks_unconfirmed_old_worker_completion(
+    tmp_path: Path, old_writer_updates_existing: bool
+) -> None:
+    store = make_store(tmp_path)
+    request = JobRequest(
+        17,
+        "example/project",
+        41,
+        "periodic_reconciliation",
+        "a" * 40,
+        observed_at=utcnow(),
+    )
+    if old_writer_updates_existing:
+        store.enqueue(request)
+        claimed = store.claim("new-worker", 60, "recovery")
+        assert claimed is not None
+        assert store.complete(claimed, "new-worker")
+        assert not store.enqueue_reconciliation_if_due(request, 604800)
+
+    # Execute only the columns written by the old worker. It either inserts
+    # an unconfirmed row or changes completed_at without the confirmation.
+    with store.engine.begin() as connection:
+        if old_writer_updates_existing:
+            connection.execute(
+                text("UPDATE reconciliation_states SET completed_at = :now"),
+                {"now": utcnow() + timedelta(seconds=1)},
+            )
+        else:
+            connection.execute(
+                text("""
+                    INSERT INTO reconciliation_states
+                    (installation_id, repository_full_name, pull_number,
+                     head_sha, completed_at, observed_at)
+                    VALUES (17, 'example/project', 41, :head, :now, :now)
+                """),
+                {"head": request.head_sha_hint, "now": utcnow()},
+            )
+    assert store.enqueue_reconciliation_if_due(request, 604800)
+    claimed = store.claim("new-worker", 60, "recovery")
+    assert claimed is not None
+    assert store.complete(claimed, "new-worker")
+    assert not store.enqueue_reconciliation_if_due(request, 604800)
+
+
 def test_completed_direct_epoch_becomes_recovery_work_on_later_recheck(tmp_path: Path) -> None:
     store = make_store(tmp_path)
     direct = JobRequest(17, "example/project", 41, "pull_request.opened", "a" * 40)
