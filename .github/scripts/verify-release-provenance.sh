@@ -245,11 +245,14 @@ for architecture in amd64 arm64; do
     continue
   fi
   verify_release_file "${source_bundle}"
+  # A rescan runs today's verifier against an older release. Read its lock as
+  # data from the attested revision without checking out or executing old code.
+  git show "${revision}:uv.lock" >"${temporary_directory}/release-uv.lock"
   python -I -S -B tools/release_python_sources.py verify \
     --architecture "${architecture}" \
     --platform-digest "$(<"${asset_directory}/digest-${architecture}.txt")" \
     --inventory "${inventory}" \
-    --lock uv.lock \
+    --lock "${temporary_directory}/release-uv.lock" \
     --bundle "${source_bundle}"
 done
 verify_release_file "${vex}"

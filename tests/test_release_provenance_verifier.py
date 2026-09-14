@@ -434,6 +434,25 @@ if arguments[0] == "verify-blob":
     fake_sleep.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
     fake_sleep.chmod(0o755)
 
+    fake_git = fake_bin / "git"
+    fake_git.write_text(
+        """#!/usr/bin/env python3
+import os
+import sys
+from pathlib import Path
+arguments = sys.argv[1:]
+with Path(os.environ["FAKE_OPERATION_LOG"]).open("a", encoding="utf-8") as log:
+    print("git " + " ".join(arguments), file=log)
+if arguments != ["show", os.environ["FAKE_EXPECTED_REVISION"] + ":uv.lock"]:
+    raise SystemExit(97)
+if os.environ.get("FAKE_MISSING_RELEASE_LOCK") == "true":
+    raise SystemExit(128)
+sys.stdout.buffer.write(Path(os.environ["FAKE_RELEASE_LOCK"]).read_bytes())
+""",
+        encoding="utf-8",
+    )
+    fake_git.chmod(0o755)
+
 
 def _tamper_source_distribution(asset_directory: Path) -> None:
     (asset_directory / f"extra_codeowners-{PYTHON_VERSION}.tar.gz").write_bytes(
@@ -589,7 +608,10 @@ def _run_verifier(
         checkout = tmp_path / "checkout"
         checkout.mkdir()
         (checkout / "tools").symlink_to(ROOT / "tools", target_is_directory=True)
-        (checkout / "uv.lock").write_bytes(PYTHON_SOURCE_LOCK)
+        (checkout / "uv.lock").write_text("version = 999\n")
+        release_lock = tmp_path / "release-uv.lock"
+        release_lock.write_bytes(PYTHON_SOURCE_LOCK)
+        verifier_environment["FAKE_RELEASE_LOCK"] = str(release_lock)
     result = subprocess.run(  # noqa: S603 - deliberately exercises the reviewed script
         [
             BASH,
@@ -774,6 +796,7 @@ def test_release_provenance_verifier_rejects_invalid_or_ambiguous_evidence(
 def test_release_provenance_verifies_python_sources(tmp_path: Path) -> None:
     result, operations = _run_verifier(tmp_path, python_delivery=True)
     assert result.returncode == 0, result.stderr
+    assert f"git show {REVISION}:uv.lock" in operations
     for architecture in ("amd64", "arm64"):
         name = f"python-source-{architecture}.tar.gz"
         assert any("gh attestation verify" in op and name in op for op in operations)
@@ -789,5 +812,13 @@ def test_release_provenance_requires_declared_python_sources(tmp_path: Path, suf
         mutate_assets=lambda directory: (
             directory / f"python-source-arm64.tar.gz{suffix}"
         ).unlink(),
+    )
+    assert result.returncode != 0
+
+
+@pytest.mark.skipif(BASH is None or JQ is None, reason="Bash and jq are required")
+def test_release_provenance_does_not_fall_back_to_current_lock(tmp_path: Path) -> None:
+    result, _ = _run_verifier(
+        tmp_path, python_delivery=True, environment={"FAKE_MISSING_RELEASE_LOCK": "true"}
     )
     assert result.returncode != 0
