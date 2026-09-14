@@ -14,6 +14,11 @@ IMAGE = "ghcr.io/stampbot/extra-codeowners"
 CHART = "ghcr.io/stampbot/charts/extra-codeowners"
 TAG = re.compile(r"v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(alpha|beta|rc)\.(0|[1-9]\d*))?")
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
+SOURCE_BUNDLE_LIMITS = {
+    "debian-source.tar": 512 * 1024 * 1024,
+    "python-source-amd64.tar.gz": 256 * 1024 * 1024,
+    "python-source-arm64.tar.gz": 256 * 1024 * 1024,
+}
 
 
 class RescanError(ValueError):
@@ -66,13 +71,13 @@ def select_release(releases: list[dict[str, Any]], requested: str = "") -> dict[
         names.add(name)
         # Source archives have their own bounded allowance. Ordinary release
         # evidence retains the existing per-file and aggregate limits.
-        limit = (512 if name == "debian-source.tar" else 128) * 1024 * 1024
+        limit = SOURCE_BUNDLE_LIMITS.get(name, 128 * 1024 * 1024)
         if type(size) is not int or not 0 < size <= limit:
             raise RescanError("release asset size is outside its bound")
-        if name != "debian-source.tar":
+        if name not in SOURCE_BUNDLE_LIMITS:
             total += size
     if total > 512 * 1024 * 1024:
-        raise RescanError("release evidence excluding Debian source exceeds 512 MiB")
+        raise RescanError("release evidence excluding source bundles exceeds 512 MiB")
     return {"tag": tag, "version": tag[1:], "python_version": python_version}
 
 

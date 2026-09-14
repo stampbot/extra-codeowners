@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from tools import release_debian_sources
+from tools import release_debian_sources, release_python_sources
 from tools.release_notices import build_notice_bundle
 from tools.release_sources import build_bundle as build_source_bundle
 
@@ -37,6 +37,17 @@ PACKAGE_METADATA_PATH = (
     "opt/venv/lib/python3.14/site-packages/example_package-1.0.0.dist-info/METADATA"
 )
 PACKAGE_METADATA = b"Metadata-Version: 2.4\nName: example-package\nVersion: 1.0.0\n"
+PYTHON_SOURCE = b"opaque example-package source archive"
+PYTHON_SOURCE_LOCK = f"""version = 1
+[[package]]
+name = "example-package"
+version = "1.0.0"
+source = {{registry = "https://pypi.org/simple"}}
+[package.sdist]
+url = "https://files.pythonhosted.org/packages/aa/bb/{"c" * 60}/example-package-1.0.0.tar.gz"
+hash = "sha256:{hashlib.sha256(PYTHON_SOURCE).hexdigest()}"
+size = {len(PYTHON_SOURCE)}
+""".encode()
 
 
 def _raw_container_inventory(architecture: str, platform_digest: str) -> bytes:
@@ -423,6 +434,25 @@ if arguments[0] == "verify-blob":
     fake_sleep.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
     fake_sleep.chmod(0o755)
 
+    fake_git = fake_bin / "git"
+    fake_git.write_text(
+        """#!/usr/bin/env python3
+import os
+import sys
+from pathlib import Path
+arguments = sys.argv[1:]
+with Path(os.environ["FAKE_OPERATION_LOG"]).open("a", encoding="utf-8") as log:
+    print("git " + " ".join(arguments), file=log)
+if arguments != ["show", os.environ["FAKE_EXPECTED_REVISION"] + ":uv.lock"]:
+    raise SystemExit(97)
+if os.environ.get("FAKE_MISSING_RELEASE_LOCK") == "true":
+    raise SystemExit(128)
+sys.stdout.buffer.write(Path(os.environ["FAKE_RELEASE_LOCK"]).read_bytes())
+""",
+        encoding="utf-8",
+    )
+    fake_git.chmod(0o755)
+
 
 def _tamper_source_distribution(asset_directory: Path) -> None:
     (asset_directory / f"extra_codeowners-{PYTHON_VERSION}.tar.gz").write_bytes(
@@ -468,11 +498,18 @@ def _run_verifier(
     mutate_assets: Callable[[Path], None] | None = None,
     source_delivery: bool = False,
     debian_delivery: bool = False,
+    python_delivery: bool = False,
     full_distro: object = None,
 ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
     asset_directory = tmp_path / "release-assets"
     asset_directory.mkdir()
     release_files = _release_files()
+    if python_delivery:
+        for architecture in ("amd64", "arm64"):
+            filename = f"distribution-inventory-{architecture}.json"
+            inventory = json.loads(release_files[filename])
+            inventory["python"]["source_bundle"] = f"python-source-{architecture}.tar.gz"
+            release_files[filename] = json.dumps(inventory).encode()
     if debian_delivery:
         for architecture in ("amd64", "arm64"):
             filename = f"distribution-inventory-{architecture}.json"
@@ -491,10 +528,24 @@ def _run_verifier(
             release_files[f"recipient-notices-{architecture}.tar.gz"] = _recipient_notices(
                 architecture, digest, release_files[filename]
             )
-    if source_delivery or debian_delivery:
+    if source_delivery or debian_delivery or python_delivery:
         _add_source_bundles(release_files)
     if debian_delivery:
         _add_debian_source_bundle(release_files)
+    if python_delivery:
+        for architecture, digest in (
+            ("amd64", AMD64_PLATFORM_DIGEST),
+            ("arm64", ARM64_PLATFORM_DIGEST),
+        ):
+            manifest = release_python_sources.plan(
+                release_files[f"distribution-inventory-{architecture}.json"],
+                PYTHON_SOURCE_LOCK,
+                architecture,
+                digest,
+            )
+            release_files[f"python-source-{architecture}.tar.gz"] = release_python_sources.build(
+                manifest, {manifest["sources"][0]["path"]: PYTHON_SOURCE}
+            )
     signed_files = {
         f"extra_codeowners-{PYTHON_VERSION}-py3-none-any.whl",
         f"extra_codeowners-{PYTHON_VERSION}.tar.gz",
@@ -507,6 +558,8 @@ def _run_verifier(
         "cpython-source-amd64.tar.gz",
         "cpython-source-arm64.tar.gz",
         "debian-source.tar",
+        "python-source-amd64.tar.gz",
+        "python-source-arm64.tar.gz",
     }
     for name, contents in release_files.items():
         artifact = asset_directory / name
@@ -550,6 +603,15 @@ def _run_verifier(
         verifier_environment |= dict(environment)
 
     assert BASH is not None
+    checkout = ROOT
+    if python_delivery:
+        checkout = tmp_path / "checkout"
+        checkout.mkdir()
+        (checkout / "tools").symlink_to(ROOT / "tools", target_is_directory=True)
+        (checkout / "uv.lock").write_text("version = 999\n")
+        release_lock = tmp_path / "release-uv.lock"
+        release_lock.write_bytes(PYTHON_SOURCE_LOCK)
+        verifier_environment["FAKE_RELEASE_LOCK"] = str(release_lock)
     result = subprocess.run(  # noqa: S603 - deliberately exercises the reviewed script
         [
             BASH,
@@ -563,7 +625,7 @@ def _run_verifier(
             VERSION,
             REVISION,
         ],
-        cwd=ROOT,
+        cwd=checkout,
         env=verifier_environment,
         check=False,
         capture_output=True,
@@ -728,3 +790,35 @@ def test_release_provenance_verifier_rejects_invalid_or_ambiguous_evidence(
         for operation in operations
         for forbidden in (" sign", " release create", " release edit", " release delete")
     )
+
+
+@pytest.mark.skipif(BASH is None or JQ is None, reason="Bash and jq are required")
+def test_release_provenance_verifies_python_sources(tmp_path: Path) -> None:
+    result, operations = _run_verifier(tmp_path, python_delivery=True)
+    assert result.returncode == 0, result.stderr
+    assert f"git show {REVISION}:uv.lock" in operations
+    for architecture in ("amd64", "arm64"):
+        name = f"python-source-{architecture}.tar.gz"
+        assert any("gh attestation verify" in op and name in op for op in operations)
+        assert any("cosign verify-blob" in op and name in op for op in operations)
+
+
+@pytest.mark.parametrize("suffix", ["", ".sigstore.json"])
+@pytest.mark.skipif(BASH is None or JQ is None, reason="Bash and jq are required")
+def test_release_provenance_requires_declared_python_sources(tmp_path: Path, suffix: str) -> None:
+    result, _ = _run_verifier(
+        tmp_path,
+        python_delivery=True,
+        mutate_assets=lambda directory: (
+            directory / f"python-source-arm64.tar.gz{suffix}"
+        ).unlink(),
+    )
+    assert result.returncode != 0
+
+
+@pytest.mark.skipif(BASH is None or JQ is None, reason="Bash and jq are required")
+def test_release_provenance_does_not_fall_back_to_current_lock(tmp_path: Path) -> None:
+    result, _ = _run_verifier(
+        tmp_path, python_delivery=True, environment={"FAKE_MISSING_RELEASE_LOCK": "true"}
+    )
+    assert result.returncode != 0
