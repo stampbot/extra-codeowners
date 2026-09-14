@@ -1,0 +1,310 @@
+{
+  "vulnerability": "CVE-2026-5450",
+  "reviewed_at": "2026-09-14",
+  "image_version": "0.1.0-alpha.41",
+  "method": "Reviewed disassembly of calls through scanf-family PLT/GOT entries on both architectures and calls to exported scanf-family entrypoints within glibc. Correlated CPython and OpenSSL sources. ARM64 stack-spilled format addresses at libselinux offsets 0x13750/0x1d988 and _remote_debugging offset 0x3108 were followed manually to constant data. This is a human-reviewed evidence record, not an automatic reachability proof.",
+  "scope": "Shipped Extra CODEOWNERS behavior. Does not cover arbitrary commands, SQL, FFI, native plugins, or custom application code. Re-review changed native binaries or newly exposed format-taking APIs; hashes identify the binaries inspected, not a promise about later wheel builds.",
+  "platforms": {
+    "amd64": {
+      "platform_digest": "sha256:a205c98e47a94510219e8ff49f336c0f76dca7e93ecf813341cb06ff90d14251",
+      "files": [
+        {
+          "path": "opt/venv/lib/python3.14/site-packages/_cffi_backend.cpython-314-x86_64-linux-gnu.so",
+          "sha256": "94dd8e25ae4cb0639a50ea84f9dfab5deb6d7a3acd5949981d920e3fe4eb7304",
+          "fixed_formats_by_call_offset": {
+            "0xa2f7": "%*s %*c%c",
+            "0x35caa": "%lx-%lx %9s %lx %9s %ld %s"
+          },
+          "format_forwarders_by_call_offset": {}
+        },
+        {
+          "path": "opt/venv/lib/python3.14/site-packages/cryptography/hazmat/bindings/_rust.abi3.so",
+          "sha256": "613ec570594be2691ce18fe8aa51aa4716584c0e586ec97dd790c4b9757b5a83",
+          "fixed_formats_by_call_offset": {
+            "0x81f00f": "%u",
+            "0x81f887": "%d"
+          },
+          "format_forwarders_by_call_offset": {}
+        },
+        {
+          "path": "opt/venv/lib/python3.14/site-packages/psycopg_binary.libs/libcrypto-e7530dde.so.3",
+          "sha256": "3761d43a07bc3a119cfce159a0ae50b5fd526bd9db8bf9e87626487d12fc89cd",
+          "fixed_formats_by_call_offset": {
+            "0x2316be": "%u",
+            "0x231e33": "%d"
+          },
+          "format_forwarders_by_call_offset": {}
+        },
+        {
+          "path": "opt/venv/lib/python3.14/site-packages/psycopg_binary.libs/libkeyutils-dfe70bd6.so.1.5",
+          "sha256": "c29e41b03cf4b2dffbfb4960946e2b42f82c0ca5d53d231d3f0fc597ba274488",
+          "fixed_formats_by_call_offset": {
+            "0x1d05": "%[^;];%d;%d;%x;",
+            "0x2063": "%x %*s %*u %*s %*x %*d %*d %s %n"
+          },
+          "format_forwarders_by_call_offset": {}
+        },
+        {
+          "path": "opt/venv/lib/python3.14/site-packages/psycopg_binary.libs/libpq-2be5f14a.so.5.18",
+          "sha256": "3918e961944c87346958a1fd8f6618f386af647c080bdda53cea03cb74327e88",
+          "fixed_formats_by_call_offset": {
+            "0x19509": "%d.%d.%d"
+          },
+          "format_forwarders_by_call_offset": {}
+        },
+        {
+          "path": "opt/venv/lib/python3.14/site-packages/psycopg_binary.libs/libselinux-0922c95c.so.1",
+          "sha256": "d4fa8e7fb3add960a68325a59c9694244aea3213fd739a50815cb067c4965654",
+          "fixed_formats_by_call_offset": {
+            "0xb87b": "%x %x %x %x %u %x",
+            "0xc5be": "%u",
+            "0xcd42": "%d",
+            "0xe642": "%d",
+            "0x1023a": "%ms %ms %ms %ms",
+            "0x13049": "%ms %ms ",
+            "0x1391e": "%ms %ms %ms ",
+            "0x164f2": "%u",
+            "0x1c0c9": "%hu",
+            "0x1c226": "%u"
+          },
+          "format_forwarders_by_call_offset": {}
+        },
+        {
+          "path": "usr/lib/x86_64-linux-gnu/libcrypto.so.3",
+          "sha256": "8bb5f3fdffe280d4453eb79a4663c2c47af70b7c247fe2e94e2da703cee1fd3d",
+          "fixed_formats_by_call_offset": {
+            "0x26d419": "%u",
+            "0x26dcc7": "%d"
+          },
+          "format_forwarders_by_call_offset": {}
+        },
+        {
+          "path": "usr/lib/x86_64-linux-gnu/libncursesw.so.6.5",
+          "sha256": "ea1e3fea29b3d3f35e240f626e5e783885d1d17f7915e7840f2a1542058c154c",
+          "fixed_formats_by_call_offset": {
+            "0xf453": "%d/%d/%d",
+            "0x1d47c": "%d%c%d%c"
+          },
+          "format_forwarders_by_call_offset": {
+            "0x1acc6": "vwscanw forwards a caller-supplied format to vsscanf; the service does not use this ncurses API, and CPython _curses does not expose scanw/vwscanw."
+          }
+        },
+        {
+          "path": "usr/lib/x86_64-linux-gnu/libuuid.so.1.3.0",
+          "sha256": "632fd43a9d8d6f3496833b7e62e7840f397163373dddf8b8eb0b2b7f36593117",
+          "fixed_formats_by_call_offset": {
+            "0x26ec": "clock: %04x tv: %lu %lu adj: %d\n",
+            "0x2f48": "cont: %lu\n"
+          },
+          "format_forwarders_by_call_offset": {}
+        },
+        {
+          "path": "usr/local/lib/libpython3.14.so.1.0",
+          "sha256": "f043f7292aa19f8df1bb4be7ea4c65ebed8d75ead989fae98c604b6c9680fc4e",
+          "fixed_formats_by_call_offset": {
+            "0x186f30": "%lx-%lx %4s %*s %*s %*s %n"
+          },
+          "format_forwarders_by_call_offset": {}
+        },
+        {
+          "path": "usr/local/lib/python3.14/lib-dynload/_curses.cpython-314-x86_64-linux-gnu.so",
+          "sha256": "ab4671ae302a2a2d2bfdc0ff201a12da91c518753526145fad1d04b87d9c3adb",
+          "fixed_formats_by_call_offset": {
+            "0x1174b": "%*[^0-9]%lu.%lu.%lu"
+          },
+          "format_forwarders_by_call_offset": {}
+        },
+        {
+          "path": "usr/local/lib/python3.14/lib-dynload/_remote_debugging.cpython-314-x86_64-linux-gnu.so",
+          "sha256": "e6487ceaf0a260ea5585a26cee1cc96296351890c0f1ec721d060eeca79276ff",
+          "fixed_formats_by_call_offset": {
+            "0x3f52": "%lx-%lx %4s %*s %*s %*s %n"
+          },
+          "format_forwarders_by_call_offset": {}
+        },
+        {
+          "path": "usr/local/lib/python3.14/lib-dynload/_socket.cpython-314-x86_64-linux-gnu.so",
+          "sha256": "cfc141d8ae76195983d3c8ffb2d18cac69d78d3daa29eda79f21f11319411300",
+          "fixed_formats_by_call_offset": {
+            "0x78f8": "%X:%X:%X:%X:%X:%X%c"
+          },
+          "format_forwarders_by_call_offset": {}
+        },
+        {
+          "path": "usr/lib/x86_64-linux-gnu/libc.so.6",
+          "sha256": "fa430b8f298f817a266046af84a77533185ad6fc4406c7d3787b5a0a0c207826",
+          "fixed_formats_by_call_offset": {
+            "0x94183": "%lx-%lx",
+            "0xd1108": "%hu%n:%hu%n:%hu%n",
+            "0xd11ec": "%hu%n:%hu%n:%hu%n",
+            "0xd126b": "%hu%n:%hu%n:%hu%n",
+            "0xd14b8": "%hu%n:%hu%n:%hu%n",
+            "0xd154d": "M%hu.%hu.%hu%n",
+            "0x10d1d2": " %d %d "
+          },
+          "format_forwarders_by_call_offset": {
+            "0x58edf": "fscanf forwards its format argument within glibc. The external caller formats were reviewed separately; no native dependency imports fwscanf.",
+            "0x829cf": "fwscanf forwards its format argument within glibc. The external caller formats were reviewed separately; no native dependency imports fwscanf."
+          }
+        }
+      ]
+    },
+    "arm64": {
+      "platform_digest": "sha256:4cffcd4d30af9afc4bcfa138b508e136a61d60e1ad3530f8ecf1848af2191898",
+      "files": [
+        {
+          "path": "opt/venv/lib/python3.14/site-packages/_cffi_backend.cpython-314-aarch64-linux-gnu.so",
+          "sha256": "40d7f8aee4072187f35ec3173499d8f28210f4425755361dfc76a31c65bc8e3e",
+          "fixed_formats_by_call_offset": {
+            "0xd534": "%*s %*c%c",
+            "0x43910": "%lx-%lx %9s %lx %9s %ld %s"
+          },
+          "format_forwarders_by_call_offset": {}
+        },
+        {
+          "path": "opt/venv/lib/python3.14/site-packages/cryptography/hazmat/bindings/_rust.abi3.so",
+          "sha256": "62bcd2062548a2e0815fa4253a7a19d24ac96bfcaa98570dd323cf3cc94e0c03",
+          "fixed_formats_by_call_offset": {
+            "0x66d0c4": "%u",
+            "0x66d260": "%u",
+            "0x66d7bc": "%d"
+          },
+          "format_forwarders_by_call_offset": {}
+        },
+        {
+          "path": "opt/venv/lib/python3.14/site-packages/psycopg_binary.libs/libcrypto-6aa7cfbd.so.1.1.1k",
+          "sha256": "812beb4bad6faa3bf1e191ad301f7a5a55bbcae360b63dca50ad262f585c4e2d",
+          "fixed_formats_by_call_offset": {
+            "0x1d4800": "%d.%d.%d.%d"
+          },
+          "format_forwarders_by_call_offset": {}
+        },
+        {
+          "path": "opt/venv/lib/python3.14/site-packages/psycopg_binary.libs/libcrypto-ce0cb7ba.so.3",
+          "sha256": "a2817306e0fe8c5533190cd48315c6d0f69c80d70b1373f76fba948a29ce4264",
+          "fixed_formats_by_call_offset": {
+            "0x211ac8": "%u",
+            "0x211c70": "%u",
+            "0x2121d8": "%d"
+          },
+          "format_forwarders_by_call_offset": {}
+        },
+        {
+          "path": "opt/venv/lib/python3.14/site-packages/psycopg_binary.libs/libkeyutils-fe6e95a9.so.1.6",
+          "sha256": "0d2a628040cf8f759447db3556701af6aa4b5b3e36a7a55d07a944c52ce33d22",
+          "fixed_formats_by_call_offset": {
+            "0x1e5c": "%[^;];%d;%d;%x;",
+            "0x2210": "%x %*s %*u %*s %*x %*d %*d %s %n"
+          },
+          "format_forwarders_by_call_offset": {}
+        },
+        {
+          "path": "opt/venv/lib/python3.14/site-packages/psycopg_binary.libs/libpq-074fb160.so.5.18",
+          "sha256": "0611dc626e66890f46a064f20e62248476a7f8f06db5b0a162a2a9cb836c1eed",
+          "fixed_formats_by_call_offset": {
+            "0x1bf64": "%d.%d.%d"
+          },
+          "format_forwarders_by_call_offset": {}
+        },
+        {
+          "path": "opt/venv/lib/python3.14/site-packages/psycopg_binary.libs/libselinux-be7a4dc7.so.1",
+          "sha256": "58019414d2ee2751e77c4afe45c72c880f3f74e053c368b04a01d983f8bbf851",
+          "fixed_formats_by_call_offset": {
+            "0xbe94": "%d",
+            "0xc070": "%x %x %x %x %u %x",
+            "0xcd64": "%u",
+            "0xd484": "%d",
+            "0xec3c": "%d",
+            "0xfda8": "%ms %ms %ms %ms",
+            "0x12e34": "%ms %ms ",
+            "0x13750": "%ms %ms %ms ",
+            "0x164d4": "%u",
+            "0x17c7c": "%d",
+            "0x1d890": "%hu",
+            "0x1d988": "%u"
+          },
+          "format_forwarders_by_call_offset": {}
+        },
+        {
+          "path": "usr/lib/aarch64-linux-gnu/libcrypto.so.3",
+          "sha256": "ad2d83bfb64c15110615fbee4161ee2cbe890abe0c924c459f63f89d4085940d",
+          "fixed_formats_by_call_offset": {
+            "0x251b40": "%u",
+            "0x251d3c": "%u",
+            "0x252474": "%d"
+          },
+          "format_forwarders_by_call_offset": {}
+        },
+        {
+          "path": "usr/lib/aarch64-linux-gnu/libncursesw.so.6.5",
+          "sha256": "c686275a2b0129ff95a17e09dc0c58a44fb306386e472212ca541951e527c91c",
+          "fixed_formats_by_call_offset": {
+            "0xed4c": "%d/%d/%d",
+            "0x1cc94": "%d%c%d%c"
+          },
+          "format_forwarders_by_call_offset": {
+            "0x1a568": "vwscanw forwards a caller-supplied format to vsscanf; the service does not use this ncurses API, and CPython _curses does not expose scanw/vwscanw."
+          }
+        },
+        {
+          "path": "usr/lib/aarch64-linux-gnu/libuuid.so.1.3.0",
+          "sha256": "0d9006452200e01835c6bb4d33bc93da4704410050e87f42475c9b24bcab555c",
+          "fixed_formats_by_call_offset": {
+            "0x1d88": "clock: %04x tv: %lu %lu adj: %d\n",
+            "0x266c": "cont: %lu\n"
+          },
+          "format_forwarders_by_call_offset": {}
+        },
+        {
+          "path": "usr/local/lib/libpython3.14.so.1.0",
+          "sha256": "1e2a6cb8843469a26536e157eee8bc24d61151ed7d7d75dfae5136968f15b641",
+          "fixed_formats_by_call_offset": {
+            "0xfd90c": "%lx-%lx %4s %*s %*s %*s %n"
+          },
+          "format_forwarders_by_call_offset": {}
+        },
+        {
+          "path": "usr/local/lib/python3.14/lib-dynload/_curses.cpython-314-aarch64-linux-gnu.so",
+          "sha256": "3ced30b3684a3e60b672afbe33b70e7fe495354427b10f32df2b08af7d1e3376",
+          "fixed_formats_by_call_offset": {
+            "0x11d60": "%*[^0-9]%lu.%lu.%lu"
+          },
+          "format_forwarders_by_call_offset": {}
+        },
+        {
+          "path": "usr/local/lib/python3.14/lib-dynload/_remote_debugging.cpython-314-aarch64-linux-gnu.so",
+          "sha256": "8025354ad48b2d8be97b1099cc75bc5f96287f5d312c177f303a6da0b6a4116b",
+          "fixed_formats_by_call_offset": {
+            "0x3108": "%lx-%lx %4s %*s %*s %*s %n"
+          },
+          "format_forwarders_by_call_offset": {}
+        },
+        {
+          "path": "usr/local/lib/python3.14/lib-dynload/_socket.cpython-314-aarch64-linux-gnu.so",
+          "sha256": "844b441003a58197be225a5b11ecb77ea6b78b4c55ab378c4035c8906d92e027",
+          "fixed_formats_by_call_offset": {
+            "0x5af8": "%X:%X:%X:%X:%X:%X%c"
+          },
+          "format_forwarders_by_call_offset": {}
+        },
+        {
+          "path": "usr/lib/aarch64-linux-gnu/libc.so.6",
+          "sha256": "9a325944115b36e74077786b29531963d96cd55cd6c82f11750a352cdb58fab0",
+          "fixed_formats_by_call_offset": {
+            "0x873b0": "%lx-%lx",
+            "0xb4138": "%hu%n:%hu%n:%hu%n",
+            "0xb4224": "%hu%n:%hu%n:%hu%n",
+            "0xb42a0": "%hu%n:%hu%n:%hu%n",
+            "0xb448c": "%hu%n:%hu%n:%hu%n",
+            "0xb4590": "M%hu.%hu.%hu%n",
+            "0xe9fa0": " %d %d "
+          },
+          "format_forwarders_by_call_offset": {
+            "0x4bfec": "fscanf forwards its format argument within glibc. The external caller formats were reviewed separately; no native dependency imports fwscanf.",
+            "0x7476c": "fwscanf forwards its format argument within glibc. The external caller formats were reviewed separately; no native dependency imports fwscanf."
+          }
+        }
+      ]
+    }
+  }
+}

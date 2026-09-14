@@ -86,10 +86,9 @@ before 1.0.
 The [current OpenVEX statement](security/vex/runtime.openvex.json) records which
 reported vulnerabilities affect the shipped service. Our
 [runtime review](security/vex/runtime-review.md) covers both image architectures:
-17 of the 18 CVEs blocking the September 14 scan are not reachable through
-supported application behavior. The remaining glibc finding, CVE-2026-5450,
-is **under investigation** and still blocks the build. We have not established
-that it is exploitable, but the evidence does not justify excluding it.
+the 18 CVEs blocking the September 14 scan are not reachable through supported
+application behavior. For glibc CVE-2026-5450, the review follows native call
+sites and their format arguments; it does not rely on a string search alone.
 
 The file also retains Debian's fixed-package claims for CVE-2026-63073 and
 CVE-2026-75803 in OpenSSL `3.5.7-1~deb13u2`. Every claim names exact package

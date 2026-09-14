@@ -1,4 +1,4 @@
-"""Keep the reviewed runtime claims version-bound and unresolved findings visible."""
+"""Keep runtime claims version-bound and tied to their reviewed evidence."""
 
 from __future__ import annotations
 
@@ -79,21 +79,35 @@ def test_runtime_claims_require_review_after_a_package_update(
         validate_release_vex(SOURCE, inventories)
 
 
-def test_review_retains_unresolved_glibc_and_existing_openssl_fixes() -> None:
+def test_review_records_glibc_caller_evidence_and_existing_openssl_fixes() -> None:
     document = json.loads(SOURCE.read_text(encoding="utf-8"))
     statements = document["statements"]
     assert Counter(statement["status"] for statement in statements) == {
-        "not_affected": 17,
-        "under_investigation": 1,
+        "not_affected": 18,
         "fixed": 2,
     }
     by_cve = {statement["vulnerability"]["name"]: statement for statement in statements}
     assert len(by_cve) == len(statements)
-    unresolved = by_cve["CVE-2026-5450"]
-    assert unresolved["status"] == "under_investigation"
-    assert "impact_statement" not in unresolved
-    assert len(unresolved["products"]) == 4
-    assert "format provenance" in unresolved["status_notes"]
+    glibc = by_cve["CVE-2026-5450"]
+    assert glibc["status"] == "not_affected"
+    assert len(glibc["products"]) == 4
+    assert "glibc-2026-5450-callers.json" in glibc["impact_statement"]
+    evidence = json.loads(
+        (ROOT / "security/vex/glibc-2026-5450-callers.json").read_text(encoding="utf-8")
+    )
+    assert evidence["vulnerability"] == "CVE-2026-5450"
+    assert set(evidence["platforms"]) == {"amd64", "arm64"}
+    for architecture, count in (("amd64", 39), ("arm64", 45)):
+        files = evidence["platforms"][architecture]["files"]
+        assert (
+            sum(
+                len(file["fixed_formats_by_call_offset"])
+                + len(file["format_forwarders_by_call_offset"])
+                for file in files
+            )
+            == count
+        )
+        assert sum(len(file["format_forwarders_by_call_offset"]) for file in files) == 3
     for cve in ("CVE-2026-63073", "CVE-2026-75803"):
         assert by_cve[cve]["status"] == "fixed"
         assert len(by_cve[cve]["products"]) == 6

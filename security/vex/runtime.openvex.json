@@ -1,6 +1,6 @@
 {
   "@context": "https://openvex.dev/ns/v0.2.0",
-  "@id": "urn:uuid:f89c56c5-a194-5bbc-af1e-8743cdd4d3f2",
+  "@id": "urn:uuid:e96ee69d-ee15-5c7d-92f4-9857ba0e0741",
   "author": "Extra CODEOWNERS maintainers",
   "role": "VEX document producer",
   "statements": [
@@ -225,6 +225,7 @@
       }
     },
     {
+      "impact_statement": "This assessment covers the shipped Extra CODEOWNERS service, not arbitrary programs run inside its container. The vulnerable path requires a scanf allocating character conversion (%mc) with an explicit width greater than 1024. A caller-level review of both native images found fixed numeric or string formats at 30 amd64 and 36 arm64 external scanf-family call sites, except ncurses vwscanw, which forwards an arbitrary format but is not used by the service or exposed by CPython _curses. Additional glibc callers use fixed formats or forward the already-reviewed arguments. ARM64 stack-spilled format pointers were traced to constant data. No reachable caller supplies the allocating character conversion; SELinux %ms conversions are not the affected %mc operation. Call offsets, binary hashes, formats and forwarding paths are recorded in security/vex/glibc-2026-5450-callers.json. Custom FFI, native plugins and arbitrary code inside the image are outside this assessment.",
       "products": [
         {
           "@id": "pkg:deb/debian/libc-bin@2.41-12%2Bdeb13u3?arch=amd64&distro=debian-13.6&upstream=glibc",
@@ -251,8 +252,8 @@
           }
         }
       ],
-      "status": "under_investigation",
-      "status_notes": "Analysis detail: Reachability review: https://github.com/stampbot/extra-codeowners/blob/main/security/vex/runtime-review.md. This assessment covers the shipped Extra CODEOWNERS service, not arbitrary programs run inside its container. The affected glibc scanf conversion allocates a character buffer with an explicit width greater than 1024. CPython and native dependencies import scanf-family functions. CPython 3.14.7 source and both architectures' ELF string inventories contain no identified vulnerable format, but this does not establish every native caller's format provenance or exclude dynamically constructed formats. Reachability remains under investigation; do not suppress this finding.\nSource: Debian Security Tracker (https://security-tracker.debian.org/tracker/CVE-2026-5450)\nOriginal Vexcalibur analysis state: in_triage",
+      "status": "not_affected",
+      "status_notes": "Analysis detail: Reachability review: https://github.com/stampbot/extra-codeowners/blob/main/security/vex/runtime-review.md. This assessment covers the shipped Extra CODEOWNERS service, not arbitrary programs run inside its container. The vulnerable path requires a scanf allocating character conversion (%mc) with an explicit width greater than 1024. A caller-level review of both native images found fixed numeric or string formats at 30 amd64 and 36 arm64 external scanf-family call sites, except ncurses vwscanw, which forwards an arbitrary format but is not used by the service or exposed by CPython _curses. Additional glibc callers use fixed formats or forward the already-reviewed arguments. ARM64 stack-spilled format pointers were traced to constant data. No reachable caller supplies the allocating character conversion; SELinux %ms conversions are not the affected %mc operation. Call offsets, binary hashes, formats and forwarding paths are recorded in security/vex/glibc-2026-5450-callers.json. Custom FFI, native plugins and arbitrary code inside the image are outside this assessment.\nSource: Debian Security Tracker (https://security-tracker.debian.org/tracker/CVE-2026-5450)\nOriginal Vexcalibur analysis state: not_affected",
       "vulnerability": {
         "name": "CVE-2026-5450"
       }

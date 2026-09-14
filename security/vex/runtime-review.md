@@ -1,9 +1,10 @@
 # Runtime vulnerability review — September 14, 2026
 
-Seventeen of the eighteen CVEs blocking the reviewed image scans are not
-reachable through the shipped service. We cannot yet exclude CVE-2026-5450 in
-glibc. It remains `under_investigation`, so the vulnerability gate stays red.
-That is an unresolved assessment, not a finding that the service is exploitable.
+The eighteen CVEs blocking the reviewed image scans are not reachable through
+the shipped service. The final glibc assessment required a native caller review,
+described below. All eighteen now have `not_affected` statements; this does not
+mean the underlying packages are patched or that every scanner finding was
+assessed.
 
 The [OpenVEX file](runtime.openvex.json) contains the individual CVEs, exact
 package URLs, explanations, and Debian advisory links. It also retains the two
@@ -32,9 +33,9 @@ both `libc6` and `libc-bin`, giving 18 distinct CVEs.
 
 Grype v0.118.0 was run against both image archives with the same database built
 on September 13, 2026. With `distro=debian-13`, none of the new VEX exclusions
-matched. With the image-derived `debian-13.6` identities, the reviewed findings
-move to the ignored list and CVE-2026-5450 remains a blocking High finding for
-both glibc packages. No vulnerability or severity filter was broadened.
+matched. The image-derived `debian-13.6` identities let the reviewed findings
+match. CVE-2026-5450 initially stayed under investigation until the caller review
+was complete. The severity threshold and unfiltered inventory are unchanged.
 
 ## Findings
 
@@ -45,7 +46,7 @@ both glibc packages. No vulnerability or severity filter was broadened.
 | `libpcre2-8-0` `10.46-1~deb13u1` | CVE-2026-86145, CVE-2026-89161 | Not affected. This Debian library is outside the Python/native dependency graph on both architectures. See the private-wheel distinction below. |
 | `libsqlite3-0` `3.46.1-7+deb13u1` | CVE-2026-11822, CVE-2026-11824 | Not affected. The affected FTS5 database-page processing requires FTS5 queries. Application schemas, migrations, and queries do not use FTS virtual tables, `MATCH`, or extension loading. There is no database-upload endpoint. This assessment includes the supported SQLite backend. |
 | `libc6` and `libc-bin` `2.41-12+deb13u3` | CVE-2026-5928 | Not affected. The application does not use C wide-stream pushback. The native caller check is described below. |
-| `libc6` and `libc-bin` `2.41-12+deb13u3` | CVE-2026-5450 | Under investigation. Native dependencies call `scanf` functions. No vulnerable format was identified, but that alone does not prove the path unreachable. |
+| `libc6` and `libc-bin` `2.41-12+deb13u3` | CVE-2026-5450 | Not affected. The reviewed native callers use fixed numeric/string formats, not the vulnerable allocating character conversion. The general-purpose ncurses format-forwarding API is not exposed by the service. |
 
 ### Native-library checks
 
@@ -82,14 +83,31 @@ not the allocating character conversion described in
 [CVE-2026-5450](https://security-tracker.debian.org/tracker/CVE-2026-5450).
 The exact 3.14.7 source archive has SHA-256
 `3b48dac8fb59f62eaa67ac83c1eb12bda1b7a08406dd286e252c11a66be27f81`, matching the
-image's CPython source record. Native importers also include CFFI, OpenSSL,
-libpq, SELinux, keyutils, libuuid, and ncurses. A full-length string search of
-both dependency graphs found no vulnerable format. It did find SELinux `%ms`
-formats, which are a different conversion. Binary strings do not establish
-format provenance, rule out constructed formats, or cover indirect calls.
-We therefore leave this CVE unresolved. Excluding it needs a caller-level review
-of the remaining native paths; updating to a digest with Debian's fixed glibc
-package is the other way to clear it.
+image's CPython source record. A string search alone did not justify an
+exemption, because native libraries can construct or forward format strings.
+
+We then reviewed calls through the native libraries' `scanf` PLT/GOT entries:
+30 call sites on amd64 and 36 on ARM64. The
+[caller record](glibc-2026-5450-callers.json) lists binary hashes, instruction
+offsets, and format strings. It also covers nine calls within glibc on each
+architecture. Three ARM64 format pointers spilled to the stack were followed
+manually back to constant data, rather than trusting the linear disassembly
+helper's candidate values.
+
+The OpenSSL calls parse URL ports with `%u` or `%d`; the older ARM64 OpenSSL
+copy uses a fixed four-part numeric format. CFFI/libffi, libpq, keyutils,
+libuuid, and CPython likewise supply fixed formats. SELinux's allocating `%ms`
+string conversions are not the affected `%mc` character conversion. None of
+those callers supplies the operation that triggers this CVE.
+
+The general format-forwarding path outside glibc is ncurses `vwscanw`. The
+service does not use it, and CPython `_curses` does not expose `scanw` or
+`vwscanw`. The glibc `fscanf` wrapper forwards the arguments reviewed at its
+external callers; no dependency imports `fwscanf`. The service does not expose
+an FFI or plugin interface through which repository data could select another
+format-taking C function. These are the grounds for `not_affected`, not the
+absence of a suspicious string or a promise that arbitrary code in this image
+is safe.
 
 ## Scope and maintenance
 
