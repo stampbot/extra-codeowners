@@ -1,6 +1,6 @@
 {
   "@context": "https://openvex.dev/ns/v0.2.0",
-  "@id": "urn:uuid:f4c3c239-3a4a-5433-a44e-406391be85ae",
+  "@id": "urn:uuid:9ccdd9fb-81e9-50bc-bf5a-fc72ffdd9484",
   "author": "Extra CODEOWNERS maintainers",
   "role": "VEX document producer",
   "statements": [
@@ -541,7 +541,7 @@
       "extra_codeowners/build_identity.py": "5c3b38f087460fca37660ddeaa8a004d05348f8c947c04fc2444739ab7896968",
       "extra_codeowners/cli.py": "79a5c200397f9544492ec6071890ff5835c1ed625c623a0a86ed3a60503e65f4",
       "extra_codeowners/codeowners.py": "da8be54dbc8a79dcbaf39d49491f950d5405d74d6bb5e07da5247644f5ffcfd8",
-      "extra_codeowners/database.py": "ff2979bc55141ce064118cbcefcc94e7b7f5a16a2e3f2b0318f2d080c7b464ad",
+      "extra_codeowners/database.py": "522da0abe2281b8e97f03a9e3f4c2cfb4426358dd6bbff7924824dca44304358",
       "extra_codeowners/dco.py": "8c3a0b541fe021fb9f05500ca9278306901010c219e7e1199ca5e205c138e68d",
       "extra_codeowners/evaluator.py": "b81b9d1c6fe81d591867b0993d413030caab8af48703c4725f14c04fe2e3f9a6",
       "extra_codeowners/github.py": "4403eecabde96c16630ce36a630cbfb0b1645e8e88f076c23c055e19083e1e02",
@@ -552,7 +552,7 @@
       "extra_codeowners/models.py": "dc59959f56e35111fae00f8f60ef054ba80eb839eb2dae5b09165d4cdc349a48",
       "extra_codeowners/policy.py": "844abb482a7c9cc3190d624cc92ece2476128644718e4096f98bfa8a0abedf8a",
       "extra_codeowners/py.typed": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "extra_codeowners/service.py": "17b537af628eb3a5315ded28de0acca8d4795e19223e44aad7eff3efe63dc827",
+      "extra_codeowners/service.py": "1c70634cb75c3d1da0f747804f8dd83458df56da7d600410524673fdae40cd7c",
       "extra_codeowners/settings.py": "bd1d3cd0acf23ea4b26869fc1e024438aba7b9acf43f3850c4e6be2e9a5b5437",
       "extra_codeowners/trace_context.py": "f79ca91baa1dd615c80546c66a6b370ba78ec7106dece3feb201d10250078532",
       "extra_codeowners/tracing.py": "62c730c8bdf4d632dace5b79232f968d871a28d8724a162aa52ba6b4ed2c6db1",
@@ -560,7 +560,7 @@
       "pyproject.toml": "4164e19c10e620b1cae1db22dab5728b4e80eb0f5a9dd768484b6f12de73fc96",
       "uv.lock": "029f0fe5b12940d2f8c4f36c5702f5e92f4aac1dc3bff75f2e90660a50dfdcc4"
     },
-    "review": "Reviewed scoped addition routing, uncached current installation membership, archive metadata, and verified retirement of removed or renamed routes. No new native-library entry points or OpenSSL reachability changes.",
+    "review": "Reviewed scoped additions, bulk follow-up budgeting, foreground preservation for pending direct evaluations and newly discovered live heads, and provider backoff despite promotion failure. Native-library usage and OpenSSL reachability are unchanged.",
     "schema_version": 1
   }
 }

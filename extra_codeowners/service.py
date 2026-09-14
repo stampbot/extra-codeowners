@@ -2263,6 +2263,7 @@ class Worker:
                 pull_number=number,
                 reason=job.reason,
                 head_sha_hint=str(head["sha"]),
+                work_class="recovery",
             )
             await asyncio.to_thread(self.store.enqueue, request)
             requests.append(request)
@@ -2272,13 +2273,28 @@ class Worker:
         async def revoke(request: JobRequest) -> None:
             async with semaphore:
                 try:
-                    await self.evaluator.invalidate_for_trigger(request)
+                    await self.evaluator.invalidate_for_trigger(
+                        replace(request, work_class="interactive")
+                    )
                 except GitHubRateLimitError:
+                    try:
+                        await asyncio.to_thread(
+                            self.store.enqueue, replace(request, work_class="interactive")
+                        )
+                    except Exception:
+                        log.exception(
+                            "authority_rate_limited_promotion_failed",
+                            repository=request.repository_full_name,
+                            pull_number=request.pull_number,
+                        )
                     raise
                 except Exception:
-                    # Every PR was durably queued before this best-effort
-                    # fast path. Its evaluation will revoke before collecting
-                    # mutable authority evidence.
+                    # A failed revocation must not wait for the recovery
+                    # reserve. Promote its durable retry; successful fan-out
+                    # evaluations stay in the bounded background lane.
+                    await asyncio.to_thread(
+                        self.store.enqueue, replace(request, work_class="interactive")
+                    )
                     log.exception(
                         "authority_fast_revocation_deferred",
                         repository=request.repository_full_name,
@@ -2311,6 +2327,9 @@ class Worker:
                         global_error.retry_after_seconds,
                     )
                 raise max(rate_limits, key=lambda error: error.retry_after_seconds)
+            for outcome in outcomes:
+                if isinstance(outcome, BaseException):
+                    raise outcome
 
     async def _process_authority(
         self,
