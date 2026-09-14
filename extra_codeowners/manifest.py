@@ -91,9 +91,7 @@ class ManifestService:
         return {
             "name": "Extra CODEOWNERS",
             "url": "https://github.com/stampbot/extra-codeowners",
-            "description": (
-                "Require human CODEOWNER approval or a narrowly delegated GitHub App approval."
-            ),
+            "description": "Code owner checks for people and trusted bots.",
             "public": False,
             "redirect_url": f"{base}/setup/callback",
             "request_oauth_on_install": False,
