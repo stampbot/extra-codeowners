@@ -745,17 +745,20 @@ def _expected_from_inventory(
         if not source_path.startswith(prefix):
             _fail("Python SBOM is outside its distribution's sboms directory")
         suffix = _safe_relative_path(source_path.removeprefix(prefix), "Python SBOM filename")
-        if record.get("kind") in {"symlink", "hardlink"}:
-            _string(record.get("link_target"), "Python SBOM link target")
+        kind = _string(record.get("kind"), "Python SBOM kind")
+        if kind in {"symlink", "hardlink"}:
+            target = _string(record.get("link_target"), "Python SBOM link target")
             unresolved.append(
                 {
                     "component": component,
                     "reason": "linked-python-sbom-file-not-preserved",
                     "source_path": source_path,
+                    "source_kind": kind,
+                    "source_link_target": target,
                 }
             )
             continue
-        if record.get("kind") != "regular":
+        if kind != "regular":
             _fail("Python SBOM must be a regular file or an explicitly unresolved link")
         digest, size = _payload_expectation(record, "Python SBOM")
         _append_expected_file(
@@ -950,6 +953,11 @@ def build_notice_bundle(
     expected, expected_links, unresolved, distro = _expected_from_inventory(
         inventory, architecture=architecture, platform_digest=platform_digest
     )
+    unresolved_sbom_links = {
+        item["source_path"]: item
+        for item in unresolved
+        if item["reason"] == "linked-python-sbom-file-not-preserved"
+    }
     collected: dict[str, _CollectedFile] = {}
     seen_paths: set[str] = set()
     total_size = 0
@@ -959,12 +967,25 @@ def build_notice_bundle(
         for member in archive:
             path = _normalize_member_path(member.name)
             selected_link = expected_links.get(path)
+            unresolved_link = unresolved_sbom_links.get(path)
             selected_file = expected.get(path)
             automatic_file = _automatic_file(path)
             if path in seen_paths and (
-                selected_link is not None or selected_file is not None or automatic_file is not None
+                selected_link is not None
+                or selected_file is not None
+                or automatic_file is not None
+                or unresolved_link is not None
             ):
                 _fail(f"root filesystem tar contains duplicate notice path {path!r}")
+            if unresolved_link is not None:
+                seen_paths.add(path)
+                if (
+                    (unresolved_link["source_kind"] == "symlink" and not member.issym())
+                    or (unresolved_link["source_kind"] == "hardlink" and not member.islnk())
+                    or member.linkname != unresolved_link["source_link_target"]
+                ):
+                    _fail(f"unresolved SBOM link {path!r} does not match the release inventory")
+                continue
             if selected_link is not None:
                 seen_paths.add(path)
                 if (
@@ -1008,7 +1029,7 @@ def build_notice_bundle(
     missing = sorted(set(expected) - set(collected))
     if missing:
         _fail(f"root filesystem tar omitted notice material: {missing}")
-    missing_links = sorted(set(expected_links) - seen_paths)
+    missing_links = sorted((set(expected_links) | set(unresolved_sbom_links)) - seen_paths)
     if missing_links:
         _fail(f"root filesystem tar omitted notice links: {missing_links}")
     if _APPLICATION_LICENSE_PATH not in collected:

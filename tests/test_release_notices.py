@@ -73,6 +73,8 @@ def test_linked_sboms_are_reported_without_following_them(tmp_path: Path, kind: 
         "component": "pypi:example-pkg@1.0",
         "source_path": path,
         "reason": "linked-python-sbom-file-not-preserved",
+        "source_kind": kind,
+        "source_link_target": "/etc/unrelated-secret",
     } in unresolved
     bundle_path = tmp_path / "notices.tar.gz"
     bundle_path.write_bytes(bundle)
@@ -81,7 +83,9 @@ def test_linked_sboms_are_reported_without_following_them(tmp_path: Path, kind: 
     )
 
 
-@pytest.mark.parametrize("mutation", ["owner", "outside", "duplicate", "kind", "digest"])
+@pytest.mark.parametrize(
+    "mutation", ["owner", "outside", "duplicate", "kind", "digest", "kind-array", "kind-object"]
+)
 def test_sbom_inventory_must_match_distribution_and_bytes(mutation: str) -> None:
     path = f"{SITE}/example_pkg-1.0.dist-info/sboms/components.json"
     members = [*_members(), (path, b"{}")]
@@ -95,6 +99,10 @@ def test_sbom_inventory_must_match_distribution_and_bytes(mutation: str) -> None
         records.append(dict(records[0]))
     elif mutation == "kind":
         records[0]["kind"] = "directory"
+    elif mutation == "kind-array":
+        records[0]["kind"] = []
+    elif mutation == "kind-object":
+        records[0]["kind"] = {}
     else:
         records[0]["sha256"] = "f" * 64
     with pytest.raises(ReleaseNoticeError):
@@ -114,6 +122,46 @@ def test_older_schema_requires_its_matching_release_verifier(tmp_path: Path) -> 
     with pytest.raises(ReleaseNoticeError, match="unsupported schema"):
         verify_notice_bundle(
             bundle_path, inventory, architecture="amd64", platform_digest=PLATFORM_DIGEST
+        )
+
+
+@pytest.mark.parametrize(
+    "mutation", ["missing", "retargeted", "regular", "other-kind", "duplicate"]
+)
+@pytest.mark.parametrize("kind", ["symlink", "hardlink"])
+def test_unresolved_sbom_link_must_match_exported_filesystem(mutation: str, kind: str) -> None:
+    path = f"{SITE}/example_pkg-1.0.dist-info/sboms/linked.json"
+    original = ((path, "relative-target.json"),)
+    inventory = _inventory_bytes(
+        _members(),
+        links=original if kind == "symlink" else (),
+        hardlinks=original if kind == "hardlink" else (),
+    )
+    links: tuple[tuple[str, str], ...] = original if kind == "symlink" else ()
+    hardlinks: tuple[tuple[str, str], ...] = original if kind == "hardlink" else ()
+    members = _members()
+    if mutation == "missing":
+        links = hardlinks = ()
+    elif mutation == "retargeted":
+        changed = ((path, "different-target.json"),)
+        links = changed if kind == "symlink" else ()
+        hardlinks = changed if kind == "hardlink" else ()
+    elif mutation == "regular":
+        links = hardlinks = ()
+        members.append((path, b"{}"))
+    elif mutation == "other-kind":
+        links, hardlinks = hardlinks, links
+    else:
+        links = original * 2 if kind == "symlink" else ()
+        hardlinks = original * 2 if kind == "hardlink" else ()
+    with pytest.raises(
+        ReleaseNoticeError, match=r"omitted notice links|does not match|duplicate notice path"
+    ):
+        build_notice_bundle(
+            _rootfs_tar(members, links=links, hardlinks=hardlinks),
+            inventory,
+            architecture="amd64",
+            platform_digest=PLATFORM_DIGEST,
         )
 
 

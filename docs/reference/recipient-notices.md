@@ -59,7 +59,8 @@ They let a recipient inspect the wheel publisher's component, version, license,
 and source declarations without extracting the container. An SBOM declaration
 is not proof that every listed build dependency is shipped, or that every
 shipped component is listed. Linked SBOMs are recorded as unresolved evidence,
-not followed. Schema 2 bundles did not preserve these files; use the verifier
+not followed. Their presence, link kind, and target must still match the
+exported filesystem before a bundle is produced. Schema 2 bundles did not preserve these files; use the verifier
 from the matching release tag when checking an older bundle.
 
 ## Verify a bundle
