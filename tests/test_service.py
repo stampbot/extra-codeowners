@@ -35,6 +35,7 @@ from extra_codeowners.database import (
     utcnow,
 )
 from extra_codeowners.github import (
+    GitHubAPIError,
     GitHubClient,
     GitHubError,
     GitHubOperationStoppedError,
@@ -2701,6 +2702,101 @@ async def test_authority_fast_revocation_failure_keeps_durable_evaluation(
     assert evaluation is not None
     assert evaluation.pull_number == 4
     assert store.dead_count() == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [404, 410])
+@pytest.mark.parametrize("superseded", [False, True])
+async def test_removed_repository_addition_retires_only_its_generation(
+    tmp_path: Path, status: int, superseded: bool
+) -> None:
+    store = migrated_store(f"sqlite:///{tmp_path / 'removed-addition.db'}")
+    request = AuthorityRequest(2, "example/project", None, "installation_repositories.added")
+    store.enqueue_authority(request)
+    claimed = store.claim_authority("worker", 60)
+    assert claimed is not None
+    evaluator = MagicMock()
+    evaluator.github.list_open_pulls = AsyncMock(
+        side_effect=GitHubAPIError(status, "GET", "/repos/example/project/pulls", "unavailable")
+    )
+
+    async def membership(installation_id: int) -> list[dict[str, Any]]:
+        assert installation_id == 2
+        if superseded:
+            store.enqueue_authority(request)
+        return [{"full_name": "example/other", "archived": False}]
+
+    evaluator.github.list_installation_repositories = AsyncMock(side_effect=membership)
+    worker = Worker(settings(), store, evaluator, "worker")
+
+    assert await worker._process_authority(claimed) == ("superseded" if superseded else "completed")
+    assert store.pending_count() == int(superseded)
+    evaluator.invalidate_for_trigger.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("membership", "expected"),
+    [
+        ([{"full_name": "Example/Project", "archived": False}], "inaccessible"),
+        ([{"full_name": "example/other"}], "failed"),
+        ([{"full_name": True, "archived": False}], "failed"),
+        ([{"full_name": "example/other", "archived": False}] * 2, "failed"),
+        (GitHubError("incomplete installation repository response"), "failed"),
+        (
+            GitHubRateLimitError(403, "GET", "/installation/repositories", "limit", 60),
+            "rate_limited",
+        ),
+    ],
+)
+async def test_repository_addition_retains_fence_without_verified_absence(
+    tmp_path: Path, membership: Any, expected: str
+) -> None:
+    store = migrated_store(f"sqlite:///{tmp_path / 'unverified-addition.db'}")
+    store.enqueue_authority(
+        AuthorityRequest(2, "example/project", None, "installation_repositories.added")
+    )
+    claimed = store.claim_authority("worker", 60)
+    assert claimed is not None
+    evaluator = MagicMock()
+    evaluator.github.list_open_pulls = AsyncMock(
+        side_effect=GitHubAPIError(404, "GET", "/repos/example/project/pulls", "unavailable")
+    )
+    evaluator.github.list_installation_repositories = AsyncMock(
+        side_effect=membership if isinstance(membership, Exception) else None,
+        return_value=membership,
+    )
+    worker = Worker(settings(), store, evaluator, "worker")
+
+    assert await worker._process_authority(claimed) == expected
+    assert store.pending_count() == 1
+    assert store.provider_is_backpressured(2) == (expected == "rate_limited")
+    evaluator.invalidate_for_trigger.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("reason", "status"),
+    [("member.removed", 404), ("installation_repositories.added", 403)],
+)
+async def test_authority_does_not_retire_other_failures(
+    tmp_path: Path, reason: str, status: int
+) -> None:
+    store = migrated_store(f"sqlite:///{tmp_path / 'other-authority.db'}")
+    store.enqueue_authority(AuthorityRequest(2, "example/project", None, reason))
+    claimed = store.claim_authority("worker", 60)
+    assert claimed is not None
+    evaluator = MagicMock()
+    evaluator.github.list_open_pulls = AsyncMock(
+        side_effect=GitHubAPIError(status, "GET", "/repos/example/project/pulls", "unavailable")
+    )
+    worker = Worker(settings(), store, evaluator, "worker")
+
+    assert await worker._process_authority(claimed) == (
+        "inaccessible" if status == 404 else "failed"
+    )
+    assert store.pending_count() == 1
+    evaluator.github.list_installation_repositories.assert_not_called()
 
 
 @pytest.mark.asyncio

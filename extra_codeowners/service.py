@@ -2194,7 +2194,29 @@ class Worker:
 
         requests: list[JobRequest] = []
         full_name = job.repository_full_name
-        pulls = await self.evaluator.github.list_open_pulls(job.installation_id, full_name)
+        try:
+            pulls = await self.evaluator.github.list_open_pulls(job.installation_id, full_name)
+        except GitHubAPIError as error:
+            if (
+                error.status_code not in {404, 410}
+                or job.reason != "installation_repositories.added"
+            ):
+                raise
+            # An addition can leave the queue after access has already been
+            # removed. A 404 alone cannot prove that: read complete current
+            # membership before retiring this generation of the addition.
+            current_repositories = _reconciliation_repositories(
+                await self.evaluator.github.list_installation_repositories(job.installation_id)
+            )
+            if any(name == full_name for name, _archived in current_repositories):
+                raise
+            log.info(
+                "authority_addition_no_longer_installed",
+                installation_id=job.installation_id,
+                repository=full_name,
+                generation=job.generation,
+            )
+            return
         for pull in pulls:
             number = pull.get("number")
             head = pull.get("head")
