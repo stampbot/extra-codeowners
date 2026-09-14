@@ -2705,7 +2705,7 @@ async def test_authority_fast_revocation_failure_keeps_durable_evaluation(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("status", [404, 410])
+@pytest.mark.parametrize("status", [301, 404, 410])
 @pytest.mark.parametrize("superseded", [False, True])
 async def test_removed_repository_addition_retires_only_its_generation(
     tmp_path: Path, status: int, superseded: bool
@@ -2817,6 +2817,7 @@ async def test_authority_does_not_retire_other_failures(
         ({"full_name": "example/project"}, "failed"),
         ({"full_name": "example/different", "archived": True}, "failed"),
         (GitHubAPIError(404, "GET", "/repos/example/project", "unavailable"), "completed"),
+        (GitHubAPIError(301, "GET", "/repos/example/project", "renamed"), "completed"),
     ],
 )
 async def test_repository_addition_checks_current_archive_state_before_listing_pulls(

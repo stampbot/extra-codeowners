@@ -2212,13 +2212,13 @@ class Worker:
             pulls = await self.evaluator.github.list_open_pulls(job.installation_id, full_name)
         except GitHubAPIError as error:
             if (
-                error.status_code not in {404, 410}
+                error.status_code not in {301, 404, 410}
                 or job.reason != "installation_repositories.added"
             ):
                 raise
             # An addition can leave the queue after access has already been
-            # removed. A 404 alone cannot prove that: read complete current
-            # membership before retiring this generation of the addition.
+            # removed or renamed. Read complete current membership rather
+            # than treating an error or redirect alone as proof of absence.
             current_repositories = _reconciliation_repositories(
                 await self.evaluator.github.list_installation_repositories(job.installation_id)
             )
