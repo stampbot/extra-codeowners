@@ -26,6 +26,7 @@ from sqlalchemy import (
     create_engine,
     delete,
     exists,
+    false,
     func,
     inspect,
     or_,
@@ -2878,12 +2879,23 @@ class QueueStore:
                 )
         return None
 
-    def claim_authority(self, owner: str, lease_seconds: int) -> ClaimedAuthorityJob | None:
-        """Atomically lease the oldest authority fan-out job."""
+    def claim_authority(
+        self, owner: str, lease_seconds: int, *, prioritize_interactive: bool = True
+    ) -> ClaimedAuthorityJob | None:
+        """Lease authority work, preferring fences blocking direct PR events."""
         now = utcnow()
         lease_until = now + timedelta(seconds=lease_seconds)
         for _ in range(3):
             with self.session() as session:
+                direct_waiter = exists(
+                    select(EvaluationJob.id).where(
+                        EvaluationJob.installation_id == AuthorityJob.installation_id,
+                        EvaluationJob.repository_full_name == AuthorityJob.scope_key,
+                        EvaluationJob.state == "pending",
+                        EvaluationJob.work_class == WORK_CLASS_INTERACTIVE,
+                        EvaluationJob.last_delivery_id.is_not(None),
+                    )
+                )
                 candidate = session.scalar(
                     select(AuthorityJob.id)
                     .where(
@@ -2893,6 +2905,11 @@ class QueueStore:
                         self._provider_available_condition(AuthorityJob.installation_id, now),
                     )
                     .order_by(
+                        case(
+                            (AuthorityJob.scope_key == "*", 0),
+                            (direct_waiter if prioritize_interactive else false(), 1),
+                            else_=2,
+                        ),
                         case(
                             (AuthorityJob.scope_key == "*", 0),
                             (AuthorityJob.base_ref == "", 1),

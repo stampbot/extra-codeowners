@@ -368,6 +368,13 @@ repository fences. Repository-wide work replaces older base-specific rows, and
 more than 100 distinct base refs for one repository collapse into a conservative
 repository-wide job.
 
+Within the authority lane, installation-wide fences still run first. After
+that, a repository fence blocking a queued direct PR event takes priority over
+unrelated background work. The fence must finish before the PR can publish;
+priority does not bypass it. Each worker uses the older ordering for every
+fourth claim so a stream of new PR events still leaves turns for background
+fences. Claims remain database-coordinated across replicas.
+
 For a mapped pull-request, review, or check-rerequest delivery, ingress stores
 the trigger and then makes a bounded attempt to make the managed check blocking.
 Existing checks receive an explicit `failure`. If a fast-path API call fails or times out, the service logs

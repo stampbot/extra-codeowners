@@ -1245,6 +1245,82 @@ def test_security_sensitive_authority_work_preempts_older_base_pushes(tmp_path: 
     assert base_push.base_ref == "main"
 
 
+@pytest.mark.parametrize("prioritize", [True, False])
+def test_direct_event_prioritizes_its_authority_fence(tmp_path: Path, prioritize: bool) -> None:
+    store = make_store(tmp_path)
+    store.enqueue_authority(AuthorityRequest(17, "example/older", None, "installation.created"))
+    store.enqueue_authority(AuthorityRequest(17, "example/active", "main", "push.repository_base"))
+    store.accept_delivery(
+        "direct-pr",
+        "pull_request",
+        JobRequest(
+            17,
+            "example/active",
+            1,
+            "pull_request.opened",
+            head_sha_hint="a" * 40,
+        ),
+    )
+    assert store.claim("evaluation", 60) is None
+    authority = store.claim_authority("worker", 60, prioritize_interactive=prioritize)
+    assert authority is not None
+    assert authority.repository_full_name == ("example/active" if prioritize else "example/older")
+    assert store.claim("evaluation", 60) is None
+    if prioritize:
+        assert store.complete_authority(authority, "worker")
+        assert store.claim("evaluation", 60) is not None
+
+
+@pytest.mark.parametrize("reason", ["periodic_reconciliation", "installation.created"])
+def test_background_fanout_does_not_get_direct_event_priority(tmp_path: Path, reason: str) -> None:
+    store = make_store(tmp_path)
+    store.enqueue_authority(AuthorityRequest(17, "example/older", None, "installation.created"))
+    store.enqueue_authority(
+        AuthorityRequest(17, "example/background", None, "installation.created")
+    )
+    store.enqueue(JobRequest(17, "example/background", 1, reason))
+    job = store.claim_authority("worker", 60)
+    assert job is not None and job.repository_full_name == "example/older"
+
+
+def test_installation_fence_still_preempts_direct_event_priority(tmp_path: Path) -> None:
+    store = make_store(tmp_path)
+    store.enqueue_authority(AuthorityRequest(17, "example/active", None, "installation.created"))
+    store.accept_delivery(
+        "direct-pr",
+        "pull_request",
+        JobRequest(
+            17,
+            "example/active",
+            1,
+            "pull_request.opened",
+            head_sha_hint="a" * 40,
+        ),
+    )
+    store.enqueue_authority(AuthorityRequest(17, None, None, "membership.removed"))
+    job = store.claim_authority("worker", 60)
+    assert job is not None and job.repository_full_name is None
+
+
+def test_direct_event_priority_does_not_cross_installations(tmp_path: Path) -> None:
+    store = make_store(tmp_path)
+    store.enqueue_authority(AuthorityRequest(17, "example/older", None, "installation.created"))
+    store.enqueue_authority(AuthorityRequest(17, "example/active", None, "installation.created"))
+    store.accept_delivery(
+        "other-installation",
+        "pull_request",
+        JobRequest(
+            99,
+            "example/active",
+            1,
+            "pull_request.opened",
+            head_sha_hint="a" * 40,
+        ),
+    )
+    job = store.claim_authority("worker", 60)
+    assert job is not None and job.repository_full_name == "example/older"
+
+
 def test_unique_base_push_backlog_coalesces_to_bounded_repository_work(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
