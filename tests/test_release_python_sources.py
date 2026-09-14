@@ -7,8 +7,12 @@ import hashlib
 import io
 import json
 import tarfile
+import time
 import urllib.error
+import urllib.request
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 from unittest.mock import Mock
 
 import pytest
@@ -53,7 +57,7 @@ source = {{editable = "."}}
 '''.encode()
 
 
-def plan() -> dict:
+def plan() -> dict[str, Any]:
     return sources.plan(inventory(), lock(), "amd64", DIGEST)
 
 
@@ -140,7 +144,7 @@ def test_rejects_bad_lock(old: bytes, new: bytes) -> None:
         lambda d: d["python"]["distributions"][0].update(version="../escape"),
     ],
 )
-def test_rejects_bad_inventory(mutation) -> None:
+def test_rejects_bad_inventory(mutation: Callable[[dict[str, Any]], None]) -> None:
     raw = json.loads(inventory())
     mutation(raw)
     with pytest.raises(sources.PythonSourceError):
@@ -176,7 +180,7 @@ def test_rejects_tampering_missing_payloads_and_trailing_data() -> None:
         sources.verify(manifest, bundle())
 
 
-def test_fetch_retries_network_errors_but_never_redirects(monkeypatch) -> None:
+def test_fetch_retries_network_errors_but_never_redirects(monkeypatch: pytest.MonkeyPatch) -> None:
     response = Mock(status=200)
     response.read.return_value = DATA
     context = Mock()
@@ -184,8 +188,8 @@ def test_fetch_retries_network_errors_but_never_redirects(monkeypatch) -> None:
     context.__exit__ = Mock(return_value=False)
     opener = Mock()
     opener.open.side_effect = [urllib.error.URLError("offline"), context]
-    monkeypatch.setattr(sources.urllib.request, "build_opener", lambda *_: opener)
-    monkeypatch.setattr(sources.time, "sleep", lambda _: None)
+    monkeypatch.setattr(urllib.request, "build_opener", lambda *_: opener)
+    monkeypatch.setattr(time, "sleep", lambda _: None)
     assert sources.fetch(plan()["sources"][0]) == DATA
     response.read.assert_called_once_with(len(DATA) + 1)
     assert opener.open.call_count == 2
@@ -196,7 +200,9 @@ def test_fetch_retries_network_errors_but_never_redirects(monkeypatch) -> None:
         sources._NoRedirect().redirect_request(Mock(), Mock(), 302, "Found", {}, URL)
 
 
-def test_cli_roundtrip_and_exclusive_output(tmp_path: Path, monkeypatch) -> None:
+def test_cli_roundtrip_and_exclusive_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     inv = tmp_path / "inventory.json"
     locked = tmp_path / "uv.lock"
     output = tmp_path / "sources.tar.gz"
