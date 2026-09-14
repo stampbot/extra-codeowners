@@ -62,6 +62,36 @@ def test_release_selection_bounds_discovery() -> None:
     for releases in ([], [_release()] * 101):
         with pytest.raises(RescanError):
             select_release(releases)
+
+
+def test_python_source_allowances_match_the_collector_and_keep_ordinary_limits() -> None:
+    from tools.release_python_sources import MAX_BUNDLE
+    from tools.release_rescan import SOURCE_BUNDLE_LIMITS
+
+    assert SOURCE_BUNDLE_LIMITS["python-source-amd64.tar.gz"] == MAX_BUNDLE
+    assert SOURCE_BUNDLE_LIMITS["python-source-arm64.tar.gz"] == MAX_BUNDLE
+    release = _release()
+    release["assets"] = [
+        {"name": name, "size": limit} for name, limit in SOURCE_BUNDLE_LIMITS.items()
+    ] + [{"name": f"ordinary-{i}", "size": 128 * 1024 * 1024} for i in range(4)]
+    assert select_release([release])["tag"] == release["tag_name"]
+    release["assets"].append({"name": "one-byte-too-many", "size": 1})
+    with pytest.raises(RescanError, match="512 MiB"):
+        select_release([release])
+
+
+@pytest.mark.parametrize("architecture", ["amd64", "arm64"])
+def test_python_source_allowance_rejects_oversized_and_misnamed_assets(architecture: str) -> None:
+    release = _release()
+    name = f"python-source-{architecture}.tar.gz"
+    for asset in (
+        {"name": name, "size": 256 * 1024 * 1024 + 1},
+        {"name": name + ".sigstore.json", "size": 129 * 1024 * 1024},
+        {"name": name.replace(architecture, "unknown"), "size": 129 * 1024 * 1024},
+    ):
+        release["assets"] = [asset]
+        with pytest.raises(RescanError, match="size"):
+            select_release([release])
     with pytest.raises(RescanError):
         select_release([_release()], "v0.1.0-alpha.1")
 
