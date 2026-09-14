@@ -162,9 +162,23 @@ lock's SHA-256 and size. The collector never extracts or runs them.
 `manifest.json` binds the bundle to the platform digest, inventory hash, and
 lock hash. It lists each archive under `sources/<package>/`. The application's
 own sdist is delivered separately in the same release. Packages without a
-locked sdist appear in `unresolved_sources`; currently that includes
-`psycopg-binary`. That entry is a missing source-delivery item, not an exemption.
-These archives also do not supply every native library embedded in a wheel.
+locked sdist appear in `unresolved_sources` unless a reviewed, exact-version
+source recipe is available. An unresolved entry is a missing source-delivery
+item, not an exemption. These archives do not supply every native library
+embedded in a wheel.
+
+For `psycopg-binary` 3.3.4, the bundle includes the upstream repository archive
+at commit `83f110367cdd249cc0a352e2246ecea9e878e5a0`, the commit referenced by
+the signed 3.3.4 tag. The manifest records the tag object, archive checksum,
+size, and paths to the upstream wheel and libpq build recipes. Downloads use
+the commit-specific GitHub archive URL and must match the reviewed bytes;
+the collector neither follows redirects nor runs those recipes.
+
+That archive supplies Psycopg's wrapper source and recipes, not the source of
+every bundled libpq, OpenSSL, OpenLDAP, or operating-system library. Their
+source and notice evidence remains part of [issue #18][source-work]. A later
+Psycopg version does not silently reuse the 3.3.4 recipe: it remains unresolved
+until its source identity is reviewed.
 
 The inventory's `python.source_bundle` field requires the bundle and its
 signature during release verification. Older inventories without the field do
@@ -187,3 +201,5 @@ succeeds silently with exit status zero. It rejects changed identities, hashes,
 sizes, duplicate or unexpected archive members, and filesystem links. Each
 sdist is limited to 64 MiB; the bundle is limited to 256 MiB before and after
 decompression. No dependency is rebuilt to produce this evidence.
+
+[source-work]: https://github.com/stampbot/extra-codeowners/issues/18
