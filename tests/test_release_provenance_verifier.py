@@ -33,6 +33,10 @@ CHART_REFERENCE = "ghcr.io/stampbot/charts/extra-codeowners"
 CHART_DIGEST = "sha256:2b8d78d285e97e3cf9b390b5c0404a77f012703fa79e1d9c492dee857f295ae8"
 AMD64_PLATFORM_DIGEST = "sha256:" + "a" * 64
 ARM64_PLATFORM_DIGEST = "sha256:" + "b" * 64
+PACKAGE_METADATA_PATH = (
+    "opt/venv/lib/python3.14/site-packages/example_package-1.0.0.dist-info/METADATA"
+)
+PACKAGE_METADATA = b"Metadata-Version: 2.4\nName: example-package\nVersion: 1.0.0\n"
 
 
 def _raw_container_inventory(architecture: str, platform_digest: str) -> bytes:
@@ -65,10 +69,9 @@ def _raw_container_inventory(architecture: str, platform_digest: str) -> bytes:
                     "distributions": [
                         {
                             "license_files": [],
-                            "metadata_path": (
-                                "opt/venv/lib/python3.14/site-packages/"
-                                "example_package-1.0.0.dist-info/METADATA"
-                            ),
+                            "metadata_path": PACKAGE_METADATA_PATH,
+                            "metadata_sha256": hashlib.sha256(PACKAGE_METADATA).hexdigest(),
+                            "metadata_size": len(PACKAGE_METADATA),
                             "name": "example-package",
                             "normalized_name": "example-package",
                             "unreferenced_license_files": [],
@@ -94,6 +97,7 @@ def _recipient_notices(
         for path, contents in (
             ("usr/local/lib/python3.14/LICENSE.txt", b"CPython license\n"),
             ("usr/share/licenses/extra-codeowners/LICENSE", b"Apache-2.0\n"),
+            (PACKAGE_METADATA_PATH, PACKAGE_METADATA),
         ):
             member = tarfile.TarInfo(path)
             member.size = len(contents)
@@ -198,6 +202,7 @@ def _add_source_bundles(files: dict[str, bytes]) -> None:
                 (license_path, license_text),
                 (metadata_path, source_metadata),
                 ("usr/share/licenses/extra-codeowners/LICENSE", b"Apache-2.0\n"),
+                (PACKAGE_METADATA_PATH, PACKAGE_METADATA),
             ):
                 member = tarfile.TarInfo(path)
                 member.size = len(contents)

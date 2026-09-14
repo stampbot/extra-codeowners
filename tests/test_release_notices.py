@@ -21,6 +21,150 @@ PLATFORM_DIGEST = "sha256:" + "a" * 64
 SITE = "opt/venv/lib/python3.14/site-packages"
 
 
+def test_bundle_retains_wheel_metadata_and_embedded_sbom_bytes(tmp_path: Path) -> None:
+    sbom_path = f"{SITE}/example_pkg-1.0.dist-info/sboms/vendor/components.cdx.json"
+    sbom = b'{"bomFormat":"CycloneDX","components":[{"name":"native-library"}]}\n'
+    members = [*_members(), (sbom_path, sbom)]
+    inventory, bundle = _bundle(members)
+    assert _bundle(list(reversed(members)))[1] == bundle
+    bundle_path = tmp_path / "notices.tar.gz"
+    bundle_path.write_bytes(bundle)
+    verify_notice_bundle(
+        bundle_path, inventory, architecture="amd64", platform_digest=PLATFORM_DIGEST
+    )
+    manifest = _manifest(bundle)
+    assert manifest["schema_version"] == 3
+    with tarfile.open(fileobj=io.BytesIO(bundle), mode="r:gz") as archive:
+        retained = archive.extractfile(
+            "notices/python/example-pkg/1.0/sboms/vendor/components.cdx.json"
+        )
+        assert retained is not None and retained.read() == sbom
+        metadata = archive.extractfile("notices/python/example-pkg/1.0/METADATA")
+        assert (
+            metadata is not None
+            and metadata.read() == dict(members)[f"{SITE}/example_pkg-1.0.dist-info/METADATA"]
+        )
+
+
+@pytest.mark.parametrize("change", ["missing", "changed"])
+def test_bundle_rejects_missing_or_changed_sbom_payload(change: str) -> None:
+    path = f"{SITE}/example_pkg-1.0.dist-info/sboms/components.json"
+    members = [*_members(), (path, b"original SBOM bytes")]
+    inventory = _inventory_bytes(members, links=())
+    replaced = _members() if change == "missing" else [*_members(), (path, b"tampered SBOM bytes")]
+    with pytest.raises(ReleaseNoticeError, match=r"omitted notice material|does not match"):
+        build_notice_bundle(
+            _rootfs_tar(replaced), inventory, architecture="amd64", platform_digest=PLATFORM_DIGEST
+        )
+
+
+@pytest.mark.parametrize("kind", ["symlink", "hardlink"])
+def test_linked_sboms_are_reported_without_following_them(tmp_path: Path, kind: str) -> None:
+    path = f"{SITE}/example_pkg-1.0.dist-info/sboms/linked.json"
+    links = ((path, "/etc/unrelated-secret"),)
+    inventory, bundle = _bundle(
+        _members(),
+        links=links if kind == "symlink" else (),
+        hardlinks=links if kind == "hardlink" else (),
+    )
+    unresolved = _manifest(bundle)["unresolved_notice_evidence"]
+    assert isinstance(unresolved, list)
+    assert {
+        "component": "pypi:example-pkg@1.0",
+        "source_path": path,
+        "reason": "linked-python-sbom-file-not-preserved",
+        "source_kind": kind,
+        "source_link_target": "/etc/unrelated-secret",
+    } in unresolved
+    bundle_path = tmp_path / "notices.tar.gz"
+    bundle_path.write_bytes(bundle)
+    verify_notice_bundle(
+        bundle_path, inventory, architecture="amd64", platform_digest=PLATFORM_DIGEST
+    )
+
+
+@pytest.mark.parametrize(
+    "mutation", ["owner", "outside", "duplicate", "kind", "digest", "kind-array", "kind-object"]
+)
+def test_sbom_inventory_must_match_distribution_and_bytes(mutation: str) -> None:
+    path = f"{SITE}/example_pkg-1.0.dist-info/sboms/components.json"
+    members = [*_members(), (path, b"{}")]
+    inventory = json.loads(_inventory_bytes(members, links=()))
+    records = inventory["python"]["embedded_sboms"]
+    if mutation == "owner":
+        records[0]["distribution"] = "not-installed"
+    elif mutation == "outside":
+        records[0]["path"] = f"{SITE}/legacy-2.0.dist-info/sboms/components.json"
+    elif mutation == "duplicate":
+        records.append(dict(records[0]))
+    elif mutation == "kind":
+        records[0]["kind"] = "directory"
+    elif mutation == "kind-array":
+        records[0]["kind"] = []
+    elif mutation == "kind-object":
+        records[0]["kind"] = {}
+    else:
+        records[0]["sha256"] = "f" * 64
+    with pytest.raises(ReleaseNoticeError):
+        build_notice_bundle(
+            _rootfs_tar(members),
+            json.dumps(inventory).encode(),
+            architecture="amd64",
+            platform_digest=PLATFORM_DIGEST,
+        )
+
+
+def test_older_schema_requires_its_matching_release_verifier(tmp_path: Path) -> None:
+    inventory, bundle = _bundle(_members())
+    previous = _rewrite_bundle(bundle, lambda manifest: manifest.update(schema_version=2))
+    bundle_path = tmp_path / "old-notices.tar.gz"
+    bundle_path.write_bytes(previous)
+    with pytest.raises(ReleaseNoticeError, match="unsupported schema"):
+        verify_notice_bundle(
+            bundle_path, inventory, architecture="amd64", platform_digest=PLATFORM_DIGEST
+        )
+
+
+@pytest.mark.parametrize(
+    "mutation", ["missing", "retargeted", "regular", "other-kind", "duplicate"]
+)
+@pytest.mark.parametrize("kind", ["symlink", "hardlink"])
+def test_unresolved_sbom_link_must_match_exported_filesystem(mutation: str, kind: str) -> None:
+    path = f"{SITE}/example_pkg-1.0.dist-info/sboms/linked.json"
+    original = ((path, "relative-target.json"),)
+    inventory = _inventory_bytes(
+        _members(),
+        links=original if kind == "symlink" else (),
+        hardlinks=original if kind == "hardlink" else (),
+    )
+    links: tuple[tuple[str, str], ...] = original if kind == "symlink" else ()
+    hardlinks: tuple[tuple[str, str], ...] = original if kind == "hardlink" else ()
+    members = _members()
+    if mutation == "missing":
+        links = hardlinks = ()
+    elif mutation == "retargeted":
+        changed = ((path, "different-target.json"),)
+        links = changed if kind == "symlink" else ()
+        hardlinks = changed if kind == "hardlink" else ()
+    elif mutation == "regular":
+        links = hardlinks = ()
+        members.append((path, b"{}"))
+    elif mutation == "other-kind":
+        links, hardlinks = hardlinks, links
+    else:
+        links = original * 2 if kind == "symlink" else ()
+        hardlinks = original * 2 if kind == "hardlink" else ()
+    with pytest.raises(
+        ReleaseNoticeError, match=r"omitted notice links|does not match|duplicate notice path"
+    ):
+        build_notice_bundle(
+            _rootfs_tar(members, links=links, hardlinks=hardlinks),
+            inventory,
+            architecture="amd64",
+            platform_digest=PLATFORM_DIGEST,
+        )
+
+
 def test_notice_bundle_preserves_cpython_source_metadata(tmp_path: Path) -> None:
     source = json.dumps(
         {

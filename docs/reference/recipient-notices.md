@@ -28,6 +28,8 @@ archive includes available:
   files under a distribution's `licenses/` directory, and direct legacy files
   named like `LICENSE`, `LICENCE`, `COPYING`, `COPYRIGHT`, or `NOTICE`. It does
   not assume other direct `.dist-info` files are notice material;
+- Python `METADATA` files and embedded wheel SBOMs, with their original bytes
+  and inventory hashes;
 - the CPython runtime license; and
 - Extra CODEOWNERS' Apache-2.0 license.
 
@@ -51,6 +53,15 @@ reviewable without silently turning a missing or indirect file into evidence.
 
 `NOTICE-README.txt` repeats the platform identity and the evidence boundary
 inside the archive so the context remains with a copied bundle.
+
+Schema 3 bundles retain Python metadata and embedded SBOMs alongside licenses.
+They let a recipient inspect the wheel publisher's component, version, license,
+and source declarations without extracting the container. An SBOM declaration
+is not proof that every listed build dependency is shipped, or that every
+shipped component is listed. Linked SBOMs are recorded as unresolved evidence,
+not followed. Their presence, link kind, and target must still match the
+exported filesystem before a bundle is produced. Schema 2 bundles did not preserve these files; use the verifier
+from the matching release tag when checking an older bundle.
 
 ## Verify a bundle
 
