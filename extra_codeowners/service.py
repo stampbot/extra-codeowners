@@ -2501,14 +2501,20 @@ class Worker:
     async def _run_authority_slot(self, stop: asyncio.Event, slot: int) -> None:
         """Run coalesced authority fan-out independently from PR evaluation."""
         owner = self._slot_owner("authority", slot)
+        claim_sequence = 0
         while not stop.is_set():
             try:
                 job = await asyncio.to_thread(
                     self.store.claim_authority,
                     owner,
                     self.settings.worker_lease_seconds,
+                    prioritize_interactive=claim_sequence != 3,
                 )
                 if job is not None:
+                    # Give older background fences every fourth claim even
+                    # when new PR events keep arriving. Database leases still
+                    # coordinate all replicas; this only chooses claim order.
+                    claim_sequence = (claim_sequence + 1) % 4
                     log.info(
                         "authority_fanout_started",
                         slot=slot,

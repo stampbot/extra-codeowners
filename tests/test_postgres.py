@@ -18,6 +18,7 @@ from sqlalchemy.exc import DBAPIError
 import extra_codeowners.migrations as migrations
 from extra_codeowners.database import (
     DATABASE_MIGRATION_HEAD,
+    AuthorityRequest,
     Base,
     ClaimedJob,
     EvaluationJob,
@@ -44,6 +45,34 @@ def postgres_url() -> str:
     if database is None or not database.endswith("_test"):
         pytest.fail("TEST_POSTGRES_URL must target a database whose name ends in '_test'")
     return value
+
+
+def test_postgres_prioritizes_direct_authority_without_double_claim(
+    postgres_store: QueueStore,
+) -> None:
+    store = postgres_store
+    store.enqueue_authority(AuthorityRequest(17, "example/older", None, "installation.created"))
+    store.enqueue_authority(AuthorityRequest(17, "example/active", "main", "push.repository_base"))
+    store.accept_delivery(
+        "direct-event",
+        "pull_request",
+        JobRequest(
+            17,
+            "example/active",
+            1,
+            "pull_request.opened",
+            head_sha_hint="a" * 40,
+        ),
+    )
+    first = store.claim_authority("replica-one", 60)
+    assert first is not None and first.repository_full_name == "example/active"
+    second = store.claim_authority("replica-two", 60)
+    assert second is not None and second.repository_full_name == "example/older"
+    assert second.id != first.id
+    assert store.claim_authority("replica-three", 60) is None
+    assert store.claim("evaluation", 60) is None
+    assert store.complete_authority(first, "replica-one")
+    assert store.claim("evaluation", 60) is not None
 
 
 @pytest.fixture

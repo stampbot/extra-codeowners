@@ -24,6 +24,7 @@ from extra_codeowners.codeowners import parse_codeowners
 from extra_codeowners.database import (
     AuthorityJob,
     AuthorityRequest,
+    ClaimedAuthorityJob,
     ClaimedJob,
     ClaimedSharedHeadInvalidation,
     EvaluationJob,
@@ -319,6 +320,39 @@ def migrated_store(database_url: str) -> QueueStore:
     store = QueueStore(database_url)
     store.initialize()
     return store
+
+
+@pytest.mark.asyncio
+async def test_authority_worker_reserves_every_fourth_claim_for_older_work(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = migrated_store(f"sqlite:///{tmp_path / 'authority-fairness.db'}")
+    for number in range(8):
+        store.enqueue_authority(
+            AuthorityRequest(17, f"example/repo-{number}", None, "installation.created")
+        )
+    worker = Worker(settings(), store, MagicMock(), "worker")
+    stop = asyncio.Event()
+    flags: list[bool] = []
+    original = store.claim_authority
+
+    def claim(
+        owner: str, lease_seconds: int, *, prioritize_interactive: bool = True
+    ) -> ClaimedAuthorityJob | None:
+        flags.append(prioritize_interactive)
+        return original(owner, lease_seconds, prioritize_interactive=prioritize_interactive)
+
+    async def process(claimed: ClaimedAuthorityJob, owner: str) -> str:
+        assert store.complete_authority(claimed, owner)
+        if len(flags) == 8:
+            stop.set()
+        return "completed"
+
+    monkeypatch.setattr(store, "claim_authority", claim)
+    monkeypatch.setattr(worker, "_process_authority", process)
+    await asyncio.wait_for(worker._run_authority_slot(stop, 0), timeout=5)
+    assert flags == [True, True, True, False] * 2
+    store.close()
 
 
 def job(store: QueueStore) -> ClaimedJob:
