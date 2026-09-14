@@ -148,6 +148,10 @@ The same rule applies to cleanup: after an ambiguous repository create,
 repeated 404 responses trigger manual verification rather than a successful
 cleanup claim.
 
+The [dated live results](../maintainers/live-validation.md) distinguish tested
+behavior from the merge and access-loss paths that remain open. Successful
+approval tests do not remove the shared-head limitation above.
+
 ## Why some paths cannot be delegated
 
 Some files decide who may approve. Others decide what trusted automation will

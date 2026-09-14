@@ -19,6 +19,7 @@ def test_manifest_requests_only_required_permissions_and_events() -> None:
 
     manifest = service.manifest()
 
+    assert manifest["description"] == "Code owner checks for people and trusted bots."
     assert manifest["default_permissions"] == {
         "checks": "write",
         "contents": "read",

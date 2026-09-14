@@ -1,6 +1,6 @@
 {
   "@context": "https://openvex.dev/ns/v0.2.0",
-  "@id": "urn:uuid:82b4335b-7fd8-5684-afba-15ed9ce01326",
+  "@id": "urn:uuid:25447f61-a2e8-5b0c-979b-c6436089fa07",
   "author": "Extra CODEOWNERS maintainers",
   "role": "VEX document producer",
   "statements": [
@@ -546,7 +546,7 @@
       "extra_codeowners/evaluator.py": "b81b9d1c6fe81d591867b0993d413030caab8af48703c4725f14c04fe2e3f9a6",
       "extra_codeowners/github.py": "4034cb95ebc393e3aa38fd5fa1dab67d89076249f1fd44d0d83c980f8e3bfc35",
       "extra_codeowners/logging.py": "a59227e76ec7809ff8bb88fee997abb9b99f32e81a4c8d16bcfc72c0c0abf33f",
-      "extra_codeowners/manifest.py": "02cb7f73bc5a6f9901eff2160d61e15a37e307f42a07863e3716d9bd60acee80",
+      "extra_codeowners/manifest.py": "33d42ac16b8218562f2baf6c0bc7c6664b03354bbf274cb0381e94740b76681e",
       "extra_codeowners/metrics.py": "5817664d5fec676eecd0e60a84499061e6bf9e0403cd02e1b2a2c86b3611e2ef",
       "extra_codeowners/migrations.py": "a86d239779ed7b0e38118a3f7c1dee9b33c71519656699f101ac556eed671a46",
       "extra_codeowners/models.py": "dc59959f56e35111fae00f8f60ef054ba80eb839eb2dae5b09165d4cdc349a48",
@@ -560,7 +560,7 @@
       "pyproject.toml": "4164e19c10e620b1cae1db22dab5728b4e80eb0f5a9dd768484b6f12de73fc96",
       "uv.lock": "029f0fe5b12940d2f8c4f36c5702f5e92f4aac1dc3bff75f2e90660a50dfdcc4"
     },
-    "review": "Authority claim ordering now prioritizes repository fences blocking direct PR events, with every fourth claim retaining the older ordering. Review of database.py and service.py confirms this changes SQL scheduling only; it introduces no native library entry points, TLS behavior, subprocess execution, or new attacker-controlled native inputs.",
+    "review": "Reviewed the App Manifest description-only change. No new inputs, native library calls, TLS behavior, parsing, or executable paths; existing vulnerability reachability conclusions are unchanged.",
     "schema_version": 1
   }
 }
