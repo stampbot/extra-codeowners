@@ -361,6 +361,7 @@ def capture_lifecycle_contracts(
         requested.sort(key=lambda item: item[1], reverse=True)
         details_complete = len(requested) <= DETAIL_LIMIT
         selected = requested[:DETAIL_LIMIT]
+        truncated_pairs = {key for _summary, _at, key, _id in requested[DETAIL_LIMIT:]}
 
         contracts: dict[str, dict[str, JsonObject]] = {name: {} for name in config.expected}
         counts = dict.fromkeys(config.expected, 0)
@@ -390,7 +391,11 @@ def capture_lifecycle_contracts(
         observations: JsonObject = {}
         for name in config.expected:
             unique = sorted(contracts[name].values(), key=_canonical_contract)
-            if not window_complete or not details_complete or captured_counts[name] < counts[name]:
+            if (
+                not window_complete
+                or name in truncated_pairs
+                or captured_counts[name] < counts[name]
+            ):
                 state = "incomplete"
             elif unique:
                 state = "observed"

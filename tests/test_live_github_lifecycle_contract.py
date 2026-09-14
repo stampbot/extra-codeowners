@@ -610,6 +610,39 @@ def test_capture_marks_an_event_incomplete_when_its_details_are_truncated(
     assert report["observations"]["installation.unsuspend"]["delivery_count"] == count
 
 
+@pytest.mark.parametrize("unknown_installation", [False, True])
+def test_detail_truncation_preserves_complete_observations_for_other_pairs(
+    tmp_path: Path, unknown_installation: bool
+) -> None:
+    listed = summary(1, event="repository", action="renamed")
+    fetched = detail(1, event="repository", action="renamed")
+    listed["repository_id"] = fetched["repository_id"] = 789
+    summaries = [listed]
+    details = [fetched]
+    for delivery_id in range(2, lifecycle_module.DETAIL_LIMIT + 2):
+        candidate = summary(delivery_id, event="installation", action="unsuspend")
+        payload = detail(delivery_id, event="installation", action="unsuspend")
+        if unknown_installation:
+            candidate["installation_id"] = payload["installation_id"] = None
+        summaries.append(candidate)
+        if delivery_id <= lifecycle_module.DETAIL_LIMIT:
+            details.append(payload)
+    client = CaptureClient([summaries, *details])
+
+    report = capture_lifecycle_contracts(
+        capture_config(tmp_path, expected=("repository.renamed", "installation.unsuspend")),
+        client=cast(RestClient, client),
+    )
+
+    assert report["result"] == "incomplete"
+    assert report["capture_complete"] is False
+    assert report["delivery_window_complete"] is True
+    assert report["delivery_details_complete"] is False
+    assert report["observations"]["repository.renamed"]["state"] == "observed"
+    assert report["observations"]["repository.renamed"]["delivery_count"] == 1
+    assert report["observations"]["installation.unsuspend"]["state"] == "incomplete"
+
+
 def test_capture_rejects_detail_that_differs_from_its_summary(tmp_path: Path) -> None:
     client = CaptureClient(
         [

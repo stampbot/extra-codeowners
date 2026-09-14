@@ -321,6 +321,8 @@ Each observation state is `observed`, `not_observed`, or `incomplete`.
 Its `delivery_count` includes summaries with the configured installation ID
 and null-ID candidates whose payload confirmed that installation. When the
 capture is incomplete, this count is not a complete inventory of deliveries.
+The detail limit marks only pairs with unread candidates incomplete; a fully
+captured pair can remain `observed` while the overall capture is incomplete.
 `not_observed` means the requested pair was absent from a complete bounded
 window. It is determinate negative evidence, not proof that GitHub can never
 send the event. `incomplete` means the page or detail bound prevented that
