@@ -1,6 +1,6 @@
 {
   "@context": "https://openvex.dev/ns/v0.2.0",
-  "@id": "urn:uuid:2767a029-2bfc-50ec-8a6f-fa056ac12eb7",
+  "@id": "urn:uuid:fdc20c0c-60d8-54be-bde6-f108e7d218f3",
   "author": "Extra CODEOWNERS maintainers",
   "role": "VEX document producer",
   "statements": [
@@ -538,7 +538,7 @@
       "extra_codeowners/build_identity.py": "5c3b38f087460fca37660ddeaa8a004d05348f8c947c04fc2444739ab7896968",
       "extra_codeowners/cli.py": "79a5c200397f9544492ec6071890ff5835c1ed625c623a0a86ed3a60503e65f4",
       "extra_codeowners/codeowners.py": "da8be54dbc8a79dcbaf39d49491f950d5405d74d6bb5e07da5247644f5ffcfd8",
-      "extra_codeowners/database.py": "58eb6f768377c9c25b17eb9fd42441df768422480976d58c130a11b2cc2cda32",
+      "extra_codeowners/database.py": "6649472bebbc51c51e75c45afdda927b99b1a5fbb74056fbb619c2cb92d50334",
       "extra_codeowners/dco.py": "8c3a0b541fe021fb9f05500ca9278306901010c219e7e1199ca5e205c138e68d",
       "extra_codeowners/evaluator.py": "b81b9d1c6fe81d591867b0993d413030caab8af48703c4725f14c04fe2e3f9a6",
       "extra_codeowners/github.py": "4f3665b31cb2d1c8eb2e44bf5c4bcd18addc8fa830da54af113af3b1f604225d",
@@ -549,7 +549,7 @@
       "extra_codeowners/models.py": "dc59959f56e35111fae00f8f60ef054ba80eb839eb2dae5b09165d4cdc349a48",
       "extra_codeowners/policy.py": "844abb482a7c9cc3190d624cc92ece2476128644718e4096f98bfa8a0abedf8a",
       "extra_codeowners/py.typed": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "extra_codeowners/service.py": "deedaca233b39b2538fbe63b78443d4f317b4f1543962830c50c2028578b7d46",
+      "extra_codeowners/service.py": "8b7e16f4a97cec5b746bd3eb87bb394959d144f7232c6179544403b47d3087f0",
       "extra_codeowners/settings.py": "5fe7f389869e1d503f3f3d46064c0c96d1ab1b07e102285b3cdad37d0faa8044",
       "extra_codeowners/trace_context.py": "f79ca91baa1dd615c80546c66a6b370ba78ec7106dece3feb201d10250078532",
       "extra_codeowners/tracing.py": "62c730c8bdf4d632dace5b79232f968d871a28d8724a162aa52ba6b4ed2c6db1",
@@ -557,7 +557,7 @@
       "pyproject.toml": "4164e19c10e620b1cae1db22dab5728b4e80eb0f5a9dd768484b6f12de73fc96",
       "uv.lock": "029f0fe5b12940d2f8c4f36c5702f5e92f4aac1dc3bff75f2e90660a50dfdcc4"
     },
-    "review": "Reviewed blocking-check refresh and missing-check invalidation optimization together. Changes are confined to GitHub API state management and request ordering. They add no native-library entry points, FFI, subprocesses, SQLite FTS, or attacker-controlled scanf formats; the recorded package reachability conclusions remain valid.",
+    "review": "Reviewed blocking-check refresh and missing-check invalidation optimization, including the known-peer discovery fallback. The SQL union reads queued and completed PR identities only to decide whether fresh GitHub discovery is needed; it uses no SQLite FTS or native extension. No native-library entry points, FFI, subprocesses, or attacker-controlled scanf formats are introduced. The recorded package reachability conclusions remain valid.",
     "schema_version": 1
   }
 }

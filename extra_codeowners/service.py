@@ -1312,10 +1312,17 @@ class EvaluationService:
             )
             await require_current_claim()
             if check_run_id is None:
-                # There is no result to revoke or propagate to other PRs.
-                # The triggering PR remains queued, and success publication
-                # still requires fresh shared-head and generation checks.
-                return
+                known_peers = await asyncio.to_thread(
+                    self.store.has_known_shared_head_peers,
+                    job.installation_id,
+                    job.repository_full_name,
+                    job.head_sha,
+                )
+                await require_current_claim()
+                if not known_peers:
+                    # No result to revoke and no known peer work to rebind.
+                    # Success still requires fresh shared-head validation.
+                    return
             current_associated = await self._current_associated_pulls(
                 job.installation_id,
                 job.repository_full_name,
@@ -1330,7 +1337,7 @@ class EvaluationService:
             # mutating request. An expired lease must never reset a result
             # published by its replacement.
             await require_current_claim()
-            if has_open_associated_pull:
+            if check_run_id is not None and has_open_associated_pull:
                 await self.github.reset_check_run(
                     job.installation_id,
                     job.repository_full_name,

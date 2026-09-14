@@ -27,8 +27,8 @@ Exact-head invalidation is a worker phase that runs before authority fan-out
 and ordinary pull-request evaluation:
 
 1. The worker claims one pending generation for an exact commit.
-2. It looks up this App's named Check Run on that commit under the cross-replica writer guard. If no check exists, it skips reset and fan-out. The triggering PR remains queued for evaluation, including current policy reads and the shared-head check before success publication.
-3. If a check exists, it fetches current state for every pull-request candidate GitHub reports. When at least one is open on the commit, it resets the check by ID to `completed` with conclusion `failure` and queues those PRs. Exact-head invalidation never creates a check. If every associated PR is closed, it preserves a completed evaluation result. A closed-pull evaluation cancels an existing queued or in-progress check, or a marked interim failure, instead of leaving unfinished work blocking.
+2. It looks up this App's named Check Run on that commit under the cross-replica writer guard. If no check exists and queued jobs plus retained reconciliation observations identify no other PR on that head, it skips reset and fan-out. The triggering PR remains queued for evaluation, including current policy reads and the shared-head check before success publication.
+3. If a check or known peer exists, it fetches current state for every pull-request candidate GitHub reports and binds open peers to this generation. When at least one is open on the commit and a check exists, it resets the check by ID to `completed` with conclusion `failure`. Exact-head invalidation never creates a check. If every associated PR is closed, it preserves a completed evaluation result. A closed-pull evaluation cancels an existing queued or in-progress check, or a marked interim failure, instead of leaving unfinished work blocking.
 4. It marks that generation invalidated only after the required work finishes. A failed lookup, lost lease, or newer generation leaves the work pending.
 
 After exact-head invalidation, Extra CODEOWNERS evaluates an open pull request

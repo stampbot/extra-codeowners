@@ -2329,6 +2329,33 @@ class QueueStore:
             and row.invalidated_generation < generation
         )
 
+    def has_known_shared_head_peers(
+        self,
+        installation_id: int,
+        repository_full_name: str,
+        head_sha: str,
+    ) -> bool:
+        """Check queued and completed observations for distinct same-head PRs.
+
+        A stale evaluation can finish before invalidation runs. Its retained
+        reconciliation state must still prevent skipping discovery of peers.
+        This is a discovery hint, never authorization evidence.
+        """
+        repository_full_name = normalize_repository_full_name(repository_full_name)
+        head_sha = validate_head_sha(head_sha)
+        queued = select(EvaluationJob.pull_number).where(
+            EvaluationJob.installation_id == installation_id,
+            EvaluationJob.repository_full_name == repository_full_name,
+            EvaluationJob.head_sha_hint == head_sha,
+        )
+        observed = select(ReconciliationState.pull_number).where(
+            ReconciliationState.installation_id == installation_id,
+            ReconciliationState.repository_full_name == repository_full_name,
+            ReconciliationState.head_sha == head_sha,
+        )
+        with self._sessions() as session:
+            return len(session.execute(queued.union(observed).limit(2)).all()) > 1
+
     def shared_head_generation(
         self,
         installation_id: int,

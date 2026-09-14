@@ -36,6 +36,29 @@ def make_store(tmp_path: Path) -> QueueStore:
     return store
 
 
+def test_known_shared_head_peers_include_completed_work_and_deduplicate(tmp_path: Path) -> None:
+    store = make_store(tmp_path)
+    head = "a" * 40
+    assert not store.has_known_shared_head_peers(2, "example/project", head)
+    store.enqueue(JobRequest(2, "example/project", 3, "test", head))
+    assert not store.has_known_shared_head_peers(2, "EXAMPLE/PROJECT", head)
+    claimed = store.claim("worker", 60)
+    assert claimed is not None
+    assert store.complete(claimed, "worker")
+    store.enqueue(JobRequest(2, "example/project", 3, "test", head))
+    assert not store.has_known_shared_head_peers(2, "example/project", head)
+    for installation, repository, sha in (
+        (3, "example/project", head),
+        (2, "example/other", head),
+        (2, "example/project", "b" * 40),
+    ):
+        store.enqueue(JobRequest(installation, repository, 4, "test", sha))
+    assert not store.has_known_shared_head_peers(2, "example/project", head)
+    store.enqueue(JobRequest(2, "example/project", 5, "test", head))
+    assert store.has_known_shared_head_peers(2, "example/project", head)
+    assert not store.has_known_shared_head_peers(3, "example/project", head)
+
+
 def test_schema_version_is_required_for_readiness(tmp_path: Path) -> None:
     store = make_store(tmp_path)
     assert store.database_available() is True

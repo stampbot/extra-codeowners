@@ -682,6 +682,62 @@ async def test_missing_check_invalidation_preserves_first_evaluation(
         assert "shared" in github.checks[-1]["text"]
 
 
+@pytest.mark.parametrize("stale_completed", [False, True], ids=["queued-peer", "completed-peer"])
+@pytest.mark.asyncio
+async def test_missing_check_rebinds_enrolled_peer_after_unenrolled_trigger(
+    tmp_path: Path,
+    stale_completed: bool,
+) -> None:
+    github = FakeGitHub(changed_path="uv.lock")
+    get_pull = github.get_pull
+    get_file = github.get_file_text
+
+    async def pull_for_base(installation_id: int, repository: str, number: int) -> dict[str, Any]:
+        pull = await get_pull(installation_id, repository, number)
+        if number == 4:
+            pull["base"]["sha"] = "c" * 40
+        return pull
+
+    async def file_for_base(*args: Any, **kwargs: Any) -> str | None:
+        if kwargs.get("ref") == "c" * 40:
+            return None
+        return await get_file(*args, **kwargs)
+
+    github.get_pull = pull_for_base  # type: ignore[method-assign]
+    github.get_file_text = file_for_base  # type: ignore[method-assign]
+    github.list_commit_pulls = AsyncMock(  # type: ignore[method-assign]
+        return_value=[
+            {"number": number, "state": "open", "head": {"sha": HEAD}} for number in (3, 4)
+        ]
+    )
+    store = migrated_store(f"sqlite:///{tmp_path / 'missing-check-peers.db'}")
+    service = EvaluationService(settings(), github, store)  # type: ignore[arg-type]
+    for number in (3, 4):
+        store.enqueue(JobRequest(2, "example/project", number, "pull_request.opened", HEAD))
+    if stale_completed:
+        stale = store.claim("stale-worker", 60)
+        assert stale is not None and stale.pull_number == 3
+        await service.evaluate_job(stale)
+        assert not github.checks
+        assert store.complete(stale, stale.lease_owner)
+
+    invalidation = store.claim_shared_head_invalidation("head-worker", 60)
+    assert invalidation is not None and invalidation.generation == 2
+    await service.invalidate_shared_head(invalidation, asyncio.Event())
+    github.list_commit_pulls.assert_awaited_once()
+    assert not github.checks
+    assert store.complete_shared_head_invalidation(invalidation)
+    claims = [store.claim("worker", 60, require_shared_head_ready=True) for _ in range(2)]
+    assert all(claim is not None and claim.shared_head_generation == 2 for claim in claims)
+    by_number = {claim.pull_number: claim for claim in claims if claim is not None}
+    assert set(by_number) == {3, 4}
+    await service.evaluate_job(by_number[4])
+    assert not github.checks
+    await service.evaluate_job(by_number[3])
+    assert github.checks[-1]["conclusion"] == "failure"
+    assert "shared" in github.checks[-1]["text"]
+
+
 @pytest.mark.parametrize("change", ["lease-lost", "new-generation", "lookup-error"])
 @pytest.mark.asyncio
 async def test_missing_check_lookup_cannot_complete_stale_or_failed_invalidation(

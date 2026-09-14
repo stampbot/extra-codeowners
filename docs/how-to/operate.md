@@ -178,7 +178,7 @@ queues recovery work in one transaction. If the head is unchanged, the service
 queues it again only after `EXTRA_CODEOWNERS_RECONCILE_RECHECK_SECONDS` has
 elapsed since the last successful evaluation. A current queue row stays put.
 
-Installing the App on a repository does not opt it into evaluation. A PR with no repository policy and no managed check still costs API reads during recovery: the worker must check for enrollment and existing results. When no check exists, invalidation skips shared-commit discovery, but the PR remains queued for those reads. Reconciliation still visits accessible repositories, so this optimization does not impose an installation-wide API budget.
+Installing the App on a repository does not opt it into evaluation. A PR with no repository policy and no managed check still costs API reads during recovery: the worker must check for enrollment and existing results. Invalidation skips shared-commit discovery only when no check exists and the database knows of no other PR on that head. Known peers still need discovery so an unenrolled PR cannot leave an enrolled peer's evaluation stale. Reconciliation still visits accessible repositories, so this optimization does not impose an installation-wide API budget.
 
 A reconciled check becomes blocking while the worker fetches current evidence.
 Existing checks show `failure` with a re-evaluation title; newly created checks
