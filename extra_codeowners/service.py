@@ -1304,6 +1304,18 @@ class EvaluationService:
 
         async with self._check_write_guard(job.installation_id, job.head_sha):
             await require_current_claim()
+            check_run_id = await self.github.existing_check_run_id(
+                job.installation_id,
+                job.repository_full_name,
+                job.head_sha,
+                self.settings.check_name,
+            )
+            await require_current_claim()
+            if check_run_id is None:
+                # There is no result to revoke or propagate to other PRs.
+                # The triggering PR remains queued, and success publication
+                # still requires fresh shared-head and generation checks.
+                return
             current_associated = await self._current_associated_pulls(
                 job.installation_id,
                 job.repository_full_name,
@@ -1314,17 +1326,11 @@ class EvaluationService:
                 state_value == "open" and associated_sha == job.head_sha
                 for state_value, associated_sha in current_associated.values()
             )
-            check_run_id = await self.github.existing_check_run_id(
-                job.installation_id,
-                job.repository_full_name,
-                job.head_sha,
-                self.settings.check_name,
-            )
             # Recheck after the GitHub read and immediately before the only
             # mutating request. An expired lease must never reset a result
             # published by its replacement.
             await require_current_claim()
-            if check_run_id is not None and has_open_associated_pull:
+            if has_open_associated_pull:
                 await self.github.reset_check_run(
                     job.installation_id,
                     job.repository_full_name,

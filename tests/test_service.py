@@ -581,6 +581,179 @@ async def test_shared_head_commit_fails_closed_across_pull_requests(tmp_path: Pa
     assert "shared" in github.checks[-1]["text"]
 
 
+@pytest.mark.asyncio
+async def test_unenrolled_recovery_uses_four_reads_without_shared_head_discovery(
+    tmp_path: Path,
+    private_key: str,
+) -> None:
+    """Count real client requests, excluding the installation token exchange."""
+    requests: list[tuple[str, str]] = []
+    pull = await FakeGitHub(changed_path="README.md").get_pull(2, "example/project", 3)
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/app/installations/2/access_tokens":
+            return httpx.Response(
+                201,
+                json={
+                    "token": "test-token",
+                    "expires_at": (datetime.now(UTC) + timedelta(hours=1)).isoformat(),
+                },
+            )
+        requests.append((request.method, request.url.path))
+        assert request.method == "GET"
+        if request.url.path.endswith("/check-runs"):
+            return httpx.Response(200, json={"check_runs": []})
+        if request.url.path.endswith("/pulls/3"):
+            return httpx.Response(200, json=pull)
+        if request.url.path.endswith("/contents/.github/extra-codeowners.toml"):
+            assert request.url.params["ref"] == BASE
+            return httpx.Response(404, json={"message": "Not Found"})
+        raise AssertionError(f"unexpected request: {request.method} {request.url}")
+
+    store = migrated_store(f"sqlite:///{tmp_path / 'unenrolled-http-budget.db'}")
+    request = JobRequest(
+        2,
+        "example/project",
+        3,
+        "periodic_reconciliation",
+        HEAD,
+        work_class="recovery",
+        observed_at=utcnow(),
+    )
+    assert store.enqueue_reconciliation_if_due(request, 900)
+    github = GitHubClient(7, private_key, transport=httpx.MockTransport(respond))
+    try:
+        service = EvaluationService(settings(), github, store)
+        invalidation = store.claim_shared_head_invalidation("head-worker", 60)
+        assert invalidation is not None
+        await service.invalidate_shared_head(invalidation, asyncio.Event())
+        assert store.complete_shared_head_invalidation(invalidation)
+        claimed = store.claim("worker", 60, require_shared_head_ready=True)
+        assert claimed is not None
+        await service.evaluate_job(claimed)
+        assert store.complete(claimed, claimed.lease_owner)
+        assert store.pending_count() == 0
+        assert not store.enqueue_reconciliation_if_due(request, 900)
+    finally:
+        await github.close()
+        store.close()
+
+    check_path = f"/repos/example/project/commits/{HEAD}/check-runs"
+    assert requests == [
+        ("GET", check_path),
+        ("GET", "/repos/example/project/pulls/3"),
+        ("GET", check_path),
+        ("GET", "/repos/example/project/contents/.github/extra-codeowners.toml"),
+    ]
+
+
+@pytest.mark.parametrize("shared", [False, True], ids=["unique-head", "shared-head"])
+@pytest.mark.asyncio
+async def test_missing_check_invalidation_preserves_first_evaluation(
+    tmp_path: Path,
+    shared: bool,
+) -> None:
+    github = FakeGitHub(changed_path="uv.lock")
+    associated = [{"number": 3, "state": "open", "head": {"sha": HEAD}}]
+    if shared:
+        associated.append({"number": 4, "state": "open", "head": {"sha": HEAD}})
+    github.list_commit_pulls = AsyncMock(return_value=associated)  # type: ignore[method-assign]
+    store = migrated_store(f"sqlite:///{tmp_path / 'first-evaluation.db'}")
+    service = EvaluationService(settings(), github, store)  # type: ignore[arg-type]
+    assert store.accept_delivery(
+        "new-pr",
+        "pull_request",
+        JobRequest(2, "example/project", 3, "pull_request.opened", HEAD),
+    ).accepted
+    invalidation = store.claim_shared_head_invalidation("head-worker", 60)
+    assert invalidation is not None
+    await service.invalidate_shared_head(invalidation, asyncio.Event())
+    github.list_commit_pulls.assert_not_awaited()
+    assert not github.checks
+    assert store.complete_shared_head_invalidation(invalidation)
+    claimed = store.claim("worker", 60, require_shared_head_ready=True)
+    assert claimed is not None and claimed.pull_number == 3
+
+    await service.evaluate_job(claimed)
+
+    github.list_commit_pulls.assert_awaited_once()
+    assert github.checks[-1]["conclusion"] == ("failure" if shared else "success")
+    if shared:
+        assert "shared" in github.checks[-1]["text"]
+
+
+@pytest.mark.parametrize("change", ["lease-lost", "new-generation", "lookup-error"])
+@pytest.mark.asyncio
+async def test_missing_check_lookup_cannot_complete_stale_or_failed_invalidation(
+    tmp_path: Path,
+    change: str,
+) -> None:
+    github = FakeGitHub(changed_path="uv.lock")
+    github.list_commit_pulls = AsyncMock()  # type: ignore[method-assign]
+    store = migrated_store(f"sqlite:///{tmp_path / 'missing-check-fence.db'}")
+    request = JobRequest(2, "example/project", 3, "pull_request.opened", HEAD)
+    assert store.accept_delivery("first", "pull_request", request).accepted
+    invalidation = store.claim_shared_head_invalidation("head-worker", 60)
+    assert invalidation is not None
+    lost = asyncio.Event()
+
+    async def interrupted_lookup(*args: Any, **kwargs: Any) -> None:
+        if change == "lease-lost":
+            lost.set()
+        elif change == "new-generation":
+            assert store.accept_delivery("newer", "pull_request", request).accepted
+        else:
+            raise GitHubError("check lookup failed")
+
+    github.existing_check_run_id = interrupted_lookup  # type: ignore[method-assign]
+    expected = GitHubError if change == "lookup-error" else service_module.SharedHeadLeaseLostError
+    with pytest.raises(expected):
+        await EvaluationService(settings(), github, store).invalidate_shared_head(  # type: ignore[arg-type]
+            invalidation,
+            lost,
+        )
+    github.list_commit_pulls.assert_not_awaited()
+    assert store.pending_shared_head_invalidation_count() == 1
+    assert store.claim("worker", 60, require_shared_head_ready=True) is None
+    assert not github.checks
+
+
+@pytest.mark.parametrize(
+    "policy",
+    [None, "schema_version = 1\nenabled = false", "not valid TOML"],
+    ids=["removed", "disabled", "malformed"],
+)
+@pytest.mark.asyncio
+async def test_existing_check_invalidation_does_not_skip_after_policy_loss(
+    tmp_path: Path,
+    policy: str | None,
+) -> None:
+    github = FakeGitHub(changed_path="uv.lock")
+    github.checks.append({"status": "completed", "conclusion": "success", "head_sha": HEAD})
+    github.get_file_text = AsyncMock(return_value=policy)  # type: ignore[method-assign]
+    github.list_commit_pulls = AsyncMock(wraps=github.list_commit_pulls)  # type: ignore[method-assign]
+    store = migrated_store(f"sqlite:///{tmp_path / 'policy-loss.db'}")
+    service = EvaluationService(settings(), github, store)  # type: ignore[arg-type]
+    assert store.accept_delivery(
+        "policy-loss",
+        "pull_request",
+        JobRequest(2, "example/project", 3, "pull_request.edited", HEAD),
+    ).accepted
+    invalidation = store.claim_shared_head_invalidation("head-worker", 60)
+    assert invalidation is not None
+
+    await service.invalidate_shared_head(invalidation, asyncio.Event())
+
+    github.get_file_text.assert_not_awaited()
+    github.list_commit_pulls.assert_awaited_once()
+    assert github.checks[-1]["status"] == "in_progress"
+    assert store.complete_shared_head_invalidation(invalidation)
+    claimed = store.claim("worker", 60, require_shared_head_ready=True)
+    assert claimed is not None
+    await service.evaluate_job(claimed)
+    assert github.checks[-1]["conclusion"] == "failure"
+
+
 @pytest.mark.parametrize(
     "stale_summary",
     [
