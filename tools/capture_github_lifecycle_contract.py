@@ -152,9 +152,15 @@ class CaptureConfig:
 
 def _summary_time(summary: JsonObject) -> datetime:
     value = summary.get("delivered_at")
-    if not isinstance(value, str):
+    if (
+        not isinstance(value, str)
+        or re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z", value) is None
+    ):
         raise ContractError("GitHub delivery summary omitted delivered_at")
-    return _timestamp(value, "GitHub delivery delivered_at")
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError as error:
+        raise ContractError("GitHub delivery delivered_at must be a valid UTC timestamp") from error
 
 
 def _summary_key(summary: JsonObject) -> str:
@@ -192,13 +198,17 @@ def _positive_detail_id(detail: JsonObject) -> int:
     return value
 
 
-def _positive_installation_id(delivery: JsonObject, description: str) -> int:
+def _metadata_installation_id(delivery: JsonObject, description: str) -> int | None:
+    if "installation_id" not in delivery:
+        raise ContractError(f"GitHub delivery {description} omitted its installation ID")
     value = delivery.get("installation_id")
+    if value is None:
+        return None
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         raise ContractError(
             f"GitHub delivery {description} omitted its positive integer installation ID"
         )
-    return value
+    return int(value)
 
 
 def _validate_status_metadata(delivery: JsonObject, description: str) -> tuple[bool, int]:
@@ -263,13 +273,13 @@ def _validate_detail(
     delivery_id: int,
     delivered_at: datetime,
     key: str,
-    installation_id: int,
-) -> None:
+) -> int:
     summary_status = _validate_status_metadata(summary, "summary")
     detail_status = _validate_status_metadata(detail, "detail")
     if (
         _positive_detail_id(detail) != delivery_id
-        or _positive_installation_id(detail, "detail") != installation_id
+        or _metadata_installation_id(detail, "detail")
+        != _metadata_installation_id(summary, "summary")
         or _summary_key(detail) != key
         or _summary_time(detail) != delivered_at
     ):
@@ -289,6 +299,29 @@ def _validate_detail(
         if field in summary
     ):
         raise ContractError("GitHub delivery detail metadata does not match its summary")
+    request = detail.get("request")
+    payload = request.get("payload") if isinstance(request, dict) else None
+    installation = payload.get("installation") if isinstance(payload, dict) else None
+    payload_installation = installation.get("id") if isinstance(installation, dict) else None
+    if (
+        type(payload_installation) is not int
+        or payload_installation <= 0
+        or not isinstance(payload, dict)
+        or payload.get("action") != key.split(".", 1)[1]
+    ):
+        raise ContractError("GitHub delivery payload omitted valid installation or action evidence")
+    metadata_installation = _metadata_installation_id(detail, "detail")
+    if metadata_installation is not None and payload_installation != metadata_installation:
+        raise ContractError("GitHub delivery payload installation disagrees with its metadata")
+    if key.startswith("repository."):
+        repository = payload.get("repository")
+        if (
+            not isinstance(repository, dict)
+            or type(repository.get("id")) is not int
+            or repository["id"] != detail["repository_id"]
+        ):
+            raise ContractError("GitHub delivery payload repository disagrees with its metadata")
+    return payload_installation
 
 
 def capture_lifecycle_contracts(
@@ -313,7 +346,8 @@ def capture_lifecycle_contracts(
             )
             if key is None:
                 continue
-            if _positive_installation_id(summary, "summary") != config.credentials.installation_id:
+            metadata_installation = _metadata_installation_id(summary, "summary")
+            if metadata_installation not in {None, config.credentials.installation_id}:
                 continue
             _validate_status_metadata(summary, "summary")
             delivered_at = _summary_time(summary)
@@ -327,24 +361,29 @@ def capture_lifecycle_contracts(
         requested.sort(key=lambda item: item[1], reverse=True)
         details_complete = len(requested) <= DETAIL_LIMIT
         selected = requested[:DETAIL_LIMIT]
+        truncated_pairs = {key for _summary, _at, key, _id in requested[DETAIL_LIMIT:]}
 
         contracts: dict[str, dict[str, JsonObject]] = {name: {} for name in config.expected}
         counts = dict.fromkeys(config.expected, 0)
         captured_counts = dict.fromkeys(config.expected, 0)
-        for _, _, key, _ in requested:
-            counts[key] += 1
+        for summary, _, key, _ in requested:
+            if _metadata_installation_id(summary, "summary") is not None:
+                counts[key] += 1
         for summary, delivered_at, key, delivery_id in selected:
             detail = active_client.request("GET", f"/app/hook/deliveries/{delivery_id}")
             if not isinstance(detail, dict):
                 raise ContractError("GitHub delivery detail is not an object")
-            _validate_detail(
+            payload_installation = _validate_detail(
                 summary,
                 detail,
                 delivery_id=delivery_id,
                 delivered_at=delivered_at,
                 key=key,
-                installation_id=config.credentials.installation_id,
             )
+            if payload_installation != config.credentials.installation_id:
+                continue
+            if _metadata_installation_id(summary, "summary") is None:
+                counts[key] += 1
             sanitized = sanitize_delivery(detail)
             captured_counts[key] += 1
             contracts[key][_canonical_contract(sanitized)] = sanitized
@@ -352,7 +391,11 @@ def capture_lifecycle_contracts(
         observations: JsonObject = {}
         for name in config.expected:
             unique = sorted(contracts[name].values(), key=_canonical_contract)
-            if not window_complete or captured_counts[name] < counts[name]:
+            if (
+                not window_complete
+                or name in truncated_pairs
+                or captured_counts[name] < counts[name]
+            ):
                 state = "incomplete"
             elif unique:
                 state = "observed"

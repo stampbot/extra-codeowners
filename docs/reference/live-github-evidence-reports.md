@@ -279,6 +279,14 @@ repository.transferred
 repository.unarchived
 ```
 
+GitHub can return `installation_id: null` in delivery-list and detail metadata
+even when the payload identifies the installation. The collector reads those
+candidates within the same detail limit and matches the payload's installation
+ID before retaining a contract. A candidate for another installation is not
+counted. Missing IDs, contradictory metadata, and invalid payload identities
+still fail capture. Delivery timestamps may include fractional UTC seconds;
+the operator's `since` value continues to use whole UTC seconds.
+
 ### Top-level fields
 
 | Field | Meaning |
@@ -296,8 +304,8 @@ repository.unarchived
 | `delivery_pages_read` | Number of delivery-list requests completed. |
 | `delivery_detail_limit` | Maximum matching delivery details read; currently `24`. |
 | `delivery_window_complete` | True when GitHub returns a page without a `rel="next"` link; false when a list bound stops paging while that relation remains. |
-| `delivery_details_complete` | False when more matching summaries exist than the detail limit permits. |
-| `observations` | State, summary count, and unique sanitized contracts for each expected pair. |
+| `delivery_details_complete` | False when more candidate summaries exist than the detail limit permits, including candidates whose metadata has a null installation ID. |
+| `observations` | State, installation-scoped delivery count, and unique sanitized contracts for each expected pair. |
 | `capture_complete` | True only when both bounds are complete and every expected pair was observed. |
 | `result` | `observed`, `incomplete`, or `failed`. |
 | `failure_type` | Exception class when `result` is `failed`; no provider error text is retained. |
@@ -310,6 +318,11 @@ their values after an arbitrary failure. Consumers must treat those absent
 fields as incomplete evidence.
 
 Each observation state is `observed`, `not_observed`, or `incomplete`.
+Its `delivery_count` includes summaries with the configured installation ID
+and null-ID candidates whose payload confirmed that installation. When the
+capture is incomplete, this count is not a complete inventory of deliveries.
+The detail limit marks only pairs with unread candidates incomplete; a fully
+captured pair can remain `observed` while the overall capture is incomplete.
 `not_observed` means the requested pair was absent from a complete bounded
 window. It is determinate negative evidence, not proof that GitHub can never
 send the event. `incomplete` means the page or detail bound prevented that
