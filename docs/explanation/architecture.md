@@ -134,9 +134,7 @@ leased exact generation -----------------+
       v
 look up existing check
       |
-      +-- absent, no known peer: no reset or fan-out needed
-      |
-      +-- absent, known peer: inspect associated PRs and fan out
+      +-- absent: no reset or fan-out needed
       |
       +-- present: inspect associated PRs, reset if open, and fan out
       |
@@ -150,9 +148,9 @@ it checks the lease owner, expiry, and generation while holding the
 installation-and-head writer guard. A replacement owner or newer generation
 therefore fences the old worker before its reset.
 
-The worker first looks up the existing Check Run by App, name, repository, and head. If none exists and the database knows of no other PR on that head, it finishes invalidation without discovering associated pull requests or writing to GitHub. The triggering PR stays queued for evaluation; this is not a decision to skip that repository.
+The worker first looks up the existing Check Run by App, name, repository, and head. If none exists, it finishes invalidation without discovering associated pull requests or writing to GitHub. Queued PRs still receive their normal evaluation; this is not a decision to skip the repository.
 
-Known peers need discovery even without a check. Otherwise, a later unenrolled PR could advance the head generation and leave an earlier enrolled PR's job stale. The worker checks queued jobs and retained reconciliation observations, fetches current peer state from GitHub, and binds open peers to the current generation. The database observations only decide whether discovery is needed; they never authorize a PR.
+A later PR can advance the shared-head generation before an earlier enrolled PR is evaluated. The earlier evaluation requeues itself at the current generation instead of completing without a result. This also works if the later PR has moved to another commit. Rebinding uses the existing generation-fenced queue operation: it preserves newer different-head work and retries if the epoch advances again. The next attempt still requires completed invalidation and fresh shared-head evidence before success.
 
 The lookup and the following lease check run under the same cross-replica writer guard used to publish results. A newer event or lost lease prevents the worker from completing its old generation. The evaluator still fetches current repository policy and, before publishing any success, checks whether another open PR shares the head. No policy or approval evidence is cached by this shortcut.
 

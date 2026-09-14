@@ -682,11 +682,15 @@ async def test_missing_check_invalidation_preserves_first_evaluation(
         assert "shared" in github.checks[-1]["text"]
 
 
-@pytest.mark.parametrize("stale_completed", [False, True], ids=["queued-peer", "completed-peer"])
+@pytest.mark.parametrize("peer_moved", [False, True], ids=["shared-peer", "moved-peer"])
+@pytest.mark.parametrize(
+    "evaluate_first", [False, True], ids=["after-invalidation", "before-invalidation"]
+)
 @pytest.mark.asyncio
-async def test_missing_check_rebinds_enrolled_peer_after_unenrolled_trigger(
+async def test_missing_check_requeues_stale_enrolled_peer(
     tmp_path: Path,
-    stale_completed: bool,
+    peer_moved: bool,
+    evaluate_first: bool,
 ) -> None:
     github = FakeGitHub(changed_path="uv.lock")
     get_pull = github.get_pull
@@ -696,6 +700,8 @@ async def test_missing_check_rebinds_enrolled_peer_after_unenrolled_trigger(
         pull = await get_pull(installation_id, repository, number)
         if number == 4:
             pull["base"]["sha"] = "c" * 40
+            if peer_moved:
+                pull["head"]["sha"] = "d" * 40
         return pull
 
     async def file_for_base(*args: Any, **kwargs: Any) -> str | None:
@@ -707,35 +713,85 @@ async def test_missing_check_rebinds_enrolled_peer_after_unenrolled_trigger(
     github.get_file_text = file_for_base  # type: ignore[method-assign]
     github.list_commit_pulls = AsyncMock(  # type: ignore[method-assign]
         return_value=[
-            {"number": number, "state": "open", "head": {"sha": HEAD}} for number in (3, 4)
+            {"number": number, "state": "open", "head": {"sha": HEAD}}
+            for number in ((3,) if peer_moved else (3, 4))
         ]
     )
     store = migrated_store(f"sqlite:///{tmp_path / 'missing-check-peers.db'}")
     service = EvaluationService(settings(), github, store)  # type: ignore[arg-type]
     for number in (3, 4):
         store.enqueue(JobRequest(2, "example/project", number, "pull_request.opened", HEAD))
-    if stale_completed:
-        stale = store.claim("stale-worker", 60)
-        assert stale is not None and stale.pull_number == 3
+    stale = store.claim("stale-worker", 60)
+    assert stale is not None and stale.pull_number == 3
+    if peer_moved:
+        store.enqueue(JobRequest(2, "example/project", 4, "pull_request.synchronize", "d" * 40))
+    if evaluate_first:
         await service.evaluate_job(stale)
         assert not github.checks
-        assert store.complete(stale, stale.lease_owner)
+        assert not store.complete(stale, stale.lease_owner)
 
     invalidation = store.claim_shared_head_invalidation("head-worker", 60)
     assert invalidation is not None and invalidation.generation == 2
     await service.invalidate_shared_head(invalidation, asyncio.Event())
-    github.list_commit_pulls.assert_awaited_once()
+    github.list_commit_pulls.assert_not_awaited()
     assert not github.checks
     assert store.complete_shared_head_invalidation(invalidation)
-    claims = [store.claim("worker", 60, require_shared_head_ready=True) for _ in range(2)]
-    assert all(claim is not None and claim.shared_head_generation == 2 for claim in claims)
-    by_number = {claim.pull_number: claim for claim in claims if claim is not None}
-    assert set(by_number) == {3, 4}
-    await service.evaluate_job(by_number[4])
+    if not evaluate_first:
+        await service.evaluate_job(stale)
+        assert not github.checks
+        assert not store.complete(stale, stale.lease_owner)
+    claimed = store.claim("worker", 60, require_shared_head_ready=True)
+    assert claimed is not None
+    if claimed.pull_number == 4:
+        await service.evaluate_job(claimed)
+        assert not github.checks
+        assert store.complete(claimed, claimed.lease_owner)
+        claimed = store.claim("worker", 60, require_shared_head_ready=True)
+    assert claimed is not None and claimed.pull_number == 3
+    assert claimed.shared_head_generation == 2
+    await service.evaluate_job(claimed)
+    github.list_commit_pulls.assert_awaited_once()
+    assert github.checks[-1]["conclusion"] == ("success" if peer_moved else "failure")
+    if not peer_moved:
+        assert "shared" in github.checks[-1]["text"]
+
+
+@pytest.mark.parametrize("change", ["new-generation", "new-head"])
+@pytest.mark.asyncio
+async def test_stale_evaluation_rebinding_preserves_newer_work(
+    tmp_path: Path,
+    change: str,
+) -> None:
+    github = FakeGitHub(changed_path="uv.lock")
+    store = migrated_store(f"sqlite:///{tmp_path / 'rebind-race.db'}")
+    store.enqueue(JobRequest(2, "example/project", 3, "first", HEAD))
+    stale = store.claim("worker", 60)
+    assert stale is not None
+    store.enqueue(JobRequest(2, "example/project", 4, "peer", HEAD))
+    enqueue = store.enqueue_for_shared_head_generation
+
+    def raced_enqueue(request: JobRequest, shared_head_generation: int) -> bool:
+        if change == "new-generation":
+            store.enqueue(JobRequest(2, "example/project", 4, "newer", HEAD))
+        else:
+            store.enqueue(JobRequest(2, "example/project", 3, "newer", "d" * 40))
+        return enqueue(request, shared_head_generation)
+
+    store.enqueue_for_shared_head_generation = raced_enqueue  # type: ignore[method-assign]
+    service = EvaluationService(settings(), github, store)  # type: ignore[arg-type]
+    if change == "new-generation":
+        with pytest.raises(service_module.SharedHeadInvalidationPendingError):
+            await service.evaluate_job(stale)
+        assert store.is_current_claim(stale)
+    else:
+        await service.evaluate_job(stale)
+        assert not store.complete(stale, stale.lease_owner)
+        with store.session() as session:
+            row = session.get(EvaluationJob, stale.id)
+            assert row is not None and row.head_sha_hint == "d" * 40
+            assert row.reason == "newer"
     assert not github.checks
-    await service.evaluate_job(by_number[3])
-    assert github.checks[-1]["conclusion"] == "failure"
-    assert "shared" in github.checks[-1]["text"]
+    assert store.pending_count() == (3 if change == "new-generation" else 4)
 
 
 @pytest.mark.parametrize("change", ["lease-lost", "new-generation", "lookup-error"])
