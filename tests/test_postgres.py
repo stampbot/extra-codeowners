@@ -23,6 +23,7 @@ from extra_codeowners.database import (
     EvaluationJob,
     JobRequest,
     QueueStore,
+    ReconciliationState,
     SharedHeadEpoch,
     utcnow,
 )
@@ -71,6 +72,52 @@ def request(pull_number: int = 42) -> JobRequest:
         reason="integration-test",
         head_sha_hint="a" * 40,
     )
+
+
+@pytest.mark.parametrize("old_writer_updates_existing", [False, True])
+def test_old_worker_completions_do_not_suppress_recovery(
+    postgres_store: QueueStore, old_writer_updates_existing: bool
+) -> None:
+    recovery = JobRequest(
+        17,
+        "example/project",
+        42,
+        "periodic_reconciliation",
+        "a" * 40,
+        observed_at=utcnow(),
+    )
+    if old_writer_updates_existing:
+        postgres_store.enqueue(recovery)
+        claimed = postgres_store.claim("new-worker", 60, "recovery")
+        assert claimed is not None
+        assert postgres_store.complete(claimed, "new-worker")
+        assert not postgres_store.enqueue_reconciliation_if_due(recovery, 604800)
+
+    with postgres_store.engine.begin() as connection:
+        if old_writer_updates_existing:
+            connection.execute(
+                text("UPDATE reconciliation_states SET completed_at = :now"),
+                {"now": utcnow() + timedelta(seconds=1)},
+            )
+        else:
+            connection.execute(
+                text("""
+                    INSERT INTO reconciliation_states
+                    (installation_id, repository_full_name, pull_number,
+                     head_sha, completed_at, observed_at)
+                    VALUES (17, 'example/project', 42, :head, :now, :now)
+                """),
+                {"head": recovery.head_sha_hint, "now": utcnow()},
+            )
+    assert postgres_store.enqueue_reconciliation_if_due(recovery, 604800)
+    claimed = postgres_store.claim("new-worker", 60, "recovery")
+    assert claimed is not None
+    assert postgres_store.complete(claimed, "new-worker")
+    with postgres_store.session() as session:
+        state = session.get(ReconciliationState, (17, "example/project", 42))
+        assert state is not None
+        assert state.confirmed_completed_at == state.completed_at
+    assert not postgres_store.enqueue_reconciliation_if_due(recovery, 604800)
 
 
 def test_concurrent_delivery_generations_are_not_lost(postgres_store: QueueStore) -> None:

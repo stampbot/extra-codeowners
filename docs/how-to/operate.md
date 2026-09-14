@@ -180,6 +180,8 @@ elapsed since the last successful evaluation. A current queue row stays put.
 
 Installing the App on a repository does not opt it into evaluation. A PR with no repository policy and no managed check still costs API reads during recovery: the worker must check for enrollment and existing results. When no check exists, invalidation skips shared-commit discovery. An enrolled evaluation bound to an older head generation requeues itself at the current generation, so an unenrolled PR cannot cause its work to be discarded. Reconciliation still visits accessible repositories, so this optimization does not impose an installation-wide API budget.
 
+An upgrade to `0007_reconciliation_completion` rechecks retained completions from older workers on the next scan, regardless of the recheck interval. Expect additional recovery work once after upgrading. Follow the [controlled upgrade procedure](upgrade.md); a rolling image replacement alone is not sufficient for this database change.
+
 A reconciled check becomes blocking while the worker fetches current evidence.
 Existing checks show `failure` with a re-evaluation title; newly created checks
 can show `in_progress`. Choose an interval and recheck period that balance that

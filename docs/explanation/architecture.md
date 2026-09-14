@@ -152,6 +152,8 @@ The worker first looks up the existing Check Run by App, name, repository, and h
 
 A later PR can advance the shared-head generation before an earlier enrolled PR is evaluated. The earlier evaluation requeues itself at the current generation instead of completing without a result. This also works if the later PR has moved to another commit. Rebinding uses the existing generation-fenced queue operation: it preserves newer different-head work and retries if the epoch advances again. The next attempt still requires completed invalidation and fresh shared-head evidence before success.
 
+Reconciliation also checks who recorded a completion. New workers confirm the completion timestamp; records from older workers lack a matching confirmation and are rechecked on the next scan. This prevents an old worker's discarded evaluation from suppressing a PR for the full recheck interval. The [database upgrade notes](../reference/upgrade-notes.md) cover the migration and required worker drain.
+
 The lookup and the following lease check run under the same cross-replica writer guard used to publish results. A newer event or lost lease prevents the worker from completing its old generation. The evaluator still fetches current repository policy and, before publishing any success, checks whether another open PR shares the head. No policy or approval evidence is cached by this shortcut.
 
 If a check exists, the worker asks GitHub which pull requests use the commit. It rejects

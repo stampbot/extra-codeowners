@@ -1,6 +1,6 @@
 {
   "@context": "https://openvex.dev/ns/v0.2.0",
-  "@id": "urn:uuid:32acee5f-251e-55ce-8952-3c12afbd80ef",
+  "@id": "urn:uuid:18e8d95e-3bf0-56ae-9d38-fe06856ae17c",
   "author": "Extra CODEOWNERS maintainers",
   "role": "VEX document producer",
   "statements": [
@@ -533,12 +533,13 @@
       "extra_codeowners/alembic/versions/0004_responsive_work_queue.py": "020a0c7847effd0b4dac7adf5f747f17a7ebdf2e00f9f7777f724f303ca289e3",
       "extra_codeowners/alembic/versions/0005_reconciliation_state_index.py": "be81a836f41dce4e7aac2b9d16ea64371cacebb7dd1f85281b391c54ecd0f004",
       "extra_codeowners/alembic/versions/0006_webhook_trace_links.py": "8be4d6cf7c6e182cf4c9b599b22e37d643b577f67c8c11cfb15da2138a8bdcd8",
+      "extra_codeowners/alembic/versions/0007_reconciliation_completion.py": "a4b0ef650761a915ea19b8f73db0d1d277d3f6f4e3f71736114906bfeeffac9f",
       "extra_codeowners/alembic/versions/__init__.py": "c421d4569599794de9ddda269e84b775d6e8204164cb9dff2487ca86560d21ae",
       "extra_codeowners/app.py": "d3a90c8bdd26b2982e11e2d19e426df76ce2674a534a113dc922347d7ca1b028",
       "extra_codeowners/build_identity.py": "5c3b38f087460fca37660ddeaa8a004d05348f8c947c04fc2444739ab7896968",
       "extra_codeowners/cli.py": "79a5c200397f9544492ec6071890ff5835c1ed625c623a0a86ed3a60503e65f4",
       "extra_codeowners/codeowners.py": "da8be54dbc8a79dcbaf39d49491f950d5405d74d6bb5e07da5247644f5ffcfd8",
-      "extra_codeowners/database.py": "58eb6f768377c9c25b17eb9fd42441df768422480976d58c130a11b2cc2cda32",
+      "extra_codeowners/database.py": "3ab208453b9d3709f27f028295def40814d7eeb0ceb628baab6efd49adbd8b01",
       "extra_codeowners/dco.py": "8c3a0b541fe021fb9f05500ca9278306901010c219e7e1199ca5e205c138e68d",
       "extra_codeowners/evaluator.py": "b81b9d1c6fe81d591867b0993d413030caab8af48703c4725f14c04fe2e3f9a6",
       "extra_codeowners/github.py": "4f3665b31cb2d1c8eb2e44bf5c4bcd18addc8fa830da54af113af3b1f604225d",
@@ -557,7 +558,7 @@
       "pyproject.toml": "4164e19c10e620b1cae1db22dab5728b4e80eb0f5a9dd768484b6f12de73fc96",
       "uv.lock": "029f0fe5b12940d2f8c4f36c5702f5e92f4aac1dc3bff75f2e90660a50dfdcc4"
     },
-    "review": "Reviewed blocking-check refresh, missing-check discovery shortcut, and stale-evaluation requeue using existing generation-fenced queue operations. Changes only affect GitHub API state and queue scheduling. The peer-table scan was removed. No native-library entry points, FFI, subprocesses, SQLite FTS, or attacker-controlled scanf formats are introduced; the recorded package reachability conclusions remain valid.",
+    "review": "Reviewed stale-evaluation rebinding and completion confirmation: ordinary generation-fenced SQL plus a nullable timestamp migration. No new native-library entry points, subprocesses, FFI, SQLite FTS, or attacker-controlled scanf formats; existing package reachability findings remain applicable.",
     "schema_version": 1
   }
 }
