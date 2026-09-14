@@ -927,6 +927,35 @@ def test_reconciliation_rechecks_unconfirmed_old_worker_completion(
     assert not store.enqueue_reconciliation_if_due(request, 604800)
 
 
+@pytest.mark.parametrize("in_flight", [False, True])
+def test_recovery_keeps_invalidation_foreground_for_pending_direct_evaluation(
+    tmp_path: Path, in_flight: bool
+) -> None:
+    store = make_store(tmp_path)
+    direct = JobRequest(17, "example/project", 41, "pull_request.opened", "a" * 40)
+    store.enqueue(direct)
+    invalidation = store.claim_shared_head_invalidation("head-worker", 60, "interactive")
+    assert invalidation is not None and store.complete_shared_head_invalidation(invalidation)
+    if in_flight:
+        assert store.claim("foreground", 60, "interactive", require_shared_head_ready=True)
+    store.enqueue(
+        JobRequest(17, "example/project", 41, "member.removed", "a" * 40, work_class="recovery")
+    )
+    assert store.claim_shared_head_invalidation("background", 60, "recovery") is None
+    current = store.claim_shared_head_invalidation("foreground", 60, "interactive")
+    assert current is not None and current.generation > invalidation.generation
+
+
+def test_first_recovery_epoch_preserves_a_direct_job_with_unknown_head(tmp_path: Path) -> None:
+    store = make_store(tmp_path)
+    store.enqueue(JobRequest(17, "example/project", 41, "pull_request.opened"))
+    store.enqueue(
+        JobRequest(17, "example/project", 41, "member.removed", "a" * 40, work_class="recovery")
+    )
+    invalidation = store.claim_shared_head_invalidation("foreground", 60, "interactive")
+    assert invalidation is not None and invalidation.head_sha == "a" * 40
+
+
 def test_completed_direct_epoch_becomes_recovery_work_on_later_recheck(tmp_path: Path) -> None:
     store = make_store(tmp_path)
     direct = JobRequest(17, "example/project", 41, "pull_request.opened", "a" * 40)

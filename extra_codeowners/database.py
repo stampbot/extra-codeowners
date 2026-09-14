@@ -29,6 +29,7 @@ from sqlalchemy import (
     false,
     func,
     inspect,
+    literal,
     or_,
     select,
     text,
@@ -1468,6 +1469,27 @@ class QueueStore:
             QueueStore._lock_shared_head_epoch_in_session(session, request)
         head_sha = validate_head_sha(request.head_sha_hint or "")
         now = utcnow()
+        foreground_waiting = bool(
+            session.scalar(
+                select(
+                    exists(
+                        select(EvaluationJob.id).where(
+                            EvaluationJob.installation_id == request.installation_id,
+                            EvaluationJob.repository_full_name == request.repository_full_name,
+                            EvaluationJob.state == "pending",
+                            EvaluationJob.work_class == WORK_CLASS_INTERACTIVE,
+                            or_(
+                                EvaluationJob.head_sha_hint == head_sha,
+                                and_(
+                                    EvaluationJob.head_sha_hint.is_(None),
+                                    EvaluationJob.pull_number == request.pull_number,
+                                ),
+                            ),
+                        )
+                    )
+                )
+            )
+        )
         key = (
             SharedHeadEpoch.installation_id == request.installation_id,
             SharedHeadEpoch.repository_full_name == request.repository_full_name,
@@ -1478,15 +1500,16 @@ class QueueStore:
             .where(*key)
             .values(
                 generation=SharedHeadEpoch.generation + 1,
-                # A periodic scan must never downgrade an already accepted
-                # webhook trigger that is still waiting for invalidation. A
-                # completed direct generation does not make a later periodic
-                # recheck foreground work forever.
+                # Preserve a pending direct invalidation or evaluation. Once
+                # both finish, later bulk rechecks can use recovery again.
                 work_class=case(
                     (
-                        and_(
-                            SharedHeadEpoch.work_class == WORK_CLASS_INTERACTIVE,
-                            SharedHeadEpoch.invalidated_generation < SharedHeadEpoch.generation,
+                        or_(
+                            literal(foreground_waiting),
+                            and_(
+                                SharedHeadEpoch.work_class == WORK_CLASS_INTERACTIVE,
+                                SharedHeadEpoch.invalidated_generation < SharedHeadEpoch.generation,
+                            ),
                         ),
                         WORK_CLASS_INTERACTIVE,
                     ),
@@ -1511,7 +1534,7 @@ class QueueStore:
             head_sha=head_sha,
             generation=1,
             invalidated_generation=0,
-            work_class=request.work_class,
+            work_class=WORK_CLASS_INTERACTIVE if foreground_waiting else request.work_class,
             changed_at=now,
             available_at=now,
         )

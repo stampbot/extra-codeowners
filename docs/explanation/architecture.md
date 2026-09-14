@@ -300,6 +300,9 @@ promotes that PR's pending work to foreground priority; a bulk refresh cannot
 demote it. If fast revocation fails, its retry is promoted too, so preserving
 the recovery reserve does not postpone an unsuccessful revocation. Failure to
 store that promotion leaves the authority fence pending.
+GitHub's rate-limit delay still applies if promotion fails. A head discovered
+during fast revocation is queued in foreground priority, as is a new invalidation
+needed by a direct evaluation that has not finished yet.
 
 This limits duplicate evaluation work after broad events. The authority
 revocations themselves can still consume the reserve, so a large installation

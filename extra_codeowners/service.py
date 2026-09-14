@@ -2273,11 +2273,20 @@ class Worker:
         async def revoke(request: JobRequest) -> None:
             async with semaphore:
                 try:
-                    await self.evaluator.invalidate_for_trigger(request)
-                except GitHubRateLimitError:
-                    await asyncio.to_thread(
-                        self.store.enqueue, replace(request, work_class="interactive")
+                    await self.evaluator.invalidate_for_trigger(
+                        replace(request, work_class="interactive")
                     )
+                except GitHubRateLimitError:
+                    try:
+                        await asyncio.to_thread(
+                            self.store.enqueue, replace(request, work_class="interactive")
+                        )
+                    except Exception:
+                        log.exception(
+                            "authority_rate_limited_promotion_failed",
+                            repository=request.repository_full_name,
+                            pull_number=request.pull_number,
+                        )
                     raise
                 except Exception:
                     # A failed revocation must not wait for the recovery

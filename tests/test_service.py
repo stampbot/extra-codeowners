@@ -2925,7 +2925,7 @@ async def test_authority_followup_uses_recovery_without_downgrading_direct_event
     )
 
     async def revoke(request: JobRequest) -> bool:
-        assert request.work_class == "recovery"
+        assert request.work_class == "interactive"
         assert REQUEST_LANE.get() == "authority"
         if direct_arrival == "during":
             store.accept_delivery("direct", "pull_request", direct)
@@ -2945,8 +2945,9 @@ async def test_authority_followup_uses_recovery_without_downgrading_direct_event
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("rate_limited", [False, True])
 async def test_failed_revocation_promotion_cannot_complete_authority_work(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, rate_limited: bool
 ) -> None:
     store = migrated_store(f"sqlite:///{tmp_path / 'fanout-promotion-failure.db'}")
     store.enqueue_authority(AuthorityRequest(2, "example/project", None, "member.removed"))
@@ -2956,7 +2957,12 @@ async def test_failed_revocation_promotion_cannot_complete_authority_work(
     evaluator.github.list_open_pulls = AsyncMock(
         return_value=[{"number": 4, "head": {"sha": HEAD}}]
     )
-    evaluator.invalidate_for_trigger = AsyncMock(side_effect=GitHubError("write failed"))
+    error = (
+        GitHubRateLimitError(429, "PATCH", "/check-runs/1", "limited", 61, global_scope=True)
+        if rate_limited
+        else GitHubError("write failed")
+    )
+    evaluator.invalidate_for_trigger = AsyncMock(side_effect=error)
     original = store.enqueue
 
     def enqueue(request: JobRequest) -> None:
@@ -2966,9 +2972,36 @@ async def test_failed_revocation_promotion_cannot_complete_authority_work(
 
     monkeypatch.setattr(store, "enqueue", enqueue)
     worker = Worker(settings(), store, evaluator, "worker")
-    assert await worker._process_authority(claimed) == "failed"
+    assert await worker._process_authority(claimed) == (
+        "rate_limited" if rate_limited else "failed"
+    )
+    assert store.provider_is_backpressured(None) is rate_limited
     with store.session() as session:
-        assert session.get(AuthorityJob, claimed.id) is not None
+        row = session.get(AuthorityJob, claimed.id)
+        assert row is not None
+        if rate_limited:
+            assert row.available_at.replace(tzinfo=UTC) > utcnow() + timedelta(seconds=55)
+
+
+@pytest.mark.asyncio
+async def test_failed_fast_revocation_keeps_newly_discovered_live_head_foreground(
+    tmp_path: Path,
+) -> None:
+    store = migrated_store(f"sqlite:///{tmp_path / 'fanout-live-head.db'}")
+    store.enqueue_authority(AuthorityRequest(2, "example/project", None, "member.removed"))
+    claimed = store.claim_authority("worker", 60)
+    assert claimed is not None
+    github = FakeGitHub(changed_path="uv.lock")
+    github.list_open_pulls = AsyncMock(  # type: ignore[attr-defined]
+        return_value=[{"number": 3, "head": {"sha": "b" * 40}}]
+    )
+    github.has_check_run = AsyncMock(side_effect=GitHubError("live check lookup failed"))  # type: ignore[method-assign]
+    runtime = settings()
+    worker = Worker(runtime, store, EvaluationService(runtime, github, store), "worker")  # type: ignore[arg-type]
+
+    assert await worker._process_authority(claimed) == "completed"
+    live = store.claim_shared_head_invalidation("observer", 60, "interactive")
+    assert live is not None and live.head_sha == HEAD
 
 
 @pytest.mark.asyncio

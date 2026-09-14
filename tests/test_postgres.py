@@ -47,6 +47,36 @@ def postgres_url() -> str:
     return value
 
 
+@pytest.mark.parametrize("in_flight", [False, True])
+def test_postgres_recovery_preserves_invalidation_for_pending_direct_evaluation(
+    postgres_store: QueueStore, in_flight: bool
+) -> None:
+    store = postgres_store
+    store.enqueue(JobRequest(17, "example/project", 41, "pull_request.opened", "a" * 40))
+    invalidation = store.claim_shared_head_invalidation("head-worker", 60, "interactive")
+    assert invalidation is not None and store.complete_shared_head_invalidation(invalidation)
+    if in_flight:
+        assert store.claim("foreground", 60, "interactive", require_shared_head_ready=True)
+    store.enqueue(
+        JobRequest(17, "example/project", 41, "member.removed", "a" * 40, work_class="recovery")
+    )
+    assert store.claim_shared_head_invalidation("background", 60, "recovery") is None
+    current = store.claim_shared_head_invalidation("foreground", 60, "interactive")
+    assert current is not None and current.generation > invalidation.generation
+
+
+def test_postgres_first_recovery_epoch_preserves_unknown_direct_head(
+    postgres_store: QueueStore,
+) -> None:
+    store = postgres_store
+    store.enqueue(JobRequest(17, "example/project", 41, "pull_request.opened"))
+    store.enqueue(
+        JobRequest(17, "example/project", 41, "member.removed", "a" * 40, work_class="recovery")
+    )
+    invalidation = store.claim_shared_head_invalidation("foreground", 60, "interactive")
+    assert invalidation is not None and invalidation.head_sha == "a" * 40
+
+
 def test_postgres_prioritizes_direct_authority_without_double_claim(
     postgres_store: QueueStore,
 ) -> None:
