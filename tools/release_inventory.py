@@ -640,6 +640,7 @@ def collect_inventory(
             "platform_digest": platform_digest,
         },
         "python": {
+            "source_bundle": f"python-source-{architecture}.tar.gz",
             "distributions": distribution_records,
             "embedded_sboms": embedded_sboms,
             "native_files": native_files,

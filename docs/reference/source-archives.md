@@ -150,3 +150,40 @@ distributions need an explicit collector update; a failed lookup never counts
 as a complete source bundle.
 
 [snapshot]: https://snapshot.debian.org/
+
+## Python source distributions
+
+Releases containing the Python source collector include
+`python-source-amd64.tar.gz` and `python-source-arm64.tar.gz`. Each holds the
+upstream sdists listed in `uv.lock` for the distributions installed on that
+platform. Package names and versions must match; downloads must match the
+lock's SHA-256 and size. The collector never extracts or runs them.
+
+`manifest.json` binds the bundle to the platform digest, inventory hash, and
+lock hash. It lists each archive under `sources/<package>/`. The application's
+own sdist is delivered separately in the same release. Packages without a
+locked sdist appear in `unresolved_sources`; currently that includes
+`psycopg-binary`. That entry is a missing source-delivery item, not an exemption.
+These archives also do not supply every native library embedded in a wheel.
+
+The inventory's `python.source_bundle` field requires the bundle and its
+signature during release verification. Older inventories without the field do
+not imply source delivery. From a trusted checkout of the release tag, download
+the bundle, its signature, the matching inventory and signature, and the platform
+digest file. Verify the signatures and attestations using the loop above with
+`distribution-inventory-amd64.json` and `python-source-amd64.tar.gz`, then run:
+
+```bash
+python -I -S -B tools/release_python_sources.py verify \
+  --architecture amd64 \
+  --platform-digest "$(<digest-amd64.txt)" \
+  --inventory distribution-inventory-amd64.json \
+  --lock uv.lock \
+  --bundle python-source-amd64.tar.gz
+```
+
+Use the lock from that release tag, not today's main branch. Verification
+succeeds silently with exit status zero. It rejects changed identities, hashes,
+sizes, duplicate or unexpected archive members, and filesystem links. Each
+sdist is limited to 64 MiB; the bundle is limited to 256 MiB before and after
+decompression. No dependency is rebuilt to produce this evidence.
