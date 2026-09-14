@@ -101,6 +101,7 @@ def test_exact_identity_determinism_and_explicit_gaps() -> None:
 @pytest.mark.parametrize("version", ["3.3.4", "3.3.5"])
 def test_binary_recipe_requires_exact_reviewed_package_version(version: str) -> None:
     raw = json.loads(inventory())
+    raw["python"]["source_recipe_schema"] = 1
     raw["python"]["distributions"][1] = {"normalized_name": "psycopg-binary", "version": version}
     locked = (
         lock()
@@ -147,6 +148,34 @@ def test_binary_recipe_requires_exact_reviewed_package_version(version: str) -> 
 def test_binary_source_fetch_rejects_other_origins_and_mutable_refs(url: str) -> None:
     with pytest.raises(sources.PythonSourceError, match="URL"):
         sources.fetch({"url": url})
+
+
+def test_historical_inventory_does_not_retroactively_require_reviewed_recipes() -> None:
+    raw = json.loads(inventory())
+    raw["python"]["distributions"][1] = {"normalized_name": "psycopg-binary", "version": "3.3.4"}
+    locked = lock().replace(b"binary-only", b"psycopg-binary").replace(b'"2.0"', b'"3.3.4"')
+    manifest = sources.plan(json.dumps(raw).encode(), locked, "amd64", DIGEST)
+    assert manifest["scope"] == (
+        "Locked Python sdists only; embedded native dependencies are not covered."
+    )
+    assert manifest["unresolved_sources"] == [
+        {"name": "psycopg-binary", "version": "3.3.4", "reason": "lock contains no source archive"}
+    ]
+    assert len(manifest["sources"]) == 1
+    historical = sources.build(manifest, {manifest["sources"][0]["path"]: DATA})
+    sources.verify(manifest, historical)
+    raw["python"]["source_recipe_schema"] = 1
+    current = sources.plan(json.dumps(raw).encode(), locked, "amd64", DIGEST)
+    with pytest.raises(sources.PythonSourceError):
+        sources.verify(current, historical)
+
+
+@pytest.mark.parametrize("schema", [True, "1", None, -1, 2])
+def test_rejects_unknown_source_recipe_schema(schema: object) -> None:
+    raw = json.loads(inventory())
+    raw["python"]["source_recipe_schema"] = schema
+    with pytest.raises(sources.PythonSourceError, match="recipe schema"):
+        sources.plan(json.dumps(raw).encode(), lock(), "amd64", DIGEST)
 
 
 def test_reviewed_binary_source_uses_the_same_hash_and_size_gate(

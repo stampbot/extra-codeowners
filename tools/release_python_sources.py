@@ -129,6 +129,9 @@ def plan(inventory: bytes, lock: bytes, architecture: str, digest: str) -> dict[
     ):
         raise PythonSourceError("unexpected Python source bundle name")
     distributions = python.get("distributions") if isinstance(python, dict) else None
+    recipe_schema = python.get("source_recipe_schema", 0) if isinstance(python, dict) else 0
+    if type(recipe_schema) is not int or recipe_schema not in {0, 1}:
+        raise PythonSourceError("unsupported source recipe schema")
     if not isinstance(distributions, list) or not 1 <= len(distributions) <= 512:
         raise PythonSourceError("invalid installed distribution list")
     sources: list[dict[str, Any]] = []
@@ -154,7 +157,7 @@ def plan(inventory: bytes, lock: bytes, architecture: str, digest: str) -> dict[
             raise PythonSourceError("source collection only supports locked PyPI packages")
         sdist = package.get("sdist")
         if sdist is None:
-            reviewed = REVIEWED_BINARY_SOURCES.get((name, version))
+            reviewed = REVIEWED_BINARY_SOURCES.get((name, version)) if recipe_schema == 1 else None
             if reviewed is not None:
                 sources.append({**identity, **reviewed})
             else:
@@ -191,6 +194,8 @@ def plan(inventory: bytes, lock: bytes, architecture: str, digest: str) -> dict[
         "scope": (
             "Locked Python sdists and explicitly reviewed binary-package source recipes; "
             "embedded native dependencies are not covered."
+            if recipe_schema == 1
+            else "Locked Python sdists only; embedded native dependencies are not covered."
         ),
     }
 

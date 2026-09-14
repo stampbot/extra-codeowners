@@ -180,6 +180,11 @@ source and notice evidence remains part of [issue #18][source-work]. A later
 Psycopg version does not silently reuse the 3.3.4 recipe: it remains unresolved
 until its source identity is reviewed.
 
+The signed inventory selects this behavior with `python.source_recipe_schema: 1`.
+Inventories without that field retain the original locked-sdist-only contract.
+Historical rescans therefore verify the sources promised by that release,
+without requiring an archive added by a later collector.
+
 The inventory's `python.source_bundle` field requires the bundle and its
 signature during release verification. Older inventories without the field do
 not imply source delivery. From a trusted checkout of the release tag, download
