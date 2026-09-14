@@ -692,7 +692,7 @@ jobs:
         run: |
           set -euo pipefail
           python -I -S -B tools/release_vex.py stage \
-            --source security/vex/openssl-3.5.7.openvex.json \
+            --source security/vex/runtime.openvex.json \
             --inventory release/image/amd64/distribution-inventory-amd64.json \
             --inventory release/image/arm64/distribution-inventory-arm64.json \
             --output "release/image/extra-codeowners-${VERSION}.openvex.json"

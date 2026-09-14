@@ -289,7 +289,7 @@ def _os_release_value(value: str, field: str) -> str:
     return value
 
 
-def _parse_debian_distro(os_release: bytes) -> str:
+def _parse_debian_distro(os_release: bytes, *, full_version: bool = False) -> str:
     try:
         content = os_release.decode("utf-8")
     except UnicodeDecodeError as error:
@@ -300,7 +300,7 @@ def _parse_debian_distro(os_release: bytes) -> str:
         if not line or line.startswith("#"):
             continue
         key, separator, value = line.partition("=")
-        if key not in {"ID", "VERSION_ID"}:
+        if key not in {"ID", "VERSION_ID", "DEBIAN_VERSION_FULL"}:
             continue
         if not separator or key in fields:
             _fail(f"os-release has an invalid {key or 'required'} field")
@@ -312,7 +312,13 @@ def _parse_debian_distro(os_release: bytes) -> str:
         _fail(f"release inventory requires Debian os-release ID, got {distribution_id!r}")
     if version_id is None or re.fullmatch(r"[0-9]+", version_id) is None:
         _fail("os-release has an invalid VERSION_ID")
-    return f"{distribution_id}-{version_id}"
+    debian_version = fields.get("DEBIAN_VERSION_FULL", version_id)
+    if (
+        re.fullmatch(r"[0-9]+(?:\.[0-9]+)*", debian_version) is None
+        or debian_version.partition(".")[0] != version_id
+    ):
+        _fail("os-release has an invalid DEBIAN_VERSION_FULL")
+    return f"{distribution_id}-{debian_version if full_version else version_id}"
 
 
 def _payload_record(path: str, payload: _Payload) -> dict[str, object]:
@@ -627,6 +633,7 @@ def collect_inventory(
         "image": {
             "architecture": architecture,
             "distro": _parse_debian_distro(os_release_contents),
+            "distro_full": _parse_debian_distro(os_release_contents, full_version=True),
             "os_release_path": "usr/lib/os-release",
             "os_release_sha256": os_release_sha256,
             "os_release_size": os_release_size,

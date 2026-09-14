@@ -127,6 +127,46 @@ def test_validate_release_vex_accepts_a_python_product_from_both_native_inventor
     assert validate_release_vex(source, inventories) == source.read_bytes()
 
 
+@pytest.mark.parametrize("distro_full", [None, "debian-13.5", "debian-13.6"])
+def test_minor_distro_claim_requires_that_exact_inventory_identity(
+    tmp_path: Path, distro_full: str | None
+) -> None:
+    source, inventories = _release_inputs(
+        tmp_path,
+        _document(
+            "pkg:deb/debian/libssl3t64@3.5.6-1~deb13u2?"
+            "arch=amd64&distro=debian-13.6&upstream=openssl"
+        ),
+    )
+    if distro_full is not None:
+        for path in inventories:
+            inventory = json.loads(path.read_text(encoding="utf-8"))
+            inventory["image"]["distro_full"] = distro_full
+            _write_json(path, inventory)
+    if distro_full == "debian-13.6":
+        assert validate_release_vex(source, inventories) == source.read_bytes()
+    else:
+        with pytest.raises(ReleaseVexError, match="does not match exactly one"):
+            validate_release_vex(source, inventories)
+
+
+@pytest.mark.parametrize("distro_full", ["debian-14.6", "debian-13.x", "ubuntu-13.6", 13.6, ""])
+def test_full_distro_identity_must_agree_with_canonical_debian_major(
+    tmp_path: Path, distro_full: object
+) -> None:
+    source, inventories = _release_inputs(
+        tmp_path,
+        _document(
+            "pkg:deb/debian/libssl3t64@3.5.6-1~deb13u2?arch=amd64&distro=debian-13&upstream=openssl"
+        ),
+    )
+    inventory = json.loads(inventories[0].read_text(encoding="utf-8"))
+    inventory["image"]["distro_full"] = distro_full
+    _write_json(inventories[0], inventory)
+    with pytest.raises(ReleaseVexError):
+        validate_release_vex(source, inventories)
+
+
 @pytest.mark.parametrize(
     ("field", "value", "message"),
     (

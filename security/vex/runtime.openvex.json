@@ -1,0 +1,520 @@
+{
+  "@context": "https://openvex.dev/ns/v0.2.0",
+  "@id": "urn:uuid:f89c56c5-a194-5bbc-af1e-8743cdd4d3f2",
+  "author": "Extra CODEOWNERS maintainers",
+  "role": "VEX document producer",
+  "statements": [
+    {
+      "impact_statement": "This assessment covers the shipped Extra CODEOWNERS service, not arbitrary programs run inside its container. The affected SQLite FTS5 reader requires crafted database pages queried through FTS5 MATCH. The service creates ordinary state tables; its schema, migrations and queries use no FTS virtual tables or MATCH expressions and do not load SQLite extensions. There is no database-upload endpoint. This covers supported SQLite operation as well as PostgreSQL deployments, not arbitrary SQL or externally supplied databases.",
+      "products": [
+        {
+          "@id": "pkg:deb/debian/libsqlite3-0@3.46.1-7%2Bdeb13u1?arch=amd64&distro=debian-13.6&upstream=sqlite3",
+          "identifiers": {
+            "purl": "pkg:deb/debian/libsqlite3-0@3.46.1-7%2Bdeb13u1?arch=amd64&distro=debian-13.6&upstream=sqlite3"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/libsqlite3-0@3.46.1-7%2Bdeb13u1?arch=arm64&distro=debian-13.6&upstream=sqlite3",
+          "identifiers": {
+            "purl": "pkg:deb/debian/libsqlite3-0@3.46.1-7%2Bdeb13u1?arch=arm64&distro=debian-13.6&upstream=sqlite3"
+          }
+        }
+      ],
+      "status": "not_affected",
+      "status_notes": "Analysis detail: Reachability review: https://github.com/stampbot/extra-codeowners/blob/main/security/vex/runtime-review.md. This assessment covers the shipped Extra CODEOWNERS service, not arbitrary programs run inside its container. The affected SQLite FTS5 reader requires crafted database pages queried through FTS5 MATCH. The service creates ordinary state tables; its schema, migrations and queries use no FTS virtual tables or MATCH expressions and do not load SQLite extensions. There is no database-upload endpoint. This covers supported SQLite operation as well as PostgreSQL deployments, not arbitrary SQL or externally supplied databases.\nSource: Debian Security Tracker (https://security-tracker.debian.org/tracker/CVE-2026-11822)\nOriginal Vexcalibur analysis state: not_affected",
+      "vulnerability": {
+        "name": "CVE-2026-11822"
+      }
+    },
+    {
+      "impact_statement": "This assessment covers the shipped Extra CODEOWNERS service, not arbitrary programs run inside its container. The affected SQLite FTS5 reader requires crafted database pages queried through FTS5 MATCH. The service creates ordinary state tables; its schema, migrations and queries use no FTS virtual tables or MATCH expressions and do not load SQLite extensions. There is no database-upload endpoint. This covers supported SQLite operation as well as PostgreSQL deployments, not arbitrary SQL or externally supplied databases.",
+      "products": [
+        {
+          "@id": "pkg:deb/debian/libsqlite3-0@3.46.1-7%2Bdeb13u1?arch=amd64&distro=debian-13.6&upstream=sqlite3",
+          "identifiers": {
+            "purl": "pkg:deb/debian/libsqlite3-0@3.46.1-7%2Bdeb13u1?arch=amd64&distro=debian-13.6&upstream=sqlite3"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/libsqlite3-0@3.46.1-7%2Bdeb13u1?arch=arm64&distro=debian-13.6&upstream=sqlite3",
+          "identifiers": {
+            "purl": "pkg:deb/debian/libsqlite3-0@3.46.1-7%2Bdeb13u1?arch=arm64&distro=debian-13.6&upstream=sqlite3"
+          }
+        }
+      ],
+      "status": "not_affected",
+      "status_notes": "Analysis detail: Reachability review: https://github.com/stampbot/extra-codeowners/blob/main/security/vex/runtime-review.md. This assessment covers the shipped Extra CODEOWNERS service, not arbitrary programs run inside its container. The affected SQLite FTS5 reader requires crafted database pages queried through FTS5 MATCH. The service creates ordinary state tables; its schema, migrations and queries use no FTS virtual tables or MATCH expressions and do not load SQLite extensions. There is no database-upload endpoint. This covers supported SQLite operation as well as PostgreSQL deployments, not arbitrary SQL or externally supplied databases.\nSource: Debian Security Tracker (https://security-tracker.debian.org/tracker/CVE-2026-11824)\nOriginal Vexcalibur analysis state: not_affected",
+      "vulnerability": {
+        "name": "CVE-2026-11824"
+      }
+    },
+    {
+      "impact_statement": "This assessment covers the shipped Extra CODEOWNERS service, not arbitrary programs run inside its container. The affected path is Socket::pack_ip_mreq_source with invalid address lengths. The shipped entrypoint and healthcheck run Python, and the service neither starts a Perl process nor embeds libperl. Repository data is not executed. Python regex, HTTP, archive and serialization implementations do not call these Perl implementations.",
+      "products": [
+        {
+          "@id": "pkg:deb/debian/perl-base@5.40.1-6?arch=amd64&distro=debian-13.6&upstream=perl",
+          "identifiers": {
+            "purl": "pkg:deb/debian/perl-base@5.40.1-6?arch=amd64&distro=debian-13.6&upstream=perl"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/perl-base@5.40.1-6?arch=arm64&distro=debian-13.6&upstream=perl",
+          "identifiers": {
+            "purl": "pkg:deb/debian/perl-base@5.40.1-6?arch=arm64&distro=debian-13.6&upstream=perl"
+          }
+        }
+      ],
+      "status": "not_affected",
+      "status_notes": "Analysis detail: Reachability review: https://github.com/stampbot/extra-codeowners/blob/main/security/vex/runtime-review.md. This assessment covers the shipped Extra CODEOWNERS service, not arbitrary programs run inside its container. The affected path is Socket::pack_ip_mreq_source with invalid address lengths. The shipped entrypoint and healthcheck run Python, and the service neither starts a Perl process nor embeds libperl. Repository data is not executed. Python regex, HTTP, archive and serialization implementations do not call these Perl implementations.\nSource: Debian Security Tracker (https://security-tracker.debian.org/tracker/CVE-2026-12087)\nOriginal Vexcalibur analysis state: not_affected",
+      "vulnerability": {
+        "name": "CVE-2026-12087"
+      }
+    },
+    {
+      "impact_statement": "This assessment covers the shipped Extra CODEOWNERS service, not arbitrary programs run inside its container. The affected path is Perl regular-expression trie handling of large alternations. The shipped entrypoint and healthcheck run Python, and the service neither starts a Perl process nor embeds libperl. Repository data is not executed. Python regex, HTTP, archive and serialization implementations do not call these Perl implementations.",
+      "products": [
+        {
+          "@id": "pkg:deb/debian/perl-base@5.40.1-6?arch=amd64&distro=debian-13.6&upstream=perl",
+          "identifiers": {
+            "purl": "pkg:deb/debian/perl-base@5.40.1-6?arch=amd64&distro=debian-13.6&upstream=perl"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/perl-base@5.40.1-6?arch=arm64&distro=debian-13.6&upstream=perl",
+          "identifiers": {
+            "purl": "pkg:deb/debian/perl-base@5.40.1-6?arch=arm64&distro=debian-13.6&upstream=perl"
+          }
+        }
+      ],
+      "status": "not_affected",
+      "status_notes": "Analysis detail: Reachability review: https://github.com/stampbot/extra-codeowners/blob/main/security/vex/runtime-review.md. This assessment covers the shipped Extra CODEOWNERS service, not arbitrary programs run inside its container. The affected path is Perl regular-expression trie handling of large alternations. The shipped entrypoint and healthcheck run Python, and the service neither starts a Perl process nor embeds libperl. Repository data is not executed. Python regex, HTTP, archive and serialization implementations do not call these Perl implementations.\nSource: Debian Security Tracker (https://security-tracker.debian.org/tracker/CVE-2026-13221)\nOriginal Vexcalibur analysis state: not_affected",
+      "vulnerability": {
+        "name": "CVE-2026-13221"
+      }
+    },
+    {
+      "impact_statement": "This assessment covers the shipped Extra CODEOWNERS service, not arbitrary programs run inside its container. The affected GNU gzip executable must decompress crafted LZW and then LZH input in one invocation. The Python service and its healthcheck never invoke GNU gzip or another shell command. HTTP gzip decoding uses Python zlib, not this executable.",
+      "products": [
+        {
+          "@id": "pkg:deb/debian/gzip@1.13-1?arch=amd64&distro=debian-13.6",
+          "identifiers": {
+            "purl": "pkg:deb/debian/gzip@1.13-1?arch=amd64&distro=debian-13.6"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/gzip@1.13-1?arch=arm64&distro=debian-13.6",
+          "identifiers": {
+            "purl": "pkg:deb/debian/gzip@1.13-1?arch=arm64&distro=debian-13.6"
+          }
+        }
+      ],
+      "status": "not_affected",
+      "status_notes": "Analysis detail: Reachability review: https://github.com/stampbot/extra-codeowners/blob/main/security/vex/runtime-review.md. This assessment covers the shipped Extra CODEOWNERS service, not arbitrary programs run inside its container. The affected GNU gzip executable must decompress crafted LZW and then LZH input in one invocation. The Python service and its healthcheck never invoke GNU gzip or another shell command. HTTP gzip decoding uses Python zlib, not this executable.\nSource: Debian Security Tracker (https://security-tracker.debian.org/tracker/CVE-2026-41992)\nOriginal Vexcalibur analysis state: not_affected",
+      "vulnerability": {
+        "name": "CVE-2026-41992"
+      }
+    },
+    {
+      "impact_statement": "This assessment covers the shipped Extra CODEOWNERS service, not arbitrary programs run inside its container. The affected path is Archive::Tar extraction of escaping symbolic-link targets. The shipped entrypoint and healthcheck run Python, and the service neither starts a Perl process nor embeds libperl. Repository data is not executed. Python regex, HTTP, archive and serialization implementations do not call these Perl implementations.",
+      "products": [
+        {
+          "@id": "pkg:deb/debian/perl-base@5.40.1-6?arch=amd64&distro=debian-13.6&upstream=perl",
+          "identifiers": {
+            "purl": "pkg:deb/debian/perl-base@5.40.1-6?arch=amd64&distro=debian-13.6&upstream=perl"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/perl-base@5.40.1-6?arch=arm64&distro=debian-13.6&upstream=perl",
+          "identifiers": {
+            "purl": "pkg:deb/debian/perl-base@5.40.1-6?arch=arm64&distro=debian-13.6&upstream=perl"
+          }
+        }
+      ],
+      "status": "not_affected",
+      "status_notes": "Analysis detail: Reachability review: https://github.com/stampbot/extra-codeowners/blob/main/security/vex/runtime-review.md. This assessment covers the shipped Extra CODEOWNERS service, not arbitrary programs run inside its container. The affected path is Archive::Tar extraction of escaping symbolic-link targets. The shipped entrypoint and healthcheck run Python, and the service neither starts a Perl process nor embeds libperl. Repository data is not executed. Python regex, HTTP, archive and serialization implementations do not call these Perl implementations.\nSource: Debian Security Tracker (https://security-tracker.debian.org/tracker/CVE-2026-42496)\nOriginal Vexcalibur analysis state: not_affected",
+      "vulnerability": {
+        "name": "CVE-2026-42496"
+      }
+    },
+    {
+      "impact_statement": "This assessment covers the shipped Extra CODEOWNERS service, not arbitrary programs run inside its container. The affected path is Archive::Tar extraction of escaping hard-link targets. The shipped entrypoint and healthcheck run Python, and the service neither starts a Perl process nor embeds libperl. Repository data is not executed. Python regex, HTTP, archive and serialization implementations do not call these Perl implementations.",
+      "products": [
+        {
+          "@id": "pkg:deb/debian/perl-base@5.40.1-6?arch=amd64&distro=debian-13.6&upstream=perl",
+          "identifiers": {
+            "purl": "pkg:deb/debian/perl-base@5.40.1-6?arch=amd64&distro=debian-13.6&upstream=perl"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/perl-base@5.40.1-6?arch=arm64&distro=debian-13.6&upstream=perl",
+          "identifiers": {
+            "purl": "pkg:deb/debian/perl-base@5.40.1-6?arch=arm64&distro=debian-13.6&upstream=perl"
+          }
+        }
+      ],
+      "status": "not_affected",
+      "status_notes": "Analysis detail: Reachability review: https://github.com/stampbot/extra-codeowners/blob/main/security/vex/runtime-review.md. This assessment covers the shipped Extra CODEOWNERS service, not arbitrary programs run inside its container. The affected path is Archive::Tar extraction of escaping hard-link targets. The shipped entrypoint and healthcheck run Python, and the service neither starts a Perl process nor embeds libperl. Repository data is not executed. Python regex, HTTP, archive and serialization implementations do not call these Perl implementations.\nSource: Debian Security Tracker (https://security-tracker.debian.org/tracker/CVE-2026-42497)\nOriginal Vexcalibur analysis state: not_affected",
+      "vulnerability": {
+        "name": "CVE-2026-42497"
+      }
+    },
+    {
+      "impact_statement": "This assessment covers the shipped Extra CODEOWNERS service, not arbitrary programs run inside its container. The affected path is IO::Uncompress::Unzip fastForward processing. The shipped entrypoint and healthcheck run Python, and the service neither starts a Perl process nor embeds libperl. Repository data is not executed. Python regex, HTTP, archive and serialization implementations do not call these Perl implementations.",
+      "products": [
+        {
+          "@id": "pkg:deb/debian/perl-base@5.40.1-6?arch=amd64&distro=debian-13.6&upstream=perl",
+          "identifiers": {
+            "purl": "pkg:deb/debian/perl-base@5.40.1-6?arch=amd64&distro=debian-13.6&upstream=perl"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/perl-base@5.40.1-6?arch=arm64&distro=debian-13.6&upstream=perl",
+          "identifiers": {
+            "purl": "pkg:deb/debian/perl-base@5.40.1-6?arch=arm64&distro=debian-13.6&upstream=perl"
+          }
+        }
+      ],
+      "status": "not_affected",
+      "status_notes": "Analysis detail: Reachability review: https://github.com/stampbot/extra-codeowners/blob/main/security/vex/runtime-review.md. This assessment covers the shipped Extra CODEOWNERS service, not arbitrary programs run inside its container. The affected path is IO::Uncompress::Unzip fastForward processing. The shipped entrypoint and healthcheck run Python, and the service neither starts a Perl process nor embeds libperl. Repository data is not executed. Python regex, HTTP, archive and serialization implementations do not call these Perl implementations.\nSource: Debian Security Tracker (https://security-tracker.debian.org/tracker/CVE-2026-48959)\nOriginal Vexcalibur analysis state: not_affected",
+      "vulnerability": {
+        "name": "CVE-2026-48959"
+      }
+    },
+    {
+      "impact_statement": "This assessment covers the shipped Extra CODEOWNERS service, not arbitrary programs run inside its container. The affected path is the zipdetails executable handling extended UID/GID fields. The shipped entrypoint and healthcheck run Python, and the service neither starts a Perl process nor embeds libperl. Repository data is not executed. Python regex, HTTP, archive and serialization implementations do not call these Perl implementations.",
+      "products": [
+        {
+          "@id": "pkg:deb/debian/perl-base@5.40.1-6?arch=amd64&distro=debian-13.6&upstream=perl",
+          "identifiers": {
+            "purl": "pkg:deb/debian/perl-base@5.40.1-6?arch=amd64&distro=debian-13.6&upstream=perl"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/perl-base@5.40.1-6?arch=arm64&distro=debian-13.6&upstream=perl",
+          "identifiers": {
+            "purl": "pkg:deb/debian/perl-base@5.40.1-6?arch=arm64&distro=debian-13.6&upstream=perl"
+          }
+        }
+      ],
+      "status": "not_affected",
+      "status_notes": "Analysis detail: Reachability review: https://github.com/stampbot/extra-codeowners/blob/main/security/vex/runtime-review.md. This assessment covers the shipped Extra CODEOWNERS service, not arbitrary programs run inside its container. The affected path is the zipdetails executable handling extended UID/GID fields. The shipped entrypoint and healthcheck run Python, and the service neither starts a Perl process nor embeds libperl. Repository data is not executed. Python regex, HTTP, archive and serialization implementations do not call these Perl implementations.\nSource: Debian Security Tracker (https://security-tracker.debian.org/tracker/CVE-2026-48961)\nOriginal Vexcalibur analysis state: not_affected",
+      "vulnerability": {
+        "name": "CVE-2026-48961"
+      }
+    },
+    {
+      "impact_statement": "This assessment covers the shipped Extra CODEOWNERS service, not arbitrary programs run inside its container. The affected path is IO::Compress filename glob mapping through File::GlobMapper. The shipped entrypoint and healthcheck run Python, and the service neither starts a Perl process nor embeds libperl. Repository data is not executed. Python regex, HTTP, archive and serialization implementations do not call these Perl implementations.",
+      "products": [
+        {
+          "@id": "pkg:deb/debian/perl-base@5.40.1-6?arch=amd64&distro=debian-13.6&upstream=perl",
+          "identifiers": {
+            "purl": "pkg:deb/debian/perl-base@5.40.1-6?arch=amd64&distro=debian-13.6&upstream=perl"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/perl-base@5.40.1-6?arch=arm64&distro=debian-13.6&upstream=perl",
+          "identifiers": {
+            "purl": "pkg:deb/debian/perl-base@5.40.1-6?arch=arm64&distro=debian-13.6&upstream=perl"
+          }
+        }
+      ],
+      "status": "not_affected",
+      "status_notes": "Analysis detail: Reachability review: https://github.com/stampbot/extra-codeowners/blob/main/security/vex/runtime-review.md. This assessment covers the shipped Extra CODEOWNERS service, not arbitrary programs run inside its container. The affected path is IO::Compress filename glob mapping through File::GlobMapper. The shipped entrypoint and healthcheck run Python, and the service neither starts a Perl process nor embeds libperl. Repository data is not executed. Python regex, HTTP, archive and serialization implementations do not call these Perl implementations.\nSource: Debian Security Tracker (https://security-tracker.debian.org/tracker/CVE-2026-48962)\nOriginal Vexcalibur analysis state: not_affected",
+      "vulnerability": {
+        "name": "CVE-2026-48962"
+      }
+    },
+    {
+      "products": [
+        {
+          "@id": "pkg:deb/debian/libc-bin@2.41-12%2Bdeb13u3?arch=amd64&distro=debian-13.6&upstream=glibc",
+          "identifiers": {
+            "purl": "pkg:deb/debian/libc-bin@2.41-12%2Bdeb13u3?arch=amd64&distro=debian-13.6&upstream=glibc"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/libc-bin@2.41-12%2Bdeb13u3?arch=arm64&distro=debian-13.6&upstream=glibc",
+          "identifiers": {
+            "purl": "pkg:deb/debian/libc-bin@2.41-12%2Bdeb13u3?arch=arm64&distro=debian-13.6&upstream=glibc"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/libc6@2.41-12%2Bdeb13u3?arch=amd64&distro=debian-13.6&upstream=glibc",
+          "identifiers": {
+            "purl": "pkg:deb/debian/libc6@2.41-12%2Bdeb13u3?arch=amd64&distro=debian-13.6&upstream=glibc"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/libc6@2.41-12%2Bdeb13u3?arch=arm64&distro=debian-13.6&upstream=glibc",
+          "identifiers": {
+            "purl": "pkg:deb/debian/libc6@2.41-12%2Bdeb13u3?arch=arm64&distro=debian-13.6&upstream=glibc"
+          }
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Analysis detail: Reachability review: https://github.com/stampbot/extra-codeowners/blob/main/security/vex/runtime-review.md. This assessment covers the shipped Extra CODEOWNERS service, not arbitrary programs run inside its container. The affected glibc scanf conversion allocates a character buffer with an explicit width greater than 1024. CPython and native dependencies import scanf-family functions. CPython 3.14.7 source and both architectures' ELF string inventories contain no identified vulnerable format, but this does not establish every native caller's format provenance or exclude dynamically constructed formats. Reachability remains under investigation; do not suppress this finding.\nSource: Debian Security Tracker (https://security-tracker.debian.org/tracker/CVE-2026-5450)\nOriginal Vexcalibur analysis state: in_triage",
+      "vulnerability": {
+        "name": "CVE-2026-5450"
+      }
+    },
+    {
+      "impact_statement": "This assessment covers the shipped Extra CODEOWNERS service, not arbitrary programs run inside its container. The affected path is Perl pack/unpack length arithmetic. The shipped entrypoint and healthcheck run Python, and the service neither starts a Perl process nor embeds libperl. Repository data is not executed. Python regex, HTTP, archive and serialization implementations do not call these Perl implementations.",
+      "products": [
+        {
+          "@id": "pkg:deb/debian/perl-base@5.40.1-6?arch=amd64&distro=debian-13.6&upstream=perl",
+          "identifiers": {
+            "purl": "pkg:deb/debian/perl-base@5.40.1-6?arch=amd64&distro=debian-13.6&upstream=perl"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/perl-base@5.40.1-6?arch=arm64&distro=debian-13.6&upstream=perl",
+          "identifiers": {
+            "purl": "pkg:deb/debian/perl-base@5.40.1-6?arch=arm64&distro=debian-13.6&upstream=perl"
+          }
+        }
+      ],
+      "status": "not_affected",
+      "status_notes": "Analysis detail: Reachability review: https://github.com/stampbot/extra-codeowners/blob/main/security/vex/runtime-review.md. This assessment covers the shipped Extra CODEOWNERS service, not arbitrary programs run inside its container. The affected path is Perl pack/unpack length arithmetic. The shipped entrypoint and healthcheck run Python, and the service neither starts a Perl process nor embeds libperl. Repository data is not executed. Python regex, HTTP, archive and serialization implementations do not call these Perl implementations.\nSource: Debian Security Tracker (https://security-tracker.debian.org/tracker/CVE-2026-57432)\nOriginal Vexcalibur analysis state: not_affected",
+      "vulnerability": {
+        "name": "CVE-2026-57432"
+      }
+    },
+    {
+      "impact_statement": "This assessment covers the shipped Extra CODEOWNERS service, not arbitrary programs run inside its container. The affected path is Storable deserialization hooks. The shipped entrypoint and healthcheck run Python, and the service neither starts a Perl process nor embeds libperl. Repository data is not executed. Python regex, HTTP, archive and serialization implementations do not call these Perl implementations.",
+      "products": [
+        {
+          "@id": "pkg:deb/debian/perl-base@5.40.1-6?arch=amd64&distro=debian-13.6&upstream=perl",
+          "identifiers": {
+            "purl": "pkg:deb/debian/perl-base@5.40.1-6?arch=amd64&distro=debian-13.6&upstream=perl"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/perl-base@5.40.1-6?arch=arm64&distro=debian-13.6&upstream=perl",
+          "identifiers": {
+            "purl": "pkg:deb/debian/perl-base@5.40.1-6?arch=arm64&distro=debian-13.6&upstream=perl"
+          }
+        }
+      ],
+      "status": "not_affected",
+      "status_notes": "Analysis detail: Reachability review: https://github.com/stampbot/extra-codeowners/blob/main/security/vex/runtime-review.md. This assessment covers the shipped Extra CODEOWNERS service, not arbitrary programs run inside its container. The affected path is Storable deserialization hooks. The shipped entrypoint and healthcheck run Python, and the service neither starts a Perl process nor embeds libperl. Repository data is not executed. Python regex, HTTP, archive and serialization implementations do not call these Perl implementations.\nSource: Debian Security Tracker (https://security-tracker.debian.org/tracker/CVE-2026-57433)\nOriginal Vexcalibur analysis state: not_affected",
+      "vulnerability": {
+        "name": "CVE-2026-57433"
+      }
+    },
+    {
+      "impact_statement": "This assessment covers the shipped Extra CODEOWNERS service, not arbitrary programs run inside its container. The service does not use C wide-character FILE pushback. CPython 3.14.7 has no ungetwc call. In both Python/native ELF dependency closures, the only external ungetwc importer is libstdc++; its consumers are greenlet and its test extension, which use C++ allocation, strings and exception support, not wide streams. The amd64 ungetwc call sites are stdio_sync_filebuf<wchar_t> operations. Python text decoding is not this C wide-stream path.",
+      "products": [
+        {
+          "@id": "pkg:deb/debian/libc-bin@2.41-12%2Bdeb13u3?arch=amd64&distro=debian-13.6&upstream=glibc",
+          "identifiers": {
+            "purl": "pkg:deb/debian/libc-bin@2.41-12%2Bdeb13u3?arch=amd64&distro=debian-13.6&upstream=glibc"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/libc-bin@2.41-12%2Bdeb13u3?arch=arm64&distro=debian-13.6&upstream=glibc",
+          "identifiers": {
+            "purl": "pkg:deb/debian/libc-bin@2.41-12%2Bdeb13u3?arch=arm64&distro=debian-13.6&upstream=glibc"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/libc6@2.41-12%2Bdeb13u3?arch=amd64&distro=debian-13.6&upstream=glibc",
+          "identifiers": {
+            "purl": "pkg:deb/debian/libc6@2.41-12%2Bdeb13u3?arch=amd64&distro=debian-13.6&upstream=glibc"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/libc6@2.41-12%2Bdeb13u3?arch=arm64&distro=debian-13.6&upstream=glibc",
+          "identifiers": {
+            "purl": "pkg:deb/debian/libc6@2.41-12%2Bdeb13u3?arch=arm64&distro=debian-13.6&upstream=glibc"
+          }
+        }
+      ],
+      "status": "not_affected",
+      "status_notes": "Analysis detail: Reachability review: https://github.com/stampbot/extra-codeowners/blob/main/security/vex/runtime-review.md. This assessment covers the shipped Extra CODEOWNERS service, not arbitrary programs run inside its container. The service does not use C wide-character FILE pushback. CPython 3.14.7 has no ungetwc call. In both Python/native ELF dependency closures, the only external ungetwc importer is libstdc++; its consumers are greenlet and its test extension, which use C++ allocation, strings and exception support, not wide streams. The amd64 ungetwc call sites are stdio_sync_filebuf<wchar_t> operations. Python text decoding is not this C wide-stream path.\nSource: Debian Security Tracker (https://security-tracker.debian.org/tracker/CVE-2026-5928)\nOriginal Vexcalibur analysis state: not_affected",
+      "vulnerability": {
+        "name": "CVE-2026-5928"
+      }
+    },
+    {
+      "products": [
+        {
+          "@id": "pkg:deb/debian/libssl3t64@3.5.7-1~deb13u2?arch=amd64&distro=debian-13.6&upstream=openssl",
+          "identifiers": {
+            "purl": "pkg:deb/debian/libssl3t64@3.5.7-1~deb13u2?arch=amd64&distro=debian-13.6&upstream=openssl"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/libssl3t64@3.5.7-1~deb13u2?arch=arm64&distro=debian-13.6&upstream=openssl",
+          "identifiers": {
+            "purl": "pkg:deb/debian/libssl3t64@3.5.7-1~deb13u2?arch=arm64&distro=debian-13.6&upstream=openssl"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/openssl-provider-legacy@3.5.7-1~deb13u2?arch=amd64&distro=debian-13.6&upstream=openssl",
+          "identifiers": {
+            "purl": "pkg:deb/debian/openssl-provider-legacy@3.5.7-1~deb13u2?arch=amd64&distro=debian-13.6&upstream=openssl"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/openssl-provider-legacy@3.5.7-1~deb13u2?arch=arm64&distro=debian-13.6&upstream=openssl",
+          "identifiers": {
+            "purl": "pkg:deb/debian/openssl-provider-legacy@3.5.7-1~deb13u2?arch=arm64&distro=debian-13.6&upstream=openssl"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/openssl@3.5.7-1~deb13u2?arch=amd64&distro=debian-13.6",
+          "identifiers": {
+            "purl": "pkg:deb/debian/openssl@3.5.7-1~deb13u2?arch=amd64&distro=debian-13.6"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/openssl@3.5.7-1~deb13u2?arch=arm64&distro=debian-13.6",
+          "identifiers": {
+            "purl": "pkg:deb/debian/openssl@3.5.7-1~deb13u2?arch=arm64&distro=debian-13.6"
+          }
+        }
+      ],
+      "status": "fixed",
+      "status_notes": "Analysis detail: Debian marks 3.5.7-1~deb13u2 as fixed for this vulnerability.\nSource: Debian Security Tracker (https://security-tracker.debian.org/tracker/CVE-2026-63073)\nOriginal Vexcalibur analysis state: resolved\nConfirmed fixed product version: 3.5.7-1~deb13u2",
+      "vulnerability": {
+        "name": "CVE-2026-63073"
+      }
+    },
+    {
+      "impact_statement": "This assessment covers the shipped Extra CODEOWNERS service, not arbitrary programs run inside its container. The affected path is HTTP::Tiny forwarding credentials across origins. The shipped entrypoint and healthcheck run Python, and the service neither starts a Perl process nor embeds libperl. Repository data is not executed. Python regex, HTTP, archive and serialization implementations do not call these Perl implementations.",
+      "products": [
+        {
+          "@id": "pkg:deb/debian/perl-base@5.40.1-6?arch=amd64&distro=debian-13.6&upstream=perl",
+          "identifiers": {
+            "purl": "pkg:deb/debian/perl-base@5.40.1-6?arch=amd64&distro=debian-13.6&upstream=perl"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/perl-base@5.40.1-6?arch=arm64&distro=debian-13.6&upstream=perl",
+          "identifiers": {
+            "purl": "pkg:deb/debian/perl-base@5.40.1-6?arch=arm64&distro=debian-13.6&upstream=perl"
+          }
+        }
+      ],
+      "status": "not_affected",
+      "status_notes": "Analysis detail: Reachability review: https://github.com/stampbot/extra-codeowners/blob/main/security/vex/runtime-review.md. This assessment covers the shipped Extra CODEOWNERS service, not arbitrary programs run inside its container. The affected path is HTTP::Tiny forwarding credentials across origins. The shipped entrypoint and healthcheck run Python, and the service neither starts a Perl process nor embeds libperl. Repository data is not executed. Python regex, HTTP, archive and serialization implementations do not call these Perl implementations.\nSource: Debian Security Tracker (https://security-tracker.debian.org/tracker/CVE-2026-7017)\nOriginal Vexcalibur analysis state: not_affected",
+      "vulnerability": {
+        "name": "CVE-2026-7017"
+      }
+    },
+    {
+      "products": [
+        {
+          "@id": "pkg:deb/debian/libssl3t64@3.5.7-1~deb13u2?arch=amd64&distro=debian-13.6&upstream=openssl",
+          "identifiers": {
+            "purl": "pkg:deb/debian/libssl3t64@3.5.7-1~deb13u2?arch=amd64&distro=debian-13.6&upstream=openssl"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/libssl3t64@3.5.7-1~deb13u2?arch=arm64&distro=debian-13.6&upstream=openssl",
+          "identifiers": {
+            "purl": "pkg:deb/debian/libssl3t64@3.5.7-1~deb13u2?arch=arm64&distro=debian-13.6&upstream=openssl"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/openssl-provider-legacy@3.5.7-1~deb13u2?arch=amd64&distro=debian-13.6&upstream=openssl",
+          "identifiers": {
+            "purl": "pkg:deb/debian/openssl-provider-legacy@3.5.7-1~deb13u2?arch=amd64&distro=debian-13.6&upstream=openssl"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/openssl-provider-legacy@3.5.7-1~deb13u2?arch=arm64&distro=debian-13.6&upstream=openssl",
+          "identifiers": {
+            "purl": "pkg:deb/debian/openssl-provider-legacy@3.5.7-1~deb13u2?arch=arm64&distro=debian-13.6&upstream=openssl"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/openssl@3.5.7-1~deb13u2?arch=amd64&distro=debian-13.6",
+          "identifiers": {
+            "purl": "pkg:deb/debian/openssl@3.5.7-1~deb13u2?arch=amd64&distro=debian-13.6"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/openssl@3.5.7-1~deb13u2?arch=arm64&distro=debian-13.6",
+          "identifiers": {
+            "purl": "pkg:deb/debian/openssl@3.5.7-1~deb13u2?arch=arm64&distro=debian-13.6"
+          }
+        }
+      ],
+      "status": "fixed",
+      "status_notes": "Analysis detail: Debian marks 3.5.7-1~deb13u2 as fixed for this vulnerability.\nSource: Debian Security Tracker (https://security-tracker.debian.org/tracker/CVE-2026-75803)\nOriginal Vexcalibur analysis state: resolved\nConfirmed fixed product version: 3.5.7-1~deb13u2",
+      "vulnerability": {
+        "name": "CVE-2026-75803"
+      }
+    },
+    {
+      "impact_statement": "This assessment covers the shipped Extra CODEOWNERS service, not arbitrary programs run inside its container. The affected path is Perl regular-expression repetition on 32-bit platforms. The shipped entrypoint and healthcheck run Python, and the service neither starts a Perl process nor embeds libperl. Repository data is not executed. Python regex, HTTP, archive and serialization implementations do not call these Perl implementations.",
+      "products": [
+        {
+          "@id": "pkg:deb/debian/perl-base@5.40.1-6?arch=amd64&distro=debian-13.6&upstream=perl",
+          "identifiers": {
+            "purl": "pkg:deb/debian/perl-base@5.40.1-6?arch=amd64&distro=debian-13.6&upstream=perl"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/perl-base@5.40.1-6?arch=arm64&distro=debian-13.6&upstream=perl",
+          "identifiers": {
+            "purl": "pkg:deb/debian/perl-base@5.40.1-6?arch=arm64&distro=debian-13.6&upstream=perl"
+          }
+        }
+      ],
+      "status": "not_affected",
+      "status_notes": "Analysis detail: Reachability review: https://github.com/stampbot/extra-codeowners/blob/main/security/vex/runtime-review.md. This assessment covers the shipped Extra CODEOWNERS service, not arbitrary programs run inside its container. The affected path is Perl regular-expression repetition on 32-bit platforms. The shipped entrypoint and healthcheck run Python, and the service neither starts a Perl process nor embeds libperl. Repository data is not executed. Python regex, HTTP, archive and serialization implementations do not call these Perl implementations.\nSource: Debian Security Tracker (https://security-tracker.debian.org/tracker/CVE-2026-8376)\nOriginal Vexcalibur analysis state: not_affected",
+      "vulnerability": {
+        "name": "CVE-2026-8376"
+      }
+    },
+    {
+      "impact_statement": "This assessment covers the shipped Extra CODEOWNERS service, not arbitrary programs run inside its container. The affected API is PCRE2 DFA matching. The named Debian libpcre2-8-0 library is outside the Python/native ELF dependency closure on both architectures. Application policy matching uses Python re. The arm64 psycopg wheel has a separate private PCRE2 dependency through its private SELinux library; that library imports ordinary matching, not pcre2_dfa_match. This statement does not exempt the private wheel library or other PCRE packages.",
+      "products": [
+        {
+          "@id": "pkg:deb/debian/libpcre2-8-0@10.46-1~deb13u1?arch=amd64&distro=debian-13.6&upstream=pcre2",
+          "identifiers": {
+            "purl": "pkg:deb/debian/libpcre2-8-0@10.46-1~deb13u1?arch=amd64&distro=debian-13.6&upstream=pcre2"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/libpcre2-8-0@10.46-1~deb13u1?arch=arm64&distro=debian-13.6&upstream=pcre2",
+          "identifiers": {
+            "purl": "pkg:deb/debian/libpcre2-8-0@10.46-1~deb13u1?arch=arm64&distro=debian-13.6&upstream=pcre2"
+          }
+        }
+      ],
+      "status": "not_affected",
+      "status_notes": "Analysis detail: Reachability review: https://github.com/stampbot/extra-codeowners/blob/main/security/vex/runtime-review.md. This assessment covers the shipped Extra CODEOWNERS service, not arbitrary programs run inside its container. The affected API is PCRE2 DFA matching. The named Debian libpcre2-8-0 library is outside the Python/native ELF dependency closure on both architectures. Application policy matching uses Python re. The arm64 psycopg wheel has a separate private PCRE2 dependency through its private SELinux library; that library imports ordinary matching, not pcre2_dfa_match. This statement does not exempt the private wheel library or other PCRE packages.\nSource: Debian Security Tracker (https://security-tracker.debian.org/tracker/CVE-2026-86145)\nOriginal Vexcalibur analysis state: not_affected",
+      "vulnerability": {
+        "name": "CVE-2026-86145"
+      }
+    },
+    {
+      "impact_statement": "This assessment covers the shipped Extra CODEOWNERS service, not arbitrary programs run inside its container. The affected API is PCRE2 JIT matching. The named Debian libpcre2-8-0 library is outside the Python/native ELF dependency closure on both architectures. Application policy matching uses Python re. The arm64 psycopg wheel has a separate private PCRE2 dependency through its private SELinux library; that library imports ordinary matching, not pcre2_jit_match. This statement does not exempt the private wheel library or other PCRE packages.",
+      "products": [
+        {
+          "@id": "pkg:deb/debian/libpcre2-8-0@10.46-1~deb13u1?arch=amd64&distro=debian-13.6&upstream=pcre2",
+          "identifiers": {
+            "purl": "pkg:deb/debian/libpcre2-8-0@10.46-1~deb13u1?arch=amd64&distro=debian-13.6&upstream=pcre2"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/libpcre2-8-0@10.46-1~deb13u1?arch=arm64&distro=debian-13.6&upstream=pcre2",
+          "identifiers": {
+            "purl": "pkg:deb/debian/libpcre2-8-0@10.46-1~deb13u1?arch=arm64&distro=debian-13.6&upstream=pcre2"
+          }
+        }
+      ],
+      "status": "not_affected",
+      "status_notes": "Analysis detail: Reachability review: https://github.com/stampbot/extra-codeowners/blob/main/security/vex/runtime-review.md. This assessment covers the shipped Extra CODEOWNERS service, not arbitrary programs run inside its container. The affected API is PCRE2 JIT matching. The named Debian libpcre2-8-0 library is outside the Python/native ELF dependency closure on both architectures. Application policy matching uses Python re. The arm64 psycopg wheel has a separate private PCRE2 dependency through its private SELinux library; that library imports ordinary matching, not pcre2_jit_match. This statement does not exempt the private wheel library or other PCRE packages.\nSource: Debian Security Tracker (https://security-tracker.debian.org/tracker/CVE-2026-89161)\nOriginal Vexcalibur analysis state: not_affected",
+      "vulnerability": {
+        "name": "CVE-2026-89161"
+      }
+    }
+  ],
+  "timestamp": "2026-09-14T00:00:00Z",
+  "tooling": "Vexcalibur",
+  "version": 1
+}

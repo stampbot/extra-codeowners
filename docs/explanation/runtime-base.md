@@ -109,16 +109,19 @@ The policy has one scoped exception. Grype reports CVE-2026-15308 as fixable
 for the CPython 3.14 binary because Python 3.15 contains a fix. Moving to an
 incompatible Python line isn't a routine patch, so the gate suppresses that
 CVE only for the current CPython binary package version. The full inventory
-still records it. All other fixable High and Critical findings stop the build.
+still records it. Other fixable High and Critical findings stop the build unless
+a matching reviewed VEX statement marks them `not_affected` or `fixed`.
 
 A Python base update stops matching the exception. CI then requires a
 maintainer to read the new report and remove or renew the rule for that exact
 patch version. A regression test keeps the version in `.grype.yaml` tied to
 the Dockerfile.
 
-The project also has a reviewed OpenVEX statement for current OpenSSL CVEs that
-do not affect the service. The [security policy](https://github.com/stampbot/extra-codeowners/blob/main/SECURITY.md)
-explains why and links to the exact statement. CI consumes it when it scans the
+The project also has a reviewed OpenVEX statement for runtime vulnerabilities,
+including those whose affected code is not reachable through the service. The
+[security policy](https://github.com/stampbot/extra-codeowners/blob/main/SECURITY.md)
+links to the statement and its supporting review. An unresolved assessment stays
+`under_investigation`; it does not suppress a finding. CI consumes VEX when it scans the
 matching image, while the raw inventory keeps every finding. A base-image
 update changes the package URL and makes the VEX stop matching; it cannot
 silently carry an old conclusion into a new image. At release time, the

@@ -99,7 +99,7 @@ def test_scan_uses_an_archive_and_one_database_without_socket_access(
     assert "GRYPE_DB_AUTO_UPDATE=false" not in inventory
     assert "GRYPE_DB_AUTO_UPDATE=false" in gate
     assert "/work/.grype.yaml" in gate
-    assert "/work/security/vex/openssl-3.5.7.openvex.json" in gate
+    assert "/work/security/vex/runtime.openvex.json" in gate
     assert gate[gate.index("--fail-on") + 1] == "high"
     assert "--only-fixed" in gate
     assert json.loads(Path(scan_env["REPORT_FILE"]).read_text()) == {"matches": []}

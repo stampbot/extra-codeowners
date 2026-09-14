@@ -34,6 +34,7 @@ class ReleaseVexError(ValueError):
 class _DebianPackage:
     architecture: str
     distro: str
+    distro_full: str
     name: str
     source: str
     version: str
@@ -169,6 +170,14 @@ def _inventory_components(
         distro = _string(image.get("distro"), f"release inventory {path}.image.distro")
         if _DEBIAN_DISTRO_PATTERN.fullmatch(distro) is None:
             _fail(f"release inventory {path}.image has an invalid Debian distro")
+        distro_full = _string(
+            image.get("distro_full", distro), f"release inventory {path}.image.distro_full"
+        )
+        if (
+            re.fullmatch(r"debian-[0-9]+(?:\.[0-9]+)*", distro_full) is None
+            or distro_full.partition(".")[0] != distro
+        ):
+            _fail(f"release inventory {path}.image has an invalid full Debian distro")
         if image.get("os_release_path") != "usr/lib/os-release":
             _fail(f"release inventory {path}.image has an unsupported os-release path")
         os_release_sha256 = _string(
@@ -199,6 +208,7 @@ def _inventory_components(
                         f"release inventory {path}.debian.packages[{index}].architecture",
                     ),
                     distro=distro,
+                    distro_full=distro_full,
                     name=_string(
                         package.get("package"),
                         f"release inventory {path}.debian.packages[{index}].package",
@@ -268,7 +278,7 @@ def _validate_product(
             if package.name == name
             and package.version == version
             and package.architecture == architecture
-            and package.distro == distro
+            and distro in {package.distro, package.distro_full}
             and (upstream is None or package.source == upstream)
         ]
         if len(package_candidates) != 1:
