@@ -146,6 +146,148 @@ def detail(
     }
 
 
+@pytest.mark.parametrize("timestamp", ["2026-07-23T12:05:00.531Z", "2026-07-23T12:05:00.123456Z"])
+def test_nullable_installation_metadata_is_scoped_by_payload(
+    tmp_path: Path,
+    timestamp: str,
+) -> None:
+    listed = summary(1, event="installation_repositories", action="added", delivered_at=timestamp)
+    fetched = detail(1, event="installation_repositories", action="added", delivered_at=timestamp)
+    listed["installation_id"] = None
+    fetched["installation_id"] = None
+    client = CaptureClient([[listed], fetched])
+
+    report = capture_lifecycle_contracts(
+        capture_config(tmp_path, expected=("installation_repositories.added",)),
+        client=cast(RestClient, client),
+    )
+
+    assert report["capture_complete"] is True
+    observed = report["observations"]["installation_repositories.added"]
+    assert observed["state"] == "observed"
+    assert observed["delivery_count"] == 1
+    assert "private-org" not in json.dumps(report)
+
+
+def test_nullable_metadata_from_another_installation_is_not_counted(tmp_path: Path) -> None:
+    listed = summary(1, event="installation", action="unsuspend")
+    fetched = detail(1, event="installation", action="unsuspend")
+    listed["installation_id"] = fetched["installation_id"] = None
+    fetched["request"]["payload"]["installation"]["id"] = 999
+
+    report = capture_lifecycle_contracts(
+        capture_config(tmp_path, expected=("installation.unsuspend",)),
+        client=cast(RestClient, CaptureClient([[listed], fetched])),
+    )
+
+    assert report["capture_complete"] is False
+    assert report["observations"]["installation.unsuspend"] == {
+        "state": "not_observed",
+        "delivery_count": 0,
+        "contracts": [],
+    }
+
+
+@pytest.mark.parametrize("installation", [None, {}, {"id": True}, {"id": 0}, {"id": "456"}])
+def test_null_metadata_does_not_excuse_invalid_payload_identity(
+    tmp_path: Path,
+    installation: object,
+) -> None:
+    listed = summary(1, event="installation", action="unsuspend")
+    fetched = detail(1, event="installation", action="unsuspend")
+    listed["installation_id"] = fetched["installation_id"] = None
+    fetched["request"]["payload"]["installation"] = installation
+
+    with pytest.raises(ContractError, match="payload omitted valid installation"):
+        capture_lifecycle_contracts(
+            capture_config(tmp_path),
+            client=cast(RestClient, CaptureClient([[listed], fetched])),
+        )
+
+
+@pytest.mark.parametrize("change", ["installation", "action", "missing_metadata", "mixed_metadata"])
+def test_delivery_payload_and_metadata_must_not_contradict_each_other(
+    tmp_path: Path,
+    change: str,
+) -> None:
+    listed = summary(1, event="installation", action="unsuspend")
+    fetched = detail(1, event="installation", action="unsuspend")
+    if change == "installation":
+        fetched["request"]["payload"]["installation"]["id"] = 999
+    elif change == "action":
+        fetched["request"]["payload"]["action"] = "deleted"
+    elif change == "missing_metadata":
+        del listed["installation_id"]
+    else:
+        listed["installation_id"] = None
+
+    with pytest.raises(ContractError):
+        capture_lifecycle_contracts(
+            capture_config(tmp_path),
+            client=cast(RestClient, CaptureClient([[listed], fetched])),
+        )
+
+
+def test_repository_payload_must_match_delivery_repository_metadata(tmp_path: Path) -> None:
+    listed = summary(1, event="repository", action="renamed")
+    fetched = detail(1, event="repository", action="renamed")
+    listed["repository_id"] = fetched["repository_id"] = 789
+    fetched["request"]["payload"]["repository"]["id"] = 999
+
+    with pytest.raises(ContractError, match="payload repository disagrees"):
+        capture_lifecycle_contracts(
+            capture_config(tmp_path, expected=("repository.renamed",)),
+            client=cast(RestClient, CaptureClient([[listed], fetched])),
+        )
+
+
+def test_unscoped_candidates_cannot_bypass_the_delivery_detail_limit(tmp_path: Path) -> None:
+    listed = []
+    fetched = []
+    for delivery_id in range(lifecycle_module.DETAIL_LIMIT + 1):
+        item = summary(delivery_id + 1, event="installation", action="unsuspend")
+        item["installation_id"] = None
+        listed.append(item)
+        if delivery_id < lifecycle_module.DETAIL_LIMIT:
+            item = detail(delivery_id + 1, event="installation", action="unsuspend")
+            item["installation_id"] = None
+            item["request"]["payload"]["installation"]["id"] = 999
+            fetched.append(item)
+    client = CaptureClient([listed, *fetched])
+
+    report = capture_lifecycle_contracts(
+        capture_config(tmp_path, expected=("installation.unsuspend",)),
+        client=cast(RestClient, client),
+    )
+
+    assert report["capture_complete"] is False
+    assert report["delivery_details_complete"] is False
+    assert report["observations"]["installation.unsuspend"]["state"] == "incomplete"
+    assert report["observations"]["installation.unsuspend"]["delivery_count"] == 0
+    assert len(client.transcript) == lifecycle_module.DETAIL_LIMIT + 1
+
+
+@pytest.mark.parametrize(
+    "timestamp",
+    [
+        "2026-07-23T12:05:00",
+        "2026-07-23T12:05:00+00:00",
+        "2026-07-23T12:05:00.1234567Z",
+        "2026-02-30T12:05:00.001Z",
+    ],
+)
+def test_delivery_time_rejects_ambiguous_or_invalid_timestamps(
+    tmp_path: Path,
+    timestamp: str,
+) -> None:
+    listed = summary(1, event="installation", action="unsuspend", delivered_at=timestamp)
+    with pytest.raises(ContractError):
+        capture_lifecycle_contracts(
+            capture_config(tmp_path),
+            client=cast(RestClient, CaptureClient([[listed]])),
+        )
+
+
 def test_capture_records_unique_sanitized_contracts_and_missing_events(tmp_path: Path) -> None:
     summaries = [
         summary(1, event="installation", action="unsuspend"),
