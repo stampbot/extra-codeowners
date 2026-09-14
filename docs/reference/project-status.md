@@ -139,11 +139,16 @@ pull request GitHub omitted.
 
 [Issue #1][issue-1] owns the remaining live tests:
 
-- required-check behavior when a completed Check Run returns to `in_progress`
+- repeated validation of the explicit failure reset used during reevaluation
 - shared-head opening and retargeting with delayed or lost webhooks
-- expected-source selection in repository and organization rulesets
-- interaction between a third-party App review and the ordinary approval count
 - installation lifecycle, repository transfer, and access loss.
+
+The September 12–13, 2026 probes confirmed expected-source selection in both
+ruleset types and that an App review can satisfy the ordinary approval count.
+A status-only `in_progress` reset retained success; the replacement explicit
+failure reset blocked the subsequent merge attempt. The reusable fixture now
+tests that failure reset and writes a versioned report so earlier observations
+aren't mistaken for a test of the current behavior.
 
 Keep GitHub's native **Require review from Code Owners** rule on production
 repositories until that contract is proven.

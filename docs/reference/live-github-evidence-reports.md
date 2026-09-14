@@ -29,16 +29,22 @@ The reports are sanitized, not anonymous. Event names, actions, timestamps,
 HTTP status codes, and payload field names can still reveal operational
 details. Inspect a report before attaching it to a public issue.
 
-## Repository fixture report, schema 2
+## Repository fixture report, schema 3
 
 The repository fixture writes `live-github-contract-report.json` unless
 `EXTRA_CODEOWNERS_LIVE_REPORT_FILE` names another path.
+
+Schema 3 probes the explicit `completed`/`failure` reset used by the application.
+Schema 2 tested a status-only `in_progress` reset, which live testing found
+could retain the previous success. Its transition observations are historical
+evidence, not results for the current reset. Keep old reports unchanged and
+rerun the fixture to obtain schema 3 evidence.
 
 ### Top-level fields
 
 | Field | Meaning |
 | --- | --- |
-| `schema_version` | Exact report schema. This page describes version `2`. |
+| `schema_version` | Exact report schema. This page describes version `3`. |
 | `api_version` | GitHub REST API version sent with every request. |
 | `source_revision` | Full source commit supplied by the operator. |
 | `started_at`, `finished_at` | Fixture timestamps. |
@@ -124,7 +130,7 @@ Require the configured automated evidence with:
 
 ```bash
 jq -e '
-  .schema_version == 2 and
+  .schema_version == 3 and
   .result == "observed" and
   .cleanup_succeeded == true and
   .evidence_completeness.configured_run_complete == true and
@@ -163,7 +169,7 @@ The core observations are:
 | --- | --- |
 | `organization_ruleset_expected_source` | Does the organization ruleset require this context from the checker App ID? |
 | `repository_ruleset_expected_source` | Does the repository ruleset require this context from the checker App ID? |
-| `completed_success_to_in_progress_blocks_merge` | Does replacing success with `in_progress` produce both a blocked mergeability state and a blocked merge API attempt? |
+| `completed_success_to_failure_blocks_merge` | Does replacing success with an explicit `completed`/`failure` result produce both a blocked mergeability state and a blocked merge API attempt? |
 | `shared_head_inherits_success_before_invalidation` | Does a second pull request with the same head inherit the existing commit-scoped success? |
 | `shared_head_invalidation_blocks_both_pull_requests` | Does invalidating that success block both pull requests? |
 | `retarget_inherits_commit_scoped_success_before_invalidation` | Does a retargeted pull request inherit the existing commit-scoped success? |
@@ -182,8 +188,8 @@ The diagnostic observations are:
 
 | Assertion | Question answered |
 | --- | --- |
-| `in_progress_merge_state_blocked` | Did mergeability settle on `blocked` after invalidation? |
-| `in_progress_merge_attempt_blocked` | Did the merge API reject the attempt? This is `null` when the state probe did not block. |
+| `failure_merge_state_blocked` | Did mergeability settle on `blocked` after invalidation? |
+| `failure_merge_attempt_blocked` | Did the merge API reject the attempt? This is `null` when the state probe did not block. |
 | `installation_repository_added_delivery_observed` | Did a selected-repositories installation expose the add event for the fixture repository? This is `null` for an all-repositories installation. |
 
 ### Repository creation recovery

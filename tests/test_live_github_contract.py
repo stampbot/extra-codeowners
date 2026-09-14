@@ -246,7 +246,7 @@ def test_contract_interpretation_requires_protection_without_inheritance() -> No
     assertions = {
         "organization_ruleset_expected_source": True,
         "repository_ruleset_expected_source": True,
-        "completed_success_to_in_progress_blocks_merge": True,
+        "completed_success_to_failure_blocks_merge": True,
         "shared_head_invalidation_blocks_both_pull_requests": True,
         "shared_head_inherits_success_before_invalidation": False,
         "retarget_inherits_commit_scoped_success_before_invalidation": False,
@@ -274,8 +274,8 @@ def test_evidence_completeness_distinguishes_false_null_and_missing() -> None:
         "numeric_approval_rule_blocks_before_app_review": None,
         "app_review_attributed_to_bot": None,
         "app_review_counts_as_numeric_approval": None,
-        "in_progress_merge_state_blocked": False,
-        "in_progress_merge_attempt_blocked": "false",
+        "failure_merge_state_blocked": False,
+        "failure_merge_attempt_blocked": "false",
         "installation_repository_added_delivery_observed": None,
     }
     del assertions["pull_request_retarget_delivery_observed"]
@@ -293,11 +293,11 @@ def test_evidence_completeness_distinguishes_false_null_and_missing() -> None:
     assert completeness["observations"]["organization_ruleset_expected_source"] == "observed_false"
     assert completeness["observations"]["app_review_attributed_to_bot"] == "not_run"
     assert completeness["observations"]["pull_request_retarget_delivery_observed"] == "missing"
-    assert completeness["observations"]["in_progress_merge_attempt_blocked"] == "invalid"
+    assert completeness["observations"]["failure_merge_attempt_blocked"] == "invalid"
     assert "organization_ruleset_expected_source" in completeness["observed_false"]
     assert "app_review_attributed_to_bot" in completeness["not_run"]
     assert "pull_request_retarget_delivery_observed" in completeness["missing"]
-    assert "in_progress_merge_attempt_blocked" in completeness["invalid"]
+    assert "failure_merge_attempt_blocked" in completeness["invalid"]
 
 
 def test_evidence_completeness_accepts_false_but_requires_configured_approver() -> None:
@@ -426,10 +426,35 @@ def test_merge_attempt_rejects_indeterminate_response() -> None:
         merge_attempt_was_blocked(403)
 
 
+@pytest.mark.parametrize("conclusion", ["success", "failure"])
+def test_check_transition_writes_an_explicit_conclusion(conclusion: str) -> None:
+    fixture = fixture_without_network()
+    client = StubClient([])
+    fixture.checker = cast(RestClient, client)
+
+    fixture._update_check(77, conclusion)
+
+    assert client.transcript[0]["method"] == "PATCH"
+    assert client.transcript[0]["path"].endswith("/check-runs/77")
+    assert client.transcript[0]["body"]["status"] == "completed"
+    assert client.transcript[0]["body"]["conclusion"] == conclusion
+
+
+def test_legacy_status_only_observation_cannot_satisfy_failure_reset_probe() -> None:
+    assertions = dict.fromkeys(contract_module.CORE_OBSERVATIONS, True)
+    del assertions["completed_success_to_failure_blocks_merge"]
+    assertions["completed_success_to_in_progress_blocks_merge"] = True
+    assertions["shared_head_inherits_success_before_invalidation"] = False
+    assertions["retarget_inherits_commit_scoped_success_before_invalidation"] = False
+
+    assert contract_module.REPORT_SCHEMA_VERSION == 3
+    assert not contract_interpretation(assertions)["github_contract_fail_closed"]
+
+
 def test_accepted_merge_uses_replacement_pull_and_remains_observed() -> None:
     fixture, replacements = fixture_for_merge_probe(200)
 
-    blocked, pull_number = fixture._attempt_in_progress_merge(1)
+    blocked, pull_number = fixture._attempt_invalidated_merge(1)
 
     assert blocked is False
     assert pull_number == 2
@@ -441,7 +466,7 @@ def test_accepted_merge_uses_replacement_pull_and_remains_observed() -> None:
 def test_blocked_merge_keeps_original_pull() -> None:
     fixture, replacements = fixture_for_merge_probe(405)
 
-    blocked, pull_number = fixture._attempt_in_progress_merge(1)
+    blocked, pull_number = fixture._attempt_invalidated_merge(1)
 
     assert blocked is True
     assert pull_number == 1
@@ -1276,9 +1301,9 @@ def test_fixture_run_follows_the_complete_check_transition_transcript(
     def merge_attempt(pull_number: int) -> tuple[bool, int]:
         return True, pull_number
 
-    fixture._attempt_in_progress_merge = merge_attempt  # type: ignore[method-assign]
+    fixture._attempt_invalidated_merge = merge_attempt  # type: ignore[method-assign]
     check_updates: list[str] = []
-    fixture._update_check = lambda check_id, status: check_updates.append(status)  # type: ignore[method-assign]
+    fixture._update_check = lambda check_id, conclusion: check_updates.append(conclusion)  # type: ignore[method-assign]
 
     def app_review(base_sha: str) -> None:
         fixture.report["assertions"].update(
@@ -1311,8 +1336,8 @@ def test_fixture_run_follows_the_complete_check_transition_transcript(
         ("retarget", "a" * 40),
         ("shared-head", "a" * 40),
     ]
-    assert check_updates == ["in_progress", "completed", "in_progress", "completed"]
-    assert report["assertions"]["completed_success_to_in_progress_blocks_merge"] is True
+    assert check_updates == ["failure", "success", "failure", "success"]
+    assert report["assertions"]["completed_success_to_failure_blocks_merge"] is True
     assert report["assertions"]["shared_head_invalidation_blocks_both_pull_requests"] is True
     assert report["assertions"]["shared_head_inherits_success_before_invalidation"] is True
     assert report["interpretation"]["github_contract_fail_closed"] is False

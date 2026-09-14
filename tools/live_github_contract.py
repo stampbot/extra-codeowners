@@ -27,7 +27,7 @@ import jwt
 API_VERSION: Final = "2026-03-10"
 API_URL: Final = "https://api.github.com"
 CONFIRMATION_PREFIX: Final = "delete-disposable-repository-in:"
-REPORT_SCHEMA_VERSION: Final = 2
+REPORT_SCHEMA_VERSION: Final = 3
 DELIVERY_LINK_HEADER_LIMIT: Final = 8192
 DELIVERY_CURSOR_LIMIT: Final = 1024
 DELIVERY_LINK_RELATIONS: Final = frozenset({"first", "last", "next", "prev"})
@@ -49,7 +49,7 @@ REPOSITORY_CLEANUP_STATES: Final = frozenset(
 CORE_OBSERVATIONS: Final = (
     "organization_ruleset_expected_source",
     "repository_ruleset_expected_source",
-    "completed_success_to_in_progress_blocks_merge",
+    "completed_success_to_failure_blocks_merge",
     "shared_head_inherits_success_before_invalidation",
     "shared_head_invalidation_blocks_both_pull_requests",
     "retarget_inherits_commit_scoped_success_before_invalidation",
@@ -62,8 +62,8 @@ APP_REVIEW_OBSERVATIONS: Final = (
     "app_review_counts_as_numeric_approval",
 )
 DIAGNOSTIC_OBSERVATIONS: Final = (
-    "in_progress_merge_state_blocked",
-    "in_progress_merge_attempt_blocked",
+    "failure_merge_state_blocked",
+    "failure_merge_attempt_blocked",
     "installation_repository_added_delivery_observed",
 )
 WEBHOOK_OBSERVATIONS: Final = (
@@ -746,7 +746,7 @@ def contract_interpretation(assertions: JsonObject) -> JsonObject:
     protective_assertions = (
         "organization_ruleset_expected_source",
         "repository_ruleset_expected_source",
-        "completed_success_to_in_progress_blocks_merge",
+        "completed_success_to_failure_blocks_merge",
         "shared_head_invalidation_blocks_both_pull_requests",
     )
     inheritance_assertions = (
@@ -1099,7 +1099,7 @@ class Fixture:
         )
         return _integer(result.get("number"), "pull request number")
 
-    def _attempt_in_progress_merge(self, pull_number: int) -> tuple[bool, int]:
+    def _attempt_invalidated_merge(self, pull_number: int) -> tuple[bool, int]:
         """Attempt the blocked merge and recover the remaining probes if GitHub accepts it."""
         merge_status = self.operator.status(
             "PUT", f"{self.repo_path}/pulls/{pull_number}/merge", body={"merge_method": "squash"}
@@ -1137,18 +1137,17 @@ class Fixture:
         )
         return _integer(result.get("id"), "check run ID")
 
-    def _update_check(self, check_id: int, status: str) -> None:
+    def _update_check(self, check_id: int, conclusion: str) -> None:
         assert self.checker is not None
         body: JsonObject = {
             "name": self.config.check_name,
-            "status": status,
+            "status": "completed",
+            "conclusion": conclusion,
             "output": {
                 "title": "Live contract probe",
-                "summary": f"Disposable check is {status}.",
+                "summary": f"Disposable check conclusion: {conclusion}.",
             },
         }
-        if status == "completed":
-            body["conclusion"] = "success"
         self.checker.request(
             "PATCH",
             f"{self.repo_path}/check-runs/{check_id}",
@@ -1476,20 +1475,20 @@ class Fixture:
                 "indeterminate transition: the completed successful check did not satisfy "
                 "the fixture's required-check precondition"
             )
-        self._update_check(check_id, "in_progress")
+        self._update_check(check_id, "failure")
         transition_blocked = not self._wait_for_merge_outcome(first, preferred=False)
         merge_attempt_blocked = False
         if transition_blocked:
-            merge_attempt_blocked, first = self._attempt_in_progress_merge(first)
+            merge_attempt_blocked, first = self._attempt_invalidated_merge(first)
         assertions = _object(self.report["assertions"], "report assertions")
-        assertions["in_progress_merge_state_blocked"] = transition_blocked
-        assertions["in_progress_merge_attempt_blocked"] = (
+        assertions["failure_merge_state_blocked"] = transition_blocked
+        assertions["failure_merge_attempt_blocked"] = (
             merge_attempt_blocked if transition_blocked else None
         )
-        assertions["completed_success_to_in_progress_blocks_merge"] = (
+        assertions["completed_success_to_failure_blocks_merge"] = (
             transition_blocked and merge_attempt_blocked
         )
-        self._update_check(check_id, "completed")
+        self._update_check(check_id, "success")
         if not self._wait_for_merge_outcome(first, preferred=True):
             raise ContractError(
                 "indeterminate shared-head probe: the restored successful check did not satisfy "
@@ -1504,14 +1503,14 @@ class Fixture:
             self._wait_for_merge_outcome(second)
         )
 
-        self._update_check(check_id, "in_progress")
+        self._update_check(check_id, "failure")
         first_blocked = not self._wait_for_merge_outcome(first, preferred=False)
         second_blocked = not self._wait_for_merge_outcome(second, preferred=False)
         assertions["shared_head_invalidation_blocks_both_pull_requests"] = (
             first_blocked and second_blocked
         )
 
-        self._update_check(check_id, "completed")
+        self._update_check(check_id, "success")
         if not self._wait_for_merge_outcome(second, preferred=True):
             raise ContractError(
                 "indeterminate retarget probe: the restored successful check did not satisfy "
