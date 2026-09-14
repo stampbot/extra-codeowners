@@ -2705,7 +2705,7 @@ async def test_authority_fast_revocation_failure_keeps_durable_evaluation(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("status", [301, 404, 410])
+@pytest.mark.parametrize("status", [301, 308, 404, 410])
 @pytest.mark.parametrize("superseded", [False, True])
 async def test_removed_repository_addition_retires_only_its_generation(
     tmp_path: Path, status: int, superseded: bool
@@ -2716,6 +2716,7 @@ async def test_removed_repository_addition_retires_only_its_generation(
     claimed = store.claim_authority("worker", 60)
     assert claimed is not None
     evaluator = MagicMock()
+    evaluator.github.installation_includes_repository = AsyncMock(return_value=True)
     evaluator.github.get_repository = AsyncMock(
         return_value={"full_name": "example/project", "archived": False}
     )
@@ -2762,6 +2763,7 @@ async def test_repository_addition_retains_fence_without_verified_absence(
     claimed = store.claim_authority("worker", 60)
     assert claimed is not None
     evaluator = MagicMock()
+    evaluator.github.installation_includes_repository = AsyncMock(return_value=True)
     evaluator.github.get_repository = AsyncMock(
         return_value={"full_name": "example/project", "archived": False}
     )
@@ -2793,6 +2795,7 @@ async def test_authority_does_not_retire_other_failures(
     claimed = store.claim_authority("worker", 60)
     assert claimed is not None
     evaluator = MagicMock()
+    evaluator.github.installation_includes_repository = AsyncMock(return_value=True)
     evaluator.github.get_repository = AsyncMock(
         return_value={"full_name": "example/project", "archived": False}
     )
@@ -2830,6 +2833,7 @@ async def test_repository_addition_checks_current_archive_state_before_listing_p
     claimed = store.claim_authority("worker", 60)
     assert claimed is not None
     evaluator = MagicMock()
+    evaluator.github.installation_includes_repository = AsyncMock(return_value=True)
     evaluator.github.get_repository = AsyncMock(
         side_effect=repository if isinstance(repository, Exception) else None,
         return_value=repository,
@@ -2855,6 +2859,7 @@ async def test_repository_addition_lists_pulls_after_current_unarchived_metadata
     claimed = store.claim_authority("worker", 60)
     assert claimed is not None
     evaluator = MagicMock()
+    evaluator.github.installation_includes_repository = AsyncMock(return_value=True)
     evaluator.github.get_repository = AsyncMock(
         return_value={"full_name": "example/project", "archived": False}
     )
@@ -2864,6 +2869,39 @@ async def test_repository_addition_lists_pulls_after_current_unarchived_metadata
     assert await worker._process_authority(claimed) == "completed"
     evaluator.github.list_open_pulls.assert_awaited_once_with(2, "example/project")
     assert store.pending_count() == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("listed", [False, True])
+async def test_public_repository_addition_does_not_use_readability_as_membership(
+    tmp_path: Path, listed: bool
+) -> None:
+    store = migrated_store(f"sqlite:///{tmp_path / 'public-addition.db'}")
+    store.enqueue_authority(
+        AuthorityRequest(2, "example/project", None, "installation_repositories.added")
+    )
+    claimed = store.claim_authority("worker", 60)
+    assert claimed is not None
+    evaluator = MagicMock()
+    evaluator.github.installation_includes_repository = AsyncMock(return_value=False)
+    evaluator.github.list_installation_repositories = AsyncMock(
+        return_value=[{"full_name": "example/project", "archived": False}] if listed else []
+    )
+    evaluator.github.get_repository = AsyncMock(
+        return_value={"full_name": "example/project", "archived": False, "private": False}
+    )
+    evaluator.github.list_open_pulls = AsyncMock(
+        return_value=[{"number": 4, "head": {"sha": HEAD}}]
+    )
+    worker = Worker(settings(), store, evaluator, "worker")
+
+    assert await worker._process_authority(claimed) == ("failed" if listed else "completed")
+    assert store.pending_count() == int(listed)
+    evaluator.github.installation_includes_repository.assert_awaited_once_with(
+        2, "example/project", refresh=True
+    )
+    evaluator.github.get_repository.assert_not_awaited()
+    evaluator.github.list_open_pulls.assert_not_awaited()
 
 
 @pytest.mark.asyncio

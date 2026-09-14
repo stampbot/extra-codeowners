@@ -414,11 +414,13 @@ async def test_installation_repository_membership_uses_app_installation_scope(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("payload", [{}, {"id": 0}, {"id": -1}, {"id": True}])
 async def test_installation_repository_membership_rejects_malformed_response(
     private_key: str,
+    payload: dict[str, object],
 ) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={})
+        return httpx.Response(200, json=payload)
 
     client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
 
@@ -465,6 +467,28 @@ async def test_installation_repository_membership_cache_uses_authority_generatio
     # process-local cache on every replica's next claimed job. The ordinary
     # hot path makes one App-authenticated request, not one per PR.
     assert len(requests) == 2
+
+
+@pytest.mark.asyncio
+async def test_installation_repository_membership_refresh_bypasses_a_warm_cache(
+    private_key: str,
+) -> None:
+    responses = iter(({"id": 2}, {"id": 3}))
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        assert request.url.path == "/repos/example/project/installation"
+        return httpx.Response(200, json=next(responses))
+
+    client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
+    assert await client.installation_includes_repository(2, "example/project")
+    assert await client.installation_includes_repository(2, "example/project")
+    assert calls == 1
+    assert not await client.installation_includes_repository(2, "example/project", refresh=True)
+    assert calls == 2
+    await client.close()
 
 
 @pytest.mark.asyncio
