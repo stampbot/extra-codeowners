@@ -114,12 +114,16 @@ is safe.
 These conclusions apply to the shipped service's behavior, including its SQLite
 backend. They do not cover arbitrary commands, custom Python code, native
 plugins, or externally supplied databases. A change in those behaviors requires
-another review even when package versions stay the same. Package updates stop
-the old package URLs from matching and require an explicit statement update.
+another review even when package versions stay the same. The runtime hash
+manifest in the VEX file makes CI stop when application, dependency, or build
+inputs change; a maintainer must review the change before recording new hashes.
+Package updates also stop the old package URLs from matching. Python bytecode
+caches are excluded from both the Docker context and the source binding.
 
 The statement was generated offline with
 [Vexcalibur v0.7.0](https://github.com/vexcalibur-dev/vexcalibur/releases/tag/v0.7.0)
-from reviewed local findings and versioned package identities. Vexcalibur
-formats the assessment; it does not establish reachability. See the
+from reviewed local findings and versioned package identities, then bound to
+the runtime inputs with `tools/release_vex.py bind-runtime`. Vexcalibur formats
+the assessment; neither tool establishes reachability. See the
 [security policy](../../SECURITY.md#vulnerability-statements) for publication
 and attestation details.

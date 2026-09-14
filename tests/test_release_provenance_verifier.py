@@ -86,7 +86,9 @@ def _raw_container_inventory(architecture: str, platform_digest: str) -> bytes:
     ).encode()
 
 
-def _recipient_notices(architecture: str, platform_digest: str) -> bytes:
+def _recipient_notices(
+    architecture: str, platform_digest: str, inventory: bytes | None = None
+) -> bytes:
     rootfs = io.BytesIO()
     with tarfile.open(fileobj=rootfs, mode="w") as archive:
         for path, contents in (
@@ -99,7 +101,7 @@ def _recipient_notices(architecture: str, platform_digest: str) -> bytes:
     rootfs.seek(0)
     return build_notice_bundle(
         rootfs,
-        _raw_container_inventory(architecture, platform_digest),
+        _raw_container_inventory(architecture, platform_digest) if inventory is None else inventory,
         architecture=architecture,
         platform_digest=platform_digest,
     )
@@ -461,6 +463,7 @@ def _run_verifier(
     mutate_assets: Callable[[Path], None] | None = None,
     source_delivery: bool = False,
     debian_delivery: bool = False,
+    full_distro: object = None,
 ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
     asset_directory = tmp_path / "release-assets"
     asset_directory.mkdir()
@@ -471,6 +474,18 @@ def _run_verifier(
             inventory = json.loads(release_files[filename])
             inventory["debian"]["source_bundle"] = "debian-source.tar"
             release_files[filename] = json.dumps(inventory).encode()
+    if full_distro is not None:
+        for architecture, digest in (
+            ("amd64", AMD64_PLATFORM_DIGEST),
+            ("arm64", ARM64_PLATFORM_DIGEST),
+        ):
+            filename = f"distribution-inventory-{architecture}.json"
+            inventory = json.loads(release_files[filename])
+            inventory["image"]["distro_full"] = full_distro
+            release_files[filename] = json.dumps(inventory).encode()
+            release_files[f"recipient-notices-{architecture}.tar.gz"] = _recipient_notices(
+                architecture, digest, release_files[filename]
+            )
     if source_delivery or debian_delivery:
         _add_source_bundles(release_files)
     if debian_delivery:
@@ -551,6 +566,21 @@ def _run_verifier(
     )
     operations = operation_log.read_text(encoding="utf-8").splitlines()
     return result, operations
+
+
+@pytest.mark.parametrize(
+    "full_distro", ["debian-13", "debian-13.6", "debian-14.6", "debian-13.x", "", 13.6]
+)
+@pytest.mark.parametrize("source_delivery", [False, True])
+@pytest.mark.skipif(BASH is None or JQ is None, reason="Bash and jq are required")
+def test_release_provenance_checks_optional_full_distro_identity(
+    tmp_path: Path, full_distro: object, source_delivery: bool
+) -> None:
+    result, _ = _run_verifier(tmp_path, full_distro=full_distro, source_delivery=source_delivery)
+    if full_distro in ("debian-13", "debian-13.6"):
+        assert result.returncode == 0, result.stderr
+    else:
+        assert result.returncode != 0
 
 
 @pytest.mark.parametrize(

@@ -129,11 +129,14 @@ verify_raw_container_inventory() {
       (.image | type == "object") and
       (.image.architecture == $architecture) and
       (.image.distro | type == "string" and test("^debian-[0-9]+$")) and
+      ((.image | has("distro_full") | not) or
+        ((.image.distro_full | type == "string" and test("^debian-[0-9]+(\\.[0-9]+)*$")) and
+          ((.image.distro_full | split(".")[0]) == .image.distro))) and
       (.image.os_release_path == "usr/lib/os-release") and
       (.image.os_release_sha256 | type == "string" and test("^[0-9a-f]{64}$")) and
       (.image.os_release_size | type == "number" and . > 0 and floor == .) and
       (.image.platform_digest == $platform_digest) and
-      ((.image | keys | sort) == [
+      ((.image | del(.distro_full) | keys | sort) == [
         "architecture",
         "distro",
         "os_release_path",

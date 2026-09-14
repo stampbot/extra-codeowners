@@ -127,6 +127,10 @@ def test_every_build_uses_the_scanner_and_retains_raw_findings_before_the_gate()
     source = ACTION.read_text()
     assert len(set(PIN.findall(source))) == 1
     assert source.index("Retain the unfiltered report") < source.index("Reject fixable")
+    gate = _script("Reject fixable high-severity vulnerabilities")
+    assert "tools/release_vex.py check-runtime" in gate
+    assert "--runtime-root ." in gate
+    assert gate.index("check-runtime") < gate.index("docker run")
     assert "if-no-files-found: error" in source
     assert "retention-days: 14" in source
     assert "always() && steps.prepare.outputs.directory != ''" in source

@@ -103,6 +103,13 @@ This is a project security statement. CI consumes the current file when it scans
 the image. The raw report retains every scanner finding, and a package-version
 change stops the VEX from matching.
 
+Reachability claims also contain a hash manifest of the reviewed application
+source, dependency lock, package configuration, and Docker build inputs. CI
+checks that manifest before using VEX, and the publisher checks it again before
+allocating a release. A runtime change requires another review even when the
+Debian package versions stay the same. Documentation-only edits do not change
+the binding. Rebinding records a maintainer's assessment; it does not perform one.
+
 Before it creates an immutable tag or a versioned image reference, the
 workflow checks every product URL against signed `amd64` and `arm64`
 inventories. Those inventories include Debian's major and full distribution

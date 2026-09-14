@@ -57,6 +57,9 @@ def test_production_container_context_excludes_documentation_and_test_inputs() -
         "!uv.lock",
         "!extra_codeowners/",
         "!extra_codeowners/**",
+        "**/__pycache__/",
+        "**/*.pyc",
+        "**/*.pyo",
     ]
 
 

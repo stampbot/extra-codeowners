@@ -391,6 +391,7 @@ def test_release_pushes_native_digests_before_assembling_the_manifest() -> None:
     )
     assert "python -I -S -B tools/release_vex.py stage" in stage_vex
     assert "security/vex/runtime.openvex.json" in stage_vex
+    assert "--runtime-root ." in stage_vex
     assert "release/image/amd64/distribution-inventory-amd64.json" in stage_vex
     assert "release/image/arm64/distribution-inventory-arm64.json" in stage_vex
     assert '"release/image/extra-codeowners-${VERSION}.openvex.json"' in stage_vex

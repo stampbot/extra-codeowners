@@ -153,6 +153,29 @@ analysis aid when a vulnerability needs review, then check the affected package
 URLs and impact statement in the pull request. The statement is a security
 conclusion, not a way to hide a scanner result.
 
+The VEX file also records hashes of the reviewed runtime inputs. CI rejects it
+after a change to application files, `uv.lock`, `pyproject.toml`, `Dockerfile`,
+or `.dockerignore`. Review the changed behavior against each existing claim
+before refreshing the binding. Docs and tests do not require a refresh.
+
+After that review, run this from the repository root with Python 3.12 or later.
+Set `REVIEW_RATIONALE` to your explanation of the runtime changes and why the
+claims still hold. The command updates the source VEX file; it does not change
+a published release or decide whether a vulnerability is reachable.
+
+```bash
+python -I -S -B tools/release_vex.py bind-runtime \
+  --source security/vex/runtime.openvex.json --runtime-root . \
+  --review "$REVIEW_RATIONALE"
+python -I -S -B tools/release_vex.py check-runtime \
+  --source security/vex/runtime.openvex.json --runtime-root .
+```
+
+The check succeeds silently when the recorded inputs match. Commit the updated
+statement with the runtime change so reviewers can inspect both. If a claim no
+longer holds, change or remove it before rebinding. Never add an automatic
+rebind step to CI.
+
 The publisher copies the reviewed bytes only when every product URL matches the
 signed native inventories. Debian URLs must identify the released architecture
 and distribution. For Grype, use the inventory's `distro_full` identity, which
