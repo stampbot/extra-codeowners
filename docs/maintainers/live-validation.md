@@ -66,6 +66,24 @@ sole code owner was not a useful negative control: GitHub still reported it
 approved with Stampbot's review. The bot-authored PR kept author ownership
 out of the negative control. See the [dated handback evidence][handback].
 
+## Scoped repository addition: September 14, 2026
+
+With `v0.1.0-alpha.51`, a newly created repository's first PR reached a final
+missing-approval result in 8 seconds. Stampbot approval then passed in
+12 seconds, including its review submission. Both service replicas were
+healthy on separate nodes.
+
+The installation-wide authority generation did not change, and no authority
+jobs remained after the test. The earlier stuck addition job for the old
+repository name also cleared. No queue reset, rename, or webhook redelivery
+was used for this test.
+
+The lifecycle collector retained an automatic repository-addition delivery
+with HTTP 202. Its bounded listing was incomplete, so it does not establish
+an exhaustive delivery history. These are positive observations of one
+addition, not proof of every lifecycle transition. See the
+[dated addition evidence][addition].
+
 ## GitHub's check contract
 
 The schema-3 provider fixture completed its automated observations on
@@ -103,3 +121,4 @@ not close it.
 [sources]: https://github.com/stampbot/extra-codeowners/issues/18
 [performance]: https://github.com/stampbot/extra-codeowners/issues/203
 [handback]: https://github.com/stampbot/extra-codeowners/issues/1#issuecomment-5672325273
+[addition]: https://github.com/stampbot/extra-codeowners/issues/203#issuecomment-5672497697
