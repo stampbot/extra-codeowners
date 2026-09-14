@@ -2195,6 +2195,20 @@ class Worker:
         requests: list[JobRequest] = []
         full_name = job.repository_full_name
         try:
+            if job.reason == "installation_repositories.added":
+                current_name, archived = _reconciliation_repository(
+                    await self.evaluator.github.get_repository(job.installation_id, full_name)
+                )
+                if current_name != full_name:
+                    raise GitHubError("repository addition metadata changed its full name")
+                if archived:
+                    log.info(
+                        "authority_addition_archived",
+                        installation_id=job.installation_id,
+                        repository=full_name,
+                        generation=job.generation,
+                    )
+                    return
             pulls = await self.evaluator.github.list_open_pulls(job.installation_id, full_name)
         except GitHubAPIError as error:
             if (

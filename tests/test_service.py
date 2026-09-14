@@ -2716,6 +2716,9 @@ async def test_removed_repository_addition_retires_only_its_generation(
     claimed = store.claim_authority("worker", 60)
     assert claimed is not None
     evaluator = MagicMock()
+    evaluator.github.get_repository = AsyncMock(
+        return_value={"full_name": "example/project", "archived": False}
+    )
     evaluator.github.list_open_pulls = AsyncMock(
         side_effect=GitHubAPIError(status, "GET", "/repos/example/project/pulls", "unavailable")
     )
@@ -2759,6 +2762,9 @@ async def test_repository_addition_retains_fence_without_verified_absence(
     claimed = store.claim_authority("worker", 60)
     assert claimed is not None
     evaluator = MagicMock()
+    evaluator.github.get_repository = AsyncMock(
+        return_value={"full_name": "example/project", "archived": False}
+    )
     evaluator.github.list_open_pulls = AsyncMock(
         side_effect=GitHubAPIError(404, "GET", "/repos/example/project/pulls", "unavailable")
     )
@@ -2787,6 +2793,9 @@ async def test_authority_does_not_retire_other_failures(
     claimed = store.claim_authority("worker", 60)
     assert claimed is not None
     evaluator = MagicMock()
+    evaluator.github.get_repository = AsyncMock(
+        return_value={"full_name": "example/project", "archived": False}
+    )
     evaluator.github.list_open_pulls = AsyncMock(
         side_effect=GitHubAPIError(status, "GET", "/repos/example/project/pulls", "unavailable")
     )
@@ -2797,6 +2806,63 @@ async def test_authority_does_not_retire_other_failures(
     )
     assert store.pending_count() == 1
     evaluator.github.list_installation_repositories.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("repository", "expected"),
+    [
+        ({"full_name": "Example/Project", "archived": True}, "completed"),
+        ({"full_name": "example/project", "archived": "true"}, "failed"),
+        ({"full_name": "example/project"}, "failed"),
+        ({"full_name": "example/different", "archived": True}, "failed"),
+        (GitHubAPIError(404, "GET", "/repos/example/project", "unavailable"), "completed"),
+    ],
+)
+async def test_repository_addition_checks_current_archive_state_before_listing_pulls(
+    tmp_path: Path, repository: Any, expected: str
+) -> None:
+    store = migrated_store(f"sqlite:///{tmp_path / 'archived-addition.db'}")
+    store.enqueue_authority(
+        AuthorityRequest(2, "example/project", None, "installation_repositories.added")
+    )
+    claimed = store.claim_authority("worker", 60)
+    assert claimed is not None
+    evaluator = MagicMock()
+    evaluator.github.get_repository = AsyncMock(
+        side_effect=repository if isinstance(repository, Exception) else None,
+        return_value=repository,
+    )
+    evaluator.github.list_installation_repositories = AsyncMock(return_value=[])
+    worker = Worker(settings(), store, evaluator, "worker")
+
+    assert await worker._process_authority(claimed) == expected
+    assert store.pending_count() == (0 if expected == "completed" else 1)
+    evaluator.github.get_repository.assert_awaited_once_with(2, "example/project")
+    evaluator.github.list_open_pulls.assert_not_called()
+    evaluator.invalidate_for_trigger.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_repository_addition_lists_pulls_after_current_unarchived_metadata(
+    tmp_path: Path,
+) -> None:
+    store = migrated_store(f"sqlite:///{tmp_path / 'unarchived-addition.db'}")
+    store.enqueue_authority(
+        AuthorityRequest(2, "example/project", None, "installation_repositories.added")
+    )
+    claimed = store.claim_authority("worker", 60)
+    assert claimed is not None
+    evaluator = MagicMock()
+    evaluator.github.get_repository = AsyncMock(
+        return_value={"full_name": "example/project", "archived": False}
+    )
+    evaluator.github.list_open_pulls = AsyncMock(return_value=[])
+    worker = Worker(settings(), store, evaluator, "worker")
+
+    assert await worker._process_authority(claimed) == "completed"
+    evaluator.github.list_open_pulls.assert_awaited_once_with(2, "example/project")
+    assert store.pending_count() == 0
 
 
 @pytest.mark.asyncio

@@ -1186,6 +1186,10 @@ class GitHubClient:
         )
         return response.payload
 
+    async def get_repository(self, installation_id: int, repository: str) -> dict[str, Any]:
+        """Fetch current repository metadata using installation access."""
+        return await self._request("GET", f"/repos/{repository}", installation_id=installation_id)
+
     async def get_pull(self, installation_id: int, repository: str, number: int) -> dict[str, Any]:
         """Fetch current pull request metadata."""
         return await self._request(

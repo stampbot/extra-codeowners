@@ -1043,6 +1043,22 @@ async def test_api_errors_expose_status_without_leaking_headers(private_key: str
 
 
 @pytest.mark.asyncio
+async def test_get_repository_uses_installation_authenticated_metadata(private_key: str) -> None:
+    metadata = {"full_name": "example/project", "archived": True}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/app/installations/2/access_tokens":
+            return httpx.Response(201, json=token_response())
+        assert request.method == "GET" and request.url.path == "/repos/example/project"
+        assert request.headers["authorization"] == "Bearer installation-token"
+        return httpx.Response(200, json=metadata)
+
+    client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
+    assert await client.get_repository(2, "example/project") == metadata
+    await client.close()
+
+
+@pytest.mark.asyncio
 async def test_rejected_cached_installation_token_is_refreshed_once(private_key: str) -> None:
     token_calls = 0
     api_calls = 0
