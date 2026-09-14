@@ -922,7 +922,7 @@ class Fixture:
         self.approver_auth = AppAuth(config.approver) if config.approver is not None else None
         self.approver: RestClient | None = None
         suffix = secrets.token_hex(16)
-        self.repository_name = f"extra-codeowners-contract-{suffix}"
+        self.repository_name = f"infra-extra-codeowners-contract-{suffix}"
         self.repository = f"{config.organization}/{self.repository_name}"
         self.repository_created = False
         self.repository_creation_attempted = False
