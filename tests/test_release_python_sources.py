@@ -98,6 +98,111 @@ def test_exact_identity_determinism_and_explicit_gaps() -> None:
     sources.verify(manifest, gzip.compress(gzip.decompress(bundle()), compresslevel=1))
 
 
+@pytest.mark.parametrize("version", ["3.3.4", "3.3.5"])
+def test_binary_recipe_requires_exact_reviewed_package_version(version: str) -> None:
+    raw = json.loads(inventory())
+    raw["python"]["source_recipe_schema"] = 1
+    raw["python"]["distributions"][1] = {"normalized_name": "psycopg-binary", "version": version}
+    locked = (
+        lock()
+        .replace(b'name = "binary-only"', b'name = "psycopg-binary"')
+        .replace(b'version = "2.0"', f'version = "{version}"'.encode())
+    )
+    manifest = sources.plan(json.dumps(raw).encode(), locked, "amd64", DIGEST)
+    recipes = [item for item in manifest["sources"] if item["name"] == "psycopg-binary"]
+    if version == "3.3.4":
+        assert len(recipes) == 1
+        recipe = recipes[0]
+        assert recipe["source_tag"] == version
+        assert recipe["source_commit"] == "83f110367cdd249cc0a352e2246ecea9e878e5a0"
+        assert recipe["source_tag_object"] == "6697f47c113ea47c671fd2c7a286074b88182a9b"
+        assert recipe["recipe_paths"] == [
+            ".github/workflows/packages-bin.yml",
+            ".github/workflows/build-and-cache-libpq.yml",
+            "tools/ci/build_libpq.sh",
+        ]
+        assert "native-library source" in recipe["delivery_scope"]
+        assert manifest["unresolved_sources"] == []
+    else:
+        assert recipes == []
+        assert manifest["unresolved_sources"] == [
+            {
+                "name": "psycopg-binary",
+                "version": version,
+                "reason": "lock contains no source archive",
+            }
+        ]
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://codeload.github.com/psycopg/psycopg/tar.gz/main",
+        "https://codeload.github.com/psycopg/other/tar.gz/" + "a" * 40,
+        "https://codeload.github.com.evil/psycopg/psycopg/tar.gz/" + "a" * 40,
+        "http://codeload.github.com/psycopg/psycopg/tar.gz/" + "a" * 40,
+        "https://codeload.github.com/psycopg/psycopg/tar.gz/" + "a" * 40 + "?token=bad",
+        "https://user@codeload.github.com/psycopg/psycopg/tar.gz/" + "a" * 40,
+    ],
+)
+def test_binary_source_fetch_rejects_other_origins_and_mutable_refs(url: str) -> None:
+    with pytest.raises(sources.PythonSourceError, match="URL"):
+        sources.fetch({"url": url})
+
+
+def test_historical_inventory_does_not_retroactively_require_reviewed_recipes() -> None:
+    raw = json.loads(inventory())
+    raw["python"]["distributions"][1] = {"normalized_name": "psycopg-binary", "version": "3.3.4"}
+    locked = lock().replace(b"binary-only", b"psycopg-binary").replace(b'"2.0"', b'"3.3.4"')
+    manifest = sources.plan(json.dumps(raw).encode(), locked, "amd64", DIGEST)
+    assert manifest["scope"] == (
+        "Locked Python sdists only; embedded native dependencies are not covered."
+    )
+    assert manifest["unresolved_sources"] == [
+        {"name": "psycopg-binary", "version": "3.3.4", "reason": "lock contains no source archive"}
+    ]
+    assert len(manifest["sources"]) == 1
+    historical = sources.build(manifest, {manifest["sources"][0]["path"]: DATA})
+    sources.verify(manifest, historical)
+    raw["python"]["source_recipe_schema"] = 1
+    current = sources.plan(json.dumps(raw).encode(), locked, "amd64", DIGEST)
+    with pytest.raises(sources.PythonSourceError):
+        sources.verify(current, historical)
+
+
+@pytest.mark.parametrize("schema", [True, "1", None, -1, 2])
+def test_rejects_unknown_source_recipe_schema(schema: object) -> None:
+    raw = json.loads(inventory())
+    raw["python"]["source_recipe_schema"] = schema
+    with pytest.raises(sources.PythonSourceError, match="recipe schema"):
+        sources.plan(json.dumps(raw).encode(), lock(), "amd64", DIGEST)
+
+
+def test_reviewed_binary_source_uses_the_same_hash_and_size_gate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = {
+        **sources.REVIEWED_BINARY_SOURCES["psycopg-binary", "3.3.4"],
+        "sha256": hashlib.sha256(DATA).hexdigest(),
+        "size": len(DATA),
+    }
+    response = Mock(status=200)
+    response.read.return_value = DATA
+    context = Mock()
+    context.__enter__ = Mock(return_value=response)
+    context.__exit__ = Mock(return_value=False)
+    opener = Mock()
+    opener.open.return_value = context
+    monkeypatch.setattr(urllib.request, "build_opener", lambda *_: opener)
+
+    assert sources.fetch(source) == DATA
+    opener.open.assert_called_once_with(source["url"], timeout=30)
+    response.read.assert_called_once_with(len(DATA) + 1)
+    response.read.return_value = b"tampered"
+    with pytest.raises(sources.PythonSourceError, match="SHA-256"):
+        sources.fetch(source)
+
+
 @pytest.mark.parametrize(
     "url",
     [

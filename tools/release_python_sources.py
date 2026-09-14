@@ -1,7 +1,7 @@
-"""Retain locked Python source archives without extracting or executing them.
+"""Retain version-matched Python source archives without extracting or executing them.
 
-These are version-matched upstream sdists, not a claim that their build inputs
-reproduce the installed wheels. Binary-only distributions remain explicit gaps.
+Locked upstream sdists and reviewed binary-package recipes are not a claim
+that their build inputs reproduce the installed wheels. Other gaps stay explicit.
 """
 
 from __future__ import annotations
@@ -33,6 +33,27 @@ URL = re.compile(
     r"https://files\.pythonhosted\.org/packages/[0-9a-f]{2}/[0-9a-f]{2}/"
     r"[0-9a-f]{60}/([A-Za-z0-9][A-Za-z0-9._+-]{0,199}\.(?:tar\.gz|zip))\Z"
 )
+PSYCOPG_URL = re.compile(r"https://codeload\.github\.com/psycopg/psycopg/tar\.gz/[0-9a-f]{40}\Z")
+REVIEWED_BINARY_SOURCES: dict[tuple[str, str], dict[str, Any]] = {
+    ("psycopg-binary", "3.3.4"): {
+        "url": "https://codeload.github.com/psycopg/psycopg/tar.gz/83f110367cdd249cc0a352e2246ecea9e878e5a0",
+        "sha256": "814e5398a6d92bb7dfbae5bed63a5771f40a59c0cf850d9a95e25ca2f82ca010",
+        "size": 611732,
+        "path": "sources/psycopg-binary/psycopg-83f110367cdd249cc0a352e2246ecea9e878e5a0.tar.gz",
+        "source_commit": "83f110367cdd249cc0a352e2246ecea9e878e5a0",
+        "source_tag": "3.3.4",
+        "source_tag_object": "6697f47c113ea47c671fd2c7a286074b88182a9b",
+        "recipe_paths": [
+            ".github/workflows/packages-bin.yml",
+            ".github/workflows/build-and-cache-libpq.yml",
+            "tools/ci/build_libpq.sh",
+        ],
+        "delivery_scope": (
+            "Version-matched Psycopg wrapper source and upstream build recipes only; "
+            "bundled native-library source and build-environment inputs remain separate gaps."
+        ),
+    },
+}
 
 
 class PythonSourceError(ValueError):
@@ -108,6 +129,9 @@ def plan(inventory: bytes, lock: bytes, architecture: str, digest: str) -> dict[
     ):
         raise PythonSourceError("unexpected Python source bundle name")
     distributions = python.get("distributions") if isinstance(python, dict) else None
+    recipe_schema = python.get("source_recipe_schema", 0) if isinstance(python, dict) else 0
+    if type(recipe_schema) is not int or recipe_schema not in {0, 1}:
+        raise PythonSourceError("unsupported source recipe schema")
     if not isinstance(distributions, list) or not 1 <= len(distributions) <= 512:
         raise PythonSourceError("invalid installed distribution list")
     sources: list[dict[str, Any]] = []
@@ -133,7 +157,11 @@ def plan(inventory: bytes, lock: bytes, architecture: str, digest: str) -> dict[
             raise PythonSourceError("source collection only supports locked PyPI packages")
         sdist = package.get("sdist")
         if sdist is None:
-            unresolved.append({**identity, "reason": "lock contains no source archive"})
+            reviewed = REVIEWED_BINARY_SOURCES.get((name, version)) if recipe_schema == 1 else None
+            if reviewed is not None:
+                sources.append({**identity, **reviewed})
+            else:
+                unresolved.append({**identity, "reason": "lock contains no source archive"})
             continue
         if not isinstance(sdist, dict):
             raise PythonSourceError("invalid locked sdist")
@@ -163,7 +191,12 @@ def plan(inventory: bytes, lock: bytes, architecture: str, digest: str) -> dict[
         "sources": sorted(sources, key=lambda item: item["name"]),
         "unresolved_sources": sorted(unresolved, key=lambda item: item["name"]),
         "separately_delivered": own,
-        "scope": "Locked Python sdists only; embedded native dependencies are not covered.",
+        "scope": (
+            "Locked Python sdists and explicitly reviewed binary-package source recipes; "
+            "embedded native dependencies are not covered."
+            if recipe_schema == 1
+            else "Locked Python sdists only; embedded native dependencies are not covered."
+        ),
     }
 
 
@@ -186,8 +219,11 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 def fetch(source: dict[str, Any]) -> bytes:
-    """Fetch an opaque archive from the fixed PyPI file origin with retries."""
-    url = _text(source.get("url"), URL)
+    """Fetch an opaque archive from a permitted source origin with retries."""
+    value = source.get("url")
+    if not isinstance(value, str) or not (URL.fullmatch(value) or PSYCOPG_URL.fullmatch(value)):
+        raise PythonSourceError("invalid source archive URL")
+    url = value
     opener = urllib.request.build_opener(_NoRedirect())
     for attempt in range(3):
         try:

@@ -641,6 +641,7 @@ def collect_inventory(
         },
         "python": {
             "source_bundle": f"python-source-{architecture}.tar.gz",
+            "source_recipe_schema": 1,
             "distributions": distribution_records,
             "embedded_sboms": embedded_sboms,
             "native_files": native_files,
