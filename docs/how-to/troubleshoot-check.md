@@ -118,9 +118,11 @@ exact base commit prints `[]`.
 
 ## If the check stays pending
 
-An `in_progress` result blocks merging while Extra CODEOWNERS invalidates stale
-evidence, reevaluates the pull request, fans out an authority change, or waits
-for GitHub or the database to recover.
+A new check can show `in_progress`. An existing check instead shows `failure`
+with a re-evaluation title while Extra CODEOWNERS fetches current evidence.
+Both block merging. The worker may be invalidating stale evidence, evaluating
+the pull request, processing an authority change, or waiting for GitHub or the
+database to recover. The interim failure does not mean evaluation has finished.
 
 Wait through the deployment's normal evaluation interval. If the result lasts
 longer than that interval, give the operator:
@@ -138,7 +140,8 @@ or a database URL.
 
 The operator should continue with
 [Investigate a missing or stale check](operate.md#investigate-a-missing-or-stale-check).
-A long-lived pending check needs service recovery, not a manufactured result.
+A check stuck in either re-evaluation state needs service recovery, not a
+manufactured result.
 
 ## Test a correction
 

@@ -1,6 +1,6 @@
 {
   "@context": "https://openvex.dev/ns/v0.2.0",
-  "@id": "urn:uuid:39d90245-43d1-5aa9-acec-6fb331c000bf",
+  "@id": "urn:uuid:aa2f56df-4028-5f97-bc8a-f65bd578183b",
   "author": "Extra CODEOWNERS maintainers",
   "role": "VEX document producer",
   "statements": [
@@ -541,7 +541,7 @@
       "extra_codeowners/database.py": "58eb6f768377c9c25b17eb9fd42441df768422480976d58c130a11b2cc2cda32",
       "extra_codeowners/dco.py": "8c3a0b541fe021fb9f05500ca9278306901010c219e7e1199ca5e205c138e68d",
       "extra_codeowners/evaluator.py": "b81b9d1c6fe81d591867b0993d413030caab8af48703c4725f14c04fe2e3f9a6",
-      "extra_codeowners/github.py": "3e3234107f2755e7a20e61c7df5998ca8c8cc3e1508bacf0c869f274c25152a4",
+      "extra_codeowners/github.py": "4f3665b31cb2d1c8eb2e44bf5c4bcd18addc8fa830da54af113af3b1f604225d",
       "extra_codeowners/logging.py": "a59227e76ec7809ff8bb88fee997abb9b99f32e81a4c8d16bcfc72c0c0abf33f",
       "extra_codeowners/manifest.py": "02cb7f73bc5a6f9901eff2160d61e15a37e307f42a07863e3716d9bd60acee80",
       "extra_codeowners/metrics.py": "b2a1744f49b7b176a5ab888dd393f6b4dd4a349755fd4f47c2ba31f4d892cdde",
@@ -549,7 +549,7 @@
       "extra_codeowners/models.py": "dc59959f56e35111fae00f8f60ef054ba80eb839eb2dae5b09165d4cdc349a48",
       "extra_codeowners/policy.py": "844abb482a7c9cc3190d624cc92ece2476128644718e4096f98bfa8a0abedf8a",
       "extra_codeowners/py.typed": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "extra_codeowners/service.py": "a0d9b22a28bb4187a01410f0d0a4b0d2aef7d54b2b0d3e53419bedcc353cd696",
+      "extra_codeowners/service.py": "412b16265ae313ea602886081e9971f2f8c616bc73b52f805399fff1017879bf",
       "extra_codeowners/settings.py": "5fe7f389869e1d503f3f3d46064c0c96d1ab1b07e102285b3cdad37d0faa8044",
       "extra_codeowners/trace_context.py": "f79ca91baa1dd615c80546c66a6b370ba78ec7106dece3feb201d10250078532",
       "extra_codeowners/tracing.py": "62c730c8bdf4d632dace5b79232f968d871a28d8724a162aa52ba6b4ed2c6db1",
@@ -557,7 +557,7 @@
       "pyproject.toml": "4164e19c10e620b1cae1db22dab5728b4e80eb0f5a9dd768484b6f12de73fc96",
       "uv.lock": "029f0fe5b12940d2f8c4f36c5702f5e92f4aac1dc3bff75f2e90660a50dfdcc4"
     },
-    "review": "Reviewed alpha.41 application and locked native dependencies for the 18 CVEs in runtime-review.md, including the 84 recorded scanf call sites. Build-context exclusions only remove Python bytecode caches; no application behavior or native dependency changed.",
+    "review": "Reviewed blocking-check refresh changes: GitHub check payloads, pending markers, and close-event handling change only API state management. No new native-library calls, subprocesses, FFI, SQLite FTS, or attacker-controlled scanf formats are introduced; the recorded package reachability conclusions remain valid.",
     "schema_version": 1
   }
 }

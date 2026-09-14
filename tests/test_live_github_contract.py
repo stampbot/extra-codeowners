@@ -852,7 +852,7 @@ def delivery_summary(
     *,
     event: str,
     action: str,
-    installation_id: int = 456,
+    installation_id: int | None = 456,
     repository_id: int | None = 789,
 ) -> dict[str, Any]:
     result: dict[str, Any] = {
@@ -931,6 +931,13 @@ def test_all_repository_webhook_capture_marks_selection_probe_not_run(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     summaries = [
+        delivery_summary(
+            3,
+            event="installation_repositories",
+            action="added",
+            installation_id=None,
+            repository_id=None,
+        ),
         delivery_summary(1, event="pull_request", action="opened"),
         delivery_summary(2, event="pull_request", action="edited"),
     ]

@@ -243,7 +243,8 @@ job. The delivery stores that exact generation token. A malformed identifier
 returns `400`; the service does not create a partial fence.
 
 Ingress then makes one bounded attempt to fetch the current pull request. It
-updates an existing managed check on the accepted head as `in_progress`. It
+updates an existing managed check on the accepted head to `completed` with
+conclusion `failure`. It
 creates one only when that head is still current on an open pull request and
 repository policy exists. A historical head with no managed check is skipped.
 If the pull request already moved, ingress records separate durable work for

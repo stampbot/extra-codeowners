@@ -37,7 +37,7 @@ pull-request activity.
 
 Also watch evaluation latency and failures, PostgreSQL latency, the durable
 rate-limit circuit, repeated GitHub API `403` or `429` responses, and every
-unexplained long-lived `in_progress` check.
+check that stays pending or shows a re-evaluation title for too long.
 
 Queue gauges describe the shared database queue, so every replica reports the
 same value. Aggregate those gauges with `max`, not `sum`. Evaluation counters
@@ -178,8 +178,9 @@ queues recovery work in one transaction. If the head is unchanged, the service
 queues it again only after `EXTRA_CODEOWNERS_RECONCILE_RECHECK_SECONDS` has
 elapsed since the last successful evaluation. A current queue row stays put.
 
-A reconciled check briefly returns to `in_progress` while the worker fetches
-current evidence. Choose an interval and recheck period that balance that
+A reconciled check becomes blocking while the worker fetches current evidence.
+Existing checks show `failure` with a re-evaluation title; newly created checks
+can show `in_progress`. Choose an interval and recheck period that balance that
 short merge interruption against stale-evidence exposure, GitHub API use, and
 your recovery objective.
 
@@ -197,9 +198,10 @@ empty commit or create another review.
 
 The action does not override policy or approve the pull request. It only asks
 the service to fetch the current review, policy, and ownership evidence again.
-The check first returns to `in_progress`, then shows either the updated result
-or the reason it still cannot pass. If it remains `in_progress`, use the queue
-and invalidation metrics above to find the blocked stage.
+The check first becomes blocking, then shows either the updated result or the
+reason it still cannot pass. If it keeps a re-evaluation title or stays
+`in_progress`, use the queue and invalidation metrics above to find the blocked
+stage. An interim `failure` is not evidence that the worker has finished.
 
 ## Protect logs and audit data
 
@@ -335,8 +337,8 @@ more than 100 distinct base refs for one repository collapse into a conservative
 repository-wide job.
 
 For a mapped pull-request, review, or check-rerequest delivery, ingress stores
-the trigger and then makes a bounded attempt to move the managed check to
-`in_progress`. If a fast-path API call fails or times out, the service logs
+the trigger and then makes a bounded attempt to make the managed check blocking.
+Existing checks receive an explicit `failure`. If a fast-path API call fails or times out, the service logs
 `webhook_check_invalidation_deferred`, increments the webhook failure
 counter with reason `invalidation_fast_path`, and still returns `202` because
 the exact-head invalidation row remains authoritative.
@@ -353,7 +355,7 @@ create a check for a historical commit. Logs use
 fencing.
 
 Before reading mutable approval evidence, the evaluation worker keeps the
-current-head check `in_progress`. It cannot publish until the exact-head
+current-head check blocking. It cannot publish a final result until the exact-head
 generation finishes. A later trigger, an exception, or unresolved authority
 fan-out therefore remains blocking. Invalidation, evaluation, and authority
 failures retry forever. Ordinary exponential delay stops growing at
@@ -363,7 +365,7 @@ own bounded delay.
 An error or cancellation during the completed write is a special case because
 GitHub may have applied the result before the client lost its response. The
 same uncertainty applies to a database error or cancellation during the
-post-publication check. The worker attempts a shielded reset to `in_progress`
+post-publication check. The worker attempts a shielded reset to a blocking result
 while it still holds the head writer guard and then preserves the original
 failure for retry. The
 `completed_check_blocking_reset_failed` and
@@ -373,9 +375,9 @@ the shielded reset emits neither event. A hard process stop or failed reset can
 leave the completed result visible, so keep native enforcement in place and
 verify that durable retry or a later trigger restores the blocking check.
 
-A long-lived `in_progress` check with repeated failures needs a database,
-network, credential, permission, or GitHub recovery. It does not need a
-manufactured result.
+A check that stays pending or keeps a re-evaluation title with repeated job
+failures needs a database, network, credential, permission, or GitHub recovery.
+It does not need a manufactured result.
 
 ### 4. Recover from the cause
 

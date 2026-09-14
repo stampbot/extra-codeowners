@@ -1308,11 +1308,6 @@ class Fixture:
             deadline = time.monotonic() + WEBHOOK_CAPTURE_SECONDS
             fixture_report = _object(self.report["fixture"], "fixture report")
             selected_installation = fixture_report["checker_repository_selection"] == "selected"
-            wanted = {
-                ("installation_repositories", "added"),
-                ("pull_request", "edited"),
-                ("pull_request", "opened"),
-            }
             required = {
                 ("pull_request", "edited"),
                 ("pull_request", "opened"),
@@ -1339,7 +1334,7 @@ class Fixture:
                     if event not in {"installation_repositories", "pull_request"}:
                         continue
                     pair = _delivery_pair(summary, "summary")
-                    if pair not in wanted or pair in contracts:
+                    if pair not in required or pair in contracts:
                         continue
                     summary_installation = _positive_delivery_integer(
                         summary.get("installation_id"),
