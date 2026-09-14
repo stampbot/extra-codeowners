@@ -1186,6 +1186,10 @@ class GitHubClient:
         )
         return response.payload
 
+    async def get_repository(self, installation_id: int, repository: str) -> dict[str, Any]:
+        """Fetch current repository metadata using installation access."""
+        return await self._request("GET", f"/repos/{repository}", installation_id=installation_id)
+
     async def get_pull(self, installation_id: int, repository: str, number: int) -> dict[str, Any]:
         """Fetch current pull request metadata."""
         return await self._request(
@@ -1198,6 +1202,7 @@ class GitHubClient:
         repository: str,
         *,
         authority_generation: int = 0,
+        refresh: bool = False,
     ) -> bool:
         """Return whether a repository is in this installation's current selection.
 
@@ -1211,6 +1216,9 @@ class GitHubClient:
         the TTL bounds recovery if a delivery is missed. A stale claimant can never
         publish because its authority generation is independently fenced by the
         queue store.
+
+        Lifecycle callers use refresh=True to require a current lookup even
+        when a repository-scoped event has not advanced the installation epoch.
         """
         if (
             isinstance(authority_generation, bool)
@@ -1221,7 +1229,7 @@ class GitHubClient:
         cache_key = (installation_id, repository)
         now = datetime.now(UTC)
         cached = self._repository_installation_memberships.get(cache_key)
-        if self._repository_membership_is_fresh(cached, authority_generation, now):
+        if not refresh and self._repository_membership_is_fresh(cached, authority_generation, now):
             assert cached is not None  # Narrowed by _repository_membership_is_fresh.
             return cached.included
 
@@ -1229,7 +1237,9 @@ class GitHubClient:
         async with lock:
             now = datetime.now(UTC)
             cached = self._repository_installation_memberships.get(cache_key)
-            if self._repository_membership_is_fresh(cached, authority_generation, now):
+            if not refresh and self._repository_membership_is_fresh(
+                cached, authority_generation, now
+            ):
                 assert cached is not None  # Narrowed by _repository_membership_is_fresh.
                 return cached.included
             included = await self._lookup_repository_installation_membership(
@@ -1291,7 +1301,7 @@ class GitHubClient:
         if not isinstance(result, dict):
             raise GitHubError(f"expected object response from GET {path}")
         result_id = result.get("id")
-        if isinstance(result_id, bool) or not isinstance(result_id, int):
+        if isinstance(result_id, bool) or not isinstance(result_id, int) or result_id <= 0:
             raise GitHubError("repository installation response omitted its integer ID")
         return result_id == installation_id
 

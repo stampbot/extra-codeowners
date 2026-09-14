@@ -2167,6 +2167,20 @@ class Worker:
                 )
                 return
 
+    async def _addition_repository_absent(self, job: ClaimedAuthorityJob) -> bool:
+        repositories = _reconciliation_repositories(
+            await self.evaluator.github.list_installation_repositories(job.installation_id)
+        )
+        if any(name == job.repository_full_name for name, _archived in repositories):
+            return False
+        log.info(
+            "authority_addition_no_longer_installed",
+            installation_id=job.installation_id,
+            repository=job.repository_full_name,
+            generation=job.generation,
+        )
+        return True
+
     async def _execute_authority(self, job: ClaimedAuthorityJob) -> None:
         if job.repository_full_name is None:
             repositories = await self.evaluator.github.list_installation_repositories(
@@ -2194,7 +2208,42 @@ class Worker:
 
         requests: list[JobRequest] = []
         full_name = job.repository_full_name
-        pulls = await self.evaluator.github.list_open_pulls(job.installation_id, full_name)
+        try:
+            if job.reason == "installation_repositories.added":
+                # Public metadata remains readable after installation access
+                # is removed. Bypass cached membership for this lifecycle job.
+                if not await self.evaluator.github.installation_includes_repository(
+                    job.installation_id, full_name, refresh=True
+                ):
+                    if await self._addition_repository_absent(job):
+                        return
+                    raise GitHubError("repository addition membership evidence is inconsistent")
+                current_name, archived = _reconciliation_repository(
+                    await self.evaluator.github.get_repository(job.installation_id, full_name)
+                )
+                if current_name != full_name:
+                    raise GitHubError("repository addition metadata changed its full name")
+                if archived:
+                    log.info(
+                        "authority_addition_archived",
+                        installation_id=job.installation_id,
+                        repository=full_name,
+                        generation=job.generation,
+                    )
+                    return
+            pulls = await self.evaluator.github.list_open_pulls(job.installation_id, full_name)
+        except GitHubAPIError as error:
+            if (
+                error.status_code not in {301, 308, 404, 410}
+                or job.reason != "installation_repositories.added"
+            ):
+                raise
+            # An addition can leave the queue after access has already been
+            # removed or renamed. Read complete current membership rather
+            # than treating an error or redirect alone as proof of absence.
+            if not await self._addition_repository_absent(job):
+                raise
+            return
         for pull in pulls:
             number = pull.get("number")
             head = pull.get("head")

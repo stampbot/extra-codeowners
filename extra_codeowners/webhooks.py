@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import re
 from dataclasses import dataclass
 from typing import Any, Final
 
@@ -270,6 +271,38 @@ def _push_authority_job(
     )
 
 
+def _single_added_repository(payload: dict[str, Any], org_config_repository: str) -> str | None:
+    """Narrow an unambiguous ordinary addition; retain broad fencing otherwise."""
+    added = payload.get("repositories_added")
+    if not isinstance(added, list) or len(added) != 1 or payload.get("repositories_removed") != []:
+        return None
+    repository = added[0]
+    installation = payload.get("installation")
+    if not isinstance(repository, dict) or not isinstance(installation, dict):
+        return None
+    account = installation.get("account")
+    if not isinstance(account, dict):
+        return None
+    login = account.get("login")
+    full_name = repository.get("full_name")
+    name = repository.get("name")
+    repository_id = repository.get("id")
+    if (
+        not isinstance(login, str)
+        or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9-]{0,38}", login) is None
+        or not isinstance(name, str)
+        or re.fullmatch(r"[A-Za-z0-9_.-]{1,100}", name) is None
+        or name in {".", ".."}
+        or not isinstance(full_name, str)
+        or full_name.lower() != f"{login}/{name}".lower()
+        or type(repository_id) is not int
+        or repository_id <= 0
+        or name.lower() == org_config_repository.lower()
+    ):
+        return None
+    return full_name.lower()
+
+
 def evaluation_job(
     webhook: VerifiedWebhook,
     *,
@@ -364,7 +397,9 @@ def evaluation_job(
         if webhook.action == "added":
             return AuthorityRequest(
                 installation_id=_installation_id(webhook.payload),
-                repository_full_name=None,
+                repository_full_name=_single_added_repository(
+                    webhook.payload, org_config_repository
+                ),
                 base_ref=None,
                 reason="installation_repositories.added",
             )

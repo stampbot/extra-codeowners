@@ -414,11 +414,13 @@ async def test_installation_repository_membership_uses_app_installation_scope(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("payload", [{}, {"id": 0}, {"id": -1}, {"id": True}])
 async def test_installation_repository_membership_rejects_malformed_response(
     private_key: str,
+    payload: dict[str, object],
 ) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={})
+        return httpx.Response(200, json=payload)
 
     client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
 
@@ -465,6 +467,28 @@ async def test_installation_repository_membership_cache_uses_authority_generatio
     # process-local cache on every replica's next claimed job. The ordinary
     # hot path makes one App-authenticated request, not one per PR.
     assert len(requests) == 2
+
+
+@pytest.mark.asyncio
+async def test_installation_repository_membership_refresh_bypasses_a_warm_cache(
+    private_key: str,
+) -> None:
+    responses = iter(({"id": 2}, {"id": 3}))
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        assert request.url.path == "/repos/example/project/installation"
+        return httpx.Response(200, json=next(responses))
+
+    client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
+    assert await client.installation_includes_repository(2, "example/project")
+    assert await client.installation_includes_repository(2, "example/project")
+    assert calls == 1
+    assert not await client.installation_includes_repository(2, "example/project", refresh=True)
+    assert calls == 2
+    await client.close()
 
 
 @pytest.mark.asyncio
@@ -1040,6 +1064,22 @@ async def test_api_errors_expose_status_without_leaking_headers(private_key: str
     await client.close()
 
     assert caught.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_get_repository_uses_installation_authenticated_metadata(private_key: str) -> None:
+    metadata = {"full_name": "example/project", "archived": True}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/app/installations/2/access_tokens":
+            return httpx.Response(201, json=token_response())
+        assert request.method == "GET" and request.url.path == "/repos/example/project"
+        assert request.headers["authorization"] == "Bearer installation-token"
+        return httpx.Response(200, json=metadata)
+
+    client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
+    assert await client.get_repository(2, "example/project") == metadata
+    await client.close()
 
 
 @pytest.mark.asyncio

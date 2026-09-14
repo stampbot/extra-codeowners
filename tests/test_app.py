@@ -21,6 +21,7 @@ from extra_codeowners.database import QueueStore
 from extra_codeowners.github import GitHubRateLimitError
 from extra_codeowners.manifest import ManifestService
 from extra_codeowners.migrations import upgrade_database
+from extra_codeowners.service import Reconciler, Worker
 from extra_codeowners.settings import Settings
 from extra_codeowners.tracing import Tracing
 
@@ -769,7 +770,23 @@ def test_liveness_fails_when_enabled_reconciler_task_has_died(tmp_path: Path) ->
     }
 
 
-def test_readiness_reports_enabled_background_tasks(tmp_path: Path) -> None:
+def test_readiness_reports_enabled_background_tasks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    started: set[str] = set()
+
+    async def worker_wait(self: object, stop: asyncio.Event) -> None:
+        started.add("worker")
+        await stop.wait()
+
+    async def reconciler_wait(self: object, stop: asyncio.Event) -> None:
+        started.add("reconciler")
+        await stop.wait()
+
+    # This tests health response fields and task lifecycle, not queue polling.
+    # Keep real tasks alive without racing SQLite writers against readiness.
+    monkeypatch.setattr(Worker, "run", worker_wait)
+    monkeypatch.setattr(Reconciler, "run", reconciler_wait)
     store = migrated_store(f"sqlite:///{tmp_path / 'enabled-task-health.db'}")
     runtime = configured_settings().model_copy(
         update={
@@ -783,6 +800,7 @@ def test_readiness_reports_enabled_background_tasks(tmp_path: Path) -> None:
     with TestClient(app) as client:
         response = client.get("/health/ready")
 
+    assert started == {"worker", "reconciler"}
     assert response.status_code == 200
     assert response.json() == {
         "status": "ready",
