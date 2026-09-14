@@ -170,6 +170,8 @@ The endpoint returns Prometheus text format. Extra CODEOWNERS defines these appl
 | `extra_codeowners_github_api_requests_total` | counter | Logical GitHub API requests, labeled by fixed operation family, authentication mode, and outcome. |
 | `extra_codeowners_github_api_request_seconds` | histogram | Wall-clock duration of the same GitHub API requests. It includes token acquisition and a bounded rejected-token retry. |
 | `extra_codeowners_github_rate_limit_events_total` | counter | GitHub rate-limit responses, labeled as installation-scoped or global. |
+| `extra_codeowners_github_physical_requests_total` | counter | Physical request attempts, including pages and retries, labeled by fixed `operation`, `authentication`, and `work_class` (`interactive`, `recovery`, or `authority`). |
+| `extra_codeowners_github_recovery_budget_deferrals_total` | counter | Requests deferred by the local REST core reserve, labeled by fixed operation. These requests were not sent to GitHub; a deferral is not a provider rate-limit response. |
 | `extra_codeowners_github_pagination_endpoint_mismatches_total` | counter | Rejected pagination links whose scheme, host, port, credentials, fragment, or resource did not match the original request. The metric has no repository, pull-request, or URL labels. |
 | `extra_codeowners_queue_depth` | gauge | Pending and leased exact-head invalidation, evaluation, and authority fan-out rows. |
 | `extra_codeowners_queue_work_class_depth` | gauge | Pending durable work, labeled by fixed `kind` and `work_class` values. Use it to distinguish foreground work from recovery backlog. |
@@ -177,7 +179,7 @@ The endpoint returns Prometheus text format. Extra CODEOWNERS defines these appl
 | `extra_codeowners_queue_wait_seconds` | histogram | Time a ready work attempt waits before a worker starts it, labeled by kind and work class. Retry backoff is not included. |
 | `extra_codeowners_webhook_to_check_completion_seconds` | histogram | Accepted work age when an evaluation finishes without a retry, labeled by work class. |
 | `extra_codeowners_shared_head_invalidation_depth` | gauge | Exact commit generations whose durable Check Run invalidation has not finished. |
-| `extra_codeowners_shared_head_invalidations_total` | counter | Durable exact-head invalidation attempts, labeled by `completed`, `failed`, `rate_limited`, or `superseded`. |
+| `extra_codeowners_shared_head_invalidations_total` | counter | Durable exact-head invalidation attempts, labeled by `completed`, `failed`, `budget_deferred`, `rate_limited`, or `superseded`. A budget deferral leaves the job queued without opening provider backpressure. |
 | `extra_codeowners_dead_jobs` | gauge | Legacy or manually introduced terminal rows. Runtime failures remain pending, so this should remain `0`. |
 | `extra_codeowners_insecure_changes_enabled` | gauge | `1` while built-in non-delegable paths are disabled; otherwise `0`. |
 | `extra_codeowners_reconciliations_total` | counter | Reconciliation outcomes, labeled with `result="success"`, `result="partial"`, or `result="failure"`. A process that observes another lease owner does not increment the counter. An open provider circuit records a partial result; an election error counts as a failure. |
