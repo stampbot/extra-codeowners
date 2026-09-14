@@ -30,6 +30,8 @@ pull-request activity.
 | `extra_codeowners_webhook_failures_total` | No unexplained increase |
 | `extra_codeowners_github_api_request_seconds` | Its p95 stays near the provider and network baseline; compare it with worker-attempt time before raising worker concurrency |
 | `extra_codeowners_github_rate_limit_events_total` | No sustained increase; a rate limit opens shared backpressure for the affected installation or the App |
+| `extra_codeowners_github_physical_requests_total` | Compare `work_class="recovery"` with `interactive` and `authority` to identify who is spending API requests; includes retries and pages |
+| `extra_codeowners_github_recovery_budget_deferrals_total` | Recovery pauses near its reserve; sustained growth means its workload exceeds the available quota |
 | `extra_codeowners_reconciliations_total{result!="success"}` | No unexplained increase |
 | `extra_codeowners_reconciliation_last_success_timestamp_seconds` | A complete run on at least one replica falls within the reconciliation objective |
 | `extra_codeowners_trace_exports_total{outcome="failure"}` | `0`; otherwise traces cannot be used as incident evidence |
@@ -172,13 +174,33 @@ margin. Keep Helm and rollout wait timeouts higher still. Don't use a larger
 startup budget to hide a persistent schema, credential, mount, or network
 failure.
 
-Each reconciliation scan reads every accessible open pull request. If GitHub
+Each reconciliation scan works through accessible open pull requests. If GitHub
 reports a new head, the database advances that head's shared generation and
 queues recovery work in one transaction. If the head is unchanged, the service
 queues it again only after `EXTRA_CODEOWNERS_RECONCILE_RECHECK_SECONDS` has
 elapsed since the last successful evaluation. A current queue row stays put.
 
-Installing the App on a repository does not opt it into evaluation. A PR with no repository policy and no managed check still costs API reads during recovery: the worker must check for enrollment and existing results. When no check exists, invalidation skips shared-commit discovery. An enrolled evaluation bound to an older head generation requeues itself at the current generation, so an unenrolled PR cannot cause its work to be discarded. Reconciliation still visits accessible repositories, so this optimization does not impose an installation-wide API budget.
+Installing the App on a repository does not opt it into evaluation. A PR with no repository policy and no managed check still costs API reads during recovery: the worker must check for enrollment and existing results. When no check exists, invalidation skips shared-commit discovery. An enrolled evaluation bound to an older head generation requeues itself at the current generation, so an unenrolled PR cannot cause its work to be discarded.
+
+Recovery leaves 20% of each installation's observed REST core limit for direct
+events and authority work by default. Set
+`EXTRA_CODEOWNERS_GITHUB_RECOVERY_RESERVE_PERCENT` to adjust that tradeoff. A
+larger reserve gives direct events more headroom but delays missed-webhook
+recovery. All replicas charge the shared database budget before each request,
+including retries and pagination. A deferred scan resumes after its last
+completed repository; repositories later in the list don't have to wait for
+every earlier repository to be scanned again. A partially read repository is
+retried from its beginning, so incomplete pagination never becomes a claim
+that its PRs were checked.
+
+The budget comes from GitHub's response headers, not a configured request
+limit. When that evidence is missing or expired, recovery gets one probe per
+minute across the installation until valid headers arrive. Direct events do
+not wait for that probe. Known quota exhaustion and provider backpressure
+still apply to every lane. Other consumers of the installation's quota can
+spend the reserve; it is not a separate allocation from GitHub. GraphQL points,
+App-authenticated discovery, and secondary limits are separate from this REST
+core budget. See [GitHub's rate-limit documentation](https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api).
 
 An upgrade to `0007_reconciliation_completion` rechecks retained completions from older workers on the next scan, regardless of the recheck interval. Expect additional recovery work once after upgrading. Follow the [controlled upgrade procedure](upgrade.md); a rolling image replacement alone is not sufficient for this database change.
 
@@ -188,9 +210,15 @@ can show `in_progress`. Choose an interval and recheck period that balance that
 short merge interruption against stale-evidence exposure, GitHub API use, and
 your recovery objective.
 
-The service does not expose remaining GitHub rate-limit quota. Watch API
-failures instead, and keep the service limited to disposable repositories
-until a deployment-specific rate-limit monitor closes that gap.
+GitHub request spans include `queue.work_class`,
+`github.quota.core_headers_valid`, and, when valid core headers are present,
+`github.quota.limit`, `github.quota.remaining`, and `github.quota.reset_at`
+(UTC epoch seconds). These are observations at response time, not live quota
+gauges. Compare physical-request counts across lanes and operations before
+raising concurrency. `reconciliation_deferred_for_recovery_budget` logs a local
+reserve pause; `reconciliation_rate_limited` reports provider backpressure.
+Neither means the scan completed. Check the oldest recovery work as well as
+direct-event latency when deciding whether the installation is healthy.
 
 ## Re-evaluate a check
 

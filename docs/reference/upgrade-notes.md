@@ -13,11 +13,11 @@ The alpha series establishes this compatibility contract:
 
 | Field | Contract |
 | --- | --- |
-| Database head | `0007_reconciliation_completion` |
-| Head change | Yes; completions from older workers must be rechecked. |
-| Supported source releases | `0.1.0-alpha.42` at `0006_webhook_trace_links`, or `0.1.0-alpha.14` at `0005_reconciliation_state_index`, after a controlled migration. |
+| Database head | `0008_recovery_api_budget` |
+| Head change | Yes; installation API budgets and discovery cursors are now shared across replicas. |
+| Supported source releases | `0.1.0-alpha.43` at `0007_reconciliation_completion`, `0.1.0-alpha.42` at `0006_webhook_trace_links`, or `0.1.0-alpha.14` at `0005_reconciliation_state_index`, after a controlled migration. |
 | Target application compatible before migration | No; startup requires the exact head. |
-| Required process state | Stop webhook ingress and every older worker before applying `0007_reconciliation_completion`. Suspend GitOps reconciliation and remove the HPA before scaling a Kubernetes Deployment to zero. |
+| Required process state | Stop webhook ingress and every older worker before applying `0008_recovery_api_budget`. Suspend GitOps reconciliation and remove the HPA before scaling a Kubernetes Deployment to zero. |
 | In-place database downgrade | Not supported. |
 | Rollback after head change | Restore the verified pre-migration backup. An older image rejects this head. |
 | Backup required | Yes, before deployment and before every pre-release schema adoption. |
@@ -88,10 +88,17 @@ GitHub backpressure and the recovery queue still apply; this is not a promise
 that all checks refresh during the first scan. Follow the independent check
 inventory in the [upgrade procedure](../how-to/upgrade.md#6-deploy-and-verify).
 
+Revision `0008_recovery_api_budget` adds an installation-wide REST core budget
+and repository discovery cursor. It moves the compatibility marker from `6`
+to `7`; existing queues, checks, and reconciliation completions are unchanged.
+The table starts empty. Each installation's first recovery request probes its
+quota, and subsequent requests use the observed headers. No configured or
+assumed request allowance is loaded during migration.
+
 An already-running process does not revalidate the Alembic head before every
 claim. Stop every older ingress, worker, and reconciler before this revision
 runs. Start only the target artifact after `database check` reports
-`0007_reconciliation_completion` and validates that artifact's
+`0008_recovery_api_budget` and validates that artifact's
 `required-release-contract`. Readiness removes an old process from webhook
 traffic after migration, but it does not cancel work that process already
 claimed. For Kubernetes, a zero-replica Deployment is not proof of a drain

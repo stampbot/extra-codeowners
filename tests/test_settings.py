@@ -32,6 +32,7 @@ def test_defaults_keep_insecure_escape_hatch_disabled() -> None:
     assert settings.github_identity_probe_interval_seconds == 30
     assert settings.github_identity_freshness_seconds == 90
     assert settings.github_max_in_flight_requests == 8
+    assert settings.github_recovery_reserve_percent == 20
     assert settings.tracing_enabled is False
     assert settings.tracing_otlp_endpoint is None
     assert settings.tracing_sample_ratio == 0.1

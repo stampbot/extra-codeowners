@@ -18,6 +18,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from pydantic import BaseModel, ConfigDict, Field
 
 from extra_codeowners import __version__
+from extra_codeowners.api_budget import RecoveryApiBudget
 from extra_codeowners.build_identity import load_build_identity
 from extra_codeowners.database import JobRequest, QueueStore
 from extra_codeowners.github import GitHubClient, GitHubRateLimitError
@@ -299,6 +300,9 @@ def create_app(
                     api_url=str(runtime.github_api_url),
                     api_version=runtime.github_api_version,
                     max_in_flight_requests=runtime.github_max_in_flight_requests,
+                    recovery_budget=RecoveryApiBudget(
+                        queue_store, runtime.github_recovery_reserve_percent
+                    ),
                     tracing=tracing,
                 )
                 resources.push_async_callback(github_client.close)

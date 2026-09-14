@@ -14,6 +14,12 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 import extra_codeowners.service as service_module
+from extra_codeowners.api_budget import (
+    REQUEST_LANE,
+    RecoveryApiBudget,
+    RecoveryBudgetDeferredError,
+    request_lane,
+)
 from extra_codeowners.codeowners import parse_codeowners
 from extra_codeowners.database import (
     AuthorityJob,
@@ -2946,6 +2952,78 @@ async def test_invalidation_lanes_reserve_their_first_work_class(
     await worker._run_invalidation_slot(stop, 0, recovery_first=recovery_first)
 
     assert claimed_classes == expected_classes
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_resumes_after_completed_repository_and_continues_other_installations(
+    tmp_path: Path,
+) -> None:
+    github = FakeGitHub(changed_path="uv.lock")
+    github.list_installations = AsyncMock(  # type: ignore[attr-defined]
+        return_value=[{"id": 2, "suspended_at": None}, {"id": 3, "suspended_at": None}]
+    )
+    github.list_installation_repositories = AsyncMock(  # type: ignore[attr-defined]
+        return_value=[
+            {"full_name": f"example/{name}", "archived": False} for name in ("a", "b", "c")
+        ]
+    )
+    visited: list[tuple[int, str]] = []
+    defer = True
+
+    async def list_pulls(installation: int, repository: str, **kwargs: Any) -> list[Any]:
+        assert REQUEST_LANE.get() == "recovery"
+        visited.append((installation, repository))
+        if defer and installation == 2 and repository == "example/b":
+            raise RecoveryBudgetDeferredError(60)
+        return [{"number": 3, "head": {"sha": HEAD}}]
+
+    github.list_open_pulls = list_pulls  # type: ignore[attr-defined]
+    store = migrated_store(f"sqlite:///{tmp_path / 'resume.db'}")
+    reconciler = Reconciler(settings(), github, store, "one")  # type: ignore[arg-type]
+    result = await reconciler.reconcile_once()
+    assert result is not None and result.deferred and not result.complete
+    assert result.failed_installations == 0
+    assert visited == [
+        (2, "example/a"),
+        (2, "example/b"),
+        (3, "example/a"),
+        (3, "example/b"),
+        (3, "example/c"),
+    ]
+    assert RecoveryApiBudget(store).repository_cursor(2) == "example/a"
+    assert not store.provider_is_backpressured(2)
+    assert REQUEST_LANE.get() == "interactive"
+    store.release_service_lease("open-pr-reconciler", "one")
+    visited.clear()
+    defer = False
+    peer = Reconciler(settings(), github, store, "two")  # type: ignore[arg-type]
+    result = await peer.reconcile_once()
+    assert result is not None and result.complete
+    assert visited[:3] == [(2, "example/b"), (2, "example/c"), (2, "example/a")]
+
+
+@pytest.mark.asyncio
+async def test_worker_budget_deferral_preserves_job_without_provider_backpressure(
+    tmp_path: Path,
+) -> None:
+    store = migrated_store(f"sqlite:///{tmp_path / 'budget-worker.db'}")
+    store.enqueue(
+        JobRequest(2, "example/project", 3, "periodic_reconciliation", work_class="recovery")
+    )
+    job = store.claim("worker", 60, "recovery")
+    assert job is not None
+
+    class Evaluator:
+        async def evaluate_job(self, claimed: ClaimedJob) -> None:
+            assert REQUEST_LANE.get() == "recovery"
+            raise RecoveryBudgetDeferredError(60)
+
+    worker = Worker(settings(), store, Evaluator(), "worker")  # type: ignore[arg-type]
+    with request_lane("recovery"):
+        assert await worker._process(job, "worker") == "budget_deferred"
+    assert store.pending_count() == 1
+    assert not store.provider_is_backpressured(2)
+    assert store.claim("peer", 60, "recovery") is None
 
 
 @pytest.mark.asyncio

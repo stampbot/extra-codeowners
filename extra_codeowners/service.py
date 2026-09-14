@@ -14,6 +14,7 @@ from typing import Any, Final, Literal
 import structlog
 from pydantic import ValidationError
 
+from extra_codeowners.api_budget import RecoveryApiBudget, RecoveryBudgetDeferredError, request_lane
 from extra_codeowners.codeowners import CodeownersDocument, parse_codeowners
 from extra_codeowners.database import (
     AuthorityRequest,
@@ -547,23 +548,26 @@ class EvaluationService:
         from interrupting the GitHub request and exposing a completed result
         before that guard is released.
         """
-        reset = asyncio.create_task(
-            self.github.upsert_check_run(
-                job.installation_id,
-                job.repository_full_name,
-                head_sha,
-                self.settings.check_name,
-                status="in_progress",
-                title="Re-evaluating CODEOWNER approvals",
-                summary=(
-                    "Completed check publication could not be verified; approval is blocked "
-                    "pending re-evaluation."
+        # This compensating write protects an uncertain success. It belongs
+        # to the authority lane even when recovery initiated the evaluation.
+        with request_lane("authority"):
+            reset = asyncio.create_task(
+                self.github.upsert_check_run(
+                    job.installation_id,
+                    job.repository_full_name,
+                    head_sha,
+                    self.settings.check_name,
+                    status="in_progress",
+                    title="Re-evaluating CODEOWNER approvals",
+                    summary=(
+                        "Completed check publication could not be verified; approval is blocked "
+                        "pending re-evaluation."
+                    ),
+                    details_url=details_url,
+                    external_id=external_id,
                 ),
-                details_url=details_url,
-                external_id=external_id,
-            ),
-            name=f"restore-blocking-check-{job.id}",
-        )
+                name=f"restore-blocking-check-{job.id}",
+            )
         cancellation: asyncio.CancelledError | None = None
         while not reset.done():
             try:
@@ -1807,16 +1811,19 @@ class Worker:
         """
         started = time.perf_counter()
         outcome = "failed"
-        with self.tracing.span(
-            f"worker.{kind}",
-            attributes={
-                "queue.kind": kind,
-                "queue.work_class": work_class,
-                "queue.producer_trace_linked": producer_trace_context is not None,
-            },
-            private_attributes=private_attributes,
-            links=(producer_trace_context,) if producer_trace_context is not None else (),
-            root=True,
+        with (
+            request_lane(work_class),
+            self.tracing.span(
+                f"worker.{kind}",
+                attributes={
+                    "queue.kind": kind,
+                    "queue.work_class": work_class,
+                    "queue.producer_trace_linked": producer_trace_context is not None,
+                },
+                private_attributes=private_attributes,
+                links=(producer_trace_context,) if producer_trace_context is not None else (),
+                root=True,
+            ),
         ):
             try:
                 outcome = await operation()
@@ -1896,6 +1903,16 @@ class Worker:
                 generation=job.generation,
             )
             return "superseded"
+        except RecoveryBudgetDeferredError as error:
+            updated = await asyncio.to_thread(
+                self.store.defer_shared_head_invalidation,
+                job,
+                str(error),
+                error.retry_after_seconds,
+            )
+            outcome = "budget_deferred" if updated else "superseded"
+            SHARED_HEAD_INVALIDATIONS.labels(outcome).inc()
+            return outcome
         except GitHubRateLimitError as error:
             await asyncio.to_thread(
                 self.store.record_provider_backpressure,
@@ -2010,6 +2027,11 @@ class Worker:
         heartbeat = asyncio.create_task(self._renew_lease(job, done), name=f"job-lease-{job.id}")
         try:
             await self.evaluator.evaluate_job(job)
+        except RecoveryBudgetDeferredError as error:
+            await asyncio.to_thread(
+                self.store.defer, job, owner, str(error), error.retry_after_seconds
+            )
+            return "budget_deferred"
         except GitHubRateLimitError as error:
             await asyncio.to_thread(
                 self.store.record_provider_backpressure,
@@ -2671,8 +2693,9 @@ class Reconciler:
     ) -> ReconciliationOutcome:
         """Perform one reconciliation while the heartbeat owns the lease."""
         stop_event = stop or asyncio.Event()
-        async with _combine_events(lost, stop_event) as request_stop:
-            return await self._reconcile_owned_scan(lost, stop_event, request_stop)
+        with request_lane("recovery"):
+            async with _combine_events(lost, stop_event) as request_stop:
+                return await self._reconcile_owned_scan(lost, stop_event, request_stop)
 
     async def _reconcile_owned_scan(
         self,
@@ -2683,6 +2706,8 @@ class Reconciler:
         """Perform the elected scan with one request-level interruption signal."""
         queued = 0
         failed_installations = 0
+        budget_deferred = False
+        budget = RecoveryApiBudget(self.store, self.settings.github_recovery_reserve_percent)
 
         def interrupted() -> bool:
             return lost.is_set() or stop_event.is_set()
@@ -2781,7 +2806,11 @@ class Reconciler:
                 )
                 if interrupted():
                     return interruption_outcome()
-                repositories = _reconciliation_repositories(repository_records)
+                repositories = sorted(_reconciliation_repositories(repository_records))
+                cursor = await asyncio.to_thread(budget.repository_cursor, installation_id)
+                repositories = [item for item in repositories if item[0].lower() > cursor] + [
+                    item for item in repositories if item[0].lower() <= cursor
+                ]
                 for full_name, archived in repositories:
                     if interrupted():
                         return interruption_outcome()
@@ -2818,8 +2847,18 @@ class Reconciler:
                             self.settings.reconcile_recheck_seconds,
                         )
                         queued += int(added)
+                    await asyncio.to_thread(
+                        budget.advance_repository, installation_id, full_name, self.owner
+                    )
             except GitHubOperationStoppedError:
                 return interruption_outcome(operation_stopped=not interrupted())
+            except RecoveryBudgetDeferredError as error:
+                budget_deferred = True
+                log.info(
+                    "reconciliation_deferred_for_recovery_budget",
+                    installation_id=installation_id,
+                    retry_after_seconds=error.retry_after_seconds,
+                )
             except GitHubRateLimitError as error:
                 failed_installations += 1
                 await asyncio.to_thread(
@@ -2848,6 +2887,7 @@ class Reconciler:
             failed_installations=failed_installations,
             lease_lost=lost.is_set(),
             stopped=stop_event.is_set(),
+            deferred=budget_deferred,
         )
 
     async def run_iteration(self, stop: asyncio.Event | None = None) -> None:
