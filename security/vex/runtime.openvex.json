@@ -1,6 +1,6 @@
 {
   "@context": "https://openvex.dev/ns/v0.2.0",
-  "@id": "urn:uuid:25447f61-a2e8-5b0c-979b-c6436089fa07",
+  "@id": "urn:uuid:cd67fd60-5442-5369-82c5-74f095c7fb36",
   "author": "Extra CODEOWNERS maintainers",
   "role": "VEX document producer",
   "statements": [
@@ -556,11 +556,11 @@
       "extra_codeowners/settings.py": "bd1d3cd0acf23ea4b26869fc1e024438aba7b9acf43f3850c4e6be2e9a5b5437",
       "extra_codeowners/trace_context.py": "f79ca91baa1dd615c80546c66a6b370ba78ec7106dece3feb201d10250078532",
       "extra_codeowners/tracing.py": "62c730c8bdf4d632dace5b79232f968d871a28d8724a162aa52ba6b4ed2c6db1",
-      "extra_codeowners/webhooks.py": "47eadaa534928fd5e60613657c0836aebd529a9e300acd8e7b95a78a0b392f96",
+      "extra_codeowners/webhooks.py": "9e6fcba834589b102fc03c7841fc479cd7745d79a84060a78f35fc36900b73ae",
       "pyproject.toml": "4164e19c10e620b1cae1db22dab5728b4e80eb0f5a9dd768484b6f12de73fc96",
       "uv.lock": "029f0fe5b12940d2f8c4f36c5702f5e92f4aac1dc3bff75f2e90660a50dfdcc4"
     },
-    "review": "Reviewed the App Manifest description-only change. No new inputs, native library calls, TLS behavior, parsing, or executable paths; existing vulnerability reachability conclusions are unchanged.",
+    "review": "Reviewed strict single-repository addition routing: only a positive repository ID and matching installation account/name with no removals can narrow the authority fence. Shared-policy additions, multi-additions, and ambiguous payloads retain installation-wide fencing. No native-library, TLS, subprocess, or FFI entry points change; existing vulnerability reachability conclusions remain applicable.",
     "schema_version": 1
   }
 }

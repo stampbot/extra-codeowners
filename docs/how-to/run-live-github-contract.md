@@ -398,7 +398,7 @@ service result:
 | Install the App | `installation.created` | Installation-wide authority work is retained and drains. |
 | Resume an installation | `installation.unsuspend` | Installation-wide authority work is retained and drains. |
 | Accept new permissions | `installation.new_permissions_accepted` | Installation-wide authority work is retained and drains. |
-| Add a selected repository | `installation_repositories.added` | Installation-wide authority work discovers the new target. |
+| Add a selected repository | `installation_repositories.added` | A single ordinary addition gets a repository authority fence; policy-repository additions, multiple additions, and ambiguous events retain installation-wide fan-out. |
 | Remove an ordinary selected target | `installation_repositories.removed` | The authenticated delivery is acknowledged without unreachable-target work. |
 | Remove the organization-policy repository | `installation_repositories.removed` | The authority epoch advances and still-accessible targets are fanned out. |
 | Rename an installation account | `installation_target.renamed` | Work is rediscovered under current repository names. |

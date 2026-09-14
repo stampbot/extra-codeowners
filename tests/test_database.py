@@ -26,6 +26,7 @@ from extra_codeowners.database import (
 )
 from extra_codeowners.migrations import upgrade_database
 from extra_codeowners.trace_context import TrustedTraceContext
+from extra_codeowners.webhooks import VerifiedWebhook, evaluation_job
 
 
 def make_store(tmp_path: Path) -> QueueStore:
@@ -1140,6 +1141,35 @@ def test_authority_scope_blocks_only_affected_evaluations(tmp_path: Path) -> Non
     store.accept_delivery("membership", "membership", installation_scope)
 
     assert store.has_blocking_authority(claimed, "release") is True
+
+
+def test_single_repository_addition_is_durable_without_fencing_existing_targets(
+    tmp_path: Path,
+) -> None:
+    store = make_store(tmp_path)
+    payload = {
+        "action": "added",
+        "installation": {"id": 17, "account": {"login": "example"}},
+        "repositories_added": [{"id": 42, "name": "new", "full_name": "example/new"}],
+        "repositories_removed": [],
+    }
+    webhook = VerifiedWebhook("new-repository", "installation_repositories", "added", payload)
+    authority = evaluation_job(webhook)
+    assert isinstance(authority, AuthorityRequest)
+    assert store.accept_delivery(webhook.delivery_id, webhook.event, authority).accepted
+    assert not store.accept_delivery(webhook.delivery_id, webhook.event, authority).accepted
+    store.enqueue(JobRequest(17, "example/new", 1, "pull_request.opened", "a" * 40))
+    store.enqueue(JobRequest(17, "example/existing", 2, "pull_request.opened", "b" * 40))
+
+    unaffected = store.claim("existing-worker", 60)
+    assert unaffected is not None and unaffected.repository_full_name == "example/existing"
+    assert not store.has_blocking_authority(unaffected, "main")
+    assert store.claim("new-worker", 60) is None
+    fence = store.claim_authority("authority-worker", 60)
+    assert fence is not None and fence.repository_full_name == "example/new"
+    assert store.complete_authority(fence, "authority-worker")
+    added = store.claim("new-worker", 60)
+    assert added is not None and added.repository_full_name == "example/new"
 
 
 def test_authority_epoch_permanently_fences_prechange_claim_after_fanout(

@@ -277,6 +277,99 @@ def test_installation_event_becomes_installation_authority_job() -> None:
     assert job.base_ref is None
 
 
+def added_repository_payload() -> dict[str, object]:
+    return {
+        "action": "added",
+        "installation": {"id": 10, "account": {"login": "Example"}},
+        "repositories_added": [{"id": 42, "name": "Project", "full_name": "Example/Project"}],
+        "repositories_removed": [],
+    }
+
+
+def test_single_ordinary_repository_addition_fences_only_that_repository() -> None:
+    webhook = signed(added_repository_payload(), event="installation_repositories")
+
+    job = evaluation_job(webhook)
+
+    assert isinstance(job, AuthorityRequest)
+    assert job.installation_id == 10
+    assert job.repository_full_name == "example/project"
+    assert job.base_ref is None
+    assert job.reason == "installation_repositories.added"
+
+
+@pytest.mark.parametrize("policy_repository", [".github", "Project", "Custom-Policy"])
+def test_adding_shared_policy_repository_always_fences_whole_installation(
+    policy_repository: str,
+) -> None:
+    payload = added_repository_payload()
+    payload["repositories_added"] = [
+        {"id": 42, "name": policy_repository.upper(), "full_name": f"Example/{policy_repository}"}
+    ]
+
+    job = evaluation_job(
+        signed(payload, event="installation_repositories"),
+        org_config_repository=policy_repository,
+    )
+
+    assert isinstance(job, AuthorityRequest)
+    assert job.repository_full_name is None
+
+
+@pytest.mark.parametrize(
+    "replacement",
+    [
+        None,
+        [],
+        "invalid",
+        [None],
+        [{}],
+        [{"id": True}],
+        [{"id": 1, "name": "Project", "full_name": "Other/Project"}],
+        [{"id": 1, "name": "Project", "full_name": "Example/Different"}],
+        [{"id": 1, "name": "..", "full_name": "Example/.."}],
+        [{"id": 1, "name": "a/b", "full_name": "Example/a/b"}],
+        [{"id": 0, "name": "Project", "full_name": "Example/Project"}],
+        [{"id": "42", "name": "Project", "full_name": "Example/Project"}],
+        [{"id": 42, "name": "Project", "full_name": "Example/Project"}] * 2,
+    ],
+)
+def test_ambiguous_repository_addition_retains_installation_fence(replacement: object) -> None:
+    payload = added_repository_payload()
+    payload["repositories_added"] = replacement
+
+    job = evaluation_job(signed(payload, event="installation_repositories"))
+
+    assert isinstance(job, AuthorityRequest)
+    assert job.repository_full_name is None
+
+
+@pytest.mark.parametrize("removed", [None, "invalid", [{}], [{"full_name": "Example/.github"}]])
+def test_repository_addition_with_removals_retains_installation_fence(removed: object) -> None:
+    payload = added_repository_payload()
+    payload["repositories_removed"] = removed
+
+    job = evaluation_job(signed(payload, event="installation_repositories"))
+
+    assert isinstance(job, AuthorityRequest)
+    assert job.repository_full_name is None
+
+
+@pytest.mark.parametrize(
+    "account", [None, {}, {"login": None}, {"login": "Other"}, {"login": ".."}]
+)
+def test_repository_addition_without_matching_account_retains_installation_fence(
+    account: object,
+) -> None:
+    payload = added_repository_payload()
+    payload["installation"] = {"id": 10, "account": account}
+
+    job = evaluation_job(signed(payload, event="installation_repositories"))
+
+    assert isinstance(job, AuthorityRequest)
+    assert job.repository_full_name is None
+
+
 def test_removing_organization_policy_repository_fans_out_installation() -> None:
     webhook = signed(
         {
