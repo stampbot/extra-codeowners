@@ -176,6 +176,74 @@ def test_reset_requires_observed_quota_not_an_assumed_refill(budget_store: Queue
     budget.admit(17, recovery=True)
 
 
+def test_shifted_nonzero_observations_do_not_postpone_recovery_forever(
+    budget_store: QueueStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    start = utcnow().replace(microsecond=0)
+    now = start
+    monkeypatch.setattr("extra_codeowners.api_budget.utcnow", lambda: now)
+    peer = QueueStore(budget_store.engine.url.render_as_string(hide_password=False))
+    first, second = RecoveryApiBudget(budget_store), RecoveryApiBudget(peer)
+    original_reset = start + timedelta(seconds=60)
+    try:
+        first.observe(17, CoreQuota(100, 20, original_reset))
+        for index, elapsed in enumerate((5, 15, 45), start=1):
+            now = start + timedelta(seconds=elapsed)
+            second.observe(17, CoreQuota(100, 99, now + timedelta(hours=1)))
+            first.admit(17, recovery=False)
+            with budget_store.session() as session:
+                row = session.get(InstallationApiBudget, 17)
+                assert row is not None and row.remaining == 20 - index
+                assert row.reset_at.replace(tzinfo=start.tzinfo) == original_reset
+            with pytest.raises(RecoveryBudgetDeferredError) as deferred:
+                second.admit(17, recovery=True)
+            assert deferred.value.retry_after_seconds == 61 - elapsed
+
+        now = original_reset + timedelta(seconds=1)
+
+        def probe(index: int) -> bool:
+            try:
+                (first if index % 2 else second).admit(17, recovery=True)
+                return True
+            except RecoveryBudgetDeferredError:
+                return False
+
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            assert sum(pool.map(probe, range(16))) == 1
+        with budget_store.session() as session:
+            row = session.get(InstallationApiBudget, 17)
+            assert row is not None and row.remaining == 17
+        second.observe(17, CoreQuota(100, 80, now + timedelta(hours=1)))
+        first.admit(17, recovery=True)
+        with budget_store.session() as session:
+            row = session.get(InstallationApiBudget, 17)
+            assert row is not None and row.remaining == 79
+    finally:
+        peer.close()
+
+
+@pytest.mark.parametrize("recovery", [False, True])
+def test_shifted_zero_observation_preserves_provider_exhaustion_deadline(
+    budget_store: QueueStore, monkeypatch: pytest.MonkeyPatch, recovery: bool
+) -> None:
+    start = utcnow().replace(microsecond=0)
+    now = start
+    monkeypatch.setattr("extra_codeowners.api_budget.utcnow", lambda: now)
+    budget = RecoveryApiBudget(budget_store)
+    budget.observe(17, CoreQuota(100, 20, start + timedelta(seconds=60)))
+    provider_reset = start + timedelta(seconds=180)
+    budget.observe(17, CoreQuota(100, 0, provider_reset))
+
+    now = start + timedelta(seconds=61)
+    with pytest.raises(ProviderQuotaExhaustedError) as exhausted:
+        budget.admit(17, recovery=recovery)
+    assert exhausted.value.retry_after_seconds == 120
+    with budget_store.session() as session:
+        row = session.get(InstallationApiBudget, 17)
+        assert row is not None and row.remaining == 0
+        assert row.reset_at.replace(tzinfo=start.tzinfo) == provider_reset
+
+
 def test_repository_cursor_requires_live_owner(budget_store: QueueStore) -> None:
     budget = RecoveryApiBudget(budget_store)
     assert budget.repository_cursor(17) == ""

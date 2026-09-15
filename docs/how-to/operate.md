@@ -202,6 +202,14 @@ spend the reserve; it is not a separate allocation from GitHub. GraphQL points,
 App-authenticated discovery, and secondary limits are separate from this REST
 core budget. See [GitHub's rate-limit documentation](https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api).
 
+The shared balance is conservative: a late response can lower it, but cannot
+refund requests already charged by another replica. A nonzero response with a
+later reset time does not extend the active accounting window. The original
+deadline still expires, allowing a fresh probe to establish the next budget.
+If GitHub explicitly reports zero remaining requests, its full reset deadline
+is honored instead. Upgrades preserve existing stored deadlines; don't clear
+budget rows to force recovery to resume sooner.
+
 An upgrade to `0007_reconciliation_completion` rechecks retained completions from older workers on the next scan, regardless of the recheck interval. Expect additional recovery work once after upgrading. Follow the [controlled upgrade procedure](upgrade.md); a rolling image replacement alone is not sufficient for this database change.
 
 A reconciled check becomes blocking while the worker fetches current evidence.

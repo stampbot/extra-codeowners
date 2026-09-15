@@ -1,6 +1,6 @@
 {
   "@context": "https://openvex.dev/ns/v0.2.0",
-  "@id": "urn:uuid:60a815f0-168c-5996-8c12-718620346828",
+  "@id": "urn:uuid:383c013c-5acc-5f00-963c-ebe4f9716990",
   "author": "Extra CODEOWNERS maintainers",
   "role": "VEX document producer",
   "statements": [
@@ -536,7 +536,7 @@
       "extra_codeowners/alembic/versions/0007_reconciliation_completion.py": "a4b0ef650761a915ea19b8f73db0d1d277d3f6f4e3f71736114906bfeeffac9f",
       "extra_codeowners/alembic/versions/0008_recovery_api_budget.py": "7d4ae0f8829500de2c23395ef7e14b29225536e841017216308fc07f48b341b3",
       "extra_codeowners/alembic/versions/__init__.py": "c421d4569599794de9ddda269e84b775d6e8204164cb9dff2487ca86560d21ae",
-      "extra_codeowners/api_budget.py": "cd225b738aca1c038e45da5740c08e8dabadbd7561b477dcdd9f700e93734f1c",
+      "extra_codeowners/api_budget.py": "0b166bf6298e321f7b0f7e972900ac633e75a2e35f0e691c535579f994ab64fb",
       "extra_codeowners/app.py": "d30ca24500e3b0d3ace360140d56d568d6bd06865acac406ddaa8a4c623d89ad",
       "extra_codeowners/build_identity.py": "5c3b38f087460fca37660ddeaa8a004d05348f8c947c04fc2444739ab7896968",
       "extra_codeowners/cli.py": "79a5c200397f9544492ec6071890ff5835c1ed625c623a0a86ed3a60503e65f4",
@@ -560,7 +560,7 @@
       "pyproject.toml": "4164e19c10e620b1cae1db22dab5728b4e80eb0f5a9dd768484b6f12de73fc96",
       "uv.lock": "029f0fe5b12940d2f8c4f36c5702f5e92f4aac1dc3bff75f2e90660a50dfdcc4"
     },
-    "review": "Authority-job installation membership checks changed; native-library call paths and the reviewed vulnerability reachability are unchanged.",
+    "review": "Only shared REST quota accounting expiry changed; native-library call paths and reviewed vulnerability reachability are unchanged.",
     "schema_version": 1
   }
 }
