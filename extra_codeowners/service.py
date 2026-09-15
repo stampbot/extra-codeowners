@@ -2167,17 +2167,24 @@ class Worker:
                 )
                 return
 
-    async def _addition_repository_absent(self, job: ClaimedAuthorityJob) -> bool:
+    async def _authority_repository_absent(self, job: ClaimedAuthorityJob) -> bool:
+        if job.repository_full_name is None:
+            raise GitHubError("repository membership check requires a repository scope")
         repositories = _reconciliation_repositories(
             await self.evaluator.github.list_installation_repositories(job.installation_id)
         )
         if any(name == job.repository_full_name for name, _archived in repositories):
             return False
+        if await self.evaluator.github.installation_includes_repository(
+            job.installation_id, job.repository_full_name, refresh=True
+        ):
+            return False
         log.info(
-            "authority_addition_no_longer_installed",
+            "authority_repository_no_longer_installed",
             installation_id=job.installation_id,
             repository=job.repository_full_name,
             generation=job.generation,
+            reason=job.reason,
         )
         return True
 
@@ -2215,7 +2222,7 @@ class Worker:
                 if not await self.evaluator.github.installation_includes_repository(
                     job.installation_id, full_name, refresh=True
                 ):
-                    if await self._addition_repository_absent(job):
+                    if await self._authority_repository_absent(job):
                         return
                     raise GitHubError("repository addition membership evidence is inconsistent")
                 current_name, archived = _reconciliation_repository(
@@ -2233,15 +2240,13 @@ class Worker:
                     return
             pulls = await self.evaluator.github.list_open_pulls(job.installation_id, full_name)
         except GitHubAPIError as error:
-            if (
-                error.status_code not in {301, 308, 404, 410}
-                or job.reason != "installation_repositories.added"
-            ):
+            if error.status_code not in {301, 308, 404, 410}:
                 raise
-            # An addition can leave the queue after access has already been
-            # removed or renamed. Read complete current membership rather
-            # than treating an error or redirect alone as proof of absence.
-            if not await self._addition_repository_absent(job):
+            # Organization events can name repositories outside the selected
+            # installation, and queued routes can outlive access or a rename.
+            # An error alone is not proof of absence: require complete current
+            # membership before retiring this authority generation.
+            if not await self._authority_repository_absent(job):
                 raise
             return
         for pull in pulls:
@@ -2362,10 +2367,10 @@ class Worker:
         except asyncio.CancelledError:
             raise
         except GitHubAPIError as error:
-            # A repository outside the installation returns 404. Keep the
-            # authority fence fail-closed, but retry it on an hours-scale
-            # cadence until an installation/repository event coalesces and
-            # wakes the same row immediately.
+            # An inaccessible repository remains fenced unless complete
+            # membership evidence proves it is outside the installation.
+            # Retry unresolved cases on an hours-scale cadence; a new event
+            # still wakes the same row immediately.
             retry_max = (
                 self.settings.authority_inaccessible_retry_max_seconds
                 if error.status_code in {404, 410}
