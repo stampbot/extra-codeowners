@@ -170,7 +170,7 @@ def test_historical_inventory_does_not_retroactively_require_reviewed_recipes() 
         sources.verify(current, historical)
 
 
-@pytest.mark.parametrize("schema", [True, "1", None, -1, 2])
+@pytest.mark.parametrize("schema", [True, "1", None, -1, 3])
 def test_rejects_unknown_source_recipe_schema(schema: object) -> None:
     raw = json.loads(inventory())
     raw["python"]["source_recipe_schema"] = schema

@@ -180,10 +180,11 @@ source and notice evidence remains part of [issue #18][source-work]. A later
 Psycopg version does not silently reuse the 3.3.4 recipe: it remains unresolved
 until its source identity is reviewed.
 
-The signed inventory selects this behavior with `python.source_recipe_schema: 1`.
-Inventories without that field retain the original locked-sdist-only contract.
-Historical rescans therefore verify the sources promised by that release,
-without requiring an archive added by a later collector.
+The signed inventory selects wrapper-recipe delivery with
+`python.source_recipe_schema: 1`. Schema 2 also retains the reviewed source
+RPMs described below. Inventories without the field retain the original
+locked-sdist-only contract. Historical rescans verify the sources promised by
+that release, without requiring archives added by a later collector.
 
 The inventory's `python.source_bundle` field requires the bundle and its
 signature during release verification. Older inventories without the field do
@@ -206,6 +207,34 @@ succeeds silently with exit status zero. It rejects changed identities, hashes,
 sizes, duplicate or unexpected archive members, and filesystem links. Each
 sdist is limited to 64 MiB; the bundle is limited to 256 MiB before and after
 decompression. No dependency is rebuilt to produce this evidence.
+
+### Psycopg's distro-library sources
+
+Schema 2 Python source bundles also contain source RPMs for the distro packages
+reported by the audited Psycopg 3.3.4 wheel SBOMs: six source packages on amd64
+and eight on arm64. Each source RPM contains its upstream sources, distro
+patches, and RPM build recipe. Files appear under
+`native/psycopg-binary/<architecture>/`; `manifest.json` lists them in
+`native_sources` with their source package, reported binary package, SHA-256,
+and size. The same verification command above checks these files too.
+
+The recipe is checked in under `tools/source_recipes/`. Its package identities
+were matched against CentOS and AlmaLinux repository metadata; the source
+downloads were checked against those checksums and the vendors' package
+signatures before the pins were recorded. Release collection uses those exact
+URLs and hashes, not a fresh repository lookup or package upgrade. It does not
+install the RPMs or run their recipes.
+
+The installed wheel's SBOM must match the reviewed hash for that architecture.
+A changed, missing, duplicate, or linked SBOM stops collection and requires a
+recipe review. This prevents a changed wheel from silently inheriting the
+previous native-source claim.
+
+These source RPMs cover the distro packages reported by those SBOMs, not
+Psycopg's custom-built libpq, OpenSSL 3, or OpenLDAP libraries, nor components
+the SBOM does not list. Those sources and the remaining notice review stay in
+[issue #18][source-work]. Keeping a version-matched source recipe is not a claim
+that rebuilding it produces byte-identical wheel binaries.
 
 ## Rust dependencies in Python wheels
 

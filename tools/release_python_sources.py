@@ -28,12 +28,19 @@ MAX_METADATA = 4 * 1024 * 1024
 MAX_FILE = 64 * 1024 * 1024
 MAX_BUNDLE = 256 * 1024 * 1024
 NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,99}\Z")
+RPM_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9+_.-]{0,99}\Z")
 VERSION = re.compile(r"[A-Za-z0-9][A-Za-z0-9.+!_-]{0,99}\Z")
 URL = re.compile(
     r"https://files\.pythonhosted\.org/packages/[0-9a-f]{2}/[0-9a-f]{2}/"
     r"[0-9a-f]{60}/([A-Za-z0-9][A-Za-z0-9._+-]{0,199}\.(?:tar\.gz|zip))\Z"
 )
 PSYCOPG_URL = re.compile(r"https://codeload\.github\.com/psycopg/psycopg/tar\.gz/[0-9a-f]{40}\Z")
+RPM_URL = re.compile(
+    r"https://(?:vault\.centos\.org/7\.9\.2009/(?:os|updates)/Source/SPackages/"
+    r"|vault\.almalinux\.org/8\.10/BaseOS/Source/Packages/)"
+    r"[A-Za-z0-9][A-Za-z0-9._+-]{0,199}\.src\.rpm\Z"
+)
+RECIPE_DIRECTORY = Path(__file__).resolve().parent / "source_recipes"
 REVIEWED_BINARY_SOURCES: dict[tuple[str, str], dict[str, Any]] = {
     ("psycopg-binary", "3.3.4"): {
         "url": "https://codeload.github.com/psycopg/psycopg/tar.gz/83f110367cdd249cc0a352e2246ecea9e878e5a0",
@@ -87,6 +94,90 @@ def _text(value: object, pattern: re.Pattern[str]) -> str:
     return value
 
 
+def _native_recipe(
+    name: str, version: str, architecture: str, python: dict[str, Any]
+) -> list[dict[str, Any]]:
+    # These are reviewed checkout data, never repository policy or a URL
+    # supplied by the wheel. The installed SBOM must match the reviewed bytes.
+    with (RECIPE_DIRECTORY / f"{name}-{version}.json").open("rb") as stream:
+        recipe = _json(stream.read(MAX_METADATA + 1))
+    if (
+        type(recipe.get("schema_version")) is not int
+        or recipe["schema_version"] != 1
+        or recipe.get("distribution") != name
+        or recipe.get("version") != version
+        or not isinstance(recipe.get("platforms"), dict)
+    ):
+        raise PythonSourceError("invalid native source recipe identity")
+    platform = recipe["platforms"].get(architecture)
+    if not isinstance(platform, dict):
+        raise PythonSourceError("native source recipe has no selected platform")
+    expected_hash = _text(platform.get("sbom_sha256"), re.compile(r"[0-9a-f]{64}\Z"))
+    expected_size = platform.get("sbom_size")
+    if type(expected_size) is not int or not 0 < expected_size <= MAX_METADATA:
+        raise PythonSourceError("invalid native source recipe SBOM size")
+    sboms = python.get("embedded_sboms")
+    if not isinstance(sboms, list) or len(sboms) > 4096:
+        raise PythonSourceError("native source recipe requires an embedded SBOM inventory")
+    if any(not isinstance(item, dict) for item in sboms):
+        raise PythonSourceError("invalid embedded SBOM inventory")
+    selected = [item for item in sboms if item.get("distribution") == name]
+    if (
+        len(selected) != 1
+        or selected[0].get("kind") != "regular"
+        or selected[0].get("link_target") is not None
+        or selected[0].get("sha256") != expected_hash
+        or type(selected[0].get("size")) is not int
+        or selected[0].get("size") != expected_size
+    ):
+        raise PythonSourceError("wheel SBOM changed; review its native source recipe")
+    records = platform.get("sources")
+    if not isinstance(records, list) or not 1 <= len(records) <= 64:
+        raise PythonSourceError("invalid native source recipe archive list")
+    result = []
+    seen = set()
+    for record in records:
+        if not isinstance(record, dict):
+            raise PythonSourceError("invalid native source recipe archive")
+        package_name = _text(record.get("name"), RPM_NAME)
+        package_version = _text(record.get("version"), VERSION)
+        filename = f"{package_name}-{package_version}.src.rpm"
+        url = _text(record.get("url"), RPM_URL)
+        if url.rsplit("/", 1)[-1] != filename or len(filename) > 100 or filename in seen:
+            raise PythonSourceError("ambiguous native source archive filename")
+        seen.add(filename)
+        checksum = _text(record.get("sha256"), re.compile(r"[0-9a-f]{64}\Z"))
+        size = record.get("size")
+        if type(size) is not int or not 0 < size <= MAX_FILE:
+            raise PythonSourceError("invalid native source archive size")
+        reported = record.get("reported_package")
+        if not isinstance(reported, dict):
+            raise PythonSourceError("native source recipe omits the reported package")
+        reported_package = {
+            "name": _text(reported.get("name"), RPM_NAME),
+            "version": _text(reported.get("version"), VERSION),
+        }
+        result.append(
+            {
+                "distribution": name,
+                "distribution_version": version,
+                "source_package": {"name": package_name, "version": package_version},
+                "reported_package": reported_package,
+                "sbom_sha256": expected_hash,
+                "url": url,
+                "sha256": checksum,
+                "size": size,
+                "path": f"native/{name}/{architecture}/{filename}",
+            }
+        )
+    return result
+
+
+def _all_sources(manifest: dict[str, Any]) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = [*manifest["sources"], *manifest.get("native_sources", [])]
+    return result
+
+
 def plan(inventory: bytes, lock: bytes, architecture: str, digest: str) -> dict[str, Any]:
     """Select only installed distributions, matching exact locked versions."""
     if architecture not in {"amd64", "arm64"}:
@@ -130,11 +221,12 @@ def plan(inventory: bytes, lock: bytes, architecture: str, digest: str) -> dict[
         raise PythonSourceError("unexpected Python source bundle name")
     distributions = python.get("distributions") if isinstance(python, dict) else None
     recipe_schema = python.get("source_recipe_schema", 0) if isinstance(python, dict) else 0
-    if type(recipe_schema) is not int or recipe_schema not in {0, 1}:
+    if type(recipe_schema) is not int or recipe_schema not in {0, 1, 2}:
         raise PythonSourceError("unsupported source recipe schema")
     if not isinstance(distributions, list) or not 1 <= len(distributions) <= 512:
         raise PythonSourceError("invalid installed distribution list")
     sources: list[dict[str, Any]] = []
+    native_sources: list[dict[str, Any]] = []
     unresolved = []
     own = []
     seen = set()
@@ -157,9 +249,12 @@ def plan(inventory: bytes, lock: bytes, architecture: str, digest: str) -> dict[
             raise PythonSourceError("source collection only supports locked PyPI packages")
         sdist = package.get("sdist")
         if sdist is None:
-            reviewed = REVIEWED_BINARY_SOURCES.get((name, version)) if recipe_schema == 1 else None
+            reviewed = REVIEWED_BINARY_SOURCES.get((name, version)) if recipe_schema >= 1 else None
             if reviewed is not None:
                 sources.append({**identity, **reviewed})
+                if recipe_schema == 2:
+                    assert isinstance(python, dict)
+                    native_sources.extend(_native_recipe(name, version, architecture, python))
             else:
                 unresolved.append({**identity, "reason": "lock contains no source archive"})
             continue
@@ -181,9 +276,9 @@ def plan(inventory: bytes, lock: bytes, architecture: str, digest: str) -> dict[
                 "path": f"sources/{name}/{url.rsplit('/', 1)[1]}",
             }
         )
-    if sum(source["size"] for source in sources) > MAX_BUNDLE - MAX_METADATA:
+    if sum(source["size"] for source in [*sources, *native_sources]) > MAX_BUNDLE - MAX_METADATA:
         raise PythonSourceError("source archives exceed bundle size limit")
-    return {
+    manifest = {
         "schema_version": 1,
         "image": {"architecture": architecture, "platform_digest": digest},
         "inventory_sha256": hashlib.sha256(inventory).hexdigest(),
@@ -194,10 +289,17 @@ def plan(inventory: bytes, lock: bytes, architecture: str, digest: str) -> dict[
         "scope": (
             "Locked Python sdists and explicitly reviewed binary-package source recipes; "
             "embedded native dependencies are not covered."
-            if recipe_schema == 1
+            if recipe_schema >= 1
             else "Locked Python sdists only; embedded native dependencies are not covered."
         ),
     }
+    if recipe_schema == 2:
+        manifest["native_sources"] = sorted(native_sources, key=lambda item: item["path"])
+        manifest["scope"] = (
+            "Python sources and reviewed native source RPMs listed in this manifest; "
+            "other embedded native components and build inputs remain separate."
+        )
+    return manifest
 
 
 def _check(data: bytes, source: dict[str, Any]) -> None:
@@ -221,7 +323,9 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 def fetch(source: dict[str, Any]) -> bytes:
     """Fetch an opaque archive from a permitted source origin with retries."""
     value = source.get("url")
-    if not isinstance(value, str) or not (URL.fullmatch(value) or PSYCOPG_URL.fullmatch(value)):
+    if not isinstance(value, str) or not (
+        URL.fullmatch(value) or PSYCOPG_URL.fullmatch(value) or RPM_URL.fullmatch(value)
+    ):
         raise PythonSourceError("invalid source archive URL")
     url = value
     opener = urllib.request.build_opener(_NoRedirect())
@@ -242,9 +346,9 @@ def fetch(source: dict[str, Any]) -> bytes:
 
 def build(manifest: dict[str, Any], payloads: dict[str, bytes]) -> bytes:
     """Create a deterministic archive; never extract any upstream sdist."""
-    if set(payloads) != {item["path"] for item in manifest["sources"]}:
+    if set(payloads) != {item["path"] for item in _all_sources(manifest)}:
         raise PythonSourceError("source payload set differs from the plan")
-    for source in manifest["sources"]:
+    for source in _all_sources(manifest):
         _check(payloads[source["path"]], source)
     files = {
         "manifest.json": (json.dumps(manifest, sort_keys=True, indent=2) + "\n").encode(),
@@ -267,7 +371,7 @@ def verify(manifest: dict[str, Any], bundle: bytes) -> dict[str, bytes]:
     """Check a freshly derived plan and return its verified source bytes."""
     if len(bundle) > MAX_BUNDLE:
         raise PythonSourceError("source bundle exceeds size limit")
-    expected = {source["path"]: source for source in manifest["sources"]}
+    expected = {source["path"]: source for source in _all_sources(manifest)}
     seen = set()
     payloads: dict[str, bytes] = {}
     try:
@@ -336,8 +440,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             with ThreadPoolExecutor(max_workers=4) as executor:
                 payloads = dict(
                     zip(
-                        (source["path"] for source in manifest["sources"]),
-                        executor.map(fetch, manifest["sources"]),
+                        (source["path"] for source in _all_sources(manifest)),
+                        executor.map(fetch, _all_sources(manifest)),
                         strict=True,
                     )
                 )
