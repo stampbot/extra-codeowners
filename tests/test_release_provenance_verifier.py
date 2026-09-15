@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from tools import release_debian_sources, release_python_sources
+from tools import release_debian_sources, release_python_sources, release_rust_sources
 from tools.release_notices import build_notice_bundle
 from tools.release_sources import build_bundle as build_source_bundle
 
@@ -499,16 +499,20 @@ def _run_verifier(
     source_delivery: bool = False,
     debian_delivery: bool = False,
     python_delivery: bool = False,
+    rust_delivery: bool = False,
     full_distro: object = None,
 ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
     asset_directory = tmp_path / "release-assets"
     asset_directory.mkdir()
     release_files = _release_files()
+    python_delivery = python_delivery or rust_delivery
     if python_delivery:
         for architecture in ("amd64", "arm64"):
             filename = f"distribution-inventory-{architecture}.json"
             inventory = json.loads(release_files[filename])
             inventory["python"]["source_bundle"] = f"python-source-{architecture}.tar.gz"
+            if rust_delivery:
+                inventory["python"]["rust_source_bundle"] = f"rust-source-{architecture}.tar.gz"
             release_files[filename] = json.dumps(inventory).encode()
     if debian_delivery:
         for architecture in ("amd64", "arm64"):
@@ -546,6 +550,24 @@ def _run_verifier(
             release_files[f"python-source-{architecture}.tar.gz"] = release_python_sources.build(
                 manifest, {manifest["sources"][0]["path"]: PYTHON_SOURCE}
             )
+    if rust_delivery:
+        for architecture, digest in (
+            ("amd64", AMD64_PLATFORM_DIGEST),
+            ("arm64", ARM64_PLATFORM_DIGEST),
+        ):
+            notices = tmp_path / f"rust-input-notices-{architecture}.tar.gz"
+            notices.write_bytes(release_files[f"recipient-notices-{architecture}.tar.gz"])
+            rust_manifest = release_rust_sources.plan(
+                release_files[f"distribution-inventory-{architecture}.json"],
+                PYTHON_SOURCE_LOCK,
+                release_files[f"python-source-{architecture}.tar.gz"],
+                notices,
+                architecture,
+                digest,
+            )
+            release_files[f"rust-source-{architecture}.tar.gz"] = release_rust_sources.build(
+                rust_manifest, {}
+            )
     signed_files = {
         f"extra_codeowners-{PYTHON_VERSION}-py3-none-any.whl",
         f"extra_codeowners-{PYTHON_VERSION}.tar.gz",
@@ -560,6 +582,8 @@ def _run_verifier(
         "debian-source.tar",
         "python-source-amd64.tar.gz",
         "python-source-arm64.tar.gz",
+        "rust-source-amd64.tar.gz",
+        "rust-source-arm64.tar.gz",
     }
     for name, contents in release_files.items():
         artifact = asset_directory / name
@@ -822,3 +846,32 @@ def test_release_provenance_does_not_fall_back_to_current_lock(tmp_path: Path) -
         tmp_path, python_delivery=True, environment={"FAKE_MISSING_RELEASE_LOCK": "true"}
     )
     assert result.returncode != 0
+
+
+@pytest.mark.skipif(BASH is None or JQ is None, reason="Bash and jq are required")
+def test_release_provenance_verifies_rust_sources(tmp_path: Path) -> None:
+    result, operations = _run_verifier(tmp_path, rust_delivery=True)
+    assert result.returncode == 0, result.stderr
+    assert f"git show {REVISION}:uv.lock" in operations
+    for architecture in ("amd64", "arm64"):
+        name = f"rust-source-{architecture}.tar.gz"
+        assert any("gh attestation verify" in op and name in op for op in operations)
+        assert any("cosign verify-blob" in op and name in op for op in operations)
+
+
+@pytest.mark.parametrize("suffix", ["", ".sigstore.json"])
+@pytest.mark.skipif(BASH is None or JQ is None, reason="Bash and jq are required")
+def test_release_provenance_requires_declared_rust_sources(tmp_path: Path, suffix: str) -> None:
+    result, _ = _run_verifier(
+        tmp_path,
+        rust_delivery=True,
+        mutate_assets=lambda directory: (directory / f"rust-source-arm64.tar.gz{suffix}").unlink(),
+    )
+    assert result.returncode != 0
+
+
+@pytest.mark.skipif(BASH is None or JQ is None, reason="Bash and jq are required")
+def test_historical_release_does_not_require_rust_sources(tmp_path: Path) -> None:
+    result, operations = _run_verifier(tmp_path, python_delivery=True)
+    assert result.returncode == 0, result.stderr
+    assert not any("rust-source-" in op for op in operations)

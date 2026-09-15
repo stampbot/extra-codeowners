@@ -63,6 +63,11 @@ not followed. Their presence, link kind, and target must still match the
 exported filesystem before a bundle is produced. Schema 2 bundles did not preserve these files; use the verifier
 from the matching release tag when checking an older bundle.
 
+[Rust source bundles](source-archives.md#rust-dependencies-in-python-wheels)
+add checksum-verified crate archives for Cargo components reported by those
+SBOMs. Their manifests connect the wheel's declarations to the retained sources;
+they do not replace the notice bundle or the remaining native-library review.
+
 ## Verify a bundle
 
 Check out the release tag, then download the matching inventory and notice

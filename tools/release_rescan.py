@@ -18,6 +18,8 @@ SOURCE_BUNDLE_LIMITS = {
     "debian-source.tar": 512 * 1024 * 1024,
     "python-source-amd64.tar.gz": 256 * 1024 * 1024,
     "python-source-arm64.tar.gz": 256 * 1024 * 1024,
+    "rust-source-amd64.tar.gz": 128 * 1024 * 1024,
+    "rust-source-arm64.tar.gz": 128 * 1024 * 1024,
 }
 
 

@@ -1233,8 +1233,8 @@ def verify_notice_bundle(
     *,
     architecture: str,
     platform_digest: str,
-) -> None:
-    """Verify a recipient notice bundle against an exact signed inventory identity."""
+) -> dict[str, bytes]:
+    """Verify the inventory binding and return regular members from that same read."""
     if architecture not in _ARCHITECTURES:
         _fail(f"unsupported architecture: {architecture!r}")
     if _DIGEST_PATTERN.fullmatch(platform_digest) is None:
@@ -1314,6 +1314,11 @@ def verify_notice_bundle(
             _fail(f"notice bundle link {path!r} does not match its manifest")
     if set(members) != expected_names:
         _fail("notice bundle members do not match its manifest")
+    return {
+        path: member.contents
+        for path, member in members.items()
+        if member.kind == "regular" and member.contents is not None
+    }
 
 
 def _read_bytes(path: Path, description: str) -> bytes:

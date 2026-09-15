@@ -67,9 +67,12 @@ def test_release_selection_bounds_discovery() -> None:
 def test_python_source_allowances_match_the_collector_and_keep_ordinary_limits() -> None:
     from tools.release_python_sources import MAX_BUNDLE
     from tools.release_rescan import SOURCE_BUNDLE_LIMITS
+    from tools.release_rust_sources import MAX_BUNDLE as RUST_MAX_BUNDLE
 
     assert SOURCE_BUNDLE_LIMITS["python-source-amd64.tar.gz"] == MAX_BUNDLE
     assert SOURCE_BUNDLE_LIMITS["python-source-arm64.tar.gz"] == MAX_BUNDLE
+    assert SOURCE_BUNDLE_LIMITS["rust-source-amd64.tar.gz"] == RUST_MAX_BUNDLE
+    assert SOURCE_BUNDLE_LIMITS["rust-source-arm64.tar.gz"] == RUST_MAX_BUNDLE
     release = _release()
     release["assets"] = [
         {"name": name, "size": limit} for name, limit in SOURCE_BUNDLE_LIMITS.items()

@@ -207,4 +207,48 @@ sizes, duplicate or unexpected archive members, and filesystem links. Each
 sdist is limited to 64 MiB; the bundle is limited to 256 MiB before and after
 decompression. No dependency is rebuilt to produce this evidence.
 
+## Rust dependencies in Python wheels
+
+Releases whose inventory declares `python.rust_source_bundle` also supply
+`rust-source-amd64.tar.gz` and `rust-source-arm64.tar.gz`. These contain the
+crates.io archives identified by the wheels' embedded CycloneDX SBOMs. Each
+archive includes the source and notices supplied by its upstream package.
+
+The collector reads each wheel's version-matched Python source distribution
+and its top-level `Cargo.lock`. A registry dependency must match a lockfile
+entry with a crates.io origin and SHA-256 checksum. Workspace entries point
+back to the retained Python source archive. Downloads use fixed crates.io
+URLs, not the SBOM's download hints. The collector checks hashes, rejects
+redirects, and never executes upstream code or extracts it to disk.
+
+`manifest.json` maps the reported Cargo components to those sources. It records
+the SBOM and lockfile hashes, preserves declared licenses, and binds the result
+to the platform inventory, Python source bundle, and notice manifest. Missing
+or ambiguous mappings stop publication. This covers the Cargo components
+reported by those SBOMs; it is not a complete inventory of native C libraries
+or a conclusion about license compliance. Those remaining checks are tracked
+in [issue #18][source-work].
+
+From a trusted checkout of the release tag, download the platform's Rust and
+Python source bundles, recipient notice bundle, inventory, and digest file.
+Verify the signatures and attestations for all four bundles/inventory files
+using the earlier verification loop, then run:
+
+```bash
+python -I -S -B tools/release_rust_sources.py verify \
+  --architecture amd64 \
+  --platform-digest "$(<digest-amd64.txt)" \
+  --inventory distribution-inventory-amd64.json \
+  --lock uv.lock \
+  --python-sources python-source-amd64.tar.gz \
+  --notices recipient-notices-amd64.tar.gz \
+  --bundle rust-source-amd64.tar.gz
+```
+
+Verification succeeds silently. It rereads the retained SBOMs and lockfiles
+and checks every crate archive against the resulting plan. A crate archive is
+limited to 16 MiB; the complete bundle is limited to 128 MiB before and after
+decompression. Older inventories without `python.rust_source_bundle` do not
+promise this evidence, so historical rescans do not require it retroactively.
+
 [source-work]: https://github.com/stampbot/extra-codeowners/issues/18

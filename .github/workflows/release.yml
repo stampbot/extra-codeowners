@@ -498,6 +498,14 @@ jobs:
             --inventory "distribution-inventory-${ARCHITECTURE}.json" \
             --lock uv.lock \
             --bundle "python-source-${ARCHITECTURE}.tar.gz"
+          python -I -S -B tools/release_rust_sources.py fetch \
+            --architecture "${ARCHITECTURE}" \
+            --platform-digest "${platform_digest}" \
+            --inventory "distribution-inventory-${ARCHITECTURE}.json" \
+            --lock uv.lock \
+            --python-sources "python-source-${ARCHITECTURE}.tar.gz" \
+            --notices "recipient-notices-${ARCHITECTURE}.tar.gz" \
+            --bundle "rust-source-${ARCHITECTURE}.tar.gz"
 
       - name: Pull exact native image
         env:
@@ -549,6 +557,7 @@ jobs:
             recipient-notices-${{ matrix.architecture }}.tar.gz
             cpython-source-${{ matrix.architecture }}.tar.gz
             python-source-${{ matrix.architecture }}.tar.gz
+            rust-source-${{ matrix.architecture }}.tar.gz
             vulnerability-report-${{ matrix.architecture }}.json
           if-no-files-found: error
           overwrite: true
@@ -686,6 +695,14 @@ jobs:
               --inventory "release/image/${architecture}/distribution-inventory-${architecture}.json" \
               --lock uv.lock \
               --bundle "release/image/${architecture}/python-source-${architecture}.tar.gz"
+            python -I -S -B tools/release_rust_sources.py verify \
+              --architecture "${architecture}" \
+              --platform-digest "${platform_digest}" \
+              --inventory "release/image/${architecture}/distribution-inventory-${architecture}.json" \
+              --lock uv.lock \
+              --python-sources "release/image/${architecture}/python-source-${architecture}.tar.gz" \
+              --notices "release/image/${architecture}/recipient-notices-${architecture}.tar.gz" \
+              --bundle "release/image/${architecture}/rust-source-${architecture}.tar.gz"
           done
 
       - name: Verify Debian sources before publication
@@ -1033,6 +1050,12 @@ jobs:
         with:
           subject-path: release/image/*/python-source-*.tar.gz
 
+      - name: Attest Rust source bundles
+        if: steps.tag.outputs.deferred != 'true'
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: release/image/*/rust-source-*.tar.gz
+
       - name: Sign release files
         if: steps.tag.outputs.deferred != 'true'
         run: |
@@ -1043,7 +1066,7 @@ jobs:
             \( -name '*.whl' -o -name 'extra_codeowners-*.tar.gz' \
             -o -name 'recipient-notices-*.tar.gz' -o -name '*.tgz' \
             -o -name 'cpython-source-*.tar.gz' \
-            -o -name 'python-source-*.tar.gz' \
+            -o -name 'python-source-*.tar.gz' -o -name 'rust-source-*.tar.gz' \
             -o -name 'debian-source.tar' \
             -o -name 'distribution-inventory-*.json' -o -name 'extra-codeowners-*.openvex.json' \
             \) -print0)
@@ -1465,6 +1488,8 @@ jobs:
             cpython-source-amd64.tar.gz.sigstore.json
             python-source-amd64.tar.gz
             python-source-amd64.tar.gz.sigstore.json
+            rust-source-amd64.tar.gz
+            rust-source-amd64.tar.gz.sigstore.json
             distribution-inventory-arm64.json
             distribution-inventory-arm64.json.sigstore.json
             recipient-notices-arm64.tar.gz
@@ -1473,6 +1498,8 @@ jobs:
             cpython-source-arm64.tar.gz.sigstore.json
             python-source-arm64.tar.gz
             python-source-arm64.tar.gz.sigstore.json
+            rust-source-arm64.tar.gz
+            rust-source-arm64.tar.gz.sigstore.json
             debian-source.tar
             debian-source.tar.sigstore.json
             vulnerability-report-amd64.json

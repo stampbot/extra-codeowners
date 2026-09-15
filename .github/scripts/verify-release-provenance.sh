@@ -255,6 +255,26 @@ for architecture in amd64 arm64; do
     --lock "${temporary_directory}/release-uv.lock" \
     --bundle "${source_bundle}"
 done
+for architecture in amd64 arm64; do
+  inventory="${asset_directory}/distribution-inventory-${architecture}.json"
+  source_bundle="${asset_directory}/rust-source-${architecture}.tar.gz"
+  if jq -e '.python | objects | has("rust_source_bundle")' "${inventory}" >/dev/null; then
+    jq -e --arg expected "rust-source-${architecture}.tar.gz" \
+      '.python.rust_source_bundle == $expected' "${inventory}" >/dev/null
+  elif [[ ! -e "${source_bundle}" && ! -e "${source_bundle}.sigstore.json" ]]; then
+    continue
+  fi
+  verify_release_file "${source_bundle}"
+  git show "${revision}:uv.lock" >"${temporary_directory}/release-uv.lock"
+  python -I -S -B tools/release_rust_sources.py verify \
+    --architecture "${architecture}" \
+    --platform-digest "$(<"${asset_directory}/digest-${architecture}.txt")" \
+    --inventory "${inventory}" \
+    --lock "${temporary_directory}/release-uv.lock" \
+    --python-sources "${asset_directory}/python-source-${architecture}.tar.gz" \
+    --notices "${asset_directory}/recipient-notices-${architecture}.tar.gz" \
+    --bundle "${source_bundle}"
+done
 verify_release_file "${vex}"
 debian_source_required=false
 for inventory in "${amd64_inventory}" "${arm64_inventory}"; do
