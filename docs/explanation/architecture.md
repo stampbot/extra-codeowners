@@ -209,6 +209,21 @@ publication guard provides the last ordering layer across repository names.
 None of these controls can revoke a success after a transfer or installation
 change has already removed the App's access.
 
+Organization team/member events can name repositories outside a selected
+installation. Before processing a repository authority job, the worker checks
+current App membership—even if the repository is public and readable. If that
+check excludes the repository, or a later read returns a redirect, `404`, or
+`410`, the worker checks the complete installation listing and repeats the
+App-authenticated lookup. It retires the job only when both exclude the
+repository. A malformed or incomplete listing, provider backoff, or conflicting
+membership evidence leaves the job pending.
+Generation and lease checks protect a newer event from being
+removed by the old worker.
+
+Retiring an unreachable route does not publish a successful check or revoke
+one already on GitHub. The native-enforcement handback is still necessary
+before removing access.
+
 The organization-policy repository receives special treatment. If it leaves
 the installation—or if removal evidence is malformed—the service schedules
 installation-wide reevaluation for every target it can still reach. A

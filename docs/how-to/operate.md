@@ -542,8 +542,10 @@ as conservative policy-source loss, advances the installation authority epoch,
 and fans out blocking work to repositories it can still reach. That defense is
 not a migration procedure.
 
-Adding repositories schedules installation-wide fan-out. Keep native
-enforcement until:
+A well-formed addition of one ordinary repository queues that repository.
+Adding the organization-policy repository, multiple repositories, or ambiguous
+addition evidence schedules installation-wide fan-out. Keep native enforcement
+until:
 
 - the App can access both the policy source and target
 - installation and authority queues have drained

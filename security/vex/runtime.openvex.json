@@ -1,6 +1,6 @@
 {
   "@context": "https://openvex.dev/ns/v0.2.0",
-  "@id": "urn:uuid:9ccdd9fb-81e9-50bc-bf5a-fc72ffdd9484",
+  "@id": "urn:uuid:60a815f0-168c-5996-8c12-718620346828",
   "author": "Extra CODEOWNERS maintainers",
   "role": "VEX document producer",
   "statements": [
@@ -552,7 +552,7 @@
       "extra_codeowners/models.py": "dc59959f56e35111fae00f8f60ef054ba80eb839eb2dae5b09165d4cdc349a48",
       "extra_codeowners/policy.py": "844abb482a7c9cc3190d624cc92ece2476128644718e4096f98bfa8a0abedf8a",
       "extra_codeowners/py.typed": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "extra_codeowners/service.py": "1c70634cb75c3d1da0f747804f8dd83458df56da7d600410524673fdae40cd7c",
+      "extra_codeowners/service.py": "c693d494a3d13fa589448222df386961f1433bff472f12fae4891c0882daf216",
       "extra_codeowners/settings.py": "bd1d3cd0acf23ea4b26869fc1e024438aba7b9acf43f3850c4e6be2e9a5b5437",
       "extra_codeowners/trace_context.py": "f79ca91baa1dd615c80546c66a6b370ba78ec7106dece3feb201d10250078532",
       "extra_codeowners/tracing.py": "62c730c8bdf4d632dace5b79232f968d871a28d8724a162aa52ba6b4ed2c6db1",
@@ -560,7 +560,7 @@
       "pyproject.toml": "4164e19c10e620b1cae1db22dab5728b4e80eb0f5a9dd768484b6f12de73fc96",
       "uv.lock": "029f0fe5b12940d2f8c4f36c5702f5e92f4aac1dc3bff75f2e90660a50dfdcc4"
     },
-    "review": "Reviewed scoped additions, bulk follow-up budgeting, foreground preservation for pending direct evaluations and newly discovered live heads, and provider backoff despite promotion failure. Native-library usage and OpenSSL reachability are unchanged.",
+    "review": "Authority-job installation membership checks changed; native-library call paths and the reviewed vulnerability reachability are unchanged.",
     "schema_version": 1
   }
 }
