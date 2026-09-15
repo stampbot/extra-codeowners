@@ -33,13 +33,56 @@ The same run exposed a slow first check: one newly opened PR waited about
 3 minutes 52 seconds for a final result. Database inspection showed its
 repository authority refresh was still pending while API quota was available.
 [PR #212][priority] prioritizes those refreshes when a direct PR event is
-waiting. That fix needs its own deployment measurement; the results above
-predate it.
+waiting. The alpha.48 observations below include that fix; the table above
+predates it.
 
 See [issue #1's dated evidence][live-evidence] for the human-review sequence.
 The missed opening webhook also recovered without redelivery, but repository
 fan-out visited the PR during recovery. That observation does not isolate the
 periodic reconciliation path or establish acceptable recovery latency.
+
+## Authority refresh and native handback: September 14, 2026
+
+With `v0.1.0-alpha.48`, a PR opened after a repository rename reached its first
+final result in 64 seconds. Part of that wait was existing provider backoff;
+the result arrived 29 seconds after quota became available. Stampbot approval
+then passed in 31 seconds, including Stampbot's review submission.
+
+Broad authority work still exhausted the test installation's quota later in
+the run. Prioritizing direct events helps while capacity is available, but
+does not create capacity once GitHub has denied further requests. The
+[performance gate][performance] remains open.
+
+The native-enforcement handback passed on a separate, bot-authored PR. Native
+code-owner review was active with no bypass actors before the Extra CODEOWNERS
+requirement was removed. After dismissing the human approval, GitHub reported
+`BLOCKED` and `REVIEW_REQUIRED`. A merge request for that exact head returned
+HTTP 405, citing the missing code-owner review. The PR remained open under
+native enforcement.
+
+This verifies the handback on that fixture, not installation suspension,
+uninstall, or repository-selection removal. An earlier PR authored by its
+sole code owner was not a useful negative control: GitHub still reported it
+approved with Stampbot's review. The bot-authored PR kept author ownership
+out of the negative control. See the [dated handback evidence][handback].
+
+## Scoped repository addition: September 14, 2026
+
+With `v0.1.0-alpha.51`, a newly created repository's first PR reached a final
+missing-approval result in 8 seconds. Stampbot approval then passed in
+12 seconds, including its review submission. Both service replicas were
+healthy on separate nodes.
+
+The installation-wide authority generation did not change, and no authority
+jobs remained after the test. The earlier stuck addition job for the old
+repository name also cleared. No queue reset, rename, or webhook redelivery
+was used for this test.
+
+The lifecycle collector retained an automatic repository-addition delivery
+with HTTP 202. Its bounded listing was incomplete, so it does not establish
+an exhaustive delivery history. These are positive observations of one
+addition, not proof of every lifecycle transition. See the
+[dated addition evidence][addition].
 
 ## GitHub's check contract
 
@@ -76,3 +119,6 @@ not close it.
 [contract]: https://github.com/stampbot/extra-codeowners/issues/1
 [threat-model]: ../explanation/threat-model.md
 [sources]: https://github.com/stampbot/extra-codeowners/issues/18
+[performance]: https://github.com/stampbot/extra-codeowners/issues/203
+[handback]: https://github.com/stampbot/extra-codeowners/issues/1#issuecomment-5672325273
+[addition]: https://github.com/stampbot/extra-codeowners/issues/203#issuecomment-5672497697
