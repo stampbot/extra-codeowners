@@ -152,7 +152,12 @@ class RecoveryApiBudget:
                 # A shifted future reset is not proof the window reset early.
                 row.remaining = min(row.remaining, quota.remaining)
                 row.request_limit = max(row.request_limit, quota.limit)
-                row.reset_at = quota.reset_at
+                # Keep the accounting deadline fixed so repeated shifted
+                # headers cannot carry an old balance forward indefinitely.
+                # An explicit zero is different: honor the provider's full
+                # exhaustion deadline before allowing another probe.
+                if quota.remaining == 0:
+                    row.reset_at = quota.reset_at
 
     def repository_cursor(self, installation_id: int) -> str:
         with self.store.session() as session:
