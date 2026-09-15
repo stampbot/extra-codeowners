@@ -263,12 +263,13 @@ def build(manifest: dict[str, Any], payloads: dict[str, bytes]) -> bytes:
     return output.getvalue()
 
 
-def verify(manifest: dict[str, Any], bundle: bytes) -> None:
-    """Check a bundle against a freshly derived plan, without filesystem writes."""
+def verify(manifest: dict[str, Any], bundle: bytes) -> dict[str, bytes]:
+    """Check a freshly derived plan and return its verified source bytes."""
     if len(bundle) > MAX_BUNDLE:
         raise PythonSourceError("source bundle exceeds size limit")
     expected = {source["path"]: source for source in manifest["sources"]}
     seen = set()
+    payloads: dict[str, bytes] = {}
     try:
         with gzip.GzipFile(fileobj=io.BytesIO(bundle)) as stream:
             raw = stream.read(MAX_BUNDLE + 1)
@@ -303,6 +304,7 @@ def verify(manifest: dict[str, Any], bundle: bytes) -> None:
                         raise PythonSourceError("source manifest differs from the image and lock")
                 else:
                     _check(data, expected[member.name])
+                    payloads[member.name] = data
                 seen.add(member.name)
                 offset = member.offset_data + ((member.size + 511) // 512) * 512
             padding = raw[offset:]
@@ -312,6 +314,7 @@ def verify(manifest: dict[str, Any], bundle: bytes) -> None:
             raise PythonSourceError("source bundle is incomplete")
     except (OSError, EOFError, tarfile.TarError) as error:
         raise PythonSourceError("invalid compressed source bundle") from error
+    return payloads
 
 
 def main(argv: Sequence[str] | None = None) -> int:
