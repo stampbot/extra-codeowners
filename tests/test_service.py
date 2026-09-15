@@ -59,6 +59,18 @@ HEAD = "a" * 40
 BASE = "b" * 40
 
 
+class InstalledAuthorityGitHub:
+    async def installation_includes_repository(
+        self,
+        installation_id: int,
+        repository: str,
+        *,
+        authority_generation: int = 0,
+        refresh: bool = False,
+    ) -> bool:
+        return True
+
+
 class FakeGitHub:
     def __init__(
         self,
@@ -101,6 +113,7 @@ class FakeGitHub:
         repository: str,
         *,
         authority_generation: int = 0,
+        refresh: bool = False,
     ) -> bool:
         return True
 
@@ -2355,7 +2368,7 @@ async def test_authority_work_fans_out_open_pulls_without_blocking_evaluations(
     stop = asyncio.Event()
     calls: list[str] = []
 
-    class AuthorityGitHub:
+    class AuthorityGitHub(InstalledAuthorityGitHub):
         async def list_open_pulls(
             self, installation_id: int, repository: str
         ) -> list[dict[str, Any]]:
@@ -2429,7 +2442,7 @@ async def test_worker_does_not_starve_evaluations_behind_authority_retries(
     stop = asyncio.Event()
     calls: list[str] = []
 
-    class AuthorityGitHub:
+    class AuthorityGitHub(InstalledAuthorityGitHub):
         async def list_open_pulls(
             self, installation_id: int, repository: str
         ) -> list[dict[str, Any]]:
@@ -2556,7 +2569,7 @@ async def test_installation_authority_splits_into_normalized_repository_jobs(
     claimed = store.claim_authority("worker", 60)
     assert claimed is not None
 
-    class AuthorityGitHub:
+    class AuthorityGitHub(InstalledAuthorityGitHub):
         async def list_installation_repositories(
             self, installation_id: int
         ) -> list[dict[str, Any]]:
@@ -2594,7 +2607,7 @@ async def test_authority_rate_limit_defers_after_bounded_batch_and_keeps_fanout(
     claimed = store.claim_authority("worker", 60)
     assert claimed is not None
 
-    class AuthorityGitHub:
+    class AuthorityGitHub(InstalledAuthorityGitHub):
         async def list_open_pulls(
             self, installation_id: int, repository: str
         ) -> list[dict[str, Any]]:
@@ -2638,7 +2651,7 @@ async def test_authority_fanout_preserves_a_global_limit_beside_a_longer_install
     claimed = store.claim_authority("worker", 60)
     assert claimed is not None
 
-    class AuthorityGitHub:
+    class AuthorityGitHub(InstalledAuthorityGitHub):
         async def list_open_pulls(
             self, installation_id: int, repository: str
         ) -> list[dict[str, Any]]:
@@ -2683,7 +2696,7 @@ async def test_authority_fast_revocation_failure_keeps_durable_evaluation(
     claimed = store.claim_authority("worker", 60)
     assert claimed is not None
 
-    class AuthorityGitHub:
+    class AuthorityGitHub(InstalledAuthorityGitHub):
         async def list_open_pulls(
             self, installation_id: int, repository: str
         ) -> list[dict[str, Any]]:
@@ -2728,9 +2741,7 @@ async def test_absent_repository_authority_retires_only_its_generation(
     claimed = store.claim_authority("worker", 60)
     assert claimed is not None
     evaluator = MagicMock()
-    evaluator.github.installation_includes_repository = AsyncMock(
-        side_effect=[True, False] if reason == "installation_repositories.added" else [False]
-    )
+    evaluator.github.installation_includes_repository = AsyncMock(side_effect=[True, False])
     evaluator.github.get_repository = AsyncMock(
         return_value={"full_name": "example/project", "archived": False}
     )
@@ -2891,13 +2902,21 @@ async def test_repository_addition_lists_pulls_after_current_unarchived_metadata
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("listed", [False, True])
-async def test_public_repository_addition_does_not_use_readability_as_membership(
-    tmp_path: Path, listed: bool
+@pytest.mark.parametrize(
+    "reason",
+    [
+        "installation_repositories.added",
+        "team_add.received",
+        "member.added",
+        "member.removed",
+        "repository.renamed",
+    ],
+)
+async def test_public_repository_authority_does_not_use_readability_as_membership(
+    tmp_path: Path, listed: bool, reason: str
 ) -> None:
     store = migrated_store(f"sqlite:///{tmp_path / 'public-addition.db'}")
-    store.enqueue_authority(
-        AuthorityRequest(2, "example/project", None, "installation_repositories.added")
-    )
+    store.enqueue_authority(AuthorityRequest(2, "example/project", None, reason))
     claimed = store.claim_authority("worker", 60)
     assert claimed is not None
     evaluator = MagicMock()
@@ -2921,6 +2940,7 @@ async def test_public_repository_addition_does_not_use_readability_as_membership
     assert evaluator.github.installation_includes_repository.await_count == (1 if listed else 2)
     evaluator.github.get_repository.assert_not_awaited()
     evaluator.github.list_open_pulls.assert_not_awaited()
+    evaluator.invalidate_for_trigger.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -2955,15 +2975,15 @@ async def test_authority_absence_requires_fresh_app_membership_agreement(
     )
     evaluator.github.list_installation_repositories = AsyncMock(return_value=[])
     evaluator.github.installation_includes_repository = AsyncMock(
-        side_effect=lookup if isinstance(lookup, Exception) else None,
-        return_value=lookup,
+        side_effect=[True, lookup],
     )
     worker = Worker(settings(), store, evaluator, "worker")
 
     assert await worker._process_authority(claimed) == expected
     assert store.pending_count() == 1
     assert store.provider_is_backpressured(None) == (expected == "rate_limited")
-    evaluator.github.installation_includes_repository.assert_awaited_once_with(
+    assert evaluator.github.installation_includes_repository.await_count == 2
+    evaluator.github.installation_includes_repository.assert_any_await(
         2, "example/project", refresh=True
     )
     evaluator.invalidate_for_trigger.assert_not_called()
@@ -2983,6 +3003,7 @@ async def test_authority_followup_uses_recovery_without_downgrading_direct_event
     claimed = store.claim_authority("worker", 60)
     assert claimed is not None
     evaluator = MagicMock()
+    evaluator.github.installation_includes_repository = AsyncMock(return_value=True)
     evaluator.github.list_open_pulls = AsyncMock(
         return_value=[{"number": 4, "head": {"sha": HEAD}}]
     )
@@ -3017,6 +3038,7 @@ async def test_failed_revocation_promotion_cannot_complete_authority_work(
     claimed = store.claim_authority("worker", 60)
     assert claimed is not None
     evaluator = MagicMock()
+    evaluator.github.installation_includes_repository = AsyncMock(return_value=True)
     evaluator.github.list_open_pulls = AsyncMock(
         return_value=[{"number": 4, "head": {"sha": HEAD}}]
     )
@@ -3078,7 +3100,7 @@ async def test_malformed_authority_fanout_remains_pending_fail_closed(tmp_path: 
     claimed = store.claim_authority("worker", 60)
     assert claimed is not None
 
-    class AuthorityGitHub:
+    class AuthorityGitHub(InstalledAuthorityGitHub):
         async def list_open_pulls(
             self, installation_id: int, repository: str
         ) -> list[dict[str, Any]]:

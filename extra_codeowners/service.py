@@ -2216,15 +2216,15 @@ class Worker:
         requests: list[JobRequest] = []
         full_name = job.repository_full_name
         try:
+            # Public repositories can remain readable outside the installation.
+            # Check current membership before queuing any authority follow-up.
+            if not await self.evaluator.github.installation_includes_repository(
+                job.installation_id, full_name, refresh=True
+            ):
+                if await self._authority_repository_absent(job):
+                    return
+                raise GitHubError("repository authority membership evidence is inconsistent")
             if job.reason == "installation_repositories.added":
-                # Public metadata remains readable after installation access
-                # is removed. Bypass cached membership for this lifecycle job.
-                if not await self.evaluator.github.installation_includes_repository(
-                    job.installation_id, full_name, refresh=True
-                ):
-                    if await self._authority_repository_absent(job):
-                        return
-                    raise GitHubError("repository addition membership evidence is inconsistent")
                 current_name, archived = _reconciliation_repository(
                     await self.evaluator.github.get_repository(job.installation_id, full_name)
                 )

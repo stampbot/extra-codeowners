@@ -210,11 +210,13 @@ None of these controls can revoke a success after a transfer or installation
 change has already removed the App's access.
 
 Organization team/member events can name repositories outside a selected
-installation. If a repository authority job receives a redirect, `404`, or
-`410`, the worker reads the complete current installation listing. It retires
-that job only when the validated listing excludes the repository and a fresh
-App-authenticated lookup agrees. A malformed or incomplete listing, provider
-backoff, or either lookup still finding the repository leaves the job pending.
+installation. Before processing a repository authority job, the worker checks
+current App membership—even if the repository is public and readable. If that
+check excludes the repository, or a later read returns a redirect, `404`, or
+`410`, the worker checks the complete installation listing and repeats the
+App-authenticated lookup. It retires the job only when both exclude the
+repository. A malformed or incomplete listing, provider backoff, or conflicting
+membership evidence leaves the job pending.
 Generation and lease checks protect a newer event from being
 removed by the old worker.
 
