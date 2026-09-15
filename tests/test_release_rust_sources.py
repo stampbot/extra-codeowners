@@ -159,6 +159,19 @@ def test_purl_identity_cannot_be_a_path_or_url(purl: str) -> None:
         rust._cargo_identity(purl)
 
 
+@pytest.mark.parametrize(
+    "version",
+    ["0.0.0+" + "--" * 80 + "!", "1.2.3+" + "x" * 1000, "1.2.3+", "1.2.3-", "01.2.3", "1.2.3-01"],
+)
+def test_version_rejects_malformed_and_adversarial_suffixes(version: str) -> None:
+    assert not rust._valid_version(version)
+
+
+@pytest.mark.parametrize("version", ["1.2.3", "0.1.2-alpha.1", "1.2.3-foo--bar+build.001"])
+def test_version_accepts_cargo_release_identifiers(version: str) -> None:
+    assert rust._valid_version(version)
+
+
 def test_plan_deduplicates_nested_targets(tmp_path: Path) -> None:
     component = {"purl": "pkg:cargo/dependency@2.0.0"}
     manifest = plan(tmp_path, components=[component, {"components": [component]}])

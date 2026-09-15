@@ -34,7 +34,8 @@ MAX_BUNDLE = 128 * 1024 * 1024
 MAX_SDIST_EXPANDED = 128 * 1024 * 1024
 MAX_COMPONENTS = 1000
 NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_-]{0,99}\Z")
-VERSION = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)*\Z")
+VERSION_CORE = re.compile(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\Z")
+VERSION_IDENTIFIER = re.compile(r"[A-Za-z0-9-]+\Z")
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 REGISTRY = "registry+https://github.com/rust-lang/crates.io-index"
 
@@ -98,13 +99,31 @@ def _cargo_components(value: dict[str, Any]) -> Iterator[dict[str, Any]]:
                 raise RustSourceError("unsupported Cargo SBOM reference")
 
 
+def _valid_version(value: str) -> bool:
+    if len(value) > 200:
+        return False
+    release, plus, build = value.partition("+")
+    core, minus, prerelease = release.partition("-")
+    if VERSION_CORE.fullmatch(core) is None:
+        return False
+    for separator, suffix in ((minus, prerelease), (plus, build)):
+        if separator and any(
+            VERSION_IDENTIFIER.fullmatch(part) is None for part in suffix.split(".")
+        ):
+            return False
+    return not minus or all(
+        not part.isdecimal() or len(part) == 1 or not part.startswith("0")
+        for part in prerelease.split(".")
+    )
+
+
 def _cargo_identity(purl: str) -> tuple[str, str]:
     parsed = urllib.parse.urlsplit(purl)
     if parsed.scheme != "pkg" or parsed.netloc or not parsed.path.startswith("cargo/"):
         raise RustSourceError("invalid Cargo package URL")
     identity = urllib.parse.unquote(parsed.path.removeprefix("cargo/"))
     name, separator, version = identity.partition("@")
-    if not separator or NAME.fullmatch(name) is None or VERSION.fullmatch(version) is None:
+    if not separator or NAME.fullmatch(name) is None or not _valid_version(version):
         raise RustSourceError("invalid Cargo component identity")
     return name, version
 
@@ -267,7 +286,7 @@ def _validate_source(source: dict[str, Any]) -> None:
         not isinstance(name, str)
         or NAME.fullmatch(name) is None
         or not isinstance(version, str)
-        or VERSION.fullmatch(version) is None
+        or not _valid_version(version)
         or not isinstance(checksum, str)
         or SHA256.fullmatch(checksum) is None
         or source.get("path") != f"sources/{name}/{name}-{version}.crate"
