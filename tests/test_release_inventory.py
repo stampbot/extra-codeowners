@@ -196,7 +196,7 @@ def test_collect_inventory_records_raw_os_python_and_native_evidence() -> None:
     python = inventory["python"]
     assert isinstance(python, dict)
     distributions = python["distributions"]
-    assert python["source_recipe_schema"] == 1
+    assert python["source_recipe_schema"] == 2
     assert python["rust_source_bundle"] == "rust-source-amd64.tar.gz"
     assert isinstance(distributions, list)
     example = next(item for item in distributions if item["normalized_name"] == "example-pkg")

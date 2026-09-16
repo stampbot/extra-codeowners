@@ -1,0 +1,174 @@
+{
+  "distribution": "psycopg-binary",
+  "platforms": {
+    "amd64": {
+      "sbom_sha256": "bdd4795c96b666a64d1410b509851d1ad397c739e7e741673d10d5be2b130eb6",
+      "sbom_size": 5183,
+      "sources": [
+        {
+          "name": "cyrus-sasl",
+          "reported_package": {
+            "name": "cyrus-sasl-lib",
+            "version": "2.1.26-24.el7_9"
+          },
+          "sha256": "c49472bd08c6060f53a9dace005b81cf466836790d2dcb407a536820f6319e77",
+          "size": 1782723,
+          "url": "https://vault.centos.org/7.9.2009/updates/Source/SPackages/cyrus-sasl-2.1.26-24.el7_9.src.rpm",
+          "version": "2.1.26-24.el7_9"
+        },
+        {
+          "name": "keyutils",
+          "reported_package": {
+            "name": "keyutils-libs",
+            "version": "1.5.8-3.el7"
+          },
+          "sha256": "eff16e16f707fd28436afe4cf7b7c2e34b9f827e7f6beacf3c6eecbf74e9f850",
+          "size": 77575,
+          "url": "https://vault.centos.org/7.9.2009/os/Source/SPackages/keyutils-1.5.8-3.el7.src.rpm",
+          "version": "1.5.8-3.el7"
+        },
+        {
+          "name": "krb5",
+          "reported_package": {
+            "name": "krb5-libs",
+            "version": "1.15.1-55.el7_9"
+          },
+          "sha256": "d154824d46dff5aece0cdb8e4c9df299058bacadbaf7fb16be8d9163ca2814bb",
+          "size": 11554886,
+          "url": "https://vault.centos.org/7.9.2009/updates/Source/SPackages/krb5-1.15.1-55.el7_9.src.rpm",
+          "version": "1.15.1-55.el7_9"
+        },
+        {
+          "name": "e2fsprogs",
+          "reported_package": {
+            "name": "libcom_err",
+            "version": "1.42.9-19.el7"
+          },
+          "sha256": "718f64bd465d1770eaf6490157a861d3dba2846b4a636a67d27bd4d38e6b86cf",
+          "size": 4765994,
+          "url": "https://vault.centos.org/7.9.2009/os/Source/SPackages/e2fsprogs-1.42.9-19.el7.src.rpm",
+          "version": "1.42.9-19.el7"
+        },
+        {
+          "name": "libselinux",
+          "reported_package": {
+            "name": "libselinux",
+            "version": "2.5-15.el7"
+          },
+          "sha256": "978ed00b9c7ca78a51e0aff48070c69ebe4fbfca0e64f618627ebdbe8786a089",
+          "size": 311489,
+          "url": "https://vault.centos.org/7.9.2009/os/Source/SPackages/libselinux-2.5-15.el7.src.rpm",
+          "version": "2.5-15.el7"
+        },
+        {
+          "name": "pcre",
+          "reported_package": {
+            "name": "pcre",
+            "version": "8.32-17.el7"
+          },
+          "sha256": "b96493d8ea6def2e9a40dade4feedcea2b4bbfe8ce4c13a3465e99f21ef2c43d",
+          "size": 1428012,
+          "url": "https://vault.centos.org/7.9.2009/os/Source/SPackages/pcre-8.32-17.el7.src.rpm",
+          "version": "8.32-17.el7"
+        }
+      ]
+    },
+    "arm64": {
+      "sbom_sha256": "2784478d9c73890a63d0e17da32f8a773e18760df09e7b22701e9a0d873c027a",
+      "sbom_size": 6327,
+      "sources": [
+        {
+          "name": "cyrus-sasl",
+          "reported_package": {
+            "name": "cyrus-sasl-lib",
+            "version": "2.1.27-6.el8_5"
+          },
+          "sha256": "f388fd13b3b10aec374f61bc1753b19ae019b0ab4937bf9bd9cbdf0f445c079a",
+          "size": 4031617,
+          "url": "https://vault.almalinux.org/8.10/BaseOS/Source/Packages/cyrus-sasl-2.1.27-6.el8_5.src.rpm",
+          "version": "2.1.27-6.el8_5"
+        },
+        {
+          "name": "keyutils",
+          "reported_package": {
+            "name": "keyutils-libs",
+            "version": "1.5.10-9.el8"
+          },
+          "sha256": "13fec652f642858757755b64195189abef7c0ff8025e9807ddba467e4ad8fbb6",
+          "size": 102531,
+          "url": "https://vault.almalinux.org/8.10/BaseOS/Source/Packages/keyutils-1.5.10-9.el8.src.rpm",
+          "version": "1.5.10-9.el8"
+        },
+        {
+          "name": "krb5",
+          "reported_package": {
+            "name": "krb5-libs",
+            "version": "1.18.2-32.el8_10"
+          },
+          "sha256": "4f9591ca0a56d6a5558930d8054cd78ba9c621d44a139d8de65915fb974d6b28",
+          "size": 10399341,
+          "url": "https://vault.almalinux.org/8.10/BaseOS/Source/Packages/krb5-1.18.2-32.el8_10.src.rpm",
+          "version": "1.18.2-32.el8_10"
+        },
+        {
+          "name": "e2fsprogs",
+          "reported_package": {
+            "name": "libcom_err",
+            "version": "1.45.6-7.el8_10"
+          },
+          "sha256": "7042d97c138a6b6c8d5a9282bf9bb736f8d377d4055fe0da2e0d3f459141b2a0",
+          "size": 5680481,
+          "url": "https://vault.almalinux.org/8.10/BaseOS/Source/Packages/e2fsprogs-1.45.6-7.el8_10.src.rpm",
+          "version": "1.45.6-7.el8_10"
+        },
+        {
+          "name": "libselinux",
+          "reported_package": {
+            "name": "libselinux",
+            "version": "2.9-11.el8_10"
+          },
+          "sha256": "1a9f9af679cb4f57c4433012f829dccec9b38fe3ac749b63785f2b70f2875afd",
+          "size": 354953,
+          "url": "https://vault.almalinux.org/8.10/BaseOS/Source/Packages/libselinux-2.9-11.el8_10.src.rpm",
+          "version": "2.9-11.el8_10"
+        },
+        {
+          "name": "libxcrypt",
+          "reported_package": {
+            "name": "libxcrypt",
+            "version": "4.1.1-6.el8"
+          },
+          "sha256": "3c492b21903329f611e7945134ed851beb2f8a38a2909109fb94c5fa20ae08bb",
+          "size": 228407,
+          "url": "https://vault.almalinux.org/8.10/BaseOS/Source/Packages/libxcrypt-4.1.1-6.el8.src.rpm",
+          "version": "4.1.1-6.el8"
+        },
+        {
+          "name": "openssl",
+          "reported_package": {
+            "name": "openssl-libs",
+            "version": "1.1.1k-15.el8_6"
+          },
+          "sha256": "5893c3a0c060ca1ef83274f22e30c89c6f4ecd602760df21cdbb10b788d15325",
+          "size": 7746716,
+          "url": "https://vault.almalinux.org/8.10/BaseOS/Source/Packages/openssl-1.1.1k-15.el8_6.src.rpm",
+          "version": "1.1.1k-15.el8_6"
+        },
+        {
+          "name": "pcre2",
+          "reported_package": {
+            "name": "pcre2",
+            "version": "10.32-3.el8_6"
+          },
+          "sha256": "c995278b025eaa5598ceb2117a5710338210839fa5bca2a3b4a279e8afd25cb9",
+          "size": 1670705,
+          "url": "https://vault.almalinux.org/8.10/BaseOS/Source/Packages/pcre2-10.32-3.el8_6.src.rpm",
+          "version": "10.32-3.el8_6"
+        }
+      ]
+    }
+  },
+  "schema_version": 1,
+  "scope": "Source RPMs for distro packages reported by the audited wheel SBOMs; custom-built libraries and other unreported components remain separate.",
+  "version": "3.3.4"
+}
