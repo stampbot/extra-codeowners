@@ -1,10 +1,11 @@
-# Runtime vulnerability review — September 14, 2026
+# Runtime vulnerability review
 
-The eighteen CVEs blocking the reviewed image scans are not reachable through
+The eighteen CVEs blocking the September 14, 2026 image scans are not reachable through
 the shipped service. The final glibc assessment required a native caller review,
 described below. All eighteen now have `not_affected` statements; this does not
 mean the underlying packages are patched or that every scanner finding was
-assessed.
+assessed. A September 19 addition covers one further PCRE2 finding, bringing
+the total to nineteen `not_affected` statements.
 
 The [OpenVEX file](runtime.openvex.json) contains the individual CVEs, exact
 package URLs, explanations, and Debian advisory links. It also retains the two
@@ -110,6 +111,30 @@ absence of a suspicious string or a promise that arbitrary code in this image
 is safe.
 
 ## Scope and maintenance
+
+### September 19 addition: PCRE2 pattern conversion
+
+The September 19 scans added CVE-2026-89157 for Debian `libpcre2-8-0`
+`10.46-1~deb13u1` on both architectures. The
+[PCRE2 maintainer advisory](https://github.com/PCRE2Project/pcre2/security/advisories/GHSA-q8g2-wprr-34m9)
+describes an allocation overflow in `pcre2_pattern_convert()` on 32-bit
+systems. It requires a large foreign-syntax pattern and PCRE2-managed output
+allocation; ordinary pattern matching is not the affected operation.
+
+Our release workflow publishes only `linux/amd64` and `linux/arm64`, both with
+64-bit `size_t`. The Debian library is also outside the native dependency graph
+reviewed above, and the service does not call this conversion API. The base
+image and locked dependencies have not changed since that review. These are
+the grounds for `not_affected`; the package itself remains unpatched.
+
+The Vexcalibur-generated statement names only this Debian package version on
+amd64 and arm64. It does not exempt private wheel libraries, 32-bit builds, or
+arbitrary programs run inside the container. Debian lists `10.46-1~deb13u2` as
+fixed in its [security tracker](https://security-tracker.debian.org/tracker/CVE-2026-89157).
+The normal base-image update can pick up that fix without adding package
+upgrades to the Dockerfile.
+
+### Review boundaries
 
 These conclusions apply to the shipped service's behavior, including its SQLite
 backend. They do not cover arbitrary commands, custom Python code, native

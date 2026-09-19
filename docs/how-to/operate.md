@@ -187,11 +187,19 @@ events and authority work by default. Set
 `EXTRA_CODEOWNERS_GITHUB_RECOVERY_RESERVE_PERCENT` to adjust that tradeoff. A
 larger reserve gives direct events more headroom but delays missed-webhook
 recovery. All replicas charge the shared database budget before each request,
-including retries and pagination. A deferred scan resumes after its last
-completed repository; repositories later in the list don't have to wait for
-every earlier repository to be scanned again. A partially read repository is
-retried from its beginning, so incomplete pagination never becomes a claim
-that its PRs were checked.
+including retries and pagination. A deferred scan saves its last completed
+repository and its progress within an unfinished repository. The next scan
+finishes that repository first, even on a replica with an empty cache.
+
+Each attempt fetches and validates every open-PR page before processing PRs in
+number order. After a PR is queued or confirmed unenrolled, its number becomes
+the durable resume point. The next attempt handles higher numbers; completion
+clears that point so the next full pass checks all PRs again. A lower-numbered
+PR that changes during a partial scan is therefore picked up on the next pass
+if its webhook was missed. Incomplete pagination never advances PR progress.
+Fresh membership that removes or archives the unfinished repository clears
+its partial progress, as does a suspended installation. If access returns,
+the next scan starts that repository from its first open PR.
 
 The budget comes from GitHub's response headers, not a configured request
 limit. When that evidence is missing or expired, recovery gets one probe per
@@ -209,6 +217,27 @@ deadline still expires, allowing a fresh probe to establish the next budget.
 If GitHub explicitly reports zero remaining requests, its full reset deadline
 is honored instead. Upgrades preserve existing stored deadlines; don't clear
 budget rows to force recovery to resume sooner.
+
+For each repository, reconciliation reads policy once per distinct base commit
+in the open-PR listing. When that policy is missing, it also asks GitHub whether
+the head has an existing managed check. Only PRs with neither policy nor a
+managed check are omitted from the recovery queue. Both observations are made
+again on every scan, so missing a policy-change webhook cannot permanently
+prevent enrollment. Disabled or unreadable policy still queues evaluation;
+removing policy cannot hide a previously managed check.
+
+Discovery pages and empty check listings are cached only within one process.
+The cache holds at most 32 MiB total, 1 MiB per entry, or 4,096 entries, and
+removes entries idle for one hour. Every entry still needs an authenticated
+conditional HTTP request before
+reuse. A `304 Not Modified` saves the response body transfer, not the physical
+request or its possible secondary-limit cost. Watch the GitHub request metric's
+`outcome="not_modified"` series separately from local `budget_deferred`
+counts. The cache is disposable and is not authority evidence.
+`extra_codeowners_reconciliation_unenrolled_skips_total` counts PRs omitted
+after those two absence checks; a rising count is expected in a mostly
+unenrolled installation. Existing queued jobs still drain normally after an
+upgrade; the optimization does not delete them.
 
 An upgrade to `0007_reconciliation_completion` rechecks retained completions from older workers on the next scan, regardless of the recheck interval. Expect additional recovery work once after upgrading. Follow the [controlled upgrade procedure](upgrade.md); a rolling image replacement alone is not sufficient for this database change.
 

@@ -83,11 +83,21 @@ def test_review_records_glibc_caller_evidence_and_existing_openssl_fixes() -> No
     document = json.loads(SOURCE.read_text(encoding="utf-8"))
     statements = document["statements"]
     assert Counter(statement["status"] for statement in statements) == {
-        "not_affected": 18,
+        "not_affected": 19,
         "fixed": 2,
     }
     by_cve = {statement["vulnerability"]["name"]: statement for statement in statements}
     assert len(by_cve) == len(statements)
+    pcre2 = by_cve["CVE-2026-89157"]
+    assert pcre2["status"] == "not_affected"
+    assert "32-bit" in pcre2["impact_statement"]
+    assert "pattern-conversion API" in pcre2["impact_statement"]
+    assert {product["identifiers"]["purl"] for product in pcre2["products"]} == {
+        f"pkg:deb/debian/libpcre2-8-0@10.46-1~deb13u1?arch={architecture}"
+        "&distro=debian-13.6&upstream=pcre2"
+        for architecture in ("amd64", "arm64")
+    }
+    assert "GHSA-q8g2-wprr-34m9" in pcre2["status_notes"]
     glibc = by_cve["CVE-2026-5450"]
     assert glibc["status"] == "not_affected"
     assert len(glibc["products"]) == 4

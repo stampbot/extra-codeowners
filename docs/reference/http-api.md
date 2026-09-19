@@ -185,7 +185,32 @@ The endpoint returns Prometheus text format. Extra CODEOWNERS defines these appl
 | `extra_codeowners_reconciliations_total` | counter | Reconciliation outcomes, labeled with `result="success"`, `result="partial"`, or `result="failure"`. A process that observes another lease owner does not increment the counter. An open provider circuit records a partial result; an election error counts as a failure. |
 | `extra_codeowners_reconciliation_seconds` | histogram | Wall-clock duration of a reconciliation attempt, including the explicit `not_elected` outcome for a replica that did not own the scan lease. |
 | `extra_codeowners_reconciliation_last_success_timestamp_seconds` | gauge | Unix timestamp of the most recent complete reconciliation by this process. A partial or failed attempt does not update it. |
+| `extra_codeowners_reconciliation_unenrolled_skips_total` | counter | PRs omitted from recovery after GitHub confirms both missing policy at the listed base commit and no managed check on the head. No labels. |
 | `extra_codeowners_trace_exports_total` | counter | Trace exporter batches, labeled by success or failure. A failure does not change the approval decision or worker retry behavior. |
+
+Discovery pages and empty managed-check listings use a disposable per-process cache with a 32 MiB total
+bound, 1 MiB per-entry bound, 4,096-entry bound, and one-hour idle lifetime.
+Each page is revalidated with an authenticated conditional HTTP request before
+the cached body is used. A `304` reuses the validated body and pagination links;
+it still consumes a physical HTTP request and may encounter secondary limits.
+The logical request counter and duration histogram use `outcome="not_modified"`
+for that response. The physical request counter has no outcome label.
+
+Reconciliation reads policy at each distinct listed base commit once per
+repository per scan. A missing policy skips queueing only after GitHub also
+confirms that the head has no managed check. Existing checks and present,
+disabled, malformed, or unreadable policy follow ordinary evaluation.
+After validating the complete list, the reconciler processes PRs in number
+order and saves progress after each handled PR. A deferred attempt resumes
+above that number in the unfinished repository, using a fresh GitHub listing.
+Completing the repository clears its PR cursor. Earlier PRs are checked again
+on the next full pass; the cursor is not evidence that their state is unchanged.
+
+The shared REST-core budget accounts conservatively across replicas. A `304`
+can refund its local debit only when the accounting receipt still matches the
+database row; a concurrent debit or stricter quota observation makes the
+refund ineligible. This avoids crediting quota that another replica already
+spent.
 
 Prometheus also publishes generated counter and histogram series, plus Python runtime and process collectors. Metric labels must never contain repository names, pull-request titles, actor names, paths, or delivery IDs. Those values would create unbounded cardinality and disclose private repository metadata.
 
@@ -196,9 +221,10 @@ database guard; a long API family points to GitHub or the network. When OTLP
 tracing is enabled, use the sampled `trace_id` in the corresponding structured
 logs to inspect the same operation without adding private values to Prometheus.
 
-`success` means the elected process completed the scan of every visible,
-unsuspended installation and validated every repository and open pull request
-returned by GitHub. `partial` means the process lost its lease or could not
+`success` means the elected process finished its resumed scan of every visible,
+unsuspended installation and validated the repository and PR listings returned
+by GitHub. PRs below a saved resume point were handled in an earlier attempt,
+not rechecked in this one. `partial` means the process lost its lease or could not
 safely scan at least one installation or queue its pull requests. If graceful
 shutdown interrupts an elected attempt, that attempt is also partial and does
 not advance the last-success timestamp. An idle or unelected shutdown records

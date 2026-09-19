@@ -73,6 +73,15 @@ class CoreQuota:
         return cls(limit, remaining, datetime.fromtimestamp(reset, UTC))
 
 
+@dataclass(frozen=True)
+class BudgetReceipt:
+    """Identify one debit; later accounting makes its refund ineligible."""
+
+    installation_id: int
+    reset_at: datetime
+    revision: int
+
+
 class RecoveryApiBudget:
     """Reserve part of a shared installation quota for direct events.
 
@@ -110,10 +119,11 @@ class RecoveryApiBudget:
         assert row is not None
         return row
 
-    def admit(self, installation_id: int, *, recovery: bool) -> None:
+    def admit(self, installation_id: int, *, recovery: bool) -> BudgetReceipt | None:
         """Charge before each physical request, including retries and pages."""
         delay = 0
         exhausted = False
+        receipt = None
         with self.store.session() as session:
             row = self._locked_row(session, installation_id)
             now = utcnow()
@@ -124,6 +134,10 @@ class RecoveryApiBudget:
                     exhausted = row.remaining == 0
                 else:
                     row.remaining = max(0, row.remaining - 1)
+                    row.accounting_revision += 1
+                    receipt = BudgetReceipt(
+                        installation_id, _utc(row.reset_at), row.accounting_revision
+                    )
             elif recovery:
                 if _utc(row.probe_after) > now:
                     delay = math.ceil((_utc(row.probe_after) - now).total_seconds())
@@ -136,13 +150,34 @@ class RecoveryApiBudget:
             if exhausted:
                 raise ProviderQuotaExhaustedError(delay)
             raise RecoveryBudgetDeferredError(delay)
+        return receipt
 
-    def observe(self, installation_id: int, quota: CoreQuota) -> None:
+    def observe(
+        self,
+        installation_id: int,
+        quota: CoreQuota,
+        *,
+        not_modified_receipt: BudgetReceipt | None = None,
+    ) -> None:
         with self.store.session() as session:
             row = self._locked_row(session, installation_id)
             previous_reset = _utc(row.reset_at)
             if quota.reset_at < previous_reset:
                 return
+            receipt = not_modified_receipt
+            if (
+                receipt is not None
+                and receipt.installation_id == installation_id
+                and receipt.reset_at == previous_reset
+                and previous_reset > utcnow()
+                and receipt.revision == row.accounting_revision
+                and quota.remaining >= row.remaining + 1
+                and row.remaining < row.request_limit
+            ):
+                # GitHub does not charge authenticated 304 responses. Refund
+                # only the latest debit: a peer's newer debit or stricter
+                # observation must never be undone by an older response.
+                row.remaining += 1
             if row.request_limit == 0 or previous_reset <= utcnow():
                 row.request_limit = quota.limit
                 row.remaining = quota.remaining
@@ -158,10 +193,37 @@ class RecoveryApiBudget:
                 # exhaustion deadline before allowing another probe.
                 if quota.remaining == 0:
                     row.reset_at = quota.reset_at
+            # Even an equal balance can be new evidence (notably an explicit
+            # zero after the last debit reached zero). Fence every observation,
+            # not only observations that change the stored number.
+            row.accounting_revision += 1
 
     def repository_cursor(self, installation_id: int) -> str:
         with self.store.session() as session:
             return self._locked_row(session, installation_id).repository_cursor
+
+    def pull_cursor(self, installation_id: int) -> tuple[str, int]:
+        """Return the last fully handled PR within an unfinished repository."""
+        with self.store.session() as session:
+            row = self._locked_row(session, installation_id)
+            return row.pull_cursor_repository, row.pull_cursor_number
+
+    def advance_pull(self, installation_id: int, full_name: str, number: int, owner: str) -> None:
+        """Keep completed PR progress across quota windows and cold replicas."""
+        with self.store.session() as session:
+            row = self._locked_row(session, installation_id)
+            lease = session.scalar(
+                select(ServiceLease)
+                .where(
+                    ServiceLease.name == "open-pr-reconciler",
+                    ServiceLease.owner == owner,
+                    ServiceLease.lease_until > utcnow(),
+                )
+                .with_for_update()
+            )
+            if lease is not None:
+                row.pull_cursor_repository = full_name.lower()
+                row.pull_cursor_number = number
 
     def advance_repository(self, installation_id: int, full_name: str, owner: str) -> None:
         """Persist only completed repositories while the caller owns discovery."""
@@ -178,3 +240,9 @@ class RecoveryApiBudget:
             )
             if lease is not None:
                 row.repository_cursor = full_name.lower()
+                row.pull_cursor_repository = ""
+                row.pull_cursor_number = 0
+
+    def clear_pull_cursor(self, installation_id: int, owner: str) -> None:
+        """Discard partial progress when fresh membership makes it ineligible."""
+        self.advance_pull(installation_id, "", 0, owner)

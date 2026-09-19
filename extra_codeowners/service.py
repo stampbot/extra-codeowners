@@ -49,6 +49,7 @@ from extra_codeowners.metrics import (
     QUEUE_WORK_CLASS_OLDEST_AGE_SECONDS,
     RECONCILIATION_LAST_SUCCESS,
     RECONCILIATION_SECONDS,
+    RECONCILIATION_UNENROLLED_SKIPS,
     RECONCILIATIONS,
     SHARED_HEAD_INVALIDATION_DEPTH,
     SHARED_HEAD_INVALIDATIONS,
@@ -2870,6 +2871,7 @@ class Reconciler:
             if interrupted():
                 return interruption_outcome()
             if suspended:
+                await asyncio.to_thread(budget.clear_pull_cursor, installation_id, self.owner)
                 continue
             if await asyncio.to_thread(self.store.provider_is_backpressured, installation_id):
                 failed_installations += 1
@@ -2890,6 +2892,20 @@ class Reconciler:
                 repositories = [item for item in repositories if item[0].lower() > cursor] + [
                     item for item in repositories if item[0].lower() <= cursor
                 ]
+                partial_repository, partial_number = await asyncio.to_thread(
+                    budget.pull_cursor, installation_id
+                )
+                if partial_repository and not any(
+                    name.lower() == partial_repository
+                    and not archived
+                    and not self.settings.is_organization_config_repository(name)
+                    for name, archived in repositories
+                ):
+                    await asyncio.to_thread(budget.clear_pull_cursor, installation_id, self.owner)
+                    partial_repository, partial_number = "", 0
+                # Finish the interrupted repository before newly added names
+                # can displace its progress. Membership still comes from GitHub.
+                repositories.sort(key=lambda item: item[0].lower() != partial_repository)
                 for full_name, archived in repositories:
                     if interrupted():
                         return interruption_outcome()
@@ -2909,9 +2925,69 @@ class Reconciler:
                     if interrupted():
                         return interruption_outcome()
                     pulls = _reconciliation_pulls(pull_records)
-                    for number, head_sha in pulls:
+                    # A policy belongs to the PR's base commit, not necessarily
+                    # the repository's default branch. Share only reads of the
+                    # same immutable base during this repository scan.
+                    policy_present: dict[str, bool] = {}
+                    records = sorted(
+                        zip(pulls, pull_records, strict=True), key=lambda item: item[0][0]
+                    )
+                    for (number, head_sha), pull_record in records:
                         if interrupted():
                             return interruption_outcome()
+                        if full_name.lower() == partial_repository and number <= partial_number:
+                            continue
+                        base = pull_record.get("base")
+                        base_sha = base.get("sha") if isinstance(base, dict) else None
+                        # Older/incomplete discovery representations fall back
+                        # to full evaluation; missing metadata cannot skip work.
+                        try:
+                            base_sha = _reconciliation_head_sha(base_sha)
+                        except _ReconciliationPayloadError:
+                            base_sha = None
+                        if base_sha is not None:
+                            if base_sha not in policy_present:
+                                try:
+                                    policy_present[base_sha] = (
+                                        await self.github.get_file_text(
+                                            installation_id,
+                                            full_name,
+                                            self.settings.policy_path,
+                                            ref=base_sha,
+                                        )
+                                        is not None
+                                    )
+                                except (GitHubRateLimitError, GitHubOperationStoppedError):
+                                    raise
+                                except GitHubError:
+                                    # Unreadable policy is not absence. Queue
+                                    # evaluation so managed success is revoked.
+                                    policy_present[base_sha] = True
+                            if interrupted():
+                                return interruption_outcome()
+                            if not policy_present[base_sha]:
+                                managed = await self.github.has_reconciliation_check(
+                                    installation_id,
+                                    full_name,
+                                    head_sha,
+                                    self.settings.check_name,
+                                    stop=request_stop,
+                                )
+                                if interrupted():
+                                    return interruption_outcome()
+                                if not managed:
+                                    # Both absence observations came from GitHub
+                                    # in this scan. A prior managed check always
+                                    # follows the ordinary invalidation path.
+                                    RECONCILIATION_UNENROLLED_SKIPS.inc()
+                                    await asyncio.to_thread(
+                                        budget.advance_pull,
+                                        installation_id,
+                                        full_name,
+                                        number,
+                                        self.owner,
+                                    )
+                                    continue
                         added = await asyncio.to_thread(
                             self.store.enqueue_reconciliation_if_due,
                             JobRequest(
@@ -2926,6 +3002,9 @@ class Reconciler:
                             self.settings.reconcile_recheck_seconds,
                         )
                         queued += int(added)
+                        await asyncio.to_thread(
+                            budget.advance_pull, installation_id, full_name, number, self.owner
+                        )
                     await asyncio.to_thread(
                         budget.advance_repository, installation_id, full_name, self.owner
                     )
