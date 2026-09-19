@@ -314,6 +314,28 @@ def test_repository_cursor_requires_live_owner(budget_store: QueueStore) -> None
     assert budget.repository_cursor(17) == "example/one"
 
 
+def test_pull_cursor_survives_handoff_and_requires_live_owner(budget_store: QueueStore) -> None:
+    budget = RecoveryApiBudget(budget_store)
+    assert budget.pull_cursor(17) == ("", 0)
+    assert budget_store.acquire_service_lease("open-pr-reconciler", "one", 60)
+    budget.advance_pull(17, "Example/One", 12, "one")
+    budget.advance_pull(17, "example/other", 99, "other")
+    assert budget.pull_cursor(17) == ("example/one", 12)
+    with budget_store.session() as session:
+        session.execute(update(ServiceLease).values(lease_until=utcnow() - timedelta(seconds=1)))
+    budget.advance_pull(17, "example/one", 13, "one")
+    budget.advance_repository(17, "example/one", "one")
+    assert budget.pull_cursor(17) == ("example/one", 12)
+    assert budget_store.acquire_service_lease("open-pr-reconciler", "two", 60)
+    peer = RecoveryApiBudget(budget_store)
+    assert peer.pull_cursor(17) == ("example/one", 12)
+    peer.advance_pull(17, "example/one", 14, "two")
+    assert budget.pull_cursor(17) == ("example/one", 14)
+    peer.advance_repository(17, "example/one", "two")
+    assert budget.pull_cursor(17) == ("", 0)
+    assert budget.repository_cursor(17) == "example/one"
+
+
 @pytest.mark.asyncio
 async def test_request_lane_is_task_local_and_restored() -> None:
     async def observe() -> str:

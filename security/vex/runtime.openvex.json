@@ -1,9 +1,31 @@
 {
   "@context": "https://openvex.dev/ns/v0.2.0",
-  "@id": "urn:uuid:e9c52b73-8a0b-58c1-aae8-9b1451ec6870",
+  "@id": "urn:uuid:d4a79017-84b2-5ab4-873a-158e10367e0f",
   "author": "Extra CODEOWNERS maintainers",
   "role": "VEX document producer",
   "statements": [
+    {
+      "impact_statement": "The affected pcre2_pattern_convert automatic allocation overflows on 32-bit systems. The published linux/amd64 and linux/arm64 images use 64-bit size_t. The named Debian library is also outside the reviewed Python/native dependency graph, and the service does not call the pattern-conversion API. This statement covers only the named Debian package in the shipped service; it does not exempt private wheel libraries, 32-bit builds, or arbitrary programs run inside the container.",
+      "products": [
+        {
+          "@id": "pkg:deb/debian/libpcre2-8-0@10.46-1~deb13u1?arch=amd64&distro=debian-13.6&upstream=pcre2",
+          "identifiers": {
+            "purl": "pkg:deb/debian/libpcre2-8-0@10.46-1~deb13u1?arch=amd64&distro=debian-13.6&upstream=pcre2"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/libpcre2-8-0@10.46-1~deb13u1?arch=arm64&distro=debian-13.6&upstream=pcre2",
+          "identifiers": {
+            "purl": "pkg:deb/debian/libpcre2-8-0@10.46-1~deb13u1?arch=arm64&distro=debian-13.6&upstream=pcre2"
+          }
+        }
+      ],
+      "status": "not_affected",
+      "status_notes": "Analysis detail: Reachability review: https://github.com/stampbot/extra-codeowners/blob/main/security/vex/runtime-review.md#september-19-addition-pcre2-pattern-conversion. The affected pcre2_pattern_convert automatic allocation overflows on 32-bit systems. The published linux/amd64 and linux/arm64 images use 64-bit size_t. The named Debian library is also outside the reviewed Python/native dependency graph, and the service does not call the pattern-conversion API. This statement covers only the named Debian package in the shipped service; it does not exempt private wheel libraries, 32-bit builds, or arbitrary programs run inside the container.\nSource: PCRE2 maintainer advisory (https://github.com/PCRE2Project/pcre2/security/advisories/GHSA-q8g2-wprr-34m9)\nOriginal Vexcalibur analysis state: not_affected",
+      "vulnerability": {
+        "name": "CVE-2026-89157"
+      }
+    },
     {
       "impact_statement": "This assessment covers the shipped Extra CODEOWNERS service, not arbitrary programs run inside its container. The affected SQLite FTS5 reader requires crafted database pages queried through FTS5 MATCH. The service creates ordinary state tables; its schema, migrations and queries use no FTS virtual tables or MATCH expressions and do not load SQLite extensions. There is no database-upload endpoint. This covers supported SQLite operation as well as PostgreSQL deployments, not arbitrary SQL or externally supplied databases.",
       "products": [
@@ -515,9 +537,9 @@
       }
     }
   ],
-  "timestamp": "2026-09-14T00:00:00Z",
+  "timestamp": "2026-09-19T17:00:00Z",
   "tooling": "Vexcalibur + Extra CODEOWNERS runtime binding",
-  "version": 1,
+  "version": 2,
   "x_extra_codeowners_runtime": {
     "files": {
       ".dockerignore": "3f9dc9d3a79fe3085f25de88403b5563ad5c7fa7010bef94c5e55f24bd3cf691",
@@ -535,14 +557,14 @@
       "extra_codeowners/alembic/versions/0006_webhook_trace_links.py": "8be4d6cf7c6e182cf4c9b599b22e37d643b577f67c8c11cfb15da2138a8bdcd8",
       "extra_codeowners/alembic/versions/0007_reconciliation_completion.py": "a4b0ef650761a915ea19b8f73db0d1d277d3f6f4e3f71736114906bfeeffac9f",
       "extra_codeowners/alembic/versions/0008_recovery_api_budget.py": "7d4ae0f8829500de2c23395ef7e14b29225536e841017216308fc07f48b341b3",
-      "extra_codeowners/alembic/versions/0009_conditional_request_budget.py": "badab596db22aa02ee0136a45211531419c56f4cec8563b69c2b41fe100744b6",
+      "extra_codeowners/alembic/versions/0009_conditional_request_budget.py": "8356e2d4f1701030ceb275cedbe85ee6ca6e4827ddd87fb84e6b8cd1726ade00",
       "extra_codeowners/alembic/versions/__init__.py": "c421d4569599794de9ddda269e84b775d6e8204164cb9dff2487ca86560d21ae",
-      "extra_codeowners/api_budget.py": "03c8d2b5dd623ac50be6c8f1deb0efd64b76a1a75207b07d2a47cfd50240c7b8",
+      "extra_codeowners/api_budget.py": "3712cb5d20c77ad0757c2740fadeb7714e8fdf9d2845ba1b32611eac571da8d2",
       "extra_codeowners/app.py": "d30ca24500e3b0d3ace360140d56d568d6bd06865acac406ddaa8a4c623d89ad",
       "extra_codeowners/build_identity.py": "5c3b38f087460fca37660ddeaa8a004d05348f8c947c04fc2444739ab7896968",
       "extra_codeowners/cli.py": "79a5c200397f9544492ec6071890ff5835c1ed625c623a0a86ed3a60503e65f4",
       "extra_codeowners/codeowners.py": "da8be54dbc8a79dcbaf39d49491f950d5405d74d6bb5e07da5247644f5ffcfd8",
-      "extra_codeowners/database.py": "71d66fb2ff85b5e0a3259983c47bee3587dcaa7987a75e4bb0daf14455df4f0a",
+      "extra_codeowners/database.py": "1df50a4282ae738dc0e1a3b66893fdd2e7e3fce0c57b4759300643ccaa778e4a",
       "extra_codeowners/dco.py": "8c3a0b541fe021fb9f05500ca9278306901010c219e7e1199ca5e205c138e68d",
       "extra_codeowners/discovery_cache.py": "ec62a728af9c5206de815aa72affd69e231d2acb45b5f80e33790ec6e20b29c7",
       "extra_codeowners/evaluator.py": "b81b9d1c6fe81d591867b0993d413030caab8af48703c4725f14c04fe2e3f9a6",
@@ -554,7 +576,7 @@
       "extra_codeowners/models.py": "dc59959f56e35111fae00f8f60ef054ba80eb839eb2dae5b09165d4cdc349a48",
       "extra_codeowners/policy.py": "844abb482a7c9cc3190d624cc92ece2476128644718e4096f98bfa8a0abedf8a",
       "extra_codeowners/py.typed": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "extra_codeowners/service.py": "0d1ed5c097583425823450256beb7cbe776f2c205943e4a6066071b497b28420",
+      "extra_codeowners/service.py": "21689b8f28865bb86edeb79ee2baffa60e4ab13bbd1f2d62ec9fdc78c3f3ec93",
       "extra_codeowners/settings.py": "bd1d3cd0acf23ea4b26869fc1e024438aba7b9acf43f3850c4e6be2e9a5b5437",
       "extra_codeowners/trace_context.py": "f79ca91baa1dd615c80546c66a6b370ba78ec7106dece3feb201d10250078532",
       "extra_codeowners/tracing.py": "62c730c8bdf4d632dace5b79232f968d871a28d8724a162aa52ba6b4ed2c6db1",
@@ -562,7 +584,7 @@
       "pyproject.toml": "4164e19c10e620b1cae1db22dab5728b4e80eb0f5a9dd768484b6f12de73fc96",
       "uv.lock": "029f0fe5b12940d2f8c4f36c5702f5e92f4aac1dc3bff75f2e90660a50dfdcc4"
     },
-    "review": "Reviewed conditional discovery and empty-check revalidation, per-base enrollment filtering, shared quota refunds, metrics, and migration 0009. These changes use bounded Python bytes, existing authenticated HTTP reads, and ordinary SQL state. They add no SQLite FTS, native format strings, subprocess execution, archive extraction, or new TLS/cryptographic call paths; existing vulnerability reachability assessments remain applicable.",
+    "review": "Reviewed conditional discovery, per-base enrollment filtering, lease-fenced intra-repository progress, shared quota refunds, metrics, and migration 0009. These paths use bounded Python values, existing authenticated HTTP reads, and ordinary SQL state. They add no SQLite FTS, native format strings, subprocess execution, archive extraction, or new TLS/cryptographic call paths. The September 19 PCRE2 conversion assessment names only the unchanged Debian package on the published 64-bit platforms; the service does not call that conversion API. Existing reachability assessments remain applicable.",
     "schema_version": 1
   }
 }

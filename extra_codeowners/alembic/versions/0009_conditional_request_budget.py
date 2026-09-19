@@ -20,12 +20,29 @@ def upgrade() -> None:
         "installation_api_budgets",
         sa.Column("accounting_revision", sa.BigInteger(), nullable=True),
     )
-    budgets = sa.table(
-        "installation_api_budgets", sa.column("accounting_revision", sa.BigInteger())
+    op.add_column(
+        "installation_api_budgets",
+        sa.Column("pull_cursor_repository", sa.String(512), nullable=True),
     )
-    op.execute(budgets.update().values(accounting_revision=0))
+    op.add_column(
+        "installation_api_budgets",
+        sa.Column("pull_cursor_number", sa.BigInteger(), nullable=True),
+    )
+    budgets = sa.table(
+        "installation_api_budgets",
+        sa.column("accounting_revision", sa.BigInteger()),
+        sa.column("pull_cursor_repository", sa.String(512)),
+        sa.column("pull_cursor_number", sa.BigInteger()),
+    )
+    op.execute(
+        budgets.update().values(
+            accounting_revision=0, pull_cursor_repository="", pull_cursor_number=0
+        )
+    )
     with op.batch_alter_table("installation_api_budgets") as batch:
         batch.alter_column("accounting_revision", existing_type=sa.BigInteger(), nullable=False)
+        batch.alter_column("pull_cursor_repository", existing_type=sa.String(512), nullable=False)
+        batch.alter_column("pull_cursor_number", existing_type=sa.BigInteger(), nullable=False)
     metadata = sa.table(
         "schema_metadata",
         sa.column("singleton_id", sa.Integer()),

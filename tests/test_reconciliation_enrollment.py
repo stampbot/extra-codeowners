@@ -29,10 +29,13 @@ class DiscoveryProvider:
         self.policy_body = "enabled = true"
         self.managed: set[str] = set()
         self.requests: Counter[str] = Counter()
+        self.limit = 15000
         self.remaining = 15000
         self.reset = int((datetime.now(UTC) + timedelta(hours=1)).timestamp())
         self.store: QueueStore | None = None
         self.inject_direct_event = False
+        self.empty_tail_repository = False
+        self.reverse_pulls = False
 
     def respond(self, request: httpx.Request) -> httpx.Response:
         path = request.url.path
@@ -51,15 +54,19 @@ class DiscoveryProvider:
         status = 200
         body: Any
         if path == "/installation/repositories":
+            repositories = [{"full_name": "example/project", "archived": False}]
+            if self.empty_tail_repository:
+                repositories.append({"full_name": "example/zempty", "archived": False})
             body = {
-                "total_count": 1,
-                "repositories": [{"full_name": "example/project", "archived": False}],
+                "total_count": len(repositories),
+                "repositories": repositories,
             }
             headers["ETag"] = '"repos"'
         elif path.endswith("/pulls"):
+            count = 0 if "/example/zempty/" in path else self.count
             page = int(request.url.params["page"])
             start = (page - 1) * 100 + 1
-            end = min(start + 100, self.count + 1)
+            end = min(start + 100, count + 1)
             body = [
                 {
                     "number": n,
@@ -69,7 +76,9 @@ class DiscoveryProvider:
                 for n in range(start, end)
             ]
             headers["ETag"] = f'"pulls-{self.base}-{page}"'
-            if end <= self.count:
+            if self.reverse_pulls:
+                body.reverse()
+            if end <= count:
                 headers["Link"] = f'<{request.url.copy_set_param("page", page + 1)}>; rel="next"'
             elif page > 1:
                 headers["Link"] = f'<{request.url.copy_set_param("page", page - 1)}>; rel="prev"'
@@ -101,7 +110,7 @@ class DiscoveryProvider:
         headers.update(
             {
                 "x-ratelimit-resource": "core",
-                "x-ratelimit-limit": "15000",
+                "x-ratelimit-limit": str(self.limit),
                 "x-ratelimit-remaining": str(self.remaining),
                 "x-ratelimit-reset": str(self.reset),
             }
@@ -173,6 +182,55 @@ async def test_large_unenrolled_installation_revalidates_without_refilling_queue
     finally:
         for github in clients:
             await github.close()
+        store.close()
+
+
+@pytest.mark.asyncio
+async def test_cold_replicas_resume_inside_repository_across_quota_windows(
+    tmp_path: Path, private_key: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    now = datetime.now(UTC)
+    monkeypatch.setattr("extra_codeowners.api_budget.utcnow", lambda: now)
+    monkeypatch.setattr("extra_codeowners.database.utcnow", lambda: now)
+    provider = DiscoveryProvider(count=140)
+    provider.limit = 60
+    provider.empty_tail_repository = True
+    provider.reverse_pulls = True
+    store = store_at(tmp_path)
+    previous_number = 0
+    try:
+        for cycle in range(8):
+            owner = f"cold-replica-{cycle}"
+            provider.remaining = provider.limit
+            provider.reset = int((now + timedelta(hours=1)).timestamp())
+            reconciler, github = reconciler_for(provider, store, private_key, owner)
+            try:
+                result = await scan(reconciler)
+            finally:
+                await github.close()
+            assert store.release_service_lease("open-pr-reconciler", owner)
+            assert result.queued == 0 and store.pending_count() == 0
+            budget = RecoveryApiBudget(store)
+            if result.complete:
+                assert cycle > 0
+                assert budget.repository_cursor(17) == "example/zempty"
+                assert budget.pull_cursor(17) == ("", 0)
+                break
+            assert result.deferred
+            repository, number = budget.pull_cursor(17)
+            assert repository == "example/project"
+            assert number > previous_number
+            previous_number = number
+            now += timedelta(hours=1, seconds=1)
+        else:
+            pytest.fail("cold scans repeated a prefix instead of finishing the repository")
+        checks = {
+            path: count for path, count in provider.requests.items() if path.endswith("/check-runs")
+        }
+        assert len(checks) == 140
+        assert set(checks.values()) == {1}
+        assert provider.requests["/repos/example/zempty/pulls"] == 1
+    finally:
         store.close()
 
 

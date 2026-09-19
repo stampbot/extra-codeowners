@@ -187,11 +187,16 @@ events and authority work by default. Set
 `EXTRA_CODEOWNERS_GITHUB_RECOVERY_RESERVE_PERCENT` to adjust that tradeoff. A
 larger reserve gives direct events more headroom but delays missed-webhook
 recovery. All replicas charge the shared database budget before each request,
-including retries and pagination. A deferred scan resumes after its last
-completed repository; repositories later in the list don't have to wait for
-every earlier repository to be scanned again. A partially read repository is
-retried from its beginning, so incomplete pagination never becomes a claim
-that its PRs were checked.
+including retries and pagination. A deferred scan saves its last completed
+repository and its progress within an unfinished repository. The next scan
+finishes that repository first, even on a replica with an empty cache.
+
+Each attempt fetches and validates every open-PR page before processing PRs in
+number order. After a PR is queued or confirmed unenrolled, its number becomes
+the durable resume point. The next attempt handles higher numbers; completion
+clears that point so the next full pass checks all PRs again. A lower-numbered
+PR that changes during a partial scan is therefore picked up on the next pass
+if its webhook was missed. Incomplete pagination never advances PR progress.
 
 The budget comes from GitHub's response headers, not a configured request
 limit. When that evidence is missing or expired, recovery gets one probe per

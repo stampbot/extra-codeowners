@@ -95,10 +95,14 @@ def test_upgrade_0008_budget_rows_backfills_revision_and_preserves_state(
         assert values.probe_after == now
         assert values.repository_cursor == "acme/project"
         assert values.accounting_revision == 0
+        assert values.pull_cursor_repository == ""
+        assert values.pull_cursor_number == 0
     store.close()
 
     assert metadata_version == 8
     assert columns["accounting_revision"]["nullable"] is False
+    assert columns["pull_cursor_repository"]["nullable"] is False
+    assert columns["pull_cursor_number"]["nullable"] is False
 
     store = QueueStore(migration_url)
     store.initialize()

@@ -401,6 +401,8 @@ class InstallationApiBudget(Base):
     probe_after: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     repository_cursor: Mapped[str] = mapped_column(String(512), nullable=False)
     accounting_revision: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    pull_cursor_repository: Mapped[str] = mapped_column(String(512), nullable=False, default="")
+    pull_cursor_number: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
 
 
 class ProviderBackpressure(Base):

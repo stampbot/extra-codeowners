@@ -2891,6 +2891,12 @@ class Reconciler:
                 repositories = [item for item in repositories if item[0].lower() > cursor] + [
                     item for item in repositories if item[0].lower() <= cursor
                 ]
+                partial_repository, partial_number = await asyncio.to_thread(
+                    budget.pull_cursor, installation_id
+                )
+                # Finish the interrupted repository before newly added names
+                # can displace its progress. Membership still comes from GitHub.
+                repositories.sort(key=lambda item: item[0].lower() != partial_repository)
                 for full_name, archived in repositories:
                     if interrupted():
                         return interruption_outcome()
@@ -2914,9 +2920,14 @@ class Reconciler:
                     # the repository's default branch. Share only reads of the
                     # same immutable base during this repository scan.
                     policy_present: dict[str, bool] = {}
-                    for (number, head_sha), pull_record in zip(pulls, pull_records, strict=True):
+                    records = sorted(
+                        zip(pulls, pull_records, strict=True), key=lambda item: item[0][0]
+                    )
+                    for (number, head_sha), pull_record in records:
                         if interrupted():
                             return interruption_outcome()
+                        if full_name.lower() == partial_repository and number <= partial_number:
+                            continue
                         base = pull_record.get("base")
                         base_sha = base.get("sha") if isinstance(base, dict) else None
                         # Older/incomplete discovery representations fall back
@@ -2960,6 +2971,13 @@ class Reconciler:
                                     # in this scan. A prior managed check always
                                     # follows the ordinary invalidation path.
                                     RECONCILIATION_UNENROLLED_SKIPS.inc()
+                                    await asyncio.to_thread(
+                                        budget.advance_pull,
+                                        installation_id,
+                                        full_name,
+                                        number,
+                                        self.owner,
+                                    )
                                     continue
                         added = await asyncio.to_thread(
                             self.store.enqueue_reconciliation_if_due,
@@ -2975,6 +2993,9 @@ class Reconciler:
                             self.settings.reconcile_recheck_seconds,
                         )
                         queued += int(added)
+                        await asyncio.to_thread(
+                            budget.advance_pull, installation_id, full_name, number, self.owner
+                        )
                     await asyncio.to_thread(
                         budget.advance_repository, installation_id, full_name, self.owner
                     )

@@ -200,6 +200,11 @@ Reconciliation reads policy at each distinct listed base commit once per
 repository per scan. A missing policy skips queueing only after GitHub also
 confirms that the head has no managed check. Existing checks and present,
 disabled, malformed, or unreadable policy follow ordinary evaluation.
+After validating the complete list, the reconciler processes PRs in number
+order and saves progress after each handled PR. A deferred attempt resumes
+above that number in the unfinished repository, using a fresh GitHub listing.
+Completing the repository clears its PR cursor. Earlier PRs are checked again
+on the next full pass; the cursor is not evidence that their state is unchanged.
 
 The shared REST-core budget accounts conservatively across replicas. A `304`
 can refund its local debit only when the accounting receipt still matches the
@@ -216,9 +221,10 @@ database guard; a long API family points to GitHub or the network. When OTLP
 tracing is enabled, use the sampled `trace_id` in the corresponding structured
 logs to inspect the same operation without adding private values to Prometheus.
 
-`success` means the elected process completed the scan of every visible,
-unsuspended installation and validated every repository and open pull request
-returned by GitHub. `partial` means the process lost its lease or could not
+`success` means the elected process finished its resumed scan of every visible,
+unsuspended installation and validated the repository and PR listings returned
+by GitHub. PRs below a saved resume point were handled in an earlier attempt,
+not rechecked in this one. `partial` means the process lost its lease or could not
 safely scan at least one installation or queue its pull requests. If graceful
 shutdown interrupts an elected attempt, that attempt is also partial and does
 not advance the last-success timestamp. An idle or unelected shutdown records

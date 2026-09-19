@@ -108,8 +108,10 @@ verify the target pod and database contract. Apply the reviewed final
 autoscaling state in a separate update before resuming GitOps; an HPA should
 exist only when those values enable it.
 
-Revision `0009_conditional_request_budget` adds an accounting revision to each
-installation budget. Conditional discovery responses use the fixed
+Revision `0009_conditional_request_budget` adds an accounting revision and an
+unfinished-repository PR cursor to each installation budget. The cursor lets
+a cold replica resume work across quota windows without repeatedly spending
+the budget on the same PRs. Conditional discovery responses use the fixed
 `not_modified` outcome and may refund one local debit only when the response's
 receipt still matches the row revision. A concurrent replica debit or stricter
 quota observation makes that refund ineligible. The compatibility marker moves

@@ -202,6 +202,29 @@ class RecoveryApiBudget:
         with self.store.session() as session:
             return self._locked_row(session, installation_id).repository_cursor
 
+    def pull_cursor(self, installation_id: int) -> tuple[str, int]:
+        """Return the last fully handled PR within an unfinished repository."""
+        with self.store.session() as session:
+            row = self._locked_row(session, installation_id)
+            return row.pull_cursor_repository, row.pull_cursor_number
+
+    def advance_pull(self, installation_id: int, full_name: str, number: int, owner: str) -> None:
+        """Keep completed PR progress across quota windows and cold replicas."""
+        with self.store.session() as session:
+            row = self._locked_row(session, installation_id)
+            lease = session.scalar(
+                select(ServiceLease)
+                .where(
+                    ServiceLease.name == "open-pr-reconciler",
+                    ServiceLease.owner == owner,
+                    ServiceLease.lease_until > utcnow(),
+                )
+                .with_for_update()
+            )
+            if lease is not None:
+                row.pull_cursor_repository = full_name.lower()
+                row.pull_cursor_number = number
+
     def advance_repository(self, installation_id: int, full_name: str, owner: str) -> None:
         """Persist only completed repositories while the caller owns discovery."""
         with self.store.session() as session:
@@ -217,3 +240,5 @@ class RecoveryApiBudget:
             )
             if lease is not None:
                 row.repository_cursor = full_name.lower()
+                row.pull_cursor_repository = ""
+                row.pull_cursor_number = 0
