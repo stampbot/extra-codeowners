@@ -246,6 +246,14 @@ doesn't guarantee a `304`. Compare the byte and entry gauges with each
 partition's limits, and keep pod identity when graphing them: replicas don't
 share this cache. A newly elected replica may need a cold scan.
 
+GitHub's ETags can change when an installation token changes, even if the
+response body doesn't. This behavior has a
+[published reproduction](https://github.com/orgs/community/discussions/75228).
+Installation tokens [expire after one hour](https://docs.github.com/en/rest/apps/apps#create-an-installation-access-token-for-an-app),
+so a normal token refresh can turn a local cache hit into a full `200` response
+that spends quota. Include token refreshes when measuring cache savings;
+don't size the recovery budget from a token-stable sample alone.
+
 `extra_codeowners_reconciliation_unenrolled_skips_total` counts PRs omitted
 after those two absence checks; a rising count is expected in a mostly
 unenrolled installation. Existing queued jobs still drain normally after an
