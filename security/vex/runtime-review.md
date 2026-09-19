@@ -146,6 +146,11 @@ The package-specific reachability conclusions above still apply. The VEX
 runtime binding records this source review; its vulnerability statements are
 unchanged.
 
+The subsequent cache partition change keeps the existing byte cache and HTTP
+revalidation paths. It separates storage budgets and adds fixed-label metrics;
+it does not compress, deserialize new formats, or change dependencies. The
+same reachability conclusions apply.
+
 These conclusions apply to the shipped service's behavior, including its SQLite
 backend. They do not cover arbitrary commands, custom Python code, native
 plugins, or externally supplied databases. A change in those behaviors requires

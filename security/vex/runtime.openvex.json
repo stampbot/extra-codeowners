@@ -1,6 +1,6 @@
 {
   "@context": "https://openvex.dev/ns/v0.2.0",
-  "@id": "urn:uuid:43bcb69f-39cd-5948-bb6a-115ead3219c9",
+  "@id": "urn:uuid:28892415-b449-5e2b-879f-33f0de22b4c6",
   "author": "Extra CODEOWNERS maintainers",
   "role": "VEX document producer",
   "statements": [
@@ -568,10 +568,10 @@
       "extra_codeowners/dco.py": "8c3a0b541fe021fb9f05500ca9278306901010c219e7e1199ca5e205c138e68d",
       "extra_codeowners/discovery_cache.py": "ec62a728af9c5206de815aa72affd69e231d2acb45b5f80e33790ec6e20b29c7",
       "extra_codeowners/evaluator.py": "b81b9d1c6fe81d591867b0993d413030caab8af48703c4725f14c04fe2e3f9a6",
-      "extra_codeowners/github.py": "e20264264b6dac7c292902a67c81ade574e3558b3245ed1de32016c9d6d9e60d",
+      "extra_codeowners/github.py": "be5398190ba981f3e8b6d6df897b96f16d7450320b7b7398b07821b970d87bef",
       "extra_codeowners/logging.py": "a59227e76ec7809ff8bb88fee997abb9b99f32e81a4c8d16bcfc72c0c0abf33f",
       "extra_codeowners/manifest.py": "33d42ac16b8218562f2baf6c0bc7c6664b03354bbf274cb0381e94740b76681e",
-      "extra_codeowners/metrics.py": "129f3209fe684375e39e546a6fd2010fab384f3229968eab58fec530101858f7",
+      "extra_codeowners/metrics.py": "741473fcdd83c899f07beb277e4a961bd536878bfda0c7b7b676cd0f07161b38",
       "extra_codeowners/migrations.py": "a86d239779ed7b0e38118a3f7c1dee9b33c71519656699f101ac556eed671a46",
       "extra_codeowners/models.py": "dc59959f56e35111fae00f8f60ef054ba80eb839eb2dae5b09165d4cdc349a48",
       "extra_codeowners/policy.py": "844abb482a7c9cc3190d624cc92ece2476128644718e4096f98bfa8a0abedf8a",
@@ -584,7 +584,7 @@
       "pyproject.toml": "4164e19c10e620b1cae1db22dab5728b4e80eb0f5a9dd768484b6f12de73fc96",
       "uv.lock": "029f0fe5b12940d2f8c4f36c5702f5e92f4aac1dc3bff75f2e90660a50dfdcc4"
     },
-    "review": "Reviewed target-branch reference resolution and publication revalidation on 2026-09-19. Existing HTTPX transport and Python JSON/string/regex operations only; no base image, dependency, native loader, subprocess, FFI, SQLite FTS5, or native format-string changes. Existing package-specific reachability conclusions remain valid; see security/vex/runtime-review.md.",
+    "review": "Reviewed current-target-branch policy resolution and separated bounded discovery caches on 2026-09-19. Existing authenticated HTTPX reads, byte-cache storage, Python JSON/string/regex validation, and fixed-label metrics only. No dependency, base image, native loading, compression, FFI, subprocess, SQLite FTS5, or native format-string change. Existing package-specific reachability assessments remain valid; see security/vex/runtime-review.md.",
     "schema_version": 1
   }
 }

@@ -229,14 +229,23 @@ prevent enrollment. Disabled or unreadable policy still queues evaluation;
 removing policy cannot hide a previously managed check.
 
 Discovery pages, branch references, and empty check listings are cached only
-within one process. The cache holds at most 32 MiB total, 1 MiB per entry,
-or 4,096 entries, and
-removes entries idle for one hour. Every entry still needs an authenticated
-conditional HTTP request before reuse. A `304 Not Modified` saves the response
-body transfer, not the physical
+within one process. The 32 MiB total budget is split: 24 MiB for pages and 8 MiB
+for the smaller branch and check responses. Large PR listings cannot evict
+entries from the smaller partition. Both remove entries idle for one hour;
+the [metric reference](../reference/http-api.md#get-metrics) lists their entry limits.
+
+Every entry still needs an authenticated conditional HTTP request before reuse.
+A `304 Not Modified` saves the response body transfer, not the physical
 request or its possible secondary-limit cost. Watch the GitHub request metric's
 `outcome="not_modified"` series separately from local `budget_deferred`
 counts. The cache is disposable and is not authority evidence.
+
+Use `extra_codeowners_github_discovery_cache_lookups_total` to distinguish a
+cold or churning cache from GitHub returning changed responses. A local hit
+doesn't guarantee a `304`. Compare the byte and entry gauges with each
+partition's limits, and keep pod identity when graphing them: replicas don't
+share this cache. A newly elected replica may need a cold scan.
+
 `extra_codeowners_reconciliation_unenrolled_skips_total` counts PRs omitted
 after those two absence checks; a rising count is expected in a mostly
 unenrolled installation. Existing queued jobs still drain normally after an

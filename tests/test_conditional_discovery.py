@@ -403,7 +403,7 @@ def test_304_refunds_own_budget_but_counts_physical_request(
         reset = (utcnow() + timedelta(hours=1)).replace(microsecond=0)
         budget.observe(17, CoreQuota(100, 91, reset))
         physical_before = GITHUB_PHYSICAL_REQUESTS.labels(
-            "get.other", "installation", "interactive"
+            "pull.list", "installation", "interactive"
         )._value.get()
 
         responses = iter(
@@ -442,7 +442,7 @@ def test_304_refunds_own_budget_but_counts_physical_request(
             row = session.get(InstallationApiBudget, 17)
             assert row is not None and row.remaining == 90
         physical_after = GITHUB_PHYSICAL_REQUESTS.labels(
-            "get.other", "installation", "interactive"
+            "pull.list", "installation", "interactive"
         )._value.get()
         assert physical_after - physical_before == 2
     finally:
