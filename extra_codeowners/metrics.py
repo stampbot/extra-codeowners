@@ -63,6 +63,21 @@ GITHUB_PAGINATION_ENDPOINT_MISMATCHES = Counter(
     "extra_codeowners_github_pagination_endpoint_mismatches_total",
     "Rejected GitHub pagination links whose endpoint did not match the request",
 )
+GITHUB_DISCOVERY_CACHE_LOOKUPS = Counter(
+    "extra_codeowners_github_discovery_cache_lookups_total",
+    "Local discovery representation lookups before authenticated HTTP revalidation",
+    ("cache", "result"),
+)
+GITHUB_DISCOVERY_CACHE_BYTES = Gauge(
+    "extra_codeowners_github_discovery_cache_bytes",
+    "Accounted bytes retained by this process's GitHub discovery client",
+    ("cache",),
+)
+GITHUB_DISCOVERY_CACHE_ENTRIES = Gauge(
+    "extra_codeowners_github_discovery_cache_entries",
+    "Representations retained by this process's GitHub discovery client",
+    ("cache",),
+)
 QUEUE_DEPTH = Gauge("extra_codeowners_queue_depth", "Pending durable work items")
 QUEUE_WORK_CLASS_DEPTH = Gauge(
     "extra_codeowners_queue_work_class_depth",

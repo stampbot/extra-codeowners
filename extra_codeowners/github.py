@@ -42,6 +42,9 @@ from extra_codeowners.discovery_cache import CacheEntry, DiscoveryCache
 from extra_codeowners.metrics import (
     GITHUB_API_REQUEST_SECONDS,
     GITHUB_API_REQUESTS,
+    GITHUB_DISCOVERY_CACHE_BYTES,
+    GITHUB_DISCOVERY_CACHE_ENTRIES,
+    GITHUB_DISCOVERY_CACHE_LOOKUPS,
     GITHUB_PAGINATION_ENDPOINT_MISMATCHES,
     GITHUB_PHYSICAL_REQUESTS,
     GITHUB_RATE_LIMIT_EVENTS,
@@ -98,6 +101,10 @@ def _request_operation(method: str, path: str) -> str:
         return "installation.repositories"
     if re.fullmatch(r"/repos/[^/]+/[^/]+/installation", path):
         return "repository.installation"
+    if re.fullmatch(r"/repos/[^/]+/[^/]+", path):
+        return "repository.get"
+    if re.fullmatch(r"/repos/[^/]+/[^/]+/pulls", path):
+        return "pull.list"
     if re.fullmatch(r"/repos/[^/]+/[^/]+/git/ref/heads/.+", path):
         return "repository.ref"
     if re.fullmatch(r"/repos/[^/]+/[^/]+/pulls/\d+/files", path):
@@ -387,7 +394,15 @@ class GitHubClient:
         self._request_semaphore = asyncio.Semaphore(max_in_flight_requests)
         self._tracing = tracing or Tracing(enabled=False)
         self._recovery_budget = recovery_budget
-        self._discovery_cache = DiscoveryCache()
+        # Large PR pages must not evict the small reference/check responses
+        # that save one primary-quota charge per unchanged unenrolled head.
+        # The combined accounted-byte bound remains 32 MiB.
+        self._discovery_cache = DiscoveryCache(max_bytes=24 * 1024 * 1024)
+        self._compact_discovery_cache = DiscoveryCache(
+            max_bytes=8 * 1024 * 1024, max_entry_bytes=64 * 1024, max_entries=8192
+        )
+        self._observe_discovery_cache("pages", self._discovery_cache)
+        self._observe_discovery_cache("compact", self._compact_discovery_cache)
         try:
             loaded_key = serialization.load_pem_private_key(private_key.encode(), password=None)
         except (TypeError, ValueError) as error:
@@ -962,6 +977,16 @@ class GitHubClient:
             json_module.dumps(params, sort_keys=True, separators=(",", ":")),
         )
 
+    def _discovery_cache_for(self, path: str) -> tuple[str, DiscoveryCache]:
+        if _request_operation("GET", path) in {"check.list", "repository.ref"}:
+            return "compact", self._compact_discovery_cache
+        return "pages", self._discovery_cache
+
+    @staticmethod
+    def _observe_discovery_cache(name: str, cache: DiscoveryCache) -> None:
+        GITHUB_DISCOVERY_CACHE_BYTES.labels(name).set(cache.bytes_used)
+        GITHUB_DISCOVERY_CACHE_ENTRIES.labels(name).set(cache.entry_count)
+
     async def _discovery_response(
         self,
         path: str,
@@ -972,10 +997,13 @@ class GitHubClient:
     ) -> httpx.Response:
         """Revalidate one discovery page; a local cache hit is never sufficient."""
         key = self._discovery_key(path, installation_id, params)
-        cached = self._discovery_cache.get(key)
+        cache_name, cache = self._discovery_cache_for(path)
+        cached = cache.get(key)
+        GITHUB_DISCOVERY_CACHE_LOOKUPS.labels(cache_name, "hit" if cached else "miss").inc()
         # Only the caller's successful body and pagination validation restores
         # this entry. An error after HTTP revalidation must not retain it.
-        self._discovery_cache.remove(key)
+        cache.remove(key)
+        self._observe_discovery_cache(cache_name, cache)
         try:
             response = await self._api_response(
                 "GET",
@@ -1014,10 +1042,12 @@ class GitHubClient:
                     headers=response_headers,
                     request=response.request,
                 )
-            self._discovery_cache.remove(key)
+            cache.remove(key)
+            self._observe_discovery_cache(cache_name, cache)
             return response
         except BaseException:
-            self._discovery_cache.remove(key)
+            cache.remove(key)
+            self._observe_discovery_cache(cache_name, cache)
             raise
 
     def _remember_discovery_response(
@@ -1029,7 +1059,9 @@ class GitHubClient:
     ) -> None:
         """Retain a page only after its caller validates the body and pagination."""
         key = self._discovery_key(path, installation_id, params)
-        self._discovery_cache.remove(key)
+        cache_name, cache = self._discovery_cache_for(path)
+        cache.remove(key)
+        self._observe_discovery_cache(cache_name, cache)
         directives = response.headers.get("cache-control", "").lower().split(",")
         if any(value.strip() == "no-store" for value in directives):
             return
@@ -1038,7 +1070,7 @@ class GitHubClient:
         # A missing validator or oversized page costs another full request;
         # it must not prevent discovery or manufacture an empty response.
         with suppress(ValueError):
-            self._discovery_cache.put(
+            cache.put(
                 key,
                 CacheEntry(
                     body=response.content,
@@ -1046,6 +1078,7 @@ class GitHubClient:
                     links=tuple(response.headers.get_list("link")),
                 ),
             )
+        self._observe_discovery_cache(cache_name, cache)
 
     async def _get_list(
         self,

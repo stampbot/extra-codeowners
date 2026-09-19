@@ -173,6 +173,9 @@ The endpoint returns Prometheus text format. Extra CODEOWNERS defines these appl
 | `extra_codeowners_github_physical_requests_total` | counter | Physical request attempts, including pages and retries, labeled by fixed `operation`, `authentication`, and `work_class` (`interactive`, `recovery`, or `authority`). |
 | `extra_codeowners_github_recovery_budget_deferrals_total` | counter | Requests deferred by the local REST core reserve, labeled by fixed operation. These requests were not sent to GitHub; a deferral is not a provider rate-limit response. |
 | `extra_codeowners_github_pagination_endpoint_mismatches_total` | counter | Rejected pagination links whose scheme, host, port, credentials, fragment, or resource did not match the original request. The metric has no repository, pull-request, or URL labels. |
+| `extra_codeowners_github_discovery_cache_lookups_total` | counter | Local lookups, labeled by `cache` (`pages` or `compact`) and `result` (`hit` or `miss`). A hit selects an entity validator; it still requires authenticated HTTP revalidation. |
+| `extra_codeowners_github_discovery_cache_bytes` | gauge | Accounted bytes retained by this process's GitHub client, labeled by `cache` (`pages` or `compact`). |
+| `extra_codeowners_github_discovery_cache_entries` | gauge | Cached representations retained by the same client and cache partition. |
 | `extra_codeowners_queue_depth` | gauge | Pending and leased exact-head invalidation, evaluation, and authority fan-out rows. |
 | `extra_codeowners_queue_work_class_depth` | gauge | Pending durable work, labeled by fixed `kind` and `work_class` values. Use it to distinguish foreground work from recovery backlog. |
 | `extra_codeowners_queue_work_class_oldest_age_seconds` | gauge | Age of the oldest pending row for the same fixed labels. |
@@ -188,13 +191,23 @@ The endpoint returns Prometheus text format. Extra CODEOWNERS defines these appl
 | `extra_codeowners_reconciliation_unenrolled_skips_total` | counter | PRs omitted from recovery after GitHub confirms both missing policy at the current target-branch commit and no managed check on the head. No labels. |
 | `extra_codeowners_trace_exports_total` | counter | Trace exporter batches, labeled by success or failure. A failure does not change the approval decision or worker retry behavior. |
 
-Discovery pages, branch references, and empty managed-check listings use a disposable per-process cache with a 32 MiB total
-bound, 1 MiB per-entry bound, 4,096-entry bound, and one-hour idle lifetime.
+Discovery responses use two disposable per-process cache partitions. Separating
+large discovery pages from small branch references and empty check listings
+prevents page churn from evicting those smaller responses. Both partitions
+have a one-hour idle lifetime; their combined accounted-byte cap is 32 MiB.
+
+| Partition | Responses | Byte cap | Per-entry cap | Entry cap |
+| --- | --- | --- | --- | --- |
+| `pages` | Repository and PR listings | 24 MiB | 1 MiB | 4,096 |
+| `compact` | Branch references and empty managed-check listings | 8 MiB | 64 KiB | 8,192 |
+
 Each page is revalidated with an authenticated conditional HTTP request before
 the cached body is used. A `304` reuses the validated body and pagination links;
 it still consumes a physical HTTP request and may encounter secondary limits.
 The logical request counter and duration histogram use `outcome="not_modified"`
 for that response. The physical request counter has no outcome label.
+Repository metadata and open-PR listings use the fixed operation labels
+`repository.get` and `pull.list`, respectively, rather than `get.other`.
 
 Reconciliation resolves each distinct target branch and reads policy at its
 current commit once per repository per scan. It does not use the potentially
