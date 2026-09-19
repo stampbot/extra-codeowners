@@ -87,6 +87,9 @@ class FakeGitHub:
         self.author_login = "pull-author"
         self.checks: list[dict[str, Any]] = []
 
+    async def get_branch_head(self, installation_id: int, repository: str, branch: str) -> str:
+        return BASE
+
     async def get_pull(self, installation_id: int, repository: str, number: int) -> dict[str, Any]:
         return {
             "number": number,
@@ -636,7 +639,7 @@ async def test_shared_head_commit_fails_closed_across_pull_requests(tmp_path: Pa
 
 
 @pytest.mark.asyncio
-async def test_unenrolled_recovery_uses_four_reads_without_shared_head_discovery(
+async def test_unenrolled_recovery_uses_five_reads_without_shared_head_discovery(
     tmp_path: Path,
     private_key: str,
 ) -> None:
@@ -659,6 +662,10 @@ async def test_unenrolled_recovery_uses_four_reads_without_shared_head_discovery
             return httpx.Response(200, json={"check_runs": []})
         if request.url.path.endswith("/pulls/3"):
             return httpx.Response(200, json=pull)
+        if request.url.path.endswith("/git/ref/heads/main"):
+            return httpx.Response(
+                200, json={"ref": "refs/heads/main", "object": {"type": "commit", "sha": BASE}}
+            )
         if request.url.path.endswith("/contents/.github/extra-codeowners.toml"):
             assert request.url.params["ref"] == BASE
             return httpx.Response(404, json={"message": "Not Found"})
@@ -697,6 +704,7 @@ async def test_unenrolled_recovery_uses_four_reads_without_shared_head_discovery
         ("GET", check_path),
         ("GET", "/repos/example/project/pulls/3"),
         ("GET", check_path),
+        ("GET", "/repos/example/project/git/ref/heads/main"),
         ("GET", "/repos/example/project/contents/.github/extra-codeowners.toml"),
     ]
 
@@ -754,6 +762,7 @@ async def test_missing_check_requeues_stale_enrolled_peer(
         pull = await get_pull(installation_id, repository, number)
         if number == 4:
             pull["base"]["sha"] = "c" * 40
+            pull["base"]["ref"] = "unenrolled"
             if peer_moved:
                 pull["head"]["sha"] = "d" * 40
         return pull
@@ -764,6 +773,11 @@ async def test_missing_check_requeues_stale_enrolled_peer(
         return await get_file(*args, **kwargs)
 
     github.get_pull = pull_for_base  # type: ignore[method-assign]
+    github.get_branch_head = AsyncMock(  # type: ignore[method-assign]
+        side_effect=lambda installation_id, repository, branch: (
+            "c" * 40 if branch == "unenrolled" else BASE
+        )
+    )
     github.get_file_text = file_for_base  # type: ignore[method-assign]
     github.list_commit_pulls = AsyncMock(  # type: ignore[method-assign]
         return_value=[
@@ -4665,3 +4679,110 @@ async def test_evaluator_skips_organization_config_repository(tmp_path: Path) ->
     await EvaluationService(settings(), github, store).evaluate_job(claimed)  # type: ignore[arg-type]
 
     assert github.checks == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("policy", [None, "enabled = false", "enabled = ["])
+async def test_current_branch_policy_revokes_success_with_stale_pr_base(
+    tmp_path: Path, policy: str | None
+) -> None:
+    github = FakeGitHub(changed_path="uv.lock")
+    github.checks.append({"conclusion": "success"})
+    current_sha = "c" * 40
+    github.get_branch_head = AsyncMock(return_value=current_sha)  # type: ignore[method-assign]
+    original = github.get_file_text
+
+    async def read_policy(
+        installation_id: int, repository: str, path: str, **kwargs: Any
+    ) -> str | None:
+        if repository == "example/project" and path.endswith("extra-codeowners.toml"):
+            assert github.checks[-1].get("conclusion") != "success"
+            assert kwargs["ref"] == current_sha
+            return policy
+        return await original(installation_id, repository, path, **kwargs)
+
+    github.get_file_text = read_policy  # type: ignore[method-assign]
+    store = migrated_store(f"sqlite:///{tmp_path / 'current-policy.db'}")
+    await EvaluationService(settings(), github, store).evaluate_job(job(store))  # type: ignore[arg-type]
+    assert github.checks[-1]["conclusion"] == "failure"
+    assert github.checks[-1]["title"] == "CODEOWNER approval required"
+    assert github.get_branch_head.await_count == 2
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_current_codeowners_uses_resolved_branch_commit(tmp_path: Path) -> None:
+    github = FakeGitHub(changed_path="uv.lock")
+    current_sha = "c" * 40
+    github.get_branch_head = AsyncMock(return_value=current_sha)  # type: ignore[method-assign]
+    original = github.get_file_text
+    observed: list[tuple[str, str]] = []
+
+    async def read_current(
+        installation_id: int, repository: str, path: str, **kwargs: Any
+    ) -> str | None:
+        if repository == "example/project":
+            observed.append((path, kwargs["ref"]))
+            assert kwargs["ref"] == current_sha
+        return await original(installation_id, repository, path, **kwargs)
+
+    github.get_file_text = read_current  # type: ignore[method-assign]
+    github.get_codeowners_errors = AsyncMock(return_value=[])  # type: ignore[method-assign]
+    store = migrated_store(f"sqlite:///{tmp_path / 'current-codeowners.db'}")
+    await EvaluationService(settings(), github, store).evaluate_job(job(store))  # type: ignore[arg-type]
+    assert github.checks[-1]["conclusion"] == "success"
+    assert (".github/CODEOWNERS", current_sha) in observed
+    github.get_codeowners_errors.assert_awaited_once_with(2, "example/project", current_sha)
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_branch_change_during_evaluation_requeues_without_success(tmp_path: Path) -> None:
+    github = FakeGitHub(changed_path="uv.lock")
+    github.get_branch_head = AsyncMock(side_effect=["c" * 40, "d" * 40])  # type: ignore[method-assign]
+    store = migrated_store(f"sqlite:///{tmp_path / 'branch-race.db'}")
+    await EvaluationService(settings(), github, store).evaluate_job(job(store))  # type: ignore[arg-type]
+    assert github.checks
+    assert not any(check.get("conclusion") == "success" for check in github.checks)
+    assert store.pending_count() > 0
+    store.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fail_on_revalidation", [False, True])
+async def test_branch_lookup_failure_cannot_preserve_success(
+    tmp_path: Path, fail_on_revalidation: bool
+) -> None:
+    github = FakeGitHub(changed_path="uv.lock")
+    github.checks.append({"conclusion": "success"})
+    outcomes: list[str | GitHubError] = [GitHubError("branch unavailable")]
+    if fail_on_revalidation:
+        outcomes.insert(0, "c" * 40)
+    github.get_branch_head = AsyncMock(side_effect=outcomes)  # type: ignore[method-assign]
+    store = migrated_store(f"sqlite:///{tmp_path / 'branch-unavailable.db'}")
+    with pytest.raises(GitHubError, match="branch unavailable"):
+        await EvaluationService(settings(), github, store).evaluate_job(job(store))  # type: ignore[arg-type]
+    assert github.checks[-1].get("conclusion") != "success"
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_first_check_uses_current_branch_policy_for_stale_pr_base(tmp_path: Path) -> None:
+    github = FakeGitHub(changed_path="uv.lock")
+    current_sha = "c" * 40
+    github.get_branch_head = AsyncMock(return_value=current_sha)  # type: ignore[method-assign]
+    original = github.get_file_text
+
+    async def read_current(
+        installation_id: int, repository: str, path: str, **kwargs: Any
+    ) -> str | None:
+        assert kwargs["ref"] == current_sha
+        return await original(installation_id, repository, path, **kwargs)
+
+    github.get_file_text = read_current  # type: ignore[method-assign]
+    store = migrated_store(f"sqlite:///{tmp_path / 'first-current-check.db'}")
+    request = JobRequest(2, "example/project", 3, "pull_request.opened", HEAD)
+    assert await EvaluationService(settings(), github, store).invalidate_for_trigger(request)  # type: ignore[arg-type]
+    assert github.checks[-1]["status"] == "in_progress"
+    github.get_branch_head.assert_awaited_once_with(2, "example/project", "main")
+    store.close()

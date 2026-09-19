@@ -98,6 +98,8 @@ def _request_operation(method: str, path: str) -> str:
         return "installation.repositories"
     if re.fullmatch(r"/repos/[^/]+/[^/]+/installation", path):
         return "repository.installation"
+    if re.fullmatch(r"/repos/[^/]+/[^/]+/git/ref/heads/.+", path):
+        return "repository.ref"
     if re.fullmatch(r"/repos/[^/]+/[^/]+/pulls/\d+/files", path):
         return "pull.files"
     if re.fullmatch(r"/repos/[^/]+/[^/]+/pulls/\d+/reviews", path):
@@ -1335,6 +1337,59 @@ class GitHubClient:
     async def get_repository(self, installation_id: int, repository: str) -> dict[str, Any]:
         """Fetch current repository metadata using installation access."""
         return await self._request("GET", f"/repos/{repository}", installation_id=installation_id)
+
+    async def get_branch_head(
+        self,
+        installation_id: int,
+        repository: str,
+        branch: str,
+        *,
+        stop: asyncio.Event | None = None,
+    ) -> str:
+        """Revalidate a target branch with GitHub and return its current commit."""
+        if (
+            not _REPOSITORY_FULL_NAME_RE.fullmatch(repository)
+            or any(part in {".", ".."} for part in repository.split("/"))
+            or not isinstance(branch, str)
+            or not branch
+            or len(branch) > 1024
+            or any(part in {"", ".", ".."} for part in branch.split("/"))
+            or any(ord(character) < 32 or ord(character) == 127 for character in branch)
+        ):
+            raise GitHubError("invalid repository or target branch reference")
+        try:
+            encoded_branch = quote(branch, safe="", encoding="utf-8", errors="strict")
+        except UnicodeError as error:
+            raise GitHubError("invalid target branch encoding") from error
+        path = f"/repos/{repository}/git/ref/heads/{encoded_branch}"
+        response = await self._discovery_response(path, installation_id, params={}, stop=stop)
+        if not response.is_success:
+            self._raise_api_error(response, "GET", path)
+        if len(response.content) > 64 * 1024 or response.headers.get("link"):
+            raise GitHubError("invalid target branch response size or pagination")
+        try:
+            decoded = response.content.decode("utf-8")
+            _validate_json_nesting(decoded)
+            payload = json_module.loads(
+                decoded,
+                object_pairs_hook=_unique_json_object,
+                parse_constant=_reject_json_constant,
+            )
+        except (UnicodeError, RecursionError, ValueError) as error:
+            raise GitHubError("expected JSON target branch reference") from error
+        if not isinstance(payload, dict) or payload.get("ref") != f"refs/heads/{branch}":
+            raise GitHubError("target branch response did not match the requested reference")
+        target = payload.get("object")
+        if (
+            not isinstance(target, dict)
+            or target.get("type") != "commit"
+            or not isinstance(target.get("sha"), str)
+            or re.fullmatch(r"[0-9a-f]{40}", target["sha"]) is None
+        ):
+            raise GitHubError("target branch reference did not identify a commit")
+        self._raise_if_stopped(stop)
+        self._remember_discovery_response(path, installation_id, {}, response)
+        return str(target["sha"])
 
     async def get_pull(self, installation_id: int, repository: str, number: int) -> dict[str, Any]:
         """Fetch current pull request metadata."""

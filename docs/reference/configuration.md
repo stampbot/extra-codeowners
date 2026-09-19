@@ -17,7 +17,7 @@ The default policy path is `.github/extra-codeowners.toml`. `EXTRA_CODEOWNERS_PO
 | Scope | Repository and revision | Purpose |
 | --- | --- | --- |
 | Organization | `<organization>/.github`, default branch | Enroll immutable application identities and add organization guardrails. |
-| Repository | Pull request's base repository, exact base commit | Enable evaluation and delegate paths to an enrolled application. |
+| Repository | Pull request's base repository, current target-branch commit | Enable evaluation and delegate paths to an enrolled application. |
 
 Organization policy is not copied into target repositories and does not opt them in. Every target repository needs an enabled repository policy. Repository policy may narrow organization authority. It cannot enroll an application or weaken an organization guardrail.
 
@@ -143,7 +143,7 @@ The following paths reject application substitution by default:
 
 The restriction controls who may satisfy review policy for a change. It does not restrict file contents. Policy may list applications. Workflows and local actions may invoke applications.
 
-The configured repository-policy path is non-delegable by default. Its default value is `.github/extra-codeowners.toml`; another validated `EXTRA_CODEOWNERS_POLICY_PATH` replaces it. A repository may set `allow_delegation_for_policy_file = true` to let a matching enrolled App cover only that path. The setting is read from the pull request's base commit, so the pull request that enables it cannot use it. An organization can veto the opt-in by adding the same path to `guardrails.non_delegable_paths`.
+The configured repository-policy path is non-delegable by default. Its default value is `.github/extra-codeowners.toml`; another validated `EXTRA_CODEOWNERS_POLICY_PATH` replaces it. A repository may set `allow_delegation_for_policy_file = true` to let a matching enrolled App cover only that path. The setting is read from the current target-branch commit, so the pull request that enables it cannot use it. An organization can veto the opt-in by adding the same path to `guardrails.non_delegable_paths`.
 
 Non-delegable patterns do not assign ownership. Standard `CODEOWNERS` must give these paths an effective human user or team owner. Otherwise, Extra CODEOWNERS reports the path as unowned and creates no code-owner requirement. The CODEOWNERS file itself must be protected. GitHub's CODEOWNERS error view reports ownership errors that would weaken this boundary.
 
@@ -336,7 +336,7 @@ credential set, and restart the workload.
 
 ## Loading and failure behavior
 
-- Repository `CODEOWNERS` and repository policy are read from the exact pull-request base commit, not from the proposed head.
+- Repository `CODEOWNERS` and repository policy are read from the current target-branch commit, not from the proposed head or an older base SHA retained in PR metadata.
 - Organization policy is read from the default branch of the configured organization-policy repository (`.github` by default).
 - A pull request cannot grant itself authority by modifying its policy file.
 - A repository delegation that references an application alias absent from organization policy makes the combined policy invalid and produces a diagnostic failure.

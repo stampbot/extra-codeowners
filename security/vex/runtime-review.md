@@ -136,6 +136,16 @@ upgrades to the Dockerfile.
 
 ### Review boundaries
 
+The September 19 target-branch policy change adds authenticated GitHub reference
+reads through the existing HTTPX client, validates their JSON responses, and
+uses the resolved commit for policy and CODEOWNERS. It does not change the
+base image, locked dependencies, native-library loading, or database queries.
+The new parsing uses Python's JSON, string, and regular-expression operations;
+it introduces no subprocess, FFI, FTS5, or native format-string entrypoint.
+The package-specific reachability conclusions above still apply. The VEX
+runtime binding records this source review; its vulnerability statements are
+unchanged.
+
 These conclusions apply to the shipped service's behavior, including its SQLite
 backend. They do not cover arbitrary commands, custom Python code, native
 plugins, or externally supplied databases. A change in those behaviors requires

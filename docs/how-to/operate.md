@@ -218,19 +218,22 @@ If GitHub explicitly reports zero remaining requests, its full reset deadline
 is honored instead. Upgrades preserve existing stored deadlines; don't clear
 budget rows to force recovery to resume sooner.
 
-For each repository, reconciliation reads policy once per distinct base commit
-in the open-PR listing. When that policy is missing, it also asks GitHub whether
-the head has an existing managed check. Only PRs with neither policy nor a
-managed check are omitted from the recovery queue. Both observations are made
+For each repository, reconciliation resolves each PR target branch with GitHub
+and reads policy at its current commit, once per branch per scan. The base SHA
+in a PR response can be older than the branch tip. When policy is missing,
+the reconciler also asks GitHub whether the head has an existing managed check.
+Only PRs with neither policy nor a managed check are omitted from the recovery
+queue. Both observations are made
 again on every scan, so missing a policy-change webhook cannot permanently
 prevent enrollment. Disabled or unreadable policy still queues evaluation;
 removing policy cannot hide a previously managed check.
 
-Discovery pages and empty check listings are cached only within one process.
-The cache holds at most 32 MiB total, 1 MiB per entry, or 4,096 entries, and
+Discovery pages, branch references, and empty check listings are cached only
+within one process. The cache holds at most 32 MiB total, 1 MiB per entry,
+or 4,096 entries, and
 removes entries idle for one hour. Every entry still needs an authenticated
-conditional HTTP request before
-reuse. A `304 Not Modified` saves the response body transfer, not the physical
+conditional HTTP request before reuse. A `304 Not Modified` saves the response
+body transfer, not the physical
 request or its possible secondary-limit cost. Watch the GitHub request metric's
 `outcome="not_modified"` series separately from local `budget_deferred`
 counts. The cache is disposable and is not authority evidence.
@@ -316,7 +319,7 @@ queue state to make the symptom disappear.
 
 ### 1. Confirm that policy should run
 
-Read repository policy from the pull request's exact base commit. Confirm that
+Read repository policy from the current tip of the PR's target branch. Confirm that
 it exists at the effective `EXTRA_CODEOWNERS_POLICY_PATH` and contains
 `enabled = true`. The default path is
 `.github/extra-codeowners.toml`.

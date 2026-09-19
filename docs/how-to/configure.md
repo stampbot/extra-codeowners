@@ -184,8 +184,8 @@ satisfy the Extra CODEOWNERS check for every matching owned path, including a
 non-delegable path. Non-delegable means an App cannot substitute for a human;
 this option intentionally treats the author as eligible human evidence. Keep
 the setting disabled for a review boundary that requires a different person.
-The policy is read from the base commit, so enabling the field in a pull request
-does not authorize that same pull request.
+The policy is read from the current target-branch commit, so enabling the field
+in a pull request does not authorize that same pull request.
 
 ### Optional: let an enrolled App maintain the policy file
 
@@ -196,8 +196,8 @@ repository's own Extra CODEOWNERS policy. The default remains human-only.
     After the option takes effect, the selected App may approve a policy edit
     that broadens what it may approve on a later pull request. The pull request
     that first enables the option cannot use it, because Extra CODEOWNERS reads
-    policy from the base commit. Review that bootstrap change with the human
-    CODEOWNERS process you want to preserve.
+    policy from the current target-branch commit. Review that bootstrap change
+    with the human CODEOWNERS process you want to preserve.
 
 In that human-reviewed bootstrap pull request, add the option and an exact
 delegation for the configured policy path. Keep this delegation separate from

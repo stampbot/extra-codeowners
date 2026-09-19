@@ -23,6 +23,7 @@ class DiscoveryProvider:
     def __init__(self, count: int = 3) -> None:
         self.count = count
         self.base = "b" * 40
+        self.reported_base: str | None = None
         self.bases: dict[int, str] = {}
         self.policies: dict[str, tuple[int, str]] = {}
         self.policy_status = 404
@@ -79,17 +80,25 @@ class DiscoveryProvider:
                 {
                     "number": n,
                     "head": {"sha": f"{n:040x}"},
-                    "base": {"sha": self.bases.get(n, self.base)},
+                    "base": {
+                        "sha": self.reported_base or self.bases.get(n, self.base),
+                        "ref": f"branch-{self.bases[n]}" if n in self.bases else "main",
+                    },
                 }
                 for n in range(start, end)
             ]
-            headers["ETag"] = f'"pulls-{self.base}-{page}"'
+            headers["ETag"] = f'"pulls-{self.reported_base or self.base}-{page}"'
             if self.reverse_pulls:
                 body.reverse()
             if end <= count:
                 headers["Link"] = f'<{request.url.copy_set_param("page", page + 1)}>; rel="next"'
             elif page > 1:
                 headers["Link"] = f'<{request.url.copy_set_param("page", page - 1)}>; rel="prev"'
+        elif "/git/ref/heads/" in path:
+            branch = path.split("/git/ref/heads/", 1)[1]
+            sha = self.base if branch == "main" else branch.removeprefix("branch-")
+            body = {"ref": f"refs/heads/{branch}", "object": {"type": "commit", "sha": sha}}
+            headers["ETag"] = f'"branch-{sha}"'
         elif "/contents/" in path:
             ref = request.url.params["ref"]
             assert ref in {self.base, *self.bases.values()}
@@ -178,7 +187,7 @@ async def test_large_unenrolled_installation_revalidates_without_refilling_queue
                 # Each cold replica fetches pages and check absence once.
                 # A warm scan still contacts GitHub for every head/page, but
                 # only its one absent-policy read consumes primary quota.
-                assert before - provider.remaining == (2527 if cycle == 0 else 1)
+                assert before - provider.remaining == (2528 if cycle == 0 else 1)
             assert store.release_service_lease("open-pr-reconciler", owner)
         assert (
             provider.requests["/repos/example/project/contents/.github/extra-codeowners.toml"] == 4
@@ -286,6 +295,7 @@ async def test_policy_appearing_or_unreadable_is_not_skipped(
     reconciler, github = reconciler_for(provider, store, private_key, "worker")
     try:
         assert (await scan(reconciler)).queued == 0
+        provider.reported_base = provider.base
         provider.base = "c" * 40
         provider.policy_status = status
         # Even malformed or disabled policy needs ordinary evaluation.
@@ -337,7 +347,7 @@ async def test_skip_does_not_remove_a_direct_event_accepted_during_discovery(
 
 
 @pytest.mark.asyncio
-async def test_policy_is_read_per_distinct_pr_base_not_default_branch(
+async def test_policy_is_read_per_current_target_branch_not_default_branch(
     tmp_path: Path, private_key: str
 ) -> None:
     provider = DiscoveryProvider(count=4)
