@@ -2871,6 +2871,7 @@ class Reconciler:
             if interrupted():
                 return interruption_outcome()
             if suspended:
+                await asyncio.to_thread(budget.clear_pull_cursor, installation_id, self.owner)
                 continue
             if await asyncio.to_thread(self.store.provider_is_backpressured, installation_id):
                 failed_installations += 1
@@ -2894,6 +2895,14 @@ class Reconciler:
                 partial_repository, partial_number = await asyncio.to_thread(
                     budget.pull_cursor, installation_id
                 )
+                if partial_repository and not any(
+                    name.lower() == partial_repository
+                    and not archived
+                    and not self.settings.is_organization_config_repository(name)
+                    for name, archived in repositories
+                ):
+                    await asyncio.to_thread(budget.clear_pull_cursor, installation_id, self.owner)
+                    partial_repository, partial_number = "", 0
                 # Finish the interrupted repository before newly added names
                 # can displace its progress. Membership still comes from GitHub.
                 repositories.sort(key=lambda item: item[0].lower() != partial_repository)

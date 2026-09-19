@@ -1,6 +1,6 @@
 {
   "@context": "https://openvex.dev/ns/v0.2.0",
-  "@id": "urn:uuid:d4a79017-84b2-5ab4-873a-158e10367e0f",
+  "@id": "urn:uuid:9caf7a0c-b1bb-5528-a3c5-57078a01a426",
   "author": "Extra CODEOWNERS maintainers",
   "role": "VEX document producer",
   "statements": [
@@ -559,7 +559,7 @@
       "extra_codeowners/alembic/versions/0008_recovery_api_budget.py": "7d4ae0f8829500de2c23395ef7e14b29225536e841017216308fc07f48b341b3",
       "extra_codeowners/alembic/versions/0009_conditional_request_budget.py": "8356e2d4f1701030ceb275cedbe85ee6ca6e4827ddd87fb84e6b8cd1726ade00",
       "extra_codeowners/alembic/versions/__init__.py": "c421d4569599794de9ddda269e84b775d6e8204164cb9dff2487ca86560d21ae",
-      "extra_codeowners/api_budget.py": "3712cb5d20c77ad0757c2740fadeb7714e8fdf9d2845ba1b32611eac571da8d2",
+      "extra_codeowners/api_budget.py": "f61539671f308b2581a4a6494a8acd56b3f9f462eac93de7ccf764acd5e82e61",
       "extra_codeowners/app.py": "d30ca24500e3b0d3ace360140d56d568d6bd06865acac406ddaa8a4c623d89ad",
       "extra_codeowners/build_identity.py": "5c3b38f087460fca37660ddeaa8a004d05348f8c947c04fc2444739ab7896968",
       "extra_codeowners/cli.py": "79a5c200397f9544492ec6071890ff5835c1ed625c623a0a86ed3a60503e65f4",
@@ -576,7 +576,7 @@
       "extra_codeowners/models.py": "dc59959f56e35111fae00f8f60ef054ba80eb839eb2dae5b09165d4cdc349a48",
       "extra_codeowners/policy.py": "844abb482a7c9cc3190d624cc92ece2476128644718e4096f98bfa8a0abedf8a",
       "extra_codeowners/py.typed": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "extra_codeowners/service.py": "21689b8f28865bb86edeb79ee2baffa60e4ab13bbd1f2d62ec9fdc78c3f3ec93",
+      "extra_codeowners/service.py": "9128891d406ca876267e02317d343d0c1b14410c60f48abf6d678a788e53fb55",
       "extra_codeowners/settings.py": "bd1d3cd0acf23ea4b26869fc1e024438aba7b9acf43f3850c4e6be2e9a5b5437",
       "extra_codeowners/trace_context.py": "f79ca91baa1dd615c80546c66a6b370ba78ec7106dece3feb201d10250078532",
       "extra_codeowners/tracing.py": "62c730c8bdf4d632dace5b79232f968d871a28d8724a162aa52ba6b4ed2c6db1",
@@ -584,7 +584,7 @@
       "pyproject.toml": "4164e19c10e620b1cae1db22dab5728b4e80eb0f5a9dd768484b6f12de73fc96",
       "uv.lock": "029f0fe5b12940d2f8c4f36c5702f5e92f4aac1dc3bff75f2e90660a50dfdcc4"
     },
-    "review": "Reviewed conditional discovery, per-base enrollment filtering, lease-fenced intra-repository progress, shared quota refunds, metrics, and migration 0009. These paths use bounded Python values, existing authenticated HTTP reads, and ordinary SQL state. They add no SQLite FTS, native format strings, subprocess execution, archive extraction, or new TLS/cryptographic call paths. The September 19 PCRE2 conversion assessment names only the unchanged Debian package on the published 64-bit platforms; the service does not call that conversion API. Existing reachability assessments remain applicable.",
+    "review": "Reviewed conditional discovery, per-base enrollment filtering, lease-fenced intra-repository progress and clearing on removal/archive/suspension, shared quota refunds, metrics, and migration 0009. These paths use bounded Python values, existing authenticated HTTP reads, and ordinary SQL state. They add no SQLite FTS, native format strings, subprocess execution, archive extraction, or new TLS/cryptographic call paths. The September 19 PCRE2 conversion assessment names only the unchanged Debian package on the published 64-bit platforms; the service does not call that conversion API. Existing reachability assessments remain applicable.",
     "schema_version": 1
   }
 }

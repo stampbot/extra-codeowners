@@ -27,9 +27,9 @@ def token_response() -> dict[str, str]:
     }
 
 
-def quota_headers(remaining: int = 90) -> dict[str, str]:
-    reset = int((datetime.now(UTC) + timedelta(hours=1)).timestamp())
+def quota_headers(remaining: int, reset: int) -> dict[str, str]:
     return {
+        "x-ratelimit-resource": "core",
         "x-ratelimit-limit": "100",
         "x-ratelimit-remaining": str(remaining),
         "x-ratelimit-reset": str(reset),
@@ -400,7 +400,8 @@ def test_304_refunds_own_budget_but_counts_physical_request(
     store.initialize()
     try:
         budget = RecoveryApiBudget(store)
-        budget.observe(17, CoreQuota(100, 90, utcnow() + timedelta(hours=1)))
+        reset = (utcnow() + timedelta(hours=1)).replace(microsecond=0)
+        budget.observe(17, CoreQuota(100, 91, reset))
         physical_before = GITHUB_PHYSICAL_REQUESTS.labels(
             "get.other", "installation", "interactive"
         )._value.get()
@@ -408,19 +409,30 @@ def test_304_refunds_own_budget_but_counts_physical_request(
         responses = iter(
             [
                 response(200, token_response()),
-                response(200, [{"number": 1}], headers={**quota_headers(90), "ETag": '"same"'}),
-                response(304, headers={**quota_headers(90), "ETag": '"same"'}),
+                response(
+                    200,
+                    [{"number": 1}],
+                    headers={**quota_headers(90, int(reset.timestamp())), "ETag": '"same"'},
+                ),
+                response(
+                    304, headers={**quota_headers(90, int(reset.timestamp())), "ETag": '"same"'}
+                ),
             ]
         )
 
         def handler(request: httpx.Request) -> httpx.Response:
             return next(responses)
 
-        client = client_for(handler, private_key)
+        client = GitHubClient(
+            1, private_key, transport=httpx.MockTransport(handler), recovery_budget=budget
+        )
 
         async def run() -> None:
             try:
                 assert await client.list_open_pulls(17, "example/project") == [{"number": 1}]
+                with store.session() as session:
+                    row = session.get(InstallationApiBudget, 17)
+                    assert row is not None and row.remaining == 90
                 assert await client.list_open_pulls(17, "example/project") == [{"number": 1}]
             finally:
                 await client.close()

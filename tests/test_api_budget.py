@@ -324,6 +324,7 @@ def test_pull_cursor_survives_handoff_and_requires_live_owner(budget_store: Queu
     with budget_store.session() as session:
         session.execute(update(ServiceLease).values(lease_until=utcnow() - timedelta(seconds=1)))
     budget.advance_pull(17, "example/one", 13, "one")
+    budget.clear_pull_cursor(17, "one")
     budget.advance_repository(17, "example/one", "one")
     assert budget.pull_cursor(17) == ("example/one", 12)
     assert budget_store.acquire_service_lease("open-pr-reconciler", "two", 60)

@@ -197,6 +197,9 @@ the durable resume point. The next attempt handles higher numbers; completion
 clears that point so the next full pass checks all PRs again. A lower-numbered
 PR that changes during a partial scan is therefore picked up on the next pass
 if its webhook was missed. Incomplete pagination never advances PR progress.
+Fresh membership that removes or archives the unfinished repository clears
+its partial progress, as does a suspended installation. If access returns,
+the next scan starts that repository from its first open PR.
 
 The budget comes from GitHub's response headers, not a configured request
 limit. When that evidence is missing or expired, recovery gets one probe per

@@ -36,6 +36,9 @@ class DiscoveryProvider:
         self.inject_direct_event = False
         self.empty_tail_repository = False
         self.reverse_pulls = False
+        self.repository_visible = True
+        self.repository_archived = False
+        self.installation_suspended = False
 
     def respond(self, request: httpx.Request) -> httpx.Response:
         path = request.url.path
@@ -49,12 +52,17 @@ class DiscoveryProvider:
                 },
             )
         if path == "/app/installations":
-            return httpx.Response(200, json=[{"id": 17, "suspended_at": None}])
+            suspended_at = datetime.now(UTC).isoformat() if self.installation_suspended else None
+            return httpx.Response(200, json=[{"id": 17, "suspended_at": suspended_at}])
         headers: dict[str, str] = {}
         status = 200
         body: Any
         if path == "/installation/repositories":
-            repositories = [{"full_name": "example/project", "archived": False}]
+            repositories = (
+                [{"full_name": "example/project", "archived": self.repository_archived}]
+                if self.repository_visible
+                else []
+            )
             if self.empty_tail_repository:
                 repositories.append({"full_name": "example/zempty", "archived": False})
             body = {
@@ -231,6 +239,40 @@ async def test_cold_replicas_resume_inside_repository_across_quota_windows(
         assert set(checks.values()) == {1}
         assert provider.requests["/repos/example/zempty/pulls"] == 1
     finally:
+        store.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["removed", "archived", "suspended"])
+async def test_ineligible_partial_repository_clears_progress_before_access_returns(
+    tmp_path: Path, private_key: str, change: str
+) -> None:
+    provider = DiscoveryProvider()
+    store = store_at(tmp_path)
+    owner = "worker"
+    assert store.acquire_service_lease("open-pr-reconciler", owner, 600)
+    budget = RecoveryApiBudget(store)
+    budget.advance_pull(17, "example/project", 3, owner)
+    provider.repository_visible = change != "removed"
+    provider.repository_archived = change == "archived"
+    provider.installation_suspended = change == "suspended"
+    reconciler, github = reconciler_for(provider, store, private_key, owner)
+    try:
+        assert (await scan(reconciler)).complete
+        assert budget.pull_cursor(17) == ("", 0)
+    finally:
+        await github.close()
+    provider.repository_visible = True
+    provider.repository_archived = False
+    provider.installation_suspended = False
+    # A fresh client prevents this fixture's deliberately fixed ETag from
+    # masking the membership change. Production GitHub changes that validator.
+    reconciler, github = reconciler_for(provider, store, private_key, owner)
+    try:
+        assert (await scan(reconciler)).complete
+        assert sum(v for k, v in provider.requests.items() if k.endswith("/check-runs")) == 3
+    finally:
+        await github.close()
         store.close()
 
 

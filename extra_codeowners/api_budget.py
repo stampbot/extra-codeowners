@@ -242,3 +242,7 @@ class RecoveryApiBudget:
                 row.repository_cursor = full_name.lower()
                 row.pull_cursor_repository = ""
                 row.pull_cursor_number = 0
+
+    def clear_pull_cursor(self, installation_id: int, owner: str) -> None:
+        """Discard partial progress when fresh membership makes it ineligible."""
+        self.advance_pull(installation_id, "", 0, owner)
