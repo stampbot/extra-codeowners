@@ -993,7 +993,7 @@ class EvaluationService:
         job: ClaimedJob,
         pull: dict[str, Any],
         head_sha: str,
-        base_sha: str,
+        policy_sha: str,
         expected_changed_files: int,
         repository_policy: RepositoryPolicy,
     ) -> EvaluationResult:
@@ -1026,7 +1026,7 @@ class EvaluationService:
             return _failure("invalid_policy", str(error))
 
         codeowners = await self._find_codeowners(
-            job.installation_id, job.repository_full_name, base_sha
+            job.installation_id, job.repository_full_name, policy_sha
         )
         if codeowners is None:
             return _failure(
@@ -1067,7 +1067,7 @@ class EvaluationService:
             job.installation_id, job.repository_full_name, job.pull_number
         )
         errors_task = self.github.get_codeowners_errors(
-            job.installation_id, job.repository_full_name, base_sha
+            job.installation_id, job.repository_full_name, policy_sha
         )
         try:
             file_values, review_values, github_errors = await asyncio.gather(
@@ -1160,7 +1160,7 @@ class EvaluationService:
         head = _required_object(pull.get("head"), "pull_request.head")
         base = _required_object(pull.get("base"), "pull_request.base")
         head_sha = _required_string(head.get("sha"), "pull_request.head.sha")
-        base_sha = _required_string(base.get("sha"), "pull_request.base.sha")
+        base_ref = _required_string(base.get("ref"), "pull_request.base.ref")
         pull_state = _required_string(pull.get("state"), "pull_request.state")
         if pull_state not in {"open", "closed"}:
             raise GitHubError(f"GitHub returned unknown pull request state {pull_state!r}")
@@ -1207,10 +1207,13 @@ class EvaluationService:
                 if check_run_id is None:
                     if pull_state != "open" or head_sha != accepted_head:
                         return live_head_queued
+                    policy_sha = await self.github.get_branch_head(
+                        job.installation_id, job.repository_full_name, base_ref
+                    )
                     repository_text = await self._repository_policy_text(
                         job.installation_id,
                         job.repository_full_name,
-                        base_sha,
+                        policy_sha,
                     )
                     if repository_text is None:
                         return live_head_queued
@@ -1265,10 +1268,13 @@ class EvaluationService:
             self.settings.check_name,
         )
         if not managed_check:
+            policy_sha = await self.github.get_branch_head(
+                job.installation_id, job.repository_full_name, base_ref
+            )
             repository_text = await self._repository_policy_text(
                 job.installation_id,
                 job.repository_full_name,
-                base_sha,
+                policy_sha,
             )
             if repository_text is None:
                 return False
@@ -1445,11 +1451,15 @@ class EvaluationService:
                 self.settings.check_name,
             )
             repository_text: str | None = None
+            policy_sha: str | None = None
             if not managed_check:
+                policy_sha = await self.github.get_branch_head(
+                    job.installation_id, job.repository_full_name, base_ref
+                )
                 repository_text = await self._repository_policy_text(
                     job.installation_id,
                     job.repository_full_name,
-                    base_sha,
+                    policy_sha,
                 )
                 if repository_text is None:
                     return
@@ -1526,11 +1536,15 @@ class EvaluationService:
                 # Fetch only after revoking a prior success. Oversized,
                 # malformed, or unavailable policy content must leave the
                 # required check blocking while the durable job retries.
+                policy_sha = await self.github.get_branch_head(
+                    job.installation_id, job.repository_full_name, base_ref
+                )
                 repository_text = await self._repository_policy_text(
                     job.installation_id,
                     job.repository_full_name,
-                    base_sha,
+                    policy_sha,
                 )
+            assert policy_sha is not None
             expected_changed_files = _required_nonnegative_int(
                 pull.get("changed_files"), "pull_request.changed_files"
             )
@@ -1549,7 +1563,7 @@ class EvaluationService:
                     job,
                     pull,
                     head_sha,
-                    base_sha,
+                    policy_sha,
                     expected_changed_files,
                     repository_policy,
                 )
@@ -1579,6 +1593,10 @@ class EvaluationService:
                 )
                 != expected_changed_files
                 or _label_names(current) != labels
+                or await self.github.get_branch_head(
+                    job.installation_id, job.repository_full_name, base_ref
+                )
+                != policy_sha
             ):
                 await asyncio.to_thread(
                     self.store.enqueue_shared_head_trigger,
@@ -2925,9 +2943,9 @@ class Reconciler:
                     if interrupted():
                         return interruption_outcome()
                     pulls = _reconciliation_pulls(pull_records)
-                    # A policy belongs to the PR's base commit, not necessarily
-                    # the repository's default branch. Share only reads of the
-                    # same immutable base during this repository scan.
+                    # PR metadata can retain an older base SHA after a branch
+                    # push. Resolve each target branch during this scan, then
+                    # read policy at that immutable commit.
                     policy_present: dict[str, bool] = {}
                     records = sorted(
                         zip(pulls, pull_records, strict=True), key=lambda item: item[0][0]
@@ -2938,22 +2956,21 @@ class Reconciler:
                         if full_name.lower() == partial_repository and number <= partial_number:
                             continue
                         base = pull_record.get("base")
-                        base_sha = base.get("sha") if isinstance(base, dict) else None
+                        base_ref = base.get("ref") if isinstance(base, dict) else None
                         # Older/incomplete discovery representations fall back
                         # to full evaluation; missing metadata cannot skip work.
-                        try:
-                            base_sha = _reconciliation_head_sha(base_sha)
-                        except _ReconciliationPayloadError:
-                            base_sha = None
-                        if base_sha is not None:
-                            if base_sha not in policy_present:
+                        if isinstance(base_ref, str) and base_ref:
+                            if base_ref not in policy_present:
                                 try:
-                                    policy_present[base_sha] = (
+                                    policy_sha = await self.github.get_branch_head(
+                                        installation_id, full_name, base_ref, stop=request_stop
+                                    )
+                                    policy_present[base_ref] = (
                                         await self.github.get_file_text(
                                             installation_id,
                                             full_name,
                                             self.settings.policy_path,
-                                            ref=base_sha,
+                                            ref=policy_sha,
                                         )
                                         is not None
                                     )
@@ -2962,10 +2979,10 @@ class Reconciler:
                                 except GitHubError:
                                     # Unreadable policy is not absence. Queue
                                     # evaluation so managed success is revoked.
-                                    policy_present[base_sha] = True
+                                    policy_present[base_ref] = True
                             if interrupted():
                                 return interruption_outcome()
-                            if not policy_present[base_sha]:
+                            if not policy_present[base_ref]:
                                 managed = await self.github.has_reconciliation_check(
                                     installation_id,
                                     full_name,

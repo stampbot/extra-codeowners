@@ -5,6 +5,11 @@ failed on a pull request. Start with the check's own summary. It is written for
 the pull-request author and repository maintainer; service operators have a
 separate [recovery runbook](operate.md#investigate-a-missing-or-stale-check).
 
+The commands use Bash and an authenticated GitHub CLI with read access to the
+repository. They can run from any directory unless a step says otherwise.
+Replace `NUMBER` with the pull-request number and `OWNER/REPOSITORY` with its
+repository name.
+
 Don't publish a replacement success or weaken repository rules to clear the
 symptom.
 
@@ -38,7 +43,7 @@ Extra CODEOWNERS stays silent when all three of these facts are true:
 - the repository has no Extra CODEOWNERS check for the current head
 - organization policy alone is the only configuration.
 
-Read repository policy from the pull request's **base commit**, not from the
+Read repository policy from the **current target-branch commit**, not from the
 proposed change. The default path is `.github/extra-codeowners.toml`. It must
 contain:
 
@@ -104,9 +109,13 @@ labels, App identity, CODEOWNERS, and reviews.
 Check GitHub's view of the standard file separately:
 
 ```bash
-BASE_SHA="$(
+BASE_REF_ENCODED="$(
   gh pr view NUMBER --repo OWNER/REPOSITORY \
-    --json baseRefOid --jq .baseRefOid
+    --json baseRefName --jq '.baseRefName | @uri'
+)"
+BASE_SHA="$(
+  gh api "repos/OWNER/REPOSITORY/git/ref/heads/$BASE_REF_ENCODED" \
+    --jq .object.sha
 )"
 gh api --method GET repos/OWNER/REPOSITORY/codeowners/errors \
   -f ref="$BASE_SHA" \
@@ -114,7 +123,8 @@ gh api --method GET repos/OWNER/REPOSITORY/codeowners/errors \
 ```
 
 Replace the pull-request number and repository. An error-free file at that
-exact base commit prints `[]`.
+current target-branch commit prints `[]`. Resolving the branch separately
+avoids using an older base SHA retained in the PR metadata.
 
 ## If the check stays pending
 

@@ -62,6 +62,9 @@ class StubGitHub:
             "labels": [],
         }
 
+    async def get_branch_head(self, installation_id: int, repository: str, branch: str) -> str:
+        return "b" * 40
+
     async def get_file_text(
         self,
         installation_id: int,

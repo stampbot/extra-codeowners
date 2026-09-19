@@ -54,7 +54,8 @@ back into GitHub with short-lived, installation-scoped tokens.
 Policy crosses a different boundary. Organization administrators decide which
 App identities may be trusted. Repository maintainers may delegate to those
 Apps, but only within the organization's guardrails and using policy from the
-pull request's base commit.
+current target-branch commit. The branch is resolved through GitHub's reference
+API because the PR's reported base SHA can remain stale after a branch update.
 
 The operator trusts the database and secret manager. Checks, logs, metrics, and
 runtime identity usually have a wider audience, so they are lower-trust
@@ -69,7 +70,7 @@ of the security contract.
 
 | Threat | Control | Residual risk |
 | --- | --- | --- |
-| A pull-request author edits delegation policy to authorize that pull request | Load repository policy and CODEOWNERS from the exact base commit. Assign policy paths to humans in CODEOWNERS and make those paths non-delegable by default. | A merged policy change governs later pull requests, so human review of it remains critical. This also prevents the pull request that first enables policy-file delegation from using that new authority. |
+| A pull-request author edits delegation policy to authorize that pull request | Load repository policy and CODEOWNERS from the current target-branch commit, then revalidate the branch before publishing. Assign policy paths to humans in CODEOWNERS and make those paths non-delegable by default. | A merged policy change governs subsequent evaluations of open PRs as well as new PRs, so human review of it remains critical. This also prevents the pull request that first enables policy-file delegation from using that new authority. |
 | A pull-request author edits the DCO checker that evaluates the same pull request | Keep the active workflow read-only and secretless. The replacement evaluator is pure, does not execute pull-request content, and is intended to run from an independently controlled GitHub App. | The independent caller and required context do not exist yet. Until issue #40 is complete, the active workflow remains review evidence rather than an enforcement boundary. |
 | A retarget or force-push changes the DCO commit range while evidence is collected | Select commit IDs through the GraphQL pull-request connection, require the exact repository, base, and head identity on every list and detail response, and require matching event, before, and after snapshots. | Publication-time revalidation is not implemented. Same-repository and private-fork commit-node reads still need live contract tests before rollout. |
 | Organization enrollment policy is changed maliciously | Keep enrollment in the separately governed organization-policy repository (`.github` by default), with native human CODEOWNER enforcement. | Compromise of that repository's merge authority can expand application trust across repositories. |

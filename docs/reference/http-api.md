@@ -185,10 +185,10 @@ The endpoint returns Prometheus text format. Extra CODEOWNERS defines these appl
 | `extra_codeowners_reconciliations_total` | counter | Reconciliation outcomes, labeled with `result="success"`, `result="partial"`, or `result="failure"`. A process that observes another lease owner does not increment the counter. An open provider circuit records a partial result; an election error counts as a failure. |
 | `extra_codeowners_reconciliation_seconds` | histogram | Wall-clock duration of a reconciliation attempt, including the explicit `not_elected` outcome for a replica that did not own the scan lease. |
 | `extra_codeowners_reconciliation_last_success_timestamp_seconds` | gauge | Unix timestamp of the most recent complete reconciliation by this process. A partial or failed attempt does not update it. |
-| `extra_codeowners_reconciliation_unenrolled_skips_total` | counter | PRs omitted from recovery after GitHub confirms both missing policy at the listed base commit and no managed check on the head. No labels. |
+| `extra_codeowners_reconciliation_unenrolled_skips_total` | counter | PRs omitted from recovery after GitHub confirms both missing policy at the current target-branch commit and no managed check on the head. No labels. |
 | `extra_codeowners_trace_exports_total` | counter | Trace exporter batches, labeled by success or failure. A failure does not change the approval decision or worker retry behavior. |
 
-Discovery pages and empty managed-check listings use a disposable per-process cache with a 32 MiB total
+Discovery pages, branch references, and empty managed-check listings use a disposable per-process cache with a 32 MiB total
 bound, 1 MiB per-entry bound, 4,096-entry bound, and one-hour idle lifetime.
 Each page is revalidated with an authenticated conditional HTTP request before
 the cached body is used. A `304` reuses the validated body and pagination links;
@@ -196,9 +196,12 @@ it still consumes a physical HTTP request and may encounter secondary limits.
 The logical request counter and duration histogram use `outcome="not_modified"`
 for that response. The physical request counter has no outcome label.
 
-Reconciliation reads policy at each distinct listed base commit once per
-repository per scan. A missing policy skips queueing only after GitHub also
-confirms that the head has no managed check. Existing checks and present,
+Reconciliation resolves each distinct target branch and reads policy at its
+current commit once per repository per scan. It does not use the potentially
+older base SHA from the PR listing. Branch-reference requests use the fixed
+operation label `repository.ref` and require authenticated HTTP revalidation
+before a cached response is reused. A missing policy skips queueing only after
+GitHub also confirms that the head has no managed check. Existing checks and present,
 disabled, malformed, or unreadable policy follow ordinary evaluation.
 After validating the complete list, the reconciler processes PRs in number
 order and saves progress after each handled PR. A deferred attempt resumes

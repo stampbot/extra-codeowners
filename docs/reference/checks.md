@@ -10,7 +10,7 @@ The evaluator fetches authorization evidence from GitHub instead of trusting mut
 
 - the current base repository identity, base commit, base ref, and head commit
 - every changed file, including the previous name of a renamed file
-- repository policy and standard `CODEOWNERS` from the exact base commit
+- repository policy and standard `CODEOWNERS` from the current target-branch commit
 - organization policy from the configured policy repository's default branch
 - submitted and dismissed pull-request reviews
 - current pull-request labels when delegations depend on them
@@ -18,6 +18,13 @@ The evaluator fetches authorization evidence from GitHub instead of trusting mut
 - enrolled App metadata and immutable bot-account identity.
 
 A webhook supplies a trigger and a delivery ID. It does not supply authorization truth.
+
+The evaluator resolves the target branch independently of the PR's reported
+base SHA, which GitHub can retain after the branch changes. Policy and
+CODEOWNERS are read at that resolved commit, and the branch is revalidated
+before publication. A changed branch queues another evaluation; a failed
+lookup cannot authorize a result. Proposed policy in the PR head never grants
+that PR new authority.
 
 Standard `CODEOWNERS` lookup follows GitHub's precedence: `.github/CODEOWNERS`, then `CODEOWNERS` in the repository root, then `docs/CODEOWNERS`. The first file found is the only one evaluated.
 
@@ -65,9 +72,10 @@ in an enrolled repository:
 12. Fetches the pull request again before publication. If it closed during the
     evaluation, the service follows the same completed-result preservation and
     unfinished-evaluation cancellation rule as in step 1. If the pull request remains
-    open but its base ref, base commit,
-    head commit, changed-file count, or label set changed, the worker discards
-    the result. It advances the current head's shared generation and queues
+    open but its base ref, reported base commit, head commit, changed-file
+    count, or label set changed, the worker discards the result. It also
+    revalidates the target branch and discards the result if the branch moved.
+    It advances the current head's shared generation and queues
     another evaluation in the same transaction.
 13. Under the publication guards, rechecks the pull-request generation, the
     shared-head generation, its completed exact-head invalidation, and the
