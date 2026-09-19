@@ -13,11 +13,11 @@ The alpha series establishes this compatibility contract:
 
 | Field | Contract |
 | --- | --- |
-| Database head | `0008_recovery_api_budget` |
-| Head change | Yes; installation API budgets and discovery cursors are now shared across replicas. |
-| Supported source releases | `0.1.0-alpha.43` at `0007_reconciliation_completion`, `0.1.0-alpha.42` at `0006_webhook_trace_links`, or `0.1.0-alpha.14` at `0005_reconciliation_state_index`, after a controlled migration. |
+| Database head | `0009_conditional_request_budget` |
+| Head change | Yes; conditional discovery accounting is now fenced across replicas. |
+| Supported source releases | `0.1.0-alpha.57` at `0008_recovery_api_budget`, `0.1.0-alpha.43` at `0007_reconciliation_completion`, `0.1.0-alpha.42` at `0006_webhook_trace_links`, or `0.1.0-alpha.14` at `0005_reconciliation_state_index`, after a controlled migration. |
 | Target application compatible before migration | No; startup requires the exact head. |
-| Required process state | Stop webhook ingress and every older worker before applying `0008_recovery_api_budget`. Suspend GitOps reconciliation and remove the HPA before scaling a Kubernetes Deployment to zero. |
+| Required process state | Stop webhook ingress and every older worker before applying `0009_conditional_request_budget`. Suspend GitOps reconciliation and remove the HPA before scaling a Kubernetes Deployment to zero. |
 | In-place database downgrade | Not supported. |
 | Rollback after head change | Restore the verified pre-migration backup. An older image rejects this head. |
 | Backup required | Yes, before deployment and before every pre-release schema adoption. |
@@ -98,7 +98,7 @@ assumed request allowance is loaded during migration.
 An already-running process does not revalidate the Alembic head before every
 claim. Stop every older ingress, worker, and reconciler before this revision
 runs. Start only the target artifact after `database check` reports
-`0008_recovery_api_budget` and validates that artifact's
+`0009_conditional_request_budget` and validates that artifact's
 `required-release-contract`. Readiness removes an old process from webhook
 traffic after migration, but it does not cancel work that process already
 claimed. For Kubernetes, a zero-replica Deployment is not proof of a drain
@@ -107,6 +107,25 @@ for the migration update, wait out both worker and reconciler leases, and
 verify the target pod and database contract. Apply the reviewed final
 autoscaling state in a separate update before resuming GitOps; an HPA should
 exist only when those values enable it.
+
+Revision `0009_conditional_request_budget` adds an accounting revision to each
+installation budget. Conditional discovery responses use the fixed
+`not_modified` outcome and may refund one local debit only when the response's
+receipt still matches the row revision. A concurrent replica debit or stricter
+quota observation makes that refund ineligible. The compatibility marker moves
+from `7` to `8`.
+
+The target artifact also keeps discovery pages and empty check listings in a disposable per-process LRU:
+32 MiB total, 1 MiB per entry, 4,096 entries, and a one-hour idle lifetime.
+Every page is revalidated over authenticated HTTP before reuse. A `304` still
+uses a physical HTTP request and can encounter secondary limits; it is not a
+local cache hit or a quota guarantee.
+
+Stop webhook ingress and every older worker before this revision runs. Take and
+verify a backup first. Apply the migration with the target artifact, then run
+the target `database check` before starting two replicas. An older artifact
+rejects the new head; rollback requires restoring the verified pre-migration
+backup.
 
 No supported application release predates the planned `0.1.0`. Databases
 created by pre-release builds have no Alembic revision, so the current `0.1.0`

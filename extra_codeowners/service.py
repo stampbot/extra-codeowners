@@ -49,6 +49,7 @@ from extra_codeowners.metrics import (
     QUEUE_WORK_CLASS_OLDEST_AGE_SECONDS,
     RECONCILIATION_LAST_SUCCESS,
     RECONCILIATION_SECONDS,
+    RECONCILIATION_UNENROLLED_SKIPS,
     RECONCILIATIONS,
     SHARED_HEAD_INVALIDATION_DEPTH,
     SHARED_HEAD_INVALIDATIONS,
@@ -2909,9 +2910,57 @@ class Reconciler:
                     if interrupted():
                         return interruption_outcome()
                     pulls = _reconciliation_pulls(pull_records)
-                    for number, head_sha in pulls:
+                    # A policy belongs to the PR's base commit, not necessarily
+                    # the repository's default branch. Share only reads of the
+                    # same immutable base during this repository scan.
+                    policy_present: dict[str, bool] = {}
+                    for (number, head_sha), pull_record in zip(pulls, pull_records, strict=True):
                         if interrupted():
                             return interruption_outcome()
+                        base = pull_record.get("base")
+                        base_sha = base.get("sha") if isinstance(base, dict) else None
+                        # Older/incomplete discovery representations fall back
+                        # to full evaluation; missing metadata cannot skip work.
+                        try:
+                            base_sha = _reconciliation_head_sha(base_sha)
+                        except _ReconciliationPayloadError:
+                            base_sha = None
+                        if base_sha is not None:
+                            if base_sha not in policy_present:
+                                try:
+                                    policy_present[base_sha] = (
+                                        await self.github.get_file_text(
+                                            installation_id,
+                                            full_name,
+                                            self.settings.policy_path,
+                                            ref=base_sha,
+                                        )
+                                        is not None
+                                    )
+                                except (GitHubRateLimitError, GitHubOperationStoppedError):
+                                    raise
+                                except GitHubError:
+                                    # Unreadable policy is not absence. Queue
+                                    # evaluation so managed success is revoked.
+                                    policy_present[base_sha] = True
+                            if interrupted():
+                                return interruption_outcome()
+                            if not policy_present[base_sha]:
+                                managed = await self.github.has_reconciliation_check(
+                                    installation_id,
+                                    full_name,
+                                    head_sha,
+                                    self.settings.check_name,
+                                    stop=request_stop,
+                                )
+                                if interrupted():
+                                    return interruption_outcome()
+                                if not managed:
+                                    # Both absence observations came from GitHub
+                                    # in this scan. A prior managed check always
+                                    # follows the ordinary invalidation path.
+                                    RECONCILIATION_UNENROLLED_SKIPS.inc()
+                                    continue
                         added = await asyncio.to_thread(
                             self.store.enqueue_reconciliation_if_due,
                             JobRequest(

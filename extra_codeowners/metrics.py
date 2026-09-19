@@ -118,6 +118,10 @@ RECONCILIATION_LAST_SUCCESS = Gauge(
     "extra_codeowners_reconciliation_last_success_timestamp_seconds",
     "Unix timestamp of the latest complete open pull request reconciliation",
 )
+RECONCILIATION_UNENROLLED_SKIPS = Counter(
+    "extra_codeowners_reconciliation_unenrolled_skips_total",
+    "PRs with freshly observed policy and managed-check absence omitted from recovery",
+)
 TRACE_EXPORTS = Counter(
     "extra_codeowners_trace_exports_total",
     "OpenTelemetry trace export batches by result",

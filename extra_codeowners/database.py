@@ -14,6 +14,7 @@ from typing import Any, Final, Literal
 
 from sqlalchemy import (
     JSON,
+    BigInteger,
     Boolean,
     CheckConstraint,
     DateTime,
@@ -44,8 +45,8 @@ from sqlalchemy.pool import NullPool
 
 from extra_codeowners.trace_context import TrustedTraceContext
 
-SCHEMA_VERSION = 7
-DATABASE_MIGRATION_HEAD = "0008_recovery_api_budget"
+SCHEMA_VERSION = 8
+DATABASE_MIGRATION_HEAD = "0009_conditional_request_budget"
 DATABASE_CONNECT_TIMEOUT_SECONDS = 3
 DATABASE_POOL_TIMEOUT_SECONDS = 2
 DATABASE_STATEMENT_TIMEOUT_MILLISECONDS = 3_000
@@ -399,6 +400,7 @@ class InstallationApiBudget(Base):
     reset_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     probe_after: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     repository_cursor: Mapped[str] = mapped_column(String(512), nullable=False)
+    accounting_revision: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
 
 
 class ProviderBackpressure(Base):

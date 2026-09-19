@@ -96,6 +96,63 @@ def test_missing_headers_are_not_quota() -> None:
     assert CoreQuota.from_headers({}) is None
 
 
+def test_conditional_receipt_refunds_once(budget_store: QueueStore) -> None:
+    budget = RecoveryApiBudget(budget_store)
+    observed = quota()
+    budget.observe(17, observed)
+    receipt = budget.admit(17, recovery=True)
+    assert receipt is not None
+    budget.observe(17, observed, not_modified_receipt=receipt)
+    budget.observe(17, observed, not_modified_receipt=receipt)
+    with budget_store.session() as session:
+        row = session.get(InstallationApiBudget, 17)
+        assert row is not None and row.remaining == 100
+
+
+def test_peer_debit_prevents_conditional_refund(budget_store: QueueStore) -> None:
+    budget = RecoveryApiBudget(budget_store)
+    peer = RecoveryApiBudget(budget_store)
+    observed = quota()
+    budget.observe(17, observed)
+    receipt = budget.admit(17, recovery=True)
+    peer.admit(17, recovery=False)
+    budget.observe(17, observed, not_modified_receipt=receipt)
+    with budget_store.session() as session:
+        row = session.get(InstallationApiBudget, 17)
+        assert row is not None and row.remaining == 98
+
+
+def test_explicit_zero_fences_receipt_even_when_balance_already_zero(
+    budget_store: QueueStore,
+) -> None:
+    budget = RecoveryApiBudget(budget_store)
+    observed = quota(1)
+    budget.observe(17, observed)
+    receipt = budget.admit(17, recovery=False)
+    budget.observe(17, CoreQuota(observed.limit, 0, observed.reset_at))
+    budget.observe(17, observed, not_modified_receipt=receipt)
+    with budget_store.session() as session:
+        row = session.get(InstallationApiBudget, 17)
+        assert row is not None and row.remaining == 0
+
+
+def test_two_peers_cannot_refund_same_receipt_twice(budget_store: QueueStore) -> None:
+    budget = RecoveryApiBudget(budget_store)
+    observed = quota(90)
+    budget.observe(17, observed)
+    receipt = budget.admit(17, recovery=True)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [
+            pool.submit(budget.observe, 17, observed, not_modified_receipt=receipt)
+            for _ in range(2)
+        ]
+        for future in futures:
+            future.result()
+    with budget_store.session() as session:
+        row = session.get(InstallationApiBudget, 17)
+        assert row is not None and row.remaining == 90
+
+
 def test_two_replicas_share_atomic_reserve(budget_store: QueueStore) -> None:
     peer = QueueStore(budget_store.engine.url.render_as_string(hide_password=False))
     first, second = RecoveryApiBudget(budget_store), RecoveryApiBudget(peer)

@@ -8,7 +8,7 @@ import math
 import re
 import time
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
@@ -23,6 +23,7 @@ from opentelemetry.trace import Span
 
 from extra_codeowners.api_budget import (
     REQUEST_LANE,
+    BudgetReceipt,
     CoreQuota,
     ProviderQuotaExhaustedError,
     RecoveryApiBudget,
@@ -37,6 +38,7 @@ from extra_codeowners.dco import (
     PullRequestSnapshot,
     RepositoryIdentity,
 )
+from extra_codeowners.discovery_cache import CacheEntry, DiscoveryCache
 from extra_codeowners.metrics import (
     GITHUB_API_REQUEST_SECONDS,
     GITHUB_API_REQUESTS,
@@ -133,6 +135,8 @@ def _request_outcome(response: httpx.Response, *, allow_not_found: bool) -> str:
     """Classify one final HTTP response with bounded metric cardinality."""
     if response.is_success:
         return "success"
+    if response.status_code == 304:
+        return "not_modified"
     if allow_not_found and response.status_code == 404:
         return "not_found"
     if response.status_code == 429:
@@ -381,6 +385,7 @@ class GitHubClient:
         self._request_semaphore = asyncio.Semaphore(max_in_flight_requests)
         self._tracing = tracing or Tracing(enabled=False)
         self._recovery_budget = recovery_budget
+        self._discovery_cache = DiscoveryCache()
         try:
             loaded_key = serialization.load_pem_private_key(private_key.encode(), password=None)
         except (TypeError, ValueError) as error:
@@ -536,10 +541,12 @@ class GitHubClient:
         )
         raise AssertionError("unreachable")  # pragma: no cover
 
-    async def _admit_request(self, installation_id: int | None, method: str, path: str) -> None:
+    async def _admit_request(
+        self, installation_id: int | None, method: str, path: str
+    ) -> BudgetReceipt | None:
         if installation_id is not None and path != "/graphql" and self._recovery_budget is not None:
             try:
-                await asyncio.to_thread(
+                return await asyncio.to_thread(
                     self._recovery_budget.admit,
                     installation_id,
                     recovery=REQUEST_LANE.get() == "recovery",
@@ -552,9 +559,15 @@ class GitHubClient:
                     "installation REST core quota is exhausted",
                     error.retry_after_seconds,
                 ) from error
+        return None
 
     async def _observe_quota(
-        self, installation_id: int | None, response: httpx.Response, span: Span
+        self,
+        installation_id: int | None,
+        response: httpx.Response,
+        span: Span,
+        *,
+        not_modified_receipt: BudgetReceipt | None = None,
     ) -> None:
         # A rejected token may expose the unauthenticated/IP quota. The
         # attempt stays charged, but its headers cannot replace this budget.
@@ -570,7 +583,15 @@ class GitHubClient:
         span.set_attribute("github.quota.remaining", quota.remaining)
         span.set_attribute("github.quota.reset_at", int(quota.reset_at.timestamp()))
         if installation_id is not None and self._recovery_budget is not None:
-            await asyncio.to_thread(self._recovery_budget.observe, installation_id, quota)
+            if not_modified_receipt is None:
+                await asyncio.to_thread(self._recovery_budget.observe, installation_id, quota)
+                return
+            await asyncio.to_thread(
+                self._recovery_budget.observe,
+                installation_id,
+                quota,
+                not_modified_receipt=not_modified_receipt,
+            )
 
     async def _api_response(
         self,
@@ -585,6 +606,7 @@ class GitHubClient:
         headers: dict[str, str] | None = None,
         allow_not_found: bool = False,
         stop: asyncio.Event | None = None,
+        conditional_discovery: bool = False,
     ) -> httpx.Response:
         """Send a public, App, or installation request with bounded retries."""
         attempts = 1 if app_authenticated or unauthenticated else 2
@@ -613,6 +635,13 @@ class GitHubClient:
                         self._raise_if_stopped(stop)
                         token: str | None = None
                         request_headers = headers or {}
+                        if attempt:
+                            # Retrying a rejected token must fetch a fresh representation.
+                            request_headers = {
+                                key: value
+                                for key, value in request_headers.items()
+                                if key.lower() not in {"if-none-match", "if-modified-since"}
+                            }
                         if unauthenticated:
                             pass
                         elif app_authenticated:
@@ -633,7 +662,7 @@ class GitHubClient:
                             budget_installation = (
                                 installation_id if authentication == "installation" else None
                             )
-                            await self._admit_request(budget_installation, method, path)
+                            receipt = await self._admit_request(budget_installation, method, path)
                             GITHUB_PHYSICAL_REQUESTS.labels(
                                 operation, authentication, REQUEST_LANE.get()
                             ).inc()
@@ -644,7 +673,20 @@ class GitHubClient:
                                 json=json,
                                 headers=request_headers,
                             )
-                            await self._observe_quota(budget_installation, response, span)
+                            refundable = (
+                                conditional_discovery
+                                and authentication == "installation"
+                                and method == "GET"
+                                and response.status_code == 304
+                                and bool(request_headers.get("If-None-Match"))
+                                and (stop is None or not stop.is_set())
+                            )
+                            await self._observe_quota(
+                                budget_installation,
+                                response,
+                                span,
+                                not_modified_receipt=receipt if refundable else None,
+                            )
                         self._raise_if_stopped(stop)
                         if (
                             response.status_code == 401
@@ -661,7 +703,7 @@ class GitHubClient:
                         outcome = _request_outcome(response, allow_not_found=allow_not_found)
                         span.set_attribute("http.response.status_code", response.status_code)
                         span.set_attribute("github.retry_count", attempt)
-                        if outcome not in {"success", "not_found"}:
+                        if outcome not in {"success", "not_found", "not_modified"}:
                             # `_api_response` is also used directly by paginated
                             # callers, so the final non-success response must
                             # become an error span before a later helper raises.
@@ -908,6 +950,101 @@ class GitHubClient:
             )
         raise GitHubAPIError(response.status_code, method, path, message)
 
+    @staticmethod
+    def _discovery_key(
+        path: str, installation_id: int, params: dict[str, Any]
+    ) -> tuple[int, str, str]:
+        return (
+            installation_id,
+            path,
+            json_module.dumps(params, sort_keys=True, separators=(",", ":")),
+        )
+
+    async def _discovery_response(
+        self,
+        path: str,
+        installation_id: int,
+        *,
+        params: dict[str, Any],
+        stop: asyncio.Event | None,
+    ) -> httpx.Response:
+        """Revalidate one discovery page; a local cache hit is never sufficient."""
+        key = self._discovery_key(path, installation_id, params)
+        cached = self._discovery_cache.get(key)
+        # Only the caller's successful body and pagination validation restores
+        # this entry. An error after HTTP revalidation must not retain it.
+        self._discovery_cache.remove(key)
+        try:
+            response = await self._api_response(
+                "GET",
+                path,
+                installation_id=installation_id,
+                params=params,
+                headers={"If-None-Match": cached.etag} if cached else None,
+                stop=stop,
+                conditional_discovery=cached is not None,
+            )
+            self._raise_if_stopped(stop)
+            if response.status_code == 304:
+                if cached is None or response.request.headers.get("if-none-match") != cached.etag:
+                    raise GitHubError("GitHub returned 304 without a matching discovery response")
+                links = (
+                    response.headers.get_list("link")
+                    if "link" in response.headers
+                    else cached.links
+                )
+                # Reconstruct only the entity validator and pagination fields.
+                # The saved bytes are already decoded; replaying content-encoding
+                # would try to decompress them a second time.
+                response_headers = [
+                    ("etag", response.headers.get("etag", cached.etag)),
+                    ("content-type", "application/json"),
+                    *(("link", link) for link in links),
+                    *(
+                        (name, response.headers[name])
+                        for name in ("cache-control", "vary")
+                        if name in response.headers
+                    ),
+                ]
+                return httpx.Response(
+                    200,
+                    content=cached.body,
+                    headers=response_headers,
+                    request=response.request,
+                )
+            self._discovery_cache.remove(key)
+            return response
+        except BaseException:
+            self._discovery_cache.remove(key)
+            raise
+
+    def _remember_discovery_response(
+        self,
+        path: str,
+        installation_id: int,
+        params: dict[str, Any],
+        response: httpx.Response,
+    ) -> None:
+        """Retain a page only after its caller validates the body and pagination."""
+        key = self._discovery_key(path, installation_id, params)
+        self._discovery_cache.remove(key)
+        directives = response.headers.get("cache-control", "").lower().split(",")
+        if any(value.strip() == "no-store" for value in directives):
+            return
+        if any(value.strip() == "*" for value in response.headers.get("vary", "").split(",")):
+            return
+        # A missing validator or oversized page costs another full request;
+        # it must not prevent discovery or manufacture an empty response.
+        with suppress(ValueError):
+            self._discovery_cache.put(
+                key,
+                CacheEntry(
+                    body=response.content,
+                    etag=response.headers.get("etag", ""),
+                    links=tuple(response.headers.get_list("link")),
+                ),
+            )
+
     async def _get_list(
         self,
         path: str,
@@ -916,6 +1053,7 @@ class GitHubClient:
         params: dict[str, Any] | None = None,
         max_items: int | None = None,
         stop: asyncio.Event | None = None,
+        conditional_discovery: bool = False,
     ) -> list[dict[str, Any]]:
         query = {**(params or {}), "per_page": 100}
         items: list[dict[str, Any]] = []
@@ -923,13 +1061,18 @@ class GitHubClient:
         while True:
             self._raise_if_stopped(stop)
             query["page"] = page
-            response = await self._api_response(
-                "GET",
-                path,
-                installation_id=installation_id,
-                params=query,
-                stop=stop,
-            )
+            if conditional_discovery:
+                response = await self._discovery_response(
+                    path, installation_id, params=query, stop=stop
+                )
+            else:
+                response = await self._api_response(
+                    "GET",
+                    path,
+                    installation_id=installation_id,
+                    params=query,
+                    stop=stop,
+                )
             self._raise_if_stopped(stop)
             if not response.is_success:
                 self._raise_api_error(response, "GET", path)
@@ -945,7 +1088,10 @@ class GitHubClient:
                 if max_items is not None and len(items) > max_items:
                     msg = f"GET {path} exceeded the supported {max_items}-item limit"
                     raise PullRequestTooLargeError(msg)
-            if not self._response_has_next_page(response, page, len(page_items)):
+            has_next = self._response_has_next_page(response, page, len(page_items))
+            if conditional_discovery:
+                self._remember_discovery_response(path, installation_id, query, response)
+            if not has_next:
                 break
             page += 1
         return items
@@ -1816,6 +1962,44 @@ class GitHubClient:
                     return candidate
         return None
 
+    async def has_reconciliation_check(
+        self,
+        installation_id: int,
+        repository: str,
+        head_sha: str,
+        check_name: str,
+        *,
+        stop: asyncio.Event | None = None,
+    ) -> bool:
+        """Revalidate check absence before skipping an unenrolled PR.
+
+        Only empty responses are cached. Any reported check needs ordinary
+        evaluation; this discovery shortcut never supplies approval evidence.
+        """
+        path = f"/repos/{repository}/commits/{head_sha}/check-runs"
+        params = {
+            "check_name": check_name,
+            "filter": "latest",
+            "app_id": self.app_id,
+            "per_page": 100,
+        }
+        response = await self._discovery_response(path, installation_id, params=params, stop=stop)
+        if not response.is_success:
+            self._raise_api_error(response, "GET", path)
+        payload = response.json()
+        if not isinstance(payload, dict):
+            raise GitHubError("check discovery response must be an object")
+        count = payload.get("total_count")
+        runs = payload.get("check_runs")
+        if type(count) is not int or count < 0 or not isinstance(runs, list):
+            raise GitHubError("check discovery response omitted a valid count or list")
+        if count or runs:
+            return True
+        if self._response_has_next_page(response, 1, 0):
+            raise GitHubError("empty check discovery response has another page")
+        self._remember_discovery_response(path, installation_id, params, response)
+        return False
+
     async def has_check_run(
         self,
         installation_id: int,
@@ -2133,11 +2317,11 @@ class GitHubClient:
         page = 1
         while True:
             self._raise_if_stopped(stop)
-            response = await self._api_response(
-                "GET",
+            query = {"per_page": 100, "page": page}
+            response = await self._discovery_response(
                 "/installation/repositories",
-                installation_id=installation_id,
-                params={"per_page": 100, "page": page},
+                installation_id,
+                params=query,
                 stop=stop,
             )
             self._raise_if_stopped(stop)
@@ -2177,10 +2361,13 @@ class GitHubClient:
             if has_next and len(result) >= expected_total:
                 msg = "installation repositories response has a next page after total_count"
                 raise GitHubError(msg)
+            if not has_next and len(result) != expected_total:
+                msg = "installation repositories response ended before total_count"
+                raise GitHubError(msg)
+            self._remember_discovery_response(
+                "/installation/repositories", installation_id, query, response
+            )
             if not has_next:
-                if len(result) != expected_total:
-                    msg = "installation repositories response ended before total_count"
-                    raise GitHubError(msg)
                 return result
             page += 1
 
@@ -2197,6 +2384,7 @@ class GitHubClient:
             installation_id,
             params={"state": "open", "sort": "updated", "direction": "desc"},
             stop=stop,
+            conditional_discovery=True,
         )
 
     async def list_commit_pulls(
