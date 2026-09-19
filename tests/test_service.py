@@ -71,6 +71,11 @@ class InstalledAuthorityGitHub:
         return True
 
 
+class EnrolledAuthorityEvaluator:
+    async def authority_followup_required(self, request: JobRequest) -> bool:
+        return True
+
+
 class FakeGitHub:
     def __init__(
         self,
@@ -227,6 +232,15 @@ required_labels = ["autoapprove"]
         return 99
 
     async def has_check_run(
+        self,
+        installation_id: int,
+        repository: str,
+        head_sha: str,
+        check_name: str,
+    ) -> bool:
+        return bool(self.checks)
+
+    async def has_reconciliation_check(
         self,
         installation_id: int,
         repository: str,
@@ -2395,7 +2409,7 @@ async def test_authority_work_fans_out_open_pulls_without_blocking_evaluations(
                 }
             ]
 
-    class Evaluator:
+    class Evaluator(EnrolledAuthorityEvaluator):
         github = AuthorityGitHub()
 
         async def evaluate_job(self, claimed: ClaimedJob) -> None:
@@ -2631,7 +2645,7 @@ async def test_authority_rate_limit_defers_after_bounded_batch_and_keeps_fanout(
                 {"number": 6, "head": {"sha": "e" * 40}, "base": {"ref": "release"}},
             ]
 
-    class Evaluator:
+    class Evaluator(EnrolledAuthorityEvaluator):
         github = AuthorityGitHub()
 
         async def invalidate_for_trigger(self, request: JobRequest) -> bool:
@@ -2674,7 +2688,7 @@ async def test_authority_fanout_preserves_a_global_limit_beside_a_longer_install
                 {"number": 5, "head": {"sha": "d" * 40}, "base": {"ref": "main"}},
             ]
 
-    class Evaluator:
+    class Evaluator(EnrolledAuthorityEvaluator):
         github = AuthorityGitHub()
 
         async def invalidate_for_trigger(self, request: JobRequest) -> bool:
@@ -2716,7 +2730,7 @@ async def test_authority_fast_revocation_failure_keeps_durable_evaluation(
         ) -> list[dict[str, Any]]:
             return [{"number": 4, "head": {"sha": "c" * 40}, "base": {"ref": "main"}}]
 
-    class Evaluator:
+    class Evaluator(EnrolledAuthorityEvaluator):
         github = AuthorityGitHub()
 
         async def invalidate_for_trigger(self, request: JobRequest) -> bool:
@@ -3030,6 +3044,7 @@ async def test_authority_followup_uses_recovery_without_downgrading_direct_event
         return managed
 
     evaluator.invalidate_for_trigger = AsyncMock(side_effect=revoke)
+    evaluator.authority_followup_required = AsyncMock(return_value=True)
     worker = Worker(settings(), store, evaluator, "worker")
     with request_lane("authority"):
         assert await worker._process_authority(claimed) == "completed"
@@ -3062,6 +3077,7 @@ async def test_failed_revocation_promotion_cannot_complete_authority_work(
         else GitHubError("write failed")
     )
     evaluator.invalidate_for_trigger = AsyncMock(side_effect=error)
+    evaluator.authority_followup_required = AsyncMock(return_value=True)
     original = store.enqueue
 
     def enqueue(request: JobRequest) -> None:

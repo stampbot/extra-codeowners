@@ -425,6 +425,13 @@ repository fences. Repository-wide work replaces older base-specific rows, and
 more than 100 distinct base refs for one repository collapse into a conservative
 repository-wide job.
 
+Before queuing follow-up work, authority discovery checks each PR for an existing
+managed check and reads policy from the current target branch. If both are absent,
+it skips the extra evaluation and invalidation jobs. The repository fence remains
+durable during those reads, and existing queued jobs are left alone. A closed PR,
+changed head, existing check, present policy, or failed lookup keeps the normal
+recovery path; disabled and malformed policies are not treated as absent.
+
 Within the authority lane, installation-wide fences still run first. After
 that, a repository fence blocking a queued direct PR event takes priority over
 unrelated background work. The fence must finish before the PR can publish;

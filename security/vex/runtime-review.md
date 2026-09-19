@@ -151,6 +151,11 @@ revalidation paths. It separates storage budgets and adds fixed-label metrics;
 it does not compress, deserialize new formats, or change dependencies. The
 same reachability conclusions apply.
 
+The authority discovery change skips duplicate jobs after checking enrollment
+through the existing GitHub client. It uses the same Python validation and
+database queue methods, with no new native calls or dependencies. The existing
+reachability assessments therefore still apply.
+
 These conclusions apply to the shipped service's behavior, including its SQLite
 backend. They do not cover arbitrary commands, custom Python code, native
 plugins, or externally supplied databases. A change in those behaviors requires
