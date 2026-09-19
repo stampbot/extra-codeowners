@@ -117,9 +117,10 @@ receipt still matches the row revision. A concurrent replica debit or stricter
 quota observation makes that refund ineligible. The compatibility marker moves
 from `7` to `8`.
 
-The target artifact also keeps discovery pages and empty check listings in a disposable per-process LRU:
-32 MiB total, 1 MiB per entry, 4,096 entries, and a one-hour idle lifetime.
-Every page is revalidated over authenticated HTTP before reuse. A `304` still
+The discovery cache is disposable and local to each process. Current releases
+keep large pages separate from branch references and empty check listings;
+see the [cache limits](http-api.md#get-metrics). Every cached response is
+revalidated over authenticated HTTP before reuse. A `304` still
 uses a physical HTTP request and can encounter secondary limits; it is not a
 local cache hit or a quota guarantee.
 
