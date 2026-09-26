@@ -1144,6 +1144,41 @@ class EvaluationService:
             )
         )
 
+    async def authority_followup_required(self, job: JobRequest) -> bool:
+        """Skip duplicate evaluation only when fresh evidence proves no enrollment."""
+        pull = await self.github.get_pull(
+            job.installation_id, job.repository_full_name, job.pull_number
+        )
+        head = _required_object(pull.get("head"), "pull_request.head")
+        base = _required_object(pull.get("base"), "pull_request.base")
+        head_sha = validate_head_sha(_required_string(head.get("sha"), "pull_request.head.sha"))
+        base_ref = _required_string(base.get("ref"), "pull_request.base.ref")
+        base_repository = _required_object(base.get("repo"), "pull_request.base.repo")
+        canonical_repository = normalize_repository_full_name(
+            _required_string(base_repository.get("full_name"), "pull_request.base.repo.full_name")
+        )
+        # Closed PRs may need a pending check finished. A changed head or route
+        # also needs the ordinary durable path, not an enrollment shortcut.
+        if (
+            pull.get("state") != "open"
+            or head_sha != job.head_sha_hint
+            or canonical_repository != job.repository_full_name
+        ):
+            return True
+        if await self.github.has_reconciliation_check(
+            job.installation_id, job.repository_full_name, head_sha, self.settings.check_name
+        ):
+            return True
+        policy_sha = await self.github.get_branch_head(
+            job.installation_id, job.repository_full_name, base_ref
+        )
+        return (
+            await self._repository_policy_text(
+                job.installation_id, job.repository_full_name, policy_sha
+            )
+            is not None
+        )
+
     async def invalidate_for_trigger(
         self,
         job: JobRequest,
@@ -2289,7 +2324,6 @@ class Worker:
                 head_sha_hint=str(head["sha"]),
                 work_class="recovery",
             )
-            await asyncio.to_thread(self.store.enqueue, request)
             requests.append(request)
 
         semaphore = asyncio.Semaphore(self.settings.authority_fanout_concurrency)
@@ -2297,6 +2331,19 @@ class Worker:
         async def revoke(request: JobRequest) -> None:
             async with semaphore:
                 try:
+                    # The leased repository authority row remains the durable
+                    # retry record while enrollment is checked. Don't create
+                    # two more jobs to repeat a confirmed absence of policy.
+                    if not await self.evaluator.authority_followup_required(request):
+                        log.debug(
+                            "authority_unenrolled_skipped",
+                            repository=request.repository_full_name,
+                            pull_number=request.pull_number,
+                        )
+                        return
+                    # Queue before revocation: it may discover and queue a
+                    # newer head, which this listed-head request must not replace.
+                    await asyncio.to_thread(self.store.enqueue, request)
                     await self.evaluator.invalidate_for_trigger(
                         replace(request, work_class="interactive")
                     )
