@@ -16,7 +16,7 @@ from extra_codeowners.api_budget import (
     RecoveryApiBudget,
     RecoveryBudgetDeferredError,
 )
-from extra_codeowners.database import AuthorityJob, AuthorityRequest, JobRequest, QueueStore
+from extra_codeowners.database import AuthorityJob, AuthorityRequest, JobRequest, QueueStore, utcnow
 from extra_codeowners.github import GitHubError, GitHubRateLimitError
 from extra_codeowners.service import EvaluationService, Worker
 
@@ -384,9 +384,11 @@ async def test_identified_revocation_uses_reserved_quota(tmp_path: Path) -> None
     lanes: list[str] = []
     original = worker.evaluator.invalidate_for_trigger
 
-    async def capture_lane(job: JobRequest, shared_head_generation: int | None = None) -> bool:
+    async def capture_lane(
+        job: JobRequest, shared_head_generation: int | None = None, **kwargs: Any
+    ) -> bool:
         lanes.append(REQUEST_LANE.get())
-        return await original(job, shared_head_generation)
+        return await original(job, shared_head_generation, **kwargs)
 
     worker.evaluator.invalidate_for_trigger = capture_lane  # type: ignore[method-assign]
     claimed = store.claim_authority("worker", 60)
@@ -394,3 +396,126 @@ async def test_identified_revocation_uses_reserved_quota(tmp_path: Path) -> None
     assert await worker._process_authority(claimed) == "completed"
     assert lanes == ["authority"]
     assert github.checks[-1]["status"] == "in_progress"
+
+
+@pytest.mark.asyncio
+async def test_new_enrollment_reuses_policy_during_revocation(tmp_path: Path) -> None:
+    store, github, _, worker = authority_fixture(tmp_path)
+    github.get_file_text.return_value = "enabled = true"
+    github.list_open_pulls.return_value = [
+        {"number": number, "head": {"sha": f"{number:040x}"}, "base": {"ref": "main"}}
+        for number in range(1, 21)
+    ]
+
+    async def current_pull(installation: int, repository: str, number: int) -> dict[str, Any]:
+        return {
+            "state": "open",
+            "head": {"sha": f"{number:040x}"},
+            "base": {"ref": "main", "repo": {"full_name": repository}},
+        }
+
+    github.get_pull.side_effect = current_pull
+    github.has_reconciliation_check.return_value = False
+    github.has_check_run.return_value = False
+    claimed = store.claim_authority("worker", 60)
+    assert claimed is not None
+    assert await worker._process_authority(claimed) == "completed"
+    assert github.get_pull.await_count == 40  # Fresh evidence before each reset.
+    assert github.get_branch_head.await_count == 1
+    assert github.get_file_text.await_count == 1
+    assert len(github.checks) == 20
+
+
+@pytest.mark.asyncio
+async def test_authority_resumes_handled_prefix_on_another_replica(tmp_path: Path) -> None:
+    store, github, _, worker = authority_fixture(tmp_path)
+    github.list_open_pulls.return_value = [
+        {"number": number, "head": {"sha": HEAD}, "base": {"ref": "main"}}
+        for number in range(205, 0, -1)
+    ]
+    original = github.get_pull
+    paused = True
+    visited: list[int] = []
+
+    async def limited_pull(installation: int, repository: str, number: int) -> dict[str, Any]:
+        visited.append(number)
+        if paused and number >= 126:
+            raise RecoveryBudgetDeferredError(600)
+        return await original(installation, repository, number)  # type: ignore[no-any-return]
+
+    github.get_pull = AsyncMock(side_effect=limited_pull)
+    worker.owner = "first-replica"
+    first = store.claim_authority("first-replica", 60)
+    assert first is not None
+    assert await worker._process_authority(first) == "budget_deferred"
+    with store.session() as session:
+        row = session.get(AuthorityJob, first.id)
+        assert row is not None and row.pull_cursor_number == 125
+        row.available_at = utcnow() - timedelta(seconds=1)
+    assert store.pending_count() == 1
+    paused = False
+    visited.clear()
+    second = store.claim_authority("second-replica", 60)
+    assert second is not None and second.pull_cursor_number == 125
+    worker = Worker(worker.settings, store, worker.evaluator, "second-replica")
+    assert await worker._process_authority(second) == "completed"
+    assert min(visited) == 126 and max(visited) == 205
+    assert store.pending_count() == 0
+
+
+@pytest.mark.asyncio
+async def test_authority_does_not_checkpoint_past_an_earlier_deferred_pull(tmp_path: Path) -> None:
+    store, github, _, worker = authority_fixture(tmp_path)
+    github.list_open_pulls.return_value = [
+        {"number": number, "head": {"sha": HEAD}, "base": {"ref": "main"}} for number in range(1, 5)
+    ]
+    original = github.get_pull
+
+    async def out_of_order(installation: int, repository: str, number: int) -> dict[str, Any]:
+        if number == 2:
+            await asyncio.sleep(0.01)
+            raise RecoveryBudgetDeferredError(600)
+        return await original(installation, repository, number)  # type: ignore[no-any-return]
+
+    github.get_pull = AsyncMock(side_effect=out_of_order)
+    claimed = store.claim_authority("worker", 60)
+    assert claimed is not None
+    assert await worker._process_authority(claimed) == "budget_deferred"
+    with store.session() as session:
+        row = session.get(AuthorityJob, claimed.id)
+        assert row is not None and row.pull_cursor_number == 1
+
+
+def test_authority_cursor_is_monotonic_and_reset_by_new_evidence(tmp_path: Path) -> None:
+    store, _, _, _ = authority_fixture(tmp_path)
+    first = store.claim_authority("first-replica", 60)
+    assert first is not None
+    assert store.advance_authority_cursor(first, 20)
+    assert store.advance_authority_cursor(first, 10)
+    with store.session() as session:
+        row = session.get(AuthorityJob, first.id)
+        assert row is not None and row.pull_cursor_number == 20
+    store.enqueue_authority(
+        AuthorityRequest(2, "example/project", None, "push.organization_policy")
+    )
+    assert not store.advance_authority_cursor(first, 30)
+    second = store.claim_authority("second-replica", 60)
+    assert second is not None and second.generation > first.generation
+    assert second.pull_cursor_number == 0
+
+
+def test_expired_claim_cannot_advance_but_takeover_retains_progress(tmp_path: Path) -> None:
+    store, _, _, _ = authority_fixture(tmp_path)
+    first = store.claim_authority("first-replica", 60)
+    assert first is not None
+    assert store.advance_authority_cursor(first, 20)
+    with store.session() as session:
+        row = session.get(AuthorityJob, first.id)
+        assert row is not None
+        row.lease_until = utcnow() - timedelta(seconds=1)
+    assert not store.advance_authority_cursor(first, 30)
+    second = store.claim_authority("second-replica", 60)
+    assert second is not None and second.generation > first.generation
+    assert second.pull_cursor_number == 20
+    assert not store.advance_authority_cursor(first, 30)
+    assert store.advance_authority_cursor(second, 40)

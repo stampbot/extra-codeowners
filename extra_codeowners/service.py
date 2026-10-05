@@ -1190,6 +1190,8 @@ class EvaluationService:
         self,
         job: JobRequest,
         shared_head_generation: int | None = None,
+        *,
+        policy_present: Callable[[str], Awaitable[bool]] | None = None,
     ) -> bool:
         """Report whether the fast path reset a check or queued a newer live head."""
         if self.settings.is_organization_config_repository(job.repository_full_name):
@@ -1249,15 +1251,19 @@ class EvaluationService:
                 if check_run_id is None:
                     if pull_state != "open" or head_sha != accepted_head:
                         return live_head_queued
-                    policy_sha = await self.github.get_branch_head(
-                        job.installation_id, job.repository_full_name, base_ref
-                    )
-                    repository_text = await self._repository_policy_text(
-                        job.installation_id,
-                        job.repository_full_name,
-                        policy_sha,
-                    )
-                    if repository_text is None:
+                    if policy_present is not None:
+                        enrolled = await policy_present(base_ref)
+                    else:
+                        policy_sha = await self.github.get_branch_head(
+                            job.installation_id, job.repository_full_name, base_ref
+                        )
+                        enrolled = (
+                            await self._repository_policy_text(
+                                job.installation_id, job.repository_full_name, policy_sha
+                            )
+                            is not None
+                        )
+                    if not enrolled:
                         return live_head_queued
                 # The GitHub lookup can outlive this delivery generation. Do
                 # not let an old handler reset a newer completed result.
@@ -1310,15 +1316,19 @@ class EvaluationService:
             self.settings.check_name,
         )
         if not managed_check:
-            policy_sha = await self.github.get_branch_head(
-                job.installation_id, job.repository_full_name, base_ref
-            )
-            repository_text = await self._repository_policy_text(
-                job.installation_id,
-                job.repository_full_name,
-                policy_sha,
-            )
-            if repository_text is None:
+            if policy_present is not None:
+                enrolled = await policy_present(base_ref)
+            else:
+                policy_sha = await self.github.get_branch_head(
+                    job.installation_id, job.repository_full_name, base_ref
+                )
+                enrolled = (
+                    await self._repository_policy_text(
+                        job.installation_id, job.repository_full_name, policy_sha
+                    )
+                    is not None
+                )
+            if not enrolled:
                 return False
 
         details_url = pull.get("html_url") if isinstance(pull.get("html_url"), str) else None
@@ -2340,6 +2350,14 @@ class Worker:
             )
             requests.append(request)
 
+        # PR numbers are monotonic within a repository. Revalidate the complete
+        # listing on every attempt, but don't repeat a durably handled prefix
+        # from this authority generation when another replica resumes it.
+        requests = sorted(
+            (request for request in requests if request.pull_number > job.pull_cursor_number),
+            key=lambda request: request.pull_number,
+        )
+
         semaphore = asyncio.Semaphore(self.settings.authority_fanout_concurrency)
         policies: dict[str, bool] = {}
         policy_locks: dict[str, asyncio.Lock] = {}
@@ -2380,7 +2398,8 @@ class Worker:
                     await asyncio.to_thread(self.store.enqueue, request)
                     with request_lane("authority"):
                         await self.evaluator.invalidate_for_trigger(
-                            replace(request, work_class="interactive")
+                            replace(request, work_class="interactive"),
+                            policy_present=policy_present,
                         )
                 except RecoveryBudgetDeferredError:
                     # The repository fence is the retry record. A local pause
@@ -2413,10 +2432,22 @@ class Worker:
                     )
 
         for offset in range(0, len(requests), 100):
+            batch = requests[offset : offset + 100]
             outcomes = await asyncio.gather(
-                *(revoke(request) for request in requests[offset : offset + 100]),
+                *(revoke(request) for request in batch),
                 return_exceptions=True,
             )
+            # Only checkpoint the successful contiguous prefix: later tasks
+            # can finish first, but must never hide an earlier deferred PR.
+            completed_number = 0
+            for request, outcome in zip(batch, outcomes, strict=True):
+                if isinstance(outcome, BaseException):
+                    break
+                completed_number = request.pull_number
+            if completed_number and not await asyncio.to_thread(
+                self.store.advance_authority_cursor, job, completed_number
+            ):
+                raise GitHubError("authority discovery lost its claim before checkpointing")
             rate_limits = [
                 outcome for outcome in outcomes if isinstance(outcome, GitHubRateLimitError)
             ]

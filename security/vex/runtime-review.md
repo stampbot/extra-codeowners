@@ -164,6 +164,11 @@ and row updates to preserve direct-event wakeups. It adds no SQLite FTS tables,
 calls. Dependencies and image inputs are unchanged, so the package-specific
 assessments above still apply.
 
+The authority cursor migration adds one integer column and backfills it through
+SQLAlchemy. Discovery checkpoints use ordinary row updates. Sharing the policy
+observation during check invalidation changes only which existing Python API
+reads are repeated; neither change adds a native input path.
+
 These conclusions apply to the shipped service's behavior, including its SQLite
 backend. They do not cover arbitrary commands, custom Python code, native
 plugins, or externally supplied databases. A change in those behaviors requires

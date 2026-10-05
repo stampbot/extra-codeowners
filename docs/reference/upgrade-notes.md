@@ -13,11 +13,11 @@ The alpha series establishes this compatibility contract:
 
 | Field | Contract |
 | --- | --- |
-| Database head | `0009_conditional_request_budget` |
-| Head change | Yes; conditional discovery accounting is now fenced across replicas. |
-| Supported source releases | `0.1.0-alpha.56` and `0.1.0-alpha.57` at `0008_recovery_api_budget`, `0.1.0-alpha.43` at `0007_reconciliation_completion`, `0.1.0-alpha.42` at `0006_webhook_trace_links`, or `0.1.0-alpha.14` at `0005_reconciliation_state_index`, after a controlled migration. |
+| Database head | `0010_authority_discovery_cursor` |
+| Head change | Yes; authority discovery now records progress across quota pauses and replica takeover. |
+| Supported source releases | `0.1.0-alpha.58` through `0.1.0-alpha.61` at `0009_conditional_request_budget`, `0.1.0-alpha.56` and `0.1.0-alpha.57` at `0008_recovery_api_budget`, `0.1.0-alpha.43` at `0007_reconciliation_completion`, `0.1.0-alpha.42` at `0006_webhook_trace_links`, or `0.1.0-alpha.14` at `0005_reconciliation_state_index`, after a controlled migration. |
 | Target application compatible before migration | No; startup requires the exact head. |
-| Required process state | Stop webhook ingress and every older worker before applying `0009_conditional_request_budget`. Suspend GitOps reconciliation and remove the HPA before scaling a Kubernetes Deployment to zero. |
+| Required process state | Stop webhook ingress and every older worker before applying `0010_authority_discovery_cursor`. Suspend GitOps reconciliation and remove the HPA before scaling a Kubernetes Deployment to zero. |
 | In-place database downgrade | Not supported. |
 | Rollback after head change | Restore the verified pre-migration backup. An older image rejects this head. |
 | Backup required | Yes, before deployment and before every pre-release schema adoption. |
@@ -98,7 +98,7 @@ assumed request allowance is loaded during migration.
 An already-running process does not revalidate the Alembic head before every
 claim. Stop every older ingress, worker, and reconciler before this revision
 runs. Start only the target artifact after `database check` reports
-`0009_conditional_request_budget` and validates that artifact's
+`0010_authority_discovery_cursor` and validates that artifact's
 `required-release-contract`. Readiness removes an old process from webhook
 traffic after migration, but it does not cancel work that process already
 claimed. For Kubernetes, a zero-replica Deployment is not proof of a drain
@@ -123,6 +123,19 @@ see the [cache limits](http-api.md#get-metrics). Every cached response is
 revalidated over authenticated HTTP before reuse. A `304` still
 uses a physical HTTP request and can encounter secondary limits; it is not a
 local cache hit or a quota guarantee.
+
+Revision `0010_authority_discovery_cursor` adds a PR-number cursor to each
+authority job. After a batch finishes, the worker records only its contiguous
+handled prefix. A quota pause or another replica can then resume without
+replaying that prefix. At most the unfinished batch of 100 PRs may repeat.
+A new authority event resets the cursor, so discovery observes the repository
+again. Existing jobs start at zero; their fences and retry state are retained.
+The compatibility marker moves from `8` to `9`.
+
+The cursor records discovery work, not approval evidence. Workers still fetch
+current PR and check information for each remaining PR, and queued evaluations
+fetch current policy before publishing their result. A partial or failed open-PR
+listing cannot advance the cursor.
 
 Stop webhook ingress and every older worker before this revision runs. Take and
 verify a backup first. Apply the migration with the target artifact, then run

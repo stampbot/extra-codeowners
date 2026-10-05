@@ -46,8 +46,8 @@ from sqlalchemy.sql.elements import ColumnElement
 
 from extra_codeowners.trace_context import TrustedTraceContext
 
-SCHEMA_VERSION = 8
-DATABASE_MIGRATION_HEAD = "0009_conditional_request_budget"
+SCHEMA_VERSION = 9
+DATABASE_MIGRATION_HEAD = "0010_authority_discovery_cursor"
 DATABASE_CONNECT_TIMEOUT_SECONDS = 3
 DATABASE_POOL_TIMEOUT_SECONDS = 2
 DATABASE_STATEMENT_TIMEOUT_MILLISECONDS = 3_000
@@ -286,6 +286,7 @@ class AuthorityJob(Base):
     base_ref: Mapped[str] = mapped_column(String(255), nullable=False, default="")
     reason: Mapped[str] = mapped_column(String(255), nullable=False)
     generation: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    pull_cursor_number: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     state: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     requested_at: Mapped[datetime] = mapped_column(
@@ -512,6 +513,7 @@ class ClaimedAuthorityJob:
     generation: int
     attempts: int
     lease_owner: str
+    pull_cursor_number: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -2062,6 +2064,7 @@ class QueueStore:
             )
             .values(
                 generation=AuthorityJob.generation + 1,
+                pull_cursor_number=0,
                 reason=request.reason,
                 requested_at=now,
                 available_at=now,
@@ -3016,6 +3019,7 @@ class QueueStore:
                     generation=row.generation,
                     attempts=row.attempts,
                     lease_owner=owner,
+                    pull_cursor_number=row.pull_cursor_number,
                 )
         return None
 
@@ -3031,6 +3035,26 @@ class QueueStore:
                     AuthorityJob.state == "pending",
                 )
                 .values(lease_until=utcnow() + timedelta(seconds=lease_seconds))
+            )
+            return getattr(result, "rowcount", 0) == 1
+
+    def advance_authority_cursor(self, job: ClaimedAuthorityJob, number: int) -> bool:
+        """Checkpoint a handled prefix only while this authority claim is current."""
+        with self.session() as session:
+            result = session.execute(
+                update(AuthorityJob)
+                .where(
+                    AuthorityJob.id == job.id,
+                    AuthorityJob.generation == job.generation,
+                    AuthorityJob.lease_owner == job.lease_owner,
+                    AuthorityJob.lease_until > utcnow(),
+                )
+                .values(
+                    pull_cursor_number=case(
+                        (AuthorityJob.pull_cursor_number < number, number),
+                        else_=AuthorityJob.pull_cursor_number,
+                    )
+                )
             )
             return getattr(result, "rowcount", 0) == 1
 

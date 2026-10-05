@@ -11,6 +11,8 @@ from sqlalchemy.engine import make_url
 
 from extra_codeowners.database import (
     DATABASE_MIGRATION_HEAD,
+    SCHEMA_VERSION,
+    AuthorityJob,
     Base,
     InstallationApiBudget,
     QueueStore,
@@ -99,11 +101,43 @@ def test_upgrade_0008_budget_rows_backfills_revision_and_preserves_state(
         assert values.pull_cursor_number == 0
     store.close()
 
-    assert metadata_version == 8
+    assert metadata_version == SCHEMA_VERSION
     assert columns["accounting_revision"]["nullable"] is False
     assert columns["pull_cursor_repository"]["nullable"] is False
     assert columns["pull_cursor_number"]["nullable"] is False
 
     store = QueueStore(migration_url)
     store.initialize()
+    store.close()
+
+
+def test_authority_cursor_migration_preserves_pending_fence(migration_url: str) -> None:
+    upgrade_database(migration_url, revision="0009_conditional_request_budget")
+    engine = create_engine(migration_url)
+    now = utcnow().replace(microsecond=0)
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                INSERT INTO authority_jobs
+                    (installation_id, scope_key, base_ref, reason, generation, state,
+                     attempts, requested_at, available_at, lease_owner, lease_until, last_error)
+                VALUES (17, 'example/project', 'main', 'push.repository_base', 5, 'pending',
+                        2, :now, :now, NULL, NULL, 'previous pause')
+                """
+            ),
+            {"now": now},
+        )
+    engine.dispose()
+    upgrade_database(migration_url)
+    store = QueueStore(migration_url)
+    store.initialize()
+    with store.session() as session:
+        row = session.query(AuthorityJob).one()
+        assert row.generation == 5 and row.attempts == 2
+        assert row.state == "pending" and row.last_error == "previous pause"
+        assert row.pull_cursor_number == 0
+    claim = store.claim_authority("new-replica", 60)
+    assert claim is not None and claim.pull_cursor_number == 0
+    assert store.advance_authority_cursor(claim, 25)
     store.close()

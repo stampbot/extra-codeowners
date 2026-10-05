@@ -2421,7 +2421,7 @@ async def test_authority_work_fans_out_open_pulls_without_blocking_evaluations(
         async def evaluate_job(self, claimed: ClaimedJob) -> None:
             calls.append("evaluation")
 
-        async def invalidate_for_trigger(self, request: JobRequest) -> bool:
+        async def invalidate_for_trigger(self, request: JobRequest, **kwargs: Any) -> bool:
             calls.append(f"revoke-{request.pull_number}")
             stop.set()
             return False
@@ -2654,7 +2654,7 @@ async def test_authority_rate_limit_defers_after_bounded_batch_and_keeps_fanout(
     class Evaluator(EnrolledAuthorityEvaluator):
         github = AuthorityGitHub()
 
-        async def invalidate_for_trigger(self, request: JobRequest) -> bool:
+        async def invalidate_for_trigger(self, request: JobRequest, **kwargs: Any) -> bool:
             if request.pull_number == 4:
                 return True
             raise GitHubRateLimitError(429, "PATCH", "/check-runs/1", "limited", 61)
@@ -2697,7 +2697,7 @@ async def test_authority_fanout_preserves_a_global_limit_beside_a_longer_install
     class Evaluator(EnrolledAuthorityEvaluator):
         github = AuthorityGitHub()
 
-        async def invalidate_for_trigger(self, request: JobRequest) -> bool:
+        async def invalidate_for_trigger(self, request: JobRequest, **kwargs: Any) -> bool:
             if request.pull_number == 4:
                 raise GitHubRateLimitError(
                     429,
@@ -2739,7 +2739,7 @@ async def test_authority_fast_revocation_failure_keeps_durable_evaluation(
     class Evaluator(EnrolledAuthorityEvaluator):
         github = AuthorityGitHub()
 
-        async def invalidate_for_trigger(self, request: JobRequest) -> bool:
+        async def invalidate_for_trigger(self, request: JobRequest, **kwargs: Any) -> bool:
             raise GitHubError("temporary Check Runs failure")
 
     worker = Worker(settings(), store, Evaluator(), "worker")  # type: ignore[arg-type]
@@ -3042,7 +3042,7 @@ async def test_authority_followup_uses_recovery_without_downgrading_direct_event
         return_value=[{"number": 4, "head": {"sha": HEAD}}]
     )
 
-    async def revoke(request: JobRequest) -> bool:
+    async def revoke(request: JobRequest, **kwargs: Any) -> bool:
         assert request.work_class == "interactive"
         assert REQUEST_LANE.get() == "authority"
         if direct_arrival == "during":

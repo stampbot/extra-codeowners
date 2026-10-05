@@ -96,7 +96,7 @@ The migration options are:
 On success, the final line names the bundled revision:
 
 ```text
-Database is at migration 0009_conditional_request_budget.
+Database is at migration 0010_authority_discovery_cursor.
 ```
 
 Production mode applies the same PostgreSQL and transport checks as `serve`. A
@@ -110,9 +110,9 @@ required release contract passes. A database already at the expected head
 still receives that validation. A mismatch exits nonzero; the migrator does
 not repair an unexpected schema that happens to carry the right revision.
 
-Migration `0009_conditional_request_budget` adds the accounting revision used
-to fence conditional-request refunds. It does not change the GitHub quota
-window or make conditional requests free of network and secondary-limit costs.
+Migration `0010_authority_discovery_cursor` records a handled PR prefix on each
+authority job, so discovery can resume after a quota pause or replica takeover.
+It does not change the GitHub quota window or remove the recovery reserve.
 
 Normal application startup never runs migrations. Read the [upgrade and restore procedure](../how-to/upgrade.md) before using the adoption flag. Every change to the Alembic head requires a database restore before an older artifact can start again; additive SQL is not an exception.
 
@@ -127,7 +127,7 @@ uv run python -m extra_codeowners database check
 On success, the final line names the compatible revision:
 
 ```text
-Database migration 0009_conditional_request_budget is compatible.
+Database migration 0010_authority_discovery_cursor is compatible.
 ```
 
 The command exits nonzero when it cannot connect or when the required release
