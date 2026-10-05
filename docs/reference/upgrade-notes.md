@@ -132,9 +132,14 @@ even when every PR on it is closed. A quota pause or another replica resumes
 without replaying completed pages. Matching observations on the unfinished
 page are skipped; changed or reopened entries on that page are reconsidered.
 A separate numeric high-water mark is retained only for diagnostics.
-At most the unfinished page of 100 PRs may repeat. A new authority event clears
-progress and starts at page one. Existing jobs also start at page one with no
+At most the unfinished page of 100 PRs may repeat. New evidence for the scan's
+scope clears progress and starts at page one. Existing jobs also start at page one with no
 handled observations; their fences and retry state are retained.
+An ordinary branch push does not reset a pending repository-wide scan. Instead,
+the row stores up to 100 distinct branch rechecks for atomic handoff at completion.
+Overflow records one full follow-up scan without interrupting the current one.
+Branch names longer than the 255-character database key also use that fallback.
+The migration initializes the pending branch map empty and the overflow flag false.
 The compatibility marker moves from `8` to `9`.
 
 These records describe discovery work, not approval evidence. Workers still fetch

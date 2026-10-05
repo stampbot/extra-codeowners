@@ -444,6 +444,11 @@ page. Changes to completed pages rely on direct events and reconciliation.
 Expect extra listing requests in repositories with a large closed history,
 not one request per changed PR.
 
+Branch pushes during a repository-wide scan queue later branch rechecks without
+resetting its progress. More than 100 distinct branches coalesce into one full
+follow-up scan. A branch name longer than the 255-character database key uses the
+same fallback. The current scan finishes first; new evidence is not discarded.
+
 Background discovery honors the recovery reserve. When it pauses, the repository
 fence stays pending without creating duplicate evaluations or marking the
 installation as rate limited. Look for

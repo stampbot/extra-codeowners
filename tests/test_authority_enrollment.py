@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -797,6 +799,38 @@ async def test_authority_resume_keeps_closed_page_progress_when_next_listing_def
     worker = Worker(worker.settings, store, worker.evaluator, "second-replica")
     assert await worker._process_authority(second) == "completed"
     assert page_calls == [(1, 0), (2, 100), (2, 100)]
+
+
+@pytest.mark.asyncio
+async def test_narrow_followup_revisits_pull_already_handled_by_broad_scan(
+    tmp_path: Path,
+) -> None:
+    store, github, _, worker = authority_fixture(tmp_path)
+    summary = pull_summary(3, "2026-09-01T12:00:00Z")
+    fingerprint = hashlib.sha256(
+        json.dumps([3, HEAD, "main", summary["updated_at"]], separators=(",", ":")).encode()
+    ).hexdigest()
+    broad = store.claim_authority("worker", 60)
+    assert broad is not None
+    assert store.advance_authority_cursor(
+        broad,
+        3,
+        {"3": fingerprint},
+        listing_next_page=2,
+        listing_last_number=100,
+    )
+    store.enqueue_authority(AuthorityRequest(2, "example/project", "main", "push.repository_base"))
+    assert store.complete_authority(broad, "worker")
+    narrow = store.claim_authority("narrow-worker", 60)
+    assert narrow is not None and narrow.base_ref == "main"
+    github.list_authority_pull_page = AsyncMock(
+        return_value=AuthorityPullPage([summary], next_page=0, last_number=3)
+    )
+    worker = Worker(worker.settings, store, worker.evaluator, "narrow-worker")
+
+    assert await worker._process_authority(narrow) == "completed"
+
+    github.get_pull.assert_awaited_once_with(2, "example/project", 3)
 
 
 def test_authority_cursor_is_monotonic_and_reset_by_new_evidence(tmp_path: Path) -> None:

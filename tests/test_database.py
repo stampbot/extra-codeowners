@@ -1212,6 +1212,230 @@ def test_authority_jobs_coalesce_and_new_generation_survives_old_completion(
     assert second.reason == "label.edited"
 
 
+@pytest.mark.parametrize("deferred", [False, True])
+def test_narrow_push_preserves_repository_authority_progress_and_claim(
+    tmp_path: Path, deferred: bool
+) -> None:
+    store = make_store(tmp_path)
+    store.enqueue_authority(AuthorityRequest(17, "example/project", None, "member.removed"))
+    claim = store.claim_authority("worker", 60)
+    assert claim is not None
+    handled = {"20": "a" * 64}
+    assert store.advance_authority_cursor(
+        claim, 20, handled, listing_next_page=3, listing_last_number=200
+    )
+    if deferred:
+        assert store.defer_authority(claim, "worker", "quota pause", 600)
+
+    with store.session() as session:
+        before = session.get(AuthorityJob, claim.id)
+        assert before is not None
+        baseline = {
+            "generation": before.generation,
+            "pull_cursor_number": before.pull_cursor_number,
+            "handled_pull_fingerprints": dict(before.handled_pull_fingerprints),
+            "listing_next_page": before.listing_next_page,
+            "listing_last_number": before.listing_last_number,
+            "lease_owner": before.lease_owner,
+            "lease_until": before.lease_until,
+            "available_at": before.available_at,
+        }
+
+    store.enqueue_authority(
+        AuthorityRequest(17, "example/project", "release", "push.repository_base")
+    )
+
+    with store.session() as session:
+        row = session.get(AuthorityJob, claim.id)
+        assert row is not None
+        assert row.base_ref == ""
+        assert row.generation == baseline["generation"]
+        assert row.pull_cursor_number == baseline["pull_cursor_number"]
+        assert row.handled_pull_fingerprints == baseline["handled_pull_fingerprints"]
+        assert row.listing_next_page == baseline["listing_next_page"]
+        assert row.listing_last_number == baseline["listing_last_number"]
+        assert row.lease_owner == baseline["lease_owner"]
+        assert row.lease_until == baseline["lease_until"]
+        assert row.available_at == baseline["available_at"]
+        assert row.pending_base_refs == {"release": "push.repository_base"}
+        assert row.pending_full_rescan is False
+    if not deferred:
+        assert store.advance_authority_cursor(claim, 21, {**handled, "21": "b" * 64})
+    else:
+        assert store.claim_authority("too-soon", 60) is None
+
+
+def test_completed_repository_authority_hands_off_deduplicated_base_refs(
+    tmp_path: Path,
+) -> None:
+    store = make_store(tmp_path)
+    store.enqueue_authority(AuthorityRequest(17, "example/project", None, "member.removed"))
+    claim = store.claim_authority("worker", 60)
+    assert claim is not None
+    assert store.advance_authority_cursor(
+        claim,
+        12,
+        {"12": "a" * 64},
+        listing_next_page=2,
+        listing_last_number=100,
+    )
+    store.enqueue_authority(AuthorityRequest(17, "example/project", "main", "push.main-first"))
+    store.enqueue_authority(AuthorityRequest(17, "example/project", "release", "push.release"))
+    store.enqueue_authority(AuthorityRequest(17, "example/project", "main", "push.main-latest"))
+
+    assert store.complete_authority(claim, "worker")
+    assert store.pending_count() == 2
+    narrow = {
+        (job.base_ref, job.reason)
+        for job in (
+            store.claim_authority("followup-worker", 60),
+            store.claim_authority("followup-worker", 60),
+        )
+        if job is not None
+    }
+    assert narrow == {("main", "push.main-latest"), ("release", "push.release")}
+
+
+def test_repository_authority_bounds_narrow_followups_with_one_full_rescan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "extra_codeowners.database.MAX_BASE_SCOPED_AUTHORITY_JOBS_PER_REPOSITORY", 2
+    )
+    store = make_store(tmp_path)
+    store.enqueue_authority(AuthorityRequest(17, "example/project", None, "member.removed"))
+    claim = store.claim_authority("worker", 60)
+    assert claim is not None
+    assert store.advance_authority_cursor(
+        claim,
+        45,
+        {"45": "c" * 64},
+        listing_next_page=4,
+        listing_last_number=300,
+    )
+    for branch in ("main", "release", "third", "fourth"):
+        store.enqueue_authority(AuthorityRequest(17, "example/project", branch, f"push.{branch}"))
+
+    with store.session() as session:
+        row = session.get(AuthorityJob, claim.id)
+        assert row is not None
+        assert row.generation == claim.generation
+        assert row.lease_owner == claim.lease_owner
+        assert row.pull_cursor_number == 45
+        assert row.listing_next_page == 4 and row.listing_last_number == 300
+        assert row.handled_pull_fingerprints == {"45": "c" * 64}
+        assert row.pending_base_refs == {}
+        assert row.pending_full_rescan is True
+
+    assert store.complete_authority(claim, "worker")
+    assert store.pending_count() == 1
+    rescan = store.claim_authority("next-worker", 60)
+    assert rescan is not None
+    assert rescan.id == claim.id and rescan.base_ref is None
+    assert rescan.generation == claim.generation + 1
+    assert rescan.pull_cursor_number == 0
+    assert rescan.listing_next_page == 1 and rescan.listing_last_number == 0
+    assert rescan.handled_pull_fingerprints == ()
+    with store.session() as session:
+        row = session.get(AuthorityJob, claim.id)
+        assert row is not None
+        assert row.pending_base_refs == {} and row.pending_full_rescan is False
+
+
+def test_overlong_narrow_followup_saturates_without_resetting_broad_claim(
+    tmp_path: Path,
+) -> None:
+    store = make_store(tmp_path)
+    store.enqueue_authority(AuthorityRequest(17, "example/project", None, "member.removed"))
+    claim = store.claim_authority("worker", 60)
+    assert claim is not None
+    assert store.advance_authority_cursor(
+        claim, 31, {"31": "f" * 64}, listing_next_page=3, listing_last_number=200
+    )
+    branch = "b" * 256
+
+    store.enqueue_authority(AuthorityRequest(17, "example/project", branch, "push.overlong"))
+
+    with store.session() as session:
+        row = session.get(AuthorityJob, claim.id)
+        assert row is not None
+        assert row.generation == claim.generation
+        assert row.lease_owner == claim.lease_owner
+        assert row.pull_cursor_number == 31
+        assert row.handled_pull_fingerprints == {"31": "f" * 64}
+        assert row.listing_next_page == 3 and row.listing_last_number == 200
+        assert row.pending_base_refs == {}
+        assert row.pending_full_rescan is True
+
+
+def test_overlong_base_push_without_broad_row_uses_bounded_repository_scope(
+    tmp_path: Path,
+) -> None:
+    store = make_store(tmp_path)
+    store.enqueue_authority(AuthorityRequest(17, "example/project", "b" * 256, "push.overlong"))
+
+    assert store.pending_count() == 1
+    broad = store.claim_authority("worker", 60)
+    assert broad is not None
+    assert broad.repository_full_name == "example/project"
+    assert broad.base_ref is None
+
+
+def test_new_repository_authority_resets_pending_narrow_followups(
+    tmp_path: Path,
+) -> None:
+    store = make_store(tmp_path)
+    store.enqueue_authority(AuthorityRequest(17, "example/project", None, "member.removed"))
+    claim = store.claim_authority("worker", 60)
+    assert claim is not None
+    assert store.advance_authority_cursor(
+        claim, 23, {"23": "d" * 64}, listing_next_page=3, listing_last_number=200
+    )
+    store.enqueue_authority(AuthorityRequest(17, "example/project", "main", "push.repository_base"))
+    store.enqueue_authority(
+        AuthorityRequest(17, "example/project", None, "push.organization_policy")
+    )
+
+    with store.session() as session:
+        row = session.get(AuthorityJob, claim.id)
+        assert row is not None
+        assert row.generation == claim.generation + 1
+        assert row.pull_cursor_number == 0
+        assert row.handled_pull_fingerprints == {}
+        assert row.listing_next_page == 1 and row.listing_last_number == 0
+        assert row.lease_owner is None and row.lease_until is None
+        assert row.pending_base_refs == {} and row.pending_full_rescan is False
+        assert row.reason == "push.organization_policy"
+
+
+@pytest.mark.parametrize("stale_completion", [False, True])
+def test_stale_repository_claim_cannot_consume_pending_base_followups(
+    tmp_path: Path, stale_completion: bool
+) -> None:
+    store = make_store(tmp_path)
+    store.enqueue_authority(AuthorityRequest(17, "example/project", None, "member.removed"))
+    old_claim = store.claim_authority("old-worker", 60)
+    assert old_claim is not None
+    with store.session() as session:
+        row = session.get(AuthorityJob, old_claim.id)
+        assert row is not None
+        row.lease_until = utcnow() - timedelta(seconds=1)
+    current = store.claim_authority("current-worker", 60)
+    assert current is not None and current.generation > old_claim.generation
+    store.enqueue_authority(AuthorityRequest(17, "example/project", "main", "push.repository_base"))
+    if stale_completion:
+        assert not store.complete_authority(old_claim, "old-worker")
+        with store.session() as session:
+            row = session.get(AuthorityJob, current.id)
+            assert row is not None
+            assert row.pending_base_refs == {"main": "push.repository_base"}
+        assert store.complete_authority(current, "current-worker")
+    else:
+        assert store.complete_authority(current, "current-worker")
+    followup = store.claim_authority("followup-worker", 60)
+    assert followup is not None and followup.base_ref == "main"
+
+
 def test_authority_scope_blocks_only_affected_evaluations(tmp_path: Path) -> None:
     store = make_store(tmp_path)
     store.enqueue(request())

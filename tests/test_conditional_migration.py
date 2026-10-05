@@ -141,6 +141,8 @@ def test_authority_cursor_migration_preserves_pending_fence(migration_url: str) 
         assert row.listing_next_page == 1
         assert row.listing_last_number == 0
         assert row.interactive_wake_generation == 0
+        assert row.pending_base_refs == {}
+        assert row.pending_full_rescan is False
     claim = store.claim_authority("new-replica", 60)
     assert claim is not None and claim.pull_cursor_number == 0
     assert claim.handled_pull_fingerprints == ()
@@ -165,6 +167,8 @@ def test_authority_cursor_migration_preserves_pending_fence(migration_url: str) 
         "listing_next_page",
         "listing_last_number",
         "interactive_wake_generation",
+        "pending_base_refs",
+        "pending_full_rescan",
     ):
         assert columns[name]["nullable"] is False
     store.close()

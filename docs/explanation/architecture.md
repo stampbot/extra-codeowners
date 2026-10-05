@@ -332,6 +332,12 @@ reopened entries on the unfinished page are reconsidered. Closed history adds
 listing requests. REST does not provide a snapshot, so changes to completed
 pages still rely on direct events and reconciliation.
 
+A branch push arriving during a repository-wide scan records a later branch
+recheck instead of restarting that scan. Completion hands those rechecks to the
+queue in the same transaction that removes the broad fence. The set of branches
+is bounded; overflow schedules one more full scan after the current one finishes.
+Repeated pushes cannot erase the current scan's progress.
+
 A reserve pause retains the repository fence without promoting unenrolled PRs
 to foreground work or imposing provider backpressure. A direct webhook or
 promoted revocation retry wakes the fences covering its repository. Those

@@ -27,6 +27,8 @@ def upgrade() -> None:
     op.add_column(
         "authority_jobs", sa.Column("interactive_wake_generation", sa.Integer(), nullable=True)
     )
+    op.add_column("authority_jobs", sa.Column("pending_base_refs", sa.JSON(), nullable=True))
+    op.add_column("authority_jobs", sa.Column("pending_full_rescan", sa.Boolean(), nullable=True))
     jobs = sa.table(
         "authority_jobs",
         sa.column("pull_cursor_number", sa.BigInteger()),
@@ -34,6 +36,8 @@ def upgrade() -> None:
         sa.column("listing_next_page", sa.Integer()),
         sa.column("listing_last_number", sa.BigInteger()),
         sa.column("interactive_wake_generation", sa.Integer()),
+        sa.column("pending_base_refs", sa.JSON()),
+        sa.column("pending_full_rescan", sa.Boolean()),
     )
     op.execute(
         jobs.update().values(
@@ -42,6 +46,8 @@ def upgrade() -> None:
             listing_next_page=1,
             listing_last_number=0,
             interactive_wake_generation=0,
+            pending_base_refs={},
+            pending_full_rescan=False,
         )
     )
     with op.batch_alter_table("authority_jobs") as batch:
@@ -52,6 +58,8 @@ def upgrade() -> None:
         batch.alter_column(
             "interactive_wake_generation", existing_type=sa.Integer(), nullable=False
         )
+        batch.alter_column("pending_base_refs", existing_type=sa.JSON(), nullable=False)
+        batch.alter_column("pending_full_rescan", existing_type=sa.Boolean(), nullable=False)
     metadata = sa.table(
         "schema_metadata",
         sa.column("singleton_id", sa.Integer()),

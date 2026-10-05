@@ -145,13 +145,18 @@ INSERT INTO authority_jobs (
   id, installation_id, scope_key, base_ref, reason, generation, state,
   attempts, requested_at, available_at, lease_owner, lease_until, last_error,
   pull_cursor_number, handled_pull_fingerprints, listing_next_page,
-  listing_last_number, interactive_wake_generation
+  listing_last_number, interactive_wake_generation, pending_base_refs, pending_full_rescan
 ) VALUES (
-  29, 1701, 'example/backup-contract', 'main', 'backup-contract', 4,
+  29, 1701, 'example/backup-contract', '', 'backup-contract', 4,
   'in_progress', 1, '2026-07-14 12:31:00.010203+00',
   '2026-07-14 12:32:00.040506+00', 'worker-backup',
   '2026-07-14 12:42:00.070809+00', NULL, 217, '{"217":"handled-observation"}',
-  3, 200, 12
+  3, 200, 12, '{"release":"push.repository_base"}', FALSE
+), (
+  30, 1701, 'example/overflow-backup', '', 'backup-overflow', 5,
+  'pending', 2, '2026-07-14 12:31:00.010203+00',
+  '2026-07-14 12:32:00.040506+00', NULL, NULL, NULL,
+  300, '{}', 4, 300, 0, '{}', TRUE
 );
 
 INSERT INTO authority_epochs (installation_id, generation, changed_at) VALUES (
