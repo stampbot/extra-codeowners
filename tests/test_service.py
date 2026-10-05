@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -72,7 +73,12 @@ class InstalledAuthorityGitHub:
 
 
 class EnrolledAuthorityEvaluator:
-    async def authority_followup_required(self, request: JobRequest) -> bool:
+    async def authority_followup_required(
+        self,
+        request: JobRequest,
+        *,
+        policy_present: Callable[[str], Awaitable[bool]] | None = None,
+    ) -> bool:
         return True
 
 
