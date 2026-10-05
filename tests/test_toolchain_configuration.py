@@ -443,6 +443,7 @@ def test_helm_chart_retains_hardening_without_image_specific_loader_paths() -> N
     assert "deploymentAnnotations" in schema["required"]
     assert schema["properties"]["deploymentAnnotations"] == {"$ref": "#/definitions/stringMap"}
     assert "highAvailability" in schema["required"]
+    assert schema["properties"]["replicaCount"]["minimum"] == 0
     assert schema["properties"]["highAvailability"]["properties"]["replicas"]["minimum"] == 2
     assert schema["properties"]["highAvailability"]["properties"]["minAvailable"] == {
         "type": "integer",

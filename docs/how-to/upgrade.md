@@ -132,7 +132,30 @@ For an upgrade from `0003_shared_head_epochs` to
 ### Drain a Kubernetes release
 
 Setting a Deployment to zero is not a stable drain while a Horizontal Pod
-Autoscaler (HPA) or GitOps controller can change it back. Suspend reconciliation
+Autoscaler (HPA) or GitOps controller can change it back. The chart now accepts
+`replicaCount: 0` with high availability disabled. If your installed chart
+supports it, you can keep GitOps running by committing this temporary state:
+
+```yaml
+replicaCount: 0
+highAvailability:
+  enabled: false
+autoscaling:
+  enabled: false
+podDisruptionBudget:
+  enabled: false
+migrations:
+  enabled: false
+```
+
+Keep the old image digest pinned while you drain, wait for every old pod and
+lease to disappear, then verify your backup. Zero replicas stop the webhook
+receiver too; record failed GitHub deliveries for redelivery after the upgrade.
+Enable the target migration before restoring the normal replica and
+high-availability settings. Verify the rendered Deployment has zero replicas
+and no HPA, PDB, or migration Job before merging the drain state.
+
+For a chart that rejects zero replicas, suspend reconciliation
 for the exact Argo CD Application, Flux resource, or other controller before
 you alter the workload. Record its previous state. The controller must not
 recreate the HPA, change the Deployment replica count, or sync an old image
