@@ -1,6 +1,6 @@
 {
   "@context": "https://openvex.dev/ns/v0.2.0",
-  "@id": "urn:uuid:65d0484b-50d4-5dd5-aacc-10d5f34415ce",
+  "@id": "urn:uuid:fe10b69d-5790-5ed3-a2ff-1783611d0176",
   "author": "Extra CODEOWNERS maintainers",
   "role": "VEX document producer",
   "statements": [
@@ -741,18 +741,18 @@
       "extra_codeowners/alembic/versions/0007_reconciliation_completion.py": "a4b0ef650761a915ea19b8f73db0d1d277d3f6f4e3f71736114906bfeeffac9f",
       "extra_codeowners/alembic/versions/0008_recovery_api_budget.py": "7d4ae0f8829500de2c23395ef7e14b29225536e841017216308fc07f48b341b3",
       "extra_codeowners/alembic/versions/0009_conditional_request_budget.py": "8356e2d4f1701030ceb275cedbe85ee6ca6e4827ddd87fb84e6b8cd1726ade00",
-      "extra_codeowners/alembic/versions/0010_authority_discovery_cursor.py": "e877c9315c4922afc9b752d99297a29290eccdb343c2a9e9c5b39dba2c0fd95a",
+      "extra_codeowners/alembic/versions/0010_authority_discovery_cursor.py": "7784f94a8794bd5b6be31c07de487cbb4a9633987c8163bc25bf8dbe3a8ff23a",
       "extra_codeowners/alembic/versions/__init__.py": "c421d4569599794de9ddda269e84b775d6e8204164cb9dff2487ca86560d21ae",
       "extra_codeowners/api_budget.py": "f61539671f308b2581a4a6494a8acd56b3f9f462eac93de7ccf764acd5e82e61",
       "extra_codeowners/app.py": "d30ca24500e3b0d3ace360140d56d568d6bd06865acac406ddaa8a4c623d89ad",
       "extra_codeowners/build_identity.py": "5c3b38f087460fca37660ddeaa8a004d05348f8c947c04fc2444739ab7896968",
       "extra_codeowners/cli.py": "79a5c200397f9544492ec6071890ff5835c1ed625c623a0a86ed3a60503e65f4",
       "extra_codeowners/codeowners.py": "da8be54dbc8a79dcbaf39d49491f950d5405d74d6bb5e07da5247644f5ffcfd8",
-      "extra_codeowners/database.py": "34ff729335d230733f3e74b5c2bb9aa522d6a90435dd39b350e26c12b3ddde51",
+      "extra_codeowners/database.py": "226252b6ecba0ef987eeda1bb3a53c033cdd993d9cb0a0abaddd4b8e476abd77",
       "extra_codeowners/dco.py": "8c3a0b541fe021fb9f05500ca9278306901010c219e7e1199ca5e205c138e68d",
       "extra_codeowners/discovery_cache.py": "ec62a728af9c5206de815aa72affd69e231d2acb45b5f80e33790ec6e20b29c7",
       "extra_codeowners/evaluator.py": "b81b9d1c6fe81d591867b0993d413030caab8af48703c4725f14c04fe2e3f9a6",
-      "extra_codeowners/github.py": "911732c1278efb65f3c2681c27cd518d41d7329224bbc6f05178989f43e3cf5f",
+      "extra_codeowners/github.py": "66610d3086984f4031721d5256fcff1c920468a7dab2ddae15d2c17f259e101b",
       "extra_codeowners/logging.py": "a59227e76ec7809ff8bb88fee997abb9b99f32e81a4c8d16bcfc72c0c0abf33f",
       "extra_codeowners/manifest.py": "33d42ac16b8218562f2baf6c0bc7c6664b03354bbf274cb0381e94740b76681e",
       "extra_codeowners/metrics.py": "741473fcdd83c899f07beb277e4a961bd536878bfda0c7b7b676cd0f07161b38",
@@ -760,15 +760,15 @@
       "extra_codeowners/models.py": "dc59959f56e35111fae00f8f60ef054ba80eb839eb2dae5b09165d4cdc349a48",
       "extra_codeowners/policy.py": "844abb482a7c9cc3190d624cc92ece2476128644718e4096f98bfa8a0abedf8a",
       "extra_codeowners/py.typed": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "extra_codeowners/service.py": "c984508b7807749ce9ffbc6296e147825ac09e37d904b935517d05be9abcfb2b",
+      "extra_codeowners/service.py": "eb200ea32edb44e01b21910eb484257f46be4ad1c396f156a0aa4c9c841eee38",
       "extra_codeowners/settings.py": "bd1d3cd0acf23ea4b26869fc1e024438aba7b9acf43f3850c4e6be2e9a5b5437",
       "extra_codeowners/trace_context.py": "f79ca91baa1dd615c80546c66a6b370ba78ec7106dece3feb201d10250078532",
       "extra_codeowners/tracing.py": "62c730c8bdf4d632dace5b79232f968d871a28d8724a162aa52ba6b4ed2c6db1",
-      "extra_codeowners/webhooks.py": "9e6fcba834589b102fc03c7841fc479cd7745d79a84060a78f35fc36900b73ae",
+      "extra_codeowners/webhooks.py": "26bb6495d413863cd3a66488a152f0d0d89b8f5dfae96abb2ea5066861b6d114",
       "pyproject.toml": "4164e19c10e620b1cae1db22dab5728b4e80eb0f5a9dd768484b6f12de73fc96",
       "uv.lock": "2f0aebfcdfe39538db8cfb67eb13287ec3245efd794c1d47d022c7297eb41b9a"
     },
-    "review": "Pagewise authority enumeration checkpoints completed pages and bounded partial-page observations. Later branch pushes retain their bounded follow-up evidence without interrupting a broad claim; completion hands it off atomically or schedules one next scan after overflow. Fresh interactive wake counters preserve arrivals across failures. These Python and SQLAlchemy paths add no native PCRE2 input or JIT calls; both reviewed graphs still exclude the named Debian library. See security/vex/runtime-review.md.",
+    "review": "Authority discovery checkpoints installation and removal membership pages, retains later evidence without resetting active progress, and uses scheduling-only base hints for matching fences. First-insert races retry against the locked existing row rather than overwriting progress. Fresh PR and membership evidence still guard publication. These Python/SQL changes add no native PCRE2 input or JIT calls; both reviewed ELF graphs exclude the named Debian library. See security/vex/runtime-review.md.",
     "schema_version": 1
   }
 }

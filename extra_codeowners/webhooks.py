@@ -9,7 +9,12 @@ import re
 from dataclasses import dataclass
 from typing import Any, Final
 
-from extra_codeowners.database import AuthorityRequest, JobRequest, validate_head_sha
+from extra_codeowners.database import (
+    AuthorityRequest,
+    JobRequest,
+    validate_base_ref_hint,
+    validate_head_sha,
+)
 
 MAX_WEBHOOK_BYTES: Final = 10 * 1024 * 1024
 PULL_REQUEST_ACTIONS: Final = frozenset(
@@ -142,12 +147,21 @@ def _pull_request_job(
     if not isinstance(head, dict):
         raise WebhookError("webhook omitted pull_request.head")
     head_sha = _head_sha(head.get("sha"), "pull_request.head.sha")
+    base = pull.get("base")
+    raw_base_ref = base.get("ref") if isinstance(base, dict) else None
+    try:
+        base_ref_hint = validate_base_ref_hint(raw_base_ref)
+    except ValueError:
+        # Scheduling hints are optional. Ignore malformed/overlong branch data
+        # rather than dropping a signed event that still carries a valid head.
+        base_ref_hint = None
     return JobRequest(
         installation_id=_installation_id(webhook.payload),
         repository_full_name=_repository_name(webhook.payload),
         pull_number=number,
         reason=f"{webhook.event}.{webhook.action or 'received'}",
         head_sha_hint=head_sha,
+        base_ref_hint=base_ref_hint,
     )
 
 

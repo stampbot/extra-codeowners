@@ -6,7 +6,7 @@ import hashlib
 import os
 import re
 import threading
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
@@ -134,6 +134,20 @@ def normalize_repository_full_name(value: str) -> str:
     return value.lower()
 
 
+def validate_base_ref_hint(value: str | None) -> str | None:
+    """Validate an optional scheduling-only base ref without requiring it."""
+    if value is None:
+        return None
+    if (
+        not isinstance(value, str)
+        or not value
+        or len(value) > MAX_AUTHORITY_BASE_REF_LENGTH
+        or any(ord(char) < 32 or ord(char) == 127 for char in value)
+    ):
+        raise ValueError("base_ref_hint must be a valid branch ref of at most 255 characters")
+    return value
+
+
 def validate_head_sha(value: str) -> str:
     """Return a canonical Git object ID suitable for a durable key."""
     if len(value) not in {40, 64} or any(
@@ -195,6 +209,7 @@ class EvaluationJob(Base):
     repository_full_name: Mapped[str] = mapped_column(String(512), nullable=False)
     pull_number: Mapped[int] = mapped_column(Integer, nullable=False)
     head_sha_hint: Mapped[str | None] = mapped_column(String(64))
+    base_ref_hint: Mapped[str | None] = mapped_column(String(255))
     last_delivery_id: Mapped[str | None] = mapped_column(String(128))
     reason: Mapped[str] = mapped_column(String(255), nullable=False)
     work_class: Mapped[WorkClass] = mapped_column(
@@ -295,9 +310,13 @@ class AuthorityJob(Base):
     )
     listing_next_page: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     listing_last_number: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    listing_expected_total: Mapped[int | None] = mapped_column(Integer)
+    membership_next_page: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    membership_expected_total: Mapped[int | None] = mapped_column(Integer)
     interactive_wake_generation: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     pending_base_refs: Mapped[dict[str, str]] = mapped_column(JSON, nullable=False, default=dict)
     pending_full_rescan: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    pending_rescan_reason: Mapped[str | None] = mapped_column(String(255))
     state: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     requested_at: Mapped[datetime] = mapped_column(
@@ -448,6 +467,7 @@ class JobRequest:
     # accepted after that instant is newer durable evidence and must win over
     # the scan's eventually consistent listing.
     observed_at: datetime | None = None
+    base_ref_hint: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -465,6 +485,7 @@ class JobRequest:
             if self.observed_at.tzinfo is None:
                 raise ValueError("observed_at must include a timezone")
             object.__setattr__(self, "observed_at", self.observed_at.astimezone(UTC))
+        validate_base_ref_hint(self.base_ref_hint)
 
 
 @dataclass(frozen=True, slots=True)
@@ -510,6 +531,7 @@ class ClaimedJob:
     requested_at: datetime
     available_at: datetime
     lease_owner: str
+    base_ref_hint: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -529,6 +551,9 @@ class ClaimedAuthorityJob:
     listing_next_page: int = 1
     listing_last_number: int = 0
     interactive_wake_generation: int = 0
+    listing_expected_total: int | None = None
+    membership_next_page: int = 1
+    membership_expected_total: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1642,6 +1667,7 @@ class QueueStore:
             "shared_head_generation": shared_head_generation,
             "reason": request.reason,
             "head_sha_hint": request.head_sha_hint,
+            "base_ref_hint": request.base_ref_hint,
             "requested_at": now,
             "available_at": now,
             "state": "pending",
@@ -1685,6 +1711,7 @@ class QueueStore:
                 reason=request.reason,
                 work_class=request.work_class,
                 head_sha_hint=request.head_sha_hint,
+                base_ref_hint=request.base_ref_hint,
                 last_delivery_id=delivery_id,
                 authority_generation=authority_generation,
                 shared_head_generation=shared_head_generation,
@@ -1698,11 +1725,26 @@ class QueueStore:
     def _wake_authority_for_interactive(session: Session, request: JobRequest) -> None:
         """Wake covering fences for direct events and internal revocation retries."""
         if request.work_class == WORK_CLASS_INTERACTIVE:
+            branch_match = (
+                AuthorityJob.base_ref == request.base_ref_hint
+                if request.base_ref_hint is not None
+                else false()
+            )
+            base_scope = or_(
+                AuthorityJob.scope_key == "*",
+                and_(
+                    AuthorityJob.scope_key == request.repository_full_name,
+                    or_(
+                        AuthorityJob.base_ref == "",
+                        branch_match,
+                    ),
+                ),
+            )
             session.execute(
                 update(AuthorityJob)
                 .where(
                     AuthorityJob.installation_id == request.installation_id,
-                    AuthorityJob.scope_key.in_(("*", request.repository_full_name)),
+                    base_scope,
                     AuthorityJob.state == "pending",
                 )
                 .values(
@@ -1833,6 +1875,7 @@ class QueueStore:
                         "reason": request.reason,
                         "work_class": request.work_class,
                         "head_sha_hint": request.head_sha_hint,
+                        "base_ref_hint": request.base_ref_hint,
                         "generation": 1,
                         "authority_generation": authority_generation,
                         "shared_head_generation": shared_head_generation,
@@ -1984,6 +2027,7 @@ class QueueStore:
                         "reason": request.reason,
                         "work_class": request.work_class,
                         "head_sha_hint": request.head_sha_hint,
+                        "base_ref_hint": request.base_ref_hint,
                         "generation": 1,
                         "authority_generation": authority_generation,
                         "shared_head_generation": generation,
@@ -2035,6 +2079,22 @@ class QueueStore:
         now = utcnow()
         scope_key = request.scope_key
         base_ref = request.base_ref or ""
+        existing = session.scalar(
+            select(AuthorityJob)
+            .where(
+                AuthorityJob.installation_id == request.installation_id,
+                AuthorityJob.scope_key == scope_key,
+                AuthorityJob.base_ref == base_ref,
+            )
+            .with_for_update()
+        )
+        if existing is not None:
+            # Later evidence needs another complete pass, not a restart of the
+            # current pass. This also bounds repeated label edits and pushes.
+            existing.pending_full_rescan = True
+            existing.pending_rescan_reason = request.reason
+            existing.pending_base_refs = {}
+            return
         if request.repository_full_name is not None:
             if not base_ref:
                 # A repository-wide authority event covers every pending base
@@ -2075,6 +2135,7 @@ class QueueStore:
                             or len(pending_refs) > MAX_BASE_SCOPED_AUTHORITY_JOBS_PER_REPOSITORY
                         ):
                             repository_wide.pending_full_rescan = True
+                            repository_wide.pending_rescan_reason = request.reason
                             repository_wide.pending_base_refs = {}
                         else:
                             repository_wide.pending_base_refs = pending_refs
@@ -2108,37 +2169,9 @@ class QueueStore:
                         )
                     )
                     base_ref = ""
-        updated = session.execute(
-            update(AuthorityJob)
-            .where(
-                AuthorityJob.installation_id == request.installation_id,
-                AuthorityJob.scope_key == scope_key,
-                AuthorityJob.base_ref == base_ref,
-            )
-            .values(
-                generation=AuthorityJob.generation + 1,
-                pull_cursor_number=0,
-                handled_pull_fingerprints={},
-                listing_next_page=1,
-                listing_last_number=0,
-                interactive_wake_generation=0,
-                pending_base_refs={},
-                pending_full_rescan=False,
-                reason=request.reason,
-                requested_at=now,
-                available_at=now,
-                state="pending",
-                attempts=0,
-                # A newer authority event fences an in-flight fan-out. Make
-                # the new generation available immediately instead of waiting
-                # for the old worker's lease to expire.
-                lease_owner=None,
-                lease_until=None,
-                last_error=None,
-            )
-        )
-        if getattr(updated, "rowcount", 0) == 1:
-            return
+        # A concurrent first insertion must take the caller's IntegrityError
+        # retry path and then coalesce under its row lock. An UPDATE here could
+        # overwrite a newly inserted row that has already begun discovery.
         session.add(
             AuthorityJob(
                 installation_id=request.installation_id,
@@ -2875,7 +2908,16 @@ class QueueStore:
                             AuthorityJob.installation_id == EvaluationJob.installation_id,
                             or_(
                                 AuthorityJob.scope_key == "*",
-                                AuthorityJob.scope_key == EvaluationJob.repository_full_name,
+                                and_(
+                                    AuthorityJob.scope_key == EvaluationJob.repository_full_name,
+                                    or_(
+                                        AuthorityJob.base_ref == "",
+                                        and_(
+                                            EvaluationJob.base_ref_hint.is_not(None),
+                                            AuthorityJob.base_ref == EvaluationJob.base_ref_hint,
+                                        ),
+                                    ),
+                                ),
                             ),
                         )
                     ),
@@ -2953,6 +2995,7 @@ class QueueStore:
                     reason=row.reason,
                     work_class=row.work_class,
                     head_sha_hint=row.head_sha_hint,
+                    base_ref_hint=row.base_ref_hint,
                     last_delivery_id=row.last_delivery_id,
                     webhook_trace_context=TrustedTraceContext.from_values(
                         delivery.producer_trace_id if delivery is not None else None,
@@ -2969,6 +3012,46 @@ class QueueStore:
                 )
         return None
 
+    def observe_evaluation_base(self, job: ClaimedJob, base_ref: str) -> bool:
+        """Persist fresh scheduling context without treating it as authority evidence."""
+        hint = (
+            base_ref
+            if isinstance(base_ref, str)
+            and base_ref
+            and len(base_ref) <= MAX_AUTHORITY_BASE_REF_LENGTH
+            and not any(ord(char) < 32 or ord(char) == 127 for char in base_ref)
+            else None
+        )
+        now = utcnow()
+        with self.session() as session:
+            result = session.execute(
+                update(EvaluationJob)
+                .where(
+                    EvaluationJob.id == job.id,
+                    EvaluationJob.generation == job.generation,
+                    EvaluationJob.lease_owner == job.lease_owner,
+                    EvaluationJob.lease_until > now,
+                    EvaluationJob.state == "pending",
+                )
+                .values(base_ref_hint=hint)
+            )
+            if getattr(result, "rowcount", 0) != 1:
+                return False
+            if hint is not None and job.work_class == WORK_CLASS_INTERACTIVE:
+                self._wake_authority_for_interactive(
+                    session,
+                    JobRequest(
+                        installation_id=job.installation_id,
+                        repository_full_name=job.repository_full_name,
+                        pull_number=job.pull_number,
+                        reason=job.reason,
+                        head_sha_hint=job.head_sha_hint,
+                        work_class=job.work_class,
+                        base_ref_hint=hint,
+                    ),
+                )
+            return True
+
     @staticmethod
     def _authority_direct_waiter() -> ColumnElement[bool]:
         return exists(
@@ -2976,7 +3059,16 @@ class QueueStore:
                 EvaluationJob.installation_id == AuthorityJob.installation_id,
                 or_(
                     AuthorityJob.scope_key == "*",
-                    EvaluationJob.repository_full_name == AuthorityJob.scope_key,
+                    and_(
+                        EvaluationJob.repository_full_name == AuthorityJob.scope_key,
+                        or_(
+                            AuthorityJob.base_ref == "",
+                            and_(
+                                EvaluationJob.base_ref_hint.is_not(None),
+                                AuthorityJob.base_ref == EvaluationJob.base_ref_hint,
+                            ),
+                        ),
+                    ),
                 ),
                 EvaluationJob.state == "pending",
                 EvaluationJob.work_class == WORK_CLASS_INTERACTIVE,
@@ -3067,6 +3159,9 @@ class QueueStore:
                     listing_next_page=row.listing_next_page,
                     listing_last_number=row.listing_last_number,
                     interactive_wake_generation=row.interactive_wake_generation,
+                    listing_expected_total=row.listing_expected_total,
+                    membership_next_page=row.membership_next_page,
+                    membership_expected_total=row.membership_expected_total,
                 )
         return None
 
@@ -3120,6 +3215,58 @@ class QueueStore:
             )
             return getattr(result, "rowcount", 0) == 1
 
+    def advance_installation_authority_page(
+        self,
+        job: ClaimedAuthorityJob,
+        requests: Sequence[AuthorityRequest],
+        *,
+        next_page: int,
+        expected_total: int | None,
+    ) -> bool:
+        """Create child fences and checkpoint their page in one fenced transaction."""
+        if job.repository_full_name is not None:
+            raise ValueError("installation pagination requires an installation authority job")
+        if any(
+            request.installation_id != job.installation_id or request.repository_full_name is None
+            for request in requests
+        ):
+            raise ValueError("installation page contains a child outside its installation")
+        with self.session() as session:
+            row = session.scalar(
+                select(AuthorityJob)
+                .where(
+                    AuthorityJob.id == job.id,
+                    AuthorityJob.generation == job.generation,
+                    AuthorityJob.lease_owner == job.lease_owner,
+                    AuthorityJob.lease_until > utcnow(),
+                )
+                .with_for_update()
+            )
+            if row is None:
+                return False
+            for request in requests:
+                self._enqueue_authority_in_session(session, request)
+            row.listing_next_page = next_page
+            row.listing_expected_total = expected_total
+            return True
+
+    def advance_authority_membership_page(
+        self, job: ClaimedAuthorityJob, *, next_page: int, expected_total: int | None
+    ) -> bool:
+        """Checkpoint a repository fence's complete-membership corroboration."""
+        with self.session() as session:
+            result = session.execute(
+                update(AuthorityJob)
+                .where(
+                    AuthorityJob.id == job.id,
+                    AuthorityJob.generation == job.generation,
+                    AuthorityJob.lease_owner == job.lease_owner,
+                    AuthorityJob.lease_until > utcnow(),
+                )
+                .values(membership_next_page=next_page, membership_expected_total=expected_total)
+            )
+            return getattr(result, "rowcount", 0) == 1
+
     def complete_authority(self, job: ClaimedAuthorityJob, owner: str) -> bool:
         """Finish a generation and atomically retain any later branch evidence."""
         with self.session() as session:
@@ -3143,10 +3290,14 @@ class QueueStore:
                 row.handled_pull_fingerprints = {}
                 row.listing_next_page = 1
                 row.listing_last_number = 0
+                row.listing_expected_total = None
+                row.membership_next_page = 1
+                row.membership_expected_total = None
                 row.interactive_wake_generation = 0
                 row.pending_base_refs = {}
                 row.pending_full_rescan = False
-                row.reason = "push.repository_base"
+                row.reason = row.pending_rescan_reason or "push.repository_base"
+                row.pending_rescan_reason = None
                 row.requested_at = now
                 row.available_at = now
                 row.state = "pending"

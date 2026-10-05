@@ -39,6 +39,7 @@ from extra_codeowners.github import (
     GitHubError,
     GitHubOperationStoppedError,
     GitHubRateLimitError,
+    InstallationRepositoriesChangedError,
     PullRequestTooLargeError,
 )
 from extra_codeowners.metrics import (
@@ -1229,6 +1230,7 @@ class EvaluationService:
                     reason="head_changed_before_fast_invalidation",
                     head_sha_hint=head_sha,
                     work_class=job.work_class,
+                    base_ref_hint=base_ref if len(base_ref) <= 255 else None,
                 ),
             )
             live_head_queued = True
@@ -1480,6 +1482,11 @@ class EvaluationService:
                 await self._finish_closed_pull_check(job, check_head, details_url)
                 return
 
+            # This hint only schedules the fence covering this PR. Every
+            # authorization/publication guard still uses fresh GitHub evidence.
+            if not await asyncio.to_thread(self.store.observe_evaluation_base, job, base_ref):
+                return
+
             if job.head_sha_hint is not None and job.head_sha_hint != head_sha:
                 await asyncio.to_thread(
                     self.store.enqueue_shared_head_trigger,
@@ -1490,6 +1497,7 @@ class EvaluationService:
                         reason="head_changed_before_evaluation",
                         head_sha_hint=head_sha,
                         work_class=job.work_class,
+                        base_ref_hint=base_ref if len(base_ref) <= 255 else None,
                     ),
                 )
                 return
@@ -1549,6 +1557,7 @@ class EvaluationService:
                             reason="shared_head_generation_changed",
                             head_sha_hint=head_sha,
                             work_class=job.work_class,
+                            base_ref_hint=base_ref if len(base_ref) <= 255 else None,
                         ),
                         current_generation,
                     )
@@ -1661,6 +1670,7 @@ class EvaluationService:
                         reason="pull_request_changed_during_evaluation",
                         head_sha_hint=current_head_sha,
                         work_class=job.work_class,
+                        base_ref_hint=(current_base_ref if len(current_base_ref) <= 255 else None),
                     ),
                 )
                 return
@@ -2243,11 +2253,33 @@ class Worker:
     async def _authority_repository_absent(self, job: ClaimedAuthorityJob) -> bool:
         if job.repository_full_name is None:
             raise GitHubError("repository membership check requires a repository scope")
-        repositories = _reconciliation_repositories(
-            await self.evaluator.github.list_installation_repositories(job.installation_id)
-        )
-        if any(name == job.repository_full_name for name, _archived in repositories):
-            return False
+        next_page = job.membership_next_page
+        expected_total = job.membership_expected_total
+        while next_page:
+            try:
+                page = await self.evaluator.github.list_installation_repository_page(
+                    job.installation_id, page=next_page, expected_total=expected_total
+                )
+            except InstallationRepositoriesChangedError:
+                await asyncio.to_thread(
+                    self.store.advance_authority_membership_page,
+                    job,
+                    next_page=1,
+                    expected_total=None,
+                )
+                raise
+            repositories = _reconciliation_repositories(page.repositories)
+            if any(name == job.repository_full_name for name, _archived in repositories):
+                return False
+            if not await asyncio.to_thread(
+                self.store.advance_authority_membership_page,
+                job,
+                next_page=page.next_page,
+                expected_total=page.total_count,
+            ):
+                raise GitHubError("repository membership corroboration claim was superseded")
+            next_page = page.next_page
+            expected_total = page.total_count
         if await self.evaluator.github.installation_includes_repository(
             job.installation_id, job.repository_full_name, refresh=True
         ):
@@ -2270,27 +2302,48 @@ class Worker:
 
     async def _discover_authority(self, job: ClaimedAuthorityJob) -> None:
         if job.repository_full_name is None:
-            repositories = await self.evaluator.github.list_installation_repositories(
-                job.installation_id
-            )
-            # Split broad work into independently retryable repository fences.
-            # The installation row continues to block every publication until
-            # all repository rows have been durably created.
-            for repository in repositories:
-                full_name = repository.get("full_name")
-                if not isinstance(full_name, str) or repository.get("archived") is True:
-                    continue
-                if self.settings.is_organization_config_repository(full_name):
-                    continue
-                await asyncio.to_thread(
-                    self.store.enqueue_authority,
-                    AuthorityRequest(
-                        installation_id=job.installation_id,
-                        repository_full_name=full_name,
-                        base_ref=None,
-                        reason=job.reason,
-                    ),
+            next_page = job.listing_next_page
+            expected_total = job.listing_expected_total
+            while next_page:
+                try:
+                    installation_page = (
+                        await self.evaluator.github.list_installation_repository_page(
+                            job.installation_id, page=next_page, expected_total=expected_total
+                        )
+                    )
+                except InstallationRepositoriesChangedError:
+                    # A changed population needs a new enumeration, not a
+                    # permanent retry against an obsolete total. Existing child
+                    # fences remain blocking and retain their own progress.
+                    await asyncio.to_thread(
+                        self.store.advance_installation_authority_page,
+                        job,
+                        [],
+                        next_page=1,
+                        expected_total=None,
+                    )
+                    raise
+                children = [
+                    AuthorityRequest(job.installation_id, full_name, None, job.reason)
+                    for full_name, archived in _reconciliation_repositories(
+                        installation_page.repositories
+                    )
+                    if not archived
+                    and not self.settings.is_organization_config_repository(full_name)
+                ]
+                # Children and parent progress commit together. A crash can
+                # replay the HTTP page, but cannot replay its committed children.
+                current = await asyncio.to_thread(
+                    self.store.advance_installation_authority_page,
+                    job,
+                    children,
+                    next_page=installation_page.next_page,
+                    expected_total=installation_page.total_count,
                 )
+                if not current:
+                    return
+                next_page = installation_page.next_page
+                expected_total = installation_page.total_count
             return
 
         full_name = job.repository_full_name
@@ -2462,6 +2515,13 @@ class Worker:
                         reason=job.reason,
                         head_sha_hint=str(head["sha"]),
                         work_class="recovery",
+                        base_ref_hint=(
+                            base["ref"]
+                            if isinstance(base, dict)
+                            and isinstance(base.get("ref"), str)
+                            and 0 < len(base["ref"]) <= 255
+                            else None
+                        ),
                     )
                 )
             observed_keys = {str(number) for number in observations}
@@ -3200,6 +3260,11 @@ class Reconciler:
                                 head_sha_hint=head_sha,
                                 work_class="recovery",
                                 observed_at=observed_at,
+                                base_ref_hint=(
+                                    base_ref
+                                    if isinstance(base_ref, str) and 0 < len(base_ref) <= 255
+                                    else None
+                                ),
                             ),
                             self.settings.reconcile_recheck_seconds,
                         )

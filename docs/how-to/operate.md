@@ -448,13 +448,24 @@ Branch pushes during a repository-wide scan queue later branch rechecks without
 resetting its progress. More than 100 distinct branches coalesce into one full
 follow-up scan. A branch name longer than the 255-character database key uses the
 same fallback. The current scan finishes first; new evidence is not discarded.
+Repeated events for the same scope, including label edits, queue one full
+follow-up pass without restarting the active scan.
+
+Installation discovery checkpoints repository pages and their child fences in
+one transaction. A restart or quota pause resumes the next page instead of
+replaying the installation from page one. If the repository count changes,
+enumeration restarts while existing child fences retain their progress. GitHub
+doesn't provide a snapshot of installation repositories; same-count membership
+changes still depend on installation events and reconciliation.
+Repository-removal corroboration also resumes its own membership-page checkpoint
+and still requires a fresh repository-installation lookup before retirement.
 
 Background discovery honors the recovery reserve. When it pauses, the repository
 fence stays pending without creating duplicate evaluations or marking the
 installation as rate limited. Look for
 `authority_discovery_deferred_for_recovery_budget` in the logs. A direct webhook
-or promoted revocation retry wakes its pending installation and repository
-fences so they can use reserved
+or promoted revocation retry wakes its pending installation-wide,
+repository-wide, and known matching base-branch fences so they can use reserved
 quota. Once discovery identifies a PR needing revocation, revocation can also
 use the reserve. Provider limits still stop every lane. A large repository
 blocking direct work or many required revocations can therefore exhaust quota;

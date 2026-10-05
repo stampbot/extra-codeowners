@@ -13,6 +13,7 @@ import httpx
 import pytest
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from sqlalchemy import select
 
 import extra_codeowners.service as service_module
 from extra_codeowners.api_budget import (
@@ -42,6 +43,8 @@ from extra_codeowners.github import (
     GitHubError,
     GitHubOperationStoppedError,
     GitHubRateLimitError,
+    InstallationRepositoriesChangedError,
+    InstallationRepositoryPage,
 )
 from extra_codeowners.migrations import upgrade_database
 from extra_codeowners.models import OrganizationPolicy
@@ -93,6 +96,27 @@ class InstalledAuthorityGitHub:
         last_number = int(selected[-1]["number"]) if selected else after_number
         return AuthorityPullPage(selected, next_page=next_page, last_number=last_number)
 
+    async def list_installation_repository_page(
+        self,
+        installation_id: int,
+        *,
+        page: int = 1,
+        expected_total: int | None = None,
+    ) -> InstallationRepositoryPage:
+        # Preserve existing test fakes that provide only the legacy full-list API.
+        repositories = await self.list_installation_repositories(installation_id)  # type: ignore[attr-defined]
+        total_count = len(repositories)
+        if expected_total is not None and expected_total != total_count:
+            raise InstallationRepositoriesChangedError(
+                "installation repositories changed total_count between durable pages"
+            )
+        if page < 1 or page > max(1, (total_count + 99) // 100):
+            raise GitHubError("installation repository page is beyond total_count")
+        offset = (page - 1) * 100
+        selected = repositories[offset : offset + 100]
+        next_page = page + 1 if offset + len(selected) < total_count else 0
+        return InstallationRepositoryPage(selected, total_count, next_page)
+
 
 def install_authority_page_bridge(github: Any) -> None:
     async def list_page(
@@ -113,6 +137,23 @@ def install_authority_page_bridge(github: Any) -> None:
         return AuthorityPullPage(selected, next_page=next_page, last_number=last_number)
 
     github.list_authority_pull_page = list_page
+
+    async def list_installation_page(
+        installation_id: int,
+        *,
+        page: int = 1,
+        expected_total: int | None = None,
+    ) -> InstallationRepositoryPage:
+        repositories = await github.list_installation_repositories(installation_id)
+        total_count = len(repositories)
+        if expected_total is not None and expected_total != total_count:
+            raise InstallationRepositoriesChangedError("repository membership changed")
+        offset = (page - 1) * 100
+        selected = repositories[offset : offset + 100]
+        next_page = page + 1 if offset + len(selected) < total_count else 0
+        return InstallationRepositoryPage(selected, total_count, next_page)
+
+    github.list_installation_repository_page = list_installation_page
 
 
 class EnrolledAuthorityEvaluator:
@@ -443,6 +484,7 @@ def job(store: QueueStore) -> ClaimedJob:
             pull_number=3,
             reason="test",
             head_sha_hint=HEAD,
+            base_ref_hint="main",
         )
     )
     invalidations = 0
@@ -567,6 +609,51 @@ async def test_allowed_application_approval_satisfies_owned_lockfile(tmp_path: P
     await service.evaluate_job(job(store))
 
     assert github.checks[-1]["conclusion"] == "success"
+
+
+@pytest.mark.asyncio
+async def test_fresh_pull_base_ref_replaces_stale_scheduling_hint(tmp_path: Path) -> None:
+    store = migrated_store(f"sqlite:///{tmp_path / 'fresh-base-hint.db'}")
+    store.enqueue_authority(AuthorityRequest(2, "example/project", "main", "push.repository_base"))
+    with store.session() as session:
+        authority = session.scalar(select(AuthorityJob))
+        assert authority is not None
+        authority.available_at = utcnow() + timedelta(hours=1)
+
+    store.enqueue(
+        JobRequest(
+            installation_id=2,
+            repository_full_name="example/project",
+            pull_number=3,
+            reason="pull_request.opened",
+            head_sha_hint=HEAD,
+            base_ref_hint="release",
+        )
+    )
+    invalidation = store.claim_shared_head_invalidation("hint-setup", 60)
+    assert invalidation is not None and store.complete_shared_head_invalidation(invalidation)
+    claimed = store.claim("hint-worker", 60)
+    assert claimed is not None and claimed.base_ref_hint == "release"
+
+    service = EvaluationService(
+        settings(),
+        FakeGitHub(changed_path="uv.lock"),  # type: ignore[arg-type]
+        store,
+    )
+    with pytest.raises(AuthorityChangePendingError):
+        await service.evaluate_job(claimed)
+
+    with store.session() as session:
+        evaluation = session.get(EvaluationJob, claimed.id)
+        authority = session.get(AuthorityJob, authority.id)
+        assert evaluation is not None and evaluation.base_ref_hint == "main"
+        assert authority is not None
+        available_at = authority.available_at
+        if available_at.tzinfo is None:
+            available_at = available_at.replace(tzinfo=UTC)
+        assert available_at <= utcnow()
+    assert store.has_blocking_authority(claimed, "main")
+    assert not store.has_blocking_authority(claimed, "release")
 
 
 async def _claim_recovery_job(store: QueueStore, head_sha: str) -> ClaimedJob:
@@ -2430,6 +2517,7 @@ async def test_authority_work_fans_out_open_pulls_without_blocking_evaluations(
             repository_full_name="example/project",
             pull_number=3,
             reason="pull_request.opened",
+            base_ref_hint="main",
         )
     )
     store.accept_delivery(
@@ -2654,7 +2742,6 @@ async def test_installation_authority_splits_into_normalized_repository_jobs(
                 {"full_name": "Example/Project", "archived": False},
                 {"full_name": "example/archived", "archived": True},
                 {"full_name": "example/.github", "archived": False},
-                {"full_name": 7, "archived": False},
             ]
 
     class Evaluator:
@@ -2669,6 +2756,34 @@ async def test_installation_authority_splits_into_normalized_repository_jobs(
     assert repository_job.repository_full_name == "example/project"
     assert repository_job.reason == "organization.member_removed"
     assert store.claim_authority("observer", 60) is None
+
+
+@pytest.mark.asyncio
+async def test_invalid_repository_name_in_installation_page_fails_closed(
+    tmp_path: Path,
+) -> None:
+    store = migrated_store(f"sqlite:///{tmp_path / 'invalid-installation-page.db'}")
+    store.enqueue_authority(AuthorityRequest(2, None, None, "organization.member_removed"))
+    claimed = store.claim_authority("worker", 60)
+    assert claimed is not None
+
+    class InvalidAuthorityGitHub(InstalledAuthorityGitHub):
+        async def list_installation_repositories(
+            self, installation_id: int
+        ) -> list[dict[str, Any]]:
+            assert installation_id == 2
+            return [{"full_name": 7, "archived": False}]
+
+    class Evaluator:
+        github = InvalidAuthorityGitHub()
+
+    worker = Worker(settings(), store, Evaluator(), "worker")  # type: ignore[arg-type]
+
+    assert await worker._process_authority(claimed) == "failed"
+    assert store.pending_count() == 1
+    assert store.claim_authority("observer", 60) is None
+    with store.session() as session:
+        assert session.get(AuthorityJob, claimed.id) is not None
 
 
 @pytest.mark.asyncio
@@ -2817,6 +2932,9 @@ async def test_absent_repository_authority_retires_only_its_generation(
     store.enqueue_authority(request)
     claimed = store.claim_authority("worker", 60)
     assert claimed is not None
+    assert store.advance_authority_cursor(
+        claimed, 7, {"7": "a" * 64}, listing_next_page=2, listing_last_number=100
+    )
     evaluator = MagicMock()
     evaluator.github.installation_includes_repository = AsyncMock(side_effect=[True, False])
     evaluator.github.get_repository = AsyncMock(
@@ -2836,8 +2954,17 @@ async def test_absent_repository_authority_retires_only_its_generation(
     install_authority_page_bridge(evaluator.github)
     worker = Worker(settings(), store, evaluator, "worker")
 
-    assert await worker._process_authority(claimed) == ("superseded" if superseded else "completed")
+    assert await worker._process_authority(claimed) == "completed"
     assert store.pending_count() == int(superseded)
+    if superseded:
+        with store.session() as session:
+            row = session.get(AuthorityJob, claimed.id)
+            assert row is not None
+            assert row.generation > claimed.generation
+            assert row.pull_cursor_number == 0
+            assert row.handled_pull_fingerprints == {}
+            assert row.listing_next_page == 1 and row.listing_last_number == 0
+            assert row.lease_owner is None and row.lease_until is None
     evaluator.invalidate_for_trigger.assert_not_called()
 
 

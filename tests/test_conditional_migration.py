@@ -148,6 +148,16 @@ def test_authority_cursor_migration_preserves_pending_fence(migration_url: str) 
     assert claim.handled_pull_fingerprints == ()
     assert claim.listing_next_page == 1 and claim.listing_last_number == 0
     assert claim.interactive_wake_generation == 0
+    assert claim.listing_expected_total is None
+    assert claim.membership_next_page == 1
+    assert claim.membership_expected_total is None
+    with store.session() as session:
+        row = session.query(AuthorityJob).one()
+        assert row.pending_rescan_reason is None
+    evaluation_columns = {
+        column["name"]: column for column in inspect(store.engine).get_columns("evaluation_jobs")
+    }
+    assert evaluation_columns["base_ref_hint"]["nullable"] is True
     assert store.advance_authority_cursor(
         claim,
         25,
@@ -169,6 +179,7 @@ def test_authority_cursor_migration_preserves_pending_fence(migration_url: str) 
         "interactive_wake_generation",
         "pending_base_refs",
         "pending_full_rescan",
+        "membership_next_page",
     ):
         assert columns[name]["nullable"] is False
     store.close()

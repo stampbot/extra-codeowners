@@ -6,6 +6,7 @@ from typing import Any, cast
 import pytest
 from sqlalchemy import Table, create_engine, inspect, select, text, update
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session as SQLAlchemySession
 
 from extra_codeowners.database import (
     LIBPQ_DISABLED_ROOT_CERT,
@@ -234,13 +235,19 @@ def test_startup_does_not_mutate_pre_release_dead_jobs(tmp_path: Path) -> None:
     assert restarted.dead_count() == 1
 
 
-def request(*, reason: str = "pull_request.opened", head: str = "a" * 40) -> JobRequest:
+def request(
+    *,
+    reason: str = "pull_request.opened",
+    head: str = "a" * 40,
+    base_ref_hint: str | None = "main",
+) -> JobRequest:
     return JobRequest(
         installation_id=17,
         repository_full_name="example/project",
         pull_number=42,
         reason=reason,
         head_sha_hint=head,
+        base_ref_hint=base_ref_hint,
     )
 
 
@@ -1399,13 +1406,68 @@ def test_new_repository_authority_resets_pending_narrow_followups(
     with store.session() as session:
         row = session.get(AuthorityJob, claim.id)
         assert row is not None
-        assert row.generation == claim.generation + 1
-        assert row.pull_cursor_number == 0
-        assert row.handled_pull_fingerprints == {}
-        assert row.listing_next_page == 1 and row.listing_last_number == 0
-        assert row.lease_owner is None and row.lease_until is None
-        assert row.pending_base_refs == {} and row.pending_full_rescan is False
-        assert row.reason == "push.organization_policy"
+        assert row.generation == claim.generation
+        assert row.pull_cursor_number == 23
+        assert row.handled_pull_fingerprints == {"23": "d" * 64}
+        assert row.listing_next_page == 3 and row.listing_last_number == 200
+        assert row.lease_owner == claim.lease_owner and row.lease_until is not None
+        assert row.pending_base_refs == {} and row.pending_full_rescan is True
+        assert row.pending_rescan_reason == "push.organization_policy"
+    assert store.complete_authority(claim, claim.lease_owner)
+    rescan = store.claim_authority("rescan", 60)
+    assert rescan is not None and rescan.generation > claim.generation
+    assert rescan.reason == "push.organization_policy"
+    assert rescan.listing_next_page == 1 and rescan.listing_last_number == 0
+
+
+def test_authority_insert_race_retries_into_locked_coalescing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = make_store(tmp_path)
+    request_value = AuthorityRequest(17, "example/project", None, "member.removed")
+    store.enqueue_authority(request_value)
+    claim = store.claim_authority("worker", 60)
+    assert claim is not None
+    assert store.advance_authority_cursor(
+        claim,
+        73,
+        {"73": "f" * 64},
+        listing_next_page=4,
+        listing_last_number=300,
+    )
+    with store.session() as session:
+        row = session.get(AuthorityJob, claim.id)
+        assert row is not None
+        baseline = (row.generation, row.lease_owner, row.lease_until)
+
+    original_scalar = SQLAlchemySession.scalar
+    hidden_once = False
+
+    def hide_first_existing_authority(
+        session: SQLAlchemySession, statement: Any, *args: Any, **kwargs: Any
+    ) -> Any:
+        nonlocal hidden_once
+        descriptions = getattr(statement, "column_descriptions", ())
+        if not hidden_once and descriptions and descriptions[0].get("entity") is AuthorityJob:
+            hidden_once = True
+            return None
+        return original_scalar(session, statement, *args, **kwargs)
+
+    monkeypatch.setattr(SQLAlchemySession, "scalar", hide_first_existing_authority)
+    store.enqueue_authority(AuthorityRequest(17, "example/project", None, "team_add.received"))
+
+    assert hidden_once
+    with store.session() as session:
+        row = session.get(AuthorityJob, claim.id)
+        assert row is not None
+        assert row.pending_full_rescan is True
+        assert row.pending_rescan_reason == "team_add.received"
+        assert row.generation == baseline[0]
+        assert row.lease_owner == baseline[1] and row.lease_until == baseline[2]
+        assert row.pull_cursor_number == 73
+        assert row.listing_next_page == 4 and row.listing_last_number == 300
+        assert row.handled_pull_fingerprints == {"73": "f" * 64}
+    store.close()
 
 
 @pytest.mark.parametrize("stale_completion", [False, True])
@@ -1604,6 +1666,7 @@ def test_direct_event_prioritizes_its_authority_fence(tmp_path: Path, prioritize
             1,
             "pull_request.opened",
             head_sha_hint="a" * 40,
+            base_ref_hint="main",
         ),
     )
     assert store.claim("evaluation", 60) is None
@@ -1614,6 +1677,120 @@ def test_direct_event_prioritizes_its_authority_fence(tmp_path: Path, prioritize
     if prioritize:
         assert store.complete_authority(authority, "worker")
         assert store.claim("evaluation", 60) is not None
+
+
+@pytest.mark.parametrize(
+    ("base_ref_hint", "expected_woken"),
+    [
+        (
+            "main",
+            {
+                ("example/project", ""),
+                ("example/project", "main"),
+                ("*", ""),
+                ("*", "install-main"),
+            },
+        ),
+        (None, {("example/project", ""), ("*", ""), ("*", "install-main")}),
+    ],
+)
+def test_direct_event_wakes_only_covering_base_authority_rows(
+    tmp_path: Path,
+    base_ref_hint: str | None,
+    expected_woken: set[tuple[str, str]],
+) -> None:
+    store = make_store(tmp_path)
+    deferred_until = utcnow() + timedelta(seconds=60)
+    with store.session() as session:
+        for scope_key, base_ref in (
+            ("example/project", ""),
+            ("example/project", "main"),
+            ("example/project", "release"),
+            ("*", ""),
+            ("*", "install-main"),
+        ):
+            session.add(
+                AuthorityJob(
+                    installation_id=17,
+                    scope_key=scope_key,
+                    base_ref=base_ref,
+                    reason="direct-wake-test",
+                    requested_at=utcnow(),
+                    available_at=deferred_until,
+                )
+            )
+        before = {
+            (row.scope_key, row.base_ref): row.interactive_wake_generation
+            for row in session.query(AuthorityJob)
+        }
+
+    store.enqueue(request(base_ref_hint=base_ref_hint))
+
+    with store.session() as session:
+        rows = session.query(AuthorityJob).all()
+        woken = {
+            (row.scope_key, row.base_ref)
+            for row in rows
+            if row.interactive_wake_generation > before[(row.scope_key, row.base_ref)]
+        }
+        assert woken == expected_woken
+        for row in rows:
+            if (row.scope_key, row.base_ref) in expected_woken:
+                assert row.available_at.replace(tzinfo=UTC) <= utcnow() + timedelta(seconds=1)
+            else:
+                assert row.available_at.replace(tzinfo=UTC) > utcnow() + timedelta(seconds=55)
+
+
+def test_unknown_direct_event_can_claim_and_fresh_base_observation_wakes_exact_fence(
+    tmp_path: Path,
+) -> None:
+    store = make_store(tmp_path)
+    store.enqueue_authority(AuthorityRequest(17, "example/project", "release", "push.release"))
+    store.enqueue_authority(AuthorityRequest(17, "example/project", "main", "push.main"))
+    for owner in ("release-worker", "main-worker"):
+        authority = store.claim_authority(owner, 60)
+        assert authority is not None
+        assert store.defer_authority(authority, owner, "quota pause", 600)
+
+    store.enqueue(request(base_ref_hint=None))
+    assert store.claim_authority("unknown-priority", 60) is None
+    claimed = store.claim("evaluation-worker", 60)
+    assert claimed is not None and claimed.base_ref_hint is None
+    with store.session() as session:
+        before = {
+            row.base_ref: row.interactive_wake_generation for row in session.query(AuthorityJob)
+        }
+
+    assert store.observe_evaluation_base(claimed, "main")
+
+    with store.session() as session:
+        rows = {row.base_ref: row for row in session.query(AuthorityJob)}
+        assert rows["main"].interactive_wake_generation == before["main"] + 1
+        assert rows["release"].interactive_wake_generation == before["release"]
+    with store.session() as session:
+        row = session.get(EvaluationJob, claimed.id)
+        assert row is not None and row.base_ref_hint == "main"
+    main_fence = store.claim_authority("main-authority-worker", 60)
+    assert main_fence is not None and main_fence.base_ref == "main"
+    assert store.authority_has_direct_waiter(main_fence)
+    assert store.has_blocking_authority(claimed, "main")
+    # The hint is scheduling context only; publication checks the actual base.
+    assert store.has_blocking_authority(claimed, "release")
+
+
+def test_base_hint_coalescing_clears_stale_value_and_rejects_invalid_explicit_values(
+    tmp_path: Path,
+) -> None:
+    store = make_store(tmp_path)
+    store.enqueue(request(base_ref_hint="main"))
+    store.enqueue(request(reason="pull_request.synchronize", base_ref_hint=None))
+    with store.session() as session:
+        row = session.query(EvaluationJob).one()
+        assert row.base_ref_hint is None
+
+    for invalid in ("", "x" * 256, "bad\nref"):
+        with pytest.raises(ValueError, match="base_ref_hint"):
+            JobRequest(17, "example/project", 42, "invalid-hint", base_ref_hint=invalid)
 
 
 @pytest.mark.parametrize("reason", ["periodic_reconciliation", "installation.created"])

@@ -16,6 +16,11 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
+    op.add_column("evaluation_jobs", sa.Column("base_ref_hint", sa.String(255), nullable=True))
+    op.add_column("authority_jobs", sa.Column("membership_next_page", sa.Integer(), nullable=True))
+    op.add_column(
+        "authority_jobs", sa.Column("membership_expected_total", sa.Integer(), nullable=True)
+    )
     op.add_column("authority_jobs", sa.Column("pull_cursor_number", sa.BigInteger(), nullable=True))
     op.add_column(
         "authority_jobs", sa.Column("handled_pull_fingerprints", sa.JSON(), nullable=True)
@@ -29,6 +34,12 @@ def upgrade() -> None:
     )
     op.add_column("authority_jobs", sa.Column("pending_base_refs", sa.JSON(), nullable=True))
     op.add_column("authority_jobs", sa.Column("pending_full_rescan", sa.Boolean(), nullable=True))
+    op.add_column(
+        "authority_jobs", sa.Column("pending_rescan_reason", sa.String(255), nullable=True)
+    )
+    op.add_column(
+        "authority_jobs", sa.Column("listing_expected_total", sa.Integer(), nullable=True)
+    )
     jobs = sa.table(
         "authority_jobs",
         sa.column("pull_cursor_number", sa.BigInteger()),
@@ -38,6 +49,7 @@ def upgrade() -> None:
         sa.column("interactive_wake_generation", sa.Integer()),
         sa.column("pending_base_refs", sa.JSON()),
         sa.column("pending_full_rescan", sa.Boolean()),
+        sa.column("membership_next_page", sa.Integer()),
     )
     op.execute(
         jobs.update().values(
@@ -48,6 +60,7 @@ def upgrade() -> None:
             interactive_wake_generation=0,
             pending_base_refs={},
             pending_full_rescan=False,
+            membership_next_page=1,
         )
     )
     with op.batch_alter_table("authority_jobs") as batch:
@@ -60,6 +73,7 @@ def upgrade() -> None:
         )
         batch.alter_column("pending_base_refs", existing_type=sa.JSON(), nullable=False)
         batch.alter_column("pending_full_rescan", existing_type=sa.Boolean(), nullable=False)
+        batch.alter_column("membership_next_page", existing_type=sa.Integer(), nullable=False)
     metadata = sa.table(
         "schema_metadata",
         sa.column("singleton_id", sa.Integer()),

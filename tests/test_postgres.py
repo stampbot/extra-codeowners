@@ -95,6 +95,7 @@ def test_postgres_prioritizes_direct_authority_without_double_claim(
             1,
             "pull_request.opened",
             head_sha_hint="a" * 40,
+            base_ref_hint="main",
         ),
     )
     first = store.claim_authority("replica-one", 60)
@@ -293,6 +294,7 @@ def request(pull_number: int = 42) -> JobRequest:
         pull_number=pull_number,
         reason="integration-test",
         head_sha_hint="a" * 40,
+        base_ref_hint="main",
     )
 
 

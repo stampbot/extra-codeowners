@@ -450,7 +450,7 @@ async def test_direct_delivery_wakes_deferred_discovery_and_uses_reserved_quota(
 
         async def repositories_with_budget(*_args: Any) -> list[dict[str, Any]]:
             budget.admit(2, recovery=REQUEST_LANE.get() == "recovery")
-            return [{"full_name": "example/project"}]
+            return [{"full_name": "example/project", "archived": False}]
 
         github.list_installation_repositories = AsyncMock(side_effect=repositories_with_budget)
 
@@ -833,7 +833,7 @@ async def test_narrow_followup_revisits_pull_already_handled_by_broad_scan(
     github.get_pull.assert_awaited_once_with(2, "example/project", 3)
 
 
-def test_authority_cursor_is_monotonic_and_reset_by_new_evidence(tmp_path: Path) -> None:
+def test_authority_cursor_is_monotonic_and_retains_later_full_pass(tmp_path: Path) -> None:
     store, _, _, _ = authority_fixture(tmp_path)
     first = store.claim_authority("first-replica", 60)
     assert first is not None
@@ -852,7 +852,9 @@ def test_authority_cursor_is_monotonic_and_reset_by_new_evidence(tmp_path: Path)
     store.enqueue_authority(
         AuthorityRequest(2, "example/project", None, "push.organization_policy")
     )
-    assert not store.advance_authority_cursor(first, 30)
+    assert store.advance_authority_cursor(first, 30)
+    assert store.claim_authority("second-replica", 60) is None
+    assert store.complete_authority(first, "first-replica")
     second = store.claim_authority("second-replica", 60)
     assert second is not None and second.generation > first.generation
     assert second.pull_cursor_number == 0

@@ -47,6 +47,36 @@ def test_valid_pull_request_trigger_becomes_job() -> None:
     assert job.repository_full_name == "example/project"
     assert job.pull_number == 7
     assert job.reason == "pull_request.opened"
+    assert job.base_ref_hint is None
+
+
+def test_pull_request_trigger_captures_valid_base_ref_hint() -> None:
+    payload = pull_payload()
+    pull = payload["pull_request"]
+    assert isinstance(pull, dict)
+    pull["base"] = {"ref": "release/2026"}
+
+    job = evaluation_job(signed(payload))
+
+    assert isinstance(job, JobRequest)
+    assert job.base_ref_hint == "release/2026"
+
+
+@pytest.mark.parametrize(
+    "base",
+    [None, {}, {"ref": ""}, {"ref": "x" * 256}, {"ref": 17}, {"ref": "bad\nref"}],
+)
+def test_malformed_optional_base_ref_hint_does_not_drop_signed_pull_event(base: object) -> None:
+    payload = pull_payload()
+    pull = payload["pull_request"]
+    assert isinstance(pull, dict)
+    pull["base"] = base
+
+    job = evaluation_job(signed(payload))
+
+    assert isinstance(job, JobRequest)
+    assert job.head_sha_hint == "a" * 40
+    assert job.base_ref_hint is None
 
 
 def test_closed_pull_request_becomes_exact_head_work() -> None:

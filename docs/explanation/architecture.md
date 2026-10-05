@@ -336,11 +336,30 @@ A branch push arriving during a repository-wide scan records a later branch
 recheck instead of restarting that scan. Completion hands those rechecks to the
 queue in the same transaction that removes the broad fence. The set of branches
 is bounded; overflow schedules one more full scan after the current one finishes.
-Repeated pushes cannot erase the current scan's progress.
+Repeated pushes cannot erase the current scan's progress. Repeated events for
+the same scope, including label edits, retain one full follow-up pass with the
+latest reason. They don't replace the active lease or its page checkpoint.
+
+Installation discovery also commits one page at a time. Each transaction
+creates the page's repository fences and advances the installation checkpoint
+together. A quota pause or replica takeover resumes at the next page. A changed
+repository count restarts enumeration because the population has changed;
+existing child fences keep their progress. The repository endpoint doesn't
+provide a snapshot or promise an ordering, so same-count membership changes
+still rely on installation events and reconciliation.
+
+A repository that appears to have lost installation access needs a complete
+membership listing and a fresh repository-installation lookup before its fence
+can retire. That corroborating listing has its own page checkpoint, separate
+from PR discovery, so a quota pause doesn't replay its completed prefix.
 
 A reserve pause retains the repository fence without promoting unenrolled PRs
 to foreground work or imposing provider backpressure. A direct webhook or
-promoted revocation retry wakes the fences covering its repository. Those
+promoted revocation retry wakes only its installation-wide, repository-wide,
+and known matching base-branch fences. A persisted base-branch hint controls
+scheduling, not authorization. A job without that hint can fetch fresh PR
+metadata to learn which branch fence it needs; publication always checks the
+fresh base branch. Those
 attempts can use the reserve to clear
 the fence before evaluation publishes. The wakeup and deferral check use the
 shared database, so a webhook arriving during a pause cannot lose its wakeup
