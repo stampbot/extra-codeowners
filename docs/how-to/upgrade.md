@@ -85,7 +85,7 @@ An `0.1.0-alpha.14` artifact prints:
 Database migration 0005_reconciliation_state_index is compatible.
 ```
 
-The target artifact prints `0009_conditional_request_budget` after the
+The target artifact prints `0010_authority_discovery_cursor` after the
 migration in step 5.
 
 Record the reported revision, current image digest, chart revision, PostgreSQL
@@ -132,7 +132,30 @@ For an upgrade from `0003_shared_head_epochs` to
 ### Drain a Kubernetes release
 
 Setting a Deployment to zero is not a stable drain while a Horizontal Pod
-Autoscaler (HPA) or GitOps controller can change it back. Suspend reconciliation
+Autoscaler (HPA) or GitOps controller can change it back. The chart now accepts
+`replicaCount: 0` with high availability disabled. If your installed chart
+supports it, you can keep GitOps running by committing this temporary state:
+
+```yaml
+replicaCount: 0
+highAvailability:
+  enabled: false
+autoscaling:
+  enabled: false
+podDisruptionBudget:
+  enabled: false
+migrations:
+  enabled: false
+```
+
+Keep the old image digest pinned while you drain, wait for every old pod and
+lease to disappear, then verify your backup. Zero replicas stop the webhook
+receiver too; record failed GitHub deliveries for redelivery after the upgrade.
+Enable the target migration before restoring the normal replica and
+high-availability settings. Verify the rendered Deployment has zero replicas
+and no HPA, PDB, or migration Job before merging the drain state.
+
+For a chart that rejects zero replicas, suspend reconciliation
 for the exact Argo CD Application, Flux resource, or other controller before
 you alter the workload. Record its previous state. The controller must not
 recreate the HPA, change the Deployment replica count, or sync an old image
@@ -388,7 +411,7 @@ run_without_libpq_environment \
 For the target artifact, success prints:
 
 ```text
-Database is at migration 0009_conditional_request_budget.
+Database is at migration 0010_authority_discovery_cursor.
 ```
 
 The migrator:
@@ -482,7 +505,7 @@ now:
 
 ```bash
 CHANGE_RECORD_DIR=/path/to/access-controlled/change-record
-FIRST_MIGRATION_LOG="$CHANGE_RECORD_DIR/extra-codeowners-0009-first-migration.log"
+FIRST_MIGRATION_LOG="$CHANGE_RECORD_DIR/extra-codeowners-0010-first-migration.log"
 test -d "$CHANGE_RECORD_DIR"
 test ! -e "$FIRST_MIGRATION_LOG"
 kubectl --namespace "$NAMESPACE" wait \
@@ -494,7 +517,7 @@ kubectl --namespace "$NAMESPACE" wait \
     "job/$DEPLOYMENT-migrate" --container=migrate >"$FIRST_MIGRATION_LOG"
 )
 grep --fixed-strings --line-regexp \
-  'Database is at migration 0009_conditional_request_budget.' \
+  'Database is at migration 0010_authority_discovery_cursor.' \
   "$FIRST_MIGRATION_LOG"
 kubectl --namespace "$NAMESPACE" rollout status \
   "deployment/$DEPLOYMENT" --timeout=10m
@@ -549,7 +572,7 @@ cluster logs before this second hook starts. Preserve and verify the second
 hook's evidence too:
 
 ```bash
-SECOND_MIGRATION_LOG="$CHANGE_RECORD_DIR/extra-codeowners-0009-final-migration.log"
+SECOND_MIGRATION_LOG="$CHANGE_RECORD_DIR/extra-codeowners-0010-final-migration.log"
 test ! -e "$SECOND_MIGRATION_LOG"
 (
   umask 077
@@ -557,12 +580,12 @@ test ! -e "$SECOND_MIGRATION_LOG"
     "job/$DEPLOYMENT-migrate" --container=migrate >"$SECOND_MIGRATION_LOG"
 )
 grep --fixed-strings --line-regexp \
-  'Database is at migration 0009_conditional_request_budget.' \
+  'Database is at migration 0010_authority_discovery_cursor.' \
   "$SECOND_MIGRATION_LOG"
 ```
 
 The second migrator takes the same advisory lock and confirms that the database
-is already at `0009_conditional_request_budget`. Alembic makes no schema change, but
+is already at `0010_authority_discovery_cursor`. Alembic makes no schema change, but
 the migrator still validates the `required-release-contract` before it prints
 success.
 

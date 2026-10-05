@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import os
 import threading
-from collections.abc import Generator
+from collections.abc import Generator, Iterator
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from datetime import timedelta
 from functools import partial
 from time import monotonic
@@ -14,10 +15,12 @@ from alembic.config import Config
 from sqlalchemy import Connection, create_engine, delete, inspect, select, text, update
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DBAPIError
+from sqlalchemy.orm import Session
 
 import extra_codeowners.migrations as migrations
 from extra_codeowners.database import (
     DATABASE_MIGRATION_HEAD,
+    AuthorityJob,
     AuthorityRequest,
     Base,
     ClaimedJob,
@@ -92,6 +95,7 @@ def test_postgres_prioritizes_direct_authority_without_double_claim(
             1,
             "pull_request.opened",
             head_sha_hint="a" * 40,
+            base_ref_hint="main",
         ),
     )
     first = store.claim_authority("replica-one", 60)
@@ -103,6 +107,169 @@ def test_postgres_prioritizes_direct_authority_without_double_claim(
     assert store.claim("evaluation", 60) is None
     assert store.complete_authority(first, "replica-one")
     assert store.claim("evaluation", 60) is not None
+
+
+@pytest.mark.parametrize("winner", ["enqueue", "complete"])
+def test_postgres_authority_completion_and_narrow_enqueue_interleave_without_gap(
+    postgres_store: QueueStore, winner: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = postgres_store
+    peer = QueueStore(postgres_url())
+    release_winner = threading.Event()
+    try:
+        store.enqueue_authority(AuthorityRequest(17, "example/project", None, "member.removed"))
+        broad = store.claim_authority("broad-worker", 60)
+        assert broad is not None
+        assert store.advance_authority_cursor(
+            broad,
+            17,
+            {"17": "e" * 64},
+            listing_next_page=2,
+            listing_last_number=100,
+        )
+        winner_store = store if winner == "complete" else peer
+        loser_store = peer if winner == "complete" else store
+        transaction_held = threading.Event()
+        loser_pid_ready = threading.Event()
+        loser_pid: list[int] = []
+
+        original_winner_session = winner_store.session
+
+        @contextmanager
+        def held_winner_session() -> Iterator[Session]:
+            with original_winner_session() as session:
+                yield session
+                transaction_held.set()
+                if not release_winner.wait(timeout=5):
+                    raise TimeoutError("test did not release PostgreSQL winner transaction")
+
+        monkeypatch.setattr(winner_store, "session", held_winner_session)
+        original_loser_session = loser_store.session
+
+        @contextmanager
+        def tracked_loser_session() -> Iterator[Session]:
+            with original_loser_session() as session:
+                pid = session.scalar(text("SELECT pg_backend_pid()"))
+                assert isinstance(pid, int)
+                loser_pid.append(pid)
+                loser_pid_ready.set()
+                yield session
+
+        monkeypatch.setattr(loser_store, "session", tracked_loser_session)
+
+        def enqueue_narrow() -> None:
+            store_to_enqueue = winner_store if winner == "enqueue" else loser_store
+            store_to_enqueue.enqueue_authority(
+                AuthorityRequest(17, "example/project", "main", "push.repository_base")
+            )
+
+        def complete_broad() -> None:
+            completing_store = winner_store if winner == "complete" else loser_store
+            assert completing_store.complete_authority(broad, "broad-worker")
+
+        winner_action = complete_broad if winner == "complete" else enqueue_narrow
+        loser_action = enqueue_narrow if winner == "complete" else complete_broad
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            winner_future = executor.submit(winner_action)
+            assert transaction_held.wait(timeout=5)
+            loser_future = executor.submit(loser_action)
+            assert loser_pid_ready.wait(timeout=5)
+            deadline = monotonic() + 5
+            blocked = False
+            with store.engine.connect().execution_options(isolation_level="AUTOCOMMIT") as observer:
+                while monotonic() < deadline:
+                    activity = observer.execute(
+                        text(
+                            """
+                            SELECT wait_event_type, pg_blocking_pids(pid)
+                            FROM pg_stat_activity
+                            WHERE pid = :pid
+                            """
+                        ),
+                        {"pid": loser_pid[0]},
+                    ).one_or_none()
+                    if (
+                        activity is not None
+                        and activity.wait_event_type == "Lock"
+                        and activity.pg_blocking_pids
+                    ):
+                        blocked = True
+                        break
+                    threading.Event().wait(0.01)
+            assert blocked, "loser transaction did not block on the held authority row"
+            release_winner.set()
+            winner_future.result(timeout=5)
+            loser_future.result(timeout=5)
+
+        with store.session() as session:
+            rows = session.query(AuthorityJob).all()
+            assert len(rows) == 1
+            assert rows[0].scope_key == "example/project"
+            assert rows[0].base_ref == ""
+            assert rows[0].target_base_refs == {"main": "push.repository_base"}
+            assert rows[0].reason == "push.repository_base"
+        followup = store.claim_authority("followup", 60)
+        assert followup is not None and dict(followup.target_base_refs) == {
+            "main": "push.repository_base"
+        }
+        assert store.claim_authority("unexpected-extra", 60) is None
+    finally:
+        release_winner.set()
+        peer.close()
+
+
+@pytest.mark.parametrize("arrival", ["before_defer", "after_defer"])
+@pytest.mark.parametrize("scope", ["example/project", None])
+def test_postgres_direct_delivery_wakes_reserved_quota_fence_across_replicas(
+    postgres_store: QueueStore, arrival: str, scope: str | None
+) -> None:
+    store = postgres_store
+    peer = QueueStore(postgres_url())
+    try:
+        store.enqueue_authority(AuthorityRequest(17, scope, None, "push.organization_policy"))
+        claimed = store.claim_authority("replica-one", 60)
+        assert claimed is not None
+
+        def deliver() -> None:
+            peer.accept_delivery(
+                "direct-event",
+                "pull_request_review",
+                request(),
+            )
+
+        if arrival == "before_defer":
+            deliver()
+        assert store.defer_authority(
+            claimed, "replica-one", "reserve pause", 600, preserve_direct_wakeup=True
+        )
+        if arrival == "after_defer":
+            assert peer.claim_authority("replica-two", 60) is None
+            deliver()
+        resumed = peer.claim_authority("replica-two", 60)
+        assert resumed is not None and resumed.generation == claimed.generation
+        assert peer.authority_has_direct_waiter(resumed)
+        assert store.claim_authority("replica-three", 60) is None
+        assert store.claim("evaluation", 60) is None
+        assert not store.provider_is_backpressured(17)
+        assert peer.complete_authority(resumed, "replica-two")
+        assert store.claim("evaluation", 60) is not None
+    finally:
+        peer.close()
+
+
+def test_postgres_direct_delivery_cannot_bypass_provider_backpressure(
+    postgres_store: QueueStore,
+) -> None:
+    store = postgres_store
+    store.enqueue_authority(
+        AuthorityRequest(17, "example/project", None, "push.organization_policy")
+    )
+    claimed = store.claim_authority("worker", 60)
+    assert claimed is not None
+    assert store.defer_authority(claimed, "worker", "provider rate limit", 600)
+    store.record_provider_backpressure(17, "provider rate limit", 600)
+    store.accept_delivery("direct", "pull_request_review", request())
+    assert store.claim_authority("another-replica", 60) is None
 
 
 @pytest.fixture
@@ -130,6 +297,7 @@ def request(pull_number: int = 42) -> JobRequest:
         pull_number=pull_number,
         reason="integration-test",
         head_sha_hint="a" * 40,
+        base_ref_hint="main",
     )
 
 

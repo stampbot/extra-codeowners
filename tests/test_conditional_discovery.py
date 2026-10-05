@@ -128,6 +128,7 @@ async def test_discovery_cache_isolated_by_installation_repository_and_page(
 async def test_repositories_all_pages_304_preserves_cached_links(private_key: str) -> None:
     page_calls: list[tuple[int, str | None]] = []
     next_link = '<https://api.github.com/installation/repositories?per_page=100&page=2>; rel="next"'
+    repositories = [{"full_name": f"example/repo-{number}"} for number in range(101)]
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path.endswith("/access_tokens"):
@@ -140,7 +141,9 @@ async def test_repositories_all_pages_304_preserves_cached_links(private_key: st
             if page == 1:
                 headers["Link"] = next_link
             return response(
-                200, {"total_count": 2, "repositories": [{"id": page}]}, headers=headers
+                200,
+                {"total_count": 101, "repositories": repositories[(page - 1) * 100 : page * 100]},
+                headers=headers,
             )
         return response(304, headers={"ETag": etag})
 
@@ -150,13 +153,14 @@ async def test_repositories_all_pages_304_preserves_cached_links(private_key: st
         second = await client.list_installation_repositories(17)
     finally:
         await close(client)
-    assert first == second == [{"id": 1}, {"id": 2}]
+    assert first == second == repositories
     assert page_calls == [(1, None), (2, None), (1, '"page-1"'), (2, '"page-2"')]
 
 
 @pytest.mark.asyncio
 async def test_repositories_changed_pagination_total_is_revalidated(private_key: str) -> None:
     calls: list[tuple[int, str | None]] = []
+    repositories = [{"full_name": f"example/repo-{number}"} for number in range(101)]
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path.endswith("/access_tokens"):
@@ -165,12 +169,14 @@ async def test_repositories_changed_pagination_total_is_revalidated(private_key:
         calls.append((page, request.headers.get("if-none-match")))
         if len(calls) == 1:
             return response(
-                200, {"total_count": 1, "repositories": [{"id": 1}]}, headers={"ETag": '"one"'}
+                200,
+                {"total_count": 1, "repositories": repositories[:1]},
+                headers={"ETag": '"one"'},
             )
         if len(calls) == 2:
             return response(
                 200,
-                {"total_count": 2, "repositories": [{"id": 1}]},
+                {"total_count": 101, "repositories": repositories[:100]},
                 headers={
                     "ETag": '"two"',
                     "Link": (
@@ -180,13 +186,15 @@ async def test_repositories_changed_pagination_total_is_revalidated(private_key:
                 },
             )
         return response(
-            200, {"total_count": 2, "repositories": [{"id": 2}]}, headers={"ETag": '"three"'}
+            200,
+            {"total_count": 101, "repositories": repositories[100:]},
+            headers={"ETag": '"three"'},
         )
 
     client = client_for(handler, private_key)
     try:
-        assert await client.list_installation_repositories(17) == [{"id": 1}]
-        assert await client.list_installation_repositories(17) == [{"id": 1}, {"id": 2}]
+        assert await client.list_installation_repositories(17) == repositories[:1]
+        assert await client.list_installation_repositories(17) == repositories
     finally:
         await close(client)
     assert calls == [(1, None), (1, '"one"'), (2, None)]

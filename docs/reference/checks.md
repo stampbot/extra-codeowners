@@ -134,14 +134,14 @@ waiting forever. Authority fan-out and pull-request evaluations also have their
 own lanes. An evaluation still stays blocking while its relevant authority
 fan-out is pending or retrying.
 
-An installation-wide job creates a current repository-wide fence for each accessible, unarchived target. A repository-wide job removes older base-specific rows for that installation and repository because it covers every open pull request there.
+An installation-wide job creates a repository fence covering every base for each accessible, unarchived target. It coalesces with existing discovery without discarding that job's progress.
 
 For each affected open pull request, fan-out advances the exact-head
 invalidation generation and queues evaluation in one transaction. It then
 attempts a best-effort fast reset. A successful reset does not create another
 generation.
 
-Repeated pushes to one base ref coalesce. One installation and repository may retain at most 100 distinct base-ref rows. A 101st distinct ref replaces them with one repository-wide job, which reevaluates all open pull requests while bounding queue growth from contributor-controlled branch names.
+Repeated pushes coalesce into one discovery job per installation and repository. Up to 100 target branches share each listing pass. A 101st distinct branch broadens that batch to every base. Arrivals during a scan collect in one later batch without discarding current progress. The shared fence blocks publication for the repository until it finishes, even for queued PRs outside its selected branches.
 
 Exact-head invalidation, evaluation, and authority exceptions remain pending.
 Ordinary failures retry indefinitely with exponential backoff capped by

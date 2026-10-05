@@ -779,7 +779,7 @@ descriptions.
 
 | Value | Type | Default | Constraints and effect |
 | --- | --- | --- | --- |
-| `replicaCount` | integer | `1` | At least 1; ignored when autoscaling is enabled. |
+| `replicaCount` | integer | `1` | At least 0; ignored when autoscaling or high availability is enabled. Use 0 only for a controlled drain. |
 | `highAvailability.enabled` | boolean | `false` | Enables the two-replica PostgreSQL preset. It overrides `replicaCount`, uses a rolling Deployment, creates a PDB, and supplies anti-affinity and topology spreading. |
 | `highAvailability.replicas` | integer | `2` | At least 2. Replica count when the HA preset is enabled and autoscaling is disabled. |
 | `highAvailability.minAvailable` | integer | `1` | Number of replicas that must remain available during a voluntary disruption. It must be lower than `replicas`. |

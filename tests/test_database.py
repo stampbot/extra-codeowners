@@ -1,4 +1,4 @@
-from datetime import timedelta
+from datetime import UTC, timedelta
 from pathlib import Path
 from time import monotonic
 from typing import Any, cast
@@ -6,6 +6,7 @@ from typing import Any, cast
 import pytest
 from sqlalchemy import Table, create_engine, inspect, select, text, update
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session as SQLAlchemySession
 
 from extra_codeowners.database import (
     LIBPQ_DISABLED_ROOT_CERT,
@@ -234,13 +235,19 @@ def test_startup_does_not_mutate_pre_release_dead_jobs(tmp_path: Path) -> None:
     assert restarted.dead_count() == 1
 
 
-def request(*, reason: str = "pull_request.opened", head: str = "a" * 40) -> JobRequest:
+def request(
+    *,
+    reason: str = "pull_request.opened",
+    head: str = "a" * 40,
+    base_ref_hint: str | None = "main",
+) -> JobRequest:
     return JobRequest(
         installation_id=17,
         repository_full_name="example/project",
         pull_number=42,
         reason=reason,
         head_sha_hint=head,
+        base_ref_hint=base_ref_hint,
     )
 
 
@@ -1126,6 +1133,141 @@ def test_failed_authority_job_retries_indefinitely(tmp_path: Path) -> None:
     assert store.pending_count() == 1
     assert store.dead_count() == 0
 
+    with store.session() as session:
+        session.execute(
+            update(AuthorityJob).where(AuthorityJob.id == job.id).values(available_at=utcnow())
+        )
+    retry = store.claim_authority("worker", 60)
+    assert retry is not None
+    store.fail_authority(retry, "worker", "still failing", max_delay_seconds=1)
+    assert store.pending_count() == 1
+    assert store.dead_count() == 0
+
+
+def test_failed_authority_with_only_an_old_interactive_waiter_backs_off(
+    tmp_path: Path,
+) -> None:
+    store = make_store(tmp_path)
+    store.enqueue_authority(authority_request())
+    store.enqueue(request())
+    job = store.claim_authority("worker", 60)
+    assert job is not None and job.interactive_wake_generation > 0
+    assert store.authority_has_direct_waiter(job)
+
+    store.fail_authority(
+        job,
+        "worker",
+        "persistent API failure",
+        max_delay_seconds=60,
+        minimum_delay_seconds=30,
+    )
+
+    with store.session() as session:
+        row = session.get(AuthorityJob, job.id)
+        assert row is not None
+        assert row.interactive_wake_generation == job.interactive_wake_generation
+        assert row.available_at.replace(tzinfo=UTC) > utcnow() + timedelta(seconds=25)
+    assert store.claim_authority("retry-too-soon", 60) is None
+
+
+def test_new_interactive_enqueue_during_authority_claim_wakes_failed_retry(
+    tmp_path: Path,
+) -> None:
+    store = make_store(tmp_path)
+    store.enqueue_authority(authority_request())
+    job = store.claim_authority("worker", 60)
+    assert job is not None
+
+    assert store.accept_delivery("arrival-during-failure", "pull_request", request()).accepted
+    store.fail_authority(
+        job,
+        "worker",
+        "API failed after the new event",
+        max_delay_seconds=60,
+        minimum_delay_seconds=30,
+    )
+
+    with store.session() as session:
+        row = session.get(AuthorityJob, job.id)
+        assert row is not None
+        assert row.interactive_wake_generation > job.interactive_wake_generation
+        assert row.available_at.replace(tzinfo=UTC) <= utcnow() + timedelta(seconds=1)
+    retry = store.claim_authority("retry-new-event", 60)
+    assert retry is not None
+
+
+@pytest.mark.parametrize(
+    ("repository", "existing_base", "incoming_base"),
+    [
+        ("example/project", None, None),
+        ("example/project", "main", "main"),
+        (None, None, None),
+        ("example/project", None, "release"),
+    ],
+)
+@pytest.mark.parametrize("during_claim", [False, True])
+def test_coalesced_authority_evidence_wakes_failed_scan_without_restarting_progress(
+    tmp_path: Path,
+    repository: str | None,
+    existing_base: str | None,
+    incoming_base: str | None,
+    during_claim: bool,
+) -> None:
+    store = make_store(tmp_path)
+    store.enqueue_authority(AuthorityRequest(17, repository, existing_base, "installation.created"))
+    claimed = store.claim_authority("worker", 60)
+    assert claimed is not None
+    assert store.advance_authority_cursor(
+        claimed, 73, {"73": "f" * 64}, listing_next_page=4, listing_last_number=300
+    )
+    if not during_claim:
+        store.fail_authority(claimed, "worker", "old 404", 21_600, 600)
+        assert store.claim_authority("too-soon", 60) is None
+
+    with store.session() as session:
+        before = session.get(AuthorityJob, claimed.id)
+        assert before is not None
+        lease = (before.lease_owner, before.lease_until)
+    new_evidence = AuthorityRequest(17, repository, incoming_base, "push.repository_base")
+    assert store.accept_delivery("authority-wake", "push", new_evidence).accepted
+    assert not store.accept_delivery("authority-wake", "push", new_evidence).accepted
+    with store.session() as session:
+        row = session.get(AuthorityJob, claimed.id)
+        assert row is not None
+        assert row.generation == claimed.generation
+        assert row.interactive_wake_generation == claimed.interactive_wake_generation + 1
+        assert (row.lease_owner, row.lease_until) == lease
+        assert row.pull_cursor_number == 73 and row.handled_pull_fingerprints == {"73": "f" * 64}
+        assert row.listing_next_page == 4 and row.listing_last_number == 300
+        assert row.available_at.replace(tzinfo=UTC) <= utcnow() + timedelta(seconds=1)
+    if during_claim:
+        store.fail_authority(claimed, "worker", "404 after arrival", 21_600, 600)
+
+    resumed = store.claim_authority("retry-new-evidence", 60)
+    assert resumed is not None and resumed.id == claimed.id
+    assert resumed.generation == claimed.generation
+    assert resumed.listing_next_page == 4 and resumed.listing_last_number == 300
+    # The old arrival is consumed by this claim, not an indefinite hot retry.
+    store.fail_authority(resumed, "retry-new-evidence", "still 404", 21_600, 600)
+    assert not store.accept_delivery("authority-wake", "push", new_evidence).accepted
+    assert store.claim_authority("unchanged-retry", 60) is None
+    store.close()
+
+
+def test_coalesced_authority_wakeup_does_not_bypass_provider_backpressure(tmp_path: Path) -> None:
+    store = make_store(tmp_path)
+    original = authority_request()
+    store.enqueue_authority(original)
+    claimed = store.claim_authority("worker", 60)
+    assert claimed is not None
+    store.record_provider_backpressure(17, "provider reset", 600)
+    assert store.defer_authority(claimed, "worker", "provider reset", 600)
+
+    assert store.accept_delivery("authority-during-provider-limit", "push", original).accepted
+    assert store.provider_is_backpressured(17)
+    assert store.claim_authority("cannot-bypass-provider", 60) is None
+    store.close()
+
 
 def test_authority_jobs_coalesce_and_new_generation_survives_old_completion(
     tmp_path: Path,
@@ -1150,7 +1292,288 @@ def test_authority_jobs_coalesce_and_new_generation_survives_old_completion(
     assert second.reason == "label.edited"
 
 
-def test_authority_scope_blocks_only_affected_evaluations(tmp_path: Path) -> None:
+@pytest.mark.parametrize("deferred", [False, True])
+def test_narrow_push_preserves_repository_authority_progress_and_claim(
+    tmp_path: Path, deferred: bool
+) -> None:
+    store = make_store(tmp_path)
+    store.enqueue_authority(AuthorityRequest(17, "example/project", None, "member.removed"))
+    claim = store.claim_authority("worker", 60)
+    assert claim is not None
+    handled = {"20": "a" * 64}
+    assert store.advance_authority_cursor(
+        claim, 20, handled, listing_next_page=3, listing_last_number=200
+    )
+    if deferred:
+        assert store.defer_authority(claim, "worker", "quota pause", 600)
+
+    with store.session() as session:
+        before = session.get(AuthorityJob, claim.id)
+        assert before is not None
+        baseline = {
+            "generation": before.generation,
+            "pull_cursor_number": before.pull_cursor_number,
+            "handled_pull_fingerprints": dict(before.handled_pull_fingerprints),
+            "listing_next_page": before.listing_next_page,
+            "listing_last_number": before.listing_last_number,
+            "lease_owner": before.lease_owner,
+            "lease_until": before.lease_until,
+            "available_at": before.available_at,
+        }
+
+    store.enqueue_authority(
+        AuthorityRequest(17, "example/project", "release", "push.repository_base")
+    )
+
+    with store.session() as session:
+        row = session.get(AuthorityJob, claim.id)
+        assert row is not None
+        assert row.base_ref == ""
+        assert row.generation == baseline["generation"]
+        assert row.pull_cursor_number == baseline["pull_cursor_number"]
+        assert row.handled_pull_fingerprints == baseline["handled_pull_fingerprints"]
+        assert row.listing_next_page == baseline["listing_next_page"]
+        assert row.listing_last_number == baseline["listing_last_number"]
+        assert row.lease_owner == baseline["lease_owner"]
+        assert row.lease_until == baseline["lease_until"]
+        assert row.available_at.replace(tzinfo=UTC) <= utcnow() + timedelta(seconds=1)
+        assert row.pending_base_refs == {"release": "push.repository_base"}
+        assert row.pending_full_rescan is False
+    if not deferred:
+        assert store.advance_authority_cursor(claim, 21, {**handled, "21": "b" * 64})
+    else:
+        resumed = store.claim_authority("new-evidence", 60)
+        assert resumed is not None and resumed.id == claim.id
+        assert resumed.listing_next_page == 3 and resumed.listing_last_number == 200
+
+
+def test_completed_repository_authority_hands_off_deduplicated_base_refs(
+    tmp_path: Path,
+) -> None:
+    store = make_store(tmp_path)
+    store.enqueue_authority(AuthorityRequest(17, "example/project", None, "member.removed"))
+    claim = store.claim_authority("worker", 60)
+    assert claim is not None
+    assert store.advance_authority_cursor(
+        claim,
+        12,
+        {"12": "a" * 64},
+        listing_next_page=2,
+        listing_last_number=100,
+    )
+    store.enqueue_authority(AuthorityRequest(17, "example/project", "main", "push.main-first"))
+    store.enqueue_authority(AuthorityRequest(17, "example/project", "release", "push.release"))
+    store.enqueue_authority(AuthorityRequest(17, "example/project", "main", "push.main-latest"))
+
+    assert store.complete_authority(claim, "worker")
+    assert store.pending_count() == 1
+    batch = store.claim_authority("followup-worker", 60)
+    assert batch is not None and batch.base_ref is None
+    assert dict(batch.target_base_refs) == {
+        "main": "push.main-latest",
+        "release": "push.release",
+    }
+    assert store.claim_authority("duplicate-history-scan", 60) is None
+
+
+def test_repository_authority_bounds_narrow_followups_with_one_full_rescan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "extra_codeowners.database.MAX_BASE_SCOPED_AUTHORITY_JOBS_PER_REPOSITORY", 2
+    )
+    store = make_store(tmp_path)
+    store.enqueue_authority(AuthorityRequest(17, "example/project", None, "member.removed"))
+    claim = store.claim_authority("worker", 60)
+    assert claim is not None
+    assert store.advance_authority_cursor(
+        claim,
+        45,
+        {"45": "c" * 64},
+        listing_next_page=4,
+        listing_last_number=300,
+    )
+    for branch in ("main", "release", "third", "fourth"):
+        store.enqueue_authority(AuthorityRequest(17, "example/project", branch, f"push.{branch}"))
+
+    with store.session() as session:
+        row = session.get(AuthorityJob, claim.id)
+        assert row is not None
+        assert row.generation == claim.generation
+        assert row.lease_owner == claim.lease_owner
+        assert row.pull_cursor_number == 45
+        assert row.listing_next_page == 4 and row.listing_last_number == 300
+        assert row.handled_pull_fingerprints == {"45": "c" * 64}
+        assert row.pending_base_refs == {}
+        assert row.pending_full_rescan is True
+
+    assert store.complete_authority(claim, "worker")
+    assert store.pending_count() == 1
+    rescan = store.claim_authority("next-worker", 60)
+    assert rescan is not None
+    assert rescan.id == claim.id and rescan.base_ref is None
+    assert rescan.generation == claim.generation + 1
+    assert rescan.pull_cursor_number == 0
+    assert rescan.listing_next_page == 1 and rescan.listing_last_number == 0
+    assert rescan.handled_pull_fingerprints == ()
+    with store.session() as session:
+        row = session.get(AuthorityJob, claim.id)
+        assert row is not None
+        assert row.pending_base_refs == {} and row.pending_full_rescan is False
+
+
+def test_overlong_narrow_followup_saturates_without_resetting_broad_claim(
+    tmp_path: Path,
+) -> None:
+    store = make_store(tmp_path)
+    store.enqueue_authority(AuthorityRequest(17, "example/project", None, "member.removed"))
+    claim = store.claim_authority("worker", 60)
+    assert claim is not None
+    assert store.advance_authority_cursor(
+        claim, 31, {"31": "f" * 64}, listing_next_page=3, listing_last_number=200
+    )
+    branch = "b" * 256
+
+    store.enqueue_authority(AuthorityRequest(17, "example/project", branch, "push.overlong"))
+
+    with store.session() as session:
+        row = session.get(AuthorityJob, claim.id)
+        assert row is not None
+        assert row.generation == claim.generation
+        assert row.lease_owner == claim.lease_owner
+        assert row.pull_cursor_number == 31
+        assert row.handled_pull_fingerprints == {"31": "f" * 64}
+        assert row.listing_next_page == 3 and row.listing_last_number == 200
+        assert row.pending_base_refs == {}
+        assert row.pending_full_rescan is True
+
+
+def test_overlong_base_push_without_broad_row_uses_bounded_repository_scope(
+    tmp_path: Path,
+) -> None:
+    store = make_store(tmp_path)
+    store.enqueue_authority(AuthorityRequest(17, "example/project", "b" * 256, "push.overlong"))
+
+    assert store.pending_count() == 1
+    broad = store.claim_authority("worker", 60)
+    assert broad is not None
+    assert broad.repository_full_name == "example/project"
+    assert broad.base_ref is None
+
+
+def test_new_repository_authority_resets_pending_narrow_followups(
+    tmp_path: Path,
+) -> None:
+    store = make_store(tmp_path)
+    store.enqueue_authority(AuthorityRequest(17, "example/project", None, "member.removed"))
+    claim = store.claim_authority("worker", 60)
+    assert claim is not None
+    assert store.advance_authority_cursor(
+        claim, 23, {"23": "d" * 64}, listing_next_page=3, listing_last_number=200
+    )
+    store.enqueue_authority(AuthorityRequest(17, "example/project", "main", "push.repository_base"))
+    store.enqueue_authority(
+        AuthorityRequest(17, "example/project", None, "push.organization_policy")
+    )
+
+    with store.session() as session:
+        row = session.get(AuthorityJob, claim.id)
+        assert row is not None
+        assert row.generation == claim.generation
+        assert row.pull_cursor_number == 23
+        assert row.handled_pull_fingerprints == {"23": "d" * 64}
+        assert row.listing_next_page == 3 and row.listing_last_number == 200
+        assert row.lease_owner == claim.lease_owner and row.lease_until is not None
+        assert row.pending_base_refs == {} and row.pending_full_rescan is True
+        assert row.pending_rescan_reason == "push.organization_policy"
+    assert store.complete_authority(claim, claim.lease_owner)
+    rescan = store.claim_authority("rescan", 60)
+    assert rescan is not None and rescan.generation > claim.generation
+    assert rescan.reason == "push.organization_policy"
+    assert rescan.listing_next_page == 1 and rescan.listing_last_number == 0
+
+
+def test_authority_insert_race_retries_into_locked_coalescing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = make_store(tmp_path)
+    request_value = AuthorityRequest(17, "example/project", None, "member.removed")
+    store.enqueue_authority(request_value)
+    claim = store.claim_authority("worker", 60)
+    assert claim is not None
+    assert store.advance_authority_cursor(
+        claim,
+        73,
+        {"73": "f" * 64},
+        listing_next_page=4,
+        listing_last_number=300,
+    )
+    with store.session() as session:
+        row = session.get(AuthorityJob, claim.id)
+        assert row is not None
+        baseline = (row.generation, row.lease_owner, row.lease_until)
+
+    original_scalar = SQLAlchemySession.scalar
+    hidden_once = False
+
+    def hide_first_existing_authority(
+        session: SQLAlchemySession, statement: Any, *args: Any, **kwargs: Any
+    ) -> Any:
+        nonlocal hidden_once
+        descriptions = getattr(statement, "column_descriptions", ())
+        if not hidden_once and descriptions and descriptions[0].get("entity") is AuthorityJob:
+            hidden_once = True
+            return None
+        return original_scalar(session, statement, *args, **kwargs)
+
+    monkeypatch.setattr(SQLAlchemySession, "scalar", hide_first_existing_authority)
+    store.enqueue_authority(AuthorityRequest(17, "example/project", None, "team_add.received"))
+
+    assert hidden_once
+    with store.session() as session:
+        row = session.get(AuthorityJob, claim.id)
+        assert row is not None
+        assert row.pending_full_rescan is True
+        assert row.pending_rescan_reason == "team_add.received"
+        assert row.generation == baseline[0]
+        assert row.lease_owner == baseline[1] and row.lease_until == baseline[2]
+        assert row.pull_cursor_number == 73
+        assert row.listing_next_page == 4 and row.listing_last_number == 300
+        assert row.handled_pull_fingerprints == {"73": "f" * 64}
+    store.close()
+
+
+@pytest.mark.parametrize("stale_completion", [False, True])
+def test_stale_repository_claim_cannot_consume_pending_base_followups(
+    tmp_path: Path, stale_completion: bool
+) -> None:
+    store = make_store(tmp_path)
+    store.enqueue_authority(AuthorityRequest(17, "example/project", None, "member.removed"))
+    old_claim = store.claim_authority("old-worker", 60)
+    assert old_claim is not None
+    with store.session() as session:
+        row = session.get(AuthorityJob, old_claim.id)
+        assert row is not None
+        row.lease_until = utcnow() - timedelta(seconds=1)
+    current = store.claim_authority("current-worker", 60)
+    assert current is not None and current.generation > old_claim.generation
+    store.enqueue_authority(AuthorityRequest(17, "example/project", "main", "push.repository_base"))
+    if stale_completion:
+        assert not store.complete_authority(old_claim, "old-worker")
+        with store.session() as session:
+            row = session.get(AuthorityJob, current.id)
+            assert row is not None
+            assert row.pending_base_refs == {"main": "push.repository_base"}
+        assert store.complete_authority(current, "current-worker")
+    else:
+        assert store.complete_authority(current, "current-worker")
+    followup = store.claim_authority("followup-worker", 60)
+    assert followup is not None and dict(followup.target_base_refs) == {
+        "main": "push.repository_base"
+    }
+
+
+def test_branch_batch_conservatively_fences_its_repository(tmp_path: Path) -> None:
     store = make_store(tmp_path)
     store.enqueue(request())
     claimed = store.claim("worker", 60)
@@ -1159,7 +1582,7 @@ def test_authority_scope_blocks_only_affected_evaluations(tmp_path: Path) -> Non
     store.accept_delivery("base", "push", authority_request())
 
     assert store.has_blocking_authority(claimed, "main") is True
-    assert store.has_blocking_authority(claimed, "release") is False
+    assert store.has_blocking_authority(claimed, "release") is True
 
     installation_scope = AuthorityRequest(
         installation_id=17,
@@ -1301,7 +1724,7 @@ def test_security_sensitive_authority_work_preempts_older_base_pushes(tmp_path: 
     base_push = store.claim_authority("worker", 60)
     assert base_push is not None
     assert base_push.repository_full_name == "example/project"
-    assert base_push.base_ref == "main"
+    assert dict(base_push.target_base_refs) == {"main": "push.repository_base"}
 
 
 @pytest.mark.parametrize("prioritize", [True, False])
@@ -1318,6 +1741,7 @@ def test_direct_event_prioritizes_its_authority_fence(tmp_path: Path, prioritize
             1,
             "pull_request.opened",
             head_sha_hint="a" * 40,
+            base_ref_hint="main",
         ),
     )
     assert store.claim("evaluation", 60) is None
@@ -1330,6 +1754,111 @@ def test_direct_event_prioritizes_its_authority_fence(tmp_path: Path, prioritize
         assert store.claim("evaluation", 60) is not None
 
 
+@pytest.mark.parametrize(
+    ("base_ref_hint", "expected_woken"),
+    [
+        (
+            "main",
+            {
+                ("example/project", ""),
+                ("example/project", "main"),
+                ("*", ""),
+                ("*", "install-main"),
+            },
+        ),
+        (None, {("example/project", ""), ("*", ""), ("*", "install-main")}),
+    ],
+)
+def test_direct_event_wakes_only_covering_base_authority_rows(
+    tmp_path: Path,
+    base_ref_hint: str | None,
+    expected_woken: set[tuple[str, str]],
+) -> None:
+    store = make_store(tmp_path)
+    deferred_until = utcnow() + timedelta(seconds=60)
+    with store.session() as session:
+        for scope_key, base_ref in (
+            ("example/project", ""),
+            ("example/project", "main"),
+            ("example/project", "release"),
+            ("*", ""),
+            ("*", "install-main"),
+        ):
+            session.add(
+                AuthorityJob(
+                    installation_id=17,
+                    scope_key=scope_key,
+                    base_ref=base_ref,
+                    reason="direct-wake-test",
+                    requested_at=utcnow(),
+                    available_at=deferred_until,
+                )
+            )
+        before = {
+            (row.scope_key, row.base_ref): row.interactive_wake_generation
+            for row in session.query(AuthorityJob)
+        }
+
+    store.enqueue(request(base_ref_hint=base_ref_hint))
+
+    with store.session() as session:
+        rows = session.query(AuthorityJob).all()
+        woken = {
+            (row.scope_key, row.base_ref)
+            for row in rows
+            if row.interactive_wake_generation > before[(row.scope_key, row.base_ref)]
+        }
+        assert woken == expected_woken
+        for row in rows:
+            if (row.scope_key, row.base_ref) in expected_woken:
+                assert row.available_at.replace(tzinfo=UTC) <= utcnow() + timedelta(seconds=1)
+            else:
+                assert row.available_at.replace(tzinfo=UTC) > utcnow() + timedelta(seconds=55)
+
+
+def test_unknown_direct_event_wakes_shared_batch_and_waits_for_its_completion(
+    tmp_path: Path,
+) -> None:
+    store = make_store(tmp_path)
+    store.enqueue_authority(AuthorityRequest(17, "example/project", "release", "push.release"))
+    store.enqueue_authority(AuthorityRequest(17, "example/project", "main", "push.main"))
+    authority = store.claim_authority("batch-worker", 60)
+    assert authority is not None
+    assert store.defer_authority(authority, "batch-worker", "quota pause", 600)
+
+    store.enqueue(request(base_ref_hint=None))
+    assert store.claim("evaluation-worker", 60) is None
+    resumed = store.claim_authority("unknown-priority", 60)
+    assert resumed is not None and resumed.id == authority.id
+    assert dict(resumed.target_base_refs) == {"main": "push.main", "release": "push.release"}
+    assert store.authority_has_direct_waiter(resumed)
+    assert store.complete_authority(resumed, "unknown-priority")
+    claimed = store.claim("evaluation-worker", 60)
+    assert claimed is not None and claimed.base_ref_hint is None
+
+    assert store.observe_evaluation_base(claimed, "main")
+
+    with store.session() as session:
+        row = session.get(EvaluationJob, claimed.id)
+        assert row is not None and row.base_ref_hint == "main"
+    assert store.claim_authority("no-extra-history-scan", 60) is None
+
+
+def test_base_hint_coalescing_clears_stale_value_and_rejects_invalid_explicit_values(
+    tmp_path: Path,
+) -> None:
+    store = make_store(tmp_path)
+    store.enqueue(request(base_ref_hint="main"))
+    store.enqueue(request(reason="pull_request.synchronize", base_ref_hint=None))
+    with store.session() as session:
+        row = session.query(EvaluationJob).one()
+        assert row.base_ref_hint is None
+
+    for invalid in ("", "x" * 256, "bad\nref"):
+        with pytest.raises(ValueError, match="base_ref_hint"):
+            JobRequest(17, "example/project", 42, "invalid-hint", base_ref_hint=invalid)
+
+
 @pytest.mark.parametrize("reason", ["periodic_reconciliation", "installation.created"])
 def test_background_fanout_does_not_get_direct_event_priority(tmp_path: Path, reason: str) -> None:
     store = make_store(tmp_path)
@@ -1337,7 +1866,7 @@ def test_background_fanout_does_not_get_direct_event_priority(tmp_path: Path, re
     store.enqueue_authority(
         AuthorityRequest(17, "example/background", None, "installation.created")
     )
-    store.enqueue(JobRequest(17, "example/background", 1, reason))
+    store.enqueue(JobRequest(17, "example/background", 1, reason, work_class="recovery"))
     job = store.claim_authority("worker", 60)
     assert job is not None and job.repository_full_name == "example/older"
 

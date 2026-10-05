@@ -13,11 +13,11 @@ The alpha series establishes this compatibility contract:
 
 | Field | Contract |
 | --- | --- |
-| Database head | `0009_conditional_request_budget` |
-| Head change | Yes; conditional discovery accounting is now fenced across replicas. |
-| Supported source releases | `0.1.0-alpha.56` and `0.1.0-alpha.57` at `0008_recovery_api_budget`, `0.1.0-alpha.43` at `0007_reconciliation_completion`, `0.1.0-alpha.42` at `0006_webhook_trace_links`, or `0.1.0-alpha.14` at `0005_reconciliation_state_index`, after a controlled migration. |
+| Database head | `0010_authority_discovery_cursor` |
+| Head change | Yes; authority discovery now records progress across quota pauses and replica takeover. |
+| Supported source releases | `0.1.0-alpha.58` through `0.1.0-alpha.61` at `0009_conditional_request_budget`, `0.1.0-alpha.56` and `0.1.0-alpha.57` at `0008_recovery_api_budget`, `0.1.0-alpha.43` at `0007_reconciliation_completion`, `0.1.0-alpha.42` at `0006_webhook_trace_links`, or `0.1.0-alpha.14` at `0005_reconciliation_state_index`, after a controlled migration. |
 | Target application compatible before migration | No; startup requires the exact head. |
-| Required process state | Stop webhook ingress and every older worker before applying `0009_conditional_request_budget`. Suspend GitOps reconciliation and remove the HPA before scaling a Kubernetes Deployment to zero. |
+| Required process state | Stop webhook ingress and every older worker before applying `0010_authority_discovery_cursor`. Remove the HPA and either commit a zero-replica drain state or suspend GitOps reconciliation before scaling down; see the [drain procedure](../how-to/upgrade.md#drain-a-kubernetes-release). |
 | In-place database downgrade | Not supported. |
 | Rollback after head change | Restore the verified pre-migration backup. An older image rejects this head. |
 | Backup required | Yes, before deployment and before every pre-release schema adoption. |
@@ -98,7 +98,7 @@ assumed request allowance is loaded during migration.
 An already-running process does not revalidate the Alembic head before every
 claim. Stop every older ingress, worker, and reconciler before this revision
 runs. Start only the target artifact after `database check` reports
-`0009_conditional_request_budget` and validates that artifact's
+`0010_authority_discovery_cursor` and validates that artifact's
 `required-release-contract`. Readiness removes an old process from webhook
 traffic after migration, but it does not cancel work that process already
 claimed. For Kubernetes, a zero-replica Deployment is not proof of a drain
@@ -123,6 +123,65 @@ see the [cache limits](http-api.md#get-metrics). Every cached response is
 revalidated over authenticated HTTP before reuse. A `304` still
 uses a physical HTTP request and can encounter secondary limits; it is not a
 local cache hit or a quota guarantee.
+
+Revision `0010_authority_discovery_cursor` records the next listing page,
+the last listed PR number, and handled observations on an unfinished page.
+Each fingerprint covers the PR number, head, target branch, and update timestamp.
+A completed page clears those fingerprints and advances the listing position,
+even when every PR on it is closed. A quota pause or another replica resumes
+without replaying completed pages. Matching observations on the unfinished
+page are skipped; changed or reopened entries on that page are reconsidered.
+A separate numeric high-water mark is retained only for diagnostics.
+At most the unfinished page of 100 PRs may repeat. New evidence for the same
+scope retains one full follow-up pass with the latest reason instead of erasing
+the current pass. Existing jobs start at page one with no handled observations;
+their fences and retry state are retained, except where legacy branch rows
+must merge into one repository job as described below.
+An ordinary branch push does not reset a pending repository-wide scan. Instead,
+the row stores up to 100 distinct branch rechecks for one follow-up batch.
+The current batch has its own target-branch map with the same limit. Both maps
+retain the latest reason for each branch. An empty current map means every base;
+overflow and branch names longer than 255 characters use that fallback.
+All branches in a batch share one historical PR listing. Completion resets the
+same row for its follow-up batch, preserving the repository fence between passes.
+
+Migration consolidates legacy branch rows for each repository into that job.
+A pre-existing repository-wide row or more than 100 branch targets produces
+a batch covering every base. Otherwise, the target map preserves the branches
+and their reasons. A single legacy row retains its retry state; merging multiple
+rows clears their leases, resets retry attempts, and advances the generation.
+Authority row counts can therefore decrease without losing discovery coverage.
+Compare that coverage as well as other queue counts when validating a restore.
+Installation jobs use the next-page checkpoint and a nullable expected repository
+count. Their child fences and page progress commit together. A changed count
+restarts enumeration without discarding existing child progress. GitHub doesn't
+promise snapshot isolation or repository ordering; same-count membership changes
+still rely on installation events and reconciliation.
+Repository-removal corroboration has a separate membership-page checkpoint and
+expected count, initialized to page one and null. It retains the complete-list
+and fresh repository-installation evidence requirement before retirement.
+
+Evaluation jobs also gain a nullable target-branch scheduling hint. Direct
+events wake the shared repository fence even when the hint is unknown or outside
+its selected branches. Publication still uses fresh evidence and its authority
+guard. Migration initializes that hint
+and the expected count to null, the pending branch map empty, the rescan flag
+false, and the pending rescan reason to null.
+The compatibility marker moves from `8` to `9`.
+
+These records describe discovery work, not approval evidence. Workers still fetch
+current PR and check information for each remaining PR, and queued evaluations
+fetch current policy before publishing their result. An invalid or failed page
+cannot advance that page's checkpoint; completed earlier pages remain recorded.
+The authority fence stays active until the listing reaches its end. Discovery
+enumerates open and closed PRs in creation order. This costs more requests for
+repositories with a large closed history, but avoids pagination shifts caused
+by updates or closing a PR. REST does not provide snapshot isolation; direct
+events and periodic reconciliation handle later changes to completed pages.
+
+The revision also records an interactive wake counter. Failure backoff preserves
+an immediate retry when a direct event arrives during the claim. An unchanged
+persistent failure still backs off, even while the same direct event waits.
 
 Stop webhook ingress and every older worker before this revision runs. Take and
 verify a backup first. Apply the migration with the target artifact, then run

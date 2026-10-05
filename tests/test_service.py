@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -12,6 +13,7 @@ import httpx
 import pytest
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from sqlalchemy import select
 
 import extra_codeowners.service as service_module
 from extra_codeowners.api_budget import (
@@ -35,11 +37,14 @@ from extra_codeowners.database import (
     utcnow,
 )
 from extra_codeowners.github import (
+    AuthorityPullPage,
     GitHubAPIError,
     GitHubClient,
     GitHubError,
     GitHubOperationStoppedError,
     GitHubRateLimitError,
+    InstallationRepositoriesChangedError,
+    InstallationRepositoryPage,
 )
 from extra_codeowners.migrations import upgrade_database
 from extra_codeowners.models import OrganizationPolicy
@@ -70,13 +75,98 @@ class InstalledAuthorityGitHub:
     ) -> bool:
         return True
 
+    async def list_authority_pull_page(
+        self,
+        installation_id: int,
+        repository: str,
+        *,
+        page: int = 1,
+        after_number: int = 0,
+    ) -> AuthorityPullPage:
+        # Test fakes install this legacy method dynamically.
+        pulls = await self.list_open_pulls(  # type: ignore[attr-defined]
+            installation_id, repository, stable=True
+        )
+        ordered = sorted(pulls, key=lambda pull: int(pull["number"]))
+        offset = (page - 1) * 100
+        selected = [
+            pull for pull in ordered[offset : offset + 100] if int(pull["number"]) > after_number
+        ]
+        next_page = page + 1 if offset + 100 < len(ordered) else 0
+        last_number = int(selected[-1]["number"]) if selected else after_number
+        return AuthorityPullPage(selected, next_page=next_page, last_number=last_number)
+
+    async def list_installation_repository_page(
+        self,
+        installation_id: int,
+        *,
+        page: int = 1,
+        expected_total: int | None = None,
+    ) -> InstallationRepositoryPage:
+        # Preserve existing test fakes that provide only the legacy full-list API.
+        repositories = await self.list_installation_repositories(installation_id)  # type: ignore[attr-defined]
+        total_count = len(repositories)
+        if expected_total is not None and expected_total != total_count:
+            raise InstallationRepositoriesChangedError(
+                "installation repositories changed total_count between durable pages"
+            )
+        if page < 1 or page > max(1, (total_count + 99) // 100):
+            raise GitHubError("installation repository page is beyond total_count")
+        offset = (page - 1) * 100
+        selected = repositories[offset : offset + 100]
+        next_page = page + 1 if offset + len(selected) < total_count else 0
+        return InstallationRepositoryPage(selected, total_count, next_page)
+
+
+def install_authority_page_bridge(github: Any) -> None:
+    async def list_page(
+        installation_id: int,
+        repository: str,
+        *,
+        page: int = 1,
+        after_number: int = 0,
+    ) -> AuthorityPullPage:
+        pulls = await github.list_open_pulls(installation_id, repository, stable=True)
+        ordered = sorted(pulls, key=lambda pull: int(pull["number"]))
+        offset = (page - 1) * 100
+        selected = [
+            pull for pull in ordered[offset : offset + 100] if int(pull["number"]) > after_number
+        ]
+        next_page = page + 1 if offset + 100 < len(ordered) else 0
+        last_number = int(selected[-1]["number"]) if selected else after_number
+        return AuthorityPullPage(selected, next_page=next_page, last_number=last_number)
+
+    github.list_authority_pull_page = list_page
+
+    async def list_installation_page(
+        installation_id: int,
+        *,
+        page: int = 1,
+        expected_total: int | None = None,
+    ) -> InstallationRepositoryPage:
+        repositories = await github.list_installation_repositories(installation_id)
+        total_count = len(repositories)
+        if expected_total is not None and expected_total != total_count:
+            raise InstallationRepositoriesChangedError("repository membership changed")
+        offset = (page - 1) * 100
+        selected = repositories[offset : offset + 100]
+        next_page = page + 1 if offset + len(selected) < total_count else 0
+        return InstallationRepositoryPage(selected, total_count, next_page)
+
+    github.list_installation_repository_page = list_installation_page
+
 
 class EnrolledAuthorityEvaluator:
-    async def authority_followup_required(self, request: JobRequest) -> bool:
+    async def authority_followup_required(
+        self,
+        request: JobRequest,
+        *,
+        policy_present: Callable[[str], Awaitable[bool]] | None = None,
+    ) -> bool:
         return True
 
 
-class FakeGitHub:
+class FakeGitHub(InstalledAuthorityGitHub):
     def __init__(
         self,
         *,
@@ -394,6 +484,7 @@ def job(store: QueueStore) -> ClaimedJob:
             pull_number=3,
             reason="test",
             head_sha_hint=HEAD,
+            base_ref_hint="main",
         )
     )
     invalidations = 0
@@ -518,6 +609,53 @@ async def test_allowed_application_approval_satisfies_owned_lockfile(tmp_path: P
     await service.evaluate_job(job(store))
 
     assert github.checks[-1]["conclusion"] == "success"
+
+
+@pytest.mark.asyncio
+async def test_fresh_pull_base_ref_replaces_stale_scheduling_hint(tmp_path: Path) -> None:
+    store = migrated_store(f"sqlite:///{tmp_path / 'fresh-base-hint.db'}")
+    store.enqueue(
+        JobRequest(
+            installation_id=2,
+            repository_full_name="example/project",
+            pull_number=3,
+            reason="pull_request.opened",
+            head_sha_hint=HEAD,
+            base_ref_hint="release",
+        )
+    )
+    invalidation = store.claim_shared_head_invalidation("hint-setup", 60)
+    assert invalidation is not None and store.complete_shared_head_invalidation(invalidation)
+    claimed = store.claim("hint-worker", 60)
+    assert claimed is not None and claimed.base_ref_hint == "release"
+
+    # An authority event can arrive after the evaluation is claimed. The fresh
+    # base still replaces its stale hint before that new shared fence blocks it.
+    store.enqueue_authority(AuthorityRequest(2, "example/project", "main", "push.repository_base"))
+    with store.session() as session:
+        authority = session.scalar(select(AuthorityJob))
+        assert authority is not None
+        authority.available_at = utcnow() + timedelta(hours=1)
+
+    service = EvaluationService(
+        settings(),
+        FakeGitHub(changed_path="uv.lock"),  # type: ignore[arg-type]
+        store,
+    )
+    with pytest.raises(AuthorityChangePendingError):
+        await service.evaluate_job(claimed)
+
+    with store.session() as session:
+        evaluation = session.get(EvaluationJob, claimed.id)
+        authority = session.get(AuthorityJob, authority.id)
+        assert evaluation is not None and evaluation.base_ref_hint == "main"
+        assert authority is not None
+        available_at = authority.available_at
+        if available_at.tzinfo is None:
+            available_at = available_at.replace(tzinfo=UTC)
+        assert available_at <= utcnow()
+    assert store.has_blocking_authority(claimed, "main")
+    assert store.has_blocking_authority(claimed, "release")
 
 
 async def _claim_recovery_job(store: QueueStore, head_sha: str) -> ClaimedJob:
@@ -2381,6 +2519,7 @@ async def test_authority_work_fans_out_open_pulls_without_blocking_evaluations(
             repository_full_name="example/project",
             pull_number=3,
             reason="pull_request.opened",
+            base_ref_hint="main",
         )
     )
     store.accept_delivery(
@@ -2398,7 +2537,7 @@ async def test_authority_work_fans_out_open_pulls_without_blocking_evaluations(
 
     class AuthorityGitHub(InstalledAuthorityGitHub):
         async def list_open_pulls(
-            self, installation_id: int, repository: str
+            self, installation_id: int, repository: str, *, stable: bool = False
         ) -> list[dict[str, Any]]:
             calls.append("authority")
             return [
@@ -2415,7 +2554,7 @@ async def test_authority_work_fans_out_open_pulls_without_blocking_evaluations(
         async def evaluate_job(self, claimed: ClaimedJob) -> None:
             calls.append("evaluation")
 
-        async def invalidate_for_trigger(self, request: JobRequest) -> bool:
+        async def invalidate_for_trigger(self, request: JobRequest, **kwargs: Any) -> bool:
             calls.append(f"revoke-{request.pull_number}")
             stop.set()
             return False
@@ -2472,7 +2611,7 @@ async def test_worker_does_not_starve_evaluations_behind_authority_retries(
 
     class AuthorityGitHub(InstalledAuthorityGitHub):
         async def list_open_pulls(
-            self, installation_id: int, repository: str
+            self, installation_id: int, repository: str, *, stable: bool = False
         ) -> list[dict[str, Any]]:
             calls.append(f"authority:{repository}")
             raise RuntimeError("repository is temporarily unavailable")
@@ -2605,7 +2744,6 @@ async def test_installation_authority_splits_into_normalized_repository_jobs(
                 {"full_name": "Example/Project", "archived": False},
                 {"full_name": "example/archived", "archived": True},
                 {"full_name": "example/.github", "archived": False},
-                {"full_name": 7, "archived": False},
             ]
 
     class Evaluator:
@@ -2623,6 +2761,34 @@ async def test_installation_authority_splits_into_normalized_repository_jobs(
 
 
 @pytest.mark.asyncio
+async def test_invalid_repository_name_in_installation_page_fails_closed(
+    tmp_path: Path,
+) -> None:
+    store = migrated_store(f"sqlite:///{tmp_path / 'invalid-installation-page.db'}")
+    store.enqueue_authority(AuthorityRequest(2, None, None, "organization.member_removed"))
+    claimed = store.claim_authority("worker", 60)
+    assert claimed is not None
+
+    class InvalidAuthorityGitHub(InstalledAuthorityGitHub):
+        async def list_installation_repositories(
+            self, installation_id: int
+        ) -> list[dict[str, Any]]:
+            assert installation_id == 2
+            return [{"full_name": 7, "archived": False}]
+
+    class Evaluator:
+        github = InvalidAuthorityGitHub()
+
+    worker = Worker(settings(), store, Evaluator(), "worker")  # type: ignore[arg-type]
+
+    assert await worker._process_authority(claimed) == "failed"
+    assert store.pending_count() == 1
+    assert store.claim_authority("observer", 60) is None
+    with store.session() as session:
+        assert session.get(AuthorityJob, claimed.id) is not None
+
+
+@pytest.mark.asyncio
 async def test_authority_rate_limit_defers_after_bounded_batch_and_keeps_fanout(
     tmp_path: Path,
 ) -> None:
@@ -2637,7 +2803,7 @@ async def test_authority_rate_limit_defers_after_bounded_batch_and_keeps_fanout(
 
     class AuthorityGitHub(InstalledAuthorityGitHub):
         async def list_open_pulls(
-            self, installation_id: int, repository: str
+            self, installation_id: int, repository: str, *, stable: bool = False
         ) -> list[dict[str, Any]]:
             return [
                 {"number": 4, "head": {"sha": "c" * 40}, "base": {"ref": "main"}},
@@ -2648,7 +2814,7 @@ async def test_authority_rate_limit_defers_after_bounded_batch_and_keeps_fanout(
     class Evaluator(EnrolledAuthorityEvaluator):
         github = AuthorityGitHub()
 
-        async def invalidate_for_trigger(self, request: JobRequest) -> bool:
+        async def invalidate_for_trigger(self, request: JobRequest, **kwargs: Any) -> bool:
             if request.pull_number == 4:
                 return True
             raise GitHubRateLimitError(429, "PATCH", "/check-runs/1", "limited", 61)
@@ -2681,7 +2847,7 @@ async def test_authority_fanout_preserves_a_global_limit_beside_a_longer_install
 
     class AuthorityGitHub(InstalledAuthorityGitHub):
         async def list_open_pulls(
-            self, installation_id: int, repository: str
+            self, installation_id: int, repository: str, *, stable: bool = False
         ) -> list[dict[str, Any]]:
             return [
                 {"number": 4, "head": {"sha": "c" * 40}, "base": {"ref": "main"}},
@@ -2691,7 +2857,7 @@ async def test_authority_fanout_preserves_a_global_limit_beside_a_longer_install
     class Evaluator(EnrolledAuthorityEvaluator):
         github = AuthorityGitHub()
 
-        async def invalidate_for_trigger(self, request: JobRequest) -> bool:
+        async def invalidate_for_trigger(self, request: JobRequest, **kwargs: Any) -> bool:
             if request.pull_number == 4:
                 raise GitHubRateLimitError(
                     429,
@@ -2726,14 +2892,14 @@ async def test_authority_fast_revocation_failure_keeps_durable_evaluation(
 
     class AuthorityGitHub(InstalledAuthorityGitHub):
         async def list_open_pulls(
-            self, installation_id: int, repository: str
+            self, installation_id: int, repository: str, *, stable: bool = False
         ) -> list[dict[str, Any]]:
             return [{"number": 4, "head": {"sha": "c" * 40}, "base": {"ref": "main"}}]
 
     class Evaluator(EnrolledAuthorityEvaluator):
         github = AuthorityGitHub()
 
-        async def invalidate_for_trigger(self, request: JobRequest) -> bool:
+        async def invalidate_for_trigger(self, request: JobRequest, **kwargs: Any) -> bool:
             raise GitHubError("temporary Check Runs failure")
 
     worker = Worker(settings(), store, Evaluator(), "worker")  # type: ignore[arg-type]
@@ -2768,6 +2934,9 @@ async def test_absent_repository_authority_retires_only_its_generation(
     store.enqueue_authority(request)
     claimed = store.claim_authority("worker", 60)
     assert claimed is not None
+    assert store.advance_authority_cursor(
+        claimed, 7, {"7": "a" * 64}, listing_next_page=2, listing_last_number=100
+    )
     evaluator = MagicMock()
     evaluator.github.installation_includes_repository = AsyncMock(side_effect=[True, False])
     evaluator.github.get_repository = AsyncMock(
@@ -2784,10 +2953,20 @@ async def test_absent_repository_authority_retires_only_its_generation(
         return [{"full_name": "example/other", "archived": False}]
 
     evaluator.github.list_installation_repositories = AsyncMock(side_effect=membership)
+    install_authority_page_bridge(evaluator.github)
     worker = Worker(settings(), store, evaluator, "worker")
 
-    assert await worker._process_authority(claimed) == ("superseded" if superseded else "completed")
+    assert await worker._process_authority(claimed) == "completed"
     assert store.pending_count() == int(superseded)
+    if superseded:
+        with store.session() as session:
+            row = session.get(AuthorityJob, claimed.id)
+            assert row is not None
+            assert row.generation > claimed.generation
+            assert row.pull_cursor_number == 0
+            assert row.handled_pull_fingerprints == {}
+            assert row.listing_next_page == 1 and row.listing_last_number == 0
+            assert row.lease_owner is None and row.lease_until is None
     evaluator.invalidate_for_trigger.assert_not_called()
 
 
@@ -2835,6 +3014,7 @@ async def test_repository_authority_retains_fence_without_verified_absence(
         side_effect=membership if isinstance(membership, Exception) else None,
         return_value=membership,
     )
+    install_authority_page_bridge(evaluator.github)
     worker = Worker(settings(), store, evaluator, "worker")
 
     assert await worker._process_authority(claimed) == expected
@@ -2861,6 +3041,7 @@ async def test_authority_does_not_retire_other_failures(
     evaluator.github.list_open_pulls = AsyncMock(
         side_effect=GitHubAPIError(status, "GET", "/repos/example/project/pulls", "unavailable")
     )
+    install_authority_page_bridge(evaluator.github)
     worker = Worker(settings(), store, evaluator, "worker")
 
     assert await worker._process_authority(claimed) == "failed"
@@ -2896,6 +3077,7 @@ async def test_repository_addition_checks_current_archive_state_before_listing_p
         return_value=repository,
     )
     evaluator.github.list_installation_repositories = AsyncMock(return_value=[])
+    install_authority_page_bridge(evaluator.github)
     worker = Worker(settings(), store, evaluator, "worker")
 
     assert await worker._process_authority(claimed) == expected
@@ -2921,10 +3103,11 @@ async def test_repository_addition_lists_pulls_after_current_unarchived_metadata
         return_value={"full_name": "example/project", "archived": False}
     )
     evaluator.github.list_open_pulls = AsyncMock(return_value=[])
+    install_authority_page_bridge(evaluator.github)
     worker = Worker(settings(), store, evaluator, "worker")
 
     assert await worker._process_authority(claimed) == "completed"
-    evaluator.github.list_open_pulls.assert_awaited_once_with(2, "example/project")
+    evaluator.github.list_open_pulls.assert_awaited_once_with(2, "example/project", stable=True)
     assert store.pending_count() == 0
 
 
@@ -2958,6 +3141,7 @@ async def test_public_repository_authority_does_not_use_readability_as_membershi
     evaluator.github.list_open_pulls = AsyncMock(
         return_value=[{"number": 4, "head": {"sha": HEAD}}]
     )
+    install_authority_page_bridge(evaluator.github)
     worker = Worker(settings(), store, evaluator, "worker")
 
     assert await worker._process_authority(claimed) == ("failed" if listed else "completed")
@@ -3005,6 +3189,7 @@ async def test_authority_absence_requires_fresh_app_membership_agreement(
     evaluator.github.installation_includes_repository = AsyncMock(
         side_effect=[True, lookup],
     )
+    install_authority_page_bridge(evaluator.github)
     worker = Worker(settings(), store, evaluator, "worker")
 
     assert await worker._process_authority(claimed) == expected
@@ -3036,7 +3221,7 @@ async def test_authority_followup_uses_recovery_without_downgrading_direct_event
         return_value=[{"number": 4, "head": {"sha": HEAD}}]
     )
 
-    async def revoke(request: JobRequest) -> bool:
+    async def revoke(request: JobRequest, **kwargs: Any) -> bool:
         assert request.work_class == "interactive"
         assert REQUEST_LANE.get() == "authority"
         if direct_arrival == "during":
@@ -3045,6 +3230,7 @@ async def test_authority_followup_uses_recovery_without_downgrading_direct_event
 
     evaluator.invalidate_for_trigger = AsyncMock(side_effect=revoke)
     evaluator.authority_followup_required = AsyncMock(return_value=True)
+    install_authority_page_bridge(evaluator.github)
     worker = Worker(settings(), store, evaluator, "worker")
     with request_lane("authority"):
         assert await worker._process_authority(claimed) == "completed"
@@ -3086,6 +3272,7 @@ async def test_failed_revocation_promotion_cannot_complete_authority_work(
         original(request)
 
     monkeypatch.setattr(store, "enqueue", enqueue)
+    install_authority_page_bridge(evaluator.github)
     worker = Worker(settings(), store, evaluator, "worker")
     assert await worker._process_authority(claimed) == (
         "rate_limited" if rate_limited else "failed"
@@ -3132,7 +3319,7 @@ async def test_malformed_authority_fanout_remains_pending_fail_closed(tmp_path: 
 
     class AuthorityGitHub(InstalledAuthorityGitHub):
         async def list_open_pulls(
-            self, installation_id: int, repository: str
+            self, installation_id: int, repository: str, *, stable: bool = False
         ) -> list[dict[str, Any]]:
             return [{"number": True, "head": {"sha": "c" * 40}, "base": {"ref": "main"}}]
 
@@ -3248,6 +3435,47 @@ async def test_authority_failure_automatically_retries_until_prior_success_is_re
 
     assert "in_progress" in [check["status"] for check in github.checks[1:]]
     assert store.dead_count() == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure_kind", ["api", "generic"])
+async def test_authority_failure_after_direct_event_keeps_fresh_wakeup(
+    tmp_path: Path, failure_kind: str
+) -> None:
+    store = migrated_store(f"sqlite:///{tmp_path / f'autority-wakeup-{failure_kind}.db'}")
+    store.enqueue_authority(AuthorityRequest(2, "example/project", None, "member.removed"))
+    claimed = store.claim_authority("worker", 60)
+    assert claimed is not None
+    github = FakeGitHub(changed_path="uv.lock")
+    direct = JobRequest(2, "example/project", 4, "pull_request.opened", HEAD)
+    error = (
+        GitHubAPIError(500, "GET", "/repos/example/project/pulls", "temporary failure")
+        if failure_kind == "api"
+        else RuntimeError("temporary failure")
+    )
+
+    async def fail_after_direct_arrival(*_args: Any, **_kwargs: Any) -> AuthorityPullPage:
+        assert store.accept_delivery("direct-during-failure", "pull_request", direct).accepted
+        raise error
+
+    github.list_authority_pull_page = AsyncMock(  # type: ignore[method-assign]
+        side_effect=fail_after_direct_arrival
+    )
+    worker = Worker(
+        settings().model_copy(update={"worker_retry_max_seconds": 60}),
+        store,
+        EvaluationService(settings(), github, store),  # type: ignore[arg-type]
+        "worker",
+    )
+
+    assert await worker._process_authority(claimed) == "failed"
+    with store.session() as session:
+        row = session.get(AuthorityJob, claimed.id)
+        assert row is not None
+        assert row.interactive_wake_generation > claimed.interactive_wake_generation
+        assert row.available_at.replace(tzinfo=UTC) <= utcnow() + timedelta(seconds=1)
+    retry = store.claim_authority("second-replica", 60)
+    assert retry is not None
 
 
 @pytest.mark.asyncio

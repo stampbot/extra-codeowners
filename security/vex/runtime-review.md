@@ -1,15 +1,44 @@
 # Runtime vulnerability review
 
-The eighteen CVEs blocking the September 14, 2026 image scans are not reachable through
+## Current runtime: October 5, 2026
+
+The pinned Python 3.14.8 image includes Debian's fixes for the nineteen findings
+previously marked `not_affected`. Those statements now say `fixed`, with the
+package versions and Debian 13.7 identities found in the new image. The VEX
+also retains the earlier OpenSSL fixes and records four September OpenSSL
+findings fixed by `3.5.7-1~deb13u3`.
+
+PyJWT is updated to 2.15.1 and urllib3 to 2.8.0. These are locked package updates,
+not exclusions. The Dockerfile still installs the locked graph without building
+dependencies or upgrading Debian packages at build time.
+
+One fixable High finding remains in the base: PCRE2
+[`CVE-2026-103111`](https://github.com/PCRE2Project/pcre2/security/advisories/GHSA-r9hj-j2rw-4q3m).
+It requires the PCRE2 JIT API. Policy matching uses Python `re`; the service
+doesn't call that API or load the named Debian library. The amd64 native
+dependency graph was checked again after the update, and an import check
+confirmed that its loaded libraries contain no PCRE2. ARM64 is checked
+statically using the pinned base and checksum-verified wheels from `uv.lock`.
+Its psycopg wheel uses a private PCRE2 library through private SELinux code,
+which imports ordinary matching functions rather than JIT APIs.
+
+The `not_affected` statement names only Debian's `libpcre2-8-0`
+`10.46-1~deb13u2` on amd64 and arm64. It doesn't exempt wheel-bundled libraries,
+custom FFI, native plugins, or arbitrary programs run inside the container.
+Other scanner findings remain visible in the unfiltered release inventories.
+
+## Historical assessment: September 14, 2026
+
+The eighteen CVEs blocking the September 14, 2026 image scans were not reachable through
 the shipped service. The final glibc assessment required a native caller review,
 described below. All eighteen now have `not_affected` statements; this does not
 mean the underlying packages are patched or that every scanner finding was
 assessed. A September 19 addition covers one further PCRE2 finding, bringing
-the total to nineteen `not_affected` statements.
+the total to nineteen `not_affected` statements for that older runtime.
 
-The [OpenVEX file](runtime.openvex.json) contains the individual CVEs, exact
-package URLs, explanations, and Debian advisory links. It also retains the two
-existing OpenSSL `fixed` statements. This review covers fixable High/Critical
+The release's OpenVEX file contained the individual CVEs, exact
+package URLs, explanations, and Debian advisory links. It also retained the two
+existing OpenSSL `fixed` statements. This historical review covers fixable High/Critical
 findings from the September 14 scans, not every item in the raw inventory.
 
 ## Images examined
@@ -155,6 +184,19 @@ The authority discovery change skips duplicate jobs after checking enrollment
 through the existing GitHub client. It uses the same Python validation and
 database queue methods, with no new native calls or dependencies. The existing
 reachability assessments therefore still apply.
+
+The October 4 authority budget change shares branch and policy reads within a
+repository attempt and schedules background discovery against the existing
+quota reserve. Its database changes use ordinary SQLAlchemy `EXISTS`, `CASE`,
+and row updates to preserve direct-event wakeups. It adds no SQLite FTS tables,
+`MATCH` queries, extension loading, subprocesses, FFI, or native format-string
+calls. Dependencies and image inputs are unchanged, so the package-specific
+assessments above still apply.
+
+The authority cursor migration adds one integer column and backfills it through
+SQLAlchemy. Discovery checkpoints use ordinary row updates. Sharing the policy
+observation during check invalidation changes only which existing Python API
+reads are repeated; neither change adds a native input path.
 
 These conclusions apply to the shipped service's behavior, including its SQLite
 backend. They do not cover arbitrary commands, custom Python code, native

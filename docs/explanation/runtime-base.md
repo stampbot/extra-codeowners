@@ -105,17 +105,10 @@ complete vulnerability inventories, a fixable High/Critical gate, recurring
 cold builds, and release attestations. The JSON inventories include findings
 that the blocking check excludes through `.grype.yaml` or VEX.
 
-The policy has one scoped exception. Grype reports CVE-2026-15308 as fixable
-for the CPython 3.14 binary because Python 3.15 contains a fix. Moving to an
-incompatible Python line isn't a routine patch, so the gate suppresses that
-CVE only for the current CPython binary package version. The full inventory
-still records it. Other fixable High and Critical findings stop the build unless
-a matching reviewed VEX statement marks them `not_affected` or `fixed`.
-
-A Python base update stops matching the exception. CI then requires a
-maintainer to read the new report and remove or renew the rule for that exact
-patch version. A regression test keeps the version in `.grype.yaml` tied to
-the Dockerfile.
+The current `.grype.yaml` has no ignore rules. The October runtime scan no
+longer reports CVE-2026-15308 for CPython, so the old package-version exception
+has been removed. Fixable High and Critical findings stop the build unless a
+matching reviewed VEX statement marks them `not_affected` or `fixed`.
 
 The project also has a reviewed OpenVEX statement for runtime vulnerabilities,
 including those whose affected code is not reachable through the service. The

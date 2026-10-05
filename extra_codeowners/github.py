@@ -294,6 +294,10 @@ class GitHubError(RuntimeError):
     """Base class for GitHub API failures."""
 
 
+class InstallationRepositoriesChangedError(GitHubError):
+    """The installation membership count changed between durable listing pages."""
+
+
 class GitHubOperationStoppedError(GitHubError):
     """The caller requested a stop between GitHub API operations."""
 
@@ -359,6 +363,24 @@ class _BoundedJsonResponse:
     retry_after: str | None
     rate_limit_remaining: str | None
     rate_limit_reset: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class AuthorityPullPage:
+    """One validated page of pull requests for authority discovery."""
+
+    pulls: list[dict[str, Any]]
+    next_page: int
+    last_number: int
+
+
+@dataclass(frozen=True, slots=True)
+class InstallationRepositoryPage:
+    """One validated page of repositories accessible to an installation."""
+
+    repositories: list[dict[str, Any]]
+    total_count: int
+    next_page: int
 
 
 class GitHubClient:
@@ -2404,60 +2426,117 @@ class GitHubClient:
         expected_total: int | None = None
         page = 1
         while True:
-            self._raise_if_stopped(stop)
-            query = {"per_page": 100, "page": page}
-            response = await self._discovery_response(
-                "/installation/repositories",
+            page_result = await self.list_installation_repository_page(
                 installation_id,
-                params=query,
+                page=page,
+                expected_total=expected_total,
                 stop=stop,
             )
-            self._raise_if_stopped(stop)
-            if not response.is_success:
-                self._raise_api_error(response, "GET", "/installation/repositories")
-            payload = response.json()
-            if not isinstance(payload, dict):
-                msg = "expected object response from GET /installation/repositories"
-                raise GitHubError(msg)
-            total_count = payload.get("total_count")
-            if isinstance(total_count, bool) or not isinstance(total_count, int) or total_count < 0:
-                msg = "installation repositories response omitted a nonnegative integer total_count"
-                raise GitHubError(msg)
-            if expected_total is None:
-                expected_total = total_count
-            elif total_count != expected_total:
-                msg = "installation repositories response changed total_count between pages"
-                raise GitHubError(msg)
-            repositories = payload.get("repositories")
-            if not isinstance(repositories, list):
-                msg = "installation repositories response omitted repositories"
-                raise GitHubError(msg)
-            for item in repositories:
-                if not isinstance(item, dict):
-                    msg = "expected object items from GET /installation/repositories"
-                    raise GitHubError(msg)
-                result.append(item)
-            if len(result) > expected_total:
-                msg = "installation repositories response exceeded total_count"
-                raise GitHubError(msg)
-            has_next = self._response_has_next_page(
-                response,
-                page,
-                len(repositories),
-                full_page_fallback=len(result) < expected_total,
-            )
-            if has_next and len(result) >= expected_total:
-                msg = "installation repositories response has a next page after total_count"
-                raise GitHubError(msg)
-            if not has_next and len(result) != expected_total:
-                msg = "installation repositories response ended before total_count"
-                raise GitHubError(msg)
-            self._remember_discovery_response(
-                "/installation/repositories", installation_id, query, response
-            )
-            if not has_next:
+            expected_total = page_result.total_count
+            result.extend(page_result.repositories)
+            if page_result.next_page == 0:
                 return result
-            page += 1
+            page = page_result.next_page
+
+    async def list_installation_repository_page(
+        self,
+        installation_id: int,
+        *,
+        page: int = 1,
+        expected_total: int | None = None,
+        stop: asyncio.Event | None = None,
+    ) -> InstallationRepositoryPage:
+        """Fetch and validate exactly one durable-resumable membership page."""
+        if isinstance(page, bool) or not isinstance(page, int) or page < 1:
+            raise ValueError("page must be a positive integer")
+        if expected_total is not None and (
+            isinstance(expected_total, bool)
+            or not isinstance(expected_total, int)
+            or expected_total < 0
+        ):
+            raise ValueError("expected_total must be a nonnegative integer or None")
+        if expected_total is not None:
+            expected_last_page = max(1, (expected_total + 99) // 100)
+            if page > expected_last_page:
+                raise GitHubError(
+                    "installation repositories response requested a page beyond total_count"
+                )
+        self._raise_if_stopped(stop)
+        query = {"per_page": 100, "page": page}
+        response = await self._discovery_response(
+            "/installation/repositories",
+            installation_id,
+            params=query,
+            stop=stop,
+        )
+        self._raise_if_stopped(stop)
+        if not response.is_success:
+            self._raise_api_error(response, "GET", "/installation/repositories")
+        payload = response.json()
+        if not isinstance(payload, dict):
+            raise GitHubError("expected object response from GET /installation/repositories")
+        total_count = payload.get("total_count")
+        if isinstance(total_count, bool) or not isinstance(total_count, int) or total_count < 0:
+            raise GitHubError(
+                "installation repositories response omitted a nonnegative integer total_count"
+            )
+        if expected_total is not None and total_count != expected_total:
+            raise InstallationRepositoriesChangedError(
+                "installation repositories changed total_count between durable pages"
+            )
+        repositories = payload.get("repositories")
+        if not isinstance(repositories, list):
+            raise GitHubError("installation repositories response omitted repositories")
+
+        offset = (page - 1) * 100
+        last_page = max(1, (total_count + 99) // 100)
+        if page > last_page:
+            raise GitHubError(
+                "installation repositories response requested a page beyond total_count"
+            )
+        expected_page_count = min(100, max(0, total_count - offset))
+        if len(repositories) != expected_page_count:
+            if page == last_page:
+                detail = "ended before total_count"
+            else:
+                detail = "page count does not match its total_count offset"
+            raise GitHubError(f"installation repositories {detail}")
+
+        seen_names: set[str] = set()
+        for item in repositories:
+            if not isinstance(item, dict):
+                raise GitHubError("expected object items from GET /installation/repositories")
+            full_name = item.get("full_name")
+            if not isinstance(full_name, str) or not _REPOSITORY_FULL_NAME_RE.fullmatch(full_name):
+                raise GitHubError("installation repository omitted a valid full_name")
+            normalized_name = full_name.casefold()
+            if normalized_name in seen_names:
+                raise GitHubError("installation repository page contains duplicate full_name")
+            seen_names.add(normalized_name)
+            if "archived" in item and type(item["archived"]) is not bool:
+                raise GitHubError("installation repository archived field must be a boolean")
+
+        expected_next_page = page + 1 if page < last_page else 0
+        has_next = self._response_has_next_page(
+            response,
+            page,
+            len(repositories),
+            full_page_fallback=expected_next_page != 0,
+        )
+        if has_next != (expected_next_page != 0):
+            if has_next:
+                detail = "has a next page after total_count"
+            else:
+                detail = "pagination links disagree with total_count"
+            raise GitHubError(f"installation repositories {detail}")
+        self._remember_discovery_response(
+            "/installation/repositories", installation_id, query, response
+        )
+        return InstallationRepositoryPage(
+            repositories=repositories,
+            total_count=total_count,
+            next_page=expected_next_page,
+        )
 
     async def list_open_pulls(
         self,
@@ -2465,14 +2544,119 @@ class GitHubClient:
         repository: str,
         *,
         stop: asyncio.Event | None = None,
+        stable: bool = False,
     ) -> list[dict[str, Any]]:
-        """List open pull requests for reconciliation."""
-        return await self._get_list(
-            f"/repos/{repository}/pulls",
-            installation_id,
-            params={"state": "open", "sort": "updated", "direction": "desc"},
-            stop=stop,
-            conditional_discovery=True,
+        """List open pull requests, optionally enumerating a stable ordered population.
+
+        Stable mode validates every pull request, including closed history,
+        while retaining only open requests. It returns after complete pagination.
+        Created-order avoids update-driven page movement, but the REST endpoint
+        does not provide a snapshot.
+        """
+        if not stable:
+            return await self._get_list(
+                f"/repos/{repository}/pulls",
+                installation_id,
+                params={"state": "open", "sort": "updated", "direction": "desc"},
+                stop=stop,
+                conditional_discovery=True,
+            )
+
+        pulls: list[dict[str, Any]] = []
+        page_number = 1
+        after_number = 0
+        while True:
+            page = await self.list_authority_pull_page(
+                installation_id,
+                repository,
+                page=page_number,
+                after_number=after_number,
+                stop=stop,
+            )
+            pulls.extend(page.pulls)
+            if page.next_page == 0:
+                return pulls
+            page_number = page.next_page
+            after_number = page.last_number
+
+    async def list_authority_pull_page(
+        self,
+        installation_id: int,
+        repository: str,
+        *,
+        page: int = 1,
+        after_number: int = 0,
+        stop: asyncio.Event | None = None,
+    ) -> AuthorityPullPage:
+        """Fetch and validate one created-order page for authority discovery."""
+        if isinstance(page, bool) or not isinstance(page, int) or page < 1:
+            raise ValueError("page must be a positive integer")
+        if isinstance(after_number, bool) or not isinstance(after_number, int) or after_number < 0:
+            raise ValueError("after_number must be a nonnegative integer")
+
+        path = f"/repos/{repository}/pulls"
+        params = {
+            "state": "all",
+            "sort": "created",
+            "direction": "asc",
+            "per_page": 100,
+            "page": page,
+        }
+        self._raise_if_stopped(stop)
+        response = await self._discovery_response(path, installation_id, params=params, stop=stop)
+        self._raise_if_stopped(stop)
+        if not response.is_success:
+            self._raise_api_error(response, "GET", path)
+        page_items = response.json()
+        if not isinstance(page_items, list):
+            raise GitHubError(f"expected list response from GET {path}")
+        if len(page_items) > 100:
+            raise GitHubError(
+                f"stable pull listing page exceeded the 100-item limit for GET {path}"
+            )
+
+        pulls: list[dict[str, Any]] = []
+        previous_number = after_number
+        for pull in page_items:
+            if not isinstance(pull, dict):
+                raise GitHubError(f"expected object items from GET {path}")
+            number = pull.get("number")
+            state = pull.get("state")
+            if not isinstance(number, int) or isinstance(number, bool) or number <= 0:
+                raise GitHubError("stable pull listing contains an invalid pull request number")
+            if number <= previous_number:
+                raise GitHubError(
+                    "stable pull listing contains duplicate or out-of-order pull request numbers"
+                )
+            if not isinstance(state, str) or state not in {"open", "closed"}:
+                raise GitHubError("stable pull listing contains an invalid pull request state")
+            updated_at = pull.get("updated_at")
+            head = pull.get("head")
+            base = pull.get("base")
+            if not isinstance(updated_at, str) or not updated_at:
+                raise GitHubError("stable pull listing contains an invalid updated_at")
+            if (
+                not isinstance(head, dict)
+                or not isinstance(head.get("sha"), str)
+                or not head["sha"]
+            ):
+                raise GitHubError("stable pull listing contains an invalid head SHA")
+            if (
+                not isinstance(base, dict)
+                or not isinstance(base.get("ref"), str)
+                or not base["ref"]
+            ):
+                raise GitHubError("stable pull listing contains an invalid base ref")
+            previous_number = number
+            if state == "open":
+                pulls.append(pull)
+
+        has_next = self._response_has_next_page(response, page, len(page_items))
+        self._remember_discovery_response(path, installation_id, params, response)
+        return AuthorityPullPage(
+            pulls=pulls,
+            next_page=page + 1 if has_next else 0,
+            last_number=previous_number,
         )
 
     async def list_commit_pulls(

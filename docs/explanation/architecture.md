@@ -179,22 +179,19 @@ revocation a prerequisite, not a best-effort side effect.
 
 ## Durable authority ordering
 
-Some changes can affect many pull requests at once. Authority work coalesces at
-three scopes:
+Some changes can affect many pull requests at once. Authority work coalesces
+by installation and repository. An installation job creates durable repository
+fences before it finishes, so one repository's retry does not delay every other
+repository. Workers claim installation work first, then repository work that
+blocks a direct event. Among the remaining jobs, a scan covering every base
+branch precedes a batch targeting selected branches.
 
-1. installation
-2. repository
-3. base ref.
-
-Workers claim the broadest scope first. An installation job splits itself into
-durable per-repository fences before it finishes, so one repository's retry
-does not delay every other repository. A repository-wide fence supersedes
-older base-ref rows.
-
-The base-ref queue is bounded. A repository may retain 100 distinct base-ref
-rows; the next one collapses them into one conservative repository job. A
-contributor can make reevaluation broader, but cannot grow that queue without
-limit or make the work disappear.
+Each repository has one discovery job. Up to 100 target branches share its PR
+listing, rather than each repeating the same closed history. More branches
+broaden the batch to cover every base. A contributor can make reevaluation
+broader, but cannot grow that queue without limit or make the work disappear.
+The shared job conservatively blocks publication for the whole repository,
+including queued PRs outside its selected branches, until discovery finishes.
 
 Repository routes are mutable names, so each job also records the
 installation's authority epoch at enqueue time. A repository rename, transfer,
@@ -319,10 +316,62 @@ GitHub's rate-limit delay still applies if promotion fails. A head discovered
 during fast revocation is queued in foreground priority, as is a new invalidation
 needed by a direct evaluation that has not finished yet.
 
-This limits duplicate evaluation work after broad events. The authority
-revocations themselves can still consume the reserve, so a large installation
-rename or policy change can still exhaust GitHub's quota. It is not a promise
-that direct events will always have capacity.
+Background authority discovery honors the recovery reserve, while identified
+revocations can spend it. PRs targeting the same branch share a branch and policy
+read within one repository attempt, including a shared failure if that read
+fails. A later attempt reads the branch again, and
+every final evaluation still fetches fresh evidence.
+
+Discovery reads open and closed PRs in creation order, one page at a time.
+It checkpoints completed pages and handled observations within an unfinished
+page. A retry can continue without replaying closed history, while changed or
+reopened entries on the unfinished page are reconsidered. Closed history adds
+listing requests. REST does not provide a snapshot, so changes to completed
+pages still rely on direct events and reconciliation.
+
+A branch push arriving during a scan records a later branch recheck instead of
+restarting that scan. Completion resets the same job for one batch of those
+branches, without removing the repository fence between passes. Each of the
+current and next batches holds up to 100 branches; overflow schedules one more
+full scan after the current one finishes.
+Repeated pushes cannot erase the current scan's progress. Repeated events for
+the same scope, including label edits, retain one full follow-up pass with the
+latest reason. They don't replace the active lease or its page checkpoint.
+
+Installation discovery also commits one page at a time. Each transaction
+creates the page's repository fences and advances the installation checkpoint
+together. A quota pause or replica takeover resumes at the next page. A changed
+repository count restarts enumeration because the population has changed;
+existing child fences keep their progress. The repository endpoint doesn't
+provide a snapshot or promise an ordering, so same-count membership changes
+still rely on installation events and reconciliation.
+
+A repository that appears to have lost installation access needs a complete
+membership listing and a fresh repository-installation lookup before its fence
+can retire. That corroborating listing has its own page checkpoint, separate
+from PR discovery, so a quota pause doesn't replay its completed prefix.
+
+A reserve pause retains the repository fence without promoting unenrolled PRs
+to foreground work or imposing provider backpressure. A direct webhook or
+promoted revocation retry wakes its installation-wide and shared repository
+fences. The repository batch wakes even if the PR's base hint is unknown or
+outside its selected branches, because it blocks publication for that repository.
+A persisted base-branch hint controls scheduling, not authorization;
+publication always checks the fresh base branch. Those attempts can use the reserve to clear
+the fence before evaluation publishes. The wakeup and deferral check use the
+shared database, so a webhook arriving during a pause cannot lose its wakeup
+when another replica finishes deferring the fence.
+New authority evidence wakes a delayed scan without resetting its progress or
+stealing an active lease. A direct event or authority change arriving during a
+failed attempt also preserves an immediate retry.
+Without another arrival, persistent errors still back off.
+
+Urgent discovery for a large repository and many required revocations can still
+consume the reserve. GitHub's limits apply to all work; direct events are not
+guaranteed capacity after quota is exhausted.
+An exhausted installation waits until its recorded quota reset even when a
+direct waiter remains queued; the waiter cannot force an immediate retry with
+no requests left.
 
 The same singleton lease controls pruning of delivery IDs and old shared-head
 rows. A shared-head row is eligible only after its latest generation was

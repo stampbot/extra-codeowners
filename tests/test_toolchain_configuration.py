@@ -258,30 +258,14 @@ def test_debian_container_uses_only_locked_binary_dependencies() -> None:
     assert "psycopg-c" not in packages
 
 
-def test_grype_policy_has_one_scoped_python_line_exception() -> None:
+def test_grype_policy_has_no_unreviewed_exclusions() -> None:
     policy = cast(
         dict[str, Any],
         yaml.safe_load((ROOT / ".grype.yaml").read_text(encoding="utf-8")),
     )
 
     assert set(policy) == {"ignore"}
-    rules = cast(list[dict[str, Any]], policy["ignore"])
-    assert len(rules) == 1
-    assert rules[0]["vulnerability"] == "CVE-2026-15308"
-    dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
-    python_base = re.search(
-        r"(?m)^FROM python:(?P<version>\d+\.\d+\.\d+)-slim-trixie@sha256:[0-9a-f]{64} "
-        r"AS python-base$",
-        dockerfile,
-    )
-    assert python_base is not None
-    assert rules[0]["package"] == {
-        "name": "python",
-        "version": python_base.group("version"),
-        "type": "binary",
-    }
-    assert "CPython 3.14" in rules[0]["reason"]
-    assert "Python 3.15" in rules[0]["reason"]
+    assert policy["ignore"] == []
 
 
 def test_openssl_vex_is_exact_and_evidence_backed() -> None:
@@ -443,6 +427,7 @@ def test_helm_chart_retains_hardening_without_image_specific_loader_paths() -> N
     assert "deploymentAnnotations" in schema["required"]
     assert schema["properties"]["deploymentAnnotations"] == {"$ref": "#/definitions/stringMap"}
     assert "highAvailability" in schema["required"]
+    assert schema["properties"]["replicaCount"]["minimum"] == 0
     assert schema["properties"]["highAvailability"]["properties"]["replicas"]["minimum"] == 2
     assert schema["properties"]["highAvailability"]["properties"]["minAvailable"] == {
         "type": "integer",

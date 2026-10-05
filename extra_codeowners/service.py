@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
@@ -14,7 +16,12 @@ from typing import Any, Final, Literal
 import structlog
 from pydantic import ValidationError
 
-from extra_codeowners.api_budget import RecoveryApiBudget, RecoveryBudgetDeferredError, request_lane
+from extra_codeowners.api_budget import (
+    ProviderQuotaExhaustedError,
+    RecoveryApiBudget,
+    RecoveryBudgetDeferredError,
+    request_lane,
+)
 from extra_codeowners.codeowners import CodeownersDocument, parse_codeowners
 from extra_codeowners.database import (
     AuthorityRequest,
@@ -37,6 +44,7 @@ from extra_codeowners.github import (
     GitHubError,
     GitHubOperationStoppedError,
     GitHubRateLimitError,
+    InstallationRepositoriesChangedError,
     PullRequestTooLargeError,
 )
 from extra_codeowners.metrics import (
@@ -1144,7 +1152,12 @@ class EvaluationService:
             )
         )
 
-    async def authority_followup_required(self, job: JobRequest) -> bool:
+    async def authority_followup_required(
+        self,
+        job: JobRequest,
+        *,
+        policy_present: Callable[[str], Awaitable[bool]] | None = None,
+    ) -> bool:
         """Skip duplicate evaluation only when fresh evidence proves no enrollment."""
         pull = await self.github.get_pull(
             job.installation_id, job.repository_full_name, job.pull_number
@@ -1169,6 +1182,8 @@ class EvaluationService:
             job.installation_id, job.repository_full_name, head_sha, self.settings.check_name
         ):
             return True
+        if policy_present is not None:
+            return await policy_present(base_ref)
         policy_sha = await self.github.get_branch_head(
             job.installation_id, job.repository_full_name, base_ref
         )
@@ -1183,6 +1198,8 @@ class EvaluationService:
         self,
         job: JobRequest,
         shared_head_generation: int | None = None,
+        *,
+        policy_present: Callable[[str], Awaitable[bool]] | None = None,
     ) -> bool:
         """Report whether the fast path reset a check or queued a newer live head."""
         if self.settings.is_organization_config_repository(job.repository_full_name):
@@ -1218,6 +1235,7 @@ class EvaluationService:
                     reason="head_changed_before_fast_invalidation",
                     head_sha_hint=head_sha,
                     work_class=job.work_class,
+                    base_ref_hint=base_ref if len(base_ref) <= 255 else None,
                 ),
             )
             live_head_queued = True
@@ -1242,15 +1260,19 @@ class EvaluationService:
                 if check_run_id is None:
                     if pull_state != "open" or head_sha != accepted_head:
                         return live_head_queued
-                    policy_sha = await self.github.get_branch_head(
-                        job.installation_id, job.repository_full_name, base_ref
-                    )
-                    repository_text = await self._repository_policy_text(
-                        job.installation_id,
-                        job.repository_full_name,
-                        policy_sha,
-                    )
-                    if repository_text is None:
+                    if policy_present is not None:
+                        enrolled = await policy_present(base_ref)
+                    else:
+                        policy_sha = await self.github.get_branch_head(
+                            job.installation_id, job.repository_full_name, base_ref
+                        )
+                        enrolled = (
+                            await self._repository_policy_text(
+                                job.installation_id, job.repository_full_name, policy_sha
+                            )
+                            is not None
+                        )
+                    if not enrolled:
                         return live_head_queued
                 # The GitHub lookup can outlive this delivery generation. Do
                 # not let an old handler reset a newer completed result.
@@ -1303,15 +1325,19 @@ class EvaluationService:
             self.settings.check_name,
         )
         if not managed_check:
-            policy_sha = await self.github.get_branch_head(
-                job.installation_id, job.repository_full_name, base_ref
-            )
-            repository_text = await self._repository_policy_text(
-                job.installation_id,
-                job.repository_full_name,
-                policy_sha,
-            )
-            if repository_text is None:
+            if policy_present is not None:
+                enrolled = await policy_present(base_ref)
+            else:
+                policy_sha = await self.github.get_branch_head(
+                    job.installation_id, job.repository_full_name, base_ref
+                )
+                enrolled = (
+                    await self._repository_policy_text(
+                        job.installation_id, job.repository_full_name, policy_sha
+                    )
+                    is not None
+                )
+            if not enrolled:
                 return False
 
         details_url = pull.get("html_url") if isinstance(pull.get("html_url"), str) else None
@@ -1461,6 +1487,11 @@ class EvaluationService:
                 await self._finish_closed_pull_check(job, check_head, details_url)
                 return
 
+            # This hint only schedules the fence covering this PR. Every
+            # authorization/publication guard still uses fresh GitHub evidence.
+            if not await asyncio.to_thread(self.store.observe_evaluation_base, job, base_ref):
+                return
+
             if job.head_sha_hint is not None and job.head_sha_hint != head_sha:
                 await asyncio.to_thread(
                     self.store.enqueue_shared_head_trigger,
@@ -1471,6 +1502,7 @@ class EvaluationService:
                         reason="head_changed_before_evaluation",
                         head_sha_hint=head_sha,
                         work_class=job.work_class,
+                        base_ref_hint=base_ref if len(base_ref) <= 255 else None,
                     ),
                 )
                 return
@@ -1530,6 +1562,7 @@ class EvaluationService:
                             reason="shared_head_generation_changed",
                             head_sha_hint=head_sha,
                             work_class=job.work_class,
+                            base_ref_hint=base_ref if len(base_ref) <= 255 else None,
                         ),
                         current_generation,
                     )
@@ -1642,6 +1675,7 @@ class EvaluationService:
                         reason="pull_request_changed_during_evaluation",
                         head_sha_hint=current_head_sha,
                         work_class=job.work_class,
+                        base_ref_hint=(current_base_ref if len(current_base_ref) <= 255 else None),
                     ),
                 )
                 return
@@ -2224,11 +2258,33 @@ class Worker:
     async def _authority_repository_absent(self, job: ClaimedAuthorityJob) -> bool:
         if job.repository_full_name is None:
             raise GitHubError("repository membership check requires a repository scope")
-        repositories = _reconciliation_repositories(
-            await self.evaluator.github.list_installation_repositories(job.installation_id)
-        )
-        if any(name == job.repository_full_name for name, _archived in repositories):
-            return False
+        next_page = job.membership_next_page
+        expected_total = job.membership_expected_total
+        while next_page:
+            try:
+                page = await self.evaluator.github.list_installation_repository_page(
+                    job.installation_id, page=next_page, expected_total=expected_total
+                )
+            except InstallationRepositoriesChangedError:
+                await asyncio.to_thread(
+                    self.store.advance_authority_membership_page,
+                    job,
+                    next_page=1,
+                    expected_total=None,
+                )
+                raise
+            repositories = _reconciliation_repositories(page.repositories)
+            if any(name == job.repository_full_name for name, _archived in repositories):
+                return False
+            if not await asyncio.to_thread(
+                self.store.advance_authority_membership_page,
+                job,
+                next_page=page.next_page,
+                expected_total=page.total_count,
+            ):
+                raise GitHubError("repository membership corroboration claim was superseded")
+            next_page = page.next_page
+            expected_total = page.total_count
         if await self.evaluator.github.installation_includes_repository(
             job.installation_id, job.repository_full_name, refresh=True
         ):
@@ -2243,31 +2299,58 @@ class Worker:
         return True
 
     async def _execute_authority(self, job: ClaimedAuthorityJob) -> None:
+        # A fence blocking a direct event or promoted revocation retry may use
+        # the reserve. Recheck the durable queue on every attempt and replica.
+        direct = await asyncio.to_thread(self.store.authority_has_direct_waiter, job)
+        with request_lane("authority" if direct else "recovery"):
+            await self._discover_authority(job)
+
+    async def _discover_authority(self, job: ClaimedAuthorityJob) -> None:
         if job.repository_full_name is None:
-            repositories = await self.evaluator.github.list_installation_repositories(
-                job.installation_id
-            )
-            # Split broad work into independently retryable repository fences.
-            # The installation row continues to block every publication until
-            # all repository rows have been durably created.
-            for repository in repositories:
-                full_name = repository.get("full_name")
-                if not isinstance(full_name, str) or repository.get("archived") is True:
-                    continue
-                if self.settings.is_organization_config_repository(full_name):
-                    continue
-                await asyncio.to_thread(
-                    self.store.enqueue_authority,
-                    AuthorityRequest(
-                        installation_id=job.installation_id,
-                        repository_full_name=full_name,
-                        base_ref=None,
-                        reason=job.reason,
-                    ),
+            next_page = job.listing_next_page
+            expected_total = job.listing_expected_total
+            while next_page:
+                try:
+                    installation_page = (
+                        await self.evaluator.github.list_installation_repository_page(
+                            job.installation_id, page=next_page, expected_total=expected_total
+                        )
+                    )
+                except InstallationRepositoriesChangedError:
+                    # A changed population needs a new enumeration, not a
+                    # permanent retry against an obsolete total. Existing child
+                    # fences remain blocking and retain their own progress.
+                    await asyncio.to_thread(
+                        self.store.advance_installation_authority_page,
+                        job,
+                        [],
+                        next_page=1,
+                        expected_total=None,
+                    )
+                    raise
+                children = [
+                    AuthorityRequest(job.installation_id, full_name, None, job.reason)
+                    for full_name, archived in _reconciliation_repositories(
+                        installation_page.repositories
+                    )
+                    if not archived
+                    and not self.settings.is_organization_config_repository(full_name)
+                ]
+                # Children and parent progress commit together. A crash can
+                # replay the HTTP page, but cannot replay its committed children.
+                current = await asyncio.to_thread(
+                    self.store.advance_installation_authority_page,
+                    job,
+                    children,
+                    next_page=installation_page.next_page,
+                    expected_total=installation_page.total_count,
                 )
+                if not current:
+                    return
+                next_page = installation_page.next_page
+                expected_total = installation_page.total_count
             return
 
-        requests: list[JobRequest] = []
         full_name = job.repository_full_name
         try:
             # Public repositories can remain readable outside the installation.
@@ -2292,7 +2375,6 @@ class Worker:
                         generation=job.generation,
                     )
                     return
-            pulls = await self.evaluator.github.list_open_pulls(job.installation_id, full_name)
         except GitHubAPIError as error:
             if error.status_code not in {301, 308, 404, 410}:
                 raise
@@ -2303,30 +2385,37 @@ class Worker:
             if not await self._authority_repository_absent(job):
                 raise
             return
-        for pull in pulls:
-            number = pull.get("number")
-            head = pull.get("head")
-            base = pull.get("base")
-            if not isinstance(number, int) or isinstance(number, bool):
-                raise GitHubError("open pull response omitted its number")
-            if not isinstance(head, dict) or not isinstance(head.get("sha"), str):
-                raise GitHubError("open pull response omitted its head SHA")
-            if job.base_ref is not None:
-                if not isinstance(base, dict) or not isinstance(base.get("ref"), str):
-                    raise GitHubError("open pull response omitted its base ref")
-                if base["ref"] != job.base_ref:
-                    continue
-            request = JobRequest(
-                installation_id=job.installation_id,
-                repository_full_name=full_name,
-                pull_number=number,
-                reason=job.reason,
-                head_sha_hint=str(head["sha"]),
-                work_class="recovery",
-            )
-            requests.append(request)
+        handled = dict(job.handled_pull_fingerprints)
+        target_base_refs = dict(job.target_base_refs)
 
         semaphore = asyncio.Semaphore(self.settings.authority_fanout_concurrency)
+        policies: dict[str, bool] = {}
+        policy_errors: dict[str, Exception] = {}
+        policy_locks: dict[str, asyncio.Lock] = {}
+
+        async def policy_present(base_ref: str) -> bool:
+            # Share one current branch/policy observation only within this
+            # attempt. A retry or later event must observe the branch again.
+            async with policy_locks.setdefault(base_ref, asyncio.Lock()):
+                if base_ref in policy_errors:
+                    # Reusing the exception must not accumulate one traceback
+                    # per PR and make formatting the shared failure quadratic.
+                    raise policy_errors[base_ref].with_traceback(None)
+                if base_ref not in policies:
+                    try:
+                        sha = await self.evaluator.github.get_branch_head(
+                            job.installation_id, full_name, base_ref
+                        )
+                        policies[base_ref] = (
+                            await self.evaluator._repository_policy_text(
+                                job.installation_id, full_name, sha
+                            )
+                            is not None
+                        )
+                    except Exception as error:
+                        policy_errors[base_ref] = error
+                        raise
+                return policies[base_ref]
 
         async def revoke(request: JobRequest) -> None:
             async with semaphore:
@@ -2334,7 +2423,9 @@ class Worker:
                     # The leased repository authority row remains the durable
                     # retry record while enrollment is checked. Don't create
                     # two more jobs to repeat a confirmed absence of policy.
-                    if not await self.evaluator.authority_followup_required(request):
+                    if not await self.evaluator.authority_followup_required(
+                        request, policy_present=policy_present
+                    ):
                         log.debug(
                             "authority_unenrolled_skipped",
                             repository=request.repository_full_name,
@@ -2344,9 +2435,15 @@ class Worker:
                     # Queue before revocation: it may discover and queue a
                     # newer head, which this listed-head request must not replace.
                     await asyncio.to_thread(self.store.enqueue, request)
-                    await self.evaluator.invalidate_for_trigger(
-                        replace(request, work_class="interactive")
-                    )
+                    with request_lane("authority"):
+                        await self.evaluator.invalidate_for_trigger(
+                            replace(request, work_class="interactive"),
+                            policy_present=policy_present,
+                        )
+                except RecoveryBudgetDeferredError:
+                    # The repository fence is the retry record. A local pause
+                    # is not evidence of failed revocation or provider backoff.
+                    raise
                 except GitHubRateLimitError:
                     try:
                         await asyncio.to_thread(
@@ -2373,11 +2470,91 @@ class Worker:
                         reason=job.reason,
                     )
 
-        for offset in range(0, len(requests), 100):
+        next_page = job.listing_next_page
+        last_number = job.listing_last_number
+        completed_number = job.pull_cursor_number
+        while next_page:
+            try:
+                page = await self.evaluator.github.list_authority_pull_page(
+                    job.installation_id, full_name, page=next_page, after_number=last_number
+                )
+            except GitHubAPIError as error:
+                if error.status_code not in {301, 308, 404, 410}:
+                    raise
+                if not await self._authority_repository_absent(job):
+                    raise
+                return
+
+            requests: list[JobRequest] = []
+            observations: dict[int, str] = {}
+            for pull in page.pulls:
+                number = pull.get("number")
+                head = pull.get("head")
+                base = pull.get("base")
+                if not isinstance(number, int) or isinstance(number, bool):
+                    raise GitHubError("open pull response omitted its number")
+                if not isinstance(head, dict) or not isinstance(head.get("sha"), str):
+                    raise GitHubError("open pull response omitted its head SHA")
+                if job.base_ref is not None or target_base_refs:
+                    if not isinstance(base, dict) or not isinstance(base.get("ref"), str):
+                        raise GitHubError("open pull response omitted its base ref")
+                    if job.base_ref is not None and base["ref"] != job.base_ref:
+                        continue
+                    if target_base_refs and base["ref"] not in target_base_refs:
+                        continue
+                observations[number] = hashlib.sha256(
+                    json.dumps(
+                        [
+                            number,
+                            head["sha"],
+                            base.get("ref") if isinstance(base, dict) else None,
+                            pull.get("updated_at"),
+                        ],
+                        separators=(",", ":"),
+                    ).encode()
+                ).hexdigest()
+                if handled.get(str(number)) == observations[number]:
+                    continue
+                requests.append(
+                    JobRequest(
+                        installation_id=job.installation_id,
+                        repository_full_name=full_name,
+                        pull_number=number,
+                        reason=(
+                            target_base_refs.get(base["ref"], job.reason)
+                            if target_base_refs and isinstance(base, dict)
+                            else job.reason
+                        ),
+                        head_sha_hint=str(head["sha"]),
+                        work_class="recovery",
+                        base_ref_hint=(
+                            base["ref"]
+                            if isinstance(base, dict)
+                            and isinstance(base.get("ref"), str)
+                            and 0 < len(base["ref"]) <= 255
+                            else None
+                        ),
+                    )
+                )
+            observed_keys = {str(number) for number in observations}
+            handled = {key: value for key, value in handled.items() if key in observed_keys}
+            batch = sorted(requests, key=lambda request: request.pull_number)
             outcomes = await asyncio.gather(
-                *(revoke(request) for request in requests[offset : offset + 100]),
+                *(revoke(request) for request in batch),
                 return_exceptions=True,
             )
+            # Only checkpoint the successful contiguous prefix: later tasks
+            # can finish first, but must never hide an earlier deferred PR.
+            prefix_number = 0
+            for request, outcome in zip(batch, outcomes, strict=True):
+                if isinstance(outcome, BaseException):
+                    break
+                prefix_number = request.pull_number
+                handled[str(request.pull_number)] = observations[request.pull_number]
+            if prefix_number and not await asyncio.to_thread(
+                self.store.advance_authority_cursor, job, prefix_number, handled
+            ):
+                raise GitHubError("authority discovery lost its claim before checkpointing")
             rate_limits = [
                 outcome for outcome in outcomes if isinstance(outcome, GitHubRateLimitError)
             ]
@@ -2402,6 +2579,23 @@ class Worker:
                 if isinstance(outcome, BaseException):
                     raise outcome
 
+            completed_number = max(completed_number, prefix_number)
+            # Every record on this page was validated before any work ran, and
+            # all required work is now handled or durably handed off. Even an
+            # all-closed page must checkpoint so history can span quota windows.
+            if not await asyncio.to_thread(
+                self.store.advance_authority_cursor,
+                job,
+                completed_number,
+                {},
+                listing_next_page=page.next_page,
+                listing_last_number=page.last_number,
+            ):
+                raise GitHubError("authority discovery lost its claim before page checkpointing")
+            handled.clear()
+            next_page = page.next_page
+            last_number = page.last_number
+
     async def _process_authority(
         self,
         job: ClaimedAuthorityJob,
@@ -2415,6 +2609,23 @@ class Worker:
         )
         try:
             await self._execute_authority(job)
+        except RecoveryBudgetDeferredError as error:
+            await asyncio.to_thread(
+                self.store.defer_authority,
+                job,
+                owner,
+                str(error),
+                error.retry_after_seconds,
+                preserve_direct_wakeup=not isinstance(error, ProviderQuotaExhaustedError),
+            )
+            log.info(
+                "authority_discovery_deferred_for_recovery_budget",
+                installation_id=job.installation_id,
+                scope=job.repository_full_name or "installation",
+                retry_after_seconds=error.retry_after_seconds,
+                provider_quota_exhausted=isinstance(error, ProviderQuotaExhaustedError),
+            )
+            return "budget_deferred"
         except GitHubRateLimitError as error:
             await asyncio.to_thread(
                 self.store.record_provider_backpressure,
@@ -2428,6 +2639,14 @@ class Worker:
                 owner,
                 str(error),
                 error.retry_after_seconds,
+            )
+            log.info(
+                "authority_discovery_deferred_for_provider_rate_limit",
+                installation_id=job.installation_id,
+                scope=job.repository_full_name or "installation",
+                retry_after_seconds=error.retry_after_seconds,
+                global_scope=error.global_scope,
+                provider_quota_exhausted=isinstance(error.__cause__, ProviderQuotaExhaustedError),
             )
             return "rate_limited"
         except asyncio.CancelledError:
@@ -3062,6 +3281,11 @@ class Reconciler:
                                 head_sha_hint=head_sha,
                                 work_class="recovery",
                                 observed_at=observed_at,
+                                base_ref_hint=(
+                                    base_ref
+                                    if isinstance(base_ref, str) and 0 < len(base_ref) <= 255
+                                    else None
+                                ),
                             ),
                             self.settings.reconcile_recheck_seconds,
                         )

@@ -23,6 +23,19 @@ helm lint charts/extra-codeowners
 
 helm template extra-codeowners charts/extra-codeowners >"${output}/default.yaml"
 helm template extra-codeowners charts/extra-codeowners \
+  --set replicaCount=0 \
+  --set highAvailability.enabled=false \
+  --set autoscaling.enabled=false \
+  --set podDisruptionBudget.enabled=false \
+  --set migrations.enabled=false \
+  >"${output}/drained.yaml"
+grep -Fxq '  replicas: 0' "${output}/drained.yaml"
+if grep -Eq '^kind: (HorizontalPodAutoscaler|PodDisruptionBudget|Job)$' \
+  "${output}/drained.yaml"; then
+  printf 'Drained release must omit autoscaling, disruption budget, and migration.\n' >&2
+  exit 1
+fi
+helm template extra-codeowners charts/extra-codeowners \
   --set monitoring.serviceMonitor.enabled=true \
   >"${output}/service-monitor-default.yaml"
 helm template extra-codeowners charts/extra-codeowners \

@@ -99,7 +99,7 @@ Authority work is claimed from broadest scope to narrowest:
 2. Repository-wide work.
 3. Base-specific push work.
 
-Installation-wide work first creates durable repository fences. A repository-wide fence replaces older base-specific rows for the same repository. If one installation and repository would accumulate a 101st distinct base ref, all of those rows collapse into one conservative repository-wide row.
+Installation-wide work first creates durable repository fences. Each repository has one discovery job. Up to 100 target branches share its PR listing; a 101st branch broadens that batch to every base. Pushes arriving during a scan collect in one next-pass batch without restarting the current pass. The shared job blocks publication for that repository until it finishes, including queued PRs outside the selected branches.
 
 Each repository job lists the affected open pull requests, creates or supersedes their evaluation jobs, and makes a bounded attempt to make managed checks blocking. Existing checks receive an explicit `failure` while evaluation is pending. Failed jobs stay pending and retry indefinitely with bounded backoff. Authority work cannot be abandoned safely because an earlier success may still be visible.
 
