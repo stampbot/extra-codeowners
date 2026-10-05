@@ -16,7 +16,12 @@ from typing import Any, Final, Literal
 import structlog
 from pydantic import ValidationError
 
-from extra_codeowners.api_budget import RecoveryApiBudget, RecoveryBudgetDeferredError, request_lane
+from extra_codeowners.api_budget import (
+    ProviderQuotaExhaustedError,
+    RecoveryApiBudget,
+    RecoveryBudgetDeferredError,
+    request_lane,
+)
 from extra_codeowners.codeowners import CodeownersDocument, parse_codeowners
 from extra_codeowners.database import (
     AuthorityRequest,
@@ -2604,13 +2609,14 @@ class Worker:
                 owner,
                 str(error),
                 error.retry_after_seconds,
-                preserve_direct_wakeup=True,
+                preserve_direct_wakeup=not isinstance(error, ProviderQuotaExhaustedError),
             )
             log.info(
                 "authority_discovery_deferred_for_recovery_budget",
                 installation_id=job.installation_id,
                 scope=job.repository_full_name or "installation",
                 retry_after_seconds=error.retry_after_seconds,
+                provider_quota_exhausted=isinstance(error, ProviderQuotaExhaustedError),
             )
             return "budget_deferred"
         except GitHubRateLimitError as error:

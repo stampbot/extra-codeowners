@@ -470,6 +470,9 @@ quota. Once discovery identifies a PR needing revocation, revocation can also
 use the reserve. Provider limits still stop every lane. A large repository
 blocking direct work or many required revocations can therefore exhaust quota;
 the reserve is not an unconditional latency guarantee.
+When the recorded quota reaches zero, discovery keeps the reset deadline even
+with direct work queued. The same log event sets
+`provider_quota_exhausted=true` to distinguish this from a reserve-only pause.
 
 Within the authority lane, installation-wide fences still run first. After
 that, a repository fence blocking a queued direct PR event takes priority over

@@ -499,6 +499,63 @@ async def test_direct_delivery_during_discovery_deferral_is_not_lost(tmp_path: P
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("scope", ["example/project", None])
+@pytest.mark.parametrize("arrival_during_claim", [False, True])
+async def test_exhausted_provider_quota_retains_reset_delay_with_direct_waiter(
+    tmp_path: Path, scope: str | None, arrival_during_claim: bool
+) -> None:
+    store, github, _, worker = authority_fixture(tmp_path)
+    budget = RecoveryApiBudget(store)
+    reset_at = utcnow() + timedelta(minutes=10)
+    budget.observe(2, CoreQuota(100, 0, reset_at))
+    if scope is None:
+        previous = store.claim_authority("worker", 60)
+        assert previous is not None and store.complete_authority(previous, "worker")
+        store.enqueue_authority(AuthorityRequest(2, None, None, "push.organization_policy"))
+
+    def accept_direct() -> None:
+        assert store.accept_delivery(
+            "quota-exhausted-direct",
+            "pull_request_review",
+            JobRequest(2, "example/project", 3, "review", HEAD),
+        )
+
+    if not arrival_during_claim:
+        accept_direct()
+
+    async def exhausted_request(*_args: Any, **_kwargs: Any) -> list[dict[str, Any]]:
+        if arrival_during_claim:
+            accept_direct()
+        budget.admit(2, recovery=REQUEST_LANE.get() == "recovery")
+        raise AssertionError("an exhausted provider budget must prevent the physical request")
+
+    github.list_open_pulls.side_effect = exhausted_request
+    if scope is None:
+        github.list_installation_repositories = AsyncMock(side_effect=exhausted_request)
+    claimed = store.claim_authority("worker", 60)
+    assert claimed is not None
+    assert await worker._process_authority(claimed) == "budget_deferred"
+    assert store.authority_has_direct_waiter(claimed)
+    with store.session() as session:
+        row = session.get(AuthorityJob, claimed.id)
+        assert row is not None and row.lease_owner is None and row.attempts == 0
+        deadline = row.available_at.replace(tzinfo=UTC)
+        assert deadline >= reset_at
+    for _ in range(3):
+        assert store.claim_authority("other-replica", 60) is None
+
+    # The exhausted installation cannot monopolize another replica's claims.
+    store.enqueue_authority(AuthorityRequest(3, "other/project", None, "label.edited"))
+    unrelated = store.claim_authority("other-replica", 60)
+    assert unrelated is not None and unrelated.installation_id == 3
+    with store.session() as session:
+        pending = session.scalars(select(EvaluationJob)).all()
+        assert len(pending) == 1
+        assert pending[0].last_delivery_id == "quota-exhausted-direct"
+        assert pending[0].state == "pending"
+
+
+@pytest.mark.asyncio
 async def test_identified_revocation_uses_reserved_quota(tmp_path: Path) -> None:
     store, github, _, worker = authority_fixture(tmp_path)
     github.checks.append({"status": "completed", "conclusion": "success"})

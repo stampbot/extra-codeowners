@@ -370,6 +370,9 @@ Without another arrival, persistent errors still back off.
 Urgent discovery for a large repository and many required revocations can still
 consume the reserve. GitHub's limits apply to all work; direct events are not
 guaranteed capacity after quota is exhausted.
+An exhausted installation waits until its recorded quota reset even when a
+direct waiter remains queued; the waiter cannot force an immediate retry with
+no requests left.
 
 The same singleton lease controls pruning of delivery IDs and old shared-head
 rows. A shared-head row is eligible only after its latest generation was
