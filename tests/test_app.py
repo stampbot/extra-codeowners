@@ -1051,7 +1051,8 @@ def test_authority_webhook_is_durably_queued_without_pr_fast_path(tmp_path: Path
     authority = store.claim_authority("observer", 60)
     assert authority is not None
     assert authority.repository_full_name == "example/project"
-    assert authority.base_ref == "main"
+    assert authority.base_ref is None
+    assert dict(authority.target_base_refs) == {"main": "push.repository_base"}
     assert github.checks == []
 
 
