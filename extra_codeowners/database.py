@@ -287,6 +287,9 @@ class AuthorityJob(Base):
     reason: Mapped[str] = mapped_column(String(255), nullable=False)
     generation: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     pull_cursor_number: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    handled_pull_fingerprints: Mapped[dict[str, str]] = mapped_column(
+        JSON, nullable=False, default=dict
+    )
     state: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     requested_at: Mapped[datetime] = mapped_column(
@@ -514,6 +517,7 @@ class ClaimedAuthorityJob:
     attempts: int
     lease_owner: str
     pull_cursor_number: int = 0
+    handled_pull_fingerprints: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -1656,6 +1660,7 @@ class QueueStore:
             )
         updated = session.execute(update(EvaluationJob).where(*update_conditions).values(**values))
         if getattr(updated, "rowcount", 0) == 1:
+            QueueStore._wake_authority_for_interactive(session, request)
             return
         if preserve_different_head:
             existing_id = session.scalar(select(EvaluationJob.id).where(*key))
@@ -1676,6 +1681,21 @@ class QueueStore:
                 available_at=now,
             )
         )
+        QueueStore._wake_authority_for_interactive(session, request)
+
+    @staticmethod
+    def _wake_authority_for_interactive(session: Session, request: JobRequest) -> None:
+        """Wake covering fences for direct events and internal revocation retries."""
+        if request.work_class == WORK_CLASS_INTERACTIVE:
+            session.execute(
+                update(AuthorityJob)
+                .where(
+                    AuthorityJob.installation_id == request.installation_id,
+                    AuthorityJob.scope_key.in_(("*", request.repository_full_name)),
+                    AuthorityJob.state == "pending",
+                )
+                .values(available_at=utcnow())
+            )
 
     def enqueue(self, request: JobRequest) -> None:
         """Enqueue an evaluation, fencing a known head in the same transaction.
@@ -2065,6 +2085,7 @@ class QueueStore:
             .values(
                 generation=AuthorityJob.generation + 1,
                 pull_cursor_number=0,
+                handled_pull_fingerprints={},
                 reason=request.reason,
                 requested_at=now,
                 available_at=now,
@@ -2203,21 +2224,6 @@ class QueueStore:
                                 delivery_id,
                                 shared_head_generation,
                             )
-                            if request.work_class == WORK_CLASS_INTERACTIVE:
-                                # A fresh direct event can use reserved quota
-                                # to finish its fence after background discovery
-                                # paused. Provider backpressure still blocks claims.
-                                session.execute(
-                                    update(AuthorityJob)
-                                    .where(
-                                        AuthorityJob.installation_id == request.installation_id,
-                                        AuthorityJob.scope_key.in_(
-                                            ("*", request.repository_full_name)
-                                        ),
-                                        AuthorityJob.state == "pending",
-                                    )
-                                    .values(available_at=utcnow())
-                                )
                         elif isinstance(request, AuthorityRequest):
                             if request.repository_full_name is None:
                                 self._bump_authority_epoch_in_session(
@@ -2936,12 +2942,11 @@ class QueueStore:
                 ),
                 EvaluationJob.state == "pending",
                 EvaluationJob.work_class == WORK_CLASS_INTERACTIVE,
-                EvaluationJob.last_delivery_id.is_not(None),
             )
         )
 
     def authority_has_direct_waiter(self, job: ClaimedAuthorityJob) -> bool:
-        """Whether this fence currently blocks an accepted direct PR event."""
+        """Whether this fence blocks a direct event or promoted revocation retry."""
         with self.session() as session:
             return bool(
                 session.scalar(
@@ -3020,6 +3025,7 @@ class QueueStore:
                     attempts=row.attempts,
                     lease_owner=owner,
                     pull_cursor_number=row.pull_cursor_number,
+                    handled_pull_fingerprints=tuple(row.handled_pull_fingerprints.items()),
                 )
         return None
 
@@ -3038,8 +3044,21 @@ class QueueStore:
             )
             return getattr(result, "rowcount", 0) == 1
 
-    def advance_authority_cursor(self, job: ClaimedAuthorityJob, number: int) -> bool:
-        """Checkpoint a handled prefix only while this authority claim is current."""
+    def advance_authority_cursor(
+        self,
+        job: ClaimedAuthorityJob,
+        number: int,
+        handled_pull_fingerprints: Mapping[str, str] | None = None,
+    ) -> bool:
+        """Checkpoint handled observations only while this authority claim is current."""
+        values: dict[str, Any] = {
+            "pull_cursor_number": case(
+                (AuthorityJob.pull_cursor_number < number, number),
+                else_=AuthorityJob.pull_cursor_number,
+            )
+        }
+        if handled_pull_fingerprints is not None:
+            values["handled_pull_fingerprints"] = dict(handled_pull_fingerprints)
         with self.session() as session:
             result = session.execute(
                 update(AuthorityJob)
@@ -3049,12 +3068,7 @@ class QueueStore:
                     AuthorityJob.lease_owner == job.lease_owner,
                     AuthorityJob.lease_until > utcnow(),
                 )
-                .values(
-                    pull_cursor_number=case(
-                        (AuthorityJob.pull_cursor_number < number, number),
-                        else_=AuthorityJob.pull_cursor_number,
-                    )
-                )
+                .values(**values)
             )
             return getattr(result, "rowcount", 0) == 1
 

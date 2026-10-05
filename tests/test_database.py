@@ -1337,7 +1337,7 @@ def test_background_fanout_does_not_get_direct_event_priority(tmp_path: Path, re
     store.enqueue_authority(
         AuthorityRequest(17, "example/background", None, "installation.created")
     )
-    store.enqueue(JobRequest(17, "example/background", 1, reason))
+    store.enqueue(JobRequest(17, "example/background", 1, reason, work_class="recovery"))
     job = store.claim_authority("worker", 60)
     assert job is not None and job.repository_full_name == "example/older"
 

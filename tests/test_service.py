@@ -2404,7 +2404,7 @@ async def test_authority_work_fans_out_open_pulls_without_blocking_evaluations(
 
     class AuthorityGitHub(InstalledAuthorityGitHub):
         async def list_open_pulls(
-            self, installation_id: int, repository: str
+            self, installation_id: int, repository: str, *, stable: bool = False
         ) -> list[dict[str, Any]]:
             calls.append("authority")
             return [
@@ -2478,7 +2478,7 @@ async def test_worker_does_not_starve_evaluations_behind_authority_retries(
 
     class AuthorityGitHub(InstalledAuthorityGitHub):
         async def list_open_pulls(
-            self, installation_id: int, repository: str
+            self, installation_id: int, repository: str, *, stable: bool = False
         ) -> list[dict[str, Any]]:
             calls.append(f"authority:{repository}")
             raise RuntimeError("repository is temporarily unavailable")
@@ -2643,7 +2643,7 @@ async def test_authority_rate_limit_defers_after_bounded_batch_and_keeps_fanout(
 
     class AuthorityGitHub(InstalledAuthorityGitHub):
         async def list_open_pulls(
-            self, installation_id: int, repository: str
+            self, installation_id: int, repository: str, *, stable: bool = False
         ) -> list[dict[str, Any]]:
             return [
                 {"number": 4, "head": {"sha": "c" * 40}, "base": {"ref": "main"}},
@@ -2687,7 +2687,7 @@ async def test_authority_fanout_preserves_a_global_limit_beside_a_longer_install
 
     class AuthorityGitHub(InstalledAuthorityGitHub):
         async def list_open_pulls(
-            self, installation_id: int, repository: str
+            self, installation_id: int, repository: str, *, stable: bool = False
         ) -> list[dict[str, Any]]:
             return [
                 {"number": 4, "head": {"sha": "c" * 40}, "base": {"ref": "main"}},
@@ -2732,7 +2732,7 @@ async def test_authority_fast_revocation_failure_keeps_durable_evaluation(
 
     class AuthorityGitHub(InstalledAuthorityGitHub):
         async def list_open_pulls(
-            self, installation_id: int, repository: str
+            self, installation_id: int, repository: str, *, stable: bool = False
         ) -> list[dict[str, Any]]:
             return [{"number": 4, "head": {"sha": "c" * 40}, "base": {"ref": "main"}}]
 
@@ -2930,7 +2930,7 @@ async def test_repository_addition_lists_pulls_after_current_unarchived_metadata
     worker = Worker(settings(), store, evaluator, "worker")
 
     assert await worker._process_authority(claimed) == "completed"
-    evaluator.github.list_open_pulls.assert_awaited_once_with(2, "example/project")
+    evaluator.github.list_open_pulls.assert_awaited_once_with(2, "example/project", stable=True)
     assert store.pending_count() == 0
 
 
@@ -3138,7 +3138,7 @@ async def test_malformed_authority_fanout_remains_pending_fail_closed(tmp_path: 
 
     class AuthorityGitHub(InstalledAuthorityGitHub):
         async def list_open_pulls(
-            self, installation_id: int, repository: str
+            self, installation_id: int, repository: str, *, stable: bool = False
         ) -> list[dict[str, Any]]:
             return [{"number": True, "head": {"sha": "c" * 40}, "base": {"ref": "main"}}]
 

@@ -321,12 +321,20 @@ needed by a direct evaluation that has not finished yet.
 
 Background authority discovery honors the recovery reserve, while identified
 revocations can spend it. PRs targeting the same branch share a branch and policy
-read within one repository attempt. A later attempt reads the branch again, and
+read within one repository attempt, including a shared failure if that read
+fails. A later attempt reads the branch again, and
 every final evaluation still fetches fresh evidence.
 
+Discovery lists open and closed PRs in creation order, then selects open ones.
+It records handled observations rather than skipping every PR below a numeric
+cursor. That means an older reopened or changed PR can be reconsidered after a
+quota pause. Closed history adds listing requests; REST does not provide a
+snapshot, so later changes still rely on direct events and reconciliation.
+
 A reserve pause retains the repository fence without promoting unenrolled PRs
-to foreground work or imposing provider backpressure. A direct webhook wakes
-the fences covering its repository. Those attempts can use the reserve to clear
+to foreground work or imposing provider backpressure. A direct webhook or
+promoted revocation retry wakes the fences covering its repository. Those
+attempts can use the reserve to clear
 the fence before evaluation publishes. The wakeup and deferral check use the
 shared database, so a webhook arriving during a pause cannot lose its wakeup
 when another replica finishes deferring the fence.

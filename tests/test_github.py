@@ -40,6 +40,24 @@ def token_response() -> dict[str, str]:
     }
 
 
+def pull_listing_record(
+    number: int,
+    state: str | None = "open",
+    updated_at: str | None = "now",
+    *,
+    head: bool = True,
+    base: bool = True,
+) -> dict[str, Any]:
+    record: dict[str, Any] = {"number": number, "state": state}
+    if updated_at is not None:
+        record["updated_at"] = updated_at
+    if head:
+        record["head"] = {"sha": "a" * 40}
+    if base:
+        record["base"] = {"ref": "main"}
+    return record
+
+
 def unexpected_request(request: httpx.Request) -> httpx.Response:
     raise AssertionError(f"unexpected request: {request.method} {request.url}")
 
@@ -1308,6 +1326,147 @@ async def test_reconciliation_list_endpoints_honor_short_pages_with_next_links(
         ("/repos/example/project/pulls", 1),
         ("/repos/example/project/pulls", 2),
     ]
+
+
+@pytest.mark.asyncio
+async def test_stable_pull_listing_keeps_created_order_across_state_and_update_changes(
+    private_key: str,
+) -> None:
+    requested: list[tuple[str, str, str, str]] = []
+    listing = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal listing
+        if request.url.path.endswith("/access_tokens"):
+            return httpx.Response(201, json=token_response())
+        if request.url.path != "/repos/example/project/pulls":
+            return unexpected_request(request)
+        requested.append(
+            (
+                request.url.params["state"],
+                request.url.params["sort"],
+                request.url.params["direction"],
+                request.url.params["page"],
+            )
+        )
+        page = int(request.url.params["page"])
+        if page == 1:
+            listing += 1
+        snapshots = (
+            {
+                1: [
+                    pull_listing_record(1, "closed", "2026-01-01"),
+                    pull_listing_record(2, "open", "2026-01-02"),
+                ],
+                2: [
+                    pull_listing_record(3, "open", "2026-01-03"),
+                    pull_listing_record(4, "closed", "2026-01-04"),
+                ],
+            },
+            {
+                1: [
+                    pull_listing_record(1, "open", "2026-02-01"),
+                    pull_listing_record(2, "open", "2026-02-02"),
+                ],
+                2: [
+                    pull_listing_record(3, "closed", "2026-02-03"),
+                    pull_listing_record(4, "open", "2026-02-04"),
+                ],
+            },
+        )
+        response = httpx.Response(200, json=snapshots[listing - 1][page])
+        if page == 1:
+            response.headers["Link"] = f'<{request.url.copy_set_param("page", "2")}>; rel="next"'
+        return response
+
+    client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
+    try:
+        first = await client.list_open_pulls(2, "example/project", stable=True)
+        second = await client.list_open_pulls(2, "example/project", stable=True)
+    finally:
+        await client.close()
+
+    assert [pull["number"] for pull in first] == [2, 3]
+    # PR 1 reopening and PR 4 reopening change only their state/update fields;
+    # neither can move an existing PR to another created-order page.
+    assert [pull["number"] for pull in second] == [1, 2, 4]
+    assert requested == [
+        ("all", "created", "asc", "1"),
+        ("all", "created", "asc", "2"),
+        ("all", "created", "asc", "1"),
+        ("all", "created", "asc", "2"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_stable_pull_listing_continues_after_full_closed_page_without_link(
+    private_key: str,
+) -> None:
+    pages: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/access_tokens"):
+            return httpx.Response(201, json=token_response())
+        if request.url.path != "/repos/example/project/pulls":
+            return unexpected_request(request)
+        page = int(request.url.params["page"])
+        pages.append(page)
+        return httpx.Response(
+            200,
+            json=(
+                [pull_listing_record(number, "closed") for number in range(1, 101)]
+                if page == 1
+                else [pull_listing_record(101)]
+            ),
+        )
+
+    client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
+    try:
+        pulls = await client.list_open_pulls(2, "example/project", stable=True)
+    finally:
+        await client.close()
+
+    assert pages == [1, 2]
+    assert [pull["number"] for pull in pulls] == [101]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("pulls", "message"),
+    [
+        (
+            [pull_listing_record(1), pull_listing_record(1, "closed")],
+            "duplicate",
+        ),
+        (
+            [pull_listing_record(2), pull_listing_record(1, "closed")],
+            "out-of-order",
+        ),
+        ([pull_listing_record(0)], "invalid pull request number"),
+        ([pull_listing_record(True)], "invalid pull request number"),
+        ([pull_listing_record(1, "merged")], "invalid pull request state"),
+        ([pull_listing_record(1, None)], "invalid pull request state"),
+        ([pull_listing_record(1, updated_at=None)], "invalid updated_at"),
+        ([pull_listing_record(1, head=False)], "invalid head SHA"),
+        ([pull_listing_record(1, base=False)], "invalid base ref"),
+    ],
+)
+async def test_stable_pull_listing_rejects_invalid_full_population(
+    private_key: str,
+    pulls: list[dict[str, Any]],
+    message: str,
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/access_tokens"):
+            return httpx.Response(201, json=token_response())
+        return httpx.Response(200, json=pulls)
+
+    client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
+    try:
+        with pytest.raises(GitHubError, match=message):
+            await client.list_open_pulls(2, "example/project", stable=True)
+    finally:
+        await client.close()
 
 
 @pytest.mark.asyncio

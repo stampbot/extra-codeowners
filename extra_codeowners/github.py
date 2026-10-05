@@ -7,7 +7,7 @@ import json as json_module
 import math
 import re
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -1089,6 +1089,7 @@ class GitHubClient:
         max_items: int | None = None,
         stop: asyncio.Event | None = None,
         conditional_discovery: bool = False,
+        item_filter: Callable[[dict[str, Any]], bool] | None = None,
     ) -> list[dict[str, Any]]:
         query = {**(params or {}), "per_page": 100}
         items: list[dict[str, Any]] = []
@@ -1119,7 +1120,8 @@ class GitHubClient:
                 if not isinstance(item, dict):
                     msg = f"expected object items from GET {path}"
                     raise GitHubError(msg)
-                items.append(item)
+                if item_filter is None or item_filter(item):
+                    items.append(item)
                 if max_items is not None and len(items) > max_items:
                     msg = f"GET {path} exceeded the supported {max_items}-item limit"
                     raise PullRequestTooLargeError(msg)
@@ -2465,14 +2467,67 @@ class GitHubClient:
         repository: str,
         *,
         stop: asyncio.Event | None = None,
+        stable: bool = False,
     ) -> list[dict[str, Any]]:
-        """List open pull requests for reconciliation."""
+        """List open pull requests, optionally enumerating a stable ordered population.
+
+        Stable mode validates every pull request, including closed history,
+        while retaining only open requests. It returns after complete pagination.
+        Created-order avoids update-driven page movement, but the REST endpoint
+        does not provide a snapshot.
+        """
+        if not stable:
+            return await self._get_list(
+                f"/repos/{repository}/pulls",
+                installation_id,
+                params={"state": "open", "sort": "updated", "direction": "desc"},
+                stop=stop,
+                conditional_discovery=True,
+            )
+
+        previous_number = 0
+
+        def select_open(pull: dict[str, Any]) -> bool:
+            # Validate the whole ordered population, but retain only open PRs
+            # in memory rather than collecting a repository's closed history.
+            nonlocal previous_number
+            number = pull.get("number")
+            state = pull.get("state")
+            if not isinstance(number, int) or isinstance(number, bool) or number <= 0:
+                raise GitHubError("stable pull listing contains an invalid pull request number")
+            if number <= previous_number:
+                raise GitHubError(
+                    "stable pull listing contains duplicate or out-of-order pull request numbers"
+                )
+            if not isinstance(state, str) or state not in {"open", "closed"}:
+                raise GitHubError("stable pull listing contains an invalid pull request state")
+            updated_at = pull.get("updated_at")
+            head = pull.get("head")
+            base = pull.get("base")
+            if not isinstance(updated_at, str) or not updated_at:
+                raise GitHubError("stable pull listing contains an invalid updated_at")
+            if (
+                not isinstance(head, dict)
+                or not isinstance(head.get("sha"), str)
+                or not head["sha"]
+            ):
+                raise GitHubError("stable pull listing contains an invalid head SHA")
+            if (
+                not isinstance(base, dict)
+                or not isinstance(base.get("ref"), str)
+                or not base["ref"]
+            ):
+                raise GitHubError("stable pull listing contains an invalid base ref")
+            previous_number = number
+            return state == "open"
+
         return await self._get_list(
             f"/repos/{repository}/pulls",
             installation_id,
-            params={"state": "open", "sort": "updated", "direction": "desc"},
+            params={"state": "all", "sort": "created", "direction": "asc"},
             stop=stop,
             conditional_discovery=True,
+            item_filter=select_open,
         )
 
     async def list_commit_pulls(

@@ -8,6 +8,7 @@ from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
+from sqlalchemy import select
 from test_service import BASE, HEAD, FakeGitHub, migrated_store, settings
 
 from extra_codeowners.api_budget import (
@@ -16,7 +17,15 @@ from extra_codeowners.api_budget import (
     RecoveryApiBudget,
     RecoveryBudgetDeferredError,
 )
-from extra_codeowners.database import AuthorityJob, AuthorityRequest, JobRequest, QueueStore, utcnow
+from extra_codeowners.database import (
+    AuthorityJob,
+    AuthorityRequest,
+    ClaimedAuthorityJob,
+    EvaluationJob,
+    JobRequest,
+    QueueStore,
+    utcnow,
+)
 from extra_codeowners.github import GitHubError, GitHubRateLimitError
 from extra_codeowners.service import EvaluationService, Worker
 
@@ -41,6 +50,26 @@ def authority_fixture(tmp_path: Path) -> tuple[QueueStore, Any, EvaluationServic
         AuthorityRequest(2, "example/project", None, "push.organization_policy")
     )
     return store, github, evaluator, worker
+
+
+def pull_summary(number: int, updated_at: str, *, sha: str = HEAD) -> dict[str, Any]:
+    return {
+        "number": number,
+        "head": {"sha": sha},
+        "base": {"ref": "main"},
+        "updated_at": updated_at,
+    }
+
+
+async def run_deferred_authority_attempt(store: QueueStore, worker: Worker) -> ClaimedAuthorityJob:
+    claimed = store.claim_authority(worker.owner, 60)
+    assert claimed is not None
+    assert await worker._process_authority(claimed) == "budget_deferred"
+    with store.session() as session:
+        row = session.get(AuthorityJob, claimed.id)
+        assert row is not None
+        row.available_at = utcnow() - timedelta(seconds=1)
+    return claimed
 
 
 @pytest.mark.asyncio
@@ -289,6 +318,96 @@ async def test_authority_policy_reads_are_shared_only_for_the_same_target_branch
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("failed_lookup", ["branch", "policy"])
+async def test_authority_caches_failed_policy_observation_per_attempt(
+    tmp_path: Path, failed_lookup: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("extra_codeowners.service.log.exception", lambda *_args, **_kwargs: None)
+    store, github, _, worker = authority_fixture(tmp_path)
+    github.list_open_pulls.return_value = [
+        {"number": number, "head": {"sha": f"{number:040x}"}, "base": {"ref": "main"}}
+        for number in range(1, 101)
+    ]
+    original = github.get_pull
+
+    async def distinct_pull(installation: int, repository: str, number: int) -> dict[str, Any]:
+        pull: dict[str, Any] = await original(installation, repository, number)
+        pull["head"]["sha"] = f"{number:040x}"
+        return pull
+
+    github.get_pull = AsyncMock(side_effect=distinct_pull)
+    cached_error = GitHubError(f"{failed_lookup} unavailable")
+    if failed_lookup == "branch":
+        github.get_branch_head.side_effect = [cached_error, "c" * 40]
+    else:
+        github.get_file_text.side_effect = [cached_error, None]
+
+    first = store.claim_authority("worker", 60)
+    assert first is not None
+    assert await worker._process_authority(first) == "completed"
+    assert github.get_branch_head.await_count == 1
+    assert github.get_file_text.await_count == (0 if failed_lookup == "branch" else 1)
+
+    store.enqueue_authority(AuthorityRequest(2, "example/project", "main", "push.repository_base"))
+    second = store.claim_authority("worker", 60)
+    assert second is not None
+    assert await worker._process_authority(second) == "completed"
+
+    # A failed observation is shared among same-branch pulls only within its
+    # attempt; a later attempt makes a fresh branch/policy read.
+    assert github.get_branch_head.await_count == 2
+    assert github.get_file_text.await_count == (1 if failed_lookup == "branch" else 2)
+    traceback_depth = 0
+    traceback = cached_error.__traceback__
+    while traceback is not None:
+        traceback_depth += 1
+        traceback = traceback.tb_next
+    assert traceback_depth < 30
+
+
+@pytest.mark.asyncio
+async def test_failed_revocation_promotion_without_delivery_uses_authority_reserve(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("extra_codeowners.service.log.exception", lambda *_args, **_kwargs: None)
+    store, github, _, worker = authority_fixture(tmp_path)
+    github.checks.append({"status": "completed", "conclusion": "success"})
+    github.has_reconciliation_check.return_value = True
+    github.has_check_run.return_value = True
+    github.upsert_check_run = AsyncMock(side_effect=GitHubError("reset unavailable"))
+
+    first = store.claim_authority("worker", 60)
+    assert first is not None
+    assert await worker._process_authority(first) == "completed"
+    assert github.upsert_check_run.await_count == 1
+    with store.session() as session:
+        promoted = session.scalar(select(EvaluationJob).where(EvaluationJob.pull_number == 3))
+        assert promoted is not None
+        assert promoted.work_class == "interactive"
+        assert promoted.last_delivery_id is None
+
+    # This quota allows authority work but not background recovery work. The
+    # failed-revocation row must therefore make the next authority attempt
+    # reserve-eligible even though no webhook delivery produced it.
+    budget = RecoveryApiBudget(store)
+    budget.observe(2, CoreQuota(100, 20, datetime.now(UTC) + timedelta(minutes=10)))
+    lanes: list[str] = []
+
+    async def list_with_budget(*_args: Any, **_kwargs: Any) -> list[dict[str, Any]]:
+        lanes.append(REQUEST_LANE.get())
+        budget.admit(2, recovery=REQUEST_LANE.get() == "recovery")
+        return [{"number": 3, "head": {"sha": HEAD}, "base": {"ref": "main"}}]
+
+    github.list_open_pulls.side_effect = list_with_budget
+    store.enqueue_authority(AuthorityRequest(2, "example/project", "main", "push.repository_base"))
+    resumed = store.claim_authority("worker", 60)
+    assert resumed is not None
+    assert await worker._process_authority(resumed) == "completed"
+    assert lanes == ["authority"]
+    assert not store.provider_is_backpressured(2)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("operation", ["list_open_pulls", "get_pull", "get_branch_head"])
 async def test_local_discovery_pause_keeps_fence_without_promoting_or_provider_backoff(
     tmp_path: Path, operation: str
@@ -316,7 +435,7 @@ async def test_direct_delivery_wakes_deferred_discovery_and_uses_reserved_quota(
     budget = RecoveryApiBudget(store)
     budget.observe(2, CoreQuota(100, 20, datetime.now(UTC) + timedelta(minutes=10)))
 
-    async def list_with_budget(*_args: Any) -> list[dict[str, Any]]:
+    async def list_with_budget(*_args: Any, **_kwargs: Any) -> list[dict[str, Any]]:
         budget.admit(2, recovery=REQUEST_LANE.get() == "recovery")
         return [{"number": 3, "head": {"sha": HEAD}, "base": {"ref": "main"}}]
 
@@ -362,7 +481,7 @@ async def test_direct_delivery_wakes_deferred_discovery_and_uses_reserved_quota(
 async def test_direct_delivery_during_discovery_deferral_is_not_lost(tmp_path: Path) -> None:
     store, github, _, worker = authority_fixture(tmp_path)
 
-    async def arrival_during_request(*_args: Any) -> None:
+    async def arrival_during_request(*_args: Any, **_kwargs: Any) -> None:
         store.accept_delivery(
             "during", "pull_request_review", JobRequest(2, "example/project", 3, "review", HEAD)
         )
@@ -430,7 +549,7 @@ async def test_new_enrollment_reuses_policy_during_revocation(tmp_path: Path) ->
 async def test_authority_resumes_handled_prefix_on_another_replica(tmp_path: Path) -> None:
     store, github, _, worker = authority_fixture(tmp_path)
     github.list_open_pulls.return_value = [
-        {"number": number, "head": {"sha": HEAD}, "base": {"ref": "main"}}
+        {"number": number, "head": {"sha": f"{number:040x}"}, "base": {"ref": "main"}}
         for number in range(205, 0, -1)
     ]
     original = github.get_pull
@@ -441,7 +560,9 @@ async def test_authority_resumes_handled_prefix_on_another_replica(tmp_path: Pat
         visited.append(number)
         if paused and number >= 126:
             raise RecoveryBudgetDeferredError(600)
-        return await original(installation, repository, number)  # type: ignore[no-any-return]
+        pull: dict[str, Any] = await original(installation, repository, number)
+        pull["head"]["sha"] = f"{number:040x}"
+        return pull
 
     github.get_pull = AsyncMock(side_effect=limited_pull)
     worker.owner = "first-replica"
@@ -451,12 +572,16 @@ async def test_authority_resumes_handled_prefix_on_another_replica(tmp_path: Pat
     with store.session() as session:
         row = session.get(AuthorityJob, first.id)
         assert row is not None and row.pull_cursor_number == 125
+        assert set(row.handled_pull_fingerprints) == {str(number) for number in range(1, 126)}
+        assert all(len(value) == 64 for value in row.handled_pull_fingerprints.values())
+        expected_handled = dict(row.handled_pull_fingerprints)
         row.available_at = utcnow() - timedelta(seconds=1)
     assert store.pending_count() == 1
     paused = False
     visited.clear()
     second = store.claim_authority("second-replica", 60)
     assert second is not None and second.pull_cursor_number == 125
+    assert dict(second.handled_pull_fingerprints) == expected_handled
     worker = Worker(worker.settings, store, worker.evaluator, "second-replica")
     assert await worker._process_authority(second) == "completed"
     assert min(visited) == 126 and max(visited) == 205
@@ -484,17 +609,96 @@ async def test_authority_does_not_checkpoint_past_an_earlier_deferred_pull(tmp_p
     with store.session() as session:
         row = session.get(AuthorityJob, claimed.id)
         assert row is not None and row.pull_cursor_number == 1
+        assert set(row.handled_pull_fingerprints) == {"1"}
+
+
+@pytest.mark.asyncio
+async def test_authority_visits_low_number_reopened_between_quota_attempts(tmp_path: Path) -> None:
+    store, github, _, worker = authority_fixture(tmp_path)
+    old = "2026-09-01T12:00:00Z"
+    reopened = "2026-09-03T12:00:00Z"
+    listings = iter(
+        [
+            [pull_summary(1, old), pull_summary(2, old)],
+            [pull_summary(2, old)],  # Pull 1 is closed during this observation.
+            [pull_summary(1, reopened), pull_summary(2, old)],  # It reopens with new evidence.
+        ]
+    )
+    stable_calls: list[bool] = []
+
+    async def list_stable(
+        _installation: int, _repository: str, *, stable: bool = False
+    ) -> list[dict[str, Any]]:
+        stable_calls.append(stable)
+        return next(listings)
+
+    github.list_open_pulls = AsyncMock(side_effect=list_stable)
+    original = github.get_pull
+    visited: list[int] = []
+
+    async def defer_pull_two(installation: int, repository: str, number: int) -> dict[str, Any]:
+        visited.append(number)
+        if number == 2:
+            raise RecoveryBudgetDeferredError(600)
+        return await original(installation, repository, number)  # type: ignore[no-any-return]
+
+    github.get_pull = AsyncMock(side_effect=defer_pull_two)
+
+    await run_deferred_authority_attempt(store, worker)
+    await run_deferred_authority_attempt(store, worker)
+    await run_deferred_authority_attempt(store, worker)
+
+    assert stable_calls == [True, True, True]
+    assert visited.count(1) == 2
+    assert visited.count(2) == 3
+
+
+@pytest.mark.asyncio
+async def test_authority_revisits_handled_pull_when_updated_at_changes(tmp_path: Path) -> None:
+    store, github, _, worker = authority_fixture(tmp_path)
+    listings = iter(
+        [
+            [pull_summary(5, "2026-09-01T12:00:00Z"), pull_summary(6, "2026-09-01T12:00:00Z")],
+            [pull_summary(5, "2026-09-02T12:00:00Z"), pull_summary(6, "2026-09-01T12:00:00Z")],
+        ]
+    )
+
+    async def list_stable(
+        _installation: int, _repository: str, *, stable: bool = False
+    ) -> list[dict[str, Any]]:
+        assert stable
+        return next(listings)
+
+    github.list_open_pulls = AsyncMock(side_effect=list_stable)
+    original = github.get_pull
+    visited: list[int] = []
+
+    async def defer_pull_six(installation: int, repository: str, number: int) -> dict[str, Any]:
+        visited.append(number)
+        if number == 6:
+            raise RecoveryBudgetDeferredError(600)
+        return await original(installation, repository, number)  # type: ignore[no-any-return]
+
+    github.get_pull = AsyncMock(side_effect=defer_pull_six)
+
+    await run_deferred_authority_attempt(store, worker)
+    await run_deferred_authority_attempt(store, worker)
+
+    assert visited.count(5) == 2
+    assert visited.count(6) == 2
 
 
 def test_authority_cursor_is_monotonic_and_reset_by_new_evidence(tmp_path: Path) -> None:
     store, _, _, _ = authority_fixture(tmp_path)
     first = store.claim_authority("first-replica", 60)
     assert first is not None
-    assert store.advance_authority_cursor(first, 20)
-    assert store.advance_authority_cursor(first, 10)
+    handled = {"10": "a" * 64, "20": "b" * 64}
+    assert store.advance_authority_cursor(first, 20, handled)
+    assert store.advance_authority_cursor(first, 10, handled)
     with store.session() as session:
         row = session.get(AuthorityJob, first.id)
         assert row is not None and row.pull_cursor_number == 20
+        assert row.handled_pull_fingerprints == handled
     store.enqueue_authority(
         AuthorityRequest(2, "example/project", None, "push.organization_policy")
     )
@@ -502,13 +706,15 @@ def test_authority_cursor_is_monotonic_and_reset_by_new_evidence(tmp_path: Path)
     second = store.claim_authority("second-replica", 60)
     assert second is not None and second.generation > first.generation
     assert second.pull_cursor_number == 0
+    assert second.handled_pull_fingerprints == ()
 
 
 def test_expired_claim_cannot_advance_but_takeover_retains_progress(tmp_path: Path) -> None:
     store, _, _, _ = authority_fixture(tmp_path)
     first = store.claim_authority("first-replica", 60)
     assert first is not None
-    assert store.advance_authority_cursor(first, 20)
+    handled = {"20": "c" * 64}
+    assert store.advance_authority_cursor(first, 20, handled)
     with store.session() as session:
         row = session.get(AuthorityJob, first.id)
         assert row is not None
@@ -517,5 +723,10 @@ def test_expired_claim_cannot_advance_but_takeover_retains_progress(tmp_path: Pa
     second = store.claim_authority("second-replica", 60)
     assert second is not None and second.generation > first.generation
     assert second.pull_cursor_number == 20
+    assert dict(second.handled_pull_fingerprints) == handled
     assert not store.advance_authority_cursor(first, 30)
-    assert store.advance_authority_cursor(second, 40)
+    extended = {**handled, "40": "d" * 64}
+    assert store.advance_authority_cursor(second, 40, extended)
+    with store.session() as session:
+        row = session.get(AuthorityJob, second.id)
+        assert row is not None and row.handled_pull_fingerprints == extended

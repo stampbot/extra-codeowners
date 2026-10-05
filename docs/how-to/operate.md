@@ -436,11 +436,18 @@ branch share one branch and policy read within that repository attempt. A retry
 or later event reads the branch again; follow-up evaluations still fetch fresh
 policy before publishing a result.
 
+Authority discovery includes closed PR history in its listing so ordinary
+updates and close/reopen events don't move entries between pages. It then
+selects open PRs. A retry skips only previously handled observations; a reopened
+or changed PR can be reconsidered. Expect extra listing requests in repositories
+with a large closed history, not one request per changed PR.
+
 Background discovery uses the recovery reserve. When it pauses, the repository
 fence stays pending without creating duplicate evaluations or marking the
 installation as rate limited. Look for
 `authority_discovery_deferred_for_recovery_budget` in the logs. A direct webhook
-wakes its pending installation and repository fences so they can use reserved
+or promoted revocation retry wakes its pending installation and repository
+fences so they can use reserved
 quota. Once discovery identifies a PR needing revocation, revocation can also
 use the reserve. Provider limits still stop every lane. A large repository
 blocking direct work or many required revocations can therefore exhaust quota;

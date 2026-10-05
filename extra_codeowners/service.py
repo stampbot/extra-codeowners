@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
@@ -2260,8 +2262,8 @@ class Worker:
         return True
 
     async def _execute_authority(self, job: ClaimedAuthorityJob) -> None:
-        # Only a fence blocking an accepted direct event may spend its reserve
-        # on discovery. Recheck the durable queue on every attempt and replica.
+        # A fence blocking a direct event or promoted revocation retry may use
+        # the reserve. Recheck the durable queue on every attempt and replica.
         direct = await asyncio.to_thread(self.store.authority_has_direct_waiter, job)
         with request_lane("authority" if direct else "recovery"):
             await self._discover_authority(job)
@@ -2316,7 +2318,9 @@ class Worker:
                         generation=job.generation,
                     )
                     return
-            pulls = await self.evaluator.github.list_open_pulls(job.installation_id, full_name)
+            pulls = await self.evaluator.github.list_open_pulls(
+                job.installation_id, full_name, stable=True
+            )
         except GitHubAPIError as error:
             if error.status_code not in {301, 308, 404, 410}:
                 raise
@@ -2327,6 +2331,7 @@ class Worker:
             if not await self._authority_repository_absent(job):
                 raise
             return
+        observations: dict[int, str] = {}
         for pull in pulls:
             number = pull.get("number")
             head = pull.get("head")
@@ -2349,33 +2354,57 @@ class Worker:
                 work_class="recovery",
             )
             requests.append(request)
+            observations[number] = hashlib.sha256(
+                json.dumps(
+                    [
+                        number,
+                        head["sha"],
+                        base.get("ref") if isinstance(base, dict) else None,
+                        pull.get("updated_at"),
+                    ],
+                    separators=(",", ":"),
+                ).encode()
+            ).hexdigest()
 
-        # PR numbers are monotonic within a repository. Revalidate the complete
-        # listing on every attempt, but don't repeat a durably handled prefix
-        # from this authority generation when another replica resumes it.
+        # Skip only observations already handled, never every number below a
+        # high-water mark: an older PR can reopen or change during a pause.
+        handled = dict(job.handled_pull_fingerprints)
         requests = sorted(
-            (request for request in requests if request.pull_number > job.pull_cursor_number),
+            (
+                request
+                for request in requests
+                if handled.get(str(request.pull_number)) != observations[request.pull_number]
+            ),
             key=lambda request: request.pull_number,
         )
 
         semaphore = asyncio.Semaphore(self.settings.authority_fanout_concurrency)
         policies: dict[str, bool] = {}
+        policy_errors: dict[str, Exception] = {}
         policy_locks: dict[str, asyncio.Lock] = {}
 
         async def policy_present(base_ref: str) -> bool:
             # Share one current branch/policy observation only within this
             # attempt. A retry or later event must observe the branch again.
             async with policy_locks.setdefault(base_ref, asyncio.Lock()):
+                if base_ref in policy_errors:
+                    # Reusing the exception must not accumulate one traceback
+                    # per PR and make formatting the shared failure quadratic.
+                    raise policy_errors[base_ref].with_traceback(None)
                 if base_ref not in policies:
-                    sha = await self.evaluator.github.get_branch_head(
-                        job.installation_id, full_name, base_ref
-                    )
-                    policies[base_ref] = (
-                        await self.evaluator._repository_policy_text(
-                            job.installation_id, full_name, sha
+                    try:
+                        sha = await self.evaluator.github.get_branch_head(
+                            job.installation_id, full_name, base_ref
                         )
-                        is not None
-                    )
+                        policies[base_ref] = (
+                            await self.evaluator._repository_policy_text(
+                                job.installation_id, full_name, sha
+                            )
+                            is not None
+                        )
+                    except Exception as error:
+                        policy_errors[base_ref] = error
+                        raise
                 return policies[base_ref]
 
         async def revoke(request: JobRequest) -> None:
@@ -2444,8 +2473,9 @@ class Worker:
                 if isinstance(outcome, BaseException):
                     break
                 completed_number = request.pull_number
+                handled[str(request.pull_number)] = observations[request.pull_number]
             if completed_number and not await asyncio.to_thread(
-                self.store.advance_authority_cursor, job, completed_number
+                self.store.advance_authority_cursor, job, completed_number, handled
             ):
                 raise GitHubError("authority discovery lost its claim before checkpointing")
             rate_limits = [

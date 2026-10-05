@@ -17,10 +17,18 @@ depends_on: str | Sequence[str] | None = None
 
 def upgrade() -> None:
     op.add_column("authority_jobs", sa.Column("pull_cursor_number", sa.BigInteger(), nullable=True))
-    jobs = sa.table("authority_jobs", sa.column("pull_cursor_number", sa.BigInteger()))
-    op.execute(jobs.update().values(pull_cursor_number=0))
+    op.add_column(
+        "authority_jobs", sa.Column("handled_pull_fingerprints", sa.JSON(), nullable=True)
+    )
+    jobs = sa.table(
+        "authority_jobs",
+        sa.column("pull_cursor_number", sa.BigInteger()),
+        sa.column("handled_pull_fingerprints", sa.JSON()),
+    )
+    op.execute(jobs.update().values(pull_cursor_number=0, handled_pull_fingerprints={}))
     with op.batch_alter_table("authority_jobs") as batch:
         batch.alter_column("pull_cursor_number", existing_type=sa.BigInteger(), nullable=False)
+        batch.alter_column("handled_pull_fingerprints", existing_type=sa.JSON(), nullable=False)
     metadata = sa.table(
         "schema_metadata",
         sa.column("singleton_id", sa.Integer()),

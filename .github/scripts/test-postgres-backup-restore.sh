@@ -144,12 +144,12 @@ INSERT INTO service_leases (name, owner, lease_until) VALUES (
 INSERT INTO authority_jobs (
   id, installation_id, scope_key, base_ref, reason, generation, state,
   attempts, requested_at, available_at, lease_owner, lease_until, last_error,
-  pull_cursor_number
+  pull_cursor_number, handled_pull_fingerprints
 ) VALUES (
   29, 1701, 'example/backup-contract', 'main', 'backup-contract', 4,
   'in_progress', 1, '2026-07-14 12:31:00.010203+00',
   '2026-07-14 12:32:00.040506+00', 'worker-backup',
-  '2026-07-14 12:42:00.070809+00', NULL, 217
+  '2026-07-14 12:42:00.070809+00', NULL, 217, '{"217":"handled-observation"}'
 );
 
 INSERT INTO authority_epochs (installation_id, generation, changed_at) VALUES (

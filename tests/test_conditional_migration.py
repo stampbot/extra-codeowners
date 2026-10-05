@@ -137,7 +137,13 @@ def test_authority_cursor_migration_preserves_pending_fence(migration_url: str) 
         assert row.generation == 5 and row.attempts == 2
         assert row.state == "pending" and row.last_error == "previous pause"
         assert row.pull_cursor_number == 0
+        assert row.handled_pull_fingerprints == {}
     claim = store.claim_authority("new-replica", 60)
     assert claim is not None and claim.pull_cursor_number == 0
-    assert store.advance_authority_cursor(claim, 25)
+    assert claim.handled_pull_fingerprints == ()
+    assert store.advance_authority_cursor(claim, 25, {"25": "handled-observation"})
+    columns = {
+        column["name"]: column for column in inspect(store.engine).get_columns("authority_jobs")
+    }
+    assert columns["handled_pull_fingerprints"]["nullable"] is False
     store.close()

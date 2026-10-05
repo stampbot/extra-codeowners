@@ -124,18 +124,25 @@ revalidated over authenticated HTTP before reuse. A `304` still
 uses a physical HTTP request and can encounter secondary limits; it is not a
 local cache hit or a quota guarantee.
 
-Revision `0010_authority_discovery_cursor` adds a PR-number cursor to each
-authority job. After a batch finishes, the worker records only its contiguous
-handled prefix. A quota pause or another replica can then resume without
-replaying that prefix. At most the unfinished batch of 100 PRs may repeat.
-A new authority event resets the cursor, so discovery observes the repository
-again. Existing jobs start at zero; their fences and retry state are retained.
+Revision `0010_authority_discovery_cursor` records handled PR observations on
+each authority job. Each record identifies the PR number, head, target branch,
+and update timestamp. After a batch finishes, the worker checkpoints its handled
+prefix. A quota pause or another replica can resume without repeating unchanged
+observations. An older PR that reopens or changes is considered again; a numeric
+high-water mark is retained only for diagnostics, never to skip work.
+At most the unfinished batch of 100 PRs may repeat. A new authority event clears
+the records, so discovery observes the repository again. Existing jobs start
+with no handled observations; their fences and retry state are retained.
 The compatibility marker moves from `8` to `9`.
 
-The cursor records discovery work, not approval evidence. Workers still fetch
+These records describe discovery work, not approval evidence. Workers still fetch
 current PR and check information for each remaining PR, and queued evaluations
 fetch current policy before publishing their result. A partial or failed open-PR
-listing cannot advance the cursor.
+listing cannot advance the checkpoint. Authority discovery enumerates open and
+closed PRs in creation order before selecting open ones. This costs more listing
+requests for repositories with a large closed history, but avoids pagination
+shifts caused by updates or closing a PR. REST does not provide snapshot
+isolation; direct events and periodic reconciliation still handle later changes.
 
 Stop webhook ingress and every older worker before this revision runs. Take and
 verify a backup first. Apply the migration with the target artifact, then run
