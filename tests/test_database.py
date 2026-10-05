@@ -1,4 +1,4 @@
-from datetime import timedelta
+from datetime import UTC, timedelta
 from pathlib import Path
 from time import monotonic
 from typing import Any, cast
@@ -1125,6 +1125,68 @@ def test_failed_authority_job_retries_indefinitely(tmp_path: Path) -> None:
 
     assert store.pending_count() == 1
     assert store.dead_count() == 0
+
+    with store.session() as session:
+        session.execute(
+            update(AuthorityJob).where(AuthorityJob.id == job.id).values(available_at=utcnow())
+        )
+    retry = store.claim_authority("worker", 60)
+    assert retry is not None
+    store.fail_authority(retry, "worker", "still failing", max_delay_seconds=1)
+    assert store.pending_count() == 1
+    assert store.dead_count() == 0
+
+
+def test_failed_authority_with_only_an_old_interactive_waiter_backs_off(
+    tmp_path: Path,
+) -> None:
+    store = make_store(tmp_path)
+    store.enqueue_authority(authority_request())
+    store.enqueue(request())
+    job = store.claim_authority("worker", 60)
+    assert job is not None and job.interactive_wake_generation > 0
+    assert store.authority_has_direct_waiter(job)
+
+    store.fail_authority(
+        job,
+        "worker",
+        "persistent API failure",
+        max_delay_seconds=60,
+        minimum_delay_seconds=30,
+    )
+
+    with store.session() as session:
+        row = session.get(AuthorityJob, job.id)
+        assert row is not None
+        assert row.interactive_wake_generation == job.interactive_wake_generation
+        assert row.available_at.replace(tzinfo=UTC) > utcnow() + timedelta(seconds=25)
+    assert store.claim_authority("retry-too-soon", 60) is None
+
+
+def test_new_interactive_enqueue_during_authority_claim_wakes_failed_retry(
+    tmp_path: Path,
+) -> None:
+    store = make_store(tmp_path)
+    store.enqueue_authority(authority_request())
+    job = store.claim_authority("worker", 60)
+    assert job is not None
+
+    assert store.accept_delivery("arrival-during-failure", "pull_request", request()).accepted
+    store.fail_authority(
+        job,
+        "worker",
+        "API failed after the new event",
+        max_delay_seconds=60,
+        minimum_delay_seconds=30,
+    )
+
+    with store.session() as session:
+        row = session.get(AuthorityJob, job.id)
+        assert row is not None
+        assert row.interactive_wake_generation > job.interactive_wake_generation
+        assert row.available_at.replace(tzinfo=UTC) <= utcnow() + timedelta(seconds=1)
+    retry = store.claim_authority("retry-new-event", 60)
+    assert retry is not None
 
 
 def test_authority_jobs_coalesce_and_new_generation_survives_old_completion(

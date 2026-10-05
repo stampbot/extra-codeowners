@@ -26,7 +26,7 @@ from extra_codeowners.database import (
     QueueStore,
     utcnow,
 )
-from extra_codeowners.github import GitHubError, GitHubRateLimitError
+from extra_codeowners.github import AuthorityPullPage, GitHubError, GitHubRateLimitError
 from extra_codeowners.service import EvaluationService, Worker
 
 
@@ -572,7 +572,8 @@ async def test_authority_resumes_handled_prefix_on_another_replica(tmp_path: Pat
     with store.session() as session:
         row = session.get(AuthorityJob, first.id)
         assert row is not None and row.pull_cursor_number == 125
-        assert set(row.handled_pull_fingerprints) == {str(number) for number in range(1, 126)}
+        assert row.listing_next_page == 2 and row.listing_last_number == 100
+        assert set(row.handled_pull_fingerprints) == {str(number) for number in range(101, 126)}
         assert all(len(value) == 64 for value in row.handled_pull_fingerprints.values())
         expected_handled = dict(row.handled_pull_fingerprints)
         row.available_at = utcnow() - timedelta(seconds=1)
@@ -581,6 +582,7 @@ async def test_authority_resumes_handled_prefix_on_another_replica(tmp_path: Pat
     visited.clear()
     second = store.claim_authority("second-replica", 60)
     assert second is not None and second.pull_cursor_number == 125
+    assert second.listing_next_page == 2 and second.listing_last_number == 100
     assert dict(second.handled_pull_fingerprints) == expected_handled
     worker = Worker(worker.settings, store, worker.evaluator, "second-replica")
     assert await worker._process_authority(second) == "completed"
@@ -688,17 +690,131 @@ async def test_authority_revisits_handled_pull_when_updated_at_changes(tmp_path:
     assert visited.count(6) == 2
 
 
+@pytest.mark.asyncio
+async def test_authority_resume_keeps_closed_page_progress_across_reserve_deferral(
+    tmp_path: Path,
+) -> None:
+    store, github, _, worker = authority_fixture(tmp_path)
+    page_calls: list[tuple[int, int]] = []
+
+    async def list_page(
+        _installation: int,
+        _repository: str,
+        *,
+        page: int = 1,
+        after_number: int = 0,
+    ) -> AuthorityPullPage:
+        page_calls.append((page, after_number))
+        if page == 1:
+            # This full page contains only closed PRs, so it yields no pulls but
+            # still advances the durable listing cursor.
+            return AuthorityPullPage([], next_page=2, last_number=100)
+        assert page == 2 and after_number == 100
+        return AuthorityPullPage(
+            [pull_summary(101, "2026-09-01T12:00:00Z"), pull_summary(102, "2026-09-01T12:00:00Z")],
+            next_page=0,
+            last_number=200,
+        )
+
+    github.list_authority_pull_page = AsyncMock(side_effect=list_page)
+    original = github.get_pull
+    pause_second = True
+    visited: list[int] = []
+
+    async def pause_second_pull(installation: int, repository: str, number: int) -> dict[str, Any]:
+        nonlocal pause_second
+        visited.append(number)
+        if number == 102 and pause_second:
+            raise RecoveryBudgetDeferredError(600)
+        return await original(installation, repository, number)  # type: ignore[no-any-return]
+
+    github.get_pull = AsyncMock(side_effect=pause_second_pull)
+    first = await run_deferred_authority_attempt(store, worker)
+    assert page_calls == [(1, 0), (2, 100)]
+    with store.session() as session:
+        row = session.get(AuthorityJob, first.id)
+        assert row is not None
+        assert row.listing_next_page == 2
+        assert row.listing_last_number == 100
+        assert set(row.handled_pull_fingerprints) == {"101"}
+
+    pause_second = False
+    worker.owner = "second-replica"
+    second = store.claim_authority("second-replica", 60)
+    assert second is not None
+    assert second.listing_next_page == 2 and second.listing_last_number == 100
+    worker = Worker(worker.settings, store, worker.evaluator, "second-replica")
+    assert await worker._process_authority(second) == "completed"
+    assert page_calls == [(1, 0), (2, 100), (2, 100)]
+    assert visited.count(101) == 1
+    assert visited.count(102) == 2
+
+
+@pytest.mark.asyncio
+async def test_authority_resume_keeps_closed_page_progress_when_next_listing_defers(
+    tmp_path: Path,
+) -> None:
+    store, github, _, worker = authority_fixture(tmp_path)
+    page_calls: list[tuple[int, int]] = []
+    defer_listing = True
+
+    async def list_page(
+        _installation: int,
+        _repository: str,
+        *,
+        page: int = 1,
+        after_number: int = 0,
+    ) -> AuthorityPullPage:
+        nonlocal defer_listing
+        page_calls.append((page, after_number))
+        if page == 1:
+            return AuthorityPullPage([], next_page=2, last_number=100)
+        assert page == 2 and after_number == 100
+        if defer_listing:
+            defer_listing = False
+            raise RecoveryBudgetDeferredError(600)
+        return AuthorityPullPage(
+            [pull_summary(101, "2026-09-01T12:00:00Z")],
+            next_page=0,
+            last_number=101,
+        )
+
+    github.list_authority_pull_page = AsyncMock(side_effect=list_page)
+
+    first = await run_deferred_authority_attempt(store, worker)
+    assert page_calls == [(1, 0), (2, 100)]
+    with store.session() as session:
+        row = session.get(AuthorityJob, first.id)
+        assert row is not None
+        assert row.listing_next_page == 2
+        assert row.listing_last_number == 100
+        assert row.handled_pull_fingerprints == {}
+
+    worker.owner = "second-replica"
+    second = store.claim_authority("second-replica", 60)
+    assert second is not None
+    assert second.listing_next_page == 2 and second.listing_last_number == 100
+    worker = Worker(worker.settings, store, worker.evaluator, "second-replica")
+    assert await worker._process_authority(second) == "completed"
+    assert page_calls == [(1, 0), (2, 100), (2, 100)]
+
+
 def test_authority_cursor_is_monotonic_and_reset_by_new_evidence(tmp_path: Path) -> None:
     store, _, _, _ = authority_fixture(tmp_path)
     first = store.claim_authority("first-replica", 60)
     assert first is not None
     handled = {"10": "a" * 64, "20": "b" * 64}
-    assert store.advance_authority_cursor(first, 20, handled)
-    assert store.advance_authority_cursor(first, 10, handled)
+    assert store.advance_authority_cursor(
+        first, 20, handled, listing_next_page=3, listing_last_number=200
+    )
+    assert store.advance_authority_cursor(
+        first, 10, handled, listing_next_page=3, listing_last_number=200
+    )
     with store.session() as session:
         row = session.get(AuthorityJob, first.id)
         assert row is not None and row.pull_cursor_number == 20
         assert row.handled_pull_fingerprints == handled
+        assert row.listing_next_page == 3 and row.listing_last_number == 200
     store.enqueue_authority(
         AuthorityRequest(2, "example/project", None, "push.organization_policy")
     )
@@ -707,6 +823,7 @@ def test_authority_cursor_is_monotonic_and_reset_by_new_evidence(tmp_path: Path)
     assert second is not None and second.generation > first.generation
     assert second.pull_cursor_number == 0
     assert second.handled_pull_fingerprints == ()
+    assert second.listing_next_page == 1 and second.listing_last_number == 0
 
 
 def test_expired_claim_cannot_advance_but_takeover_retains_progress(tmp_path: Path) -> None:
@@ -714,7 +831,9 @@ def test_expired_claim_cannot_advance_but_takeover_retains_progress(tmp_path: Pa
     first = store.claim_authority("first-replica", 60)
     assert first is not None
     handled = {"20": "c" * 64}
-    assert store.advance_authority_cursor(first, 20, handled)
+    assert store.advance_authority_cursor(
+        first, 20, handled, listing_next_page=2, listing_last_number=100
+    )
     with store.session() as session:
         row = session.get(AuthorityJob, first.id)
         assert row is not None
@@ -724,9 +843,13 @@ def test_expired_claim_cannot_advance_but_takeover_retains_progress(tmp_path: Pa
     assert second is not None and second.generation > first.generation
     assert second.pull_cursor_number == 20
     assert dict(second.handled_pull_fingerprints) == handled
+    assert second.listing_next_page == 2 and second.listing_last_number == 100
     assert not store.advance_authority_cursor(first, 30)
     extended = {**handled, "40": "d" * 64}
-    assert store.advance_authority_cursor(second, 40, extended)
+    assert store.advance_authority_cursor(
+        second, 40, extended, listing_next_page=3, listing_last_number=200
+    )
     with store.session() as session:
         row = session.get(AuthorityJob, second.id)
         assert row is not None and row.handled_pull_fingerprints == extended
+        assert row.listing_next_page == 3 and row.listing_last_number == 200

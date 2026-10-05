@@ -124,25 +124,32 @@ revalidated over authenticated HTTP before reuse. A `304` still
 uses a physical HTTP request and can encounter secondary limits; it is not a
 local cache hit or a quota guarantee.
 
-Revision `0010_authority_discovery_cursor` records handled PR observations on
-each authority job. Each record identifies the PR number, head, target branch,
-and update timestamp. After a batch finishes, the worker checkpoints its handled
-prefix. A quota pause or another replica can resume without repeating unchanged
-observations. An older PR that reopens or changes is considered again; a numeric
-high-water mark is retained only for diagnostics, never to skip work.
-At most the unfinished batch of 100 PRs may repeat. A new authority event clears
-the records, so discovery observes the repository again. Existing jobs start
-with no handled observations; their fences and retry state are retained.
+Revision `0010_authority_discovery_cursor` records the next listing page,
+the last listed PR number, and handled observations on an unfinished page.
+Each fingerprint covers the PR number, head, target branch, and update timestamp.
+A completed page clears those fingerprints and advances the listing position,
+even when every PR on it is closed. A quota pause or another replica resumes
+without replaying completed pages. Matching observations on the unfinished
+page are skipped; changed or reopened entries on that page are reconsidered.
+A separate numeric high-water mark is retained only for diagnostics.
+At most the unfinished page of 100 PRs may repeat. A new authority event clears
+progress and starts at page one. Existing jobs also start at page one with no
+handled observations; their fences and retry state are retained.
 The compatibility marker moves from `8` to `9`.
 
 These records describe discovery work, not approval evidence. Workers still fetch
 current PR and check information for each remaining PR, and queued evaluations
-fetch current policy before publishing their result. A partial or failed open-PR
-listing cannot advance the checkpoint. Authority discovery enumerates open and
-closed PRs in creation order before selecting open ones. This costs more listing
-requests for repositories with a large closed history, but avoids pagination
-shifts caused by updates or closing a PR. REST does not provide snapshot
-isolation; direct events and periodic reconciliation still handle later changes.
+fetch current policy before publishing their result. An invalid or failed page
+cannot advance that page's checkpoint; completed earlier pages remain recorded.
+The authority fence stays active until the listing reaches its end. Discovery
+enumerates open and closed PRs in creation order. This costs more requests for
+repositories with a large closed history, but avoids pagination shifts caused
+by updates or closing a PR. REST does not provide snapshot isolation; direct
+events and periodic reconciliation handle later changes to completed pages.
+
+The revision also records an interactive wake counter. Failure backoff preserves
+an immediate retry when a direct event arrives during the claim. An unchanged
+persistent failure still backs off, even while the same direct event waits.
 
 Stop webhook ingress and every older worker before this revision runs. Take and
 verify a backup first. Apply the migration with the target artifact, then run

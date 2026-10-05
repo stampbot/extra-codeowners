@@ -7,7 +7,7 @@ import json as json_module
 import math
 import re
 import time
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -359,6 +359,15 @@ class _BoundedJsonResponse:
     retry_after: str | None
     rate_limit_remaining: str | None
     rate_limit_reset: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class AuthorityPullPage:
+    """One validated page of pull requests for authority discovery."""
+
+    pulls: list[dict[str, Any]]
+    next_page: int
+    last_number: int
 
 
 class GitHubClient:
@@ -1089,7 +1098,6 @@ class GitHubClient:
         max_items: int | None = None,
         stop: asyncio.Event | None = None,
         conditional_discovery: bool = False,
-        item_filter: Callable[[dict[str, Any]], bool] | None = None,
     ) -> list[dict[str, Any]]:
         query = {**(params or {}), "per_page": 100}
         items: list[dict[str, Any]] = []
@@ -1120,8 +1128,7 @@ class GitHubClient:
                 if not isinstance(item, dict):
                     msg = f"expected object items from GET {path}"
                     raise GitHubError(msg)
-                if item_filter is None or item_filter(item):
-                    items.append(item)
+                items.append(item)
                 if max_items is not None and len(items) > max_items:
                     msg = f"GET {path} exceeded the supported {max_items}-item limit"
                     raise PullRequestTooLargeError(msg)
@@ -2485,12 +2492,64 @@ class GitHubClient:
                 conditional_discovery=True,
             )
 
-        previous_number = 0
+        pulls: list[dict[str, Any]] = []
+        page_number = 1
+        after_number = 0
+        while True:
+            page = await self.list_authority_pull_page(
+                installation_id,
+                repository,
+                page=page_number,
+                after_number=after_number,
+                stop=stop,
+            )
+            pulls.extend(page.pulls)
+            if page.next_page == 0:
+                return pulls
+            page_number = page.next_page
+            after_number = page.last_number
 
-        def select_open(pull: dict[str, Any]) -> bool:
-            # Validate the whole ordered population, but retain only open PRs
-            # in memory rather than collecting a repository's closed history.
-            nonlocal previous_number
+    async def list_authority_pull_page(
+        self,
+        installation_id: int,
+        repository: str,
+        *,
+        page: int = 1,
+        after_number: int = 0,
+        stop: asyncio.Event | None = None,
+    ) -> AuthorityPullPage:
+        """Fetch and validate one created-order page for authority discovery."""
+        if isinstance(page, bool) or not isinstance(page, int) or page < 1:
+            raise ValueError("page must be a positive integer")
+        if isinstance(after_number, bool) or not isinstance(after_number, int) or after_number < 0:
+            raise ValueError("after_number must be a nonnegative integer")
+
+        path = f"/repos/{repository}/pulls"
+        params = {
+            "state": "all",
+            "sort": "created",
+            "direction": "asc",
+            "per_page": 100,
+            "page": page,
+        }
+        self._raise_if_stopped(stop)
+        response = await self._discovery_response(path, installation_id, params=params, stop=stop)
+        self._raise_if_stopped(stop)
+        if not response.is_success:
+            self._raise_api_error(response, "GET", path)
+        page_items = response.json()
+        if not isinstance(page_items, list):
+            raise GitHubError(f"expected list response from GET {path}")
+        if len(page_items) > 100:
+            raise GitHubError(
+                f"stable pull listing page exceeded the 100-item limit for GET {path}"
+            )
+
+        pulls: list[dict[str, Any]] = []
+        previous_number = after_number
+        for pull in page_items:
+            if not isinstance(pull, dict):
+                raise GitHubError(f"expected object items from GET {path}")
             number = pull.get("number")
             state = pull.get("state")
             if not isinstance(number, int) or isinstance(number, bool) or number <= 0:
@@ -2519,15 +2578,15 @@ class GitHubClient:
             ):
                 raise GitHubError("stable pull listing contains an invalid base ref")
             previous_number = number
-            return state == "open"
+            if state == "open":
+                pulls.append(pull)
 
-        return await self._get_list(
-            f"/repos/{repository}/pulls",
-            installation_id,
-            params={"state": "all", "sort": "created", "direction": "asc"},
-            stop=stop,
-            conditional_discovery=True,
-            item_filter=select_open,
+        has_next = self._response_has_next_page(response, page, len(page_items))
+        self._remember_discovery_response(path, installation_id, params, response)
+        return AuthorityPullPage(
+            pulls=pulls,
+            next_page=page + 1 if has_next else 0,
+            last_number=previous_number,
         )
 
     async def list_commit_pulls(

@@ -290,6 +290,9 @@ class AuthorityJob(Base):
     handled_pull_fingerprints: Mapped[dict[str, str]] = mapped_column(
         JSON, nullable=False, default=dict
     )
+    listing_next_page: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    listing_last_number: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    interactive_wake_generation: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     state: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     requested_at: Mapped[datetime] = mapped_column(
@@ -518,6 +521,9 @@ class ClaimedAuthorityJob:
     lease_owner: str
     pull_cursor_number: int = 0
     handled_pull_fingerprints: tuple[tuple[str, str], ...] = ()
+    listing_next_page: int = 1
+    listing_last_number: int = 0
+    interactive_wake_generation: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -1694,7 +1700,10 @@ class QueueStore:
                     AuthorityJob.scope_key.in_(("*", request.repository_full_name)),
                     AuthorityJob.state == "pending",
                 )
-                .values(available_at=utcnow())
+                .values(
+                    available_at=utcnow(),
+                    interactive_wake_generation=AuthorityJob.interactive_wake_generation + 1,
+                )
             )
 
     def enqueue(self, request: JobRequest) -> None:
@@ -2086,6 +2095,9 @@ class QueueStore:
                 generation=AuthorityJob.generation + 1,
                 pull_cursor_number=0,
                 handled_pull_fingerprints={},
+                listing_next_page=1,
+                listing_last_number=0,
+                interactive_wake_generation=0,
                 reason=request.reason,
                 requested_at=now,
                 available_at=now,
@@ -3026,6 +3038,9 @@ class QueueStore:
                     lease_owner=owner,
                     pull_cursor_number=row.pull_cursor_number,
                     handled_pull_fingerprints=tuple(row.handled_pull_fingerprints.items()),
+                    listing_next_page=row.listing_next_page,
+                    listing_last_number=row.listing_last_number,
+                    interactive_wake_generation=row.interactive_wake_generation,
                 )
         return None
 
@@ -3049,6 +3064,9 @@ class QueueStore:
         job: ClaimedAuthorityJob,
         number: int,
         handled_pull_fingerprints: Mapping[str, str] | None = None,
+        *,
+        listing_next_page: int | None = None,
+        listing_last_number: int | None = None,
     ) -> bool:
         """Checkpoint handled observations only while this authority claim is current."""
         values: dict[str, Any] = {
@@ -3059,6 +3077,10 @@ class QueueStore:
         }
         if handled_pull_fingerprints is not None:
             values["handled_pull_fingerprints"] = dict(handled_pull_fingerprints)
+        if listing_next_page is not None:
+            values["listing_next_page"] = listing_next_page
+        if listing_last_number is not None:
+            values["listing_last_number"] = listing_last_number
         with self.session() as session:
             result = session.execute(
                 update(AuthorityJob)
@@ -3111,6 +3133,7 @@ class QueueStore:
                 max(minimum_delay_seconds, 2 ** min(job.attempts, 30)),
             ),
         )
+        now = utcnow()
         with self.session() as session:
             result = session.execute(
                 update(AuthorityJob)
@@ -3121,7 +3144,16 @@ class QueueStore:
                 )
                 .values(
                     state="pending",
-                    available_at=utcnow() + timedelta(seconds=delay_seconds),
+                    # Preserve an arrival during this claim, not every old
+                    # waiter: an unchanged persistent failure must still back off.
+                    available_at=case(
+                        (
+                            AuthorityJob.interactive_wake_generation
+                            > job.interactive_wake_generation,
+                            now,
+                        ),
+                        else_=now + timedelta(seconds=delay_seconds),
+                    ),
                     lease_owner=None,
                     lease_until=None,
                     last_error=error[:2000],

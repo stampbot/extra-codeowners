@@ -2293,7 +2293,6 @@ class Worker:
                 )
             return
 
-        requests: list[JobRequest] = []
         full_name = job.repository_full_name
         try:
             # Public repositories can remain readable outside the installation.
@@ -2318,9 +2317,6 @@ class Worker:
                         generation=job.generation,
                     )
                     return
-            pulls = await self.evaluator.github.list_open_pulls(
-                job.installation_id, full_name, stable=True
-            )
         except GitHubAPIError as error:
             if error.status_code not in {301, 308, 404, 410}:
                 raise
@@ -2331,52 +2327,7 @@ class Worker:
             if not await self._authority_repository_absent(job):
                 raise
             return
-        observations: dict[int, str] = {}
-        for pull in pulls:
-            number = pull.get("number")
-            head = pull.get("head")
-            base = pull.get("base")
-            if not isinstance(number, int) or isinstance(number, bool):
-                raise GitHubError("open pull response omitted its number")
-            if not isinstance(head, dict) or not isinstance(head.get("sha"), str):
-                raise GitHubError("open pull response omitted its head SHA")
-            if job.base_ref is not None:
-                if not isinstance(base, dict) or not isinstance(base.get("ref"), str):
-                    raise GitHubError("open pull response omitted its base ref")
-                if base["ref"] != job.base_ref:
-                    continue
-            request = JobRequest(
-                installation_id=job.installation_id,
-                repository_full_name=full_name,
-                pull_number=number,
-                reason=job.reason,
-                head_sha_hint=str(head["sha"]),
-                work_class="recovery",
-            )
-            requests.append(request)
-            observations[number] = hashlib.sha256(
-                json.dumps(
-                    [
-                        number,
-                        head["sha"],
-                        base.get("ref") if isinstance(base, dict) else None,
-                        pull.get("updated_at"),
-                    ],
-                    separators=(",", ":"),
-                ).encode()
-            ).hexdigest()
-
-        # Skip only observations already handled, never every number below a
-        # high-water mark: an older PR can reopen or change during a pause.
         handled = dict(job.handled_pull_fingerprints)
-        requests = sorted(
-            (
-                request
-                for request in requests
-                if handled.get(str(request.pull_number)) != observations[request.pull_number]
-            ),
-            key=lambda request: request.pull_number,
-        )
 
         semaphore = asyncio.Semaphore(self.settings.authority_fanout_concurrency)
         policies: dict[str, bool] = {}
@@ -2460,22 +2411,76 @@ class Worker:
                         reason=job.reason,
                     )
 
-        for offset in range(0, len(requests), 100):
-            batch = requests[offset : offset + 100]
+        next_page = job.listing_next_page
+        last_number = job.listing_last_number
+        completed_number = job.pull_cursor_number
+        while next_page:
+            try:
+                page = await self.evaluator.github.list_authority_pull_page(
+                    job.installation_id, full_name, page=next_page, after_number=last_number
+                )
+            except GitHubAPIError as error:
+                if error.status_code not in {301, 308, 404, 410}:
+                    raise
+                if not await self._authority_repository_absent(job):
+                    raise
+                return
+
+            requests: list[JobRequest] = []
+            observations: dict[int, str] = {}
+            for pull in page.pulls:
+                number = pull.get("number")
+                head = pull.get("head")
+                base = pull.get("base")
+                if not isinstance(number, int) or isinstance(number, bool):
+                    raise GitHubError("open pull response omitted its number")
+                if not isinstance(head, dict) or not isinstance(head.get("sha"), str):
+                    raise GitHubError("open pull response omitted its head SHA")
+                if job.base_ref is not None:
+                    if not isinstance(base, dict) or not isinstance(base.get("ref"), str):
+                        raise GitHubError("open pull response omitted its base ref")
+                    if base["ref"] != job.base_ref:
+                        continue
+                observations[number] = hashlib.sha256(
+                    json.dumps(
+                        [
+                            number,
+                            head["sha"],
+                            base.get("ref") if isinstance(base, dict) else None,
+                            pull.get("updated_at"),
+                        ],
+                        separators=(",", ":"),
+                    ).encode()
+                ).hexdigest()
+                if handled.get(str(number)) == observations[number]:
+                    continue
+                requests.append(
+                    JobRequest(
+                        installation_id=job.installation_id,
+                        repository_full_name=full_name,
+                        pull_number=number,
+                        reason=job.reason,
+                        head_sha_hint=str(head["sha"]),
+                        work_class="recovery",
+                    )
+                )
+            observed_keys = {str(number) for number in observations}
+            handled = {key: value for key, value in handled.items() if key in observed_keys}
+            batch = sorted(requests, key=lambda request: request.pull_number)
             outcomes = await asyncio.gather(
                 *(revoke(request) for request in batch),
                 return_exceptions=True,
             )
             # Only checkpoint the successful contiguous prefix: later tasks
             # can finish first, but must never hide an earlier deferred PR.
-            completed_number = 0
+            prefix_number = 0
             for request, outcome in zip(batch, outcomes, strict=True):
                 if isinstance(outcome, BaseException):
                     break
-                completed_number = request.pull_number
+                prefix_number = request.pull_number
                 handled[str(request.pull_number)] = observations[request.pull_number]
-            if completed_number and not await asyncio.to_thread(
-                self.store.advance_authority_cursor, job, completed_number, handled
+            if prefix_number and not await asyncio.to_thread(
+                self.store.advance_authority_cursor, job, prefix_number, handled
             ):
                 raise GitHubError("authority discovery lost its claim before checkpointing")
             rate_limits = [
@@ -2501,6 +2506,23 @@ class Worker:
             for outcome in outcomes:
                 if isinstance(outcome, BaseException):
                     raise outcome
+
+            completed_number = max(completed_number, prefix_number)
+            # Every record on this page was validated before any work ran, and
+            # all required work is now handled or durably handed off. Even an
+            # all-closed page must checkpoint so history can span quota windows.
+            if not await asyncio.to_thread(
+                self.store.advance_authority_cursor,
+                job,
+                completed_number,
+                {},
+                listing_next_page=page.next_page,
+                listing_last_number=page.last_number,
+            ):
+                raise GitHubError("authority discovery lost its claim before page checkpointing")
+            handled.clear()
+            next_page = page.next_page
+            last_number = page.last_number
 
     async def _process_authority(
         self,

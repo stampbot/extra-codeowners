@@ -436,13 +436,15 @@ branch share one branch and policy read within that repository attempt. A retry
 or later event reads the branch again; follow-up evaluations still fetch fresh
 policy before publishing a result.
 
-Authority discovery includes closed PR history in its listing so ordinary
-updates and close/reopen events don't move entries between pages. It then
-selects open PRs. A retry skips only previously handled observations; a reopened
-or changed PR can be reconsidered. Expect extra listing requests in repositories
-with a large closed history, not one request per changed PR.
+Authority discovery includes closed PR history so ordinary updates and
+close/reopen events don't move entries between pages. It processes open PRs and
+checkpoints each completed page, even one containing only closed PRs. A retry
+resumes that progress and skips matching handled observations on its unfinished
+page. Changes to completed pages rely on direct events and reconciliation.
+Expect extra listing requests in repositories with a large closed history,
+not one request per changed PR.
 
-Background discovery uses the recovery reserve. When it pauses, the repository
+Background discovery honors the recovery reserve. When it pauses, the repository
 fence stays pending without creating duplicate evaluations or marking the
 installation as rate limited. Look for
 `authority_discovery_deferred_for_recovery_budget` in the logs. A direct webhook

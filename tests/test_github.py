@@ -1431,6 +1431,138 @@ async def test_stable_pull_listing_continues_after_full_closed_page_without_link
 
 
 @pytest.mark.asyncio
+async def test_authority_pull_page_resumes_at_requested_page_and_number(
+    private_key: str,
+) -> None:
+    requests: list[httpx.URL] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/access_tokens"):
+            return httpx.Response(201, json=token_response())
+        requests.append(request.url)
+        return httpx.Response(
+            200,
+            json=[
+                pull_listing_record(101, "open"),
+                pull_listing_record(102, "closed"),
+            ],
+        )
+
+    client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
+    try:
+        page = await client.list_authority_pull_page(2, "example/project", page=2, after_number=100)
+    finally:
+        await client.close()
+
+    assert [pull["number"] for pull in page.pulls] == [101]
+    assert page.next_page == 0
+    assert page.last_number == 102
+    assert len(requests) == 1
+    assert dict(requests[0].params) == {
+        "state": "all",
+        "sort": "created",
+        "direction": "asc",
+        "per_page": "100",
+        "page": "2",
+    }
+
+
+@pytest.mark.asyncio
+async def test_authority_pull_page_rejects_malformed_closed_row_after_open_row(
+    private_key: str,
+) -> None:
+    requests: list[httpx.URL] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/access_tokens"):
+            return httpx.Response(201, json=token_response())
+        requests.append(request.url)
+        return httpx.Response(
+            200,
+            json=[
+                pull_listing_record(101, "open"),
+                pull_listing_record(102, "closed", updated_at=None),
+            ],
+        )
+
+    client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
+    try:
+        with pytest.raises(GitHubError, match="invalid updated_at"):
+            await client.list_authority_pull_page(2, "example/project", page=2, after_number=100)
+    finally:
+        await client.close()
+
+    assert len(requests) == 1
+    assert requests[0].params["page"] == "2"
+
+
+@pytest.mark.asyncio
+async def test_authority_pull_page_rejects_more_than_page_limit(private_key: str) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/access_tokens"):
+            return httpx.Response(201, json=token_response())
+        return httpx.Response(
+            200,
+            json=[pull_listing_record(number) for number in range(1, 102)],
+        )
+
+    client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
+    try:
+        with pytest.raises(GitHubError, match="exceeded the 100-item limit"):
+            await client.list_authority_pull_page(2, "example/project")
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_authority_pull_page_does_not_fetch_when_stopped(private_key: str) -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.path.endswith("/access_tokens"):
+            return httpx.Response(201, json=token_response())
+        return httpx.Response(200, json=[])
+
+    client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
+    stop = asyncio.Event()
+    stop.set()
+    try:
+        with pytest.raises(GitHubOperationStoppedError):
+            await client.list_authority_pull_page(2, "example/project", stop=stop)
+    finally:
+        await client.close()
+
+    assert requests == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("pulls", "expected_last_number"),
+    [([], 100), ([pull_listing_record(101, "closed"), pull_listing_record(102, "closed")], 102)],
+)
+async def test_authority_pull_page_handles_terminal_empty_and_closed_pages(
+    private_key: str,
+    pulls: list[dict[str, Any]],
+    expected_last_number: int,
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/access_tokens"):
+            return httpx.Response(201, json=token_response())
+        return httpx.Response(200, json=pulls)
+
+    client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
+    try:
+        page = await client.list_authority_pull_page(2, "example/project", page=3, after_number=100)
+    finally:
+        await client.close()
+
+    assert page.pulls == []
+    assert page.next_page == 0
+    assert page.last_number == expected_last_number
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("pulls", "message"),
     [

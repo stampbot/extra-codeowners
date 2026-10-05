@@ -138,12 +138,33 @@ def test_authority_cursor_migration_preserves_pending_fence(migration_url: str) 
         assert row.state == "pending" and row.last_error == "previous pause"
         assert row.pull_cursor_number == 0
         assert row.handled_pull_fingerprints == {}
+        assert row.listing_next_page == 1
+        assert row.listing_last_number == 0
+        assert row.interactive_wake_generation == 0
     claim = store.claim_authority("new-replica", 60)
     assert claim is not None and claim.pull_cursor_number == 0
     assert claim.handled_pull_fingerprints == ()
-    assert store.advance_authority_cursor(claim, 25, {"25": "handled-observation"})
+    assert claim.listing_next_page == 1 and claim.listing_last_number == 0
+    assert claim.interactive_wake_generation == 0
+    assert store.advance_authority_cursor(
+        claim,
+        25,
+        {"25": "handled-observation"},
+        listing_next_page=2,
+        listing_last_number=100,
+    )
+    with store.session() as session:
+        row = session.query(AuthorityJob).one()
+        assert row.listing_next_page == 2 and row.listing_last_number == 100
+        assert row.handled_pull_fingerprints == {"25": "handled-observation"}
     columns = {
         column["name"]: column for column in inspect(store.engine).get_columns("authority_jobs")
     }
-    assert columns["handled_pull_fingerprints"]["nullable"] is False
+    for name in (
+        "handled_pull_fingerprints",
+        "listing_next_page",
+        "listing_last_number",
+        "interactive_wake_generation",
+    ):
+        assert columns[name]["nullable"] is False
     store.close()

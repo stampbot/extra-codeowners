@@ -325,11 +325,12 @@ read within one repository attempt, including a shared failure if that read
 fails. A later attempt reads the branch again, and
 every final evaluation still fetches fresh evidence.
 
-Discovery lists open and closed PRs in creation order, then selects open ones.
-It records handled observations rather than skipping every PR below a numeric
-cursor. That means an older reopened or changed PR can be reconsidered after a
-quota pause. Closed history adds listing requests; REST does not provide a
-snapshot, so later changes still rely on direct events and reconciliation.
+Discovery reads open and closed PRs in creation order, one page at a time.
+It checkpoints completed pages and handled observations within an unfinished
+page. A retry can continue without replaying closed history, while changed or
+reopened entries on the unfinished page are reconsidered. Closed history adds
+listing requests. REST does not provide a snapshot, so changes to completed
+pages still rely on direct events and reconciliation.
 
 A reserve pause retains the repository fence without promoting unenrolled PRs
 to foreground work or imposing provider backpressure. A direct webhook or
@@ -338,6 +339,8 @@ attempts can use the reserve to clear
 the fence before evaluation publishes. The wakeup and deferral check use the
 shared database, so a webhook arriving during a pause cannot lose its wakeup
 when another replica finishes deferring the fence.
+An event arriving during a failed attempt also preserves an immediate retry.
+Without another arrival, persistent errors still back off.
 
 Urgent discovery for a large repository and many required revocations can still
 consume the reserve. GitHub's limits apply to all work; direct events are not

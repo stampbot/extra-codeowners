@@ -20,15 +20,38 @@ def upgrade() -> None:
     op.add_column(
         "authority_jobs", sa.Column("handled_pull_fingerprints", sa.JSON(), nullable=True)
     )
+    op.add_column("authority_jobs", sa.Column("listing_next_page", sa.Integer(), nullable=True))
+    op.add_column(
+        "authority_jobs", sa.Column("listing_last_number", sa.BigInteger(), nullable=True)
+    )
+    op.add_column(
+        "authority_jobs", sa.Column("interactive_wake_generation", sa.Integer(), nullable=True)
+    )
     jobs = sa.table(
         "authority_jobs",
         sa.column("pull_cursor_number", sa.BigInteger()),
         sa.column("handled_pull_fingerprints", sa.JSON()),
+        sa.column("listing_next_page", sa.Integer()),
+        sa.column("listing_last_number", sa.BigInteger()),
+        sa.column("interactive_wake_generation", sa.Integer()),
     )
-    op.execute(jobs.update().values(pull_cursor_number=0, handled_pull_fingerprints={}))
+    op.execute(
+        jobs.update().values(
+            pull_cursor_number=0,
+            handled_pull_fingerprints={},
+            listing_next_page=1,
+            listing_last_number=0,
+            interactive_wake_generation=0,
+        )
+    )
     with op.batch_alter_table("authority_jobs") as batch:
         batch.alter_column("pull_cursor_number", existing_type=sa.BigInteger(), nullable=False)
         batch.alter_column("handled_pull_fingerprints", existing_type=sa.JSON(), nullable=False)
+        batch.alter_column("listing_next_page", existing_type=sa.Integer(), nullable=False)
+        batch.alter_column("listing_last_number", existing_type=sa.BigInteger(), nullable=False)
+        batch.alter_column(
+            "interactive_wake_generation", existing_type=sa.Integer(), nullable=False
+        )
     metadata = sa.table(
         "schema_metadata",
         sa.column("singleton_id", sa.Integer()),

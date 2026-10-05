@@ -110,8 +110,10 @@ required release contract passes. A database already at the expected head
 still receives that validation. A mismatch exits nonzero; the migrator does
 not repair an unexpected schema that happens to carry the right revision.
 
-Migration `0010_authority_discovery_cursor` records a handled PR prefix on each
-authority job, so discovery can resume after a quota pause or replica takeover.
+Migration `0010_authority_discovery_cursor` records completed listing pages and
+handled observations on an unfinished page. Discovery resumes after a quota
+pause or replica takeover without replaying completed pages. The revision also
+preserves a new direct event's wakeup when its authority claim fails.
 It does not change the GitHub quota window or remove the recovery reserve.
 
 Normal application startup never runs migrations. Read the [upgrade and restore procedure](../how-to/upgrade.md) before using the adoption flag. Every change to the Alembic head requires a database restore before an older artifact can start again; additive SQL is not an exception.
