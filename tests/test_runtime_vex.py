@@ -13,15 +13,15 @@ from tools.release_vex import ReleaseVexError, validate_release_vex
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "security/vex/runtime.openvex.json"
 PACKAGES = (
-    ("gzip", "gzip", "1.13-1"),
-    ("libc-bin", "glibc", "2.41-12+deb13u3"),
-    ("libc6", "glibc", "2.41-12+deb13u3"),
-    ("libpcre2-8-0", "pcre2", "10.46-1~deb13u1"),
-    ("libsqlite3-0", "sqlite3", "3.46.1-7+deb13u1"),
-    ("libssl3t64", "openssl", "3.5.7-1~deb13u2"),
-    ("openssl", "openssl", "3.5.7-1~deb13u2"),
-    ("openssl-provider-legacy", "openssl", "3.5.7-1~deb13u2"),
-    ("perl-base", "perl", "5.40.1-6"),
+    ("gzip", "gzip", "1.13-1+deb13u1"),
+    ("libc-bin", "glibc", "2.41-12+deb13u4"),
+    ("libc6", "glibc", "2.41-12+deb13u4"),
+    ("libpcre2-8-0", "pcre2", "10.46-1~deb13u2"),
+    ("libsqlite3-0", "sqlite3", "3.46.1-7+deb13u2"),
+    ("libssl3t64", "openssl", "3.5.7-1~deb13u3"),
+    ("openssl", "openssl", "3.5.7-1~deb13u3"),
+    ("openssl-provider-legacy", "openssl", "3.5.7-1~deb13u3"),
+    ("perl-base", "perl", "5.40.1-6+deb13u1"),
 )
 
 
@@ -34,7 +34,7 @@ def inventories(tmp_path: Path) -> list[Path]:
             "image": {
                 "architecture": architecture,
                 "distro": "debian-13",
-                "distro_full": "debian-13.6",
+                "distro_full": "debian-13.7",
                 "os_release_path": "usr/lib/os-release",
                 "os_release_sha256": "c" * 64,
                 "os_release_size": 286,
@@ -83,25 +83,26 @@ def test_review_records_glibc_caller_evidence_and_existing_openssl_fixes() -> No
     document = json.loads(SOURCE.read_text(encoding="utf-8"))
     statements = document["statements"]
     assert Counter(statement["status"] for statement in statements) == {
-        "not_affected": 19,
-        "fixed": 2,
+        "not_affected": 1,
+        "fixed": 25,
     }
     by_cve = {statement["vulnerability"]["name"]: statement for statement in statements}
     assert len(by_cve) == len(statements)
-    pcre2 = by_cve["CVE-2026-89157"]
+    pcre2 = by_cve["CVE-2026-103111"]
     assert pcre2["status"] == "not_affected"
-    assert "32-bit" in pcre2["impact_statement"]
-    assert "pattern-conversion API" in pcre2["impact_statement"]
+    assert "JIT" in pcre2["impact_statement"]
+    assert "does not load the named Debian" in pcre2["impact_statement"]
     assert {product["identifiers"]["purl"] for product in pcre2["products"]} == {
-        f"pkg:deb/debian/libpcre2-8-0@10.46-1~deb13u1?arch={architecture}"
-        "&distro=debian-13.6&upstream=pcre2"
+        f"pkg:deb/debian/libpcre2-8-0@10.46-1~deb13u2?arch={architecture}"
+        "&distro=debian-13.7&upstream=pcre2"
         for architecture in ("amd64", "arm64")
     }
-    assert "GHSA-q8g2-wprr-34m9" in pcre2["status_notes"]
+    assert "GHSA-r9hj-j2rw-4q3m" in pcre2["status_notes"]
     glibc = by_cve["CVE-2026-5450"]
-    assert glibc["status"] == "not_affected"
+    assert glibc["status"] == "fixed"
     assert len(glibc["products"]) == 4
-    assert "glibc-2026-5450-callers.json" in glibc["impact_statement"]
+    # Retain the historical caller evidence without treating it as a claim
+    # about the updated runtime. Its glibc package now contains the fixes.
     evidence = json.loads(
         (ROOT / "security/vex/glibc-2026-5450-callers.json").read_text(encoding="utf-8")
     )

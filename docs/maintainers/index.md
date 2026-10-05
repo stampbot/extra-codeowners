@@ -194,7 +194,8 @@ records the package versions, native-library checks, and limits of the current
 assessment. `under_investigation` is not an exemption: the finding still blocks
 the High/Critical gate. The older OpenSSL-only files remain as historical
 evidence; current builds use the combined runtime statement.
-The Python version is unchanged by this base-image digest refresh.
+The October 5 runtime update also moves CPython from 3.14.7 to 3.14.8; review
+its compatibility tests and source evidence along with the Debian packages.
 
 Before allocating another version, the workflow requires the preceding release
 to be published and immutable. It accepts `v0.1.0-alpha.7` as the sole
