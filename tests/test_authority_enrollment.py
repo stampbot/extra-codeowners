@@ -879,7 +879,7 @@ async def test_narrow_followup_revisits_pull_already_handled_by_broad_scan(
     store.enqueue_authority(AuthorityRequest(2, "example/project", "main", "push.repository_base"))
     assert store.complete_authority(broad, "worker")
     narrow = store.claim_authority("narrow-worker", 60)
-    assert narrow is not None and narrow.base_ref == "main"
+    assert narrow is not None and dict(narrow.target_base_refs) == {"main": "push.repository_base"}
     github.list_authority_pull_page = AsyncMock(
         return_value=AuthorityPullPage([summary], next_page=0, last_number=3)
     )
@@ -888,6 +888,73 @@ async def test_narrow_followup_revisits_pull_already_handled_by_broad_scan(
     assert await worker._process_authority(narrow) == "completed"
 
     github.get_pull.assert_awaited_once_with(2, "example/project", 3)
+
+
+@pytest.mark.asyncio
+async def test_one_historical_listing_serves_one_hundred_pending_branches(tmp_path: Path) -> None:
+    store, github, _, worker = authority_fixture(tmp_path)
+    initial = store.claim_authority("worker", 60)
+    assert initial is not None and store.complete_authority(initial, "worker")
+    refs = [f"branch-{number:03d}" for number in range(100)]
+    for number, ref in enumerate(refs):
+        assert store.accept_delivery(
+            f"branch-push-{number}",
+            "push",
+            AuthorityRequest(2, "example/project", ref, "push.repository_base"),
+        ).accepted
+    assert store.pending_count() == 1
+    claimed = store.claim_authority("worker", 60)
+    assert claimed is not None and set(dict(claimed.target_base_refs)) == set(refs)
+    assert store.claim_authority("second-replica", 60) is None
+    calls: list[int] = []
+
+    async def history_page(
+        _installation: int, _repository: str, *, page: int = 1, after_number: int = 0
+    ) -> AuthorityPullPage:
+        calls.append(page)
+        assert after_number == (page - 1) * 100
+        if page < 5:
+            return AuthorityPullPage([], next_page=page + 1, last_number=page * 100)
+        assert page == 5
+        pulls = [pull_summary(number, "2026-10-05T00:00:00Z") for number in (401, 402, 403)]
+        for pull, ref in zip(pulls, (refs[0], refs[-1], "unrelated"), strict=True):
+            pull["base"] = {"ref": ref}
+        return AuthorityPullPage(pulls, next_page=0, last_number=403)
+
+    original = github.get_pull
+
+    async def current_pull(installation: int, repository: str, number: int) -> dict[str, Any]:
+        pull: dict[str, Any] = await original(installation, repository, number)
+        pull["base"]["ref"] = refs[0] if number == 401 else refs[-1]
+        return pull
+
+    github.list_authority_pull_page = AsyncMock(side_effect=history_page)
+    github.get_pull = AsyncMock(side_effect=current_pull)
+    assert await worker._process_authority(claimed) == "completed"
+    assert calls == [1, 2, 3, 4, 5]  # Five history requests, not 100 separate five-page scans.
+    assert {call.args[2] for call in github.get_pull.await_args_list} == {401, 402}
+    assert github.get_branch_head.await_count == 2
+    assert store.pending_count() == 0
+
+
+def test_active_scan_hands_one_hundred_later_branches_to_one_batch(tmp_path: Path) -> None:
+    store, _, _, _ = authority_fixture(tmp_path)
+    current = store.claim_authority("worker", 60)
+    assert current is not None
+    assert store.advance_authority_cursor(
+        current, 0, {}, listing_next_page=3, listing_last_number=200
+    )
+    targets = {f"branch-{number:03d}": "push.repository_base" for number in range(100)}
+    for ref, reason in targets.items():
+        store.enqueue_authority(AuthorityRequest(2, "example/project", ref, reason))
+    assert store.pending_count() == 1
+    assert store.complete_authority(current, "worker")
+    followup = store.claim_authority("second-replica", 60)
+    assert followup is not None and followup.id == current.id
+    assert followup.generation == current.generation + 1
+    assert dict(followup.target_base_refs) == targets
+    assert followup.listing_next_page == 1 and followup.listing_last_number == 0
+    assert store.claim_authority("duplicate-history", 60) is None
 
 
 def test_authority_cursor_is_monotonic_and_retains_later_full_pass(tmp_path: Path) -> None:

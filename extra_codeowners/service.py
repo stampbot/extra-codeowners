@@ -2386,6 +2386,7 @@ class Worker:
                 raise
             return
         handled = dict(job.handled_pull_fingerprints)
+        target_base_refs = dict(job.target_base_refs)
 
         semaphore = asyncio.Semaphore(self.settings.authority_fanout_concurrency)
         policies: dict[str, bool] = {}
@@ -2494,10 +2495,12 @@ class Worker:
                     raise GitHubError("open pull response omitted its number")
                 if not isinstance(head, dict) or not isinstance(head.get("sha"), str):
                     raise GitHubError("open pull response omitted its head SHA")
-                if job.base_ref is not None:
+                if job.base_ref is not None or target_base_refs:
                     if not isinstance(base, dict) or not isinstance(base.get("ref"), str):
                         raise GitHubError("open pull response omitted its base ref")
-                    if base["ref"] != job.base_ref:
+                    if job.base_ref is not None and base["ref"] != job.base_ref:
+                        continue
+                    if target_base_refs and base["ref"] not in target_base_refs:
                         continue
                 observations[number] = hashlib.sha256(
                     json.dumps(
@@ -2517,7 +2520,11 @@ class Worker:
                         installation_id=job.installation_id,
                         repository_full_name=full_name,
                         pull_number=number,
-                        reason=job.reason,
+                        reason=(
+                            target_base_refs.get(base["ref"], job.reason)
+                            if target_base_refs and isinstance(base, dict)
+                            else job.reason
+                        ),
                         head_sha_hint=str(head["sha"]),
                         work_class="recovery",
                         base_ref_hint=(

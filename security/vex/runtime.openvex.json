@@ -1,6 +1,6 @@
 {
   "@context": "https://openvex.dev/ns/v0.2.0",
-  "@id": "urn:uuid:7942584d-7bc1-576f-a0f7-cd9af81b6616",
+  "@id": "urn:uuid:2b9b54d1-557e-5d77-a22f-7a756f4ef22c",
   "author": "Extra CODEOWNERS maintainers",
   "role": "VEX document producer",
   "statements": [
@@ -741,14 +741,14 @@
       "extra_codeowners/alembic/versions/0007_reconciliation_completion.py": "a4b0ef650761a915ea19b8f73db0d1d277d3f6f4e3f71736114906bfeeffac9f",
       "extra_codeowners/alembic/versions/0008_recovery_api_budget.py": "7d4ae0f8829500de2c23395ef7e14b29225536e841017216308fc07f48b341b3",
       "extra_codeowners/alembic/versions/0009_conditional_request_budget.py": "8356e2d4f1701030ceb275cedbe85ee6ca6e4827ddd87fb84e6b8cd1726ade00",
-      "extra_codeowners/alembic/versions/0010_authority_discovery_cursor.py": "7784f94a8794bd5b6be31c07de487cbb4a9633987c8163bc25bf8dbe3a8ff23a",
+      "extra_codeowners/alembic/versions/0010_authority_discovery_cursor.py": "db4d488e8a193346098b2415e6c02d788365679ec631996a920270495df24d80",
       "extra_codeowners/alembic/versions/__init__.py": "c421d4569599794de9ddda269e84b775d6e8204164cb9dff2487ca86560d21ae",
       "extra_codeowners/api_budget.py": "f61539671f308b2581a4a6494a8acd56b3f9f462eac93de7ccf764acd5e82e61",
       "extra_codeowners/app.py": "d30ca24500e3b0d3ace360140d56d568d6bd06865acac406ddaa8a4c623d89ad",
       "extra_codeowners/build_identity.py": "5c3b38f087460fca37660ddeaa8a004d05348f8c947c04fc2444739ab7896968",
       "extra_codeowners/cli.py": "79a5c200397f9544492ec6071890ff5835c1ed625c623a0a86ed3a60503e65f4",
       "extra_codeowners/codeowners.py": "da8be54dbc8a79dcbaf39d49491f950d5405d74d6bb5e07da5247644f5ffcfd8",
-      "extra_codeowners/database.py": "7675af57c9ffd17d72610384c1ccdeaec7804f3a7b20b43bd78e7ea6893ca039",
+      "extra_codeowners/database.py": "de70a8db4643708686ee80816e82992861354a96d4c5a9076f6f0fcbf3f28c86",
       "extra_codeowners/dco.py": "8c3a0b541fe021fb9f05500ca9278306901010c219e7e1199ca5e205c138e68d",
       "extra_codeowners/discovery_cache.py": "ec62a728af9c5206de815aa72affd69e231d2acb45b5f80e33790ec6e20b29c7",
       "extra_codeowners/evaluator.py": "b81b9d1c6fe81d591867b0993d413030caab8af48703c4725f14c04fe2e3f9a6",
@@ -760,7 +760,7 @@
       "extra_codeowners/models.py": "dc59959f56e35111fae00f8f60ef054ba80eb839eb2dae5b09165d4cdc349a48",
       "extra_codeowners/policy.py": "844abb482a7c9cc3190d624cc92ece2476128644718e4096f98bfa8a0abedf8a",
       "extra_codeowners/py.typed": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "extra_codeowners/service.py": "478a0788f9e7eef2cfeaa9665a89467cc08e7bf8d000a4e983eaf6e531ddf644",
+      "extra_codeowners/service.py": "dceae3d51583ef7657ded3b2e7f40f0ebea75495cf2d8b6741e616da844c43f8",
       "extra_codeowners/settings.py": "bd1d3cd0acf23ea4b26869fc1e024438aba7b9acf43f3850c4e6be2e9a5b5437",
       "extra_codeowners/trace_context.py": "f79ca91baa1dd615c80546c66a6b370ba78ec7106dece3feb201d10250078532",
       "extra_codeowners/tracing.py": "62c730c8bdf4d632dace5b79232f968d871a28d8724a162aa52ba6b4ed2c6db1",
@@ -768,7 +768,7 @@
       "pyproject.toml": "4164e19c10e620b1cae1db22dab5728b4e80eb0f5a9dd768484b6f12de73fc96",
       "uv.lock": "2f0aebfcdfe39538db8cfb67eb13287ec3245efd794c1d47d022c7297eb41b9a"
     },
-    "review": "Coalesced authority evidence now wakes delayed work and advances the existing wake serial while preserving discovery progress and active claims. These Python/SQL scheduling changes introduce no native PCRE2 inputs or JIT calls; both reviewed ELF graphs exclude the named Debian library. See security/vex/runtime-review.md.",
+    "review": "Shared authority branch batches and migration consolidation change Python and SQL only. No native PCRE2 inputs or JIT calls were added; both reviewed ELF graphs exclude the named Debian library. See security/vex/runtime-review.md.",
     "schema_version": 1
   }
 }

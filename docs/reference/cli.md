@@ -114,7 +114,8 @@ Migration `0010_authority_discovery_cursor` records completed listing pages and
 handled observations on an unfinished page. Discovery resumes after a quota
 pause or replica takeover without replaying completed pages. The revision also
 preserves a new direct event's wakeup when its authority claim fails, and retains
-later branch rechecks without restarting a repository-wide scan.
+later branch rechecks without restarting a repository-wide scan. Pending
+branches share one historical PR listing rather than scanning it separately.
 It does not change the GitHub quota window or remove the recovery reserve.
 
 Normal application startup never runs migrations. Read the [upgrade and restore procedure](../how-to/upgrade.md) before using the adoption flag. Every change to the Alembic head requires a database restore before an older artifact can start again; additive SQL is not an exception.

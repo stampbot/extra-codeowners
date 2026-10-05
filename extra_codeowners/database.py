@@ -313,6 +313,7 @@ class AuthorityJob(Base):
     listing_expected_total: Mapped[int | None] = mapped_column(Integer)
     membership_next_page: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     membership_expected_total: Mapped[int | None] = mapped_column(Integer)
+    target_base_refs: Mapped[dict[str, str]] = mapped_column(JSON, nullable=False, default=dict)
     # Direct PR events and coalesced authority evidence share this wake serial.
     interactive_wake_generation: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     pending_base_refs: Mapped[dict[str, str]] = mapped_column(JSON, nullable=False, default=dict)
@@ -555,6 +556,7 @@ class ClaimedAuthorityJob:
     listing_expected_total: int | None = None
     membership_next_page: int = 1
     membership_expected_total: int | None = None
+    target_base_refs: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -2079,7 +2081,12 @@ class QueueStore:
     ) -> None:
         now = utcnow()
         scope_key = request.scope_key
-        base_ref = request.base_ref or ""
+        # All branches share one repository listing and uniqueness key. An
+        # empty target set means all branches; otherwise it is a bounded batch.
+        base_ref = ""
+        target_ref = request.base_ref if request.repository_full_name is not None else None
+        if target_ref is not None and len(target_ref) > MAX_AUTHORITY_BASE_REF_LENGTH:
+            target_ref = None
         existing = session.scalar(
             select(AuthorityJob)
             .where(
@@ -2090,90 +2097,44 @@ class QueueStore:
             .with_for_update()
         )
         if existing is not None:
-            # Later evidence needs another complete pass, not a restart of the
-            # current pass. This also bounds repeated label edits and pushes.
-            existing.pending_full_rescan = True
-            existing.pending_rescan_reason = request.reason
-            existing.pending_base_refs = {}
             existing.available_at = now
             existing.interactive_wake_generation += 1
-            return
-        if request.repository_full_name is not None:
-            if not base_ref:
-                # A repository-wide authority event covers every pending base
-                # push and should collapse a contributor-created branch queue.
-                session.execute(
-                    delete(AuthorityJob).where(
-                        AuthorityJob.installation_id == request.installation_id,
-                        AuthorityJob.scope_key == scope_key,
-                        AuthorityJob.base_ref != "",
+            unstarted = (
+                existing.lease_owner is None
+                and existing.attempts == 0
+                and existing.listing_next_page == 1
+                and existing.listing_last_number == 0
+                and not existing.handled_pull_fingerprints
+            )
+            if unstarted:
+                # No observation exists yet, so widening this queued pass
+                # cannot omit evidence or discard a completed prefix.
+                if target_ref is None:
+                    existing.target_base_refs = {}
+                elif existing.target_base_refs:
+                    targets = dict(existing.target_base_refs)
+                    targets[target_ref] = request.reason
+                    existing.target_base_refs = (
+                        targets
+                        if len(targets) <= MAX_BASE_SCOPED_AUTHORITY_JOBS_PER_REPOSITORY
+                        else {}
                     )
-                )
+                existing.reason = request.reason
+            elif target_ref is None:
+                existing.pending_full_rescan = True
+                existing.pending_rescan_reason = request.reason
+                existing.pending_base_refs = {}
             else:
-                same_base_exists = session.scalar(
-                    select(AuthorityJob.id).where(
-                        AuthorityJob.installation_id == request.installation_id,
-                        AuthorityJob.scope_key == scope_key,
-                        AuthorityJob.base_ref == base_ref,
-                    )
-                )
-                repository_wide = session.scalar(
-                    select(AuthorityJob)
-                    .where(
-                        AuthorityJob.installation_id == request.installation_id,
-                        AuthorityJob.scope_key == scope_key,
-                        AuthorityJob.base_ref == "",
-                    )
-                    .with_for_update()
-                )
-                if repository_wide is not None:
-                    # A branch push must not restart a broader scan that may
-                    # already span quota windows. Keep later evidence separate
-                    # and hand it off atomically when that scan completes.
-                    repository_wide.available_at = now
-                    repository_wide.interactive_wake_generation += 1
-                    if not repository_wide.pending_full_rescan:
-                        pending_refs = dict(repository_wide.pending_base_refs)
-                        pending_refs[base_ref] = request.reason
-                        if (
-                            len(base_ref) > MAX_AUTHORITY_BASE_REF_LENGTH
-                            or len(pending_refs) > MAX_BASE_SCOPED_AUTHORITY_JOBS_PER_REPOSITORY
-                        ):
-                            repository_wide.pending_full_rescan = True
-                            repository_wide.pending_rescan_reason = request.reason
-                            repository_wide.pending_base_refs = {}
-                        else:
-                            repository_wide.pending_base_refs = pending_refs
-                    return
-                base_scoped_count = int(
-                    session.scalar(
-                        select(func.count())
-                        .select_from(AuthorityJob)
-                        .where(
-                            AuthorityJob.installation_id == request.installation_id,
-                            AuthorityJob.scope_key == scope_key,
-                            AuthorityJob.base_ref != "",
-                        )
-                    )
-                    or 0
-                )
-                if len(base_ref) > MAX_AUTHORITY_BASE_REF_LENGTH or (
-                    same_base_exists is None
-                    and base_scoped_count >= MAX_BASE_SCOPED_AUTHORITY_JOBS_PER_REPOSITORY
-                ):
-                    # Once the bounded set overflows, one repository-wide job
-                    # is safer and cheaper than an attacker-controlled number
-                    # of unique branch rows. It conservatively reevaluates all
-                    # open pull requests in the repository.
-                    # Refs too long for the SQL key use the same fallback.
-                    session.execute(
-                        delete(AuthorityJob).where(
-                            AuthorityJob.installation_id == request.installation_id,
-                            AuthorityJob.scope_key == scope_key,
-                            AuthorityJob.base_ref != "",
-                        )
-                    )
-                    base_ref = ""
+                if not existing.pending_full_rescan:
+                    pending_refs = dict(existing.pending_base_refs)
+                    pending_refs[target_ref] = request.reason
+                    if len(pending_refs) > MAX_BASE_SCOPED_AUTHORITY_JOBS_PER_REPOSITORY:
+                        existing.pending_full_rescan = True
+                        existing.pending_rescan_reason = request.reason
+                        existing.pending_base_refs = {}
+                    else:
+                        existing.pending_base_refs = pending_refs
+            return
         # A concurrent first insertion must take the caller's IntegrityError
         # retry path and then coalesce under its row lock. An UPDATE here could
         # overwrite a newly inserted row that has already begun discovery.
@@ -2182,6 +2143,7 @@ class QueueStore:
                 installation_id=request.installation_id,
                 scope_key=scope_key,
                 base_ref=base_ref,
+                target_base_refs=({target_ref: request.reason} if target_ref is not None else {}),
                 reason=request.reason,
                 requested_at=now,
                 available_at=now,
@@ -3098,6 +3060,8 @@ class QueueStore:
         for _ in range(3):
             with self.session() as session:
                 direct_waiter = self._authority_direct_waiter()
+                targets = func.json_each(AuthorityJob.target_base_refs).table_valued("key", "value")
+                all_bases = ~exists(select(literal(1)).select_from(targets).correlate(AuthorityJob))
                 candidate = session.scalar(
                     select(AuthorityJob.id)
                     .where(
@@ -3114,7 +3078,7 @@ class QueueStore:
                         ),
                         case(
                             (AuthorityJob.scope_key == "*", 0),
-                            (AuthorityJob.base_ref == "", 1),
+                            (and_(AuthorityJob.base_ref == "", all_bases), 1),
                             else_=2,
                         ),
                         AuthorityJob.available_at,
@@ -3167,6 +3131,7 @@ class QueueStore:
                     listing_expected_total=row.listing_expected_total,
                     membership_next_page=row.membership_next_page,
                     membership_expected_total=row.membership_expected_total,
+                    target_base_refs=tuple(row.target_base_refs.items()),
                 )
         return None
 
@@ -3286,11 +3251,17 @@ class QueueStore:
             )
             if row is None:
                 return False
-            if row.pending_full_rescan:
-                # Coalesce overflow into one *next* scan. Arrivals during the
-                # current scan never erase its progress or steal its lease.
+            if row.pending_full_rescan or row.pending_base_refs:
+                # One next batch shares history across every later branch.
+                # Never fan out a separate historical scan for each ref.
+                targets = {} if row.pending_full_rescan else dict(row.pending_base_refs)
+                reason = row.pending_rescan_reason or (
+                    next(reversed(targets.values())) if targets else "push.repository_base"
+                )
                 now = utcnow()
                 row.generation += 1
+                row.base_ref = ""
+                row.target_base_refs = targets
                 row.pull_cursor_number = 0
                 row.handled_pull_fingerprints = {}
                 row.listing_next_page = 1
@@ -3301,7 +3272,7 @@ class QueueStore:
                 row.interactive_wake_generation = 0
                 row.pending_base_refs = {}
                 row.pending_full_rescan = False
-                row.reason = row.pending_rescan_reason or "push.repository_base"
+                row.reason = reason
                 row.pending_rescan_reason = None
                 row.requested_at = now
                 row.available_at = now
@@ -3311,18 +3282,7 @@ class QueueStore:
                 row.lease_until = None
                 row.last_error = None
             else:
-                pending_refs = dict(row.pending_base_refs)
                 session.delete(row)
-                session.flush()
-                # Deletion and follow-up insertion share the transaction, so
-                # publishers cannot observe a gap between the two fences.
-                for base_ref, reason in pending_refs.items():
-                    self._enqueue_authority_in_session(
-                        session,
-                        AuthorityRequest(
-                            job.installation_id, job.repository_full_name, base_ref, reason
-                        ),
-                    )
             return True
 
     def fail_authority(

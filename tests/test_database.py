@@ -1366,16 +1366,14 @@ def test_completed_repository_authority_hands_off_deduplicated_base_refs(
     store.enqueue_authority(AuthorityRequest(17, "example/project", "main", "push.main-latest"))
 
     assert store.complete_authority(claim, "worker")
-    assert store.pending_count() == 2
-    narrow = {
-        (job.base_ref, job.reason)
-        for job in (
-            store.claim_authority("followup-worker", 60),
-            store.claim_authority("followup-worker", 60),
-        )
-        if job is not None
+    assert store.pending_count() == 1
+    batch = store.claim_authority("followup-worker", 60)
+    assert batch is not None and batch.base_ref is None
+    assert dict(batch.target_base_refs) == {
+        "main": "push.main-latest",
+        "release": "push.release",
     }
-    assert narrow == {("main", "push.main-latest"), ("release", "push.release")}
+    assert store.claim_authority("duplicate-history-scan", 60) is None
 
 
 def test_repository_authority_bounds_narrow_followups_with_one_full_rescan(
@@ -1570,10 +1568,12 @@ def test_stale_repository_claim_cannot_consume_pending_base_followups(
     else:
         assert store.complete_authority(current, "current-worker")
     followup = store.claim_authority("followup-worker", 60)
-    assert followup is not None and followup.base_ref == "main"
+    assert followup is not None and dict(followup.target_base_refs) == {
+        "main": "push.repository_base"
+    }
 
 
-def test_authority_scope_blocks_only_affected_evaluations(tmp_path: Path) -> None:
+def test_branch_batch_conservatively_fences_its_repository(tmp_path: Path) -> None:
     store = make_store(tmp_path)
     store.enqueue(request())
     claimed = store.claim("worker", 60)
@@ -1582,7 +1582,7 @@ def test_authority_scope_blocks_only_affected_evaluations(tmp_path: Path) -> Non
     store.accept_delivery("base", "push", authority_request())
 
     assert store.has_blocking_authority(claimed, "main") is True
-    assert store.has_blocking_authority(claimed, "release") is False
+    assert store.has_blocking_authority(claimed, "release") is True
 
     installation_scope = AuthorityRequest(
         installation_id=17,
@@ -1724,7 +1724,7 @@ def test_security_sensitive_authority_work_preempts_older_base_pushes(tmp_path: 
     base_push = store.claim_authority("worker", 60)
     assert base_push is not None
     assert base_push.repository_full_name == "example/project"
-    assert base_push.base_ref == "main"
+    assert dict(base_push.target_base_refs) == {"main": "push.repository_base"}
 
 
 @pytest.mark.parametrize("prioritize", [True, False])
@@ -1816,41 +1816,32 @@ def test_direct_event_wakes_only_covering_base_authority_rows(
                 assert row.available_at.replace(tzinfo=UTC) > utcnow() + timedelta(seconds=55)
 
 
-def test_unknown_direct_event_can_claim_and_fresh_base_observation_wakes_exact_fence(
+def test_unknown_direct_event_wakes_shared_batch_and_waits_for_its_completion(
     tmp_path: Path,
 ) -> None:
     store = make_store(tmp_path)
     store.enqueue_authority(AuthorityRequest(17, "example/project", "release", "push.release"))
     store.enqueue_authority(AuthorityRequest(17, "example/project", "main", "push.main"))
-    for owner in ("release-worker", "main-worker"):
-        authority = store.claim_authority(owner, 60)
-        assert authority is not None
-        assert store.defer_authority(authority, owner, "quota pause", 600)
+    authority = store.claim_authority("batch-worker", 60)
+    assert authority is not None
+    assert store.defer_authority(authority, "batch-worker", "quota pause", 600)
 
     store.enqueue(request(base_ref_hint=None))
-    assert store.claim_authority("unknown-priority", 60) is None
+    assert store.claim("evaluation-worker", 60) is None
+    resumed = store.claim_authority("unknown-priority", 60)
+    assert resumed is not None and resumed.id == authority.id
+    assert dict(resumed.target_base_refs) == {"main": "push.main", "release": "push.release"}
+    assert store.authority_has_direct_waiter(resumed)
+    assert store.complete_authority(resumed, "unknown-priority")
     claimed = store.claim("evaluation-worker", 60)
     assert claimed is not None and claimed.base_ref_hint is None
-    with store.session() as session:
-        before = {
-            row.base_ref: row.interactive_wake_generation for row in session.query(AuthorityJob)
-        }
 
     assert store.observe_evaluation_base(claimed, "main")
 
     with store.session() as session:
-        rows = {row.base_ref: row for row in session.query(AuthorityJob)}
-        assert rows["main"].interactive_wake_generation == before["main"] + 1
-        assert rows["release"].interactive_wake_generation == before["release"]
-    with store.session() as session:
         row = session.get(EvaluationJob, claimed.id)
         assert row is not None and row.base_ref_hint == "main"
-    main_fence = store.claim_authority("main-authority-worker", 60)
-    assert main_fence is not None and main_fence.base_ref == "main"
-    assert store.authority_has_direct_waiter(main_fence)
-    assert store.has_blocking_authority(claimed, "main")
-    # The hint is scheduling context only; publication checks the actual base.
-    assert store.has_blocking_authority(claimed, "release")
+    assert store.claim_authority("no-extra-history-scan", 60) is None
 
 
 def test_base_hint_coalescing_clears_stale_value_and_rejects_invalid_explicit_values(

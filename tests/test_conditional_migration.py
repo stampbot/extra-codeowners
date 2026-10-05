@@ -111,6 +111,57 @@ def test_upgrade_0008_budget_rows_backfills_revision_and_preserves_state(
     store.close()
 
 
+@pytest.mark.parametrize(("branch_count", "include_broad"), [(2, False), (2, True), (101, False)])
+def test_authority_migration_batches_legacy_branch_history_once(
+    migration_url: str, branch_count: int, include_broad: bool
+) -> None:
+    upgrade_database(migration_url, revision="0009_conditional_request_budget")
+    engine = create_engine(migration_url)
+    now = utcnow().replace(microsecond=0)
+    old_rows = [
+        {
+            "base_ref": f"branch-{number:03d}",
+            "reason": f"push-{number}",
+            "generation": number + 1,
+            "now": now,
+        }
+        for number in range(branch_count)
+    ]
+    if include_broad:
+        old_rows.append({"base_ref": "", "reason": "label.edited", "generation": 1000, "now": now})
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                INSERT INTO authority_jobs
+                    (installation_id, scope_key, base_ref, reason, generation, state,
+                     attempts, requested_at, available_at, lease_owner, lease_until, last_error)
+                VALUES (17, 'example/project', :base_ref, :reason, :generation, 'pending',
+                        2, :now, :now, NULL, NULL, 'previous pause')
+                """
+            ),
+            old_rows,
+        )
+    engine.dispose()
+    upgrade_database(migration_url)
+    store = QueueStore(migration_url)
+    store.initialize()
+    with store.session() as session:
+        row = session.query(AuthorityJob).one()
+        assert row.base_ref == "" and row.state == "pending"
+        assert row.generation == (1001 if include_broad else branch_count + 1)
+        assert row.listing_next_page == 1 and row.handled_pull_fingerprints == {}
+        assert row.lease_owner is None and row.lease_until is None
+        if include_broad or branch_count > 100:
+            assert row.target_base_refs == {}
+        else:
+            assert row.target_base_refs == {item["base_ref"]: item["reason"] for item in old_rows}
+    assert store.pending_count() == 1
+    assert store.claim_authority("batch-worker", 60) is not None
+    assert store.claim_authority("duplicate-history-worker", 60) is None
+    store.close()
+
+
 def test_authority_cursor_migration_preserves_pending_fence(migration_url: str) -> None:
     upgrade_database(migration_url, revision="0009_conditional_request_budget")
     engine = create_engine(migration_url)
@@ -143,6 +194,8 @@ def test_authority_cursor_migration_preserves_pending_fence(migration_url: str) 
         assert row.interactive_wake_generation == 0
         assert row.pending_base_refs == {}
         assert row.pending_full_rescan is False
+        assert row.base_ref == ""
+        assert row.target_base_refs == {"main": "push.repository_base"}
     claim = store.claim_authority("new-replica", 60)
     assert claim is not None and claim.pull_cursor_number == 0
     assert claim.handled_pull_fingerprints == ()
@@ -151,6 +204,7 @@ def test_authority_cursor_migration_preserves_pending_fence(migration_url: str) 
     assert claim.listing_expected_total is None
     assert claim.membership_next_page == 1
     assert claim.membership_expected_total is None
+    assert dict(claim.target_base_refs) == {"main": "push.repository_base"}
     with store.session() as session:
         row = session.query(AuthorityJob).one()
         assert row.pending_rescan_reason is None
@@ -178,6 +232,7 @@ def test_authority_cursor_migration_preserves_pending_fence(migration_url: str) 
         "listing_last_number",
         "interactive_wake_generation",
         "pending_base_refs",
+        "target_base_refs",
         "pending_full_rescan",
         "membership_next_page",
     ):

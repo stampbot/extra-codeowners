@@ -205,10 +205,13 @@ def test_postgres_authority_completion_and_narrow_enqueue_interleave_without_gap
             rows = session.query(AuthorityJob).all()
             assert len(rows) == 1
             assert rows[0].scope_key == "example/project"
-            assert rows[0].base_ref == "main"
+            assert rows[0].base_ref == ""
+            assert rows[0].target_base_refs == {"main": "push.repository_base"}
             assert rows[0].reason == "push.repository_base"
         followup = store.claim_authority("followup", 60)
-        assert followup is not None and followup.base_ref == "main"
+        assert followup is not None and dict(followup.target_base_refs) == {
+            "main": "push.repository_base"
+        }
         assert store.claim_authority("unexpected-extra", 60) is None
     finally:
         release_winner.set()

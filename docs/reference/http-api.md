@@ -357,7 +357,7 @@ The authority worker then:
 3. Supersedes each evaluation generation.
 4. Makes a bounded attempt to invalidate each managed check.
 
-Installation-wide and repository-wide work is claimed before base-specific push work. Repository-wide work removes older base-specific rows. A 101st distinct base ref for one installation and repository collapses those rows into one repository-wide job.
+Installation-wide work is claimed first, followed by repository work blocking direct events. Among other jobs, batches covering every base precede targeted branch batches. Each repository has one discovery job with up to 100 target branches sharing its listing. Overflow broadens the batch to every base. Pushes received during a scan collect in one later batch without restarting the current pass. The shared fence blocks publication for the repository, including queued PRs outside the selected branches.
 
 Exact-head invalidation, evaluation, and authority failures remain pending and
 retry indefinitely with bounded ordinary backoff. GitHub rate limits use a

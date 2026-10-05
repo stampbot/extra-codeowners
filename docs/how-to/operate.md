@@ -421,9 +421,10 @@ Each lane helps with the other class only when its own queue is empty. Authority
 fan-out and pull-request evaluation have separate lanes, so a retrying fan-out
 cannot starve unrelated pull requests. An evaluation with a relevant authority
 fence still waits to publish. Installation-wide authority work splits into
-repository fences. Repository-wide work replaces older base-specific rows, and
-more than 100 distinct base refs for one repository collapse into a conservative
-repository-wide job.
+repository fences. Each repository has one discovery job, with up to 100 target
+branches sharing its historical PR listing. Overflow broadens the batch to all
+bases. The job blocks publication for that repository until discovery finishes,
+even for queued PRs outside the selected branches.
 
 Before queuing follow-up work, authority discovery checks each PR for an existing
 managed check and reads policy from the current target branch. If both are absent,
@@ -444,10 +445,11 @@ page. Changes to completed pages rely on direct events and reconciliation.
 Expect extra listing requests in repositories with a large closed history,
 not one request per changed PR.
 
-Branch pushes during a repository-wide scan queue later branch rechecks without
-resetting its progress. More than 100 distinct branches coalesce into one full
-follow-up scan. A branch name longer than the 255-character database key uses the
-same fallback. The current scan finishes first; new evidence is not discarded.
+Branch pushes before a scan starts join its batch. Pushes during a scan queue
+one later batch without resetting its progress. Both batches hold at most 100
+distinct branches; overflow broadens the affected batch to all bases. A branch
+name longer than 255 characters uses the same fallback. The current scan
+finishes first; new evidence is not discarded.
 Repeated events for the same scope, including label edits, queue one full
 follow-up pass without restarting the active scan.
 
@@ -465,7 +467,7 @@ fence stays pending without creating duplicate evaluations or marking the
 installation as rate limited. Look for
 `authority_discovery_deferred_for_recovery_budget` in the logs. A direct webhook
 or promoted revocation retry wakes its pending installation-wide,
-repository-wide, and known matching base-branch fences so they can use reserved
+shared repository fences so they can use reserved
 quota. Once discovery identifies a PR needing revocation, revocation can also
 use the reserve. Provider limits still stop every lane. A large repository
 blocking direct work or many required revocations can therefore exhaust quota;

@@ -135,11 +135,23 @@ A separate numeric high-water mark is retained only for diagnostics.
 At most the unfinished page of 100 PRs may repeat. New evidence for the same
 scope retains one full follow-up pass with the latest reason instead of erasing
 the current pass. Existing jobs start at page one with no handled observations;
-their fences and retry state are retained.
+their fences and retry state are retained, except where legacy branch rows
+must merge into one repository job as described below.
 An ordinary branch push does not reset a pending repository-wide scan. Instead,
-the row stores up to 100 distinct branch rechecks for atomic handoff at completion.
-Overflow records one full follow-up scan without interrupting the current one.
-Branch names longer than the 255-character database key also use that fallback.
+the row stores up to 100 distinct branch rechecks for one follow-up batch.
+The current batch has its own target-branch map with the same limit. Both maps
+retain the latest reason for each branch. An empty current map means every base;
+overflow and branch names longer than 255 characters use that fallback.
+All branches in a batch share one historical PR listing. Completion resets the
+same row for its follow-up batch, preserving the repository fence between passes.
+
+Migration consolidates legacy branch rows for each repository into that job.
+A pre-existing repository-wide row or more than 100 branch targets produces
+a batch covering every base. Otherwise, the target map preserves the branches
+and their reasons. A single legacy row retains its retry state; merging multiple
+rows clears their leases, resets retry attempts, and advances the generation.
+Authority row counts can therefore decrease without losing discovery coverage.
+Compare that coverage as well as other queue counts when validating a restore.
 Installation jobs use the next-page checkpoint and a nullable expected repository
 count. Their child fences and page progress commit together. A changed count
 restarts enumeration without discarding existing child progress. GitHub doesn't
@@ -150,9 +162,9 @@ expected count, initialized to page one and null. It retains the complete-list
 and fresh repository-installation evidence requirement before retirement.
 
 Evaluation jobs also gain a nullable target-branch scheduling hint. Direct
-events wake matching branch fences, not every branch in the repository. Unknown
-hints may learn the current branch from a fresh PR read; publication still
-uses fresh evidence and its authority guard. Migration initializes that hint
+events wake the shared repository fence even when the hint is unknown or outside
+its selected branches. Publication still uses fresh evidence and its authority
+guard. Migration initializes that hint
 and the expected count to null, the pending branch map empty, the rescan flag
 false, and the pending rescan reason to null.
 The compatibility marker moves from `8` to `9`.
