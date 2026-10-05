@@ -722,7 +722,7 @@
   ],
   "timestamp": "2026-10-05T01:00:00Z",
   "tooling": "Vexcalibur + Extra CODEOWNERS runtime binding",
-  "version": 1,
+  "version": 3,
   "x_extra_codeowners_runtime": {
     "files": {
       ".dockerignore": "3f9dc9d3a79fe3085f25de88403b5563ad5c7fa7010bef94c5e55f24bd3cf691",
