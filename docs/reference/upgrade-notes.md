@@ -17,7 +17,7 @@ The alpha series establishes this compatibility contract:
 | Head change | Yes; authority discovery now records progress across quota pauses and replica takeover. |
 | Supported source releases | `0.1.0-alpha.58` through `0.1.0-alpha.61` at `0009_conditional_request_budget`, `0.1.0-alpha.56` and `0.1.0-alpha.57` at `0008_recovery_api_budget`, `0.1.0-alpha.43` at `0007_reconciliation_completion`, `0.1.0-alpha.42` at `0006_webhook_trace_links`, or `0.1.0-alpha.14` at `0005_reconciliation_state_index`, after a controlled migration. |
 | Target application compatible before migration | No; startup requires the exact head. |
-| Required process state | Stop webhook ingress and every older worker before applying `0010_authority_discovery_cursor`. Suspend GitOps reconciliation and remove the HPA before scaling a Kubernetes Deployment to zero. |
+| Required process state | Stop webhook ingress and every older worker before applying `0010_authority_discovery_cursor`. Remove the HPA and either commit a zero-replica drain state or suspend GitOps reconciliation before scaling down; see the [drain procedure](../how-to/upgrade.md#drain-a-kubernetes-release). |
 | In-place database downgrade | Not supported. |
 | Rollback after head change | Restore the verified pre-migration backup. An older image rejects this head. |
 | Backup required | Yes, before deployment and before every pre-release schema adoption. |
