@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock
@@ -8,7 +10,13 @@ from unittest.mock import AsyncMock
 import pytest
 from test_service import BASE, HEAD, FakeGitHub, migrated_store, settings
 
-from extra_codeowners.database import AuthorityRequest, JobRequest, QueueStore
+from extra_codeowners.api_budget import (
+    REQUEST_LANE,
+    CoreQuota,
+    RecoveryApiBudget,
+    RecoveryBudgetDeferredError,
+)
+from extra_codeowners.database import AuthorityJob, AuthorityRequest, JobRequest, QueueStore
 from extra_codeowners.github import GitHubError, GitHubRateLimitError
 from extra_codeowners.service import EvaluationService, Worker
 
@@ -219,8 +227,8 @@ async def test_large_unenrolled_fanout_does_not_create_a_second_queue(tmp_path: 
     assert github.get_pull.await_count == 1000
     assert github.has_reconciliation_check.await_count == 1000
     github.has_check_run.assert_not_awaited()
-    assert github.get_branch_head.await_count == 1000
-    assert github.get_file_text.await_count == 1000
+    assert github.get_branch_head.await_count == 1
+    assert github.get_file_text.await_count == 1
     assert store.pending_count() == 0
     assert not github.checks
 
@@ -234,8 +242,10 @@ async def test_revocation_new_head_is_not_overwritten_after_enrollment_lookup(
     original = evaluator.authority_followup_required
     new_head = "d" * 40
 
-    async def advance_after_lookup(job: JobRequest) -> bool:
-        required = await original(job)
+    async def advance_after_lookup(
+        job: JobRequest, *, policy_present: Callable[[str], Awaitable[bool]] | None = None
+    ) -> bool:
+        required = await original(job, policy_present=policy_present)
         pull = await github.get_pull(2, "example/project", 3)
         pull["head"]["sha"] = new_head
         github.get_pull.return_value = pull
@@ -252,3 +262,135 @@ async def test_revocation_new_head_is_not_overwritten_after_enrollment_lookup(
     assert evaluation.work_class == "interactive"
     assert store.shared_head_generation(2, "example/project", HEAD) == 1
     assert store.shared_head_generation(2, "example/project", new_head) == 1
+
+
+@pytest.mark.asyncio
+async def test_authority_policy_reads_are_shared_only_for_the_same_target_branch(
+    tmp_path: Path,
+) -> None:
+    store, github, _, worker = authority_fixture(tmp_path)
+    github.list_open_pulls.return_value = [
+        {"number": number, "head": {"sha": HEAD}, "base": {"ref": "main"}} for number in range(1, 6)
+    ]
+    original = github.get_pull
+
+    async def different_branch(installation: int, repository: str, number: int) -> dict[str, Any]:
+        pull: dict[str, Any] = await original(installation, repository, number)
+        pull["base"]["ref"] = "main" if number % 2 else "release"
+        return pull
+
+    github.get_pull = AsyncMock(side_effect=different_branch)
+    claimed = store.claim_authority("worker", 60)
+    assert claimed is not None
+    assert await worker._process_authority(claimed) == "completed"
+    assert github.get_branch_head.await_count == 2
+    assert github.get_file_text.await_count == 2
+    assert store.pending_count() == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["list_open_pulls", "get_pull", "get_branch_head"])
+async def test_local_discovery_pause_keeps_fence_without_promoting_or_provider_backoff(
+    tmp_path: Path, operation: str
+) -> None:
+    store, github, _, worker = authority_fixture(tmp_path)
+    getattr(github, operation).side_effect = RecoveryBudgetDeferredError(600)
+    claimed = store.claim_authority("worker", 60)
+    assert claimed is not None
+    assert await worker._process_authority(claimed) == "budget_deferred"
+    assert not store.provider_is_backpressured(2)
+    assert store.pending_count() == 1
+    assert store.pending_shared_head_invalidation_count() == 0
+    assert store.claim_authority("observer", 60) is None
+    with store.session() as session:
+        row = session.get(AuthorityJob, claimed.id)
+        assert row is not None and row.attempts == 0 and row.lease_owner is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope", ["example/project", None])
+async def test_direct_delivery_wakes_deferred_discovery_and_uses_reserved_quota(
+    tmp_path: Path, scope: str | None
+) -> None:
+    store, github, _, worker = authority_fixture(tmp_path)
+    budget = RecoveryApiBudget(store)
+    budget.observe(2, CoreQuota(100, 20, datetime.now(UTC) + timedelta(minutes=10)))
+
+    async def list_with_budget(*_args: Any) -> list[dict[str, Any]]:
+        budget.admit(2, recovery=REQUEST_LANE.get() == "recovery")
+        return [{"number": 3, "head": {"sha": HEAD}, "base": {"ref": "main"}}]
+
+    github.list_open_pulls.side_effect = list_with_budget
+    if scope is None:
+        # Replace the fixture's repository job with installation-wide discovery.
+        first = store.claim_authority("worker", 60)
+        assert first is not None and store.complete_authority(first, "worker")
+        store.enqueue_authority(AuthorityRequest(2, None, None, "push.organization_policy"))
+
+        async def repositories_with_budget(*_args: Any) -> list[dict[str, Any]]:
+            budget.admit(2, recovery=REQUEST_LANE.get() == "recovery")
+            return [{"full_name": "example/project"}]
+
+        github.list_installation_repositories = AsyncMock(side_effect=repositories_with_budget)
+
+    claimed = store.claim_authority("worker", 60)
+    assert claimed is not None
+    assert await worker._process_authority(claimed) == "budget_deferred"
+    assert store.claim_authority("observer", 60) is None
+
+    store.accept_delivery(
+        "direct", "pull_request_review", JobRequest(2, "example/project", 3, "review", HEAD)
+    )
+    # Replay cannot keep waking a job or increment its generation.
+    assert not store.accept_delivery(
+        "direct", "pull_request_review", JobRequest(2, "example/project", 3, "review", HEAD)
+    )
+    resumed = store.claim_authority("worker", 60)
+    assert resumed is not None
+    assert resumed.generation == claimed.generation
+    assert await worker._process_authority(resumed) == "completed"
+    if scope is None:
+        repository_job = store.claim_authority("worker", 60)
+        assert repository_job is not None
+        assert await worker._process_authority(repository_job) == "completed"
+    assert store.claim_authority("observer", 60) is None
+    assert not store.provider_is_backpressured(2)
+    assert store.pending_count() >= 1  # Original direct work is retained.
+
+
+@pytest.mark.asyncio
+async def test_direct_delivery_during_discovery_deferral_is_not_lost(tmp_path: Path) -> None:
+    store, github, _, worker = authority_fixture(tmp_path)
+
+    async def arrival_during_request(*_args: Any) -> None:
+        store.accept_delivery(
+            "during", "pull_request_review", JobRequest(2, "example/project", 3, "review", HEAD)
+        )
+        raise RecoveryBudgetDeferredError(600)
+
+    github.list_open_pulls.side_effect = arrival_during_request
+    claimed = store.claim_authority("worker", 60)
+    assert claimed is not None
+    assert await worker._process_authority(claimed) == "budget_deferred"
+    resumed = store.claim_authority("another-replica", 60)
+    assert resumed is not None and resumed.generation == claimed.generation
+    assert store.authority_has_direct_waiter(resumed)
+
+
+@pytest.mark.asyncio
+async def test_identified_revocation_uses_reserved_quota(tmp_path: Path) -> None:
+    store, github, _, worker = authority_fixture(tmp_path)
+    github.checks.append({"status": "completed", "conclusion": "success"})
+    lanes: list[str] = []
+    original = worker.evaluator.invalidate_for_trigger
+
+    async def capture_lane(job: JobRequest, shared_head_generation: int | None = None) -> bool:
+        lanes.append(REQUEST_LANE.get())
+        return await original(job, shared_head_generation)
+
+    worker.evaluator.invalidate_for_trigger = capture_lane  # type: ignore[method-assign]
+    claimed = store.claim_authority("worker", 60)
+    assert claimed is not None
+    assert await worker._process_authority(claimed) == "completed"
+    assert lanes == ["authority"]
+    assert github.checks[-1]["status"] == "in_progress"

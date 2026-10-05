@@ -42,6 +42,7 @@ from sqlalchemy.engine import Connection, Engine, make_url
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 from sqlalchemy.pool import NullPool
+from sqlalchemy.sql.elements import ColumnElement
 
 from extra_codeowners.trace_context import TrustedTraceContext
 
@@ -2199,6 +2200,21 @@ class QueueStore:
                                 delivery_id,
                                 shared_head_generation,
                             )
+                            if request.work_class == WORK_CLASS_INTERACTIVE:
+                                # A fresh direct event can use reserved quota
+                                # to finish its fence after background discovery
+                                # paused. Provider backpressure still blocks claims.
+                                session.execute(
+                                    update(AuthorityJob)
+                                    .where(
+                                        AuthorityJob.installation_id == request.installation_id,
+                                        AuthorityJob.scope_key.in_(
+                                            ("*", request.repository_full_name)
+                                        ),
+                                        AuthorityJob.state == "pending",
+                                    )
+                                    .values(available_at=utcnow())
+                                )
                         elif isinstance(request, AuthorityRequest):
                             if request.repository_full_name is None:
                                 self._bump_authority_epoch_in_session(
@@ -2906,6 +2922,30 @@ class QueueStore:
                 )
         return None
 
+    @staticmethod
+    def _authority_direct_waiter() -> ColumnElement[bool]:
+        return exists(
+            select(EvaluationJob.id).where(
+                EvaluationJob.installation_id == AuthorityJob.installation_id,
+                or_(
+                    AuthorityJob.scope_key == "*",
+                    EvaluationJob.repository_full_name == AuthorityJob.scope_key,
+                ),
+                EvaluationJob.state == "pending",
+                EvaluationJob.work_class == WORK_CLASS_INTERACTIVE,
+                EvaluationJob.last_delivery_id.is_not(None),
+            )
+        )
+
+    def authority_has_direct_waiter(self, job: ClaimedAuthorityJob) -> bool:
+        """Whether this fence currently blocks an accepted direct PR event."""
+        with self.session() as session:
+            return bool(
+                session.scalar(
+                    select(self._authority_direct_waiter()).where(AuthorityJob.id == job.id)
+                )
+            )
+
     def claim_authority(
         self, owner: str, lease_seconds: int, *, prioritize_interactive: bool = True
     ) -> ClaimedAuthorityJob | None:
@@ -2914,15 +2954,7 @@ class QueueStore:
         lease_until = now + timedelta(seconds=lease_seconds)
         for _ in range(3):
             with self.session() as session:
-                direct_waiter = exists(
-                    select(EvaluationJob.id).where(
-                        EvaluationJob.installation_id == AuthorityJob.installation_id,
-                        EvaluationJob.repository_full_name == AuthorityJob.scope_key,
-                        EvaluationJob.state == "pending",
-                        EvaluationJob.work_class == WORK_CLASS_INTERACTIVE,
-                        EvaluationJob.last_delivery_id.is_not(None),
-                    )
-                )
+                direct_waiter = self._authority_direct_waiter()
                 candidate = session.scalar(
                     select(AuthorityJob.id)
                     .where(
@@ -3074,6 +3106,8 @@ class QueueStore:
         owner: str,
         error: str,
         delay_seconds: int,
+        *,
+        preserve_direct_wakeup: bool = False,
     ) -> bool:
         """Defer a rate-limited fan-out without consuming its retry budget."""
         delay_seconds = max(1, min(delay_seconds, 86_400))
@@ -3090,7 +3124,12 @@ class QueueStore:
                         (AuthorityJob.attempts > 0, AuthorityJob.attempts - 1),
                         else_=0,
                     ),
-                    available_at=utcnow() + timedelta(seconds=delay_seconds),
+                    available_at=case(
+                        (self._authority_direct_waiter(), utcnow()),
+                        else_=utcnow() + timedelta(seconds=delay_seconds),
+                    )
+                    if preserve_direct_wakeup
+                    else utcnow() + timedelta(seconds=delay_seconds),
                     lease_owner=None,
                     lease_until=None,
                     last_error=error[:2000],

@@ -31,7 +31,7 @@ pull-request activity.
 | `extra_codeowners_github_api_request_seconds` | Its p95 stays near the provider and network baseline; compare it with worker-attempt time before raising worker concurrency |
 | `extra_codeowners_github_rate_limit_events_total` | No sustained increase; a rate limit opens shared backpressure for the affected installation or the App |
 | `extra_codeowners_github_physical_requests_total` | Compare `work_class="recovery"` with `interactive` and `authority` to identify who is spending API requests; includes retries and pages |
-| `extra_codeowners_github_recovery_budget_deferrals_total` | Recovery pauses near its reserve; sustained growth means its workload exceeds the available quota |
+| `extra_codeowners_github_recovery_budget_deferrals_total` | Recovery and background authority discovery pause near the reserve; sustained growth means their workload exceeds the available quota |
 | `extra_codeowners_reconciliations_total{result!="success"}` | No unexplained increase |
 | `extra_codeowners_reconciliation_last_success_timestamp_seconds` | A complete run on at least one replica falls within the reconciliation objective |
 | `extra_codeowners_trace_exports_total{outcome="failure"}` | `0`; otherwise traces cannot be used as incident evidence |
@@ -182,8 +182,8 @@ elapsed since the last successful evaluation. A current queue row stays put.
 
 Installing the App on a repository does not opt it into evaluation. A PR with no repository policy and no managed check still costs API reads during recovery: the worker must check for enrollment and existing results. When no check exists, invalidation skips shared-commit discovery. An enrolled evaluation bound to an older head generation requeues itself at the current generation, so an unenrolled PR cannot cause its work to be discarded.
 
-Recovery leaves 20% of each installation's observed REST core limit for direct
-events and authority work by default. Set
+Recovery and background authority discovery leave 20% of each installation's
+observed REST core limit for direct events and identified revocations by default. Set
 `EXTRA_CODEOWNERS_GITHUB_RECOVERY_RESERVE_PERCENT` to adjust that tradeoff. A
 larger reserve gives direct events more headroom but delays missed-webhook
 recovery. All replicas charge the shared database budget before each request,
@@ -431,6 +431,20 @@ it skips the extra evaluation and invalidation jobs. The repository fence remain
 durable during those reads, and existing queued jobs are left alone. A closed PR,
 changed head, existing check, present policy, or failed lookup keeps the normal
 recovery path; disabled and malformed policies are not treated as absent.
+PR metadata and check absence are refreshed for each PR. PRs targeting the same
+branch share one branch and policy read within that repository attempt. A retry
+or later event reads the branch again; follow-up evaluations still fetch fresh
+policy before publishing a result.
+
+Background discovery uses the recovery reserve. When it pauses, the repository
+fence stays pending without creating duplicate evaluations or marking the
+installation as rate limited. Look for
+`authority_discovery_deferred_for_recovery_budget` in the logs. A direct webhook
+wakes its pending installation and repository fences so they can use reserved
+quota. Once discovery identifies a PR needing revocation, revocation can also
+use the reserve. Provider limits still stop every lane. A large repository
+blocking direct work or many required revocations can therefore exhaust quota;
+the reserve is not an unconditional latency guarantee.
 
 Within the authority lane, installation-wide fences still run first. After
 that, a repository fence blocking a queued direct PR event takes priority over

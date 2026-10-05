@@ -1144,7 +1144,12 @@ class EvaluationService:
             )
         )
 
-    async def authority_followup_required(self, job: JobRequest) -> bool:
+    async def authority_followup_required(
+        self,
+        job: JobRequest,
+        *,
+        policy_present: Callable[[str], Awaitable[bool]] | None = None,
+    ) -> bool:
         """Skip duplicate evaluation only when fresh evidence proves no enrollment."""
         pull = await self.github.get_pull(
             job.installation_id, job.repository_full_name, job.pull_number
@@ -1169,6 +1174,8 @@ class EvaluationService:
             job.installation_id, job.repository_full_name, head_sha, self.settings.check_name
         ):
             return True
+        if policy_present is not None:
+            return await policy_present(base_ref)
         policy_sha = await self.github.get_branch_head(
             job.installation_id, job.repository_full_name, base_ref
         )
@@ -2243,6 +2250,13 @@ class Worker:
         return True
 
     async def _execute_authority(self, job: ClaimedAuthorityJob) -> None:
+        # Only a fence blocking an accepted direct event may spend its reserve
+        # on discovery. Recheck the durable queue on every attempt and replica.
+        direct = await asyncio.to_thread(self.store.authority_has_direct_waiter, job)
+        with request_lane("authority" if direct else "recovery"):
+            await self._discover_authority(job)
+
+    async def _discover_authority(self, job: ClaimedAuthorityJob) -> None:
         if job.repository_full_name is None:
             repositories = await self.evaluator.github.list_installation_repositories(
                 job.installation_id
@@ -2327,6 +2341,24 @@ class Worker:
             requests.append(request)
 
         semaphore = asyncio.Semaphore(self.settings.authority_fanout_concurrency)
+        policies: dict[str, bool] = {}
+        policy_locks: dict[str, asyncio.Lock] = {}
+
+        async def policy_present(base_ref: str) -> bool:
+            # Share one current branch/policy observation only within this
+            # attempt. A retry or later event must observe the branch again.
+            async with policy_locks.setdefault(base_ref, asyncio.Lock()):
+                if base_ref not in policies:
+                    sha = await self.evaluator.github.get_branch_head(
+                        job.installation_id, full_name, base_ref
+                    )
+                    policies[base_ref] = (
+                        await self.evaluator._repository_policy_text(
+                            job.installation_id, full_name, sha
+                        )
+                        is not None
+                    )
+                return policies[base_ref]
 
         async def revoke(request: JobRequest) -> None:
             async with semaphore:
@@ -2334,7 +2366,9 @@ class Worker:
                     # The leased repository authority row remains the durable
                     # retry record while enrollment is checked. Don't create
                     # two more jobs to repeat a confirmed absence of policy.
-                    if not await self.evaluator.authority_followup_required(request):
+                    if not await self.evaluator.authority_followup_required(
+                        request, policy_present=policy_present
+                    ):
                         log.debug(
                             "authority_unenrolled_skipped",
                             repository=request.repository_full_name,
@@ -2344,9 +2378,14 @@ class Worker:
                     # Queue before revocation: it may discover and queue a
                     # newer head, which this listed-head request must not replace.
                     await asyncio.to_thread(self.store.enqueue, request)
-                    await self.evaluator.invalidate_for_trigger(
-                        replace(request, work_class="interactive")
-                    )
+                    with request_lane("authority"):
+                        await self.evaluator.invalidate_for_trigger(
+                            replace(request, work_class="interactive")
+                        )
+                except RecoveryBudgetDeferredError:
+                    # The repository fence is the retry record. A local pause
+                    # is not evidence of failed revocation or provider backoff.
+                    raise
                 except GitHubRateLimitError:
                     try:
                         await asyncio.to_thread(
@@ -2415,6 +2454,22 @@ class Worker:
         )
         try:
             await self._execute_authority(job)
+        except RecoveryBudgetDeferredError as error:
+            await asyncio.to_thread(
+                self.store.defer_authority,
+                job,
+                owner,
+                str(error),
+                error.retry_after_seconds,
+                preserve_direct_wakeup=True,
+            )
+            log.info(
+                "authority_discovery_deferred_for_recovery_budget",
+                installation_id=job.installation_id,
+                scope=job.repository_full_name or "installation",
+                retry_after_seconds=error.retry_after_seconds,
+            )
+            return "budget_deferred"
         except GitHubRateLimitError as error:
             await asyncio.to_thread(
                 self.store.record_provider_backpressure,

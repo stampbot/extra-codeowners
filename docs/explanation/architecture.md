@@ -319,10 +319,21 @@ GitHub's rate-limit delay still applies if promotion fails. A head discovered
 during fast revocation is queued in foreground priority, as is a new invalidation
 needed by a direct evaluation that has not finished yet.
 
-This limits duplicate evaluation work after broad events. The authority
-revocations themselves can still consume the reserve, so a large installation
-rename or policy change can still exhaust GitHub's quota. It is not a promise
-that direct events will always have capacity.
+Background authority discovery honors the recovery reserve, while identified
+revocations can spend it. PRs targeting the same branch share a branch and policy
+read within one repository attempt. A later attempt reads the branch again, and
+every final evaluation still fetches fresh evidence.
+
+A reserve pause retains the repository fence without promoting unenrolled PRs
+to foreground work or imposing provider backpressure. A direct webhook wakes
+the fences covering its repository. Those attempts can use the reserve to clear
+the fence before evaluation publishes. The wakeup and deferral check use the
+shared database, so a webhook arriving during a pause cannot lose its wakeup
+when another replica finishes deferring the fence.
+
+Urgent discovery for a large repository and many required revocations can still
+consume the reserve. GitHub's limits apply to all work; direct events are not
+guaranteed capacity after quota is exhausted.
 
 The same singleton lease controls pruning of delivery IDs and old shared-head
 rows. A shared-head row is eligible only after its latest generation was

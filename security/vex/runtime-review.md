@@ -156,6 +156,14 @@ through the existing GitHub client. It uses the same Python validation and
 database queue methods, with no new native calls or dependencies. The existing
 reachability assessments therefore still apply.
 
+The October 4 authority budget change shares branch and policy reads within a
+repository attempt and schedules background discovery against the existing
+quota reserve. Its database changes use ordinary SQLAlchemy `EXISTS`, `CASE`,
+and row updates to preserve direct-event wakeups. It adds no SQLite FTS tables,
+`MATCH` queries, extension loading, subprocesses, FFI, or native format-string
+calls. Dependencies and image inputs are unchanged, so the package-specific
+assessments above still apply.
+
 These conclusions apply to the shipped service's behavior, including its SQLite
 backend. They do not cover arbitrary commands, custom Python code, native
 plugins, or externally supplied databases. A change in those behaviors requires

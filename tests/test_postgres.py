@@ -105,6 +105,60 @@ def test_postgres_prioritizes_direct_authority_without_double_claim(
     assert store.claim("evaluation", 60) is not None
 
 
+@pytest.mark.parametrize("arrival", ["before_defer", "after_defer"])
+@pytest.mark.parametrize("scope", ["example/project", None])
+def test_postgres_direct_delivery_wakes_reserved_quota_fence_across_replicas(
+    postgres_store: QueueStore, arrival: str, scope: str | None
+) -> None:
+    store = postgres_store
+    peer = QueueStore(postgres_url())
+    try:
+        store.enqueue_authority(AuthorityRequest(17, scope, None, "push.organization_policy"))
+        claimed = store.claim_authority("replica-one", 60)
+        assert claimed is not None
+
+        def deliver() -> None:
+            peer.accept_delivery(
+                "direct-event",
+                "pull_request_review",
+                request(),
+            )
+
+        if arrival == "before_defer":
+            deliver()
+        assert store.defer_authority(
+            claimed, "replica-one", "reserve pause", 600, preserve_direct_wakeup=True
+        )
+        if arrival == "after_defer":
+            assert peer.claim_authority("replica-two", 60) is None
+            deliver()
+        resumed = peer.claim_authority("replica-two", 60)
+        assert resumed is not None and resumed.generation == claimed.generation
+        assert peer.authority_has_direct_waiter(resumed)
+        assert store.claim_authority("replica-three", 60) is None
+        assert store.claim("evaluation", 60) is None
+        assert not store.provider_is_backpressured(17)
+        assert peer.complete_authority(resumed, "replica-two")
+        assert store.claim("evaluation", 60) is not None
+    finally:
+        peer.close()
+
+
+def test_postgres_direct_delivery_cannot_bypass_provider_backpressure(
+    postgres_store: QueueStore,
+) -> None:
+    store = postgres_store
+    store.enqueue_authority(
+        AuthorityRequest(17, "example/project", None, "push.organization_policy")
+    )
+    claimed = store.claim_authority("worker", 60)
+    assert claimed is not None
+    assert store.defer_authority(claimed, "worker", "provider rate limit", 600)
+    store.record_provider_backpressure(17, "provider rate limit", 600)
+    store.accept_delivery("direct", "pull_request_review", request())
+    assert store.claim_authority("another-replica", 60) is None
+
+
 @pytest.fixture
 def postgres_store() -> Generator[QueueStore]:
     url = postgres_url()
