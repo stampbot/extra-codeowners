@@ -473,8 +473,12 @@ use the reserve. Provider limits still stop every lane. A large repository
 blocking direct work or many required revocations can therefore exhaust quota;
 the reserve is not an unconditional latency guarantee.
 When the recorded quota reaches zero, discovery keeps the reset deadline even
-with direct work queued. The same log event sets
-`provider_quota_exhausted=true` to distinguish this from a reserve-only pause.
+with direct work queued. The client reports this through
+`authority_discovery_deferred_for_provider_rate_limit` with
+`provider_quota_exhausted=true`. Other provider rate limits use the same event
+with that field false; `global_scope` distinguishes shared backpressure from an
+installation-only delay. A reserve-only pause uses the recovery-budget event
+above and does not impose provider backpressure.
 New authority evidence also wakes a scan waiting on an earlier API-failure
 backoff. It preserves listing progress and an active claim; a subsequent
 failure cannot overwrite that arrival's wakeup. Provider backpressure still

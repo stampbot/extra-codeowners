@@ -22,9 +22,18 @@ from extra_codeowners.api_budget import (
     RecoveryBudgetDeferredError,
     request_lane,
 )
-from extra_codeowners.database import Base, InstallationApiBudget, QueueStore, ServiceLease, utcnow
+from extra_codeowners.database import (
+    AuthorityRequest,
+    Base,
+    InstallationApiBudget,
+    QueueStore,
+    ServiceLease,
+    utcnow,
+)
 from extra_codeowners.github import GitHubClient, GitHubRateLimitError
 from extra_codeowners.migrations import upgrade_database
+from extra_codeowners.service import EvaluationService, Worker
+from extra_codeowners.settings import Settings
 from extra_codeowners.tracing import Tracing
 
 
@@ -427,6 +436,65 @@ async def test_client_stops_all_lanes_at_known_zero(
     try:
         with pytest.raises(GitHubRateLimitError, match="quota is exhausted"):
             await client._api_response("GET", "/repos/o/r", installation_id=17)
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("exhausted", [True, False])
+async def test_authority_logs_real_client_quota_and_secondary_limit(
+    budget_store: QueueStore,
+    private_key: str,
+    monkeypatch: pytest.MonkeyPatch,
+    exhausted: bool,
+) -> None:
+    budget = RecoveryApiBudget(budget_store)
+    budget.observe(17, quota(0 if exhausted else 100))
+    requests: list[str] = []
+    events: list[tuple[str, dict[str, object]]] = []
+
+    def response(request: httpx.Request) -> httpx.Response:
+        requests.append(request.url.path)
+        if request.url.path.endswith("/access_tokens"):
+            return httpx.Response(
+                201,
+                json={"token": "token", "expires_at": (utcnow() + timedelta(hours=1)).isoformat()},
+            )
+        return httpx.Response(429, headers={"retry-after": "61"}, json={"message": "limited"})
+
+    monkeypatch.setattr(
+        "extra_codeowners.service.log.info", lambda event, **fields: events.append((event, fields))
+    )
+    client = GitHubClient(
+        1, private_key, recovery_budget=budget, transport=httpx.MockTransport(response)
+    )
+    runtime = Settings(
+        _env_file=None, environment="test", worker_enabled=False, reconcile_enabled=False
+    )
+    worker = Worker(
+        runtime, budget_store, EvaluationService(runtime, client, budget_store), "worker"
+    )
+    budget_store.enqueue_authority(AuthorityRequest(17, None, None, "push.organization_policy"))
+    claimed = budget_store.claim_authority("worker", 60)
+    assert claimed is not None
+    try:
+        assert await worker._process_authority(claimed) == "rate_limited"
+        diagnostic = [
+            fields
+            for event, fields in events
+            if event == "authority_discovery_deferred_for_provider_rate_limit"
+        ]
+        assert len(diagnostic) == 1
+        assert diagnostic[0]["provider_quota_exhausted"] is exhausted
+        assert diagnostic[0]["global_scope"] is not exhausted
+        assert diagnostic[0]["installation_id"] == 17
+        assert diagnostic[0]["scope"] == "installation"
+        assert budget_store.claim_authority("retry", 60) is None
+        if exhausted:
+            assert "/installation/repositories" not in requests
+        else:
+            assert "/installation/repositories" in requests
+            assert diagnostic[0]["retry_after_seconds"] == 61
     finally:
         await client.close()
 

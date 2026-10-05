@@ -2640,6 +2640,14 @@ class Worker:
                 str(error),
                 error.retry_after_seconds,
             )
+            log.info(
+                "authority_discovery_deferred_for_provider_rate_limit",
+                installation_id=job.installation_id,
+                scope=job.repository_full_name or "installation",
+                retry_after_seconds=error.retry_after_seconds,
+                global_scope=error.global_scope,
+                provider_quota_exhausted=isinstance(error.__cause__, ProviderQuotaExhaustedError),
+            )
             return "rate_limited"
         except asyncio.CancelledError:
             raise

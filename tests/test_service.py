@@ -614,12 +614,6 @@ async def test_allowed_application_approval_satisfies_owned_lockfile(tmp_path: P
 @pytest.mark.asyncio
 async def test_fresh_pull_base_ref_replaces_stale_scheduling_hint(tmp_path: Path) -> None:
     store = migrated_store(f"sqlite:///{tmp_path / 'fresh-base-hint.db'}")
-    store.enqueue_authority(AuthorityRequest(2, "example/project", "main", "push.repository_base"))
-    with store.session() as session:
-        authority = session.scalar(select(AuthorityJob))
-        assert authority is not None
-        authority.available_at = utcnow() + timedelta(hours=1)
-
     store.enqueue(
         JobRequest(
             installation_id=2,
@@ -634,6 +628,14 @@ async def test_fresh_pull_base_ref_replaces_stale_scheduling_hint(tmp_path: Path
     assert invalidation is not None and store.complete_shared_head_invalidation(invalidation)
     claimed = store.claim("hint-worker", 60)
     assert claimed is not None and claimed.base_ref_hint == "release"
+
+    # An authority event can arrive after the evaluation is claimed. The fresh
+    # base still replaces its stale hint before that new shared fence blocks it.
+    store.enqueue_authority(AuthorityRequest(2, "example/project", "main", "push.repository_base"))
+    with store.session() as session:
+        authority = session.scalar(select(AuthorityJob))
+        assert authority is not None
+        authority.available_at = utcnow() + timedelta(hours=1)
 
     service = EvaluationService(
         settings(),
@@ -653,7 +655,7 @@ async def test_fresh_pull_base_ref_replaces_stale_scheduling_hint(tmp_path: Path
             available_at = available_at.replace(tzinfo=UTC)
         assert available_at <= utcnow()
     assert store.has_blocking_authority(claimed, "main")
-    assert not store.has_blocking_authority(claimed, "release")
+    assert store.has_blocking_authority(claimed, "release")
 
 
 async def _claim_recovery_job(store: QueueStore, head_sha: str) -> ClaimedJob:
