@@ -473,6 +473,10 @@ the reserve is not an unconditional latency guarantee.
 When the recorded quota reaches zero, discovery keeps the reset deadline even
 with direct work queued. The same log event sets
 `provider_quota_exhausted=true` to distinguish this from a reserve-only pause.
+New authority evidence also wakes a scan waiting on an earlier API-failure
+backoff. It preserves listing progress and an active claim; a subsequent
+failure cannot overwrite that arrival's wakeup. Provider backpressure still
+applies.
 
 Within the authority lane, installation-wide fences still run first. After
 that, a repository fence blocking a queued direct PR event takes priority over

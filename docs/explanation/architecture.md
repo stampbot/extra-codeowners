@@ -364,7 +364,9 @@ attempts can use the reserve to clear
 the fence before evaluation publishes. The wakeup and deferral check use the
 shared database, so a webhook arriving during a pause cannot lose its wakeup
 when another replica finishes deferring the fence.
-An event arriving during a failed attempt also preserves an immediate retry.
+New authority evidence wakes a delayed scan without resetting its progress or
+stealing an active lease. A direct event or authority change arriving during a
+failed attempt also preserves an immediate retry.
 Without another arrival, persistent errors still back off.
 
 Urgent discovery for a large repository and many required revocations can still

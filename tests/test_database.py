@@ -1196,6 +1196,79 @@ def test_new_interactive_enqueue_during_authority_claim_wakes_failed_retry(
     assert retry is not None
 
 
+@pytest.mark.parametrize(
+    ("repository", "existing_base", "incoming_base"),
+    [
+        ("example/project", None, None),
+        ("example/project", "main", "main"),
+        (None, None, None),
+        ("example/project", None, "release"),
+    ],
+)
+@pytest.mark.parametrize("during_claim", [False, True])
+def test_coalesced_authority_evidence_wakes_failed_scan_without_restarting_progress(
+    tmp_path: Path,
+    repository: str | None,
+    existing_base: str | None,
+    incoming_base: str | None,
+    during_claim: bool,
+) -> None:
+    store = make_store(tmp_path)
+    store.enqueue_authority(AuthorityRequest(17, repository, existing_base, "installation.created"))
+    claimed = store.claim_authority("worker", 60)
+    assert claimed is not None
+    assert store.advance_authority_cursor(
+        claimed, 73, {"73": "f" * 64}, listing_next_page=4, listing_last_number=300
+    )
+    if not during_claim:
+        store.fail_authority(claimed, "worker", "old 404", 21_600, 600)
+        assert store.claim_authority("too-soon", 60) is None
+
+    with store.session() as session:
+        before = session.get(AuthorityJob, claimed.id)
+        assert before is not None
+        lease = (before.lease_owner, before.lease_until)
+    new_evidence = AuthorityRequest(17, repository, incoming_base, "push.repository_base")
+    assert store.accept_delivery("authority-wake", "push", new_evidence).accepted
+    assert not store.accept_delivery("authority-wake", "push", new_evidence).accepted
+    with store.session() as session:
+        row = session.get(AuthorityJob, claimed.id)
+        assert row is not None
+        assert row.generation == claimed.generation
+        assert row.interactive_wake_generation == claimed.interactive_wake_generation + 1
+        assert (row.lease_owner, row.lease_until) == lease
+        assert row.pull_cursor_number == 73 and row.handled_pull_fingerprints == {"73": "f" * 64}
+        assert row.listing_next_page == 4 and row.listing_last_number == 300
+        assert row.available_at.replace(tzinfo=UTC) <= utcnow() + timedelta(seconds=1)
+    if during_claim:
+        store.fail_authority(claimed, "worker", "404 after arrival", 21_600, 600)
+
+    resumed = store.claim_authority("retry-new-evidence", 60)
+    assert resumed is not None and resumed.id == claimed.id
+    assert resumed.generation == claimed.generation
+    assert resumed.listing_next_page == 4 and resumed.listing_last_number == 300
+    # The old arrival is consumed by this claim, not an indefinite hot retry.
+    store.fail_authority(resumed, "retry-new-evidence", "still 404", 21_600, 600)
+    assert not store.accept_delivery("authority-wake", "push", new_evidence).accepted
+    assert store.claim_authority("unchanged-retry", 60) is None
+    store.close()
+
+
+def test_coalesced_authority_wakeup_does_not_bypass_provider_backpressure(tmp_path: Path) -> None:
+    store = make_store(tmp_path)
+    original = authority_request()
+    store.enqueue_authority(original)
+    claimed = store.claim_authority("worker", 60)
+    assert claimed is not None
+    store.record_provider_backpressure(17, "provider reset", 600)
+    assert store.defer_authority(claimed, "worker", "provider reset", 600)
+
+    assert store.accept_delivery("authority-during-provider-limit", "push", original).accepted
+    assert store.provider_is_backpressured(17)
+    assert store.claim_authority("cannot-bypass-provider", 60) is None
+    store.close()
+
+
 def test_authority_jobs_coalesce_and_new_generation_survives_old_completion(
     tmp_path: Path,
 ) -> None:
@@ -1263,13 +1336,15 @@ def test_narrow_push_preserves_repository_authority_progress_and_claim(
         assert row.listing_last_number == baseline["listing_last_number"]
         assert row.lease_owner == baseline["lease_owner"]
         assert row.lease_until == baseline["lease_until"]
-        assert row.available_at == baseline["available_at"]
+        assert row.available_at.replace(tzinfo=UTC) <= utcnow() + timedelta(seconds=1)
         assert row.pending_base_refs == {"release": "push.repository_base"}
         assert row.pending_full_rescan is False
     if not deferred:
         assert store.advance_authority_cursor(claim, 21, {**handled, "21": "b" * 64})
     else:
-        assert store.claim_authority("too-soon", 60) is None
+        resumed = store.claim_authority("new-evidence", 60)
+        assert resumed is not None and resumed.id == claim.id
+        assert resumed.listing_next_page == 3 and resumed.listing_last_number == 200
 
 
 def test_completed_repository_authority_hands_off_deduplicated_base_refs(

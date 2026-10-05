@@ -313,6 +313,7 @@ class AuthorityJob(Base):
     listing_expected_total: Mapped[int | None] = mapped_column(Integer)
     membership_next_page: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     membership_expected_total: Mapped[int | None] = mapped_column(Integer)
+    # Direct PR events and coalesced authority evidence share this wake serial.
     interactive_wake_generation: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     pending_base_refs: Mapped[dict[str, str]] = mapped_column(JSON, nullable=False, default=dict)
     pending_full_rescan: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
@@ -2094,6 +2095,8 @@ class QueueStore:
             existing.pending_full_rescan = True
             existing.pending_rescan_reason = request.reason
             existing.pending_base_refs = {}
+            existing.available_at = now
+            existing.interactive_wake_generation += 1
             return
         if request.repository_full_name is not None:
             if not base_ref:
@@ -2127,6 +2130,8 @@ class QueueStore:
                     # A branch push must not restart a broader scan that may
                     # already span quota windows. Keep later evidence separate
                     # and hand it off atomically when that scan completes.
+                    repository_wide.available_at = now
+                    repository_wide.interactive_wake_generation += 1
                     if not repository_wide.pending_full_rescan:
                         pending_refs = dict(repository_wide.pending_base_refs)
                         pending_refs[base_ref] = request.reason
