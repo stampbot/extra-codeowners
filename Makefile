@@ -10,6 +10,8 @@ format: ## Format Python source and test files.
 	uv run ruff check --fix .
 
 lint: ## Run source and repository linters.
+	uv run python -I -S -B tools/release_vex.py check-runtime \
+		--source security/vex/runtime.openvex.json --runtime-root .
 	uv run ruff format --check .
 	uv run ruff check .
 	uv run mypy extra_codeowners tests tools/evaluation_beta.py \

@@ -1,6 +1,6 @@
 {
   "@context": "https://openvex.dev/ns/v0.2.0",
-  "@id": "urn:uuid:395cbb63-30f1-50ea-abb5-f0681e088d85",
+  "@id": "urn:uuid:7df868d6-fe4d-5d98-b1cf-60d793571c83",
   "author": "Extra CODEOWNERS maintainers",
   "role": "VEX document producer",
   "statements": [
@@ -752,7 +752,7 @@
       "extra_codeowners/dco.py": "8c3a0b541fe021fb9f05500ca9278306901010c219e7e1199ca5e205c138e68d",
       "extra_codeowners/discovery_cache.py": "ec62a728af9c5206de815aa72affd69e231d2acb45b5f80e33790ec6e20b29c7",
       "extra_codeowners/evaluator.py": "b81b9d1c6fe81d591867b0993d413030caab8af48703c4725f14c04fe2e3f9a6",
-      "extra_codeowners/github.py": "66610d3086984f4031721d5256fcff1c920468a7dab2ddae15d2c17f259e101b",
+      "extra_codeowners/github.py": "886bc39a9dba15062d70b38e74838c81811e4aa6e450ba3f1e1dc5aa89ec85d5",
       "extra_codeowners/logging.py": "a59227e76ec7809ff8bb88fee997abb9b99f32e81a4c8d16bcfc72c0c0abf33f",
       "extra_codeowners/manifest.py": "33d42ac16b8218562f2baf6c0bc7c6664b03354bbf274cb0381e94740b76681e",
       "extra_codeowners/metrics.py": "741473fcdd83c899f07beb277e4a961bd536878bfda0c7b7b676cd0f07161b38",
@@ -768,7 +768,7 @@
       "pyproject.toml": "4164e19c10e620b1cae1db22dab5728b4e80eb0f5a9dd768484b6f12de73fc96",
       "uv.lock": "2f0aebfcdfe39538db8cfb67eb13287ec3245efd794c1d47d022c7297eb41b9a"
     },
-    "review": "Shared authority branch batches, migration consolidation, and provider diagnostics change Python and SQL only. No native PCRE2 inputs or JIT calls were added; both reviewed ELF graphs exclude the named Debian library. See security/vex/runtime-review.md.",
+    "review": "October 7 PR #242: authority-page validation now detects duplicate PR numbers with a page-local Python set instead of assuming numeric order. HTTP transport, native loading, database queries, locked dependencies, and image inputs are unchanged; no PCRE2 JIT or other new native API path is introduced. Existing fixed package versions and the Debian PCRE2 reachability conclusion remain valid. See security/vex/runtime-review.md.",
     "schema_version": 1
   }
 }
