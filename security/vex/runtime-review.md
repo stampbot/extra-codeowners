@@ -198,6 +198,13 @@ SQLAlchemy. Discovery checkpoints use ordinary row updates. Sharing the policy
 observation during check invalidation changes only which existing Python API
 reads are repeated; neither change adds a native input path.
 
+The October 7 authority-page fix replaces a PR-number ordering comparison with
+a page-local Python set that detects duplicates. It changes neither HTTP
+transport nor native-library loading, database queries, dependencies, or image
+inputs. It adds no PCRE2 or other native API entrypoint. The existing package
+versions and vulnerability statements therefore remain unchanged; only the
+reviewed source binding is refreshed.
+
 These conclusions apply to the shipped service's behavior, including its SQLite
 backend. They do not cover arbitrary commands, custom Python code, native
 plugins, or externally supplied databases. A change in those behaviors requires

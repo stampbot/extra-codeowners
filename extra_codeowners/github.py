@@ -2588,7 +2588,11 @@ class GitHubClient:
         after_number: int = 0,
         stop: asyncio.Event | None = None,
     ) -> AuthorityPullPage:
-        """Fetch and validate one created-order page for authority discovery."""
+        """Fetch and validate one created-order page for authority discovery.
+
+        ``after_number`` carries the last observed number across page checkpoints;
+        it is not a lower bound. GitHub sorts by creation time, not PR number.
+        """
         if isinstance(page, bool) or not isinstance(page, int) or page < 1:
             raise ValueError("page must be a positive integer")
         if isinstance(after_number, bool) or not isinstance(after_number, int) or after_number < 0:
@@ -2616,7 +2620,8 @@ class GitHubClient:
             )
 
         pulls: list[dict[str, Any]] = []
-        previous_number = after_number
+        last_number = after_number
+        seen_numbers: set[int] = set()
         for pull in page_items:
             if not isinstance(pull, dict):
                 raise GitHubError(f"expected object items from GET {path}")
@@ -2624,10 +2629,9 @@ class GitHubClient:
             state = pull.get("state")
             if not isinstance(number, int) or isinstance(number, bool) or number <= 0:
                 raise GitHubError("stable pull listing contains an invalid pull request number")
-            if number <= previous_number:
-                raise GitHubError(
-                    "stable pull listing contains duplicate or out-of-order pull request numbers"
-                )
+            if number in seen_numbers:
+                raise GitHubError("stable pull listing contains duplicate pull request numbers")
+            seen_numbers.add(number)
             if not isinstance(state, str) or state not in {"open", "closed"}:
                 raise GitHubError("stable pull listing contains an invalid pull request state")
             updated_at = pull.get("updated_at")
@@ -2647,7 +2651,7 @@ class GitHubClient:
                 or not base["ref"]
             ):
                 raise GitHubError("stable pull listing contains an invalid base ref")
-            previous_number = number
+            last_number = number
             if state == "open":
                 pulls.append(pull)
 
@@ -2656,7 +2660,7 @@ class GitHubClient:
         return AuthorityPullPage(
             pulls=pulls,
             next_page=page + 1 if has_next else 0,
-            last_number=previous_number,
+            last_number=last_number,
         )
 
     async def list_commit_pulls(

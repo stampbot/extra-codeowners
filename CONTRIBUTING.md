@@ -54,6 +54,7 @@ mise run check
 `mise run check` runs:
 
 - Python linting and type checking
+- the reviewed VEX source binding, without updating vulnerability claims
 - the locally available tests
 - the strict documentation build
 - workflow and YAML linting
@@ -61,6 +62,10 @@ mise run check
 
 It does not enforce coverage. PostgreSQL tests are skipped unless
 `TEST_POSTGRES_URL` points to a disposable test database.
+
+A runtime change can make the VEX binding stale. Follow the
+[VEX review procedure](docs/maintainers/index.md#update-a-vex-claim) before
+refreshing it; the local check never refreshes the binding automatically.
 
 > [!WARNING]
 > Never point `TEST_POSTGRES_URL` at a production or shared database. The test

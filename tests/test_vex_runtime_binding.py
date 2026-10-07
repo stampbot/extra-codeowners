@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,17 @@ import pytest
 from tools.release_vex import ReleaseVexError, bind_runtime, main, validate_runtime_binding
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_local_preflight_checks_binding_without_refreshing_it() -> None:
+    mise = tomllib.loads((ROOT / "mise.toml").read_text(encoding="utf-8"))
+    commands = mise["tasks"]["lint:python"]["run"]
+    assert "tools/release_vex.py check-runtime" in commands[0]
+    assert "--source security/vex/runtime.openvex.json --runtime-root ." in commands[0]
+    assert all("bind-runtime" not in command for command in commands)
+    makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+    assert "tools/release_vex.py check-runtime" in makefile
+    assert "bind-runtime" not in makefile
 
 
 @pytest.fixture

@@ -441,7 +441,10 @@ Authority discovery includes closed PR history so ordinary updates and
 close/reopen events don't move entries between pages. It processes open PRs and
 checkpoints each completed page, even one containing only closed PRs. A retry
 resumes that progress and skips matching handled observations on its unfinished
-page. Changes to completed pages rely on direct events and reconciliation.
+page. GitHub returns these pages in creation-time order, which need not match
+PR-number order. Discovery doesn't skip a PR because its number is lower than
+one seen on an earlier page. Changes to completed pages rely on direct events
+and reconciliation.
 Expect extra listing requests in repositories with a large closed history,
 not one request per changed PR.
 
