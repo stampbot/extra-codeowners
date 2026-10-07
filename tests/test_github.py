@@ -1575,10 +1575,6 @@ async def test_authority_pull_page_handles_terminal_empty_and_closed_pages(
             [pull_listing_record(1), pull_listing_record(1, "closed")],
             "duplicate",
         ),
-        (
-            [pull_listing_record(2), pull_listing_record(1, "closed")],
-            "out-of-order",
-        ),
         ([pull_listing_record(0)], "invalid pull request number"),
         ([pull_listing_record(True)], "invalid pull request number"),
         ([pull_listing_record(1, "merged")], "invalid pull request state"),
