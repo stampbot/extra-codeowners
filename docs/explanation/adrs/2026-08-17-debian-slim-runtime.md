@@ -11,6 +11,7 @@
 | Scope | The base image for the build and runtime container stages. It doesn't cover vulnerability policy or release signing. |
 | Related | [Why the runtime uses Debian slim](../runtime-base.md), [release from main CI](2026-08-17-release-from-main-ci.md) |
 | Implementation | [PR #146](https://github.com/stampbot/extra-codeowners/pull/146), [issue #135](https://github.com/stampbot/extra-codeowners/issues/135) |
+| Revisit when | A locked runtime dependency has no glibc wheel for a supported architecture. |
 
 ## Business driver
 

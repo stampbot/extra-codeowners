@@ -19,4 +19,6 @@ old one.
 
 These first five were written in October 2026 to record decisions already in
 effect. Their dates come from the commits and pull requests that made each
-decision.
+decision. Each record states the decision as it stands now, including later
+refinements, and its Implementation row names the pull requests that added
+them.

@@ -11,13 +11,15 @@
 | Scope | How versions are chosen and how release artifacts are built and published. It doesn't make an alpha a supported production release. |
 | Related | [Architecture: CI and release path](../architecture.md#ci-and-release-path), [maintainer guide](../../maintainers/index.md), [Debian slim runtime](2026-08-17-debian-slim-runtime.md) |
 | Implementation | [PR #146](https://github.com/stampbot/extra-codeowners/pull/146); release-channel trailers in [PR #168](https://github.com/stampbot/extra-codeowners/pull/168) |
+| Revisit when | The project has a second maintainer or a supported stable release line. |
 
 ## Business driver
 
 With one maintainer, every manual release step is a step that gets skipped or
-done inconsistently. The earlier pipeline was fragile enough that releases
-lagged behind `main`, and a release built separately from CI couldn't prove it
-contained the bytes CI had tested.
+done inconsistently. Each release took a preparation pull request and a signed
+tag, then a separate workflow rebuilt the artifacts. That rebuild couldn't
+prove it contained the bytes CI had tested, and its long build chain often
+failed late.
 
 ## Constraints
 
@@ -56,13 +58,17 @@ The decision has these boundaries:
 
 ### Keep the current approach
 
-The previous pipeline crossed a bespoke wheelhouse, a cross-architecture
-evidence spine, and raw OCI transport before it could publish anything. Small
-changes often failed late, and the maintenance cost outgrew the application.
+Before this decision, a maintainer ran `tools/prepare_prerelease.py` to open a
+pull request that bumped `pyproject.toml`, `uv.lock`, and `CHANGELOG.md`, then
+pushed a signed tag that started a separate release workflow. That workflow
+rebuilt the artifacts outside the CI run that tested the commit, through a
+bespoke wheelhouse, a cross-architecture evidence spine, and raw OCI transport.
+Small changes often failed late, and the maintenance cost outgrew the
+application.
 
-### Release pull requests
+### Automate release pull requests
 
-A tool such as Release Please opens a pull request that bumps a version file
-and changelog. That adds a second merge per release and a version file to keep
-in sync, and the release still has to rebuild artifacts outside the CI run
-that tested them.
+A tool such as Release Please would open the version-bump pull request
+automatically. That removes the script, but each release still needs a second
+merge and a version file kept in sync, and the release still rebuilds
+artifacts outside the CI run that tested them.

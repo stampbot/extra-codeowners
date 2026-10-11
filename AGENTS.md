@@ -21,13 +21,15 @@ Tools come from `mise.toml` and Python dependencies from `uv.lock`. Review
 `mise.toml` before running `mise trust`.
 
 ```shell
+mise trust
 mise install
 mise run bootstrap   # uv sync --all-groups --frozen
 mise run format      # ruff format
 mise run check       # lint, tests, strict docs build, workflow and Helm checks
 ```
 
-Run a single test with `uv run pytest tests/test_evaluator.py -k <name>`.
+Run a single test with `uv run pytest --no-cov tests/test_evaluator.py -k <name>`;
+without `--no-cov`, the coverage threshold fails a partial run.
 PostgreSQL tests run only when `TEST_POSTGRES_URL` points at a disposable
 database whose name ends in `_test`; the suite drops and recreates tables.
 

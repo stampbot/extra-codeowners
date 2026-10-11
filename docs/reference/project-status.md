@@ -155,21 +155,20 @@ date and release.
 Keep GitHub's native **Require review from Code Owners** rule on production
 repositories until that contract is proven.
 
-## Other open hardening work
+## DCO and release-evidence limits
 
 The repository contains a bounded Developer Certificate of Origin (DCO)
 evaluator. It binds a decision to one repository, pull request, and exact base
 and head commit. No independent service or workflow calls it yet, so a pull
 request can still modify the workflow that checks that pull request. Read the
 [DCO evidence contract](dco-evidence.md) for the implemented boundary.
-[Issue #40][issue-40] tracks independent execution.
 
 The release pipeline produces BuildKit software bills of materials, raw
 container inventories, provenance, signatures, attestations, and vulnerability
 reports. None of those artifacts alone proves every open-source redistribution
 duty. The project also needs recurring scans of already-published digests
-because a clean release-day scan cannot see tomorrow's disclosure; [issue #22][issue-22]
-tracks that work.
+because a clean release-day scan cannot see tomorrow's disclosure.
+[Remaining work](#remaining-work) lists the tracking issues for both limits.
 
 ## Planned distributions
 
@@ -180,7 +179,8 @@ hosted service are separate roadmap items, with no availability date.
 
 This is the one list of open work. Other pages describe current limits and
 link here instead of keeping their own lists. Each item links to the issue that
-holds its evidence and decisions.
+holds its evidence and decisions, except the requirement coverage gaps, which
+have no issue yet.
 
 ### Gates for the first supported release
 
@@ -214,6 +214,9 @@ close before the project is presented as production-ready:
 - [Issue #24][issue-24]: harden the `stampbot` organization's identity and
   new-repository defaults.
 - [Issue #10][issue-10]: enroll in the OpenSSF Best Practices program.
+- [Issue #30][issue-30]: decide the retention of the legacy preview images.
+- [Issue #160][issue-160]: confirm Renovate's DCO sign-off before it takes over
+  a new update class.
 - Requirement test coverage has gaps. XCO-004 in the
   [threat model](../explanation/threat-model.md#invariants) and XCO-015 in the
   [architecture design rules](../explanation/architecture.md#design-rules) have
@@ -258,6 +261,7 @@ on this list opens or closes.
 [issue-74]: https://github.com/stampbot/extra-codeowners/issues/74
 [issue-76]: https://github.com/stampbot/extra-codeowners/issues/76
 [issue-124]: https://github.com/stampbot/extra-codeowners/issues/124
+[issue-160]: https://github.com/stampbot/extra-codeowners/issues/160
 [issue-203]: https://github.com/stampbot/extra-codeowners/issues/203
 [issue-241]: https://github.com/stampbot/extra-codeowners/issues/241
 [issue-243]: https://github.com/stampbot/extra-codeowners/issues/243
