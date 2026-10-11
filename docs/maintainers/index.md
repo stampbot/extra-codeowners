@@ -227,7 +227,8 @@ hid a missing or mutable input.
 ## Maintainer procedures
 
 - [Review current project status](../reference/project-status.md)
-- [Review the runtime base decision](../explanation/runtime-base.md)
+- [Read the decision records](../explanation/adrs/index.md)
+- [Review the runtime base image](../explanation/runtime-base.md)
 - [Respond to a dependency audit](../how-to/respond-to-dependency-audit.md)
 - [Rescan a published image](../how-to/rescan-published-image.md)
 - [Review or recover a Renovate update](../how-to/manage-renovate-updates.md)

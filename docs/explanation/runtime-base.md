@@ -12,6 +12,9 @@ at. The digest fixes the bytes used by the build. Renovate updates both through
 an ordinary pull request, so a base-image refresh gets the same tests and
 review as an application change.
 
+The [decision record](adrs/2026-08-17-debian-slim-runtime.md)
+covers the alternatives, including the Alpine image this replaced.
+
 ## Why Debian fits this application
 
 The locked dependency graph has published Linux wheels for both supported
@@ -105,10 +108,9 @@ complete vulnerability inventories, a fixable High/Critical gate, recurring
 cold builds, and release attestations. The JSON inventories include findings
 that the blocking check excludes through `.grype.yaml` or VEX.
 
-The current `.grype.yaml` has no ignore rules. The October runtime scan no
-longer reports CVE-2026-15308 for CPython, so the old package-version exception
-has been removed. Fixable High and Critical findings stop the build unless a
-matching reviewed VEX statement marks them `not_affected` or `fixed`.
+`.grype.yaml` has no ignore rules. Fixable High and Critical findings stop the
+build unless a matching reviewed VEX statement marks them `not_affected` or
+`fixed`.
 
 The project also has a reviewed OpenVEX statement for runtime vulnerabilities,
 including those whose affected code is not reachable through the service. The

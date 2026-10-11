@@ -16,7 +16,9 @@ users or teams with explicit write access; it doesn't document a GitHub App bot
 account as a supported owner type.
 
 The extra check leaves human ownership where GitHub expects it and records App
-authority somewhere that can express the missing limits.
+authority somewhere that can express the missing limits. The
+[decision record](adrs/2026-07-13-app-approvals-through-a-required-check.md)
+sets out the boundaries that choice has to keep.
 
 ## The decision in one pull request
 
@@ -36,8 +38,8 @@ and a delegation covers the path and owner
 Every distinct owner set represented by the pull request must be satisfied. In
 the implemented evaluator contract, a human can cover an ordinary application
 change while an enrolled App covers a delegated lockfile in the same pull
-request. The project has not yet recorded a dated live GitHub run of the
-App-review and required-check behavior.
+request. The [live validation results](../maintainers/live-validation.md)
+record dated GitHub runs of that App-review and required-check behavior.
 
 The result is a Check Run named `Extra CODEOWNERS / approval`. The service
 doesn't submit a review, change branch protection, merge the pull request, or
@@ -114,12 +116,10 @@ AND Extra CODEOWNERS / approval succeeds from the expected App
 AND every other required rule succeeds
 ```
 
-Extra CODEOWNERS doesn't alter GitHub's numeric count. GitHub's public
-documentation also doesn't promise that a third-party App review satisfies
-that count.
-[Issue #1](https://github.com/stampbot/extra-codeowners/issues/1) tracks a
-dated live probe, so test that behavior in your disposable repository and keep
-the numeric rule.
+Extra CODEOWNERS doesn't alter GitHub's numeric count. In the project's live
+tests, an App-authored approving review did satisfy that count, but GitHub's
+public documentation doesn't promise it. Test the behavior in your disposable
+repository and keep the numeric rule.
 
 The [repository-rules guide](../how-to/prepare-repository-rules.md) gives the
 complete test and rollback procedure.
