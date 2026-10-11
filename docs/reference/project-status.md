@@ -1,7 +1,7 @@
 # Project status
 
 Legacy registry inventory verified: 2026-09-09. Other status last verified:
-2026-08-31.
+2026-10-11.
 
 Extra CODEOWNERS is ready for source review and non-required shadow-mode
 testing. It is not ready to replace GitHub's native code-owner enforcement on
@@ -143,12 +143,14 @@ pull request GitHub omitted.
 - shared-head opening and retargeting with delayed or lost webhooks
 - installation lifecycle, repository transfer, and access loss.
 
-The September 12–13, 2026 probes confirmed expected-source selection in both
-ruleset types and that an App review can satisfy the ordinary approval count.
-A status-only `in_progress` reset retained success; the replacement explicit
-failure reset blocked the subsequent merge attempt. The reusable fixture now
-tests that failure reset and writes a versioned report so earlier observations
-aren't mistaken for a test of the current behavior.
+Live tests have confirmed that an expected App source works in both
+repository and organization rulesets, that an App review can satisfy the
+ordinary approval count, and that the explicit failure reset blocks a merge.
+The service resets to an explicit failure because a status-only `in_progress`
+reset didn't reliably block one. The reusable fixture writes a versioned report
+so an older observation isn't mistaken for a test of current behavior. The
+[live validation results](../maintainers/live-validation.md) record each run's
+date and release.
 
 Keep GitHub's native **Require review from Code Owners** rule on production
 repositories until that contract is proven.
@@ -174,12 +176,85 @@ tracks that work.
 The self-hosted GitHub App comes first. A packaged Marketplace Action and a
 hosted service are separate roadmap items, with no availability date.
 
-Follow the linked issues for current evidence and decisions. Update this page
-whenever an availability or safety claim changes.
+## Remaining work {#remaining-work}
 
+This is the one list of open work. Other pages describe current limits and
+link here instead of keeping their own lists. Each item links to the issue that
+holds its evidence and decisions.
+
+### Gates for the first supported release
+
+The [First supported release][milestone] milestone holds the gates that must
+close before the project is presented as production-ready:
+
+- [Issue #1][issue-1]: prove live check invalidation, shared-head behavior,
+  and installation access loss. This is the
+  [production enforcement blocker](#production-enforcement-blocker).
+- [Issue #203][issue-203]: bound GitHub API use for large installations whose
+  repositories are mostly unenrolled, and measure quiet reconciliation and
+  missed-webhook recovery.
+- [Issue #18][issue-18]: complete corresponding-source delivery and approval of
+  the distribution mechanism.
+
+### Known defects
+
+- [Issue #243][issue-243]: the check briefly reports failure about every 30
+  minutes on an unchanged, approved pull request, then returns to success.
+- [Issue #241][issue-241]: when Argo CD resumes a drained release, the
+  PodDisruptionBudget should be ordered after the Deployment.
+
+### Hardening and verification
+
+- [Issue #40][issue-40]: run DCO evaluation where a pull request can't modify
+  its own checker.
+- [Issue #22][issue-22]: rescan published image digests for newly disclosed
+  vulnerabilities.
+- [Issue #74][issue-74]: verify the first immutable release from a clean
+  client.
+- [Issue #24][issue-24]: harden the `stampbot` organization's identity and
+  new-repository defaults.
+- [Issue #10][issue-10]: enroll in the OpenSSF Best Practices program.
+- Two requirements have no test that names them: XCO-004 in the
+  [threat model](../explanation/threat-model.md#invariants) and XCO-015 in the
+  [architecture design rules](../explanation/architecture.md#design-rules).
+
+### Evaluation and adoption
+
+- [Issue #76][issue-76]: run a disposable, non-required evaluation beta.
+- [Issue #34][issue-34]: require the check on this repository, with Stampbot
+  as the approving App.
+
+### Roadmap
+
+- [Issue #4][issue-4]: support merge queues and `merge_group` reevaluation.
+- [Issue #2][issue-2]: publish the `extra-codeowners-action` Marketplace
+  Action.
+- [Issue #5][issue-5]: design the hosted service's security and operating
+  model.
+- [Issue #3][issue-3]: add a supported Google Cloud reference deployment.
+- [Issue #124][issue-124]: support Redis as a second state-store backend.
+- [Issue #7][issue-7]: design the App icon and project identity.
+
+Update this page whenever an availability or safety claim changes, or an issue
+on this list opens or closes.
+
+[milestone]: https://github.com/stampbot/extra-codeowners/milestone/1
 [issue-1]: https://github.com/stampbot/extra-codeowners/issues/1
+[issue-2]: https://github.com/stampbot/extra-codeowners/issues/2
+[issue-3]: https://github.com/stampbot/extra-codeowners/issues/3
+[issue-4]: https://github.com/stampbot/extra-codeowners/issues/4
+[issue-5]: https://github.com/stampbot/extra-codeowners/issues/5
+[issue-7]: https://github.com/stampbot/extra-codeowners/issues/7
+[issue-10]: https://github.com/stampbot/extra-codeowners/issues/10
 [issue-18]: https://github.com/stampbot/extra-codeowners/issues/18
 [issue-22]: https://github.com/stampbot/extra-codeowners/issues/22
+[issue-24]: https://github.com/stampbot/extra-codeowners/issues/24
 [issue-30]: https://github.com/stampbot/extra-codeowners/issues/30
+[issue-34]: https://github.com/stampbot/extra-codeowners/issues/34
 [issue-40]: https://github.com/stampbot/extra-codeowners/issues/40
 [issue-74]: https://github.com/stampbot/extra-codeowners/issues/74
+[issue-76]: https://github.com/stampbot/extra-codeowners/issues/76
+[issue-124]: https://github.com/stampbot/extra-codeowners/issues/124
+[issue-203]: https://github.com/stampbot/extra-codeowners/issues/203
+[issue-241]: https://github.com/stampbot/extra-codeowners/issues/241
+[issue-243]: https://github.com/stampbot/extra-codeowners/issues/243

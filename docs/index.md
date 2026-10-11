@@ -38,9 +38,11 @@ switch. It doesn't replace your minimum approval count, stale-review setting,
 signed-commit policy, or other required checks.
 
 GitHub doesn't publicly promise that a third-party App review counts toward
-the ordinary approval minimum. A nonzero minimum may therefore keep a pull
-request blocked after the Extra CODEOWNERS check succeeds. Test that combination
-in a disposable repository before relying on it.
+the ordinary approval minimum. It did in the project's
+[live tests](maintainers/live-validation.md#githubs-check-contract), but a
+nonzero minimum could still keep a pull request blocked after the Extra
+CODEOWNERS check succeeds. Test that combination in a disposable repository
+before relying on it.
 
 Read the [native CODEOWNERS comparison](explanation/native-codeowners.md) for
 the full decision model. The [threat model](explanation/threat-model.md)
