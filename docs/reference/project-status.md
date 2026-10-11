@@ -214,9 +214,12 @@ close before the project is presented as production-ready:
 - [Issue #24][issue-24]: harden the `stampbot` organization's identity and
   new-repository defaults.
 - [Issue #10][issue-10]: enroll in the OpenSSF Best Practices program.
-- Two requirements have no test that names them: XCO-004 in the
+- Requirement test coverage has gaps. XCO-004 in the
   [threat model](../explanation/threat-model.md#invariants) and XCO-015 in the
-  [architecture design rules](../explanation/architecture.md#design-rules).
+  [architecture design rules](../explanation/architecture.md#design-rules) have
+  no test that names them. Tests for XCO-007 cover the expected App source but
+  don't assert the published head SHA, and tests for XCO-011 cover logs but not
+  metrics, check output, or audit details.
 
 ### Evaluation and adoption
 

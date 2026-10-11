@@ -93,7 +93,6 @@ def test_invalid_optional_delivery_trace_context_is_ignored() -> None:
     assert TrustedTraceContext.from_values("not-a-trace", "not-a-span", 1) is None
 
 
-# Verifies XCO-011.
 def test_trace_export_omits_private_metadata_and_exception_text_by_default() -> None:
     exporter = InMemorySpanExporter()
     tracing = Tracing(

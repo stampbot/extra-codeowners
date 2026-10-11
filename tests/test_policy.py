@@ -79,7 +79,6 @@ def test_configured_repository_policy_path_is_non_delegable() -> None:
     assert not compiled.is_non_delegable(".github/extra-codeowners.toml")
 
 
-# Verifies XCO-003.
 def test_policy_file_delegation_opt_in_leaves_other_builtins_and_org_guardrails_intact() -> None:
     repository_policy = repository(allow_delegation_for_policy_file=True)
     delegated = compile_policy(organization(), repository_policy)

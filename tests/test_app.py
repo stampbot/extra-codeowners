@@ -1029,6 +1029,7 @@ def test_org_config_repository_webhook_is_acknowledged_but_not_queued(tmp_path: 
     assert store.pending_count() == 0
 
 
+# Verifies XCO-013.
 def test_authority_webhook_is_durably_queued_without_pr_fast_path(tmp_path: Path) -> None:
     store = migrated_store(f"sqlite:///{tmp_path / 'authority-app.db'}")
     github = StubGitHub()

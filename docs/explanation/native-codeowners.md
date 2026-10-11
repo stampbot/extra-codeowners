@@ -39,7 +39,8 @@ Every distinct owner set represented by the pull request must be satisfied. In
 the implemented evaluator contract, a human can cover an ordinary application
 change while an enrolled App covers a delegated lockfile in the same pull
 request. The [live validation results](../maintainers/live-validation.md)
-record dated GitHub runs of that App-review and required-check behavior.
+record dated GitHub runs of human approvals and Stampbot approvals on delegated
+paths, each in a separate pull request.
 
 The result is a Check Run named `Extra CODEOWNERS / approval`. The service
 doesn't submit a review, change branch protection, merge the pull request, or

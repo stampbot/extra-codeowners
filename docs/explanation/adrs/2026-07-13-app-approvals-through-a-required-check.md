@@ -43,10 +43,15 @@ The decision has these boundaries:
 - Each distinct effective owner set is satisfied on its own, by a human or by
   an App whose delegation covers those paths and owners.
 - Organization policy enrolls an App by immutable identity and sets
-  guardrails. Repository policy can only narrow that: it delegates paths and
-  owners, and it can't enroll a new App or remove a guardrail.
-- Built-in non-delegable paths, including `CODEOWNERS`, workflows, and the
-  approving App's own policy, can't be approved by an App.
+  guardrails. Repository policy delegates paths and owners within that, and it
+  can't enroll a new App or remove an organization guardrail.
+- By default, an App can't approve the paths that decide who may approve:
+  `CODEOWNERS`, workflows, local actions, Stampbot's `/stampbot.toml`, and the
+  repository policy file. A repository can opt its own policy file into App
+  delegation, and an operator can remove the built-in list with an explicit
+  insecure setting; the
+  [configuration reference](../../reference/configuration.md#built-in-non-delegable-paths)
+  has the exact rules. Other Apps' control files need organization guardrails.
 - The check replaces only the native code-owner switch. The ordinary approval
   count and every other repository rule stay in place.
 

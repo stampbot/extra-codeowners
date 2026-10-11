@@ -33,7 +33,9 @@ database whose name ends in `_test`; the suite drops and recreates tables.
 
 ## Rules for changes
 
-- Sign off every commit with `git commit --signoff`. CI enforces the DCO.
+- Every commit needs a DCO `Signed-off-by` trailer, and CI enforces it. Add one
+  with `git commit --signoff` only when the person you're working for
+  certifies the DCO for the change. Never add a sign-off for someone else.
 - Use conventional commit subjects. The release planner reads them, and a
   `Release-Channel:` trailer changes the release channel; read
   [CONTRIBUTING.md](CONTRIBUTING.md#choose-a-release-channel) before using one.
@@ -57,8 +59,10 @@ Read these before changing the system's behavior:
 
 When documents disagree, an Accepted ADR wins over a living page, and a living
 page wins over a proposal or an open issue. Issues define the scope of current
-work but never override an Accepted ADR. Report a conflict instead of silently
-resolving it.
+work but never override an Accepted ADR. Nothing overrides a threat-model
+invariant: if a document or change conflicts with one, keep the fail-closed
+behavior and report the conflict. Report any other conflict instead of
+silently resolving it.
 
 The pages under `docs/explanation/` and `docs/reference/` describe the current
 state. When a change alters behavior, update the affected pages in the same

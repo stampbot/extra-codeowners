@@ -611,6 +611,7 @@ async def test_allowed_application_approval_satisfies_owned_lockfile(tmp_path: P
     assert github.checks[-1]["conclusion"] == "success"
 
 
+# Verifies XCO-014.
 @pytest.mark.asyncio
 async def test_fresh_pull_base_ref_replaces_stale_scheduling_hint(tmp_path: Path) -> None:
     store = migrated_store(f"sqlite:///{tmp_path / 'fresh-base-hint.db'}")
@@ -2202,7 +2203,6 @@ async def test_existing_success_is_revoked_before_policy_fetch_failure(tmp_path:
     assert github.checks[-1]["status"] == "in_progress"
 
 
-# Verifies XCO-014.
 @pytest.mark.asyncio
 async def test_bot_user_identity_mismatch_does_not_authorize_bot(tmp_path: Path) -> None:
     github = FakeGitHub(changed_path="uv.lock")

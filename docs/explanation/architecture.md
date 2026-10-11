@@ -14,7 +14,7 @@ do.
 ## Design rules
 
 The implementation follows four rules. The first three have their own IDs;
-the fourth restates threat-model invariant XCO-001.
+the fourth is covered by threat-model invariants XCO-001 and XCO-002.
 
 1. **XCO-013.** Store relevant work before acknowledging the webhook.
 2. **XCO-014.** Fetch authorization evidence from GitHub; never trust a webhook
@@ -22,7 +22,7 @@ the fourth restates threat-model invariant XCO-001.
 3. **XCO-015.** Keep the policy evaluator deterministic and independent of the
    network and database adapters.
 4. Let missing, stale, truncated, or contradictory evidence block success
-   ([XCO-001](threat-model.md#invariants)).
+   ([XCO-001 and XCO-002](threat-model.md#invariants)).
 
 ## From event to decision
 
