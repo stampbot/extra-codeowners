@@ -212,6 +212,7 @@ def test_rest_client_returns_body_with_only_the_link_header() -> None:
     assert route.called
 
 
+# Verifies XCO-007.
 def test_expected_source_requires_context_and_integration() -> None:
     ruleset = {
         "rules": [

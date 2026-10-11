@@ -270,6 +270,7 @@ def test_repository_toml_pattern_limit_fails_closed(extra_patterns: int) -> None
         RepositoryPolicy.from_toml(content)
 
 
+# Verifies XCO-006.
 @pytest.mark.property
 @given(paths=DISTINCT_FILENAMES)
 def test_rename_evaluation_keeps_old_and_new_owner_requirements(paths: tuple[str, str]) -> None:

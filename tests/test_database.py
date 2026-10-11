@@ -281,6 +281,7 @@ def test_mixed_case_triggers_coalesce_in_one_queue_row(tmp_path: Path) -> None:
     assert claimed.generation == 2
 
 
+# Verifies XCO-010.
 def test_known_head_enqueue_creates_a_durable_invalidation_fence(tmp_path: Path) -> None:
     store = make_store(tmp_path)
 
@@ -352,6 +353,7 @@ def test_claimed_job_keeps_the_original_trusted_webhook_trace_context(tmp_path: 
     assert claimed.webhook_trace_context == original
 
 
+# Verifies XCO-010.
 def test_shared_head_invalidation_gates_publication_until_completion(
     tmp_path: Path,
 ) -> None:
@@ -386,6 +388,7 @@ def test_expired_shared_head_lease_cannot_complete_after_replacement(
     assert store.complete_shared_head_invalidation(replacement) is True
 
 
+# Verifies XCO-010.
 def test_new_shared_head_generation_fences_old_lease_and_completion(
     tmp_path: Path,
 ) -> None:
@@ -1648,6 +1651,7 @@ def test_authority_epoch_permanently_fences_prechange_claim_after_fanout(
     assert after_change.authority_generation == 1
 
 
+# Verifies XCO-009.
 def test_authority_epoch_fences_prechange_job_claimed_after_fanout(tmp_path: Path) -> None:
     store = make_store(tmp_path)
     store.enqueue(request())
@@ -1679,6 +1683,7 @@ def test_repository_authority_epoch_does_not_cancel_unrelated_repository(
     assert store.is_current_claim(unrelated) is True
 
 
+# Verifies XCO-009.
 def test_unresolved_authority_prevents_evaluation_claim_churn(tmp_path: Path) -> None:
     store = make_store(tmp_path)
     store.enqueue(request())

@@ -232,6 +232,7 @@ def parsed_commit(**changes: Any) -> CommitEvidence:
     return CommitEvidence.from_graphql(graphql_commit_payload(**changes))
 
 
+# Verifies XCO-012.
 @pytest.mark.parametrize("count", (1, 101, MAX_PULL_COMMITS))
 def test_accepts_complete_bounded_linear_histories(count: int) -> None:
     result = evaluate_dco(linear_evidence(count))
@@ -452,6 +453,7 @@ def test_a_changed_commit_count_between_observations_fails_as_a_race() -> None:
     assert evaluate_dco(rebuild(evidence, before=before)).failure is DcoFailure.PULL_REQUEST_CHANGED
 
 
+# Verifies XCO-012.
 @pytest.mark.parametrize(
     ("field", "value"),
     (
@@ -477,6 +479,7 @@ def test_comparison_must_be_bound_to_the_exact_pull_snapshot(
     assert result.head_sha == evidence.event.head_sha
 
 
+# Verifies XCO-012.
 def test_exact_compare_binding_closes_same_head_same_count_retarget_aba_for_merge_graphs() -> None:
     left = signed_commit(sha(1), (BASE_SHA,))
     right = signed_commit(sha(2), (BASE_SHA,))
@@ -1175,6 +1178,7 @@ def test_an_official_dependabot_commit_can_still_use_the_ordinary_author_route()
     assert result.commits[0].outcome is DcoCommitOutcome.AUTHOR_SIGNOFF
 
 
+# Verifies XCO-001.
 def test_result_model_rejects_contradictory_pass_and_failure_states() -> None:
     with pytest.raises(ValidationError, match="passing result cannot have"):
         DcoEvaluationResult(

@@ -539,6 +539,7 @@ async def test_each_pagination_page_uses_the_shared_budget(
         await client.close()
 
 
+# Verifies XCO-011.
 @pytest.mark.asyncio
 @pytest.mark.parametrize("streaming", [False, True])
 async def test_quota_traces_explain_lane_and_reset_without_repository_metadata(

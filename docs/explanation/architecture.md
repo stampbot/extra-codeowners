@@ -7,18 +7,22 @@ old success immediately, while a durable worker performs the authoritative
 evaluation.
 
 This page describes the self-hosted GitHub App that exists today. The planned
-Marketplace Action and hosted service are separate distributions.
+Marketplace Action and hosted service are separate distributions. The
+[decision records](adrs/index.md) explain why the main pieces work the way they
+do.
 
 ## Design rules
 
-The implementation follows four rules:
+The implementation follows four rules. The first three have their own IDs;
+the fourth restates threat-model invariant XCO-001.
 
-1. Store relevant work before acknowledging the webhook.
-2. Fetch authorization evidence from GitHub; never trust a webhook payload as
-   proof that a review or policy is valid.
-3. Keep the policy evaluator deterministic and independent of the network and
-   database adapters.
-4. Let missing, stale, truncated, or contradictory evidence block success.
+1. **XCO-013.** Store relevant work before acknowledging the webhook.
+2. **XCO-014.** Fetch authorization evidence from GitHub; never trust a webhook
+   payload as proof that a review or policy is valid.
+3. **XCO-015.** Keep the policy evaluator deterministic and independent of the
+   network and database adapters.
+4. Let missing, stale, truncated, or contradictory evidence block success
+   ([XCO-001](threat-model.md#invariants)).
 
 ## From event to decision
 

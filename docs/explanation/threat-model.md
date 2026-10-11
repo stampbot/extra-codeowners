@@ -107,30 +107,33 @@ of the security contract.
 
 ## Invariants
 
-Implementation details may change. These properties may not:
+Implementation details may change. These properties may not. Each has a
+stable ID; a test that verifies one names that ID in a comment.
 
-1. Incomplete or contradictory evidence never yields success.
-2. A review for an older head never satisfies the current head.
-3. A repository cannot enroll its own trusted application.
-4. A label is never approval evidence by itself.
-5. Every distinct effective CODEOWNERS owner set is satisfied independently.
-6. Both names of a renamed file are evaluated.
-7. Check publication is bound to the exact evaluated head and the expected App
-   source.
-8. A worker never treats an uncertain completed write or post-publication
-   generation check as current. It attempts a shielded reset to a blocking result
-   before releasing the writer guard and preserves the original exception or
-   cancellation so durable work remains retryable.
-9. Relevant pending or retrying authority fan-out prevents publication of a
-   completed result.
-10. A shared-head generation cannot publish until durable invalidation for that
-    exact generation has finished.
-11. Credentials and raw private payloads never appear in logs, metrics, checks,
-    or audit details.
-12. An independent DCO result identifies the repository, pull request, base
-    SHA, and head SHA whose snapshot-bound commit connection produced it.
+1. **XCO-001.** Incomplete or contradictory evidence never yields success.
+2. **XCO-002.** A review for an older head never satisfies the current head.
+3. **XCO-003.** A repository cannot enroll its own trusted application.
+4. **XCO-004.** A label is never approval evidence by itself.
+5. **XCO-005.** Every distinct effective CODEOWNERS owner set is satisfied
+   independently.
+6. **XCO-006.** Both names of a renamed file are evaluated.
+7. **XCO-007.** Check publication is bound to the exact evaluated head and the
+   expected App source.
+8. **XCO-008.** A worker never treats an uncertain completed write or
+   post-publication generation check as current. It attempts a shielded reset
+   to a blocking result before releasing the writer guard and preserves the
+   original exception or cancellation so durable work remains retryable.
+9. **XCO-009.** Relevant pending or retrying authority fan-out prevents
+   publication of a completed result.
+10. **XCO-010.** A shared-head generation cannot publish until durable
+    invalidation for that exact generation has finished.
+11. **XCO-011.** Credentials and raw private payloads never appear in logs,
+    metrics, checks, or audit details.
+12. **XCO-012.** An independent DCO result identifies the repository, pull
+    request, base SHA, and head SHA whose snapshot-bound commit connection
+    produced it.
 
-Invariant 7 has an important limit. GitHub does not offer a pull-request-scoped
+XCO-007 has an important limit. GitHub does not offer a pull-request-scoped
 required Check Run, so two pull requests can inherit the check attached to one
 commit. Shared-head detection and durable exact-head invalidation close the
 worker race after acceptance. They cannot eliminate the period before GitHub
@@ -245,3 +248,6 @@ The implementation does not currently cover:
   service
 - arbitrary third-party callers; the webhook endpoint authenticates GitHub,
   not a general API client.
+
+The [remaining work](../reference/project-status.md#remaining-work) list links
+the issues that track these boundaries.

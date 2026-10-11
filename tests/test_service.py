@@ -1565,6 +1565,7 @@ async def test_evaluation_lease_loss_during_completion_restores_blocking_check(
     assert github.checks[-1].get("conclusion") is None
 
 
+# Verifies XCO-008.
 @pytest.mark.asyncio
 async def test_applied_completed_write_error_resets_before_guard_release_and_propagates(
     tmp_path: Path,
@@ -1691,6 +1692,7 @@ async def test_postflight_database_error_restores_blocking_check_before_propagat
     assert github.checks[-1].get("conclusion") is None
 
 
+# Verifies XCO-008.
 @pytest.mark.asyncio
 async def test_cancellation_during_postflight_waits_for_shielded_blocking_reset(
     tmp_path: Path,
@@ -1758,6 +1760,7 @@ async def test_cancellation_during_postflight_waits_for_shielded_blocking_reset(
     ]
 
 
+# Verifies XCO-008.
 @pytest.mark.asyncio
 async def test_postflight_reset_failure_preserves_database_error_for_retry(
     tmp_path: Path,
@@ -1795,6 +1798,7 @@ async def test_postflight_reset_failure_preserves_database_error_for_retry(
     ]
 
 
+# Verifies XCO-014.
 @pytest.mark.asyncio
 async def test_direct_human_owner_without_write_access_is_not_accepted(tmp_path: Path) -> None:
     github = FakeGitHub(changed_path="uv.lock", reviewer_type="User")
@@ -2026,6 +2030,7 @@ async def test_disabled_repository_publishes_failing_check(tmp_path: Path) -> No
     assert github.checks[-1]["conclusion"] == "failure"
 
 
+# Verifies XCO-001.
 @pytest.mark.asyncio
 async def test_missing_codeowners_fails_closed(tmp_path: Path) -> None:
     github = FakeGitHub(changed_path="uv.lock")
@@ -2152,6 +2157,7 @@ async def test_github_codeowners_errors_fail_closed(tmp_path: Path) -> None:
     assert "Invalid owner" in github.checks[-1]["text"]
 
 
+# Verifies XCO-001.
 @pytest.mark.asyncio
 async def test_missing_label_evidence_fails_closed(tmp_path: Path) -> None:
     github = FakeGitHub(changed_path="uv.lock")
@@ -2196,6 +2202,7 @@ async def test_existing_success_is_revoked_before_policy_fetch_failure(tmp_path:
     assert github.checks[-1]["status"] == "in_progress"
 
 
+# Verifies XCO-014.
 @pytest.mark.asyncio
 async def test_bot_user_identity_mismatch_does_not_authorize_bot(tmp_path: Path) -> None:
     github = FakeGitHub(changed_path="uv.lock")
@@ -2209,6 +2216,7 @@ async def test_bot_user_identity_mismatch_does_not_authorize_bot(tmp_path: Path)
     assert github.checks[-1]["conclusion"] == "failure"
 
 
+# Verifies XCO-014.
 @pytest.mark.asyncio
 async def test_stale_head_hint_requeues_live_head_and_stales_shared_claim(
     tmp_path: Path,
@@ -2241,6 +2249,7 @@ async def test_stale_head_hint_requeues_live_head_and_stales_shared_claim(
     assert store.shared_head_generation_is_current(prior_current_head_claim, "c" * 40) is False
 
 
+# Verifies XCO-007.
 @pytest.mark.asyncio
 async def test_revision_change_during_evaluation_is_requeued_without_stale_check(
     tmp_path: Path,
@@ -2636,6 +2645,7 @@ async def test_worker_does_not_starve_evaluations_behind_authority_retries(
     assert store.claim_authority("observer", 60) is not None
 
 
+# Verifies XCO-009.
 @pytest.mark.asyncio
 async def test_accepted_authority_change_fences_inflight_success(tmp_path: Path) -> None:
     github = FakeGitHub(changed_path="uv.lock")
@@ -4540,6 +4550,7 @@ def test_reconciliation_rejects_duplicate_identities_in_collected_pages(
         validator(payload)
 
 
+# Verifies XCO-011.
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("malformed", "secret", "is_batch"),
