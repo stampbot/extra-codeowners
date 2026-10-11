@@ -1,0 +1,13 @@
+# Settings for trellis skills. Skills read this before asking a question.
+style: preserve
+paths:
+  adrs: docs/explanation/adrs
+  living: docs/explanation
+adrs:
+  naming: date
+  owner: Maintainers
+requirements:
+  id_pattern: XCO-<NNN>
+  keywords: lowercase
+precedence: AGENTS.md
+shared_adrs: none
