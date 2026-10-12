@@ -198,8 +198,6 @@ close before the project is presented as production-ready:
 
 ### Known defects
 
-- [Issue #243][issue-243]: the check briefly reports failure about every 30
-  minutes on an unchanged, approved pull request, then returns to success.
 - [Issue #241][issue-241]: when Argo CD resumes a drained release, the
   PodDisruptionBudget should be ordered after the Deployment.
 
@@ -264,4 +262,3 @@ on this list opens or closes.
 [issue-160]: https://github.com/stampbot/extra-codeowners/issues/160
 [issue-203]: https://github.com/stampbot/extra-codeowners/issues/203
 [issue-241]: https://github.com/stampbot/extra-codeowners/issues/241
-[issue-243]: https://github.com/stampbot/extra-codeowners/issues/243

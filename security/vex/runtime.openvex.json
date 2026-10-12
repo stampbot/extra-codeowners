@@ -1,6 +1,6 @@
 {
   "@context": "https://openvex.dev/ns/v0.2.0",
-  "@id": "urn:uuid:7df868d6-fe4d-5d98-b1cf-60d793571c83",
+  "@id": "urn:uuid:769ea643-9161-5c89-bcc2-e2046c30c666",
   "author": "Extra CODEOWNERS maintainers",
   "role": "VEX document producer",
   "statements": [
@@ -748,11 +748,11 @@
       "extra_codeowners/build_identity.py": "5c3b38f087460fca37660ddeaa8a004d05348f8c947c04fc2444739ab7896968",
       "extra_codeowners/cli.py": "79a5c200397f9544492ec6071890ff5835c1ed625c623a0a86ed3a60503e65f4",
       "extra_codeowners/codeowners.py": "da8be54dbc8a79dcbaf39d49491f950d5405d74d6bb5e07da5247644f5ffcfd8",
-      "extra_codeowners/database.py": "de70a8db4643708686ee80816e82992861354a96d4c5a9076f6f0fcbf3f28c86",
+      "extra_codeowners/database.py": "53f6fe731d54f371c9d970698323f3e72274e96b11c0289e078a31757541651f",
       "extra_codeowners/dco.py": "8c3a0b541fe021fb9f05500ca9278306901010c219e7e1199ca5e205c138e68d",
       "extra_codeowners/discovery_cache.py": "ec62a728af9c5206de815aa72affd69e231d2acb45b5f80e33790ec6e20b29c7",
       "extra_codeowners/evaluator.py": "b81b9d1c6fe81d591867b0993d413030caab8af48703c4725f14c04fe2e3f9a6",
-      "extra_codeowners/github.py": "886bc39a9dba15062d70b38e74838c81811e4aa6e450ba3f1e1dc5aa89ec85d5",
+      "extra_codeowners/github.py": "17551850c697ba91d056cc07075365e4e4a97edcb95ff097a91fd954429bbbe6",
       "extra_codeowners/logging.py": "a59227e76ec7809ff8bb88fee997abb9b99f32e81a4c8d16bcfc72c0c0abf33f",
       "extra_codeowners/manifest.py": "33d42ac16b8218562f2baf6c0bc7c6664b03354bbf274cb0381e94740b76681e",
       "extra_codeowners/metrics.py": "741473fcdd83c899f07beb277e4a961bd536878bfda0c7b7b676cd0f07161b38",
@@ -760,7 +760,7 @@
       "extra_codeowners/models.py": "dc59959f56e35111fae00f8f60ef054ba80eb839eb2dae5b09165d4cdc349a48",
       "extra_codeowners/policy.py": "844abb482a7c9cc3190d624cc92ece2476128644718e4096f98bfa8a0abedf8a",
       "extra_codeowners/py.typed": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "extra_codeowners/service.py": "45eabc85e6567947542048f0d3eaef160b89762a3241f7af3b732a6310e116b6",
+      "extra_codeowners/service.py": "3dec3833bb088828345c38a8fe8278c47a501c980d01a051e2a978edc30584a7",
       "extra_codeowners/settings.py": "bd1d3cd0acf23ea4b26869fc1e024438aba7b9acf43f3850c4e6be2e9a5b5437",
       "extra_codeowners/trace_context.py": "f79ca91baa1dd615c80546c66a6b370ba78ec7106dece3feb201d10250078532",
       "extra_codeowners/tracing.py": "62c730c8bdf4d632dace5b79232f968d871a28d8724a162aa52ba6b4ed2c6db1",
@@ -768,7 +768,7 @@
       "pyproject.toml": "4164e19c10e620b1cae1db22dab5728b4e80eb0f5a9dd768484b6f12de73fc96",
       "uv.lock": "2f0aebfcdfe39538db8cfb67eb13287ec3245efd794c1d47d022c7297eb41b9a"
     },
-    "review": "October 7 PR #242: authority-page validation now detects duplicate PR numbers with a page-local Python set instead of assuming numeric order. HTTP transport, native loading, database queries, locked dependencies, and image inputs are unchanged; no PCRE2 JIT or other new native API path is introduced. Existing fixed package versions and the Debian PCRE2 reachability conclusion remain valid. See security/vex/runtime-review.md.",
+    "review": "Behavior-preserving restructure of the scheduled recheck change: shared claim-release helper in database.py, named reason constants, a ClaimedJob property, and explicit deferral arguments in service.py. No new dependencies, imports, native libraries, or regular-expression use; the PCRE2 JIT not_affected claim still holds and fixed claims are unaffected.",
     "schema_version": 1
   }
 }

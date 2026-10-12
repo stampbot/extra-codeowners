@@ -13,8 +13,8 @@ do.
 
 ## Design rules
 
-The implementation follows four rules. The first three have their own IDs;
-the fourth is covered by threat-model invariants XCO-001 and XCO-002.
+The implementation follows five rules. Four have their own IDs; the fourth
+is covered by threat-model invariants XCO-001 and XCO-002.
 
 1. **XCO-013.** Store relevant work before acknowledging the webhook.
 2. **XCO-014.** Fetch authorization evidence from GitHub; never trust a webhook
@@ -23,6 +23,10 @@ the fourth is covered by threat-model invariants XCO-001 and XCO-002.
    network and database adapters.
 4. Let missing, stale, truncated, or contradictory evidence block success
    ([XCO-001 and XCO-002](threat-model.md#invariants)).
+5. **XCO-017.** Block the check before evaluating any trigger that might change
+   the result, but never change a published result on a timer alone until a
+   new evaluation produces a different one
+   ([decision record](adrs/2026-10-11-keep-results-on-scheduled-rechecks.md)).
 
 ## From event to decision
 
@@ -235,7 +239,9 @@ pretending the App can update a repository it can no longer access.
 
 For each job, the worker first fetches the current revisions and moves the
 named check on that head to a blocking state: a new check starts `in_progress`,
-while an existing check receives an explicit `failure`. It then confirms that it owns the
+while an existing check receives an explicit `failure`. A `scheduled_recheck`
+skips that step and leaves the published result in place, as the
+[reconciler](#reconciler) section explains. It then confirms that it owns the
 newest database generation before collecting mutable reviews, labels,
 membership, and policy.
 
@@ -294,9 +300,43 @@ unchanged head is also queued when its bounded recheck deadline arrives. This
 still repairs a missed review, label, or policy event that did not change the
 head, but it does not refill the whole queue every five minutes.
 
-When reconciliation needs work, one transaction advances that head's shared
+Those two cases get different treatment, because only one of them carries new
+evidence. A head change, a head with no confirmed completion, or a pull request
+the reconciler has no record of means something may have happened that we
+didn't hear about. For those, one transaction advances that head's shared
 generation, makes its exact-head invalidation pending, and inserts a
-low-priority recovery evaluation. A direct webhook promotes an existing
+low-priority recovery evaluation, so the check goes blocking before anything is
+re-read.
+
+A recheck that's due only because time passed is a `scheduled_recheck`
+(XCO-017). It
+binds to the head's current generation instead of advancing it, so no
+invalidation runs. The worker keeps the published result while it evaluates
+and writes the check only if the new result differs. Every Check Run write
+sends webhooks to anything watching the pull request. Blocking first would
+flap a quiet pull request from success to failure and back on every recheck.
+A missed review or label change that the recheck uncovers still flips the
+check, just without the blocking step in between. The old result was already
+visible for up to a recheck interval, and this adds the evaluation's own
+duration to that window.
+
+That window has to stay short ([XCO-016](threat-model.md#invariants)). If a
+scheduled recheck fails or loses its
+worker, the job becomes ordinary recovery work: the same transaction advances
+the shared generation, the invalidation worker blocks the check, and the retry
+blocks first like any other evaluation. Otherwise a GitHub incident, which
+tends to drop webhooks and fail API calls at the same time, could leave a
+stale success up for hours.
+
+Deferrals are treated differently, because recovery work is deferred
+routinely for API budget and that isn't evidence of anything. A rate-limit or
+budget deferral keeps the published result unless the retry would land more
+than one recheck interval after the recheck was queued. An authority or
+exact-head deferral never converts the job, because a reset is already on its
+way.
+
+Any trigger that lands on a queued `scheduled_recheck` row replaces its reason
+and generation, so that evaluation goes back to blocking first. A direct webhook promotes an existing
 recovery row and its head invalidation in the same transaction. A later scan
 can never demote it again. If the internal job did not know its head when
 queued, its first authoritative pull-request read advances the head and binds

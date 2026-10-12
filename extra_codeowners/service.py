@@ -24,6 +24,7 @@ from extra_codeowners.api_budget import (
 )
 from extra_codeowners.codeowners import CodeownersDocument, parse_codeowners
 from extra_codeowners.database import (
+    PERIODIC_RECONCILIATION_REASON,
     AuthorityRequest,
     CheckWriteGuard,
     ClaimedAuthorityJob,
@@ -1532,6 +1533,7 @@ class EvaluationService:
                     return
             details_url = pull.get("html_url") if isinstance(pull.get("html_url"), str) else None
             external_id = f"{job.repository_full_name}#{job.pull_number}@{head_sha}"
+            scheduled_recheck = job.keeps_published_check
 
             # Revoke any previous success before collecting mutable review and
             # label evidence. A retry remains blocking instead of leaving a
@@ -1571,20 +1573,21 @@ class EvaluationService:
                             "shared-head generation changed while rebinding evaluation"
                         )
                     return
-                await self.github.upsert_check_run(
-                    job.installation_id,
-                    job.repository_full_name,
-                    head_sha,
-                    self.settings.check_name,
-                    status="in_progress",
-                    title="Evaluating CODEOWNER approvals",
-                    summary=(
-                        "A current evaluation is in progress; approval is blocked until it "
-                        "completes."
-                    ),
-                    details_url=details_url,
-                    external_id=external_id,
-                )
+                if not scheduled_recheck:
+                    await self.github.upsert_check_run(
+                        job.installation_id,
+                        job.repository_full_name,
+                        head_sha,
+                        self.settings.check_name,
+                        status="in_progress",
+                        title="Evaluating CODEOWNER approvals",
+                        summary=(
+                            "A current evaluation is in progress; approval is blocked until it "
+                            "completes."
+                        ),
+                        details_url=details_url,
+                        external_id=external_id,
+                    )
             if job.last_delivery_id is not None:
                 await asyncio.to_thread(self.store.mark_delivery_invalidated, job.last_delivery_id)
             if not await asyncio.to_thread(
@@ -1749,6 +1752,7 @@ class EvaluationService:
                             details_url=details_url,
                             external_id=external_id,
                             include_re_evaluate_action=True,
+                            skip_if_unchanged=scheduled_recheck,
                         )
                     except asyncio.CancelledError:
                         await self._restore_blocking_after_uncertain_completion(
@@ -2117,7 +2121,12 @@ class Worker:
             await self.evaluator.evaluate_job(job)
         except RecoveryBudgetDeferredError as error:
             await asyncio.to_thread(
-                self.store.defer, job, owner, str(error), error.retry_after_seconds
+                self.store.defer,
+                job,
+                owner,
+                str(error),
+                error.retry_after_seconds,
+                scheduled_recheck_limit_seconds=self.settings.reconcile_recheck_seconds,
             )
             return "budget_deferred"
         except GitHubRateLimitError as error:
@@ -2139,6 +2148,7 @@ class Worker:
                 owner,
                 str(error),
                 error.retry_after_seconds,
+                scheduled_recheck_limit_seconds=self.settings.reconcile_recheck_seconds,
             )
             return "rate_limited"
         except AuthorityChangePendingError as error:
@@ -2153,6 +2163,8 @@ class Worker:
                 owner,
                 str(error),
                 max(5, int(self.settings.worker_poll_seconds * 10)),
+                # Authority fan-out already resets the check for this PR.
+                scheduled_recheck_limit_seconds=None,
             )
             return "authority_deferred"
         except SharedHeadInvalidationPendingError as error:
@@ -2167,6 +2179,8 @@ class Worker:
                 owner,
                 str(error),
                 max(1, int(self.settings.worker_poll_seconds * 2)),
+                # A pending exact-head invalidation already resets the check.
+                scheduled_recheck_limit_seconds=None,
             )
             return "invalidation_deferred"
         except asyncio.CancelledError:
@@ -3277,7 +3291,7 @@ class Reconciler:
                                 installation_id=installation_id,
                                 repository_full_name=full_name,
                                 pull_number=number,
-                                reason="periodic_reconciliation",
+                                reason=PERIODIC_RECONCILIATION_REASON,
                                 head_sha_hint=head_sha,
                                 work_class="recovery",
                                 observed_at=observed_at,

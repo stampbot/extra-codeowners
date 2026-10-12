@@ -64,6 +64,7 @@ nav:
           - Explicit schema migrations: explanation/adrs/2026-07-15-explicit-schema-migrations.md
           - Runtime image on Debian slim: explanation/adrs/2026-08-17-debian-slim-runtime.md
           - Release from main CI: explanation/adrs/2026-08-17-release-from-main-ci.md
+          - Keep results on scheduled rechecks: explanation/adrs/2026-10-11-keep-results-on-scheduled-rechecks.md
   - Maintainer and release engineering:
       - Overview: maintainers/index.md
       - Run the live GitHub contract: how-to/run-live-github-contract.md

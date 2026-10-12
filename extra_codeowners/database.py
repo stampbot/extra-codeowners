@@ -55,6 +55,13 @@ MAX_BASE_SCOPED_AUTHORITY_JOBS_PER_REPOSITORY = 100
 MAX_AUTHORITY_BASE_REF_LENGTH = 255
 WORK_CLASS_INTERACTIVE: Final = "interactive"
 WORK_CLASS_RECOVERY: Final = "recovery"
+# A timer-driven recheck of a head whose last evaluation completed. It carries
+# no new evidence, so the evaluator keeps the published result until the new
+# evaluation differs. Any trigger that coalesces into the row replaces it.
+SCHEDULED_RECHECK_REASON: Final = "scheduled_recheck"
+# Reconciler work the scan cannot vouch for: a missed head change, an
+# unconfirmed completion, or a pull request with no completion record.
+PERIODIC_RECONCILIATION_REASON: Final = "periodic_reconciliation"
 WorkClass = Literal["interactive", "recovery"]
 # ``sslmode=require`` normally skips server-certificate verification, but libpq
 # upgrades it to ``verify-ca`` when its default root certificate exists. Point
@@ -477,7 +484,10 @@ class JobRequest:
             "repository_full_name",
             normalize_repository_full_name(self.repository_full_name),
         )
-        if self.reason == "periodic_reconciliation" and self.work_class == WORK_CLASS_INTERACTIVE:
+        if (
+            self.reason in {PERIODIC_RECONCILIATION_REASON, SCHEDULED_RECHECK_REASON}
+            and self.work_class == WORK_CLASS_INTERACTIVE
+        ):
             # Keep the public request type safe for older call sites. Periodic
             # work is never allowed to impersonate a webhook-triggered job.
             object.__setattr__(self, "work_class", WORK_CLASS_RECOVERY)
@@ -534,6 +544,18 @@ class ClaimedJob:
     available_at: datetime
     lease_owner: str
     base_ref_hint: str | None = None
+
+    @property
+    def keeps_published_check(self) -> bool:
+        """Whether this attempt may leave the published result in place.
+
+        A scheduled recheck carries no new evidence, so it keeps the result
+        until its evaluation differs. Any trigger replaces the reason, and
+        ``QueueStore.fail`` and a long ``defer`` turn it into revoke-first
+        work. Only the first attempt qualifies: a lease reclaimed after a
+        crash or shutdown blocks first as well.
+        """
+        return self.reason == SCHEDULED_RECHECK_REASON and self.attempts <= 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -1509,6 +1531,28 @@ class QueueStore:
         )
 
     @staticmethod
+    def _touch_shared_head_epoch_in_session(session: Session, request: JobRequest) -> int:
+        """Return the current head generation and keep its fence out of pruning.
+
+        An open pull request's epoch must not age into retention pruning. A
+        real write also makes a concurrent prune re-check the row's age
+        instead of deleting a fence that a recheck was just bound to.
+        """
+        head_sha = validate_head_sha(request.head_sha_hint or "")
+        session.execute(
+            update(SharedHeadEpoch)
+            .where(
+                SharedHeadEpoch.installation_id == request.installation_id,
+                SharedHeadEpoch.repository_full_name == request.repository_full_name,
+                SharedHeadEpoch.head_sha == head_sha,
+            )
+            .values(changed_at=utcnow())
+        )
+        return QueueStore._shared_head_generation_in_session(
+            session, request.installation_id, request.repository_full_name, head_sha
+        )
+
+    @staticmethod
     def _advance_shared_head_epoch_in_session(
         session: Session,
         request: JobRequest,
@@ -1935,7 +1979,10 @@ class QueueStore:
         The scan still compares every open pull request returned by GitHub.
         A changed head is queued immediately, even when an older row is
         pending. An unchanged head is queued only when it has never completed
-        or its successful evaluation is older than ``recheck_seconds``.
+        or its successful evaluation is older than ``recheck_seconds``. A
+        recheck of a confirmed, unchanged head is queued as
+        ``SCHEDULED_RECHECK_REASON`` without advancing the exact-head epoch,
+        so a quiet pull request's published check is not reset on a timer.
         """
         if request.work_class != WORK_CLASS_RECOVERY:
             raise ValueError("reconciliation work must use the recovery class")
@@ -2000,23 +2047,36 @@ class QueueStore:
                         if state is not None:
                             state.observed_at = now
                         return True
-                    completed_at = state.completed_at if state is not None else None
-                    if completed_at is not None and completed_at.tzinfo is None:
-                        completed_at = completed_at.replace(tzinfo=UTC)
-                    if (
-                        state is not None
+                    # A confirmed completion of this exact head is the only
+                    # state that lets a scan skip work or keep the result.
+                    confirmed_at = (
+                        state.completed_at
+                        if state is not None
                         and state.head_sha == request.head_sha_hint
                         and state.confirmed_completed_at == state.completed_at
-                        and completed_at is not None
-                        and completed_at > now - timedelta(seconds=recheck_seconds)
+                        else None
+                    )
+                    if confirmed_at is not None and confirmed_at.tzinfo is None:
+                        confirmed_at = confirmed_at.replace(tzinfo=UTC)
+                    if confirmed_at is not None and confirmed_at > now - timedelta(
+                        seconds=recheck_seconds
                     ):
+                        assert state is not None
                         state.observed_at = now
                         return False
-                    generation = self._advance_shared_head_epoch_in_session(
-                        session,
-                        request,
-                        shared_head_locked=True,
-                    )
+                    if confirmed_at is not None:
+                        # Only the clock changed. Advancing the exact-head
+                        # epoch would reset the published check, so bind to
+                        # the current generation and let the evaluator keep
+                        # the result unless the new evaluation differs.
+                        request = replace(request, reason=SCHEDULED_RECHECK_REASON)
+                        generation = self._touch_shared_head_epoch_in_session(session, request)
+                    else:
+                        generation = self._advance_shared_head_epoch_in_session(
+                            session,
+                            request,
+                            shared_head_locked=True,
+                        )
                     authority_generation = (
                         session.scalar(
                             select(AuthorityEpoch.generation).where(
@@ -3441,6 +3501,61 @@ class QueueStore:
                     state.observed_at = now
             return True
 
+    @staticmethod
+    def _scheduled_recheck_revocation(job: ClaimedJob) -> JobRequest | None:
+        """Return the revoke-first request that replaces a scheduled recheck."""
+        if job.reason != SCHEDULED_RECHECK_REASON or job.head_sha_hint is None:
+            return None
+        return JobRequest(
+            installation_id=job.installation_id,
+            repository_full_name=job.repository_full_name,
+            pull_number=job.pull_number,
+            reason=PERIODIC_RECONCILIATION_REASON,
+            head_sha_hint=job.head_sha_hint,
+            work_class=job.work_class,
+            base_ref_hint=job.base_ref_hint,
+        )
+
+    def _release_claim_in_session(
+        self,
+        session: Session,
+        job: ClaimedJob,
+        owner: str,
+        revocation: JobRequest | None,
+        **values: Any,
+    ) -> bool:
+        """Release a claim with ``values``, optionally ending a scheduled recheck.
+
+        A scheduled recheck keeps the published result only while it can
+        replace it promptly. With ``revocation``, the same transaction advances
+        the exact-head epoch and rewrites the row as revoke-first work, so
+        invalidation blocks the check before the retry runs.
+        """
+        if revocation is not None:
+            # Webhooks lock the exact-head epoch before the PR row.
+            self._lock_shared_head_epoch_in_session(session, revocation)
+        claim = (
+            EvaluationJob.id == job.id,
+            EvaluationJob.generation == job.generation,
+            EvaluationJob.lease_owner == owner,
+        )
+        result = session.execute(update(EvaluationJob).where(*claim).values(**values))
+        updated = getattr(result, "rowcount", 0) == 1
+        if not updated:
+            session.execute(
+                update(EvaluationJob).where(*claim).values(lease_owner=None, lease_until=None)
+            )
+        elif revocation is not None:
+            generation = self._advance_shared_head_epoch_in_session(
+                session, revocation, shared_head_locked=True
+            )
+            session.execute(
+                update(EvaluationJob)
+                .where(EvaluationJob.id == job.id, EvaluationJob.generation == job.generation)
+                .values(reason=revocation.reason, shared_head_generation=generation)
+            )
+        return updated
+
     def fail(
         self,
         job: ClaimedJob,
@@ -3448,69 +3563,67 @@ class QueueStore:
         error: str,
         max_delay_seconds: int,
     ) -> None:
-        """Retry evaluation indefinitely with bounded exponential backoff."""
+        """Retry evaluation indefinitely with bounded exponential backoff.
+
+        A failed scheduled recheck always becomes revoke-first work: the
+        failure may last hours, and the recheck may be the only signal of a
+        missed webhook.
+        """
         delay_seconds = max(1, min(max_delay_seconds, 2 ** min(job.attempts, 30)))
         with self.session() as session:
-            result = session.execute(
-                update(EvaluationJob)
-                .where(
-                    EvaluationJob.id == job.id,
-                    EvaluationJob.generation == job.generation,
-                    EvaluationJob.lease_owner == owner,
-                )
-                .values(
-                    state="pending",
-                    available_at=utcnow() + timedelta(seconds=delay_seconds),
-                    lease_owner=None,
-                    lease_until=None,
-                    last_error=error[:2000],
-                )
+            self._release_claim_in_session(
+                session,
+                job,
+                owner,
+                self._scheduled_recheck_revocation(job),
+                state="pending",
+                available_at=utcnow() + timedelta(seconds=delay_seconds),
+                lease_owner=None,
+                lease_until=None,
+                last_error=error[:2000],
             )
-            if getattr(result, "rowcount", 0) == 0:
-                session.execute(
-                    update(EvaluationJob)
-                    .where(
-                        EvaluationJob.id == job.id,
-                        EvaluationJob.generation == job.generation,
-                        EvaluationJob.lease_owner == owner,
-                    )
-                    .values(lease_owner=None, lease_until=None)
-                )
 
-    def defer(self, job: ClaimedJob, owner: str, error: str, delay_seconds: int) -> bool:
-        """Release a claim until a provider-supplied retry time without spending an attempt."""
+    def defer(
+        self,
+        job: ClaimedJob,
+        owner: str,
+        error: str,
+        delay_seconds: int,
+        *,
+        scheduled_recheck_limit_seconds: int | None,
+    ) -> bool:
+        """Release a claim until a provider-supplied retry time without spending an attempt.
+
+        A scheduled recheck keeps the published result through a deferral
+        unless ``scheduled_recheck_limit_seconds`` is set and the retry would
+        land later than that many seconds after the recheck was queued. Budget
+        pressure alone is not evidence, so short deferrals don't flap the check.
+        Callers pass ``None`` only when a reset is already in flight.
+        """
         delay_seconds = max(1, min(delay_seconds, 86_400))
+        revocation = None
+        if scheduled_recheck_limit_seconds is not None:
+            requested_at = job.requested_at
+            if requested_at.tzinfo is None:
+                requested_at = requested_at.replace(tzinfo=UTC)
+            retry_at = utcnow() + timedelta(seconds=delay_seconds)
+            if retry_at - requested_at > timedelta(seconds=scheduled_recheck_limit_seconds):
+                revocation = self._scheduled_recheck_revocation(job)
         with self.session() as session:
-            result = session.execute(
-                update(EvaluationJob)
-                .where(
-                    EvaluationJob.id == job.id,
-                    EvaluationJob.generation == job.generation,
-                    EvaluationJob.lease_owner == owner,
-                )
-                .values(
-                    attempts=case(
-                        (EvaluationJob.attempts > 0, EvaluationJob.attempts - 1),
-                        else_=0,
-                    ),
-                    available_at=utcnow() + timedelta(seconds=delay_seconds),
-                    lease_owner=None,
-                    lease_until=None,
-                    last_error=error[:2000],
-                )
+            return self._release_claim_in_session(
+                session,
+                job,
+                owner,
+                revocation,
+                attempts=case(
+                    (EvaluationJob.attempts > 0, EvaluationJob.attempts - 1),
+                    else_=0,
+                ),
+                available_at=utcnow() + timedelta(seconds=delay_seconds),
+                lease_owner=None,
+                lease_until=None,
+                last_error=error[:2000],
             )
-            updated = getattr(result, "rowcount", 0) == 1
-            if not updated:
-                session.execute(
-                    update(EvaluationJob)
-                    .where(
-                        EvaluationJob.id == job.id,
-                        EvaluationJob.generation == job.generation,
-                        EvaluationJob.lease_owner == owner,
-                    )
-                    .values(lease_owner=None, lease_until=None)
-                )
-            return updated
 
     def acquire_service_lease(self, name: str, owner: str, lease_seconds: int) -> bool:
         """Atomically acquire or renew a named cross-process lease."""
