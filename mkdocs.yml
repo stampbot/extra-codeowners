@@ -57,6 +57,13 @@ nav:
       - Database migrations: explanation/database-migrations.md
       - Threat model: explanation/threat-model.md
       - Property testing: explanation/property-testing.md
+      - Decision records:
+          - explanation/adrs/index.md
+          - App approvals via a required check: explanation/adrs/2026-07-13-app-approvals-through-a-required-check.md
+          - Store webhook work first: explanation/adrs/2026-07-13-store-webhook-work-first.md
+          - Explicit schema migrations: explanation/adrs/2026-07-15-explicit-schema-migrations.md
+          - Runtime image on Debian slim: explanation/adrs/2026-08-17-debian-slim-runtime.md
+          - Release from main CI: explanation/adrs/2026-08-17-release-from-main-ci.md
   - Maintainer and release engineering:
       - Overview: maintainers/index.md
       - Run the live GitHub contract: how-to/run-live-github-contract.md
@@ -68,4 +75,4 @@ nav:
       - Review stacked pull requests: how-to/review-stacked-pull-requests.md
       - Update the tutorial webhook relay: maintainers/update-tutorial-relay.md
       - DCO evidence contract: reference/dco-evidence.md
-      - Runtime base image decision: explanation/runtime-base.md
+      - Runtime base image: explanation/runtime-base.md

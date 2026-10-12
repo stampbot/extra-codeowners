@@ -103,15 +103,15 @@ Completing the fixture does not turn that result into a pass. See
 
 ## Work still needed
 
-Before a supported release, finish the large-installation performance and
-reconciliation measurements, then exercise repository lifecycle and App
-access-loss transitions with the native-enforcement handback in place.
-Record delivery payload contracts separately from service behavior: an event
-in GitHub's delivery log does not prove the service processed it.
+These results don't cover large-installation performance, quiet
+reconciliation, repository lifecycle transitions, or App access loss. The
+[remaining work](../reference/project-status.md#remaining-work) list tracks
+those gates, along with the distribution source work in
+[issue #18][sources], which passing approval tests doesn't close.
 
-The distribution source and notice work in [issue #18][sources] is a separate
-release gate. Passing approval tests or verifying signed source bundles does
-not close it.
+When you add results here, record delivery payload contracts separately from
+service behavior: an event in GitHub's delivery log doesn't prove the service
+processed it.
 
 [milestone]: https://github.com/stampbot/extra-codeowners/milestone/1
 [priority]: https://github.com/stampbot/extra-codeowners/pull/212

@@ -2572,6 +2572,7 @@ async def test_has_check_run_rejects_malformed_list(private_key: str) -> None:
     await client.close()
 
 
+# Verifies XCO-007.
 @pytest.mark.asyncio
 async def test_has_check_run_ignores_foreign_and_malformed_runs(private_key: str) -> None:
     def handler(request: httpx.Request) -> httpx.Response:

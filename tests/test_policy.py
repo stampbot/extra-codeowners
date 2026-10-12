@@ -92,6 +92,7 @@ def test_policy_file_delegation_opt_in_leaves_other_builtins_and_org_guardrails_
     assert organization_guarded.is_non_delegable(".github/extra-codeowners.toml")
 
 
+# Verifies XCO-003.
 def test_unenrolled_application_fails_policy_compilation() -> None:
     repo = RepositoryPolicy(
         enabled=True,

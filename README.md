@@ -181,6 +181,8 @@ These are the shortest routes into the manual:
 | Review deployment and operations | [Deployment guide](docs/how-to/deploy.md) and [operations guide](docs/how-to/operate.md) |
 | Inspect release notice evidence | [Recipient notice bundles](docs/reference/recipient-notices.md) |
 | Understand CI and releases | [Architecture](docs/explanation/architecture.md#ci-and-release-path) and [maintainer guide](docs/maintainers/index.md) |
+| Understand why it's built this way | [Decision records](docs/explanation/adrs/index.md) |
+| See what's left before a supported release | [Remaining work](docs/reference/project-status.md#remaining-work) |
 | Contribute | [Contributor guide](CONTRIBUTING.md) |
 
 The full manual is on

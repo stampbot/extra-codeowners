@@ -88,9 +88,10 @@ chart archive contains the chart verification and install commands.
 For a source review or local image test, the Dockerfile installs the runtime
 graph from `uv.lock` and rejects dependency source builds. Release builds run
 natively on `amd64` and `arm64`, scan each image, and assemble the
-multi-platform tag only after both builds pass. The
-[runtime-base explanation](../explanation/runtime-base.md) records the exact
-base and residual risk.
+multi-platform tag only after both builds pass. The Dockerfile
+pins the exact base image by digest, and the
+[runtime-base explanation](../explanation/runtime-base.md) covers the choice and
+its residual risk.
 
 ## Prerequisites
 

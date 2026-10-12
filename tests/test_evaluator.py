@@ -200,6 +200,7 @@ def test_latest_opinionated_review_wins_but_later_comment_does_not_supersede() -
     assert result.conclusion is EvaluationConclusion.FAILURE
 
 
+# Verifies XCO-002.
 def test_exact_head_freshness_is_default_and_can_be_explicitly_disabled() -> None:
     stale = app_review(sha=OLD_SHA)
     strict_result = evaluate(evaluation(reviews=(stale,)))
@@ -260,6 +261,7 @@ def test_eligible_author_can_satisfy_non_delegable_owner_set_when_opted_in() -> 
     )
 
 
+# Verifies XCO-005.
 def test_author_evidence_only_satisfies_matching_owner_set() -> None:
     result = evaluate(
         evaluation(
@@ -362,6 +364,7 @@ def test_mixed_delegated_and_uncovered_paths_require_a_human() -> None:
     assert evidence["src/main.py"].eligible_apps == ()
 
 
+# Verifies XCO-005.
 def test_every_distinct_owner_set_must_be_satisfied() -> None:
     codeowners = "/infra/** @example/infra\n/security/** @example/security\n"
     repo = repository(delegation(paths=("/infra/**",), owners=("@example/infra",)))
@@ -379,6 +382,7 @@ def test_every_distinct_owner_set_must_be_satisfied() -> None:
     assert sum(requirement.satisfied for requirement in result.requirements) == 1
 
 
+# Verifies XCO-006.
 def test_rename_evaluates_both_old_and_new_ownership() -> None:
     result = evaluate(
         evaluation(
@@ -444,6 +448,7 @@ def test_invalid_codeowners_fails_closed() -> None:
     assert result.requirements == ()
 
 
+# Verifies XCO-003.
 def test_unenrolled_delegation_fails_closed() -> None:
     result = evaluate(
         evaluation(

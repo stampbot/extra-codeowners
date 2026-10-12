@@ -15,6 +15,9 @@ the intended database operations. After Alembic runs, the application compares
 the result with its `required-release-contract`. That contract is not an
 upgrade plan or a universal proof of every PostgreSQL object.
 
+The [decision record](adrs/2026-07-15-explicit-schema-migrations.md)
+covers the alternatives this design replaced.
+
 ## One component changes the schema
 
 The migration command and the running service have different jobs:

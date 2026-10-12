@@ -293,6 +293,7 @@ def webhook_headers(body: bytes, delivery: str = "delivery-1") -> dict[str, str]
     }
 
 
+# Verifies XCO-013.
 def test_health_and_signed_webhook_ingestion(tmp_path: Path) -> None:
     store = migrated_store(f"sqlite:///{tmp_path / 'app.db'}")
     github = StubGitHub()
@@ -648,6 +649,7 @@ def test_webhook_fast_path_records_a_global_rate_limit(tmp_path: Path) -> None:
     assert store.delivery_needs_invalidation("delivery-1") is True
 
 
+# Verifies XCO-013.
 def test_webhook_fast_path_failure_is_durable_and_replayable(tmp_path: Path) -> None:
     store = migrated_store(f"sqlite:///{tmp_path / 'app.db'}")
     github = StubGitHub()
@@ -1027,6 +1029,7 @@ def test_org_config_repository_webhook_is_acknowledged_but_not_queued(tmp_path: 
     assert store.pending_count() == 0
 
 
+# Verifies XCO-013.
 def test_authority_webhook_is_durably_queued_without_pr_fast_path(tmp_path: Path) -> None:
     store = migrated_store(f"sqlite:///{tmp_path / 'authority-app.db'}")
     github = StubGitHub()
@@ -1056,6 +1059,7 @@ def test_authority_webhook_is_durably_queued_without_pr_fast_path(tmp_path: Path
     assert github.checks == []
 
 
+# Verifies XCO-013.
 def test_authority_guard_failure_returns_retryable_service_error(
     tmp_path: Path, monkeypatch: Any
 ) -> None:
