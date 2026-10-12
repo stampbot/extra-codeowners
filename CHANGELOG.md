@@ -6,6 +6,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Rel
 
 ## [Unreleased]
 
+### Fixed
+
+- Stop the periodic reconciler from flapping the check on quiet pull requests.
+  A recheck that's due only because time passed now keeps the published result
+  and writes the check only when the result changes. Each recheck used to reset
+  the check to failure and back to success, sending webhooks to every
+  subscriber. Head changes and other triggers still block the check before
+  re-evaluating. Fixes
+  [issue #243](https://github.com/stampbot/extra-codeowners/issues/243).
+
 ## [0.1.0-alpha.7] - 2026-08-13
 
 ### Fixed

@@ -24,6 +24,7 @@ from extra_codeowners.api_budget import (
 )
 from extra_codeowners.codeowners import parse_codeowners
 from extra_codeowners.database import (
+    SCHEDULED_RECHECK_REASON,
     AuthorityJob,
     AuthorityRequest,
     ClaimedAuthorityJob,
@@ -504,7 +505,7 @@ async def test_evaluation_queue_wait_measures_the_ready_retry_attempt(
 ) -> None:
     store = migrated_store(f"sqlite:///{tmp_path / 'queue-wait-retry.db'}")
     first = job(store)
-    assert store.defer(first, "test-worker", "retry later", 1)
+    assert store.defer(first, "test-worker", "retry later", 1, scheduled_recheck_limit_seconds=None)
     with store.session() as session:
         row = session.get(EvaluationJob, first.id)
         assert row is not None
@@ -2201,6 +2202,103 @@ async def test_existing_success_is_revoked_before_policy_fetch_failure(tmp_path:
         await EvaluationService(settings(), github, store).evaluate_job(job(store))  # type: ignore[arg-type]
 
     assert github.checks[-1]["status"] == "in_progress"
+
+
+def scheduled_recheck(store: QueueStore, *, trigger: JobRequest | None = None) -> ClaimedJob:
+    """Complete one evaluation, then claim the reconciler's timer recheck."""
+    assert store.complete(job(store), "test-worker")
+    with store.session() as session:
+        state = session.get(ReconciliationState, (2, "example/project", 3))
+        assert state is not None
+        state.completed_at = state.confirmed_completed_at = utcnow() - timedelta(hours=1)
+    generation = store.shared_head_generation(2, "example/project", HEAD)
+    assert store.enqueue_reconciliation_if_due(
+        JobRequest(
+            2,
+            "example/project",
+            3,
+            "periodic_reconciliation",
+            HEAD,
+            work_class="recovery",
+            observed_at=utcnow(),
+            base_ref_hint="main",
+        ),
+        recheck_seconds=900,
+    )
+    # A timer recheck carries no evidence, so it must not queue an exact-head
+    # reset of the published check.
+    assert store.shared_head_generation(2, "example/project", HEAD) == generation
+    assert store.claim_shared_head_invalidation("test-head-worker", 60) is None
+    if trigger is not None:
+        store.enqueue(trigger)
+        while invalidation := store.claim_shared_head_invalidation("test-head-worker", 60):
+            assert store.complete_shared_head_invalidation(invalidation)
+    claimed = store.claim("test-worker", 60)
+    assert claimed is not None
+    return claimed
+
+
+# Verifies XCO-017.
+@pytest.mark.asyncio
+async def test_scheduled_recheck_keeps_the_published_result_until_it_changes(
+    tmp_path: Path,
+) -> None:
+    github = FakeGitHub(changed_path="uv.lock")
+    github.checks.append({"status": "completed", "conclusion": "success"})
+    store = migrated_store(f"sqlite:///{tmp_path / 'scheduled.db'}")
+    claimed = scheduled_recheck(store)
+    assert claimed.reason == SCHEDULED_RECHECK_REASON
+
+    await EvaluationService(settings(), github, store).evaluate_job(claimed)  # type: ignore[arg-type]
+
+    # No interim blocking write: the only write is the final result, which the
+    # client skips when GitHub already shows it.
+    assert [check.get("status") for check in github.checks[1:]] == ["completed"]
+    assert github.checks[-1]["conclusion"] == "success"
+    assert github.checks[-1]["skip_if_unchanged"] is True
+
+
+# Verifies XCO-016.
+@pytest.mark.asyncio
+async def test_reclaimed_scheduled_recheck_revokes_before_evaluating(tmp_path: Path) -> None:
+    github = FakeGitHub(changed_path="uv.lock")
+    github.checks.append({"status": "completed", "conclusion": "success"})
+    store = migrated_store(f"sqlite:///{tmp_path / 'scheduled-reclaimed.db'}")
+    claimed = scheduled_recheck(store)
+    # A worker that died mid-evaluation leaves an expired lease behind.
+    with store.session() as session:
+        row = session.get(EvaluationJob, claimed.id)
+        assert row is not None
+        row.lease_until = utcnow() - timedelta(seconds=1)
+    reclaimed = store.claim("replacement-worker", 60)
+    assert reclaimed is not None
+    assert reclaimed.reason == SCHEDULED_RECHECK_REASON and reclaimed.attempts == 2
+
+    await EvaluationService(settings(), github, store).evaluate_job(reclaimed)  # type: ignore[arg-type]
+
+    assert [check.get("status") for check in github.checks[1:]] == ["in_progress", "completed"]
+
+
+# Verifies XCO-017.
+@pytest.mark.asyncio
+async def test_trigger_during_scheduled_recheck_revokes_before_evaluating(
+    tmp_path: Path,
+) -> None:
+    github = FakeGitHub(changed_path="uv.lock")
+    github.checks.append({"status": "completed", "conclusion": "success"})
+    store = migrated_store(f"sqlite:///{tmp_path / 'scheduled-trigger.db'}")
+    claimed = scheduled_recheck(
+        store,
+        trigger=JobRequest(
+            2, "example/project", 3, "pull_request_review.dismissed", HEAD, base_ref_hint="main"
+        ),
+    )
+    assert claimed.reason == "pull_request_review.dismissed"
+
+    await EvaluationService(settings(), github, store).evaluate_job(claimed)  # type: ignore[arg-type]
+
+    assert [check.get("status") for check in github.checks[1:]] == ["in_progress", "completed"]
+    assert github.checks[-1]["skip_if_unchanged"] is False
 
 
 @pytest.mark.asyncio

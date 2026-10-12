@@ -863,6 +863,84 @@ async def test_existing_check_is_made_explicitly_failing_for_pending_work(
     assert "started_at" not in payload
 
 
+# Verifies XCO-017.
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("difference", "patched"),
+    [
+        ({}, False),
+        ({"output": {"title": "Satisfied", "summary": "All set.", "text": None}}, False),
+        ({"conclusion": "failure"}, True),
+        ({"external_id": "extra-codeowners:pending:example/project#3@" + "a" * 40}, True),
+        ({"output": {"title": "Evaluating", "summary": "All set.", "text": ""}}, True),
+        ({"output": {"title": "Satisfied", "summary": "All set.", "text": "stale"}}, True),
+        ({"details_url": "https://example.test/other"}, True),
+        ({"status": "in_progress", "conclusion": None}, True),
+    ],
+)
+async def test_unchanged_completed_check_is_not_rewritten(
+    private_key: str, difference: dict[str, Any], patched: bool
+) -> None:
+    requests: list[httpx.Request] = []
+    existing = {
+        "id": 77,
+        "name": "check",
+        "app": {"id": 1},
+        "status": "completed",
+        "conclusion": "success",
+        "external_id": "example/project#3@" + "a" * 40,
+        "details_url": "https://example.test/pull/3",
+        "output": {"title": "Satisfied", "summary": "All set.", "text": ""},
+        **difference,
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.path.endswith("/access_tokens"):
+            return httpx.Response(201, json=token_response())
+        if request.method == "GET":
+            return httpx.Response(200, json={"check_runs": [existing]})
+        return httpx.Response(200, json={"id": 77, **json.loads(request.content)})
+
+    client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
+    check_id = await client.upsert_check_run(
+        2,
+        "example/project",
+        "a" * 40,
+        "check",
+        conclusion="success",
+        title="Satisfied",
+        summary="All set.",
+        details_url="https://example.test/pull/3",
+        external_id="example/project#3@" + "a" * 40,
+        skip_if_unchanged=True,
+    )
+    await client.close()
+
+    assert check_id == 77
+    assert any(request.method == "PATCH" for request in requests) is patched
+
+
+@pytest.mark.asyncio
+async def test_only_completed_results_can_skip_an_unchanged_check(private_key: str) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError(f"unexpected request {request.method} {request.url}")
+
+    client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
+    with pytest.raises(ValueError, match="only completed"):
+        await client.upsert_check_run(
+            2,
+            "example/project",
+            "a" * 40,
+            "check",
+            status="in_progress",
+            title="Evaluating",
+            summary="Approval blocked",
+            skip_if_unchanged=True,
+        )
+    await client.close()
+
+
 def test_invalid_private_key_is_rejected_at_startup() -> None:
     with pytest.raises(ValueError, match="valid unencrypted PEM"):
         GitHubClient(1, "not-a-private-key")

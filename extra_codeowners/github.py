@@ -227,6 +227,28 @@ query DcoCommit($id: ID!) {
 """
 
 
+def _check_run_matches(run: dict[str, Any], payload: dict[str, Any]) -> bool:
+    """Return whether an existing check already shows a completed payload.
+
+    GitHub's check-run responses omit ``actions``, so a matching check written
+    without the Re-evaluate action keeps that gap until its result changes.
+    """
+    output = run.get("output")
+    if not isinstance(output, dict):
+        return False
+    requested = payload["output"]
+    return (
+        run.get("status") == "completed"
+        and run.get("conclusion") == payload["conclusion"]
+        and run.get("external_id") == payload["external_id"]
+        and output.get("title") == requested["title"]
+        and output.get("summary") == requested["summary"]
+        # GitHub reports an empty text body as null.
+        and (output.get("text") or "") == requested["text"]
+        and ("details_url" not in payload or run.get("details_url") == payload["details_url"])
+    )
+
+
 def _dco_repository_path(repository: str) -> str:
     """Validate an exact repository name before using it in a DCO REST path."""
     if (
@@ -2047,6 +2069,16 @@ class GitHubClient:
         head_sha: str,
         check_name: str,
     ) -> int | None:
+        run = await self._latest_check_run(installation_id, repository, head_sha, check_name)
+        return None if run is None else run["id"]
+
+    async def _latest_check_run(
+        self,
+        installation_id: int,
+        repository: str,
+        head_sha: str,
+        check_name: str,
+    ) -> dict[str, Any] | None:
         existing = await self._request(
             "GET",
             f"/repos/{repository}/commits/{head_sha}/check-runs",
@@ -2069,7 +2101,7 @@ class GitHubClient:
             if isinstance(app, dict) and app.get("id") == self.app_id:
                 candidate = run.get("id")
                 if isinstance(candidate, int):
-                    return candidate
+                    return run
         return None
 
     async def has_reconciliation_check(
@@ -2300,12 +2332,17 @@ class GitHubClient:
         details_url: str | None = None,
         external_id: str | None = None,
         include_re_evaluate_action: bool = False,
+        skip_if_unchanged: bool = False,
     ) -> int:
         """Create or update this App's latest named check on a commit.
 
         Pending work uses an explicit failure when updating an existing check.
         GitHub can retain a completed conclusion when PATCH requests only a
         pending status. New checks start queued or in progress as requested.
+
+        With ``skip_if_unchanged``, a completed result identical to the
+        existing check is not written again. Every PATCH emits check webhooks,
+        so a scheduled recheck that reaches the same result stays silent.
         """
         if status not in {"queued", "in_progress", "completed"}:
             raise ValueError("unsupported check-run status")
@@ -2313,12 +2350,15 @@ class GitHubClient:
             raise ValueError("completed check runs require a conclusion")
         if status != "completed" and conclusion is not None:
             raise ValueError("non-completed check runs cannot have a conclusion")
-        check_id = await self._latest_check_run_id(
+        if skip_if_unchanged and status != "completed":
+            raise ValueError("only completed check runs can skip an unchanged result")
+        existing = await self._latest_check_run(
             installation_id,
             repository,
             head_sha,
             check_name,
         )
+        check_id: int | None = None if existing is None else existing["id"]
 
         payload: dict[str, Any] = {
             "name": check_name,
@@ -2344,6 +2384,8 @@ class GitHubClient:
             payload["started_at"] = datetime.now(UTC).isoformat().replace("+00:00", "Z")
         if details_url is not None:
             payload["details_url"] = details_url
+        if skip_if_unchanged and existing is not None and _check_run_matches(existing, payload):
+            return int(existing["id"])
         if check_id is None:
             payload["head_sha"] = head_sha
             result = await self._request(

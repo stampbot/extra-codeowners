@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import UTC, timedelta
 from pathlib import Path
 from time import monotonic
@@ -10,8 +11,10 @@ from sqlalchemy.orm import Session as SQLAlchemySession
 
 from extra_codeowners.database import (
     LIBPQ_DISABLED_ROOT_CERT,
+    SCHEDULED_RECHECK_REASON,
     AuthorityJob,
     AuthorityRequest,
+    ClaimedJob,
     EvaluationJob,
     JobRequest,
     QueueStore,
@@ -995,6 +998,189 @@ def test_completed_direct_epoch_becomes_recovery_work_on_later_recheck(tmp_path:
     recheck_invalidation = store.claim_shared_head_invalidation("head-worker", 60, "recovery")
     assert recheck_invalidation is not None
     assert recheck_invalidation.work_class == "recovery"
+
+
+# Verifies XCO-017.
+def test_confirmed_unchanged_head_recheck_does_not_reset_the_published_check(
+    tmp_path: Path,
+) -> None:
+    store = make_store(tmp_path)
+    store.enqueue(JobRequest(17, "example/project", 41, "pull_request.opened", "a" * 40))
+    invalidation = store.claim_shared_head_invalidation("head-worker", 60, "interactive")
+    assert invalidation is not None
+    assert store.complete_shared_head_invalidation(invalidation)
+    claimed = store.claim("foreground-worker", 60, "interactive", require_shared_head_ready=True)
+    assert claimed is not None
+    assert store.complete(claimed, "foreground-worker") is True
+    with store.session() as session:
+        state = session.get(ReconciliationState, (17, "example/project", 41))
+        assert state is not None
+        state.completed_at = state.confirmed_completed_at = utcnow() - timedelta(seconds=601)
+
+    assert store.enqueue_reconciliation_if_due(
+        JobRequest(
+            17,
+            "example/project",
+            41,
+            "periodic_reconciliation",
+            "a" * 40,
+            observed_at=utcnow(),
+        ),
+        recheck_seconds=600,
+    )
+
+    assert store.shared_head_generation(17, "example/project", "a" * 40) == 1
+    assert store.claim_shared_head_invalidation("head-worker", 60) is None
+    recheck = store.claim("recovery-worker", 60, "recovery", require_shared_head_ready=True)
+    assert recheck is not None
+    assert recheck.reason == SCHEDULED_RECHECK_REASON
+    assert recheck.shared_head_generation == 1
+    assert store.shared_head_generation_is_publishable(recheck, "a" * 40)
+
+
+def claim_scheduled_recheck(store: QueueStore) -> ClaimedJob:
+    """Complete one direct evaluation, then claim its due timer recheck."""
+    store.enqueue(JobRequest(17, "example/project", 41, "pull_request.opened", "a" * 40))
+    invalidation = store.claim_shared_head_invalidation("head-worker", 60, "interactive")
+    assert invalidation is not None
+    assert store.complete_shared_head_invalidation(invalidation)
+    claimed = store.claim("foreground-worker", 60, "interactive", require_shared_head_ready=True)
+    assert claimed is not None
+    assert store.complete(claimed, "foreground-worker") is True
+    with store.session() as session:
+        state = session.get(ReconciliationState, (17, "example/project", 41))
+        assert state is not None
+        state.completed_at = state.confirmed_completed_at = utcnow() - timedelta(seconds=601)
+        epoch = session.get(SharedHeadEpoch, (17, "example/project", "a" * 40))
+        assert epoch is not None
+        epoch.changed_at = utcnow() - timedelta(days=60)
+    assert store.enqueue_reconciliation_if_due(
+        JobRequest(
+            17,
+            "example/project",
+            41,
+            "periodic_reconciliation",
+            "a" * 40,
+            observed_at=utcnow(),
+        ),
+        recheck_seconds=600,
+    )
+    recheck = store.claim("recovery-worker", 60, "recovery", require_shared_head_ready=True)
+    assert recheck is not None
+    assert recheck.reason == SCHEDULED_RECHECK_REASON
+    assert recheck.attempts == 1
+    return recheck
+
+
+def test_scheduled_recheck_keeps_its_epoch_out_of_retention_pruning(tmp_path: Path) -> None:
+    store = make_store(tmp_path)
+    claim_scheduled_recheck(store)
+    # The fence was 60 days old before the recheck touched it.
+    assert store.prune_shared_head_epochs(utcnow() - timedelta(days=30)) == 0
+    assert store.shared_head_generation(17, "example/project", "a" * 40) == 1
+
+
+# Verifies XCO-016.
+@pytest.mark.parametrize(
+    ("outcome", "blocks"),
+    [
+        ("fail", True),
+        ("long_provider_deferral", True),
+        ("short_budget_deferral", False),
+        ("revocation_already_pending", False),
+    ],
+)
+def test_scheduled_recheck_blocks_the_check_only_when_it_cannot_finish_promptly(
+    tmp_path: Path, outcome: str, blocks: bool
+) -> None:
+    store = make_store(tmp_path)
+    recheck = claim_scheduled_recheck(store)
+
+    if outcome == "fail":
+        store.fail(recheck, "recovery-worker", "GitHub unavailable", 60)
+    elif outcome == "long_provider_deferral":
+        assert store.defer(
+            recheck, "recovery-worker", "rate limited", 3600, scheduled_recheck_limit_seconds=900
+        )
+    elif outcome == "short_budget_deferral":
+        assert store.defer(
+            recheck, "recovery-worker", "budget reserve", 60, scheduled_recheck_limit_seconds=900
+        )
+    else:
+        # Authority and exact-head deferrals already have a reset in flight.
+        assert store.defer(
+            recheck,
+            "recovery-worker",
+            "authority pending",
+            3600,
+            scheduled_recheck_limit_seconds=None,
+        )
+
+    with store.session() as session:
+        row = session.scalar(select(EvaluationJob).where(EvaluationJob.pull_number == 41))
+        assert row is not None
+    if blocks:
+        # The retry may be hours away. Invalidation blocks the check meanwhile,
+        # and the retry is ordinary revoke-first work.
+        assert store.shared_head_generation(17, "example/project", "a" * 40) == 2
+        blocking = store.claim_shared_head_invalidation("head-worker", 60, "recovery")
+        assert blocking is not None and blocking.generation == 2
+        assert row.reason == "periodic_reconciliation"
+        assert row.shared_head_generation == 2
+    else:
+        assert store.shared_head_generation(17, "example/project", "a" * 40) == 1
+        assert store.claim_shared_head_invalidation("head-worker", 60) is None
+        assert row.reason == SCHEDULED_RECHECK_REASON
+        assert row.shared_head_generation == 1
+
+
+def test_superseded_scheduled_recheck_failure_leaves_the_new_trigger_alone(
+    tmp_path: Path,
+) -> None:
+    store = make_store(tmp_path)
+    recheck = claim_scheduled_recheck(store)
+    store.enqueue(JobRequest(17, "example/project", 41, "pull_request_review.dismissed", "a" * 40))
+    generation = store.shared_head_generation(17, "example/project", "a" * 40)
+
+    store.fail(recheck, "recovery-worker", "GitHub unavailable", 60)
+
+    assert store.shared_head_generation(17, "example/project", "a" * 40) == generation
+    with store.session() as session:
+        row = session.scalar(select(EvaluationJob).where(EvaluationJob.pull_number == 41))
+        assert row is not None
+        assert row.reason == "pull_request_review.dismissed"
+
+
+# Verifies XCO-017.
+def test_unconfirmed_or_moved_head_recheck_still_resets_the_check(tmp_path: Path) -> None:
+    store = make_store(tmp_path)
+    request = JobRequest(
+        17,
+        "example/project",
+        41,
+        "periodic_reconciliation",
+        "a" * 40,
+        observed_at=utcnow(),
+    )
+    # No completion record: the reconciler cannot vouch for the check.
+    assert store.enqueue_reconciliation_if_due(request, recheck_seconds=600)
+    invalidation = store.claim_shared_head_invalidation("head-worker", 60, "recovery")
+    assert invalidation is not None
+    assert store.complete_shared_head_invalidation(invalidation)
+    claimed = store.claim("recovery-worker", 60, "recovery", require_shared_head_ready=True)
+    assert claimed is not None
+    assert claimed.reason == "periodic_reconciliation"
+    assert store.complete(claimed, "recovery-worker")
+
+    # The completed head moved without a webhook: the new head is new evidence.
+    moved = replace(request, head_sha_hint="b" * 40, observed_at=utcnow())
+    assert store.enqueue_reconciliation_if_due(moved, recheck_seconds=600)
+    invalidation = store.claim_shared_head_invalidation("head-worker", 60, "recovery")
+    assert invalidation is not None and invalidation.head_sha == "b" * 40
+    assert store.complete_shared_head_invalidation(invalidation)
+    claimed = store.claim("recovery-worker", 60, "recovery", require_shared_head_ready=True)
+    assert claimed is not None
+    assert claimed.reason == "periodic_reconciliation"
 
 
 def test_reconciliation_does_not_replace_newer_interactive_head(tmp_path: Path) -> None:
@@ -2023,7 +2209,10 @@ def test_rate_limit_defer_releases_superseded_generation(tmp_path: Path) -> None
     assert first is not None
     store.enqueue(request(reason="pull_request_review.submitted"))
 
-    assert store.defer(first, "worker-one", "rate limited", 30) is False
+    assert (
+        store.defer(first, "worker-one", "rate limited", 30, scheduled_recheck_limit_seconds=None)
+        is False
+    )
     second = store.claim("worker-two", 60)
 
     assert second is not None
