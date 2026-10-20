@@ -69,7 +69,7 @@ docs = [
   "mkdocs>=1.6.0,<2",
   "mkdocs-material>=9.5.0,<10",
 ]
-tooling = ["uv==0.11.28"]
+tooling = ["uv==0.13.4"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["extra_codeowners"]
