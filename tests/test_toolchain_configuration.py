@@ -151,7 +151,8 @@ def test_project_owned_uv_version_drives_local_container_and_action_setup() -> N
     reviewed_version = _mise_uv_version()
     compatible = SpecifierSet(project["tool"]["uv"]["required-version"])
     assert reviewed_version in compatible
-    assert "0.12.7" in compatible
+    major, minor, patch = map(int, reviewed_version.split("."))
+    assert f"{major}.{minor}.{patch + 1}" in compatible
     assert project["dependency-groups"]["tooling"] == [f"uv=={reviewed_version}"]
     locked = [
         package for package in _load_toml(ROOT / "uv.lock")["package"] if package["name"] == "uv"

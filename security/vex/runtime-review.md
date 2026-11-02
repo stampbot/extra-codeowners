@@ -1,18 +1,40 @@
 # Runtime vulnerability review
 
-## Current runtime: October 5, 2026
+## Current runtime: November 2, 2026
 
-The pinned Python 3.14.8 image includes Debian's fixes for the nineteen findings
-previously marked `not_affected`. Those statements now say `fixed`, with the
-package versions and Debian 13.7 identities found in the new image. The VEX
-also retains the earlier OpenSSL fixes and records four September OpenSSL
+The pinned Python 3.14.10 base replaces 3.14.8. This is Python's
+[expedited security release](https://www.python.org/downloads/release/python-31410/)
+for the compromised eMudhra intermediate keys. The locked certifi bundle is
+also updated to 2026.10.19, and the digest-pinned uv build tool to 0.13.4.
+These are package updates, not vulnerability exclusions. The Dockerfile still
+doesn't upgrade operating-system packages at build time.
+
+Both base architectures contain Debian 13.7 and `libpcre2-8-0`
+`10.46-1~deb13u3`. Debian marks
+[CVE-2026-103111 fixed in that version](https://security-tracker.debian.org/tracker/CVE-2026-103111).
+The current VEX therefore records `fixed`, replacing the previous
+`not_affected` assessment. The three earlier PCRE2 statements now identify
+the same installed version. No reachability exclusion remains in the current
+statement; raw findings still stay in the unfiltered scan reports.
+
+The Python 3.12–3.14 environments retain Psycopg 3.3.4 and its reviewed source
+recipe. The new uv resolver also locks Psycopg 3.3.6 for Python 3.15 and later
+because 3.3.4 has no compatible wheels there. That future branch is not used
+by the current runtime image and does not extend the tested Python matrix.
+
+## Previous runtime: October 5, 2026
+
+The Python 3.14.8 image included Debian's fixes for the nineteen findings
+previously marked `not_affected`. Those statements changed to `fixed`, with the
+package versions and Debian 13.7 identities found in that image. The VEX
+also retained the earlier OpenSSL fixes and recorded four September OpenSSL
 findings fixed by `3.5.7-1~deb13u3`.
 
 PyJWT is updated to 2.15.1 and urllib3 to 2.8.0. These are locked package updates,
 not exclusions. The Dockerfile still installs the locked graph without building
 dependencies or upgrading Debian packages at build time.
 
-One fixable High finding remains in the base: PCRE2
+One fixable High finding remained in that base: PCRE2
 [`CVE-2026-103111`](https://github.com/PCRE2Project/pcre2/security/advisories/GHSA-r9hj-j2rw-4q3m).
 It requires the PCRE2 JIT API. Policy matching uses Python `re`; the service
 doesn't call that API or load the named Debian library. The amd64 native
@@ -22,8 +44,8 @@ statically using the pinned base and checksum-verified wheels from `uv.lock`.
 Its psycopg wheel uses a private PCRE2 library through private SELinux code,
 which imports ordinary matching functions rather than JIT APIs.
 
-The `not_affected` statement names only Debian's `libpcre2-8-0`
-`10.46-1~deb13u2` on amd64 and arm64. It doesn't exempt wheel-bundled libraries,
+That `not_affected` statement named only Debian's `libpcre2-8-0`
+`10.46-1~deb13u2` on amd64 and arm64. It did not exempt wheel-bundled libraries,
 custom FFI, native plugins, or arbitrary programs run inside the container.
 Other scanner findings remain visible in the unfiltered release inventories.
 
