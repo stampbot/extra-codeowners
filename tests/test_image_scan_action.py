@@ -33,6 +33,10 @@ def scan_env(tmp_path: Path) -> dict[str, str]:
         f"#!{sys.executable}\n"
         "import json, os, pathlib, sys\n"
         "args = sys.argv[1:]\n"
+        "path = pathlib.Path(os.environ['DOCKER_LOG'])\n"
+        "previous = []\n"
+        "if path.exists():\n"
+        "    previous = [json.loads(s) for s in path.read_text().splitlines()]\n"
         "with open(os.environ['DOCKER_LOG'], 'a') as log:\n"
         "    log.write(json.dumps(args) + '\\n')\n"
         "if args[:2] == ['image', 'inspect']:\n"
@@ -40,14 +44,29 @@ def scan_env(tmp_path: Path) -> dict[str, str]:
         "elif args[:2] == ['image', 'save']:\n"
         "    pathlib.Path(args[3]).touch()\n"
         "elif args[0] == 'run':\n"
+        "    if args[-2:] == ['db', 'update']:\n"
+        "        attempts = sum(c[-2:] == ['db', 'update'] for c in previous)\n"
+        "        if attempts < int(os.environ.get('DB_UPDATE_FAILURES', '0')):\n"
+        "            sys.exit(int(os.environ.get('DB_UPDATE_EXIT', '1')))\n"
         "    print('{\"matches\": []}')\n"
         "sys.exit(int(os.environ.get('DOCKER_EXIT', '0')))\n"
     )
     docker.chmod(0o755)
+    sleep = tmp_path / "sleep"
+    sleep.write_text(
+        f"#!{sys.executable}\n"
+        "import os, sys\n"
+        "with open(os.environ['SLEEP_LOG'], 'a') as log:\n"
+        "    log.write(sys.argv[1] + '\\n')\n"
+    )
+    sleep.chmod(0o755)
     return {
         **os.environ,
-        "PATH": f"{tmp_path}{os.pathsep}{os.environ['PATH']}",
+        "PATH": os.pathsep.join(
+            (str(tmp_path), str(Path(sys.executable).parent), os.environ["PATH"])
+        ),
         "DOCKER_LOG": str(tmp_path / "docker.jsonl"),
+        "SLEEP_LOG": str(tmp_path / "sleep.log"),
         "RUNNER_TEMP": str(tmp_path),
         "GITHUB_OUTPUT": str(tmp_path / "output"),
         "GITHUB_WORKSPACE": str(ROOT),
@@ -77,12 +96,18 @@ def test_scan_uses_an_archive_and_one_database_without_socket_access(
     assert result.returncode == 0, result.stderr
     directory = Path(scan_env["GITHUB_OUTPUT"]).read_text().strip().removeprefix("directory=")
     scan_env["SCAN_DIRECTORY"] = directory
-    for name in ("Inventory all vulnerabilities", "Reject fixable high-severity vulnerabilities"):
+    for name in (
+        "Download vulnerability database",
+        "Inventory all vulnerabilities",
+        "Reject fixable high-severity vulnerabilities",
+    ):
         result = _run(name, scan_env)
         assert result.returncode == 0, result.stderr
     calls = [json.loads(line) for line in Path(scan_env["DOCKER_LOG"]).read_text().splitlines()]
     assert calls[1] == ["image", "save", "--output", f"{directory}/image.tar", "sha256:" + "a" * 64]
-    inventory, gate = calls[2:]
+    download, inventory, gate = calls[2:]
+    assert download[-2:] == ["db", "update"]
+    assert f"type=bind,src={directory}/db,dst=/cache" in download
     for call in (inventory, gate):
         assert "docker-archive:/image.tar" in call
         assert f"type=bind,src={directory}/image.tar,dst=/image.tar,readonly" in call
@@ -96,7 +121,7 @@ def test_scan_uses_an_archive_and_one_database_without_socket_access(
     assert "/work/.github/grype-inventory.yaml" in inventory
     assert "--vex" not in inventory
     assert "--only-fixed" not in inventory
-    assert "GRYPE_DB_AUTO_UPDATE=false" not in inventory
+    assert "GRYPE_DB_AUTO_UPDATE=false" in inventory
     assert "GRYPE_DB_AUTO_UPDATE=false" in gate
     assert "/work/.grype.yaml" in gate
     assert "/work/security/vex/runtime.openvex.json" in gate
@@ -111,6 +136,7 @@ def test_scan_uses_an_archive_and_one_database_without_socket_access(
     "step",
     [
         "Prepare scanner inputs",
+        "Download vulnerability database",
         "Inventory all vulnerabilities",
         "Reject fixable high-severity vulnerabilities",
     ],
@@ -123,14 +149,46 @@ def test_docker_and_scanner_failures_fail_the_step(
     assert _run(step, scan_env).returncode == exit_code
 
 
+@pytest.mark.parametrize(
+    ("failures", "failure_code", "attempts", "exit_code"),
+    [(0, 1, 1, 0), (1, 1, 2, 0), (2, 1, 3, 0), (3, 2, 3, 2), (1, 130, 1, 130), (1, 143, 1, 143)],
+)
+def test_database_download_retry_bounds_and_cancellation(
+    scan_env: dict[str, str], failures: int, failure_code: int, attempts: int, exit_code: int
+) -> None:
+    scan_env.update(
+        DB_UPDATE_FAILURES=str(failures),
+        DB_UPDATE_EXIT=str(failure_code),
+        SCAN_DIRECTORY=scan_env["RUNNER_TEMP"],
+    )
+    result = _run("Download vulnerability database", scan_env)
+    assert result.returncode == exit_code, result.stderr
+    calls = [json.loads(line) for line in Path(scan_env["DOCKER_LOG"]).read_text().splitlines()]
+    assert len(calls) == attempts
+    for call in calls:
+        assert call[-3:] == [scan_env["GRYPE_IMAGE"], "db", "update"]
+        assert "GRYPE_DB_UPDATE_AVAILABLE_TIMEOUT=30s" in call
+        assert "GRYPE_DB_UPDATE_DOWNLOAD_TIMEOUT=120s" in call
+        assert "--read-only" in call and "--cap-drop=ALL" in call
+        assert "docker.sock" not in " ".join(call)
+    delays = Path(scan_env["SLEEP_LOG"])
+    assert (delays.read_text().splitlines() if delays.exists() else []) == ["5", "10"][
+        : attempts - 1
+    ]
+
+
 def test_every_build_uses_the_scanner_and_retains_raw_findings_before_the_gate() -> None:
     source = ACTION.read_text()
     assert len(set(PIN.findall(source))) == 1
+    assert source.index("Download vulnerability database") < source.index(
+        "Inventory all vulnerabilities"
+    )
     assert source.index("Retain the unfiltered report") < source.index("Reject fixable")
     gate = _script("Reject fixable high-severity vulnerabilities")
     assert "tools/release_vex.py check-runtime" in gate
     assert "--runtime-root ." in gate
     assert gate.index("check-runtime") < gate.index("docker run")
+    assert "for attempt" not in gate
     assert "if-no-files-found: error" in source
     assert "retention-days: 14" in source
     assert "always() && steps.prepare.outputs.directory != ''" in source
@@ -163,6 +221,7 @@ def test_real_scanner_on_an_explicitly_selected_local_image(tmp_path: Path) -> N
         pytest.skip("set LOCAL_SCAN_IMAGE to a locally loaded image")
     env = {
         **os.environ,
+        "PATH": os.pathsep.join((str(Path(sys.executable).parent), os.environ["PATH"])),
         "RUNNER_TEMP": str(tmp_path),
         "GITHUB_OUTPUT": str(tmp_path / "output"),
         "GITHUB_WORKSPACE": str(ROOT),
@@ -175,6 +234,7 @@ def test_real_scanner_on_an_explicitly_selected_local_image(tmp_path: Path) -> N
     try:
         for name in (
             "Prepare scanner inputs",
+            "Download vulnerability database",
             "Inventory all vulnerabilities",
             "Reject fixable high-severity vulnerabilities",
         ):

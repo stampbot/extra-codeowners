@@ -52,7 +52,7 @@ runs:
             sleep "$((attempt * 5))"
           fi
         done
-        exit 1
+        exit "${status}"
 
     - name: Inventory all vulnerabilities
       shell: bash
