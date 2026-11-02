@@ -68,7 +68,7 @@ def test_rebinding_advances_revision_and_preserves_statement_dates(
     previous_version = document["version"]
     previous_date = document["timestamp"]
     document["statements"] = [
-        {"status": "fixed"},
+        {"status": "fixed", "timestamp": previous_date},
         {"status": "fixed", "timestamp": "2026-09-02T00:00:00Z"},
     ]
     source.write_text(json.dumps(document))
@@ -83,6 +83,28 @@ def test_rebinding_advances_revision_and_preserves_statement_dates(
     stable = source.read_bytes()
     bind_runtime(source, root, "Reviewed application and native API reachability.")
     assert source.read_bytes() == stable
+
+
+def test_post_bind_statement_edit_requires_another_review(runtime: tuple[Path, Path]) -> None:
+    source, root = runtime
+    document = json.loads(source.read_text())
+    document["statements"] = [{"status": "fixed", "timestamp": "2026-09-02T00:00:00Z"}]
+    source.write_text(json.dumps(document))
+    with pytest.raises(ReleaseVexError, match="content changed"):
+        validate_runtime_binding(source, root)
+    bind_runtime(source, root, "Reviewed the new statement.")
+    validate_runtime_binding(source, root)
+
+
+def test_new_statement_cannot_inherit_an_old_assessment_date(runtime: tuple[Path, Path]) -> None:
+    source, root = runtime
+    document = json.loads(source.read_text())
+    document["statements"] = [{"status": "fixed"}]
+    source.write_text(json.dumps(document))
+    before = source.read_bytes()
+    with pytest.raises(ReleaseVexError, match="statement timestamp"):
+        bind_runtime(source, root, "Reviewed the new statement.")
+    assert source.read_bytes() == before
 
 
 def test_runtime_only_change_advances_vex_revision(runtime: tuple[Path, Path]) -> None:

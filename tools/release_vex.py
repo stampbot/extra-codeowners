@@ -117,6 +117,8 @@ def _runtime_files(root: Path) -> dict[str, str]:
 def validate_runtime_binding(source: Path, root: Path) -> None:
     """Reject reachability claims after changes to their reviewed runtime inputs."""
     document = _mapping(_read_json(source, "reviewed VEX"), "reviewed VEX")
+    if document.get("@id") != _document_id(document):
+        _fail("VEX document content changed after review; review the edits and rebind")
     binding = _mapping(document.get(_RUNTIME_BINDING), "VEX runtime binding")
     if binding.get("schema_version") != 1:
         _fail("VEX runtime binding has an unsupported schema version")
@@ -137,13 +139,13 @@ def _advance_review_metadata(document: dict[str, object]) -> None:
     version = document.get("version")
     if type(version) is not int or version < 1:
         _fail("runtime binding requires a positive OpenVEX document version")
-    previous = _string(document.get("timestamp"), "OpenVEX document timestamp")
-    # Retain inherited knowledge dates. A changed statement must name the
-    # date of its new assessment before the reviewer binds the document.
+    _string(document.get("timestamp"), "OpenVEX document timestamp")
+    # Explicit dates prevent new assertions from inheriting an older issue
+    # time. Existing statement dates survive a runtime-only review unchanged.
     statements = []
     for item in _sequence(document.get("statements"), "OpenVEX statements"):
         statement = dict(_mapping(item, "OpenVEX statement"))
-        statement.setdefault("timestamp", previous)
+        _string(statement.get("timestamp"), "OpenVEX statement timestamp")
         statements.append(statement)
     issued = datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
     document.update(
