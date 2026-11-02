@@ -265,6 +265,13 @@ doesn't guarantee a `304`. Compare the byte and entry gauges with each
 partition's limits, and keep pod identity when graphing them: replicas don't
 share this cache. A newly elected replica may need a cold scan.
 
+A transient `500`, `502`, `503`, or `504` on a discovery GET gets one retry
+after a one-second wait, within the original request deadline. A response with
+`Retry-After`, permission failure, or rate-limit response is not retried inline
+by this rule. Persistent failures still leave reconciliation partial. Traces
+record the transient status and `retry_wait` phase; each physical attempt
+still needs quota admission. This does not retry writes or streamed reads.
+
 Check `extra_codeowners_github_discovery_cache_events_total` before enlarging
 the cache. It distinguishes capacity evictions from expiration, responses too
 large to retain, invalid metadata or encoding, missing validators, and responses that

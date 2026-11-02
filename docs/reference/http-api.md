@@ -199,7 +199,7 @@ prevents page churn from evicting those smaller responses. Both partitions
 have a one-hour idle lifetime; their combined accounted-byte cap is 32 MiB.
 
 The request phases are `authentication`, `semaphore_wait`, `quota_admission`,
-`http`, `quota_accounting`, and, for streamed responses, `body`. Ordinary
+`http`, `quota_accounting`, `retry_wait`, and, for streamed responses, `body`. Ordinary
 `http` timing includes reading the response body. Streamed `http` timing ends
 when headers arrive; `body` covers the caller's consumption and response
 closure, not just network transfer. Authentication may include a nested token
@@ -212,6 +212,16 @@ The existing request span accumulates each phase across retries in
 physical attempt. These attributes contain no validators or request contents.
 `absent` means no entry exists now; it does not distinguish a cold cache from
 one whose entry was evicted. The cache retains no history of evicted keys.
+
+Discovery GETs retry one `500`, `502`, `503`, or `504` response after a
+one-second wait, unless the response includes `Retry-After`. Each attempt
+requires authentication and shared quota admission. The existing operation
+deadline includes the wait and any one-time token refresh; retries do not hold
+the request permit while waiting. A retry removes conditional validators and
+fetches a fresh representation. Persistent errors still fail the operation.
+Ordinary requests and streamed reads do not gain this transient retry.
+The existing span records `github.retry_count`, the wait phase, and
+`github.discovery.transient_retry_status_code` when this retry is used.
 
 | Partition | Responses | Byte cap | Per-entry cap | Entry cap |
 | --- | --- | --- | --- | --- |

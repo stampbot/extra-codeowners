@@ -417,3 +417,35 @@ async def test_check_absence_requires_a_valid_response(private_key: str, payload
             await github.has_reconciliation_check(17, "example/project", "a" * 40, "approval")
     finally:
         await github.close()
+
+
+@pytest.mark.asyncio
+async def test_one_transient_check_listing_does_not_abort_the_scan(
+    tmp_path: Path, private_key: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Verifies XCO-014: successful recovery still requires current GitHub evidence.
+    provider = DiscoveryProvider(count=3)
+    original = provider.respond
+    failures = 0
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        nonlocal failures
+        if request.url.path.endswith("/check-runs") and failures == 0:
+            failures += 1
+            return httpx.Response(500, json={"message": "temporary failure"})
+        return original(request)
+
+    monkeypatch.setattr(provider, "respond", respond)
+    store = store_at(tmp_path)
+    reconciler, github = reconciler_for(provider, store, private_key, "replica-one")
+    try:
+        result = await scan(reconciler)
+        assert failures == 1
+        assert result.complete and result.queued == 0
+        assert (
+            sum(count for path, count in provider.requests.items() if path.endswith("/check-runs"))
+            == 3
+        )
+    finally:
+        await github.close()
+        store.close()

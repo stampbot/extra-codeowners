@@ -30,6 +30,12 @@ authenticated conditional request. No package or library version changes.
 All 26 current VEX statements remain `fixed`; this review adds no reachability
 exclusion and makes no claim about the older, unpatched images.
 
+The discovery retry change repeats one authenticated GET after a transient
+server response, using the same HTTP client, deadline, quota guard and parser.
+It adds no retry for writes or streamed reads and no dependency, native-library
+or package change. All current `fixed` statements and their assessment dates
+remain unchanged.
+
 ## Previous runtime: October 5, 2026
 
 The Python 3.14.8 image included Debian's fixes for the nineteen findings

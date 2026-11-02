@@ -13,7 +13,13 @@ from opentelemetry.trace import Span
 from extra_codeowners.metrics import GITHUB_API_PHASE_SECONDS
 
 type RequestPhase = Literal[
-    "authentication", "semaphore_wait", "quota_admission", "http", "quota_accounting", "body"
+    "authentication",
+    "semaphore_wait",
+    "quota_admission",
+    "http",
+    "quota_accounting",
+    "body",
+    "retry_wait",
 ]
 
 

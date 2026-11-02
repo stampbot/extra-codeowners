@@ -680,7 +680,16 @@ class GitHubClient:
         discovery_cache_status: CacheLookupStatus | None = None,
     ) -> httpx.Response:
         """Send a public, App, or installation request with bounded retries."""
-        attempts = 1 if app_authenticated or unauthenticated else 2
+        retry_discovery = (
+            method == "GET"
+            and installation_id is not None
+            and not app_authenticated
+            and not unauthenticated
+            and discovery_cache_status is not None
+        )
+        attempts = 3 if retry_discovery else (1 if app_authenticated or unauthenticated else 2)
+        refreshed_token = False
+        retried_transient = False
         authentication = (
             "public" if unauthenticated else "app" if app_authenticated else "installation"
         )
@@ -711,7 +720,8 @@ class GitHubClient:
                         token: str | None = None
                         request_headers = headers or {}
                         if attempt:
-                            # Retrying a rejected token must fetch a fresh representation.
+                            # A retry must fetch a fresh representation, including
+                            # after a transient discovery failure.
                             request_headers = {
                                 key: value
                                 for key, value in request_headers.items()
@@ -777,13 +787,36 @@ class GitHubClient:
                             response.status_code == 401
                             and not app_authenticated
                             and not unauthenticated
-                            and attempt == 0
+                            and not refreshed_token
                         ):
                             assert installation_id is not None
                             assert token is not None
                             cached = self._tokens.get(installation_id)
                             if cached is not None and cached.value == token:
                                 self._tokens.pop(installation_id, None)
+                            refreshed_token = True
+                            continue
+                        if (
+                            retry_discovery
+                            and not retried_transient
+                            and response.status_code in {500, 502, 503, 504}
+                            and "retry-after" not in response.headers
+                            and attempt + 1 < attempts
+                        ):
+                            retried_transient = True
+                            span.set_attribute(
+                                "github.discovery.transient_retry_status_code", response.status_code
+                            )
+                            await response.aclose()
+                            # No permit or database transaction is held while
+                            # waiting. The original operation deadline still applies.
+                            with timing.phase("retry_wait"):
+                                if stop is None:
+                                    await asyncio.sleep(1)
+                                else:
+                                    with suppress(TimeoutError):
+                                        await asyncio.wait_for(stop.wait(), timeout=1)
+                            self._raise_if_stopped(stop)
                             continue
                         outcome = _request_outcome(response, allow_not_found=allow_not_found)
                         span.set_attribute("http.response.status_code", response.status_code)
