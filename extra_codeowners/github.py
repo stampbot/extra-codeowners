@@ -38,18 +38,20 @@ from extra_codeowners.dco import (
     PullRequestSnapshot,
     RepositoryIdentity,
 )
-from extra_codeowners.discovery_cache import CacheEntry, DiscoveryCache
+from extra_codeowners.discovery_cache import CacheEntry, CacheLookupStatus, DiscoveryCache
 from extra_codeowners.metrics import (
     GITHUB_API_REQUEST_SECONDS,
     GITHUB_API_REQUESTS,
     GITHUB_DISCOVERY_CACHE_BYTES,
     GITHUB_DISCOVERY_CACHE_ENTRIES,
+    GITHUB_DISCOVERY_CACHE_EVENTS,
     GITHUB_DISCOVERY_CACHE_LOOKUPS,
     GITHUB_PAGINATION_ENDPOINT_MISMATCHES,
     GITHUB_PHYSICAL_REQUESTS,
     GITHUB_RATE_LIMIT_EVENTS,
     GITHUB_RECOVERY_BUDGET_DEFERRALS,
 )
+from extra_codeowners.request_timing import RequestTiming
 from extra_codeowners.tracing import Tracing
 
 MAX_PULL_FILES: Final = 3000
@@ -441,9 +443,15 @@ class GitHubClient:
         # Large PR pages must not evict the small reference/check responses
         # that save one primary-quota charge per unchanged unenrolled head.
         # The combined accounted-byte bound remains 32 MiB.
-        self._discovery_cache = DiscoveryCache(max_bytes=24 * 1024 * 1024)
+        self._discovery_cache = DiscoveryCache(
+            max_bytes=24 * 1024 * 1024,
+            observer=lambda event: GITHUB_DISCOVERY_CACHE_EVENTS.labels("pages", event).inc(),
+        )
         self._compact_discovery_cache = DiscoveryCache(
-            max_bytes=8 * 1024 * 1024, max_entry_bytes=64 * 1024, max_entries=8192
+            max_bytes=8 * 1024 * 1024,
+            max_entry_bytes=64 * 1024,
+            max_entries=8192,
+            observer=lambda event: GITHUB_DISCOVERY_CACHE_EVENTS.labels("compact", event).inc(),
         )
         self._observe_discovery_cache("pages", self._discovery_cache)
         self._observe_discovery_cache("compact", self._compact_discovery_cache)
@@ -668,6 +676,7 @@ class GitHubClient:
         allow_not_found: bool = False,
         stop: asyncio.Event | None = None,
         conditional_discovery: bool = False,
+        discovery_cache_status: CacheLookupStatus | None = None,
     ) -> httpx.Response:
         """Send a public, App, or installation request with bounded retries."""
         attempts = 1 if app_authenticated or unauthenticated else 2
@@ -688,6 +697,10 @@ class GitHubClient:
                 },
                 private_attributes={"github.path": path},
             ) as span:
+                timing = RequestTiming(span, operation, authentication, REQUEST_LANE.get())
+                if discovery_cache_status is not None:
+                    span.set_attribute("github.discovery.cache", self._discovery_cache_for(path)[0])
+                    span.set_attribute("github.discovery.lookup", discovery_cache_status)
                 # Include both authentication attempts in one deadline. A 401
                 # retry must use only the time left from the original operation,
                 # rather than receiving a second full wall-clock budget.
@@ -703,37 +716,46 @@ class GitHubClient:
                                 for key, value in request_headers.items()
                                 if key.lower() not in {"if-none-match", "if-modified-since"}
                             }
-                        if unauthenticated:
-                            pass
-                        elif app_authenticated:
-                            token = self._app_jwt()
-                            request_headers = {
-                                **request_headers,
-                                "Authorization": f"Bearer {token}",
-                            }
-                        else:
-                            assert installation_id is not None
-                            token = await self._installation_token(installation_id, stop=stop)
-                            request_headers = {
-                                **request_headers,
-                                "Authorization": f"Bearer {token}",
-                            }
+                        with timing.phase("authentication"):
+                            if unauthenticated:
+                                pass
+                            elif app_authenticated:
+                                token = self._app_jwt()
+                                request_headers = {
+                                    **request_headers,
+                                    "Authorization": f"Bearer {token}",
+                                }
+                            else:
+                                assert installation_id is not None
+                                token = await self._installation_token(installation_id, stop=stop)
+                                request_headers = {
+                                    **request_headers,
+                                    "Authorization": f"Bearer {token}",
+                                }
                         self._raise_if_stopped(stop)
-                        async with self._request_semaphore:
+                        async with timing.slot(self._request_semaphore):
                             budget_installation = (
                                 installation_id if authentication == "installation" else None
                             )
-                            receipt = await self._admit_request(budget_installation, method, path)
+                            with timing.phase("quota_admission"):
+                                receipt = await self._admit_request(
+                                    budget_installation, method, path
+                                )
                             GITHUB_PHYSICAL_REQUESTS.labels(
                                 operation, authentication, REQUEST_LANE.get()
                             ).inc()
-                            response = await self._http.request(
-                                method,
-                                path,
-                                params=params,
-                                json=json,
-                                headers=request_headers,
+                            span.set_attribute(
+                                "github.request.conditional",
+                                any(key.lower() == "if-none-match" for key in request_headers),
                             )
+                            with timing.phase("http"):
+                                response = await self._http.request(
+                                    method,
+                                    path,
+                                    params=params,
+                                    json=json,
+                                    headers=request_headers,
+                                )
                             refundable = (
                                 conditional_discovery
                                 and authentication == "installation"
@@ -742,12 +764,13 @@ class GitHubClient:
                                 and bool(request_headers.get("If-None-Match"))
                                 and (stop is None or not stop.is_set())
                             )
-                            await self._observe_quota(
-                                budget_installation,
-                                response,
-                                span,
-                                not_modified_receipt=receipt if refundable else None,
-                            )
+                            with timing.phase("quota_accounting"):
+                                await self._observe_quota(
+                                    budget_installation,
+                                    response,
+                                    span,
+                                    not_modified_receipt=receipt if refundable else None,
+                                )
                         self._raise_if_stopped(stop)
                         if (
                             response.status_code == 401
@@ -840,13 +863,15 @@ class GitHubClient:
                 },
                 private_attributes={"github.path": path},
             ) as span:
+                timing = RequestTiming(span, operation, "installation", REQUEST_LANE.get())
                 # The deadline covers both authentication attempts, token
                 # acquisition, permit acquisition, opening the stream, and body
                 # consumption. A rejected token cannot grant a retry a second
                 # full operation budget.
                 async with asyncio.timeout(self._request_deadline_seconds):
                     for attempt in range(2):
-                        token = await self._installation_token(installation_id)
+                        with timing.phase("authentication"):
+                            token = await self._installation_token(installation_id)
                         request = self._http.build_request(
                             method,
                             path,
@@ -854,14 +879,17 @@ class GitHubClient:
                             json=json,
                             headers={**(headers or {}), "Authorization": f"Bearer {token}"},
                         )
-                        async with self._request_semaphore:
-                            await self._admit_request(installation_id, method, path)
+                        async with timing.slot(self._request_semaphore):
+                            with timing.phase("quota_admission"):
+                                await self._admit_request(installation_id, method, path)
                             GITHUB_PHYSICAL_REQUESTS.labels(
                                 operation, "installation", REQUEST_LANE.get()
                             ).inc()
-                            response = await self._http.send(request, stream=True)
+                            with timing.phase("http"):
+                                response = await self._http.send(request, stream=True)
                             try:
-                                await self._observe_quota(installation_id, response, span)
+                                with timing.phase("quota_accounting"):
+                                    await self._observe_quota(installation_id, response, span)
                             except BaseException:
                                 await response.aclose()
                                 raise
@@ -879,10 +907,11 @@ class GitHubClient:
                             span.set_attribute("github.retry_count", attempt)
                             if outcome not in {"success", "not_found"}:
                                 self._tracing.mark_error(span, f"HTTP {response.status_code}")
-                            try:
-                                yield response
-                            finally:
-                                await response.aclose()
+                            with timing.phase("body"):
+                                try:
+                                    yield response
+                                finally:
+                                    await response.aclose()
                             return
         except RecoveryBudgetDeferredError:
             outcome = "budget_deferred"
@@ -1042,7 +1071,7 @@ class GitHubClient:
         """Revalidate one discovery page; a local cache hit is never sufficient."""
         key = self._discovery_key(path, installation_id, params)
         cache_name, cache = self._discovery_cache_for(path)
-        cached = cache.get(key)
+        cached, cache_status = cache.lookup(key)
         GITHUB_DISCOVERY_CACHE_LOOKUPS.labels(cache_name, "hit" if cached else "miss").inc()
         # Only the caller's successful body and pagination validation restores
         # this entry. An error after HTTP revalidation must not retain it.
@@ -1057,6 +1086,7 @@ class GitHubClient:
                 headers={"If-None-Match": cached.etag} if cached else None,
                 stop=stop,
                 conditional_discovery=cached is not None,
+                discovery_cache_status=cache_status,
             )
             self._raise_if_stopped(stop)
             if response.status_code == 304:
@@ -1108,8 +1138,13 @@ class GitHubClient:
         self._observe_discovery_cache(cache_name, cache)
         directives = response.headers.get("cache-control", "").lower().split(",")
         if any(value.strip() == "no-store" for value in directives):
+            GITHUB_DISCOVERY_CACHE_EVENTS.labels(cache_name, "skipped_no_store").inc()
             return
         if any(value.strip() == "*" for value in response.headers.get("vary", "").split(",")):
+            GITHUB_DISCOVERY_CACHE_EVENTS.labels(cache_name, "skipped_vary").inc()
+            return
+        if not response.headers.get("etag"):
+            GITHUB_DISCOVERY_CACHE_EVENTS.labels(cache_name, "skipped_no_validator").inc()
             return
         # A missing validator or oversized page costs another full request;
         # it must not prevent discovery or manufacture an empty response.

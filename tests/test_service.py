@@ -3813,7 +3813,11 @@ async def test_worker_budget_deferral_preserves_job_without_provider_backpressur
 
 
 @pytest.mark.asyncio
-async def test_reconciler_enqueues_open_pull_requests(tmp_path: Path) -> None:
+async def test_reconciler_enqueues_open_pull_requests(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    logger = MagicMock()
+    monkeypatch.setattr(service_module, "log", logger)
     github = FakeGitHub(changed_path="uv.lock")
     github.list_installations = AsyncMock(  # type: ignore[attr-defined]
         return_value=[{"id": 2, "suspended_at": None}]
@@ -3830,11 +3834,28 @@ async def test_reconciler_enqueues_open_pull_requests(tmp_path: Path) -> None:
     queued = await reconciler.reconcile_once()
 
     assert queued == ReconciliationOutcome(queued=1)
+    [enqueued] = [
+        call.kwargs
+        for call in logger.info.call_args_list
+        if call.args == ("reconciliation_work_enqueued",)
+    ]
+    assert enqueued == {
+        "installation_id": 2,
+        "repository": "example/project",
+        "pull_number": 3,
+        "head_sha": HEAD,
+        "discovery_reason": "periodic_reconciliation",
+        "work_class": "recovery",
+    }
     assert store.pending_count() == 2
     assert store.pending_shared_head_invalidation_count() == 1
     assert store.shared_head_generation(2, "example/project", HEAD) == 1
 
+    logger.reset_mock()
     assert await reconciler.reconcile_once() == ReconciliationOutcome(queued=0)
+    assert not any(
+        call.args == ("reconciliation_work_enqueued",) for call in logger.info.call_args_list
+    )
     assert store.pending_count() == 2
     assert store.pending_shared_head_invalidation_count() == 1
     assert store.shared_head_generation(2, "example/project", HEAD) == 1

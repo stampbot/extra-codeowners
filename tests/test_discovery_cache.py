@@ -110,3 +110,33 @@ def test_remove_updates_accounting_and_is_idempotent() -> None:
     cache.remove(KEY)
     assert cache.entry_count == 0
     assert cache.bytes_used == 0
+
+
+def test_lookup_reports_expiration_without_retaining_eviction_history() -> None:
+    clock = Clock()
+    events: list[str] = []
+    cache = DiscoveryCache(max_entries=1, idle_ttl_seconds=10, clock=clock, observer=events.append)
+    assert cache.lookup(KEY) == (None, "absent")
+    cache.put(KEY, entry())
+    assert cache.lookup(KEY) == (entry(), "hit")
+    clock.value = 10
+    assert cache.lookup(KEY) == (None, "expired")
+    assert cache.lookup(KEY) == (None, "absent")
+    cache.put(KEY, entry())
+    cache.put((17, "/other", ""), entry())
+    assert cache.lookup(KEY) == (None, "absent")
+    assert events == ["stored", "expired", "stored", "stored", "evicted_entries"]
+    assert cache.entry_count == 1
+
+
+def test_byte_evictions_and_storage_rejections_have_fixed_events() -> None:
+    events: list[str] = []
+    cache = DiscoveryCache(max_bytes=60, max_entry_bytes=60, observer=events.append)
+    cache.put(KEY, entry())
+    cache.put((17, "/other", ""), entry())
+    with pytest.raises(ValueError):
+        cache.put(KEY, entry(etag="private-unquoted-validator"))
+    with pytest.raises(ValueError):
+        cache.put(KEY, entry(body=b"x" * 61))
+    assert events == ["stored", "stored", "evicted_bytes", "rejected_metadata", "rejected_size"]
+    assert cache.lookup(KEY) == (None, "absent")
