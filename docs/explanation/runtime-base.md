@@ -72,8 +72,11 @@ PR builds, release builds, and scheduled cold builds use the same Grype
 container, pinned by digest and updated by Renovate. The scanner reads an
 exported image archive without access to the Docker socket. Each job downloads
 a fresh vulnerability database for its raw JSON report, uploads the report,
-then uses that same database for the VEX-aware blocking check. A failed scan
-or database download fails the job; it isn't treated as a clean result.
+then uses that same database for the VEX-aware blocking check. Database download
+gets up to three attempts, with short backoff and bounded network timeouts.
+Neither scan starts unless the update succeeds. A persistent download failure
+or a failed scan fails the job; there is no stale-database fallback or retry of
+the vulnerability gate to obtain a passing result.
 
 After `Required` succeeds on a `main` push, the release job repeats the native
 builds with provenance and software bill of materials generation enabled. It

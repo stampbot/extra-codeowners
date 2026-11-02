@@ -25,6 +25,35 @@ runs:
         image_id="$(docker image inspect --format '{{.Id}}' "${SCAN_IMAGE}")"
         docker image save --output "${directory}/image.tar" "${image_id}"
 
+    - name: Download vulnerability database
+      shell: bash
+      env:
+        SCAN_DIRECTORY: ${{ steps.prepare.outputs.directory }}
+        GRYPE_IMAGE: >-
+          anchore/grype:v0.118.0@sha256:8a93fc48da96bd6ec5981279d099b69de11541dc68fdf222fb9161f8ff284af7
+      run: |
+        for attempt in 1 2 3; do
+          if docker run --rm --read-only --cap-drop=ALL --security-opt=no-new-privileges \
+            --user "$(id -u):$(id -g)" --tmpfs /tmp:rw,nosuid,nodev,mode=1777 \
+            --mount "type=bind,src=${SCAN_DIRECTORY}/db,dst=/cache" \
+            --env GRYPE_DB_CACHE_DIR=/cache \
+            --env GRYPE_DB_UPDATE_AVAILABLE_TIMEOUT=30s \
+            --env GRYPE_DB_UPDATE_DOWNLOAD_TIMEOUT=120s \
+            "${GRYPE_IMAGE}" db update; then
+            exit 0
+          else
+            status=$?
+          fi
+          if (( status == 130 || status == 143 )); then
+            exit "${status}"
+          fi
+          printf 'Vulnerability database download attempt %d failed.\n' "${attempt}" >&2
+          if (( attempt < 3 )); then
+            sleep "$((attempt * 5))"
+          fi
+        done
+        exit 1
+
     - name: Inventory all vulnerabilities
       shell: bash
       env:
@@ -38,7 +67,7 @@ runs:
           --mount "type=bind,src=${GITHUB_WORKSPACE},dst=/work,readonly" \
           --mount "type=bind,src=${SCAN_DIRECTORY}/image.tar,dst=/image.tar,readonly" \
           --mount "type=bind,src=${SCAN_DIRECTORY}/db,dst=/cache" \
-          --env GRYPE_DB_CACHE_DIR=/cache \
+          --env GRYPE_DB_CACHE_DIR=/cache --env GRYPE_DB_AUTO_UPDATE=false \
           "${GRYPE_IMAGE}" docker-archive:/image.tar --by-cve \
           --config /work/.github/grype-inventory.yaml --output json \
           >"${REPORT_FILE}"
