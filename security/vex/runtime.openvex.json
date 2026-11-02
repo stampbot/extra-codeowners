@@ -1,7 +1,8 @@
 {
   "@context": "https://openvex.dev/ns/v0.2.0",
-  "@id": "urn:uuid:7f50a762-a8e9-56ad-80a9-f9ab80cd06a8",
+  "@id": "urn:uuid:d2604994-4097-5b31-b271-b0b0be53e7d1",
   "author": "Extra CODEOWNERS maintainers",
+  "last_updated": "2026-11-02T14:30:53Z",
   "role": "VEX document producer",
   "statements": [
     {
@@ -21,6 +22,7 @@
       ],
       "status": "fixed",
       "status_notes": "Debian marks CVE-2026-103111 fixed in trixie's pcre2 10.46-1~deb13u3. That package version and Debian 13.7 identity were inspected in both pinned Python 3.14.10 base architectures. Source: https://security-tracker.debian.org/tracker/CVE-2026-103111. This is a package fix, not a reachability exclusion.",
+      "timestamp": "2026-11-02T14:30:53Z",
       "vulnerability": {
         "name": "CVE-2026-103111"
       }
@@ -42,6 +44,7 @@
       ],
       "status": "fixed",
       "status_notes": "Analysis detail: Debian identifies 3.46.1-7+deb13u2 as including the fix for this vulnerability. The package version was observed in the pinned Python 3.14.8 base image.\nSource: Debian Security Tracker (https://security-tracker.debian.org/tracker/CVE-2026-11822)\nOriginal Vexcalibur analysis state: resolved\nConfirmed fixed product version: 3.46.1-7+deb13u2",
+      "timestamp": "2026-10-05T01:00:00Z",
       "vulnerability": {
         "name": "CVE-2026-11822"
       }
@@ -63,6 +66,7 @@
       ],
       "status": "fixed",
       "status_notes": "Analysis detail: Debian identifies 3.46.1-7+deb13u2 as including the fix for this vulnerability. The package version was observed in the pinned Python 3.14.8 base image.\nSource: Debian Security Tracker (https://security-tracker.debian.org/tracker/CVE-2026-11824)\nOriginal Vexcalibur analysis state: resolved\nConfirmed fixed product version: 3.46.1-7+deb13u2",
+      "timestamp": "2026-10-05T01:00:00Z",
       "vulnerability": {
         "name": "CVE-2026-11824"
       }
@@ -84,6 +88,7 @@
       ],
       "status": "fixed",
       "status_notes": "Analysis detail: Debian identifies 5.40.1-6+deb13u1 as including the fix for this vulnerability. The package version was observed in the pinned Python 3.14.8 base image.\nSource: Debian Security Tracker (https://security-tracker.debian.org/tracker/CVE-2026-12087)\nOriginal Vexcalibur analysis state: resolved\nConfirmed fixed product version: 5.40.1-6+deb13u1",
+      "timestamp": "2026-10-05T01:00:00Z",
       "vulnerability": {
         "name": "CVE-2026-12087"
       }
@@ -105,6 +110,7 @@
       ],
       "status": "fixed",
       "status_notes": "Analysis detail: Debian identifies 5.40.1-6+deb13u1 as including the fix for this vulnerability. The package version was observed in the pinned Python 3.14.8 base image.\nSource: Debian Security Tracker (https://security-tracker.debian.org/tracker/CVE-2026-13221)\nOriginal Vexcalibur analysis state: resolved\nConfirmed fixed product version: 5.40.1-6+deb13u1",
+      "timestamp": "2026-10-05T01:00:00Z",
       "vulnerability": {
         "name": "CVE-2026-13221"
       }
@@ -126,6 +132,7 @@
       ],
       "status": "fixed",
       "status_notes": "Analysis detail: Debian identifies 1.13-1+deb13u1 as including the fix for this vulnerability. The package version was observed in the pinned Python 3.14.8 base image.\nSource: Debian Security Tracker (https://security-tracker.debian.org/tracker/CVE-2026-41992)\nOriginal Vexcalibur analysis state: resolved\nConfirmed fixed product version: 1.13-1+deb13u1",
+      "timestamp": "2026-10-05T01:00:00Z",
       "vulnerability": {
         "name": "CVE-2026-41992"
       }
@@ -147,6 +154,7 @@
       ],
       "status": "fixed",
       "status_notes": "Analysis detail: Debian identifies 5.40.1-6+deb13u1 as including the fix for this vulnerability. The package version was observed in the pinned Python 3.14.8 base image.\nSource: Debian Security Tracker (https://security-tracker.debian.org/tracker/CVE-2026-42496)\nOriginal Vexcalibur analysis state: resolved\nConfirmed fixed product version: 5.40.1-6+deb13u1",
+      "timestamp": "2026-10-05T01:00:00Z",
       "vulnerability": {
         "name": "CVE-2026-42496"
       }
@@ -168,6 +176,7 @@
       ],
       "status": "fixed",
       "status_notes": "Analysis detail: Debian identifies 5.40.1-6+deb13u1 as including the fix for this vulnerability. The package version was observed in the pinned Python 3.14.8 base image.\nSource: Debian Security Tracker (https://security-tracker.debian.org/tracker/CVE-2026-42497)\nOriginal Vexcalibur analysis state: resolved\nConfirmed fixed product version: 5.40.1-6+deb13u1",
+      "timestamp": "2026-10-05T01:00:00Z",
       "vulnerability": {
         "name": "CVE-2026-42497"
       }
@@ -189,6 +198,7 @@
       ],
       "status": "fixed",
       "status_notes": "Analysis detail: Debian identifies 5.40.1-6+deb13u1 as including the fix for this vulnerability. The package version was observed in the pinned Python 3.14.8 base image.\nSource: Debian Security Tracker (https://security-tracker.debian.org/tracker/CVE-2026-48959)\nOriginal Vexcalibur analysis state: resolved\nConfirmed fixed product version: 5.40.1-6+deb13u1",
+      "timestamp": "2026-10-05T01:00:00Z",
       "vulnerability": {
         "name": "CVE-2026-48959"
       }
@@ -210,6 +220,7 @@
       ],
       "status": "fixed",
       "status_notes": "Analysis detail: Debian identifies 5.40.1-6+deb13u1 as including the fix for this vulnerability. The package version was observed in the pinned Python 3.14.8 base image.\nSource: Debian Security Tracker (https://security-tracker.debian.org/tracker/CVE-2026-48961)\nOriginal Vexcalibur analysis state: resolved\nConfirmed fixed product version: 5.40.1-6+deb13u1",
+      "timestamp": "2026-10-05T01:00:00Z",
       "vulnerability": {
         "name": "CVE-2026-48961"
       }
@@ -231,6 +242,7 @@
       ],
       "status": "fixed",
       "status_notes": "Analysis detail: Debian identifies 5.40.1-6+deb13u1 as including the fix for this vulnerability. The package version was observed in the pinned Python 3.14.8 base image.\nSource: Debian Security Tracker (https://security-tracker.debian.org/tracker/CVE-2026-48962)\nOriginal Vexcalibur analysis state: resolved\nConfirmed fixed product version: 5.40.1-6+deb13u1",
+      "timestamp": "2026-10-05T01:00:00Z",
       "vulnerability": {
         "name": "CVE-2026-48962"
       }
@@ -264,6 +276,7 @@
       ],
       "status": "fixed",
       "status_notes": "Analysis detail: Debian identifies 2.41-12+deb13u4 as including the fix for this vulnerability. The package version was observed in the pinned Python 3.14.8 base image.\nSource: Debian Security Tracker (https://security-tracker.debian.org/tracker/CVE-2026-5450)\nOriginal Vexcalibur analysis state: resolved\nConfirmed fixed product version: 2.41-12+deb13u4",
+      "timestamp": "2026-10-05T01:00:00Z",
       "vulnerability": {
         "name": "CVE-2026-5450"
       }
@@ -309,6 +322,7 @@
       ],
       "status": "fixed",
       "status_notes": "Analysis detail: Debian identifies 3.5.7-1~deb13u3 as including the fix for this vulnerability. The package version was observed in the pinned Python 3.14.8 base image.\nSource: Debian Security Tracker (https://security-tracker.debian.org/tracker/CVE-2026-54873)\nOriginal Vexcalibur analysis state: resolved\nConfirmed fixed product version: 3.5.7-1~deb13u3",
+      "timestamp": "2026-10-05T01:00:00Z",
       "vulnerability": {
         "name": "CVE-2026-54873"
       }
@@ -330,6 +344,7 @@
       ],
       "status": "fixed",
       "status_notes": "Analysis detail: Debian identifies 5.40.1-6+deb13u1 as including the fix for this vulnerability. The package version was observed in the pinned Python 3.14.8 base image.\nSource: Debian Security Tracker (https://security-tracker.debian.org/tracker/CVE-2026-57432)\nOriginal Vexcalibur analysis state: resolved\nConfirmed fixed product version: 5.40.1-6+deb13u1",
+      "timestamp": "2026-10-05T01:00:00Z",
       "vulnerability": {
         "name": "CVE-2026-57432"
       }
@@ -351,6 +366,7 @@
       ],
       "status": "fixed",
       "status_notes": "Analysis detail: Debian identifies 5.40.1-6+deb13u1 as including the fix for this vulnerability. The package version was observed in the pinned Python 3.14.8 base image.\nSource: Debian Security Tracker (https://security-tracker.debian.org/tracker/CVE-2026-57433)\nOriginal Vexcalibur analysis state: resolved\nConfirmed fixed product version: 5.40.1-6+deb13u1",
+      "timestamp": "2026-10-05T01:00:00Z",
       "vulnerability": {
         "name": "CVE-2026-57433"
       }
@@ -384,6 +400,7 @@
       ],
       "status": "fixed",
       "status_notes": "Analysis detail: Debian identifies 2.41-12+deb13u4 as including the fix for this vulnerability. The package version was observed in the pinned Python 3.14.8 base image.\nSource: Debian Security Tracker (https://security-tracker.debian.org/tracker/CVE-2026-5928)\nOriginal Vexcalibur analysis state: resolved\nConfirmed fixed product version: 2.41-12+deb13u4",
+      "timestamp": "2026-10-05T01:00:00Z",
       "vulnerability": {
         "name": "CVE-2026-5928"
       }
@@ -429,6 +446,7 @@
       ],
       "status": "fixed",
       "status_notes": "Analysis detail: Debian identifies 3.5.7-1~deb13u3 as including the fix for this vulnerability. The package version was observed in the pinned Python 3.14.8 base image.\nSource: Debian Security Tracker (https://security-tracker.debian.org/tracker/CVE-2026-63073)\nOriginal Vexcalibur analysis state: resolved\nConfirmed fixed product version: 3.5.7-1~deb13u3",
+      "timestamp": "2026-10-05T01:00:00Z",
       "vulnerability": {
         "name": "CVE-2026-63073"
       }
@@ -450,6 +468,7 @@
       ],
       "status": "fixed",
       "status_notes": "Analysis detail: Debian identifies 5.40.1-6+deb13u1 as including the fix for this vulnerability. The package version was observed in the pinned Python 3.14.8 base image.\nSource: Debian Security Tracker (https://security-tracker.debian.org/tracker/CVE-2026-7017)\nOriginal Vexcalibur analysis state: resolved\nConfirmed fixed product version: 5.40.1-6+deb13u1",
+      "timestamp": "2026-10-05T01:00:00Z",
       "vulnerability": {
         "name": "CVE-2026-7017"
       }
@@ -495,6 +514,7 @@
       ],
       "status": "fixed",
       "status_notes": "Analysis detail: Debian identifies 3.5.7-1~deb13u3 as including the fix for this vulnerability. The package version was observed in the pinned Python 3.14.8 base image.\nSource: Debian Security Tracker (https://security-tracker.debian.org/tracker/CVE-2026-72897)\nOriginal Vexcalibur analysis state: resolved\nConfirmed fixed product version: 3.5.7-1~deb13u3",
+      "timestamp": "2026-10-05T01:00:00Z",
       "vulnerability": {
         "name": "CVE-2026-72897"
       }
@@ -540,6 +560,7 @@
       ],
       "status": "fixed",
       "status_notes": "Analysis detail: Debian identifies 3.5.7-1~deb13u3 as including the fix for this vulnerability. The package version was observed in the pinned Python 3.14.8 base image.\nSource: Debian Security Tracker (https://security-tracker.debian.org/tracker/CVE-2026-75803)\nOriginal Vexcalibur analysis state: resolved\nConfirmed fixed product version: 3.5.7-1~deb13u3",
+      "timestamp": "2026-10-05T01:00:00Z",
       "vulnerability": {
         "name": "CVE-2026-75803"
       }
@@ -561,6 +582,7 @@
       ],
       "status": "fixed",
       "status_notes": "Analysis detail: Debian identifies 5.40.1-6+deb13u1 as including the fix for this vulnerability. The package version was observed in the pinned Python 3.14.8 base image.\nSource: Debian Security Tracker (https://security-tracker.debian.org/tracker/CVE-2026-8376)\nOriginal Vexcalibur analysis state: resolved\nConfirmed fixed product version: 5.40.1-6+deb13u1",
+      "timestamp": "2026-10-05T01:00:00Z",
       "vulnerability": {
         "name": "CVE-2026-8376"
       }
@@ -606,6 +628,7 @@
       ],
       "status": "fixed",
       "status_notes": "Analysis detail: Debian identifies 3.5.7-1~deb13u3 as including the fix for this vulnerability. The package version was observed in the pinned Python 3.14.8 base image.\nSource: Debian Security Tracker (https://security-tracker.debian.org/tracker/CVE-2026-84782)\nOriginal Vexcalibur analysis state: resolved\nConfirmed fixed product version: 3.5.7-1~deb13u3",
+      "timestamp": "2026-10-05T01:00:00Z",
       "vulnerability": {
         "name": "CVE-2026-84782"
       }
@@ -651,6 +674,7 @@
       ],
       "status": "fixed",
       "status_notes": "Analysis detail: Debian identifies 3.5.7-1~deb13u3 as including the fix for this vulnerability. The package version was observed in the pinned Python 3.14.8 base image.\nSource: Debian Security Tracker (https://security-tracker.debian.org/tracker/CVE-2026-84784)\nOriginal Vexcalibur analysis state: resolved\nConfirmed fixed product version: 3.5.7-1~deb13u3",
+      "timestamp": "2026-10-05T01:00:00Z",
       "vulnerability": {
         "name": "CVE-2026-84784"
       }
@@ -672,6 +696,7 @@
       ],
       "status": "fixed",
       "status_notes": "Debian marks CVE-2026-86145 fixed in trixie's pcre2 10.46-1~deb13u3. That package version and Debian 13.7 identity were inspected in both pinned Python 3.14.10 base architectures. Source: https://security-tracker.debian.org/tracker/CVE-2026-86145. This is a package fix, not a reachability exclusion.",
+      "timestamp": "2026-11-02T14:30:53Z",
       "vulnerability": {
         "name": "CVE-2026-86145"
       }
@@ -693,6 +718,7 @@
       ],
       "status": "fixed",
       "status_notes": "Debian marks CVE-2026-89157 fixed in trixie's pcre2 10.46-1~deb13u3. That package version and Debian 13.7 identity were inspected in both pinned Python 3.14.10 base architectures. Source: https://security-tracker.debian.org/tracker/CVE-2026-89157. This is a package fix, not a reachability exclusion.",
+      "timestamp": "2026-11-02T14:30:53Z",
       "vulnerability": {
         "name": "CVE-2026-89157"
       }
@@ -714,14 +740,15 @@
       ],
       "status": "fixed",
       "status_notes": "Debian marks CVE-2026-89161 fixed in trixie's pcre2 10.46-1~deb13u3. That package version and Debian 13.7 identity were inspected in both pinned Python 3.14.10 base architectures. Source: https://security-tracker.debian.org/tracker/CVE-2026-89161. This is a package fix, not a reachability exclusion.",
+      "timestamp": "2026-11-02T14:30:53Z",
       "vulnerability": {
         "name": "CVE-2026-89161"
       }
     }
   ],
-  "timestamp": "2026-10-05T01:00:00Z",
+  "timestamp": "2026-11-02T14:30:53Z",
   "tooling": "Vexcalibur + Extra CODEOWNERS runtime binding",
-  "version": 3,
+  "version": 4,
   "x_extra_codeowners_runtime": {
     "files": {
       ".dockerignore": "3f9dc9d3a79fe3085f25de88403b5563ad5c7fa7010bef94c5e55f24bd3cf691",

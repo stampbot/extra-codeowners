@@ -176,6 +176,13 @@ statement with the runtime change so reviewers can inspect both. If a claim no
 longer holds, change or remove it before rebinding. Never add an automatic
 rebind step to CI.
 
+When you change a vulnerability statement, give that statement a `timestamp`
+for the new assessment. The explicit bind command advances the document
+revision and issue time when reviewed content changes, preserving inherited
+dates for other statements. Repeating it with the same content and rationale
+does not create another revision. This bookkeeping does not perform the
+security review or choose a vulnerability status.
+
 The publisher copies the reviewed bytes only when every product URL matches the
 signed native inventories. Debian URLs must identify the released architecture
 and distribution. For Grype, use the inventory's `distro_full` identity, which

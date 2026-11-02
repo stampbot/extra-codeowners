@@ -12,6 +12,7 @@ import sys
 import uuid
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Final, NoReturn, cast
 from urllib.parse import unquote
@@ -124,21 +125,47 @@ def validate_runtime_binding(source: Path, root: Path) -> None:
         _fail("VEX runtime binding is stale; review reachable behavior before rebinding the VEX")
 
 
+def _document_id(document: Mapping[str, object]) -> str:
+    content = dict(document)
+    content.pop("@id", None)
+    return uuid.uuid5(
+        uuid.NAMESPACE_URL, json.dumps(content, sort_keys=True, separators=(",", ":"))
+    ).urn
+
+
+def _advance_review_metadata(document: dict[str, object]) -> None:
+    version = document.get("version")
+    if type(version) is not int or version < 1:
+        _fail("runtime binding requires a positive OpenVEX document version")
+    previous = _string(document.get("timestamp"), "OpenVEX document timestamp")
+    # Retain inherited knowledge dates. A changed statement must name the
+    # date of its new assessment before the reviewer binds the document.
+    statements = []
+    for item in _sequence(document.get("statements"), "OpenVEX statements"):
+        statement = dict(_mapping(item, "OpenVEX statement"))
+        statement.setdefault("timestamp", previous)
+        statements.append(statement)
+    issued = datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
+    document.update(
+        version=version + 1, timestamp=issued, last_updated=issued, statements=statements
+    )
+
+
 def bind_runtime(source: Path, root: Path, review: str) -> None:
     """Record a maintainer's completed review; this command does not perform the review."""
     document = dict(_mapping(_read_json(source, "reviewed VEX"), "reviewed VEX"))
     if document.get("@context") != _OPENVEX_CONTEXT:
         _fail("runtime binding requires an OpenVEX v0.2.0 document")
+    previous_id = document.get("@id")
     document[_RUNTIME_BINDING] = {
         "schema_version": 1,
         "files": _runtime_files(root),
         "review": _string(review, "runtime review rationale"),
     }
     document["tooling"] = "Vexcalibur + Extra CODEOWNERS runtime binding"
-    document.pop("@id", None)
-    document["@id"] = uuid.uuid5(
-        uuid.NAMESPACE_URL, json.dumps(document, sort_keys=True, separators=(",", ":"))
-    ).urn
+    if previous_id != _document_id(document):
+        _advance_review_metadata(document)
+    document["@id"] = _document_id(document)
     source.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
