@@ -1,8 +1,8 @@
 {
   "@context": "https://openvex.dev/ns/v0.2.0",
-  "@id": "urn:uuid:a5fb6571-f093-5459-82d2-a473d1373024",
+  "@id": "urn:uuid:7c75a57e-16e1-56bc-b4c0-50c316d5abd6",
   "author": "Extra CODEOWNERS maintainers",
-  "last_updated": "2026-11-02T15:10:25Z",
+  "last_updated": "2026-11-02T16:54:41Z",
   "role": "VEX document producer",
   "statements": [
     {
@@ -746,9 +746,9 @@
       }
     }
   ],
-  "timestamp": "2026-11-02T15:10:25Z",
+  "timestamp": "2026-11-02T16:54:41Z",
   "tooling": "Vexcalibur + Extra CODEOWNERS runtime binding",
-  "version": 5,
+  "version": 6,
   "x_extra_codeowners_runtime": {
     "files": {
       ".dockerignore": "3f9dc9d3a79fe3085f25de88403b5563ad5c7fa7010bef94c5e55f24bd3cf691",
@@ -776,9 +776,9 @@
       "extra_codeowners/codeowners.py": "da8be54dbc8a79dcbaf39d49491f950d5405d74d6bb5e07da5247644f5ffcfd8",
       "extra_codeowners/database.py": "53f6fe731d54f371c9d970698323f3e72274e96b11c0289e078a31757541651f",
       "extra_codeowners/dco.py": "8c3a0b541fe021fb9f05500ca9278306901010c219e7e1199ca5e205c138e68d",
-      "extra_codeowners/discovery_cache.py": "adf544d1287be1463f59da5c1e2e73ee45e53661f4c2cf65ea49c3fbef60674e",
+      "extra_codeowners/discovery_cache.py": "3c3d0af70b21e49181c0d44ffd7b1ec5fdc929f8c3083a2eda404efbbd56f565",
       "extra_codeowners/evaluator.py": "b81b9d1c6fe81d591867b0993d413030caab8af48703c4725f14c04fe2e3f9a6",
-      "extra_codeowners/github.py": "f1efe480090dcf4c19d8bac398550c8c058bea9565b038c6d781e7747a5b3058",
+      "extra_codeowners/github.py": "b0a73652a75a33d856c28b34e961e9d02a3543b1e975e787713808c745cf5ae5",
       "extra_codeowners/logging.py": "a59227e76ec7809ff8bb88fee997abb9b99f32e81a4c8d16bcfc72c0c0abf33f",
       "extra_codeowners/manifest.py": "33d42ac16b8218562f2baf6c0bc7c6664b03354bbf274cb0381e94740b76681e",
       "extra_codeowners/metrics.py": "6293de9acad3d3f639fda0403fb2e0f317a733a173a6cb7bf977d16a4e3fd522",
@@ -795,7 +795,7 @@
       "pyproject.toml": "bfb88e388d4590a6f52ed6d76889460a6b698f13129389b3823d2ff661bedd55",
       "uv.lock": "5514cb0448adb693fe97f3d2c8016ccd606890327a1946467fbd118356de4922"
     },
-    "review": "Reviewed phase timing, bounded cache diagnostics, and post-commit discovery logging against the patched runtime from PR254. These changes add no native API reachability or approval authority. All 26 inherited vulnerability statements remain fixed for the exact pinned package versions; no exclusions or statement assessment dates changed.",
+    "review": "Reviewed bounded local page-cache zlib storage: original admission limits, bounded decoding and authenticated HTTP revalidation remain enforced. No dependency or package changes; all 26 fixed statements and their assessment dates remain unchanged. See security/vex/runtime-review.md.",
     "schema_version": 1
   }
 }

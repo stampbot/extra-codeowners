@@ -1,5 +1,6 @@
 """Keep compact discovery evidence reusable when PR pages exceed their budget."""
 
+import hashlib
 from collections import Counter
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -30,6 +31,7 @@ def metric_value(
 @pytest.mark.asyncio
 async def test_large_pages_cannot_evict_small_checks_or_branch_refs(private_key: str) -> None:
     statuses: Counter[tuple[str, int]] = Counter()
+    page_body = hashlib.shake_256(b"fictional PR description").hexdigest(22_500)
 
     def respond(request: httpx.Request) -> httpx.Response:
         path = request.url.path
@@ -48,9 +50,9 @@ async def test_large_pages_cannot_evict_small_checks_or_branch_refs(private_key:
         statuses[operation, 200] += 1
         body: Any
         if operation == "pull.list":
-            # A live PR-list page was about 45 kB. One thousand such pages
-            # exceed the page budget without exceeding the per-entry limit.
-            body = [{"number": 1, "body": "x" * 45_000}]
+            # One thousand 45-kB descriptions exceed the page budget even
+            # after encoding, without exceeding the raw per-entry limit.
+            body = [{"number": 1, "body": page_body}]
         elif operation == "check.list":
             body = {"total_count": 0, "check_runs": []}
         else:

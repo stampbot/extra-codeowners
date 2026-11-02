@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 import re
 import time
+import zlib
 from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -12,7 +13,13 @@ from typing import Final, Literal
 
 type CacheLookupStatus = Literal["hit", "absent", "expired"]
 type CacheEvent = Literal[
-    "expired", "stored", "rejected_metadata", "rejected_size", "evicted_bytes", "evicted_entries"
+    "expired",
+    "stored",
+    "rejected_metadata",
+    "rejected_size",
+    "rejected_encoding",
+    "evicted_bytes",
+    "evicted_entries",
 ]
 
 DEFAULT_MAX_BYTES: Final = 32 * 1024 * 1024
@@ -40,6 +47,7 @@ class _StoredEntry:
     entry: CacheEntry
     last_used: float
     size: int
+    compressed: bool = False
 
 
 class DiscoveryCache:
@@ -59,6 +67,7 @@ class DiscoveryCache:
         idle_ttl_seconds: float = DEFAULT_IDLE_TTL_SECONDS,
         clock: Callable[[], float] = time.monotonic,
         observer: Callable[[CacheEvent], None] | None = None,
+        compress: bool = False,
     ) -> None:
         if any(
             isinstance(value, bool) or not isinstance(value, int) or value <= 0
@@ -78,6 +87,7 @@ class DiscoveryCache:
         self.idle_ttl_seconds = idle_ttl_seconds
         self._clock = clock
         self._observer = observer
+        self._compress = compress
         self._entries: OrderedDict[tuple[int, str, str], _StoredEntry] = OrderedDict()
         self._bytes = 0
 
@@ -110,9 +120,26 @@ class DiscoveryCache:
             self._remove_validated(key)
             self._observe("expired")
             return None, "expired"
+        entry = stored.entry
+        if stored.compressed:
+            try:
+                decoder = zlib.decompressobj()
+                body = decoder.decompress(entry.body, self.max_entry_bytes + 1)
+                if (
+                    len(body) > self.max_entry_bytes
+                    or not decoder.eof
+                    or decoder.unconsumed_tail
+                    or decoder.unused_data
+                ):
+                    raise ValueError("invalid cached encoding")
+                entry = CacheEntry(body, entry.etag, entry.links)
+            except (zlib.error, ValueError):
+                self._remove_validated(key)
+                self._observe("rejected_encoding")
+                return None, "absent"
         stored.last_used = now
         self._entries.move_to_end(key)
-        return stored.entry, "hit"
+        return entry, "hit"
 
     def put(self, key: tuple[int, str, str], entry: CacheEntry) -> None:
         """Store an entry, evicting oldest entries until all bounds hold."""
@@ -130,8 +157,18 @@ class DiscoveryCache:
         if size > self.max_entry_bytes or size > self.max_bytes:
             self._observe("rejected_size")
             raise ValueError("cache entry exceeds its configured size bound")
+        compressed = False
+        if self._compress:
+            try:
+                encoded = zlib.compress(entry.body, level=1)
+            except zlib.error:
+                encoded = entry.body
+            if len(encoded) < len(entry.body):
+                size -= len(entry.body) - len(encoded)
+                entry = CacheEntry(encoded, entry.etag, entry.links)
+                compressed = True
         now = self._clock()
-        self._entries[key] = _StoredEntry(entry, now, size)
+        self._entries[key] = _StoredEntry(entry, now, size, compressed)
         self._bytes += size
         self._observe("stored")
         while len(self._entries) > self.max_entries or self._bytes > self.max_bytes:

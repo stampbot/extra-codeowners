@@ -22,6 +22,14 @@ recipe. The new uv resolver also locks Psycopg 3.3.6 for Python 3.15 and later
 because 3.3.4 has no compatible wheels there. That future branch is not used
 by the current runtime image and does not extend the tested Python matrix.
 
+The page-cache storage change uses Python's existing zlib binding to encode
+validated listing bodies. Admission still checks the raw representation's
+size; decoding has a fixed output bound and rejects incomplete or trailing
+data. A failed decode discards the entry, and HTTP reuse still requires an
+authenticated conditional request. No package or library version changes.
+All 26 current VEX statements remain `fixed`; this review adds no reachability
+exclusion and makes no claim about the older, unpatched images.
+
 ## Previous runtime: October 5, 2026
 
 The Python 3.14.8 image included Debian's fixes for the nineteen findings
@@ -197,9 +205,9 @@ The package-specific reachability conclusions above still apply. The VEX
 runtime binding records this source review; its vulnerability statements are
 unchanged.
 
-The subsequent cache partition change keeps the existing byte cache and HTTP
+The earlier cache partition change kept the existing byte cache and HTTP
 revalidation paths. It separates storage budgets and adds fixed-label metrics;
-it does not compress, deserialize new formats, or change dependencies. The
+it did not compress, deserialize new formats, or change dependencies. The
 same reachability conclusions apply.
 
 The authority discovery change skips duplicate jobs after checking enrollment

@@ -249,6 +249,9 @@ within one process. The 32 MiB total budget is split: 24 MiB for pages and 8 MiB
 for the smaller branch and check responses. Large PR listings cannot evict
 entries from the smaller partition. Both remove entries idle for one hour;
 the [metric reference](../reference/http-api.md#get-metrics) lists their entry limits.
+Page bodies are compressed in memory when that saves space. The byte gauge
+counts this retained representation, not the uncompressed response size or
+total process memory. The original response must still fit the per-entry limit.
 
 Every entry still needs an authenticated conditional HTTP request before reuse.
 A `304 Not Modified` saves the response body transfer, not the physical
@@ -264,7 +267,7 @@ share this cache. A newly elected replica may need a cold scan.
 
 Check `extra_codeowners_github_discovery_cache_events_total` before enlarging
 the cache. It distinguishes capacity evictions from expiration, responses too
-large to retain, invalid metadata, missing validators, and responses that
+large to retain, invalid metadata or encoding, missing validators, and responses that
 prohibit storage. Discovery spans identify a local hit, absence, or expiration
 without exporting an ETag. An `absent` lookup does not explain its own cause;
 use the event counters to assess churn rather than attributing every miss to
