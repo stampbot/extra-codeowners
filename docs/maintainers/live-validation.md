@@ -6,6 +6,50 @@ about future webhook timing. The open release gates are tracked in
 non-required during evaluation; retain native code-owner enforcement for
 production-sensitive repositories.
 
+## Diagnostics and approval probe: November 2, 2026
+
+Alpha.65 runs on two Kubernetes nodes with shared PostgreSQL state. The
+diagnostics from [PR #253][diagnostics] are deployed through
+[Argo PR #2626][diagnostics-deployment]. Release signatures and source-bound
+provenance verified against the exact main commit. Inventory, notice, source
+and OpenVEX verification passed too; those checks do not establish the
+distribution approval tracked in [issue #18][sources].
+
+On a retained delegated-path PR, removing its required label produced an
+explicit blocking failure after about 8.5 seconds and the final
+missing-approval failure after about 13.5 seconds. Restoring the label
+produced success after about 11.5 seconds. These intervals start when the API
+request began and end at GitHub's whole-second completion timestamp. They
+are individual observations, not latency percentiles. The label is restored
+and the PR head is unchanged.
+
+Both evaluation traces were retrieved from Tempo. They last about 8.00 and
+7.74 seconds, with 17 and 18 outer GitHub operations. Every operation records
+zero retries and no error. Semaphore wait is negligible in those traces;
+HTTP reads and writes dominate. This does not explain the older 32.5-second
+withdrawal or establish acceptable reconciliation performance.
+
+The first elected scan in the subsequent observation ended partial at
+16:57:41 UTC. A GitHub HTTP 500 while listing checks failed one installation;
+the outcome reports neither a quota deferral nor a lost lease. Its trace lasts
+1,783 seconds and contains 4,615 outer GitHub operations. Their phase totals
+include 1,490 seconds in HTTP and 201 seconds in quota admission/accounting,
+with only 0.017 seconds waiting for the request semaphore. Nested token requests
+are excluded from these operation totals to avoid double-counting.
+
+The new retention counters also recorded page-cache byte evictions, proving
+storage pressure rather than inferring it from a full byte gauge. Reducing
+that pressure may improve reuse, but a cached response still needs a GitHub
+request. It will not remove the cost of thousands of serial validations.
+
+No installation selection, queue, quota or deployment setting was changed to
+obtain these measurements; no webhook was redelivered. The quiet window has
+no further controlled fixture changes, not a guarantee that every repository
+in the installation is idle. These results do not complete the two-success
+quiet-cycle gate, isolate missed-webhook recovery, or test a multipage
+checkpoint across a quota reset. See the [dated evidence][november-evidence]
+and the [performance gate][performance].
+
 ## Deployed approval checks: September 14, 2026
 
 The App ran `v0.1.0-alpha.45` on two Kubernetes nodes with PostgreSQL state.
@@ -103,8 +147,9 @@ Completing the fixture does not turn that result into a pass. See
 
 ## Work still needed
 
-These results don't cover large-installation performance, quiet
-reconciliation, repository lifecycle transitions, or App access loss. The
+The performance gate remains open. These results do not establish quiet
+recovery or complete coverage of repository lifecycle transitions and App
+access loss. The
 [remaining work](../reference/project-status.md#remaining-work) list tracks
 those gates, along with the distribution source work in
 [issue #18][sources], which passing approval tests doesn't close.
@@ -122,3 +167,6 @@ processed it.
 [performance]: https://github.com/stampbot/extra-codeowners/issues/203
 [handback]: https://github.com/stampbot/extra-codeowners/issues/1#issuecomment-5672325273
 [addition]: https://github.com/stampbot/extra-codeowners/issues/203#issuecomment-5672497697
+[diagnostics]: https://github.com/stampbot/extra-codeowners/pull/253
+[diagnostics-deployment]: https://github.com/neverendingsupport/argo-apps/pull/2626
+[november-evidence]: https://github.com/stampbot/extra-codeowners/issues/203#issuecomment-6583054451
