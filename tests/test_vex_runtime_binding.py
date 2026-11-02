@@ -107,6 +107,45 @@ def test_new_statement_cannot_inherit_an_old_assessment_date(runtime: tuple[Path
     assert source.read_bytes() == before
 
 
+@pytest.mark.parametrize(
+    "timestamp",
+    [
+        "not-a-date",
+        "2026-02-30T00:00:00Z",
+        "2026-09-02",
+        "2026-09-02T00:00:00",
+        "2026-09-02 00:00:00Z",
+        "2026-09-02T00:00:00+24:00",
+        "2026-09-02T00:00:00+00:60",
+    ],
+)
+def test_rebinding_rejects_malformed_statement_dates_without_rewriting(
+    runtime: tuple[Path, Path], timestamp: str
+) -> None:
+    source, root = runtime
+    document = json.loads(source.read_text())
+    document["statements"] = [{"status": "fixed", "timestamp": timestamp}]
+    source.write_text(json.dumps(document))
+    before = source.read_bytes()
+    with pytest.raises(ReleaseVexError, match=r"timestamp.*date-time"):
+        bind_runtime(source, root, "Reviewed the new statement.")
+    assert source.read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    "timestamp", ["2026-09-02T00:00:00Z", "2026-09-02t00:00:00.123z", "2026-09-02T10:30:00+05:30"]
+)
+def test_rebinding_preserves_valid_statement_dates(
+    runtime: tuple[Path, Path], timestamp: str
+) -> None:
+    source, root = runtime
+    document = json.loads(source.read_text())
+    document["statements"] = [{"status": "fixed", "timestamp": timestamp}]
+    source.write_text(json.dumps(document))
+    bind_runtime(source, root, "Reviewed the new statement.")
+    assert json.loads(source.read_text())["statements"][0]["timestamp"] == timestamp
+
+
 def test_runtime_only_change_advances_vex_revision(runtime: tuple[Path, Path]) -> None:
     source, root = runtime
     before = json.loads(source.read_text())["version"]

@@ -127,6 +127,22 @@ def test_validate_release_vex_accepts_a_python_product_from_both_native_inventor
     assert validate_release_vex(source, inventories) == source.read_bytes()
 
 
+@pytest.mark.parametrize("location", ["document", "statement"])
+@pytest.mark.parametrize("field", ["timestamp", "last_updated"])
+@pytest.mark.parametrize("value", ["not-a-date", "2026-02-30T00:00:00Z", "2026-09-02T00:00:00"])
+def test_release_validation_rejects_malformed_dates(
+    tmp_path: Path, location: str, field: str, value: str
+) -> None:
+    document = _document("pkg:pypi/extra_codeowners@0.1.0a27")
+    if location == "document":
+        document[field] = value
+    else:
+        document["statements"][0][field] = value
+    source, inventories = _release_inputs(tmp_path, document)
+    with pytest.raises(ReleaseVexError, match="date-time"):
+        validate_release_vex(source, inventories)
+
+
 @pytest.mark.parametrize("distro_full", [None, "debian-13.5", "debian-13.6"])
 def test_minor_distro_claim_requires_that_exact_inventory_identity(
     tmp_path: Path, distro_full: str | None
