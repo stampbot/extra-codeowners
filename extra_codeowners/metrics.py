@@ -49,6 +49,12 @@ GITHUB_RATE_LIMIT_EVENTS = Counter(
     "GitHub API rate-limit responses observed by authentication scope",
     ("scope",),
 )
+GITHUB_API_PHASE_SECONDS = Histogram(
+    "extra_codeowners_github_api_phase_seconds",
+    "Time in a fixed phase of a GitHub attempt, including failed and cancelled phases",
+    ("operation", "authentication", "work_class", "phase"),
+    buckets=(0.001, 0.005, 0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30),
+)
 GITHUB_PHYSICAL_REQUESTS = Counter(
     "extra_codeowners_github_physical_requests_total",
     "Physical GitHub request attempts, including retries and pages",
@@ -72,6 +78,11 @@ GITHUB_DISCOVERY_CACHE_BYTES = Gauge(
     "extra_codeowners_github_discovery_cache_bytes",
     "Accounted bytes retained by this process's GitHub discovery client",
     ("cache",),
+)
+GITHUB_DISCOVERY_CACHE_EVENTS = Counter(
+    "extra_codeowners_github_discovery_cache_events_total",
+    "Discovery cache retention, expiration, rejection, and capacity eviction decisions",
+    ("cache", "event"),
 )
 GITHUB_DISCOVERY_CACHE_ENTRIES = Gauge(
     "extra_codeowners_github_discovery_cache_entries",

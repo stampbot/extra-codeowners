@@ -169,6 +169,7 @@ The endpoint returns Prometheus text format. Extra CODEOWNERS defines these appl
 | `extra_codeowners_work_attempt_seconds` | histogram | Wall-clock duration of the same worker attempts. |
 | `extra_codeowners_github_api_requests_total` | counter | Logical GitHub API requests, labeled by fixed operation family, authentication mode, and outcome. |
 | `extra_codeowners_github_api_request_seconds` | histogram | Wall-clock duration of the same GitHub API requests. It includes token acquisition and a bounded rejected-token retry. |
+| `extra_codeowners_github_api_phase_seconds` | histogram | Time in one fixed request phase, labeled by `operation`, `authentication`, `work_class`, and `phase`. Includes failed and cancelled phases; retries produce separate observations. |
 | `extra_codeowners_github_rate_limit_events_total` | counter | GitHub rate-limit responses, labeled as installation-scoped or global. |
 | `extra_codeowners_github_physical_requests_total` | counter | Physical request attempts, including pages and retries, labeled by fixed `operation`, `authentication`, and `work_class` (`interactive`, `recovery`, or `authority`). |
 | `extra_codeowners_github_recovery_budget_deferrals_total` | counter | Requests deferred by the local REST core reserve, labeled by fixed operation. These requests were not sent to GitHub; a deferral is not a provider rate-limit response. |
@@ -176,6 +177,7 @@ The endpoint returns Prometheus text format. Extra CODEOWNERS defines these appl
 | `extra_codeowners_github_discovery_cache_lookups_total` | counter | Local lookups, labeled by `cache` (`pages` or `compact`) and `result` (`hit` or `miss`). A hit selects an entity validator; it still requires authenticated HTTP revalidation. |
 | `extra_codeowners_github_discovery_cache_bytes` | gauge | Accounted bytes retained by this process's GitHub client, labeled by `cache` (`pages` or `compact`). |
 | `extra_codeowners_github_discovery_cache_entries` | gauge | Cached representations retained by the same client and cache partition. |
+| `extra_codeowners_github_discovery_cache_events_total` | counter | Cache retention decisions, labeled by `cache` and fixed `event`: `stored`, `expired`, `evicted_bytes`, `evicted_entries`, `rejected_size`, `rejected_metadata`, `skipped_no_validator`, `skipped_no_store`, or `skipped_vary`. |
 | `extra_codeowners_queue_depth` | gauge | Pending and leased exact-head invalidation, evaluation, and authority fan-out rows. |
 | `extra_codeowners_queue_work_class_depth` | gauge | Pending durable work, labeled by fixed `kind` and `work_class` values. Use it to distinguish foreground work from recovery backlog. |
 | `extra_codeowners_queue_work_class_oldest_age_seconds` | gauge | Age of the oldest pending row for the same fixed labels. |
@@ -195,6 +197,21 @@ Discovery responses use two disposable per-process cache partitions. Separating
 large discovery pages from small branch references and empty check listings
 prevents page churn from evicting those smaller responses. Both partitions
 have a one-hour idle lifetime; their combined accounted-byte cap is 32 MiB.
+
+The request phases are `authentication`, `semaphore_wait`, `quota_admission`,
+`http`, `quota_accounting`, and, for streamed responses, `body`. Ordinary
+`http` timing includes reading the response body. Streamed `http` timing ends
+when headers arrive; `body` covers the caller's consumption and response
+closure, not just network transfer. Authentication may include a nested token
+request, so adding parent and child timings double-counts that work.
+
+The existing request span accumulates each phase across retries in
+`github.phase.<phase>.seconds`. Discovery spans also record
+`github.discovery.cache` (`pages` or `compact`), `github.discovery.lookup`
+(`hit`, `absent`, or `expired`), and `github.request.conditional` for the final
+physical attempt. These attributes contain no validators or request contents.
+`absent` means no entry exists now; it does not distinguish a cold cache from
+one whose entry was evicted. The cache retains no history of evicted keys.
 
 | Partition | Responses | Byte cap | Per-entry cap | Entry cap |
 | --- | --- | --- | --- | --- |
@@ -233,7 +250,8 @@ Prometheus also publishes generated counter and histogram series, plus Python ru
 For a slow check, compare queue wait, worker-attempt, and GitHub API histograms
 in that order. A long queue wait points to scheduling or provider backpressure;
 a long worker attempt with ordinary API timing points to policy work or a
-database guard; a long API family points to GitHub or the network. When OTLP
+database guard. A long API family needs its phase timings to distinguish HTTP
+from local coordination. When OTLP
 tracing is enabled, use the sampled `trace_id` in the corresponding structured
 logs to inspect the same operation without adding private values to Prometheus.
 

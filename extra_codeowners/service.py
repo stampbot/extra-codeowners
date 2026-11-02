@@ -3304,6 +3304,16 @@ class Reconciler:
                             self.settings.reconcile_recheck_seconds,
                         )
                         queued += int(added)
+                        if added:
+                            log.info(
+                                "reconciliation_work_enqueued",
+                                installation_id=installation_id,
+                                repository=full_name,
+                                pull_number=number,
+                                head_sha=head_sha,
+                                discovery_reason=PERIODIC_RECONCILIATION_REASON,
+                                work_class="recovery",
+                            )
                         await asyncio.to_thread(
                             budget.advance_pull, installation_id, full_name, number, self.owner
                         )

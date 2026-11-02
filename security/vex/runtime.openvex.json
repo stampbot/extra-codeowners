@@ -1,8 +1,8 @@
 {
   "@context": "https://openvex.dev/ns/v0.2.0",
-  "@id": "urn:uuid:d2604994-4097-5b31-b271-b0b0be53e7d1",
+  "@id": "urn:uuid:a5fb6571-f093-5459-82d2-a473d1373024",
   "author": "Extra CODEOWNERS maintainers",
-  "last_updated": "2026-11-02T14:30:53Z",
+  "last_updated": "2026-11-02T15:10:25Z",
   "role": "VEX document producer",
   "statements": [
     {
@@ -746,9 +746,9 @@
       }
     }
   ],
-  "timestamp": "2026-11-02T14:30:53Z",
+  "timestamp": "2026-11-02T15:10:25Z",
   "tooling": "Vexcalibur + Extra CODEOWNERS runtime binding",
-  "version": 4,
+  "version": 5,
   "x_extra_codeowners_runtime": {
     "files": {
       ".dockerignore": "3f9dc9d3a79fe3085f25de88403b5563ad5c7fa7010bef94c5e55f24bd3cf691",
@@ -776,17 +776,18 @@
       "extra_codeowners/codeowners.py": "da8be54dbc8a79dcbaf39d49491f950d5405d74d6bb5e07da5247644f5ffcfd8",
       "extra_codeowners/database.py": "53f6fe731d54f371c9d970698323f3e72274e96b11c0289e078a31757541651f",
       "extra_codeowners/dco.py": "8c3a0b541fe021fb9f05500ca9278306901010c219e7e1199ca5e205c138e68d",
-      "extra_codeowners/discovery_cache.py": "ec62a728af9c5206de815aa72affd69e231d2acb45b5f80e33790ec6e20b29c7",
+      "extra_codeowners/discovery_cache.py": "adf544d1287be1463f59da5c1e2e73ee45e53661f4c2cf65ea49c3fbef60674e",
       "extra_codeowners/evaluator.py": "b81b9d1c6fe81d591867b0993d413030caab8af48703c4725f14c04fe2e3f9a6",
-      "extra_codeowners/github.py": "17551850c697ba91d056cc07075365e4e4a97edcb95ff097a91fd954429bbbe6",
+      "extra_codeowners/github.py": "f1efe480090dcf4c19d8bac398550c8c058bea9565b038c6d781e7747a5b3058",
       "extra_codeowners/logging.py": "a59227e76ec7809ff8bb88fee997abb9b99f32e81a4c8d16bcfc72c0c0abf33f",
       "extra_codeowners/manifest.py": "33d42ac16b8218562f2baf6c0bc7c6664b03354bbf274cb0381e94740b76681e",
-      "extra_codeowners/metrics.py": "741473fcdd83c899f07beb277e4a961bd536878bfda0c7b7b676cd0f07161b38",
+      "extra_codeowners/metrics.py": "6293de9acad3d3f639fda0403fb2e0f317a733a173a6cb7bf977d16a4e3fd522",
       "extra_codeowners/migrations.py": "a86d239779ed7b0e38118a3f7c1dee9b33c71519656699f101ac556eed671a46",
       "extra_codeowners/models.py": "dc59959f56e35111fae00f8f60ef054ba80eb839eb2dae5b09165d4cdc349a48",
       "extra_codeowners/policy.py": "844abb482a7c9cc3190d624cc92ece2476128644718e4096f98bfa8a0abedf8a",
       "extra_codeowners/py.typed": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "extra_codeowners/service.py": "3dec3833bb088828345c38a8fe8278c47a501c980d01a051e2a978edc30584a7",
+      "extra_codeowners/request_timing.py": "d99524ae46150300c1065eebc1939b4107d280de798b83b464e3855464e93fe2",
+      "extra_codeowners/service.py": "bb4b4d14ad995417332a09215297d729cdf3827e378931dda1e51c7465cd3799",
       "extra_codeowners/settings.py": "bd1d3cd0acf23ea4b26869fc1e024438aba7b9acf43f3850c4e6be2e9a5b5437",
       "extra_codeowners/trace_context.py": "f79ca91baa1dd615c80546c66a6b370ba78ec7106dece3feb201d10250078532",
       "extra_codeowners/tracing.py": "62c730c8bdf4d632dace5b79232f968d871a28d8724a162aa52ba6b4ed2c6db1",
@@ -794,7 +795,7 @@
       "pyproject.toml": "bfb88e388d4590a6f52ed6d76889460a6b698f13129389b3823d2ff661bedd55",
       "uv.lock": "5514cb0448adb693fe97f3d2c8016ccd606890327a1946467fbd118356de4922"
     },
-    "review": "Reviewed November 2 security update: Python 3.14.10 base and uv 0.13.4 pinned by registry index digest; certifi, OpenTelemetry, Mako and tooling dependencies updated to patched versions. Both base architectures retain Debian 13.7 and now contain pcre2 10.46-1~deb13u3, verified against Debian security-tracker fixed status. Current VEX has only fixed statements, with updated PCRE2 product identities; no reachability exclusion is carried forward. Python 3.12-3.14 retain Psycopg 3.3.4; the resolver fork to 3.3.6 applies only to Python >=3.15 and is outside the current image.",
+    "review": "Reviewed phase timing, bounded cache diagnostics, and post-commit discovery logging against the patched runtime from PR254. These changes add no native API reachability or approval authority. All 26 inherited vulnerability statements remain fixed for the exact pinned package versions; no exclusions or statement assessment dates changed.",
     "schema_version": 1
   }
 }

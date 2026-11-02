@@ -72,6 +72,22 @@ The service creates root spans for webhook acceptance, reconciliation, and
 each leased worker attempt. GitHub calls are child spans with a fixed operation
 name such as `pull.get`, `content.get`, or `check.update`.
 
+For a slow GitHub operation, compare its `github.phase.<phase>.seconds`
+attributes before assuming the network is slow. They separate authentication,
+permit waiting, quota admission, HTTP, and quota accounting. Streamed reads
+also time body consumption. The corresponding
+`extra_codeowners_github_api_phase_seconds` histogram works even when tracing
+is disabled. The [metric reference](../reference/http-api.md#get-metrics)
+defines the phases and their limits.
+
+When reconciliation queues work, `reconciliation_work_enqueued` records the
+repository, PR, head, and `discovery_reason="periodic_reconciliation"` after
+the queue transaction commits. This identifies discovery, not the eventual
+job reason: a timer-only evaluation may become `scheduled_recheck`, and a
+later trigger may replace it. Correlate this record with evaluation logs when
+testing missed-webhook recovery. The enqueue record alone does not prove that
+evaluation completed or that no other trigger arrived.
+
 When a verified direct webhook is sampled, Extra CODEOWNERS stores its local
 span identity with the retained delivery. The later evaluation starts its own
 root span and links back to that webhook span. This still works when another
@@ -94,7 +110,7 @@ Use this order when a check is late:
 
 1. Check `queue_wait_seconds` and oldest interactive queue age. A high value means the job waited before evaluation.
 2. Check `work_attempt_seconds`. If it is also high, open a sampled worker trace and follow its webhook link when it has one.
-3. Compare the child GitHub spans and `github_api_request_seconds`. Slow API spans point to GitHub or the network; ordinary API spans point to policy work, a database guard, or a local resource limit.
+3. Compare the child GitHub spans and `github_api_request_seconds`. For a slow API span, inspect its phase timings to distinguish HTTP from permit waiting and quota coordination. Ordinary API timing points outside that request path, such as policy work or a database guard.
 
 Do not use a trace as the only source of truth. Sampling intentionally omits
 some work, and a failed exporter does not affect the approval decision.
@@ -246,6 +262,14 @@ doesn't guarantee a `304`. Compare the byte and entry gauges with each
 partition's limits, and keep pod identity when graphing them: replicas don't
 share this cache. A newly elected replica may need a cold scan.
 
+Check `extra_codeowners_github_discovery_cache_events_total` before enlarging
+the cache. It distinguishes capacity evictions from expiration, responses too
+large to retain, invalid metadata, missing validators, and responses that
+prohibit storage. Discovery spans identify a local hit, absence, or expiration
+without exporting an ETag. An `absent` lookup does not explain its own cause;
+use the event counters to assess churn rather than attributing every miss to
+eviction.
+
 GitHub's ETags can change when an installation token changes, even if the
 response body doesn't. This behavior has a
 [published reproduction](https://github.com/orgs/community/discussions/75228).
@@ -261,11 +285,13 @@ upgrade; the optimization does not delete them.
 
 An upgrade to `0007_reconciliation_completion` rechecks retained completions from older workers on the next scan, regardless of the recheck interval. Expect additional recovery work once after upgrading. Follow the [controlled upgrade procedure](upgrade.md); a rolling image replacement alone is not sufficient for this database change.
 
-A reconciled check becomes blocking while the worker fetches current evidence.
-Existing checks show `failure` with a re-evaluation title; newly created checks
-can show `in_progress`. Choose an interval and recheck period that balance that
-short merge interruption against stale-evidence exposure, GitHub API use, and
-your recovery objective.
+Reconciliation blocks the check first when it discovers a changed head or
+cannot confirm the previous completion. A timer-only recheck keeps the
+published result until fresh evidence produces a different result. Failure,
+worker loss, or a sufficiently long deferral converts it back to revoke-first
+work, as the [scheduled-recheck decision](../explanation/adrs/2026-10-11-keep-results-on-scheduled-rechecks.md)
+describes. Choose the scan and recheck intervals with that stale-evidence
+window and the installation's API budget in mind.
 
 GitHub request spans include `queue.work_class`,
 `github.quota.core_headers_valid`, and, when valid core headers are present,

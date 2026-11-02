@@ -8,7 +8,12 @@ import time
 from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Final
+from typing import Final, Literal
+
+type CacheLookupStatus = Literal["hit", "absent", "expired"]
+type CacheEvent = Literal[
+    "expired", "stored", "rejected_metadata", "rejected_size", "evicted_bytes", "evicted_entries"
+]
 
 DEFAULT_MAX_BYTES: Final = 32 * 1024 * 1024
 DEFAULT_MAX_ENTRY_BYTES: Final = 1024 * 1024
@@ -53,6 +58,7 @@ class DiscoveryCache:
         max_entries: int = DEFAULT_MAX_ENTRIES,
         idle_ttl_seconds: float = DEFAULT_IDLE_TTL_SECONDS,
         clock: Callable[[], float] = time.monotonic,
+        observer: Callable[[CacheEvent], None] | None = None,
     ) -> None:
         if any(
             isinstance(value, bool) or not isinstance(value, int) or value <= 0
@@ -71,6 +77,7 @@ class DiscoveryCache:
         self.max_entries = max_entries
         self.idle_ttl_seconds = idle_ttl_seconds
         self._clock = clock
+        self._observer = observer
         self._entries: OrderedDict[tuple[int, str, str], _StoredEntry] = OrderedDict()
         self._bytes = 0
 
@@ -89,17 +96,23 @@ class DiscoveryCache:
     def get(self, key: tuple[int, str, str]) -> CacheEntry | None:
         """Return a live entry, refreshing its idle lifetime and LRU position."""
 
+        return self.lookup(key)[0]
+
+    def lookup(self, key: tuple[int, str, str]) -> tuple[CacheEntry | None, CacheLookupStatus]:
+        """Return an entry and its current state; absence has no retained history."""
+
         key = self._validate_key(key)
         stored = self._entries.get(key)
         if stored is None:
-            return None
+            return None, "absent"
         now = self._clock()
         if now - stored.last_used >= self.idle_ttl_seconds:
             self._remove_validated(key)
-            return None
+            self._observe("expired")
+            return None, "expired"
         stored.last_used = now
         self._entries.move_to_end(key)
-        return stored.entry
+        return stored.entry, "hit"
 
     def put(self, key: tuple[int, str, str], entry: CacheEntry) -> None:
         """Store an entry, evicting oldest entries until all bounds hold."""
@@ -108,16 +121,27 @@ class DiscoveryCache:
         self._remove_validated(key)
         if not isinstance(entry, CacheEntry):
             raise TypeError("entry must be a CacheEntry")
-        self._validate_entry(entry)
+        try:
+            self._validate_entry(entry)
+        except ValueError:
+            self._observe("rejected_metadata")
+            raise
         size = self._entry_size(key, entry)
         if size > self.max_entry_bytes or size > self.max_bytes:
+            self._observe("rejected_size")
             raise ValueError("cache entry exceeds its configured size bound")
         now = self._clock()
         self._entries[key] = _StoredEntry(entry, now, size)
         self._bytes += size
+        self._observe("stored")
         while len(self._entries) > self.max_entries or self._bytes > self.max_bytes:
+            self._observe("evicted_bytes" if self._bytes > self.max_bytes else "evicted_entries")
             _, evicted = self._entries.popitem(last=False)
             self._bytes -= evicted.size
+
+    def _observe(self, event: CacheEvent) -> None:
+        if self._observer is not None:
+            self._observer(event)
 
     def remove(self, key: tuple[int, str, str]) -> None:
         """Discard one entry if it exists."""

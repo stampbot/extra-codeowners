@@ -14,6 +14,7 @@ import pytest
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from sqlalchemy import select
+from structlog.testing import capture_logs
 
 import extra_codeowners.service as service_module
 from extra_codeowners.api_budget import (
@@ -3827,14 +3828,28 @@ async def test_reconciler_enqueues_open_pull_requests(tmp_path: Path) -> None:
     store = migrated_store(f"sqlite:///{tmp_path / 'reconcile.db'}")
     reconciler = Reconciler(settings(), github, store, "reconciler")  # type: ignore[arg-type]
 
-    queued = await reconciler.reconcile_once()
+    with capture_logs() as logs:
+        queued = await reconciler.reconcile_once()
 
     assert queued == ReconciliationOutcome(queued=1)
+    [enqueued] = [item for item in logs if item["event"] == "reconciliation_work_enqueued"]
+    assert enqueued == {
+        "event": "reconciliation_work_enqueued",
+        "log_level": "info",
+        "installation_id": 2,
+        "repository": "example/project",
+        "pull_number": 3,
+        "head_sha": HEAD,
+        "discovery_reason": "periodic_reconciliation",
+        "work_class": "recovery",
+    }
     assert store.pending_count() == 2
     assert store.pending_shared_head_invalidation_count() == 1
     assert store.shared_head_generation(2, "example/project", HEAD) == 1
 
-    assert await reconciler.reconcile_once() == ReconciliationOutcome(queued=0)
+    with capture_logs() as logs:
+        assert await reconciler.reconcile_once() == ReconciliationOutcome(queued=0)
+    assert not any(item["event"] == "reconciliation_work_enqueued" for item in logs)
     assert store.pending_count() == 2
     assert store.pending_shared_head_invalidation_count() == 1
     assert store.shared_head_generation(2, "example/project", HEAD) == 1

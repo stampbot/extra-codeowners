@@ -16,7 +16,7 @@ from extra_codeowners.github import (
     GitHubError,
     GitHubOperationStoppedError,
 )
-from extra_codeowners.metrics import GITHUB_PHYSICAL_REQUESTS
+from extra_codeowners.metrics import GITHUB_DISCOVERY_CACHE_EVENTS, GITHUB_PHYSICAL_REQUESTS
 from extra_codeowners.migrations import upgrade_database
 
 
@@ -72,6 +72,42 @@ async def test_open_pulls_200_then_304_replays_unchanged_body(private_key: str) 
     pulls = [request for request in calls if request.url.path.endswith("/pulls")]
     assert len(pulls) == 2
     assert pulls[1].headers["if-none-match"] == '"pulls-v1"'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("headers", "event"),
+    [
+        ({}, "skipped_no_validator"),
+        ({"ETag": '"one"', "Cache-Control": "no-store"}, "skipped_no_store"),
+        ({"ETag": '"one"', "Vary": "*"}, "skipped_vary"),
+        ({"ETag": "private-invalid-validator"}, "rejected_metadata"),
+    ],
+)
+async def test_uncacheable_response_reports_reason_but_still_fetches_github(
+    private_key: str, headers: dict[str, str], event: str
+) -> None:
+    # Verifies XCO-011: rejection diagnostics contain fixed reasons, not header values.
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/access_tokens"):
+            return response(200, token_response())
+        requests.append(request)
+        return response(200, [], headers=headers)
+
+    metric = GITHUB_DISCOVERY_CACHE_EVENTS.labels("pages", event)
+    before = metric._value.get()
+    client = client_for(handler, private_key)
+    try:
+        assert await client.list_open_pulls(17, "example/project") == []
+        assert await client.list_open_pulls(17, "example/project") == []
+    finally:
+        await close(client)
+    assert metric._value.get() - before == 2
+    assert len(requests) == 2
+    assert all("if-none-match" not in request.headers for request in requests)
+    assert "private-invalid-validator" not in repr(list(GITHUB_DISCOVERY_CACHE_EVENTS.collect()))
 
 
 @pytest.mark.asyncio
