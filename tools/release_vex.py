@@ -12,6 +12,7 @@ import sys
 import uuid
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Final, NoReturn, cast
 from urllib.parse import unquote
@@ -27,6 +28,10 @@ _DEBIAN_DISTRO_PATTERN: Final = re.compile(r"\Adebian-[0-9]+\Z")
 _OPENVEX_PREDICATE_TYPE: Final = "https://openvex.dev/ns"
 _IN_TOTO_STATEMENT_TYPE: Final = "https://in-toto.io/Statement/v0.1"
 _RUNTIME_BINDING: Final = "x_extra_codeowners_runtime"
+_DATE_TIME_PATTERN: Final = re.compile(
+    r"[0-9]{4}-[0-9]{2}-[0-9]{2}[Tt][0-9]{2}:[0-9]{2}:[0-9]{2}"
+    r"(?:\.[0-9]+)?(?:[Zz]|[+-][0-9]{2}:[0-5][0-9])"
+)
 
 
 class ReleaseVexError(ValueError):
@@ -69,6 +74,29 @@ def _string(value: object, description: str) -> str:
     if not isinstance(value, str) or not value.strip():
         _fail(f"{description} must be a nonempty string")
     return value
+
+
+def _timestamp(value: object, description: str) -> None:
+    timestamp = _string(value, description)
+    if not _DATE_TIME_PATTERN.fullmatch(timestamp):
+        _fail(f"{description} must be an RFC 3339 date-time with a timezone")
+    try:
+        datetime.fromisoformat(timestamp.upper())
+    except ValueError as error:
+        raise ReleaseVexError(f"{description} must be a valid RFC 3339 date-time") from error
+
+
+def _validate_timestamps(document: Mapping[str, object], *, explicit_statements: bool) -> None:
+    _timestamp(document.get("timestamp"), "OpenVEX document timestamp")
+    if "last_updated" in document:
+        _timestamp(document["last_updated"], "OpenVEX document last_updated")
+    for item in _sequence(document.get("statements"), "OpenVEX statements"):
+        statement = _mapping(item, "OpenVEX statement")
+        if explicit_statements or "timestamp" in statement:
+            _timestamp(statement.get("timestamp"), "OpenVEX statement timestamp")
+        for field in ("last_updated", "action_statement_timestamp"):
+            if field in statement:
+                _timestamp(statement[field], f"OpenVEX statement {field}")
 
 
 def _load_json(raw: bytes, description: str) -> object:
@@ -116,6 +144,9 @@ def _runtime_files(root: Path) -> dict[str, str]:
 def validate_runtime_binding(source: Path, root: Path) -> None:
     """Reject reachability claims after changes to their reviewed runtime inputs."""
     document = _mapping(_read_json(source, "reviewed VEX"), "reviewed VEX")
+    _validate_timestamps(document, explicit_statements=True)
+    if document.get("@id") != _document_id(document):
+        _fail("VEX document content changed after review; review the edits and rebind")
     binding = _mapping(document.get(_RUNTIME_BINDING), "VEX runtime binding")
     if binding.get("schema_version") != 1:
         _fail("VEX runtime binding has an unsupported schema version")
@@ -124,21 +155,40 @@ def validate_runtime_binding(source: Path, root: Path) -> None:
         _fail("VEX runtime binding is stale; review reachable behavior before rebinding the VEX")
 
 
+def _document_id(document: Mapping[str, object]) -> str:
+    content = dict(document)
+    content.pop("@id", None)
+    return uuid.uuid5(
+        uuid.NAMESPACE_URL, json.dumps(content, sort_keys=True, separators=(",", ":"))
+    ).urn
+
+
+def _advance_review_metadata(document: dict[str, object]) -> None:
+    version = document.get("version")
+    if type(version) is not int or version < 1:
+        _fail("runtime binding requires a positive OpenVEX document version")
+    # bind_runtime validates explicit statement dates before this update;
+    # a runtime-only review must not change their assessment dates.
+    issued = datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
+    document.update(version=version + 1, timestamp=issued, last_updated=issued)
+
+
 def bind_runtime(source: Path, root: Path, review: str) -> None:
     """Record a maintainer's completed review; this command does not perform the review."""
     document = dict(_mapping(_read_json(source, "reviewed VEX"), "reviewed VEX"))
     if document.get("@context") != _OPENVEX_CONTEXT:
         _fail("runtime binding requires an OpenVEX v0.2.0 document")
+    _validate_timestamps(document, explicit_statements=True)
+    previous_id = document.get("@id")
     document[_RUNTIME_BINDING] = {
         "schema_version": 1,
         "files": _runtime_files(root),
         "review": _string(review, "runtime review rationale"),
     }
     document["tooling"] = "Vexcalibur + Extra CODEOWNERS runtime binding"
-    document.pop("@id", None)
-    document["@id"] = uuid.uuid5(
-        uuid.NAMESPACE_URL, json.dumps(document, sort_keys=True, separators=(",", ":"))
-    ).urn
+    if previous_id != _document_id(document):
+        _advance_review_metadata(document)
+    document["@id"] = _document_id(document)
     source.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
@@ -362,6 +412,7 @@ def validate_release_vex(source: Path, inventories: Iterable[Path]) -> bytes:
     document = _mapping(document_value, "OpenVEX document")
     if document.get("@context") != _OPENVEX_CONTEXT:
         _fail("OpenVEX document has an unsupported @context")
+    _validate_timestamps(document, explicit_statements=False)
     _string(document.get("@id"), "OpenVEX document.@id")
     _string(document.get("author"), "OpenVEX document.author")
     statements = _sequence(document.get("statements"), "OpenVEX document.statements")

@@ -134,6 +134,7 @@ def _release_vex() -> bytes:
         json.dumps(
             {
                 "@context": "https://openvex.dev/ns/v0.2.0",
+                "timestamp": "2026-08-27T00:00:00Z",
                 "@id": "urn:uuid:8b0d4df6-cb7e-4d27-8970-e1b4db0d2a4f",
                 "author": "Extra CODEOWNERS maintainers",
                 "statements": [

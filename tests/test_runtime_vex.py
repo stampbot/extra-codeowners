@@ -16,7 +16,7 @@ PACKAGES = (
     ("gzip", "gzip", "1.13-1+deb13u1"),
     ("libc-bin", "glibc", "2.41-12+deb13u4"),
     ("libc6", "glibc", "2.41-12+deb13u4"),
-    ("libpcre2-8-0", "pcre2", "10.46-1~deb13u2"),
+    ("libpcre2-8-0", "pcre2", "10.46-1~deb13u3"),
     ("libsqlite3-0", "sqlite3", "3.46.1-7+deb13u2"),
     ("libssl3t64", "openssl", "3.5.7-1~deb13u3"),
     ("openssl", "openssl", "3.5.7-1~deb13u3"),
@@ -82,22 +82,18 @@ def test_runtime_claims_require_review_after_a_package_update(
 def test_review_records_glibc_caller_evidence_and_existing_openssl_fixes() -> None:
     document = json.loads(SOURCE.read_text(encoding="utf-8"))
     statements = document["statements"]
-    assert Counter(statement["status"] for statement in statements) == {
-        "not_affected": 1,
-        "fixed": 25,
-    }
+    assert Counter(statement["status"] for statement in statements) == {"fixed": 26}
     by_cve = {statement["vulnerability"]["name"]: statement for statement in statements}
     assert len(by_cve) == len(statements)
     pcre2 = by_cve["CVE-2026-103111"]
-    assert pcre2["status"] == "not_affected"
-    assert "JIT" in pcre2["impact_statement"]
-    assert "does not load the named Debian" in pcre2["impact_statement"]
+    assert pcre2["status"] == "fixed"
+    assert "impact_statement" not in pcre2
     assert {product["identifiers"]["purl"] for product in pcre2["products"]} == {
-        f"pkg:deb/debian/libpcre2-8-0@10.46-1~deb13u2?arch={architecture}"
+        f"pkg:deb/debian/libpcre2-8-0@10.46-1~deb13u3?arch={architecture}"
         "&distro=debian-13.7&upstream=pcre2"
         for architecture in ("amd64", "arm64")
     }
-    assert "GHSA-r9hj-j2rw-4q3m" in pcre2["status_notes"]
+    assert "security-tracker.debian.org/tracker/CVE-2026-103111" in pcre2["status_notes"]
     glibc = by_cve["CVE-2026-5450"]
     assert glibc["status"] == "fixed"
     assert len(glibc["products"]) == 4
