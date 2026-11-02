@@ -137,7 +137,11 @@ def test_release_validation_rejects_malformed_dates(
     if location == "document":
         document[field] = value
     else:
-        document["statements"][0][field] = value
+        statements = document["statements"]
+        assert isinstance(statements, list)
+        statement = statements[0]
+        assert isinstance(statement, dict)
+        statement[field] = value
     source, inventories = _release_inputs(tmp_path, document)
     with pytest.raises(ReleaseVexError, match="date-time"):
         validate_release_vex(source, inventories)
