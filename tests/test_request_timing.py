@@ -18,6 +18,11 @@ from extra_codeowners.request_timing import RequestTiming
 from extra_codeowners.tracing import Tracing
 
 
+def raise_request_failure() -> None:
+    """Exercise exception cleanup without hiding the assertions from static analysis."""
+    raise RuntimeError("not exported")
+
+
 def test_phase_totals_include_retries_and_failed_phases(monkeypatch: pytest.MonkeyPatch) -> None:
     clock = iter((0.0, 2.0, 3.0, 7.0))
     monkeypatch.setattr("extra_codeowners.request_timing.time.perf_counter", lambda: next(clock))
@@ -28,7 +33,7 @@ def test_phase_totals_include_retries_and_failed_phases(monkeypatch: pytest.Monk
     with timing.phase("http"):
         pass
     with pytest.raises(RuntimeError, match="not exported"), timing.phase("http"):
-        raise RuntimeError("not exported")
+        raise_request_failure()
     assert timing.seconds == {"http": 6.0}
     assert metric._sum.get() - before == 6.0
     assert span.set_attribute.call_args_list[-1].args == ("github.phase.http.seconds", 6.0)
@@ -50,7 +55,7 @@ async def test_cancelled_wait_does_not_release_another_requests_permit() -> None
         await waiting.wait()
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
-            await task
+            await asyncio.gather(task)
         assert semaphore.locked()
     assert not semaphore.locked()
     assert timing.seconds["semaphore_wait"] >= 0
@@ -63,7 +68,7 @@ async def test_slot_releases_permit_when_body_fails() -> None:
     with pytest.raises(RuntimeError), timing.phase("http"):
         async with timing.slot(semaphore):
             assert semaphore.locked()
-            raise RuntimeError("failure")
+            raise_request_failure()
     assert not semaphore.locked()
 
 
