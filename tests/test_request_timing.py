@@ -181,6 +181,39 @@ async def test_auth_retry_records_final_unconditional_attempt(private_key: str) 
 
 
 @pytest.mark.asyncio
+async def test_discovery_retry_records_wait_and_status_on_the_existing_span(
+    private_key: str,
+) -> None:
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        if request.url.path.endswith("/access_tokens"):
+            return token_response()
+        calls += 1
+        return httpx.Response(500) if calls == 1 else httpx.Response(200, json=[])
+
+    client, tracing, exporter = traced_client(private_key, handler)
+    try:
+        assert await client.list_open_pulls(17, "example/project") == []
+    finally:
+        await client.close()
+        tracing.shutdown()
+    spans = [
+        span
+        for span in exporter.get_finished_spans()
+        if (span.attributes or {}).get("github.operation") == "pull.list"
+    ]
+    assert len(spans) == 1
+    attrs = dict(spans[0].attributes or {})
+    assert attrs["github.retry_count"] == 1
+    assert attrs["github.discovery.transient_retry_status_code"] == 500
+    assert attrs["http.response.status_code"] == 200
+    wait_seconds = attrs["github.phase.retry_wait.seconds"]
+    assert isinstance(wait_seconds, float) and wait_seconds > 0
+
+
+@pytest.mark.asyncio
 async def test_stream_body_is_timed_and_response_closed(private_key: str) -> None:
     responses: list[httpx.Response] = []
 

@@ -1,8 +1,8 @@
 {
   "@context": "https://openvex.dev/ns/v0.2.0",
-  "@id": "urn:uuid:7c75a57e-16e1-56bc-b4c0-50c316d5abd6",
+  "@id": "urn:uuid:3ce930c6-5949-550c-8122-1a7ce4e63742",
   "author": "Extra CODEOWNERS maintainers",
-  "last_updated": "2026-11-02T16:54:41Z",
+  "last_updated": "2026-11-02T17:17:26Z",
   "role": "VEX document producer",
   "statements": [
     {
@@ -746,9 +746,9 @@
       }
     }
   ],
-  "timestamp": "2026-11-02T16:54:41Z",
+  "timestamp": "2026-11-02T17:17:26Z",
   "tooling": "Vexcalibur + Extra CODEOWNERS runtime binding",
-  "version": 6,
+  "version": 7,
   "x_extra_codeowners_runtime": {
     "files": {
       ".dockerignore": "3f9dc9d3a79fe3085f25de88403b5563ad5c7fa7010bef94c5e55f24bd3cf691",
@@ -778,7 +778,7 @@
       "extra_codeowners/dco.py": "8c3a0b541fe021fb9f05500ca9278306901010c219e7e1199ca5e205c138e68d",
       "extra_codeowners/discovery_cache.py": "3c3d0af70b21e49181c0d44ffd7b1ec5fdc929f8c3083a2eda404efbbd56f565",
       "extra_codeowners/evaluator.py": "b81b9d1c6fe81d591867b0993d413030caab8af48703c4725f14c04fe2e3f9a6",
-      "extra_codeowners/github.py": "b0a73652a75a33d856c28b34e961e9d02a3543b1e975e787713808c745cf5ae5",
+      "extra_codeowners/github.py": "bf93f8f973348c2cf8843d557f77107ab53bd60721636c1c46d911a69c626c62",
       "extra_codeowners/logging.py": "a59227e76ec7809ff8bb88fee997abb9b99f32e81a4c8d16bcfc72c0c0abf33f",
       "extra_codeowners/manifest.py": "33d42ac16b8218562f2baf6c0bc7c6664b03354bbf274cb0381e94740b76681e",
       "extra_codeowners/metrics.py": "6293de9acad3d3f639fda0403fb2e0f317a733a173a6cb7bf977d16a4e3fd522",
@@ -786,7 +786,7 @@
       "extra_codeowners/models.py": "dc59959f56e35111fae00f8f60ef054ba80eb839eb2dae5b09165d4cdc349a48",
       "extra_codeowners/policy.py": "844abb482a7c9cc3190d624cc92ece2476128644718e4096f98bfa8a0abedf8a",
       "extra_codeowners/py.typed": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "extra_codeowners/request_timing.py": "d99524ae46150300c1065eebc1939b4107d280de798b83b464e3855464e93fe2",
+      "extra_codeowners/request_timing.py": "0cacde50baabed9ab68fa6c6cad9b10d20c1fb67ca6d0e2d64a09342771d3691",
       "extra_codeowners/service.py": "bb4b4d14ad995417332a09215297d729cdf3827e378931dda1e51c7465cd3799",
       "extra_codeowners/settings.py": "bd1d3cd0acf23ea4b26869fc1e024438aba7b9acf43f3850c4e6be2e9a5b5437",
       "extra_codeowners/trace_context.py": "f79ca91baa1dd615c80546c66a6b370ba78ec7106dece3feb201d10250078532",
@@ -795,7 +795,7 @@
       "pyproject.toml": "bfb88e388d4590a6f52ed6d76889460a6b698f13129389b3823d2ff661bedd55",
       "uv.lock": "5514cb0448adb693fe97f3d2c8016ccd606890327a1946467fbd118356de4922"
     },
-    "review": "Reviewed bounded local page-cache zlib storage: original admission limits, bounded decoding and authenticated HTTP revalidation remain enforced. No dependency or package changes; all 26 fixed statements and their assessment dates remain unchanged. See security/vex/runtime-review.md.",
+    "review": "Reviewed one bounded transient retry for authenticated discovery GETs only. Original operation deadline, per-attempt shared quota admission, cancellation and HTTP validation remain enforced; no write or streaming retry is added. No package, dependency or native reachability changes; all 26 fixed statements and assessment dates are preserved.",
     "schema_version": 1
   }
 }
