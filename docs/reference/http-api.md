@@ -175,9 +175,9 @@ The endpoint returns Prometheus text format. Extra CODEOWNERS defines these appl
 | `extra_codeowners_github_recovery_budget_deferrals_total` | counter | Requests deferred by the local REST core reserve, labeled by fixed operation. These requests were not sent to GitHub; a deferral is not a provider rate-limit response. |
 | `extra_codeowners_github_pagination_endpoint_mismatches_total` | counter | Rejected pagination links whose scheme, host, port, credentials, fragment, or resource did not match the original request. The metric has no repository, pull-request, or URL labels. |
 | `extra_codeowners_github_discovery_cache_lookups_total` | counter | Local lookups, labeled by `cache` (`pages` or `compact`) and `result` (`hit` or `miss`). A hit selects an entity validator; it still requires authenticated HTTP revalidation. |
-| `extra_codeowners_github_discovery_cache_bytes` | gauge | Accounted bytes retained by this process's GitHub client, labeled by `cache` (`pages` or `compact`). |
+| `extra_codeowners_github_discovery_cache_bytes` | gauge | Accounted storage bytes retained by this process's GitHub client, including encoded bodies where smaller, labeled by `cache` (`pages` or `compact`). Not total process memory. |
 | `extra_codeowners_github_discovery_cache_entries` | gauge | Cached representations retained by the same client and cache partition. |
-| `extra_codeowners_github_discovery_cache_events_total` | counter | Cache retention decisions, labeled by `cache` and fixed `event`: `stored`, `expired`, `evicted_bytes`, `evicted_entries`, `rejected_size`, `rejected_metadata`, `skipped_no_validator`, `skipped_no_store`, or `skipped_vary`. |
+| `extra_codeowners_github_discovery_cache_events_total` | counter | Cache retention decisions, labeled by `cache` and fixed `event`: `stored`, `expired`, `evicted_bytes`, `evicted_entries`, `rejected_size`, `rejected_metadata`, `rejected_encoding`, `skipped_no_validator`, `skipped_no_store`, or `skipped_vary`. |
 | `extra_codeowners_queue_depth` | gauge | Pending and leased exact-head invalidation, evaluation, and authority fan-out rows. |
 | `extra_codeowners_queue_work_class_depth` | gauge | Pending durable work, labeled by fixed `kind` and `work_class` values. Use it to distinguish foreground work from recovery backlog. |
 | `extra_codeowners_queue_work_class_oldest_age_seconds` | gauge | Age of the oldest pending row for the same fixed labels. |
@@ -217,6 +217,14 @@ one whose entry was evicted. The cache retains no history of evicted keys.
 | --- | --- | --- | --- | --- |
 | `pages` | Repository and PR listings | 24 MiB | 1 MiB | 4,096 |
 | `compact` | Branch references and empty managed-check listings | 8 MiB | 64 KiB | 8,192 |
+
+The page partition uses zlib encoding when it makes a body smaller. Byte caps
+and the byte gauge count retained bodies plus keys, validators, and links;
+per-entry admission limits apply to the original, unencoded representation
+and its metadata. Encoding cannot admit an otherwise oversized response.
+Decoding is bounded by the per-entry limit. Invalid encodings are discarded
+and counted as `rejected_encoding`; the next request fetches a fresh body.
+This is local storage encoding, not HTTP content encoding or encryption.
 
 Each page is revalidated with an authenticated conditional HTTP request before
 the cached body is used. A `304` reuses the validated body and pagination links;

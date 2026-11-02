@@ -53,7 +53,8 @@ async def close(client: GitHubClient) -> None:
 @pytest.mark.asyncio
 async def test_open_pulls_200_then_304_replays_unchanged_body(private_key: str) -> None:
     calls: list[httpx.Request] = []
-    body = [{"number": 1, "title": "one"}]
+    # Verifies XCO-014: encoded storage still needs authenticated revalidation.
+    body = [{"number": 1, "title": "a repeated title " * 100}]
 
     def handler(request: httpx.Request) -> httpx.Response:
         calls.append(request)
@@ -66,12 +67,41 @@ async def test_open_pulls_200_then_304_replays_unchanged_body(private_key: str) 
     client = client_for(handler, private_key)
     try:
         assert await client.list_open_pulls(17, "example/project") == body
+        assert next(iter(client._discovery_cache._entries.values())).compressed
         assert await client.list_open_pulls(17, "example/project") == body
     finally:
         await close(client)
     pulls = [request for request in calls if request.url.path.endswith("/pulls")]
     assert len(pulls) == 2
     assert pulls[1].headers["if-none-match"] == '"pulls-v1"'
+    assert pulls[1].headers["authorization"] == "Bearer installation-token"
+
+
+@pytest.mark.asyncio
+async def test_corrupt_encoded_body_fetches_fresh_without_a_validator(private_key: str) -> None:
+    # Verifies XCO-001 and XCO-014: invalid storage cannot replace current evidence.
+    from extra_codeowners.discovery_cache import CacheEntry
+
+    requests: list[httpx.Request] = []
+    bodies = [[{"number": 1, "title": "old " * 100}], [{"number": 2}]]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/access_tokens"):
+            return response(200, token_response())
+        requests.append(request)
+        return response(200, bodies[len(requests) - 1], headers={"ETag": '"entity"'})
+
+    client = client_for(handler, private_key)
+    try:
+        assert await client.list_open_pulls(17, "example/project") == bodies[0]
+        stored = next(iter(client._discovery_cache._entries.values()))
+        assert stored.compressed
+        stored.entry = CacheEntry(b"corrupt", '"entity"')
+        assert await client.list_open_pulls(17, "example/project") == bodies[1]
+        assert "if-none-match" not in requests[-1].headers
+        assert requests[-1].headers["authorization"] == "Bearer installation-token"
+    finally:
+        await close(client)
 
 
 @pytest.mark.asyncio

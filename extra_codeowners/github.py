@@ -445,6 +445,7 @@ class GitHubClient:
         # The combined accounted-byte bound remains 32 MiB.
         self._discovery_cache = DiscoveryCache(
             max_bytes=24 * 1024 * 1024,
+            compress=True,
             observer=lambda event: GITHUB_DISCOVERY_CACHE_EVENTS.labels("pages", event).inc(),
         )
         self._compact_discovery_cache = DiscoveryCache(
