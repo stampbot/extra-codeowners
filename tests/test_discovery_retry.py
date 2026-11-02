@@ -190,7 +190,7 @@ async def test_stop_interrupts_retry_wait_without_sending_again(private_key: str
             await requested.wait()
         stop.set()
         with pytest.raises(GitHubOperationStoppedError):
-            await task
+            await asyncio.gather(task)
         assert len(requests) == 1
         assert client._discovery_cache.entry_count == 0
     finally:
@@ -248,7 +248,7 @@ async def test_task_cancellation_during_retry_wait_does_not_send_again(private_k
             await requested.wait()
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
-            await task
+            await asyncio.gather(task)
         assert len(requests) == 1
         assert client._discovery_cache.entry_count == 0
         assert not client._request_semaphore.locked()
