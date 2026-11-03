@@ -1,7 +1,8 @@
 # Project status
 
-Legacy registry inventory verified: 2026-09-09. Other status last verified:
-2026-10-11.
+The [validation evidence](../maintainers/evidence/index.md) records which
+releases and environments have been tested. Those observations do not replace
+the release gates below.
 
 Extra CODEOWNERS is ready for source review and non-required shadow-mode
 testing. It is not ready to replace GitHub's native code-owner enforcement on
@@ -193,6 +194,11 @@ close before the project is presented as production-ready:
 - [Issue #203][issue-203]: bound GitHub API use for large installations whose
   repositories are mostly unenrolled, and measure quiet reconciliation and
   missed-webhook recovery.
+- [Issue #260][issue-260]: handle the observed discovery-read connection
+  disconnect within the existing retry, quota and deadline bounds.
+- [Issue #259][issue-259]: keep long reconciliation traces complete and bounded.
+  The [open design](../explanation/design/2026-11-02-bounded-reconciliation-traces.md)
+  compares options; none is implemented by that document.
 - [Issue #18][issue-18]: complete corresponding-source delivery and approval of
   the distribution mechanism.
 
@@ -212,15 +218,14 @@ close before the project is presented as production-ready:
 - [Issue #24][issue-24]: harden the `stampbot` organization's identity and
   new-repository defaults.
 - [Issue #10][issue-10]: enroll in the OpenSSF Best Practices program.
-- [Issue #30][issue-30]: decide the retention of the legacy preview images.
-- [Issue #160][issue-160]: confirm Renovate's DCO sign-off before it takes over
-  a new update class.
 - Requirement test coverage has gaps. XCO-004 in the
   [threat model](../explanation/threat-model.md#invariants) and XCO-015 in the
   [architecture design rules](../explanation/architecture.md#design-rules) have
   no test that names them. Tests for XCO-007 cover the expected App source but
-  don't assert the published head SHA, and tests for XCO-011 cover logs but not
-  metrics, check output, or audit details.
+  don't assert the published head SHA. XCO-011 has tests for logs and selected
+  request/cache metrics and trace attributes, but complete coverage of check
+  output and audit details is not established. A referenced ID is not proof
+  of every part of an invariant.
 
 ### Evaluation and adoption
 
@@ -259,6 +264,7 @@ on this list opens or closes.
 [issue-74]: https://github.com/stampbot/extra-codeowners/issues/74
 [issue-76]: https://github.com/stampbot/extra-codeowners/issues/76
 [issue-124]: https://github.com/stampbot/extra-codeowners/issues/124
-[issue-160]: https://github.com/stampbot/extra-codeowners/issues/160
 [issue-203]: https://github.com/stampbot/extra-codeowners/issues/203
 [issue-241]: https://github.com/stampbot/extra-codeowners/issues/241
+[issue-259]: https://github.com/stampbot/extra-codeowners/issues/259
+[issue-260]: https://github.com/stampbot/extra-codeowners/issues/260

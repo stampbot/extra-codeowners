@@ -6,6 +6,12 @@ about future webhook timing. The open release gates are tracked in
 non-required during evaluation; retain native code-owner enforcement for
 production-sensitive repositories.
 
+New runs have their own dated [evidence receipts](evidence/index.md). The
+[November 2 reconciliation and alpha.67 receipt](evidence/2026-11-02-reconciliation-and-alpha67.md)
+records the completed observation windows, release verification and restored
+label probe. The older sections below retain their original observations;
+later evidence does not silently turn them into tests of a newer release.
+
 ## Diagnostics and approval probe: November 2, 2026
 
 Alpha.65 runs on two Kubernetes nodes with shared PostgreSQL state. The
