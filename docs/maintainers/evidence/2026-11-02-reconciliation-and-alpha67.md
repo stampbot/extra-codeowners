@@ -15,10 +15,10 @@ remain in the maintainer's private evidence records.
 
 The tested releases bind the observations to these revisions:
 
-| Release | Source revision | Deployment |
-| --- | --- | --- |
-| [Alpha.65](https://github.com/stampbot/extra-codeowners/releases/tag/v0.1.0-alpha.65) | `b6e6d1e7a06692211d118a431e08ae5676107f08` | [Argo PR #2626](https://github.com/neverendingsupport/argo-apps/pull/2626) |
-| [Alpha.67](https://github.com/stampbot/extra-codeowners/releases/tag/v0.1.0-alpha.67) | `02f064ea82a23bf6b791d87ccc0145a08eabb759` | [Argo PR #2628](https://github.com/neverendingsupport/argo-apps/pull/2628) |
+| Release | Source revision |
+| --- | --- |
+| [Alpha.65](https://github.com/stampbot/extra-codeowners/releases/tag/v0.1.0-alpha.65) | `b6e6d1e7a06692211d118a431e08ae5676107f08` |
+| [Alpha.67](https://github.com/stampbot/extra-codeowners/releases/tag/v0.1.0-alpha.67) | `02f064ea82a23bf6b791d87ccc0145a08eabb759` |
 
 Both ran two replicas on separate Kubernetes nodes with shared PostgreSQL
 state. Each observation checked pod identity, image continuity, readiness,
@@ -112,8 +112,8 @@ version 7 had 26 `fixed` statements and no new exclusion.
 The deployment PR changed only the app's chart version and image digest. Its
 applicable checks passed; an unrelated namespace-boundary check failed with
 the same normalized error on the base revision. The authorized app-only admin
-merge left that policy untouched, with the comparison recorded in
-[the PR evidence](https://github.com/neverendingsupport/argo-apps/pull/2628#issuecomment-6585041311).
+merge left that policy untouched. The normalized comparison and deployment
+PR reference are retained with the private evidence, not published here.
 
 Argo's repository-resolution comparison error cleared without a forced
 refresh or sync. Automatic sync ran from 18:34:38 through 18:34:59. Both pods
