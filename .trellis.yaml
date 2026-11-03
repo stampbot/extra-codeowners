@@ -2,7 +2,9 @@
 style: preserve
 paths:
   adrs: docs/explanation/adrs
+  design: docs/explanation/design
   living: docs/explanation
+  evidence: docs/maintainers/evidence
 adrs:
   naming: date
   owner: Maintainers

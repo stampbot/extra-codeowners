@@ -69,7 +69,11 @@ silently resolving it.
 The pages under `docs/explanation/` and `docs/reference/` describe the current
 state. When a change alters behavior, update the affected pages in the same
 pull request, and put the history in an ADR, the changelog, or the commit
-message. Dated test results belong in `docs/maintainers/live-validation.md`.
+message. Open design choices belong in `docs/explanation/design/` and describe
+direction, not shipped behavior. Keep dated test results in append-only receipts
+under `docs/maintainers/evidence/`; `docs/maintainers/live-validation.md` links
+to them and retains the older results. Never rewrite a published receipt to
+make a later run look like the original observation.
 
 Requirements have stable IDs of the form `XCO-NNN`: the threat model's
 invariants and the architecture page's design rules. A test that verifies one
@@ -79,6 +83,11 @@ can be traced to its proof. Never reuse a retired ID.
 `.trellis.yaml` records these conventions for the trellis documentation
 skills. This repository keeps every decision record here; it has no shared ADR
 home.
+
+Read the [design-document workflow](CONTRIBUTING.md#keep-design-and-evidence-current)
+before adding a decision, proposal, or validation receipt. GitHub issues hold
+implementation tasks and acceptance criteria; don't copy their checklists into
+ADRs or maintain another list of open work outside project status.
 
 ## Documentation
 

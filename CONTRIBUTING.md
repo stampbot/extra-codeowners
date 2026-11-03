@@ -12,6 +12,45 @@ request.
   [SECURITY.md](SECURITY.md).
 - Open an issue before investing in a large feature or compatibility change.
 
+## Keep design and evidence current
+
+The docs use [Trellis](https://github.com/herodevs-labs/ai-skills/tree/main/plugins/trellis)
+to keep design choices, current behavior, and historical proof separate.
+You don't need the plugin to contribute. Follow the conventions recorded in
+[`.trellis.yaml`](.trellis.yaml) and use the existing Markdown layout:
+
+| What you're writing | Where it belongs | When to update it |
+| --- | --- | --- |
+| How the system works now | [Architecture](docs/explanation/architecture.md), [threat model](docs/explanation/threat-model.md), and affected reference or how-to pages | In the same PR as the behavior change. Rewrite current state; don't append a change history. |
+| A durable decision and its alternatives | A dated [ADR](docs/explanation/adrs/index.md) | Edit a Draft or Proposed record freely. Once Accepted, keep its reasoning intact; a different decision needs a superseding ADR. |
+| A substantial choice that is still open | A dated file under `docs/explanation/design/` | Compare options against existing requirements. Mark it Decided only when the resulting decisions are recorded; it never becomes the current architecture page. |
+| A test run or measured claim | A dated [evidence receipt](docs/maintainers/evidence/index.md) | Add a new receipt for each later run or correction. Published receipts stay unchanged. |
+| Tasks, rollout steps, and acceptance criteria | A GitHub issue, linked from [remaining work](docs/reference/project-status.md#remaining-work) | Keep the checklist in the issue, not in a second roadmap or ADR. |
+
+Before changing behavior, read the affected living pages and Accepted ADRs.
+An Accepted ADR wins over a living page; a living page wins over a proposal.
+Nothing overrides a threat-model invariant. Report a conflict rather than
+rewriting a page to hide it.
+
+Requirements keep their `XCO-NNN` IDs. A test that verifies one names the ID
+and asserts the relevant behavior; a comment alone isn't proof. Keep partial
+coverage and unverified requirements visible in project status. Don't
+renumber an existing requirement or invent a latency target from one test run.
+
+For a validation receipt, record the tested version and source revision,
+environment, UTC window, method, observed results, and what the run did not
+prove. Separate queue insertion from completed evaluation, and process-wide
+metrics from evidence about one scan. Publish sanitized summaries, not private
+payloads, credentials, or raw infrastructure logs. A successful artifact check
+is not distribution approval.
+
+List new pages in `mkdocs.yml` and new ADRs in their index, in date order.
+Run `mise run docs` and `mise run lint:markdown` from the prepared repository
+root; both exit zero when their checks pass. If you use Trellis, also run its
+`check-doc-drift` skill. Review any unchecked categories and verify the test
+assertions behind its requirement references; the checker cannot certify the
+design or the implementation.
+
 ## Prepare a development environment
 
 You need Git, [mise](https://mise.jdx.dev/), and a POSIX-compatible shell.

@@ -480,6 +480,30 @@ delivery retention, or one scan interval plus one recheck interval. A slow
 scan therefore cannot erase the fingerprint before it reaches the same pull
 request again.
 
+### Discovery reuse and retries
+
+Discovery uses disposable caches within each process; replicas don't share
+cached representations. Page bodies use zlib encoding only when it saves
+space, after the unencoded entry passes its admission limit. The compact
+partition stays separate so large listings cannot evict branch references and
+empty check listings. Corrupt or expired storage becomes a cache miss.
+
+A cache hit never supplies authorization evidence on its own (XCO-001 and
+XCO-014). GitHub must authenticate and revalidate the representation before
+the client reuses its body or pagination links. Every physical request still
+needs quota admission, including a conditional request or retry. The
+[metric reference](../reference/http-api.md#get-metrics) defines storage caps,
+retention events and the distinction between physical requests and quota use.
+
+Authenticated discovery GETs have one inline retry for a received `500`,
+`502`, `503` or `504` without `Retry-After`. The one-second wait and at most one
+token refresh share the original operation deadline. Waiting holds neither
+a request permit nor a database transaction. Retried reads strip conditional
+validators; an unmatched `304` fails closed. Transport exceptions, ordinary
+requests, streamed reads and writes do not gain this transient retry.
+The [discovery decision](adrs/2026-11-02-bounded-discovery-optimizations.md)
+records why local reuse and retries must keep these boundaries.
+
 ## Pure evaluator
 
 The evaluator imports no GitHub or database behavior. It accepts typed evidence
@@ -573,6 +597,20 @@ calls become child spans. This makes a trace useful on any replica without
 changing the durable queue's cross-replica coordination rules. The service
 does not join a caller-provided webhook trace: GitHub has not authenticated
 that context for the application.
+
+Existing request spans accumulate fixed phase timings for authentication,
+permit waiting, quota admission, HTTP, quota accounting and retry waiting;
+streamed requests also time body consumption. Phase timing adds no child
+spans. The histogram remains available when tracing is disabled. The
+post-commit `reconciliation_work_enqueued` log proves that recovery work was
+stored, not that its evaluation completed or had no competing trigger.
+
+A full scan still uses one growing trace. A backend may retain only part of
+it, so a successful export is not proof of complete trace retention. Use
+completion logs, outcome counters and the last-success gauge to verify scan
+completion before interpreting its retained spans. The
+[bounded-tracing design](design/2026-11-02-bounded-reconciliation-traces.md)
+is open; linked or aggregated scan traces are not implemented.
 
 For a sampled, verified direct webhook, ingress keeps its own opaque span
 identity with the delivery record. The corresponding worker attempt starts a

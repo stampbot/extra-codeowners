@@ -20,6 +20,7 @@ fail-closed behavior, persistence, deployment, migration, or rollback. Write
 
 - [ ] I added or updated tests for behavior and failure paths.
 - [ ] I updated user, configuration, deployment, or operations documentation where needed.
+- [ ] I updated affected living pages and linked any decision, open design, or dated validation evidence; published evidence is unchanged.
 - [ ] I considered compatibility and documented any migration or rollback constraint.
 - [ ] I used least privilege and did not add credentials or private data.
 - [ ] I ran `mise run check`, or explained any check I could not run.

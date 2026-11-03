@@ -115,6 +115,23 @@ Use this order when a check is late:
 Do not use a trace as the only source of truth. Sampling intentionally omits
 some work, and a failed exporter does not affect the approval decision.
 
+Before attributing a whole scan to its phases, confirm that the trace contains
+the `reconciliation.run` root and its final outcome. Correlate the same attempt
+with its completion log, reconciliation outcome counter and last-success
+timestamp. A partial scan doesn't update that timestamp. Retained child spans
+without the root are incomplete evidence, even when export succeeded; check
+the backend's size/drop limits and query completeness rather than treating
+the missing span as an application failure.
+
+Phase totals are not automatically wall-clock percentages: nested token
+requests and concurrent operations can overlap. Cache and request counters
+also include other work in the same process. Compare each pod's identity,
+image and counter continuity before calculating deltas, and don't combine
+different releases to claim two quiet successful cycles. The
+[validation receipts](../maintainers/evidence/index.md) show the limits of the
+measured evidence; [issue #259](https://github.com/stampbot/extra-codeowners/issues/259)
+tracks the incomplete long-trace problem.
+
 Read runtime identity through an operator-only route after every rollout.
 Official images report their verified source commit in `build_revision`;
 source installations report `null`. Treat the response as a consistency
