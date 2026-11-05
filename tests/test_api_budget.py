@@ -74,6 +74,52 @@ def headers(remaining: int = 99) -> dict[str, str]:
     }
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("known_budget", [False, True])
+async def test_discovery_disconnect_keeps_its_debit_and_readmits_retry(
+    budget_store: QueueStore, private_key: str, known_budget: bool
+) -> None:
+    budget = RecoveryApiBudget(budget_store)
+    if known_budget:
+        budget.observe(17, quota(90))
+    requests: list[httpx.Request] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/access_tokens"):
+            return httpx.Response(
+                201,
+                json={
+                    "token": "fictional-token",
+                    "expires_at": (utcnow() + timedelta(hours=1)).isoformat(),
+                },
+            )
+        requests.append(request)
+        if len(requests) == 1:
+            raise httpx.RemoteProtocolError("fictional transport detail", request=request)
+        # A higher response balance must not refund the disconnected request.
+        return httpx.Response(200, json=[], headers=headers(99))
+
+    client = GitHubClient(7, private_key, transport=httpx.MockTransport(respond))
+    client._recovery_budget = budget
+    try:
+        with request_lane("recovery"):
+            if known_budget:
+                assert await client.list_open_pulls(17, "example/project") == []
+            else:
+                # The failed initial probe did not establish a quota balance.
+                with pytest.raises(RecoveryBudgetDeferredError):
+                    await client.list_open_pulls(17, "example/project")
+        assert len(requests) == (2 if known_budget else 1)
+        assert client._discovery_cache.entry_count == 0
+        with budget_store.session() as session:
+            row = session.get(InstallationApiBudget, 17)
+            assert row is not None
+            assert row.remaining == (88 if known_budget else 0)
+        assert not client._request_semaphore.locked()
+    finally:
+        await client.close()
+
+
 @pytest.mark.parametrize(
     "key,value",
     [

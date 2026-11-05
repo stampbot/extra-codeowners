@@ -752,6 +752,7 @@ class GitHubClient:
                                 receipt = await self._admit_request(
                                     budget_installation, method, path
                                 )
+                            span.set_attribute("github.retry_count", attempt)
                             GITHUB_PHYSICAL_REQUESTS.labels(
                                 operation, authentication, REQUEST_LANE.get()
                             ).inc()
@@ -759,32 +760,46 @@ class GitHubClient:
                                 "github.request.conditional",
                                 any(key.lower() == "if-none-match" for key in request_headers),
                             )
-                            with timing.phase("http"):
-                                response = await self._http.request(
-                                    method,
-                                    path,
-                                    params=params,
-                                    json=json,
-                                    headers=request_headers,
+                            response: httpx.Response | None
+                            try:
+                                with timing.phase("http"):
+                                    response = await self._http.request(
+                                        method,
+                                        path,
+                                        params=params,
+                                        json=json,
+                                        headers=request_headers,
+                                    )
+                            except httpx.RemoteProtocolError:
+                                if (
+                                    not retry_discovery
+                                    or retried_transient
+                                    or attempt + 1 >= attempts
+                                ):
+                                    raise
+                                # The request may have reached GitHub. Keep its
+                                # quota reservation; there is no response to observe.
+                                response = None
+                            if response is not None:
+                                refundable = (
+                                    conditional_discovery
+                                    and authentication == "installation"
+                                    and method == "GET"
+                                    and response.status_code == 304
+                                    and bool(request_headers.get("If-None-Match"))
+                                    and (stop is None or not stop.is_set())
                                 )
-                            refundable = (
-                                conditional_discovery
-                                and authentication == "installation"
-                                and method == "GET"
-                                and response.status_code == 304
-                                and bool(request_headers.get("If-None-Match"))
-                                and (stop is None or not stop.is_set())
-                            )
-                            with timing.phase("quota_accounting"):
-                                await self._observe_quota(
-                                    budget_installation,
-                                    response,
-                                    span,
-                                    not_modified_receipt=receipt if refundable else None,
-                                )
+                                with timing.phase("quota_accounting"):
+                                    await self._observe_quota(
+                                        budget_installation,
+                                        response,
+                                        span,
+                                        not_modified_receipt=receipt if refundable else None,
+                                    )
                         self._raise_if_stopped(stop)
                         if (
-                            response.status_code == 401
+                            response is not None
+                            and response.status_code == 401
                             and not app_authenticated
                             and not unauthenticated
                             and not refreshed_token
@@ -796,7 +811,7 @@ class GitHubClient:
                                 self._tokens.pop(installation_id, None)
                             refreshed_token = True
                             continue
-                        if (
+                        if response is None or (
                             retry_discovery
                             and not retried_transient
                             and response.status_code in {500, 502, 503, 504}
@@ -804,10 +819,16 @@ class GitHubClient:
                             and attempt + 1 < attempts
                         ):
                             retried_transient = True
-                            span.set_attribute(
-                                "github.discovery.transient_retry_status_code", response.status_code
-                            )
-                            await response.aclose()
+                            if response is None:
+                                span.set_attribute(
+                                    "github.discovery.transient_retry_error", "remote_protocol"
+                                )
+                            else:
+                                span.set_attribute(
+                                    "github.discovery.transient_retry_status_code",
+                                    response.status_code,
+                                )
+                                await response.aclose()
                             # No permit or database transaction is held while
                             # waiting. The original operation deadline still applies.
                             with timing.phase("retry_wait"):
@@ -820,7 +841,6 @@ class GitHubClient:
                             continue
                         outcome = _request_outcome(response, allow_not_found=allow_not_found)
                         span.set_attribute("http.response.status_code", response.status_code)
-                        span.set_attribute("github.retry_count", attempt)
                         if outcome not in {"success", "not_found", "not_modified"}:
                             # `_api_response` is also used directly by paginated
                             # callers, so the final non-success response must

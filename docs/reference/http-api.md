@@ -213,15 +213,27 @@ physical attempt. These attributes contain no validators or request contents.
 `absent` means no entry exists now; it does not distinguish a cold cache from
 one whose entry was evicted. The cache retains no history of evicted keys.
 
-Discovery GETs retry one `500`, `502`, `503`, or `504` response after a
-one-second wait, unless the response includes `Retry-After`. Each attempt
-requires authentication and shared quota admission. The existing operation
-deadline includes the wait and any one-time token refresh; retries do not hold
-the request permit while waiting. A retry removes conditional validators and
-fetches a fresh representation. Persistent errors still fail the operation.
-Ordinary requests and streamed reads do not gain this transient retry.
-The existing span records `github.retry_count`, the wait phase, and
-`github.discovery.transient_retry_status_code` when this retry is used.
+Installation-authenticated discovery GETs have one transient retry after a
+one-second wait. It covers a received `500`, `502`, `503`, or `504` without
+`Retry-After`, or an HTTPX `RemoteProtocolError`, including a disconnect before
+response headers. Those failures share one retry budget; a disconnect followed
+by a server error does not earn another retry.
+
+Each attempt requires authentication and shared quota admission. A disconnect
+has no response headers to account for and does not refund its quota debit.
+Without a known balance, the existing recovery-probe guard can defer the
+retry rather than guess that quota remains. The original operation deadline
+includes waiting and at most one token refresh. Waiting holds neither a
+request permit nor a database transaction. Retried reads remove conditional
+validators and fetch a fresh representation; an unmatched `304` fails closed.
+Persistent errors still fail the operation. Other transport errors, ordinary
+requests, writes, token requests and streamed reads gain no transient retry.
+
+The existing span records `github.retry_count` and the wait phase. A received
+server response records `github.discovery.transient_retry_status_code`;
+a retried disconnect records the fixed
+`github.discovery.transient_retry_error="remote_protocol"` instead. Recovered
+disconnects do not export the exception message, even in private-metadata mode.
 
 | Partition | Responses | Byte cap | Per-entry cap | Entry cap |
 | --- | --- | --- | --- | --- |

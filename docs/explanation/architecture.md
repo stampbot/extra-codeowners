@@ -495,12 +495,14 @@ needs quota admission, including a conditional request or retry. The
 [metric reference](../reference/http-api.md#get-metrics) defines storage caps,
 retention events and the distinction between physical requests and quota use.
 
-Authenticated discovery GETs have one inline retry for a received `500`,
-`502`, `503` or `504` without `Retry-After`. The one-second wait and at most one
-token refresh share the original operation deadline. Waiting holds neither
-a request permit nor a database transaction. Retried reads strip conditional
-validators; an unmatched `304` fails closed. Transport exceptions, ordinary
-requests, streamed reads and writes do not gain this transient retry.
+Authenticated discovery GETs share one inline retry between a received `500`,
+`502`, `503` or `504` without `Retry-After` and an HTTPX `RemoteProtocolError`,
+including a disconnect before response headers. A disconnect has no quota
+headers to observe and does not refund its debit. The one-second wait and at
+most one token refresh share the original operation deadline. Waiting holds
+neither a request permit nor a database transaction. Retried reads strip
+conditional validators; an unmatched `304` fails closed. Other transport
+errors, ordinary requests, streamed reads and writes do not gain this retry.
 The [discovery decision](adrs/2026-11-02-bounded-discovery-optimizations.md)
 records why local reuse and retries must keep these boundaries.
 

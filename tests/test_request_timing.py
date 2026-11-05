@@ -238,3 +238,49 @@ async def test_stream_body_is_timed_and_response_closed(private_key: str) -> Non
         seconds = (stream.attributes or {})[f"github.phase.{phase}.seconds"]
         assert isinstance(seconds, float) and seconds >= 0
     assert all(response.is_closed for response in responses)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("private_metadata", [False, True])
+async def test_recovered_disconnect_records_fixed_reason_without_exception_text(
+    private_key: str, private_metadata: bool
+) -> None:
+    # Verifies XCO-011: a recovered retry records its class, never exception content.
+    exporter = InMemorySpanExporter()
+    tracing = Tracing(
+        enabled=True,
+        endpoint="http://tempo.example.test/v1/traces",
+        sample_ratio=1,
+        include_private_metadata=private_metadata,
+        processor=SimpleSpanProcessor(exporter),
+    )
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        if request.url.path.endswith("/access_tokens"):
+            return token_response()
+        calls += 1
+        if calls == 1:
+            raise httpx.RemoteProtocolError("fictional private transport detail", request=request)
+        return httpx.Response(200, json=[])
+
+    client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler), tracing=tracing)
+    try:
+        assert await client.list_open_pulls(17, "example/project") == []
+    finally:
+        await client.close()
+        tracing.shutdown()
+    spans = exporter.get_finished_spans()
+    pulls = [s for s in spans if (s.attributes or {}).get("github.operation") == "pull.list"]
+    assert len(pulls) == 1
+    attributes = dict(pulls[0].attributes or {})
+    assert attributes["github.retry_count"] == 1
+    assert attributes["github.discovery.transient_retry_error"] == "remote_protocol"
+    assert "github.discovery.transient_retry_status_code" not in attributes
+    assert attributes["http.response.status_code"] == 200
+    wait = attributes["github.phase.retry_wait.seconds"]
+    assert isinstance(wait, float) and wait > 0
+    assert "fictional private transport detail" not in repr(
+        [(s.attributes, s.events, s.status) for s in spans]
+    )
