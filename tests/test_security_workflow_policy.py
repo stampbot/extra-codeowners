@@ -317,7 +317,8 @@ def test_release_write_permissions_are_limited_to_build_and_publish_jobs() -> No
         "packages": "write",
     }
     for name, job in jobs.items():
-        if name == "verify-existing":
+        if name in {"verify-existing", "debian-sources"}:
+            # Source reuse verifies prior evidence but never signs or publishes it.
             assert _job_permissions(job) == {"attestations": "read", "contents": "read"}
         elif name not in {"image", "publish"}:
             assert _job_permissions(job) is None, f"{name} unexpectedly overrides permissions"

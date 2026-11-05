@@ -1,8 +1,9 @@
 """Retain version-matched Debian sources without extracting or building them.
 
-Debian Snapshot is the HTTPS source of descriptor metadata. Its SHA-1 URLs
-locate files; SHA-256 from each .dsc verifies the source archives. Descriptor
-signatures are preserved, not verified against Debian developer keyrings.
+Debian Snapshot supplies descriptor metadata over HTTPS. Its SHA-1 URLs locate
+files; SHA-256 from each .dsc verifies the source archives. Routine releases can
+rebind an authenticated prior bundle when all source identities match.
+Descriptor signatures are retained, not verified against Debian keyrings.
 """
 
 from __future__ import annotations
@@ -13,6 +14,8 @@ import http.client
 import io
 import json
 import re
+import shutil
+import subprocess
 import sys
 import tarfile
 import tempfile
@@ -529,14 +532,292 @@ def verify_bundle(
     return manifest
 
 
+def rebind_bundle(
+    inventories: dict[str, bytes],
+    digests: dict[str, str],
+    previous_inventories: dict[str, bytes],
+    previous_digests: dict[str, str],
+    previous_bundle: Path,
+    bundle: Path,
+) -> bool:
+    """Rebind authenticated prior source bytes; callers must verify provenance first.
+
+    False means valid prior evidence has a different source identity set.
+    Invalid evidence always raises, including when identities differ.
+    """
+    if previous_bundle.is_symlink() or bundle.exists() or bundle.is_symlink():
+        raise DebianSourceError("reuse requires regular input and a new output bundle")
+    manifest = verify_bundle(previous_inventories, previous_digests, previous_bundle)
+    images, packages = identities(inventories, digests)
+    if packages != identities(previous_inventories, previous_digests)[1]:
+        return False
+    manifest["images"] = images
+    encoded = (json.dumps(manifest, sort_keys=True, indent=2) + "\n").encode()
+    if len(encoded) > MAX_METADATA:
+        raise DebianSourceError("rebound source manifest exceeds size limit")
+    with tempfile.TemporaryDirectory(prefix="debian-rebind-", dir=bundle.parent) as directory:
+        staged = Path(directory) / "bundle.tar"
+        with (
+            tarfile.open(previous_bundle, mode="r:") as old,
+            tarfile.open(staged, mode="w", format=tarfile.USTAR_FORMAT) as new,
+        ):
+            first = old.next()
+            assert first is not None  # The complete input was verified above.
+            header = tarfile.TarInfo("manifest.json")
+            header.size = len(encoded)
+            header.mode = 0o644
+            new.addfile(header, io.BytesIO(encoded))
+            while member := old.next():
+                contents = old.extractfile(member)
+                assert contents is not None
+                header = tarfile.TarInfo(member.name)
+                header.size = member.size
+                header.mode = 0o644
+                new.addfile(header, contents)
+        verify_bundle(inventories, digests, staged)
+        bundle.hardlink_to(staged)
+    return True
+
+
+def _gh(arguments: Sequence[str], description: str) -> bytes:
+    """Read GitHub evidence without executing any prior release's source code."""
+    gh = shutil.which("gh")
+    if gh is None:
+        raise DebianSourceError("source reuse requires the GitHub CLI")
+    try:
+        # Fixed CLI operations, validated identities and separate argv; no shell.
+        result = subprocess.run(  # noqa: S603
+            [gh, *arguments],
+            capture_output=True,
+            check=True,
+            timeout=600 if list(arguments[:2]) == ["release", "download"] else 90,
+        )
+    except subprocess.TimeoutExpired as error:
+        raise DebianSourceError(f"GitHub evidence command timed out: {description}") from error
+    except subprocess.CalledProcessError as error:
+        raise DebianSourceError(
+            f"GitHub evidence command failed (exit {error.returncode}): {description}"
+        ) from error
+    except (subprocess.SubprocessError, OSError) as error:
+        raise DebianSourceError(f"GitHub evidence command failed: {description}") from error
+    if len(result.stdout) > MAX_METADATA:
+        raise DebianSourceError("GitHub evidence response exceeds size limit")
+    return result.stdout
+
+
+def _release_revision(repository: str, tag: str) -> str:
+    reference = _json(
+        _gh(
+            ["api", f"repos/{repository}/git/ref/tags/{urllib.parse.quote(tag, safe='')}"],
+            "resolve immutable release tag",
+        )
+    )
+    for depth in range(4):
+        item = reference.get("object")
+        if not isinstance(item, dict):
+            raise DebianSourceError("release tag omitted its Git object")
+        sha = _encoded(item.get("sha"), SHA1, "release source revision")
+        if item.get("type") == "commit":
+            return sha
+        if item.get("type") != "tag":
+            raise DebianSourceError("release tag does not resolve to a commit")
+        if depth == 3:
+            break
+        reference = _json(
+            _gh(["api", f"repos/{repository}/git/tags/{sha}"], "resolve annotated release tag")
+        )
+    raise DebianSourceError("release tag nesting exceeds limit")
+
+
+def _verify_prior_attestation(path: Path, repository: str, revision: str) -> None:
+    records_raw = _gh(
+        [
+            "attestation",
+            "verify",
+            str(path),
+            "--repo",
+            repository,
+            "--signer-workflow",
+            f"{repository}/.github/workflows/release.yml",
+            "--source-digest",
+            revision,
+            "--source-ref",
+            "refs/heads/main",
+            "--deny-self-hosted-runners",
+            "--format",
+            "json",
+        ],
+        f"verify prior {path.name} provenance",
+    )
+    try:
+        records = json.loads(records_raw, object_pairs_hook=_pairs)
+        if not isinstance(records, list) or not 0 < len(records) <= 32:
+            raise DebianSourceError("prior evidence has no bounded verified attestations")
+        digest = _hash_file(path)
+        identity = f"https://github.com/{repository}/.github/workflows/release.yml@refs/heads/main"
+        for record in records:
+            verified = record["verificationResult"]
+            if verified["signature"]["certificate"]["subjectAlternativeName"] != identity:
+                raise DebianSourceError("prior evidence has an unexpected signing identity")
+            subjects = verified["statement"]["subject"]
+            if (
+                not isinstance(subjects, list)
+                or len(
+                    [
+                        subject
+                        for subject in subjects
+                        if subject.get("name") == path.name
+                        and subject.get("digest", {}).get("sha256") == digest
+                    ]
+                )
+                != 1
+            ):
+                raise DebianSourceError("prior evidence attestation has the wrong subject")
+    except (KeyError, TypeError, AttributeError, ValueError, RecursionError) as error:
+        raise DebianSourceError("invalid or mismatched verified prior attestation") from error
+
+
+def reuse_release(
+    inventories: dict[str, bytes], digests: dict[str, str], bundle: Path, repository: str
+) -> bool:
+    """Reuse exact sources from a completed immutable, attested official release."""
+    _, packages = identities(inventories, digests)
+    if re.fullmatch(
+        r"[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9_.-]{1,100}", repository
+    ) is None or repository.split("/")[-1] in {".", ".."}:
+        raise DebianSourceError("invalid GitHub source repository")
+    if bundle.exists() or bundle.is_symlink():
+        raise DebianSourceError("refusing to overwrite an existing source bundle")
+    raw = _gh(["api", f"repos/{repository}/releases?per_page=5"], "list completed releases")
+    try:
+        releases = json.loads(raw, object_pairs_hook=_pairs)
+    except (ValueError, UnicodeError, RecursionError) as error:
+        raise DebianSourceError("invalid release catalog") from error
+    if not isinstance(releases, list) or len(releases) > 5:
+        raise DebianSourceError("invalid or oversized release catalog")
+    names = {
+        "distribution-inventory-amd64.json",
+        "distribution-inventory-arm64.json",
+        "debian-source.tar",
+    }
+    candidate = None
+    for release in releases:
+        if not isinstance(release, dict):
+            raise DebianSourceError("invalid release record")
+        if release.get("draft") is not False or release.get("immutable") is not True:
+            continue
+        tag = release.get("tag_name")
+        if (
+            not isinstance(tag, str)
+            or re.fullmatch(
+                r"v[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?", tag
+            )
+            is None
+        ):
+            continue
+        assets = release.get("assets")
+        if not isinstance(assets, list) or len(assets) > 128:
+            raise DebianSourceError("invalid release asset list")
+        if not all(
+            isinstance(asset, dict) and isinstance(asset.get("name"), str) for asset in assets
+        ):
+            raise DebianSourceError("invalid release asset record")
+        selected = [
+            asset for asset in assets if isinstance(asset, dict) and asset.get("name") in names
+        ]
+        if {asset["name"] for asset in selected} != names:
+            continue
+        if len(selected) != len(names) or any(
+            type(asset.get("size")) is not int
+            or not 0
+            < asset["size"]
+            <= (MAX_BUNDLE if asset["name"] == "debian-source.tar" else MAX_METADATA)
+            for asset in selected
+        ):
+            raise DebianSourceError("duplicate or oversized prior release evidence")
+        candidate = tag
+        break
+    if candidate is None:
+        return False
+    revision = _release_revision(repository, candidate)
+    sys.stderr.write(f"Checking prior Debian source evidence: {candidate} ({revision})\n")
+    with tempfile.TemporaryDirectory(prefix="debian-prior-", dir=bundle.parent) as directory:
+        previous = Path(directory)
+        previous_inventories = {}
+        previous_digests = {}
+        for architecture in ("amd64", "arm64"):
+            name = f"distribution-inventory-{architecture}.json"
+            _gh(
+                [
+                    "release",
+                    "download",
+                    candidate,
+                    "--repo",
+                    repository,
+                    "--pattern",
+                    name,
+                    "--dir",
+                    str(previous),
+                ],
+                f"download prior {name}",
+            )
+            path = previous / name
+            if (
+                path.is_symlink()
+                or not path.is_file()
+                or not 0 < path.stat().st_size <= MAX_METADATA
+            ):
+                raise DebianSourceError("invalid downloaded prior inventory")
+            _verify_prior_attestation(path, repository, revision)
+            previous_inventories[architecture] = path.read_bytes()
+            image = _json(previous_inventories[architecture]).get("image")
+            if not isinstance(image, dict):
+                raise DebianSourceError("prior inventory omitted image identity")
+            previous_digests[architecture] = _encoded(
+                image.get("platform_digest"),
+                re.compile(r"sha256:[0-9a-f]{64}\Z"),
+                "prior platform digest",
+            )
+        if identities(previous_inventories, previous_digests)[1] != packages:
+            return False
+        _gh(
+            [
+                "release",
+                "download",
+                candidate,
+                "--repo",
+                repository,
+                "--pattern",
+                "debian-source.tar",
+                "--dir",
+                str(previous),
+            ],
+            "download prior source bundle",
+        )
+        prior_bundle = previous / "debian-source.tar"
+        if (
+            prior_bundle.is_symlink()
+            or not prior_bundle.is_file()
+            or not 0 < prior_bundle.stat().st_size <= MAX_BUNDLE
+        ):
+            raise DebianSourceError("invalid downloaded prior source bundle")
+        _verify_prior_attestation(prior_bundle, repository, revision)
+        return rebind_bundle(
+            inventories, digests, previous_inventories, previous_digests, prior_bundle, bundle
+        )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("fetch", "verify"))
+    parser.add_argument("command", choices=("fetch", "verify", "reuse-release"))
     for architecture in ("amd64", "arm64"):
         parser.add_argument(f"--inventory-{architecture}", type=Path, required=True)
         parser.add_argument(f"--digest-{architecture}", required=True)
     parser.add_argument("--bundle", type=Path, required=True)
     parser.add_argument("--cache", type=Path)
+    parser.add_argument(
+        "--repository", help="GitHub repository whose official release signs reused evidence"
+    )
     args = parser.parse_args(argv)
     try:
         inventories = {}
@@ -547,6 +828,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             digests[architecture] = getattr(args, f"digest_{architecture}")
         if args.command == "verify":
             verify_bundle(inventories, digests, args.bundle)
+        elif args.command == "reuse-release":
+            if args.repository is None:
+                raise DebianSourceError("reuse-release requires --repository")
+            if not reuse_release(inventories, digests, args.bundle, args.repository):
+                sys.stderr.write(
+                    "No compatible immutable source evidence; fresh collection required.\n"
+                )
+                return 3
+            sys.stderr.write("Reused authenticated, version-matched Debian source bytes.\n")
         elif args.cache is None:
             raise DebianSourceError("fetch requires a dedicated --cache directory")
         else:

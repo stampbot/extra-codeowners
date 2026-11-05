@@ -67,6 +67,7 @@ nav:
           - Keep results on scheduled rechecks: explanation/adrs/2026-10-11-keep-results-on-scheduled-rechecks.md
           - Bounded discovery optimizations: explanation/adrs/2026-11-02-bounded-discovery-optimizations.md
           - Linked reconciliation traces: explanation/adrs/2026-11-05-linked-reconciliation-traces.md
+          - Reuse authenticated Debian sources: explanation/adrs/2026-11-05-reuse-authenticated-debian-sources.md
       - Design comparisons:
           - Bounded reconciliation traces: explanation/design/2026-11-02-bounded-reconciliation-traces.md
   - Maintainer and release engineering:
@@ -78,6 +79,7 @@ nav:
           - maintainers/evidence/index.md
           - November reconciliation and alpha.67: maintainers/evidence/2026-11-02-reconciliation-and-alpha67.md
           - November trace-size investigation: maintainers/evidence/2026-11-05-trace-size-investigation.md
+          - November Debian source reuse: maintainers/evidence/2026-11-05-debian-source-reuse.md
       - Respond to dependency audit: how-to/respond-to-dependency-audit.md
       - Rescan a published image: how-to/rescan-published-image.md
       - Review or recover a Renovate update: how-to/manage-renovate-updates.md

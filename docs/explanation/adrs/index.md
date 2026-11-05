@@ -19,6 +19,7 @@ old one.
 | 2026-10-11 | [Keep the published result on a scheduled recheck](2026-10-11-keep-results-on-scheduled-rechecks.md) | Accepted |
 | 2026-11-02 | [Bound discovery optimizations without weakening evidence](2026-11-02-bounded-discovery-optimizations.md) | Accepted |
 | 2026-11-05 | [Link bounded request traces to a reconciliation summary](2026-11-05-linked-reconciliation-traces.md) | Accepted |
+| 2026-11-05 | [Reuse authenticated, version-matched Debian sources](2026-11-05-reuse-authenticated-debian-sources.md) | Accepted |
 
 These first five were written in October 2026 to record decisions already in
 effect. Their dates come from the commits and pull requests that made each
