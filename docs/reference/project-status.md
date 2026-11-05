@@ -197,8 +197,8 @@ close before the project is presented as production-ready:
 - [Issue #260][issue-260]: handle the observed discovery-read connection
   disconnect within the existing retry, quota and deadline bounds.
 - [Issue #259][issue-259]: keep long reconciliation traces complete and bounded.
-  The [open design](../explanation/design/2026-11-02-bounded-reconciliation-traces.md)
-  compares options; none is implemented by that document.
+  The [linked-trace decision](../explanation/adrs/2026-11-05-linked-reconciliation-traces.md)
+  bounds each source-owned trace; full-scan live validation remains open.
 - [Issue #18][issue-18]: complete corresponding-source delivery and approval of
   the distribution mechanism.
 

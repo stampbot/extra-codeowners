@@ -9,6 +9,8 @@ safe for a shared tracing backend.
 
 from __future__ import annotations
 
+import asyncio
+import traceback
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from typing import TYPE_CHECKING
@@ -29,6 +31,13 @@ from opentelemetry.trace import Link, Span, SpanContext, Status, StatusCode, Tra
 
 from extra_codeowners import __version__
 from extra_codeowners.metrics import TRACE_EXPORTS
+from extra_codeowners.reconciliation_tracing import (
+    CURRENT_SCAN,
+    REQUEST_DEPTH,
+    BoundedFields,
+    LinkedScanSampler,
+    ScanTrace,
+)
 from extra_codeowners.trace_context import TrustedTraceContext
 
 if TYPE_CHECKING:
@@ -92,7 +101,7 @@ class Tracing:
                     "deployment.environment.name": environment,
                 }
             ),
-            sampler=ParentBased(TraceIdRatioBased(sample_ratio)),
+            sampler=ParentBased(LinkedScanSampler(TraceIdRatioBased(sample_ratio))),
         )
         self._provider.add_span_processor(
             processor
@@ -130,6 +139,8 @@ class Tracing:
         private_attributes: Mapping[str, TraceAttribute] | None = None,
         links: Sequence[TrustedTraceContext] = (),
         root: bool = False,
+        reconciliation_request: bool = False,
+        bounded_fields: BoundedFields | None = None,
     ) -> Iterator[Span]:
         """Record a span and bind IDs into logs only when it is sampled.
 
@@ -142,6 +153,24 @@ class Tracing:
         span_attributes = dict(attributes or {})
         if self.include_private_metadata and private_attributes is not None:
             span_attributes.update(private_attributes)
+        scan = CURRENT_SCAN.get() if reconciliation_request else None
+        if scan is not None and scan.owner is not self:
+            scan = None
+        context = otel_context.Context() if root else None
+        depth_token = None
+        if scan is not None:
+            context = scan.request_context()
+            bounded_fields = BoundedFields()
+            span_attributes["reconciliation.scan_trace_id"] = f"{scan.context.trace_id:032x}"
+            scan.detail_traces += 1
+            depth = REQUEST_DEPTH.get()
+            if depth == 0:
+                scan.outer_requests += 1
+            depth_token = REQUEST_DEPTH.set(depth + 1)
+        if bounded_fields is not None:
+            span_attributes = {
+                key: bounded_fields.value(value) for key, value in span_attributes.items()
+            }
         otel_links = tuple(
             Link(
                 SpanContext(
@@ -153,28 +182,65 @@ class Tracing:
             )
             for link in links
         )
-        with self._tracer.start_as_current_span(
-            name,
-            context=otel_context.Context() if root else None,
-            attributes=span_attributes,
-            links=otel_links or None,
-            record_exception=False,
-            set_status_on_exception=False,
+        if scan is not None:
+            otel_links = (Link(scan.context),)
+        try:
+            with self._tracer.start_as_current_span(
+                name,
+                context=context,
+                attributes=span_attributes,
+                links=otel_links or None,
+                record_exception=False,
+                set_status_on_exception=False,
+            ) as span:
+                span_context = span.get_span_context()
+                sampled = bool(span_context.trace_flags & TraceFlags.SAMPLED)
+                try:
+                    if span.is_recording() and span_context.is_valid and sampled:
+                        with (
+                            structlog.contextvars.bound_contextvars(
+                                trace_id=f"{span_context.trace_id:032x}",
+                                span_id=f"{span_context.span_id:016x}",
+                            ),
+                            self._error_status(span, bounded_fields),
+                        ):
+                            yield span
+                    else:
+                        with self._error_status(span, bounded_fields):
+                            yield span
+                finally:
+                    if bounded_fields is not None:
+                        bounded_fields.finish(span)
+        finally:
+            if depth_token is not None:
+                REQUEST_DEPTH.reset(depth_token)
+
+    @contextmanager
+    def reconciliation_span(self) -> Iterator[Span]:
+        """Keep the scan root independent of its linked GitHub request traces."""
+        with self.span(
+            "reconciliation.run",
+            root=True,
+            attributes={"reconciliation.component": "open_pull_scan"},
+            bounded_fields=BoundedFields(),
         ) as span:
-            context = span.get_span_context()
-            sampled = bool(context.trace_flags & TraceFlags.SAMPLED)
-            if span.is_recording() and context.is_valid and sampled:
-                with (
-                    structlog.contextvars.bound_contextvars(
-                        trace_id=f"{context.trace_id:032x}",
-                        span_id=f"{context.span_id:016x}",
-                    ),
-                    self._error_status(span),
-                ):
-                    yield span
-            else:
-                with self._error_status(span):
-                    yield span
+            span.set_attribute("reconciliation.outcome", "failure")
+            if not self.enabled:
+                yield span
+                return
+            scan = ScanTrace(self, span.get_span_context())
+            scan_token = CURRENT_SCAN.set(scan)
+            depth_token = REQUEST_DEPTH.set(0)
+            try:
+                yield span
+            except asyncio.CancelledError:
+                span.set_attribute("reconciliation.outcome", "cancelled")
+                self.mark_error(span, "CancelledError")
+                raise
+            finally:
+                scan.finish(span)
+                REQUEST_DEPTH.reset(depth_token)
+                CURRENT_SCAN.reset(scan_token)
 
     @staticmethod
     def capture_trusted_context(span: Span) -> TrustedTraceContext | None:
@@ -199,14 +265,26 @@ class Tracing:
         span.set_status(Status(StatusCode.ERROR, description[:128]))
 
     @contextmanager
-    def _error_status(self, span: Span) -> Iterator[Span]:
+    def _error_status(self, span: Span, bounded: BoundedFields | None = None) -> Iterator[Span]:
         """Mark exceptions while keeping default traces free of exception text."""
         try:
             yield span
         except Exception as error:
             self.mark_error(span, type(error).__name__)
             if self.include_private_metadata:
-                span.record_exception(error)
+                if bounded is None:
+                    span.record_exception(error)
+                else:
+                    span.add_event(
+                        "exception",
+                        {
+                            "exception.type": bounded.value(type(error).__name__),
+                            "exception.message": bounded.value(str(error)),
+                            "exception.stacktrace": bounded.value(
+                                "".join(traceback.format_exception(error))
+                            ),
+                        },
+                    )
             raise
 
     def shutdown(self) -> None:

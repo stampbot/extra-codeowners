@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import nullcontext
 from datetime import UTC, datetime, timedelta
 from unittest.mock import Mock
 
@@ -102,8 +103,10 @@ def token_response() -> httpx.Response:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("scan", [False, True])
 async def test_request_phases_and_cache_state_use_existing_private_safe_spans(
     private_key: str,
+    scan: bool,
 ) -> None:
     # Verifies XCO-011: attributes and metric labels omit repository, ETag, and token.
     def handler(request: httpx.Request) -> httpx.Response:
@@ -115,8 +118,9 @@ async def test_request_phases_and_cache_state_use_existing_private_safe_spans(
 
     client, tracing, exporter = traced_client(private_key, handler)
     try:
-        assert await client.list_open_pulls(17, "private/project") == []
-        assert await client.list_open_pulls(17, "private/project") == []
+        with tracing.reconciliation_span() if scan else nullcontext():
+            assert await client.list_open_pulls(17, "private/project") == []
+            assert await client.list_open_pulls(17, "private/project") == []
     finally:
         await client.close()
         tracing.shutdown()
@@ -127,7 +131,16 @@ async def test_request_phases_and_cache_state_use_existing_private_safe_spans(
         for s in spans
         if (s.attributes or {}).get("github.operation") == "pull.list"
     ]
-    assert len(spans) == 3  # Two list operations and one token request; no phase spans.
+    assert len(spans) == 3 + int(scan)  # Two list operations, token, optional scan; no phase spans.
+    if scan:
+        summary = spans[-1]
+        assert summary.name == "reconciliation.run"
+        assert summary.attributes is not None
+        assert summary.attributes["reconciliation.detail_traces"] == 3
+        assert summary.attributes["reconciliation.outer_requests"] == 2
+        for request_span in spans[:-1]:
+            assert request_span.parent is None
+            assert request_span.links[0].context == summary.context
     assert [attrs["github.discovery.lookup"] for attrs in pulls] == ["absent", "hit"]
     assert [attrs["github.request.conditional"] for attrs in pulls] == [False, True]
     for attrs in pulls:

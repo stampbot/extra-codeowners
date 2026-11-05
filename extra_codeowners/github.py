@@ -706,6 +706,7 @@ class GitHubClient:
                     "http.request.method": method,
                 },
                 private_attributes={"github.path": path},
+                reconciliation_request=True,
             ) as span:
                 timing = RequestTiming(span, operation, authentication, REQUEST_LANE.get())
                 if discovery_cache_status is not None:
@@ -916,6 +917,7 @@ class GitHubClient:
                     "http.request.method": method,
                 },
                 private_attributes={"github.path": path},
+                reconciliation_request=True,
             ) as span:
                 timing = RequestTiming(span, operation, "installation", REQUEST_LANE.get())
                 # The deadline covers both authentication attempts, token

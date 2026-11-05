@@ -594,7 +594,7 @@ reconciliation progress using fixed labels only. They never use a repository,
 pull request, actor, path, SHA, or delivery ID as a label.
 
 Tracing is off by default. When enabled, it creates a root span for a webhook
-acceptance, elected reconciliation scan, or leased worker attempt. GitHub API
+acceptance, reconciliation attempt, or leased worker attempt. Worker GitHub API
 calls become child spans. This makes a trace useful on any replica without
 changing the durable queue's cross-replica coordination rules. The service
 does not join a caller-provided webhook trace: GitHub has not authenticated
@@ -607,12 +607,33 @@ spans. The histogram remains available when tracing is disabled. The
 post-commit `reconciliation_work_enqueued` log proves that recovery work was
 stored, not that its evaluation completed or had no competing trigger.
 
-A full scan still uses one growing trace. A backend may retain only part of
-it, so a successful export is not proof of complete trace retention. Use
-completion logs, outcome counters and the last-success gauge to verify scan
-completion before interpreting its retained spans. The
-[bounded-tracing design](design/2026-11-02-bounded-reconciliation-traces.md)
-is open; linked or aggregated scan traces are not implemented.
+Reconciliation keeps a small summary trace and starts an independent linked
+root for each logical GitHub operation. A request's retries stay inside that
+root; nested token operations get separate roots. Each follows the scan's
+local sampling decision and carries its opaque trace ID for searches. The
+summary records final outcome, request counts and fixed phase totals, excluding
+nested token timing already included in outer authentication. It retains no
+list of request identities. Private paths and exception fields are capped at
+2,048 characters each, with `tracing.truncated_fields` recording clipping on
+the affected span. Worker and webhook layouts are unchanged.
+
+```text
+Listing request root -- link --+
+Token request root   -- link --+--> Scan summary root
+Stream request root  -- link --+
+```
+
+Each root is a separate trace. The links preserve the scan relationship without
+putting all requests in one growing parent trace.
+
+This bounds the source-owned instrumentation per trace, not the total traffic
+or backend retention. Export, ingestion and retention failures can still lose
+data. Use completion logs, outcome counters and the last-success gauge before
+interpreting retained spans. The
+[linked-trace decision](adrs/2026-11-05-linked-reconciliation-traces.md)
+records the size evidence and volume tradeoff; the
+[trace reference](../reference/http-api.md#reconciliation-trace-fields)
+defines the fields.
 
 For a sampled, verified direct webhook, ingress keeps its own opaque span
 identity with the delivery record. The corresponding worker attempt starts a

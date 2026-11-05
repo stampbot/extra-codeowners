@@ -6,21 +6,11 @@ import asyncio
 import time
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager, contextmanager
-from typing import Literal
 
 from opentelemetry.trace import Span
 
 from extra_codeowners.metrics import GITHUB_API_PHASE_SECONDS
-
-type RequestPhase = Literal[
-    "authentication",
-    "semaphore_wait",
-    "quota_admission",
-    "http",
-    "quota_accounting",
-    "body",
-    "retry_wait",
-]
+from extra_codeowners.reconciliation_tracing import RequestPhase, observe_scan_phase
 
 
 class RequestTiming:
@@ -42,6 +32,7 @@ class RequestTiming:
             self.seconds[phase] = self.seconds.get(phase, 0.0) + elapsed
             self.span.set_attribute(f"github.phase.{phase}.seconds", self.seconds[phase])
             GITHUB_API_PHASE_SECONDS.labels(*self.labels, phase).observe(elapsed)
+            observe_scan_phase(phase, elapsed)
 
     @asynccontextmanager
     async def slot(self, semaphore: asyncio.Semaphore) -> AsyncIterator[None]:
