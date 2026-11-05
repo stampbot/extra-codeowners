@@ -1731,6 +1731,13 @@ def test_release_retains_one_cached_debian_source_bundle_before_publication() ->
     assert "--inventory-arm64" in sources
     assert "hashFiles('Dockerfile')" in sources
     assert "restore-keys: debian-sources-v1-" in sources
+    assert "tools/release_debian_sources.py reuse-release" in sources
+    assert "attestations: read" in sources
+    assert "GH_TOKEN: ${{ github.token }}" in sources
+    assert sources.index("id: reuse") < sources.index("Restore verified source download cache")
+    assert sources.count("if: steps.reuse.outputs.reused == 'false'") == 2
+    assert "3) printf" in sources
+    assert '*) exit "${status}"' in sources
     assert "compression-level: 0" in sources
     assert "- debian-sources" in publish
     assert publish.index("tools/release_debian_sources.py verify") < publish.index("id: tag")

@@ -117,6 +117,39 @@ This bundle covers installed Debian packages, not libraries supplied by a Python
 wheel merely because they have the same name. For example, Debian's OpenSSL
 source does not stand in for Psycopg's bundled OpenSSL source.
 
+### Reusing retained Debian sources
+
+An application-only release does not need a new Snapshot lookup for source
+bytes the project already retains. Before collection, CI checks the five most
+recent GitHub releases for a completed immutable release containing both
+distribution inventories and the Debian bundle. It resolves that release's
+tag to its commit and verifies the inventories' official release-workflow
+attestations, pinned to that commit and `refs/heads/main`, with self-hosted
+signers rejected.
+
+If both platforms' complete source-package identity set matches the new
+inventories, CI downloads and authenticates the old bundle too. The existing
+verifier checks its old image binding, every descriptor, archive hash, size
+and structural limit. CI then copies the same source bytes into a new bundle,
+changes only the manifest's image/inventory binding, and verifies it against
+the new inventories. The new release signs and attests that new bundle.
+No old application or collector code is run, and no source archive is extracted
+or built. The Snapshot provenance describes where the bytes were originally
+collected, not a fresh network read during every release.
+
+No candidate or a changed source identity takes the ordinary Snapshot path.
+A failed attestation, malformed bundle, bad checksum or GitHub verification
+error stops the release; it does not authorize fallback past a failed trust
+check. Routine matching releases can therefore finish during a Snapshot outage,
+but a new source version still needs successful collection. No source lock
+file or manually selected previous version is required.
+
+The collector's `reuse-release` command returns `0` after verified reuse, `3`
+only when fresh collection is required, and `1` for an evidence or I/O failure.
+Its GitHub CLI calls have 90-second metadata/verification deadlines and
+600-second download deadlines. The CI job retains its 20-minute overall limit.
+See the [source-reuse decision](../explanation/adrs/2026-11-05-reuse-authenticated-debian-sources.md).
+
 ## Verify the Debian bundle
 
 Use the same Bash, Python, GitHub CLI, and Cosign prerequisites as above, from a

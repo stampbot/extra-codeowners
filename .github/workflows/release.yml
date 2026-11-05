@@ -569,6 +569,9 @@ jobs:
     if: needs.plan.outputs.already_released != 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    permissions:
+      contents: read
+      attestations: read
     steps:
       - name: Check out release commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -588,7 +591,28 @@ jobs:
           path: evidence
           merge-multiple: true
 
+      - name: Reuse authenticated version-matched source evidence
+        id: reuse
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_REPOSITORY: ${{ github.repository }}
+        run: |
+          status=0
+          python -I -S -B tools/release_debian_sources.py reuse-release \
+            --repository "${SOURCE_REPOSITORY}" \
+            --inventory-amd64 evidence/distribution-inventory-amd64.json \
+            --inventory-arm64 evidence/distribution-inventory-arm64.json \
+            --digest-amd64 "$(<evidence/digest-amd64.txt)" \
+            --digest-arm64 "$(<evidence/digest-arm64.txt)" \
+            --bundle debian-source.tar || status=$?
+          case "${status}" in
+            0) printf 'reused=true\n' >>"${GITHUB_OUTPUT}" ;;
+            3) printf 'reused=false\n' >>"${GITHUB_OUTPUT}" ;;
+            *) exit "${status}" ;;
+          esac
+
       - name: Restore verified source download cache
+        if: steps.reuse.outputs.reused == 'false'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .debian-source-cache
@@ -596,6 +620,7 @@ jobs:
           restore-keys: debian-sources-v1-
 
       - name: Collect sources for both platforms
+        if: steps.reuse.outputs.reused == 'false'
         run: |
           python -I -S -B tools/release_debian_sources.py fetch \
             --inventory-amd64 evidence/distribution-inventory-amd64.json \

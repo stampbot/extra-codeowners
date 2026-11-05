@@ -201,6 +201,8 @@ close before the project is presented as production-ready:
   bounds each source-owned trace; full-scan live validation remains open.
 - [Issue #18][issue-18]: complete corresponding-source delivery and approval of
   the distribution mechanism.
+- [Issue #264][issue-264]: restore routine publication during Debian Snapshot
+  outages by reusing authenticated, version-matched source evidence.
 
 ### Hardening and verification
 
@@ -262,3 +264,4 @@ on this list opens or closes.
 [issue-203]: https://github.com/stampbot/extra-codeowners/issues/203
 [issue-259]: https://github.com/stampbot/extra-codeowners/issues/259
 [issue-260]: https://github.com/stampbot/extra-codeowners/issues/260
+[issue-264]: https://github.com/stampbot/extra-codeowners/issues/264
