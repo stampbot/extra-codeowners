@@ -13,6 +13,8 @@ from tools.release_vex import ReleaseVexError, validate_release_vex
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "security/vex/runtime.openvex.json"
 PACKAGES = (
+    ("apt", "apt", "3.0.3"),
+    ("libapt-pkg7.0", "apt", "3.0.3"),
     ("gzip", "gzip", "1.13-1+deb13u1"),
     ("libc-bin", "glibc", "2.41-12+deb13u4"),
     ("libc6", "glibc", "2.41-12+deb13u4"),
@@ -82,7 +84,10 @@ def test_runtime_claims_require_review_after_a_package_update(
 def test_review_records_glibc_caller_evidence_and_existing_openssl_fixes() -> None:
     document = json.loads(SOURCE.read_text(encoding="utf-8"))
     statements = document["statements"]
-    assert Counter(statement["status"] for statement in statements) == {"fixed": 26}
+    assert Counter(statement["status"] for statement in statements) == {
+        "fixed": 26,
+        "not_affected": 1,
+    }
     by_cve = {statement["vulnerability"]["name"]: statement for statement in statements}
     assert len(by_cve) == len(statements)
     pcre2 = by_cve["CVE-2026-103111"]
@@ -120,4 +125,26 @@ def test_review_records_glibc_caller_evidence_and_existing_openssl_fixes() -> No
         assert len(by_cve[cve]["products"]) == 6
     assert "runtime.openvex.json" in (ROOT / ".github/actions/scan-image/action.yml").read_text(
         encoding="utf-8"
+    )
+
+
+def test_apt_claim_is_version_bound_and_excludes_manual_package_installation() -> None:
+    document = json.loads(SOURCE.read_text(encoding="utf-8"))
+    statement = next(
+        item
+        for item in document["statements"]
+        if item["vulnerability"]["name"] == "CVE-2026-109518"
+    )
+    assert statement["status"] == "not_affected"
+    assert statement["justification"] == "vulnerable_code_not_in_execute_path"
+    assert {product["identifiers"]["purl"] for product in statement["products"]} == {
+        f"pkg:deb/debian/{package}@3.0.3?arch={architecture}&distro=debian-13.7{upstream}"
+        for package, upstream in (("apt", ""), ("libapt-pkg7.0", "&upstream=apt"))
+        for architecture in ("amd64", "arm64")
+    }
+    assert "remain present and unpatched" in statement["impact_statement"]
+    assert "operator-run package installation" in statement["impact_statement"]
+    assert "custom code or plugins" in statement["impact_statement"]
+    assert (
+        "https://security-tracker.debian.org/tracker/CVE-2026-109518" in statement["status_notes"]
     )
