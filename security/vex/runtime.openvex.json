@@ -1,8 +1,8 @@
 {
   "@context": "https://openvex.dev/ns/v0.2.0",
-  "@id": "urn:uuid:3ce930c6-5949-550c-8122-1a7ce4e63742",
+  "@id": "urn:uuid:67e15fcb-7c79-5d92-b91f-afb16a7e5766",
   "author": "Extra CODEOWNERS maintainers",
-  "last_updated": "2026-11-02T17:17:26Z",
+  "last_updated": "2026-11-05T04:57:43Z",
   "role": "VEX document producer",
   "statements": [
     {
@@ -746,9 +746,9 @@
       }
     }
   ],
-  "timestamp": "2026-11-02T17:17:26Z",
+  "timestamp": "2026-11-05T04:57:43Z",
   "tooling": "Vexcalibur + Extra CODEOWNERS runtime binding",
-  "version": 7,
+  "version": 9,
   "x_extra_codeowners_runtime": {
     "files": {
       ".dockerignore": "3f9dc9d3a79fe3085f25de88403b5563ad5c7fa7010bef94c5e55f24bd3cf691",
@@ -778,7 +778,7 @@
       "extra_codeowners/dco.py": "8c3a0b541fe021fb9f05500ca9278306901010c219e7e1199ca5e205c138e68d",
       "extra_codeowners/discovery_cache.py": "3c3d0af70b21e49181c0d44ffd7b1ec5fdc929f8c3083a2eda404efbbd56f565",
       "extra_codeowners/evaluator.py": "b81b9d1c6fe81d591867b0993d413030caab8af48703c4725f14c04fe2e3f9a6",
-      "extra_codeowners/github.py": "bf93f8f973348c2cf8843d557f77107ab53bd60721636c1c46d911a69c626c62",
+      "extra_codeowners/github.py": "0b563c75523db6ab4db51d7f755d908fa45107f257d9f830a7802358cc4ef006",
       "extra_codeowners/logging.py": "a59227e76ec7809ff8bb88fee997abb9b99f32e81a4c8d16bcfc72c0c0abf33f",
       "extra_codeowners/manifest.py": "33d42ac16b8218562f2baf6c0bc7c6664b03354bbf274cb0381e94740b76681e",
       "extra_codeowners/metrics.py": "6293de9acad3d3f639fda0403fb2e0f317a733a173a6cb7bf977d16a4e3fd522",
@@ -795,7 +795,7 @@
       "pyproject.toml": "bfb88e388d4590a6f52ed6d76889460a6b698f13129389b3823d2ff661bedd55",
       "uv.lock": "5514cb0448adb693fe97f3d2c8016ccd606890327a1946467fbd118356de4922"
     },
-    "review": "Reviewed one bounded transient retry for authenticated discovery GETs only. Original operation deadline, per-attempt shared quota admission, cancellation and HTTP validation remain enforced; no write or streaming retry is added. No package, dependency or native reachability changes; all 26 fixed statements and assessment dates are preserved.",
+    "review": "Review for #260: one HTTPX RemoteProtocolError during an authenticated discovery GET can share the existing transient retry budget. Original deadline, per-attempt authentication and quota admission, validator stripping, stop/cancellation and no-write/no-stream retry boundaries are preserved. Retry count advances only after quota admission. No dependencies, native package identities, TLS settings or native entry points change. All 26 fixed statements and their original assessment timestamps remain unchanged; no reachability exclusion is added.",
     "schema_version": 1
   }
 }

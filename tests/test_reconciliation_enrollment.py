@@ -420,8 +420,9 @@ async def test_check_absence_requires_a_valid_response(private_key: str, payload
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["server", "disconnect"])
 async def test_one_transient_check_listing_does_not_abort_the_scan(
-    tmp_path: Path, private_key: str, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, private_key: str, monkeypatch: pytest.MonkeyPatch, failure: str
 ) -> None:
     # Verifies XCO-014: successful recovery still requires current GitHub evidence.
     provider = DiscoveryProvider(count=3)
@@ -432,6 +433,8 @@ async def test_one_transient_check_listing_does_not_abort_the_scan(
         nonlocal failures
         if request.url.path.endswith("/check-runs") and failures == 0:
             failures += 1
+            if failure == "disconnect":
+                raise httpx.RemoteProtocolError("fictional transport detail", request=request)
             return httpx.Response(500, json={"message": "temporary failure"})
         return original(request)
 

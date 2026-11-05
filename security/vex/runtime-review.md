@@ -1,5 +1,14 @@
 # Runtime vulnerability review
 
+## Discovery disconnect retry: November 5, 2026 UTC
+
+The discovery client can repeat one authenticated GET after HTTPX reports a
+remote protocol error. It shares the existing transient retry budget,
+deadline, parser and quota guard. It adds no write, streaming or token-request
+retry, and no new native-library entry point. Dependencies, package identities
+and TLS configuration are unchanged. All 26 `fixed` statements and their
+assessment dates remain unchanged; this source review adds no exclusion.
+
 ## Current runtime: November 2, 2026
 
 The pinned Python 3.14.10 base replaces 3.14.8. This is Python's
