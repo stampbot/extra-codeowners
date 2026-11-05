@@ -194,9 +194,6 @@ close before the project is presented as production-ready:
 - [Issue #203][issue-203]: bound GitHub API use for large installations whose
   repositories are mostly unenrolled, and measure quiet reconciliation and
   missed-webhook recovery.
-- [Issue #259][issue-259]: keep long reconciliation traces complete and bounded.
-  The [linked-trace decision](../explanation/adrs/2026-11-05-linked-reconciliation-traces.md)
-  bounds each source-owned trace; full-scan live validation remains open.
 - [Issue #18][issue-18]: complete corresponding-source delivery and approval of
   the distribution mechanism.
 
@@ -258,4 +255,3 @@ on this list opens or closes.
 [issue-76]: https://github.com/stampbot/extra-codeowners/issues/76
 [issue-124]: https://github.com/stampbot/extra-codeowners/issues/124
 [issue-203]: https://github.com/stampbot/extra-codeowners/issues/203
-[issue-259]: https://github.com/stampbot/extra-codeowners/issues/259

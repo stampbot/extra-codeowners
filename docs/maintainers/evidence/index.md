@@ -12,6 +12,7 @@ the older results and links newer receipts.
 - [November 5, 2026: trace-size investigation](2026-11-05-trace-size-investigation.md)
 - [November 5, 2026: Debian source outage and reuse](2026-11-05-debian-source-reuse.md)
 - [November 5, 2026: alpha.69 release and approval validation](2026-11-05-alpha69-release-and-approval.md)
+- [November 5, 2026: alpha.69 successful reconciliation](2026-11-05-alpha69-successful-reconciliation.md)
 
 ## Add a receipt
 
