@@ -12,6 +12,11 @@ records the completed observation windows, release verification and restored
 label probe. The older sections below retain their original observations;
 later evidence does not silently turn them into tests of a newer release.
 
+The [November 5 alpha.69 receipt](evidence/2026-11-05-alpha69-release-and-approval.md)
+records verified publication, automatic rollout, the restored approval probe
+and complete linked telemetry for a large partial scan. It does not establish
+a successful full scan or the remaining provider and performance contracts.
+
 ## Diagnostics and approval probe: November 2, 2026
 
 Alpha.65 runs on two Kubernetes nodes with shared PostgreSQL state. The

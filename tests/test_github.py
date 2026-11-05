@@ -2673,6 +2673,62 @@ async def test_has_check_run_ignores_foreign_and_malformed_runs(private_key: str
     await client.close()
 
 
+# Verifies XCO-007.
+@pytest.mark.asyncio
+@pytest.mark.parametrize("existing", [False, True], ids=["create", "update"])
+async def test_check_publication_selects_evaluated_head_and_own_app(
+    private_key: str,
+    existing: bool,
+) -> None:
+    head = "b" * 40
+    calls: list[tuple[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/app/installations/2/access_tokens":
+            return httpx.Response(201, json=token_response())
+        assert request.headers["authorization"] == "Bearer installation-token"
+        calls.append((request.method, request.url.path))
+        if request.method == "GET":
+            assert request.url.path == f"/repos/example/project/commits/{head}/check-runs"
+            assert request.url.params["app_id"] == "1"
+            assert request.url.params["check_name"] == "check"
+            runs = [{"id": 98, "name": "check", "app": {"id": 9}}]
+            if existing:
+                runs.append({"id": 99, "name": "check", "app": {"id": 1}})
+            return httpx.Response(200, json={"check_runs": runs})
+        payload = json.loads(request.content)
+        if existing:
+            assert request.method == "PATCH"
+            assert request.url.path == "/repos/example/project/check-runs/99"
+            assert "head_sha" not in payload  # Updates cannot retarget a Check Run.
+        else:
+            assert request.method == "POST"
+            assert request.url.path == "/repos/example/project/check-runs"
+            assert payload["head_sha"] == head
+            assert payload["name"] == "check"
+        assert payload["status"] == "completed"
+        assert payload["conclusion"] == "success"
+        return httpx.Response(200, json={"id": 99})
+
+    client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
+    try:
+        assert (
+            await client.upsert_check_run(
+                2,
+                "example/project",
+                head,
+                "check",
+                title="Approved",
+                summary="fixture",
+                conclusion="success",
+            )
+            == 99
+        )
+    finally:
+        await client.close()
+    assert len(calls) == 2
+
+
 @pytest.mark.asyncio
 async def test_existing_check_id_and_reset_never_post_a_new_check(private_key: str) -> None:
     methods: list[str] = []

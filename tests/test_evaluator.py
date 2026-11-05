@@ -1,6 +1,12 @@
 """End-to-end unit tests for the network-free approval evaluator."""
 
+import json
+import subprocess
+import sys
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
+
+import pytest
 
 from extra_codeowners.evaluator import evaluate, latest_opinionated_reviews
 from extra_codeowners.models import (
@@ -424,6 +430,84 @@ def test_labels_only_restrict_app_eligibility_and_do_not_block_human() -> None:
     assert app_result.conclusion is EvaluationConclusion.FAILURE
     assert "label conditions" in app_result.requirements[0].path_evidence[0].explanation
     assert human_result.conclusion is EvaluationConclusion.SUCCESS
+
+
+# Verifies XCO-004.
+@pytest.mark.parametrize(
+    "reviews",
+    [
+        (),
+        (app_review(app_id=999),),
+        (app_review(sha=OLD_SHA),),
+        (app_review(state=ReviewState.DISMISSED),),
+        (app_review(state=ReviewState.COMMENTED),),
+        (human_review(),),
+    ],
+    ids=["absent", "unenrolled", "stale", "dismissed", "comment", "nonowner"],
+)
+def test_approval_labels_cannot_replace_eligible_review(
+    reviews: tuple[PullRequestReview, ...],
+) -> None:
+    result = evaluate(
+        evaluation(
+            reviews=reviews,
+            repo=repository(delegation(required_labels=("automated",))),
+            labels=("automated", "bot-approved", "human-approved", "approved"),
+        )
+    )
+
+    assert result.conclusion is EvaluationConclusion.FAILURE
+    assert result.requirements[0].satisfied is False
+    assert result.requirements[0].satisfied_by == ()
+    assert result.requirements[0].path_evidence[0].approved_apps == ()
+
+
+# Verifies XCO-015.
+@pytest.mark.parametrize("approved", [False, True], ids=["denied", "approved"])
+def test_evaluator_is_repeatable_without_loading_network_or_database_adapters(
+    approved: bool,
+) -> None:
+    data = evaluation(reviews=(app_review(),) if approved else ())
+    before = data.model_dump_json()
+    expected = evaluate(data)
+    # A fresh interpreter cannot inherit adapters imported by other tests.
+    program = """
+import importlib.abc
+import sys
+
+class NoAdapters(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        blocked = (
+            "httpx", "httpcore", "requests", "sqlalchemy", "sqlite3", "psycopg",
+            "extra_codeowners.github", "extra_codeowners.database", "extra_codeowners.service",
+        )
+        if any(fullname == name or fullname.startswith(name + ".") for name in blocked):
+            raise AssertionError("evaluator imported an adapter: " + fullname)
+
+sys.meta_path.insert(0, NoAdapters())
+sys.path.insert(0, sys.argv[1])
+from extra_codeowners.evaluator import evaluate
+from extra_codeowners.models import EvaluationInput
+
+data = EvaluationInput.model_validate_json(sys.stdin.read())
+before = data.model_dump_json()
+first = evaluate(data)
+assert evaluate(data) == first
+assert evaluate(data.model_copy(deep=True)) == first
+assert data.model_dump_json() == before
+print(first.model_dump_json())
+"""
+    completed = subprocess.run(  # noqa: S603 - fixed program and current interpreter; no shell.
+        [sys.executable, "-I", "-B", "-c", program, str(Path(__file__).resolve().parents[1])],
+        input=before,
+        text=True,
+        capture_output=True,
+        check=True,
+        timeout=10,
+    )
+
+    assert json.loads(completed.stdout) == expected.model_dump(mode="json")
+    assert data.model_dump_json() == before
 
 
 def test_unowned_files_are_github_compatible_and_require_no_approval() -> None:
