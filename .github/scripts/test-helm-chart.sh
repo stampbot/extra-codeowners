@@ -35,6 +35,38 @@ if grep -Eq '^kind: (HorizontalPodAutoscaler|PodDisruptionBudget|Job)$' \
   printf 'Drained release must omit autoscaling, disruption budget, and migration.\n' >&2
   exit 1
 fi
+# Verifies the rendered zero-to-two restore keeps migration, Deployment and PDB ordered.
+helm template extra-codeowners charts/extra-codeowners \
+  --set highAvailability.enabled=true \
+  --set migrations.asHelmHook=false \
+  --set-json 'migrations.annotations={"argocd.argoproj.io/sync-wave":"-1"}' \
+  >"${output}/ha-restore.yaml"
+grep -Fxq '  replicas: 2' "${output}/ha-restore.yaml"
+grep -Fxq '  minAvailable: 1' "${output}/ha-restore.yaml"
+helm template extra-codeowners charts/extra-codeowners \
+  --set highAvailability.enabled=true \
+  --show-only templates/pdb.yaml \
+  >"${output}/pdb-default-wave.yaml"
+grep -Fq 'argocd.argoproj.io/sync-wave: "1"' "${output}/pdb-default-wave.yaml"
+grep -Fq 'app.kubernetes.io/component: application' "${output}/pdb-default-wave.yaml"
+for pair in '-3:-2' '0:1' '4:5' '+02:3' '08:9' '010:11' '+0008:9' '-010:-9' '-0008:-7' '-000:1' \
+  '-9223372036854775808:-9223372036854775807' \
+  '9223372036854775806:9223372036854775807'; do
+  deployment_wave="${pair%%:*}"
+  pdb_wave="${pair#*:}"
+  helm template extra-codeowners charts/extra-codeowners \
+    --set highAvailability.enabled=true \
+    --set-json "deploymentAnnotations={\"argocd.argoproj.io/sync-wave\":\"${deployment_wave}\"}" \
+    --show-only templates/pdb.yaml \
+    >"${output}/pdb-custom-wave.yaml"
+  grep -Fq "argocd.argoproj.io/sync-wave: \"${pdb_wave}\"" \
+    "${output}/pdb-custom-wave.yaml"
+done
+helm template extra-codeowners charts/extra-codeowners \
+  --set podDisruptionBudget.enabled=true \
+  --show-only templates/pdb.yaml \
+  >"${output}/pdb-single-replica.yaml"
+grep -Fq 'argocd.argoproj.io/sync-wave: "1"' "${output}/pdb-single-replica.yaml"
 helm template extra-codeowners charts/extra-codeowners \
   --set monitoring.serviceMonitor.enabled=true \
   >"${output}/service-monitor-default.yaml"
@@ -122,6 +154,12 @@ reject_values() {
 reject_values 'insecure-mode environment override' \
   --set-string extraEnv[0].name=EXTRA_CODEOWNERS_ALLOW_INSECURE_CHANGES \
   --set-string extraEnv[0].value=true
+for invalid_wave in 'later' '1.5' ' 2' '-2 ' '9223372036854775807' \
+  '9223372036854775808' '-9223372036854775809'; do
+  reject_values "invalid or overflowing Deployment sync wave: ${invalid_wave}" \
+    --set highAvailability.enabled=true \
+    --set-json "deploymentAnnotations={\"argocd.argoproj.io/sync-wave\":\"${invalid_wave}\"}"
+done
 reject_values 'PostgreSQL enforcement environment override' \
   --set-string extraEnv[0].name=EXTRA_CODEOWNERS_REQUIRE_POSTGRESQL \
   --set-string extraEnv[0].value=false

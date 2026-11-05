@@ -296,6 +296,8 @@ jobs:
           -skip ServiceMonitor,PrometheusRule
           /work/default.yaml /work/optional.yaml /work/credentials.yaml
           /work/rolling-update.yaml
+          /work/ha-restore.yaml /work/pdb-default-wave.yaml
+          /work/pdb-custom-wave.yaml /work/pdb-single-replica.yaml
 
   container:
     name: Container (${{ matrix.architecture }})
