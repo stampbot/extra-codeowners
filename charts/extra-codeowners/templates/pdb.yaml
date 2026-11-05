@@ -3,6 +3,8 @@ apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
   name: {{ include "extra-codeowners.fullname" . }}
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ include "extra-codeowners.pdbSyncWave" . | quote }}
   labels:
     {{- include "extra-codeowners.labels" . | nindent 4 }}
 spec:

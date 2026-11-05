@@ -202,11 +202,6 @@ close before the project is presented as production-ready:
 - [Issue #18][issue-18]: complete corresponding-source delivery and approval of
   the distribution mechanism.
 
-### Known defects
-
-- [Issue #241][issue-241]: when Argo CD resumes a drained release, the
-  PodDisruptionBudget should be ordered after the Deployment.
-
 ### Hardening and verification
 
 - [Issue #40][issue-40]: run DCO evaluation where a pull request can't modify
@@ -265,6 +260,5 @@ on this list opens or closes.
 [issue-76]: https://github.com/stampbot/extra-codeowners/issues/76
 [issue-124]: https://github.com/stampbot/extra-codeowners/issues/124
 [issue-203]: https://github.com/stampbot/extra-codeowners/issues/203
-[issue-241]: https://github.com/stampbot/extra-codeowners/issues/241
 [issue-259]: https://github.com/stampbot/extra-codeowners/issues/259
 [issue-260]: https://github.com/stampbot/extra-codeowners/issues/260

@@ -155,6 +155,12 @@ Enable the target migration before restoring the normal replica and
 high-availability settings. Verify the rendered Deployment has zero replicas
 and no HPA, PDB, or migration Job before merging the drain state.
 
+On restore, the chart places an enabled PDB one Argo sync wave after the
+Deployment, following any custom Deployment wave. Argo therefore waits for
+the restored Deployment to become healthy before applying the PDB. Keep the
+migration hook in an earlier wave; the PDB's `minAvailable` and application-only
+selector do not change. Plain Helm does not use Argo's wave annotation.
+
 For a chart that rejects zero replicas, suspend reconciliation
 for the exact Argo CD Application, Flux resource, or other controller before
 you alter the workload. Record its previous state. The controller must not

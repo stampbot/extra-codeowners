@@ -3,6 +3,29 @@
 {{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
+{{/* Argo must restore the Deployment before an admission policy checks its PDB. */}}
+{{- define "extra-codeowners.pdbSyncWave" -}}
+{{- $text := default "0" (index .Values.deploymentAnnotations "argocd.argoproj.io/sync-wave") -}}
+{{- if not (regexMatch "^[+-]?[0-9]+$" $text) -}}
+{{- fail "deploymentAnnotations argocd.argoproj.io/sync-wave must be a signed 64-bit decimal integer when a PDB is enabled" -}}
+{{- end -}}
+{{/* Sprig int64 uses base 0. Strip decimal padding before conversion, unlike octal. */}}
+{{- $decimal := regexReplaceAll "^0+" (trimPrefix "-" (trimPrefix "+" $text)) "" | default "0" -}}
+{{- if and (hasPrefix "-" $text) (ne $decimal "0") -}}
+{{- $decimal = printf "-%s" $decimal -}}
+{{- end -}}
+{{- $wave := int64 $decimal -}}
+{{/* int64 silently coerces overflow; require a lossless decimal conversion. */}}
+{{- if ne (printf "%d" $wave) $decimal -}}
+{{- fail "deploymentAnnotations argocd.argoproj.io/sync-wave must be a signed 64-bit decimal integer when a PDB is enabled" -}}
+{{- end -}}
+{{- $next := add $wave 1 -}}
+{{- if le $next $wave -}}
+{{- fail "deploymentAnnotations argocd.argoproj.io/sync-wave must leave room for a later PDB wave" -}}
+{{- end -}}
+{{- $next -}}
+{{- end -}}
+
 {{/* Create a default fully qualified app name. */}}
 {{- define "extra-codeowners.fullname" -}}
 {{- if .Values.fullnameOverride }}

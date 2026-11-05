@@ -396,6 +396,20 @@ database Secret is available first. Argo waits for this hook to succeed before
 it applies the Deployment. The chart owns the hook and hook-delete annotations,
 so values cannot weaken that lifecycle.
 
+When a PodDisruptionBudget is enabled, the chart puts it in the Argo sync
+wave immediately after the Deployment: wave `1` by default, following the
+Deployment's default wave `0`. A custom Deployment wave in
+`deploymentAnnotations` moves the PDB with it. It must be a signed 64-bit
+decimal integer below the maximum value so a later wave exists. No second
+value needs to be kept in sync.
+
+Argo waits for the Deployment wave to become healthy before applying the PDB.
+This matters when restoring a drained release: an admission policy must see
+the restored replica count before it checks `minAvailable`. Keep migrations
+in an earlier wave. The annotation has no ordering effect during a plain Helm
+install, and the PDB's selector and availability requirement are unchanged.
+See [Argo's wave ordering](https://argo-cd.readthedocs.io/en/stable/user-guide/sync-waves/#combining-sync-waves-and-hooks).
+
 The default startup probe calls `/health/live` every five seconds, gives each
 request three seconds, and allows 60 failures. That gives initialization five
 minutes before Kubernetes restarts the container. Kubernetes begins liveness
