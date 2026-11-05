@@ -1,10 +1,46 @@
 {
   "@context": "https://openvex.dev/ns/v0.2.0",
-  "@id": "urn:uuid:4ab74a7b-b65b-5b22-806d-6d2c75c1706a",
+  "@id": "urn:uuid:d052fef5-16d5-528f-a533-5d38c1424241",
   "author": "Extra CODEOWNERS maintainers",
-  "last_updated": "2026-11-05T05:27:28Z",
+  "last_updated": "2026-11-05T07:30:58Z",
   "role": "VEX document producer",
   "statements": [
+    {
+      "impact_statement": "CVE-2026-109518 requires APT to acquire and install packages over attacker-controlled HTTP while following redirects and retrying downloads. The shipped Extra CODEOWNERS entrypoint, healthcheck, migrations and application routes run Python; they do not invoke APT, load its Python bindings or expose its package-acquisition API. GitHub requests use HTTPX, not APT. The vulnerable APT acquisition/install code is therefore outside the reviewed service execution path. The apt packages remain present and unpatched. This assessment does not cover operator-run package installation, custom code or plugins, or arbitrary execution after compromise.",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "products": [
+        {
+          "@id": "pkg:deb/debian/apt@3.0.3?arch=amd64&distro=debian-13.7",
+          "identifiers": {
+            "purl": "pkg:deb/debian/apt@3.0.3?arch=amd64&distro=debian-13.7"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/apt@3.0.3?arch=arm64&distro=debian-13.7",
+          "identifiers": {
+            "purl": "pkg:deb/debian/apt@3.0.3?arch=arm64&distro=debian-13.7"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/libapt-pkg7.0@3.0.3?arch=amd64&distro=debian-13.7&upstream=apt",
+          "identifiers": {
+            "purl": "pkg:deb/debian/libapt-pkg7.0@3.0.3?arch=amd64&distro=debian-13.7&upstream=apt"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/libapt-pkg7.0@3.0.3?arch=arm64&distro=debian-13.7&upstream=apt",
+          "identifiers": {
+            "purl": "pkg:deb/debian/libapt-pkg7.0@3.0.3?arch=arm64&distro=debian-13.7&upstream=apt"
+          }
+        }
+      ],
+      "status": "not_affected",
+      "status_notes": "Debian identifies apt 3.0.3 as vulnerable and trixie's 3.0.4 as fixed. This is a runtime reachability assessment, not a package fix or component-absence claim. Source: https://security-tracker.debian.org/tracker/CVE-2026-109518. Reviewed Python entrypoint/CLI, ASGI routes, GitHub HTTPX client, migration commands and Dockerfile; no APT invocation or adapter is used. The runtime binding records the reviewed code, dependency lock and Docker inputs. Raw scan findings and the empty scanner ignore list are retained.",
+      "timestamp": "2026-11-05T07:30:00Z",
+      "vulnerability": {
+        "name": "CVE-2026-109518"
+      }
+    },
     {
       "products": [
         {
@@ -746,9 +782,9 @@
       }
     }
   ],
-  "timestamp": "2026-11-05T05:27:28Z",
+  "timestamp": "2026-11-05T07:30:58Z",
   "tooling": "Vexcalibur + Extra CODEOWNERS runtime binding",
-  "version": 12,
+  "version": 13,
   "x_extra_codeowners_runtime": {
     "files": {
       ".dockerignore": "3f9dc9d3a79fe3085f25de88403b5563ad5c7fa7010bef94c5e55f24bd3cf691",
@@ -796,7 +832,7 @@
       "pyproject.toml": "bfb88e388d4590a6f52ed6d76889460a6b698f13129389b3823d2ff661bedd55",
       "uv.lock": "5514cb0448adb693fe97f3d2c8016ccd606890327a1946467fbd118356de4922"
     },
-    "review": "Reviewed fixed request-phase type ownership, local linked-root sampling and bounded private text export through the unchanged OpenTelemetry SDK. No dependency, image, TLS, database query or native entry-point change. All 26 fixed assessments and dates unchanged; no new exclusion.",
+    "review": "Reviewed CVE-2026-109518 acquisition/install prerequisites against Python entrypoint, CLI, healthcheck, ASGI routes, migrations, HTTPX client, dependency lock and pinned Dockerfile. No APT execution or acquisition API is exposed. Exact apt/libapt 3.0.3 products on Debian 13.7 are not_affected for the shipped runtime only; operator installs/custom code/post-compromise execution are excluded. Debian advisory and independent source review recorded in #268 and runtime-review.md; earlier fixed assessments unchanged.",
     "schema_version": 1
   }
 }

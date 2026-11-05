@@ -1,5 +1,32 @@
 # Runtime vulnerability review
 
+## APT package installation: November 5, 2026 UTC
+
+[CVE-2026-109518](https://security-tracker.debian.org/tracker/CVE-2026-109518)
+requires an APT package installation over manipulated HTTP, with redirects,
+retries and hard-link reuse. Debian marks the installed `apt` and
+`libapt-pkg7.0` 3.0.3 as vulnerable; trixie's 3.0.4 contains the fix.
+
+The shipped entrypoint, healthcheck, migrations and application routes run
+Python. The Dockerfile installs locked Python dependencies with uv, not APT.
+The service neither starts APT nor exposes its acquisition API; GitHub HTTP
+requests use HTTPX. The reviewed source contains no subprocess or FFI path to
+APT. This supports `not_affected` with
+`vulnerable_code_not_in_execute_path`, not component absence or a package fix.
+
+The statement names both packages on amd64 and arm64, using the Debian 13.7
+identities from the native reports and signed inventories. The 26 earlier
+`fixed` statements retain their contents and assessment dates. Raw scanner
+findings remain available, and there is no scanner ignore. The runtime binding
+forces another review when application code, dependencies or Docker inputs
+change.
+
+APT remains installed and unpatched. This assessment does not cover an
+operator installing packages, custom code or plugins, or arbitrary execution
+after compromise. Non-root execution is defense in depth, not the basis for
+the assessment. No container execution or new native-linkage inspection was
+performed for this source-level acquisition-path review.
+
 ## Bounded reconciliation tracing: November 5, 2026 UTC
 
 Reconciliation now exports a fixed-size summary and linked logical-request

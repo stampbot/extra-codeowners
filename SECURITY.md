@@ -86,15 +86,13 @@ before 1.0.
 The [current OpenVEX statement](security/vex/runtime.openvex.json) records which
 reported vulnerabilities affect the shipped service. Our
 [runtime review](security/vex/runtime-review.md) covers both image architectures.
-The October 5 update records 25 fixed vulnerabilities, including the findings
-previously excluded for the September runtime. Its OpenSSL claims name
-`3.5.7-1~deb13u3`.
-
-One claim remains `not_affected`: CVE-2026-103111 in Debian's PCRE2 library.
-The service neither loads that library nor calls the affected JIT API. The
-review distinguishes it from the private PCRE2 copy in the ARM64 PostgreSQL
-driver. Every claim names package versions, architectures, and the Debian
-distribution; none covers arbitrary commands or custom code in the container.
+It records package fixes, including the earlier PCRE2 and OpenSSL findings.
+One claim is `not_affected`: CVE-2026-109518 in APT's package-acquisition path.
+The shipped service doesn't invoke APT or expose its install API; its HTTP
+requests use HTTPX. APT remains installed and unpatched. This assessment does
+not cover an operator installing packages, custom code or plugins, or arbitrary
+execution after compromise. Every claim names package versions, architectures,
+and the Debian distribution.
 
 The OpenSSL-only statements for [3.5.6](security/vex/openssl-3.5.6.openvex.json)
 and [3.5.7](security/vex/openssl-3.5.7.openvex.json) remain as historical evidence.
