@@ -17,6 +17,10 @@ records verified publication, automatic rollout, the restored approval probe
 and complete linked telemetry for a large partial scan. It does not establish
 a successful full scan or the remaining provider and performance contracts.
 
+The [later successful-scan receipt](evidence/2026-11-05-alpha69-successful-reconciliation.md)
+records the completed outcome and all 6,352 linked request traces. It is one
+successful cycle; the other performance and provider gates remain separate.
+
 ## Diagnostics and approval probe: November 2, 2026
 
 Alpha.65 runs on two Kubernetes nodes with shared PostgreSQL state. The
