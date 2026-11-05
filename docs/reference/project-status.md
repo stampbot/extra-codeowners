@@ -194,15 +194,11 @@ close before the project is presented as production-ready:
 - [Issue #203][issue-203]: bound GitHub API use for large installations whose
   repositories are mostly unenrolled, and measure quiet reconciliation and
   missed-webhook recovery.
-- [Issue #260][issue-260]: handle the observed discovery-read connection
-  disconnect within the existing retry, quota and deadline bounds.
 - [Issue #259][issue-259]: keep long reconciliation traces complete and bounded.
   The [linked-trace decision](../explanation/adrs/2026-11-05-linked-reconciliation-traces.md)
   bounds each source-owned trace; full-scan live validation remains open.
 - [Issue #18][issue-18]: complete corresponding-source delivery and approval of
   the distribution mechanism.
-- [Issue #264][issue-264]: restore routine publication during Debian Snapshot
-  outages by reusing authenticated, version-matched source evidence.
 
 ### Hardening and verification
 
@@ -215,14 +211,14 @@ close before the project is presented as production-ready:
 - [Issue #24][issue-24]: harden the `stampbot` organization's identity and
   new-repository defaults.
 - [Issue #10][issue-10]: enroll in the OpenSSF Best Practices program.
-- Requirement test coverage has gaps. XCO-004 in the
-  [threat model](../explanation/threat-model.md#invariants) and XCO-015 in the
-  [architecture design rules](../explanation/architecture.md#design-rules) have
-  no test that names them. Tests for XCO-007 cover the expected App source but
-  don't assert the published head SHA. XCO-011 has tests for logs and selected
-  request/cache metrics and trace attributes, but complete coverage of check
-  output and audit details is not established. A referenced ID is not proof
-  of every part of an invariant.
+- Requirement test coverage remains partial. XCO-011 in the
+  [threat model](../explanation/threat-model.md#invariants) has tests for logs
+  and selected request/cache metrics and trace attributes, but complete
+  coverage of check output and audit details is not established. The
+  evaluator's repeatability and adapter-import tests cover approved and
+  denied fixtures, not every possible policy. Mocked check-publication tests
+  assert the head and App selection; they don't prove GitHub's merge behavior.
+  A referenced ID is not proof of every part of an invariant.
 
 ### Evaluation and adoption
 
@@ -263,5 +259,3 @@ on this list opens or closes.
 [issue-124]: https://github.com/stampbot/extra-codeowners/issues/124
 [issue-203]: https://github.com/stampbot/extra-codeowners/issues/203
 [issue-259]: https://github.com/stampbot/extra-codeowners/issues/259
-[issue-260]: https://github.com/stampbot/extra-codeowners/issues/260
-[issue-264]: https://github.com/stampbot/extra-codeowners/issues/264
