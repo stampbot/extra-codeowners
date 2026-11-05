@@ -3365,23 +3365,32 @@ class Reconciler:
         started = time.perf_counter()
         result = "failure"
         try:
-            with self.tracing.span(
-                "reconciliation.run",
-                attributes={"reconciliation.component": "open_pull_scan"},
-            ) as span:
+            with self.tracing.reconciliation_span() as span:
                 try:
                     outcome = await self.reconcile_once(stop)
                 except Exception as error:
                     result = "failure"
+                    span.set_attribute("reconciliation.outcome", result)
                     self.tracing.mark_error(span, type(error).__name__)
                     RECONCILIATIONS.labels(result).inc()
                     log.exception("reconciliation_failed")
                     return
                 if outcome is None:
                     result = "not_elected"
+                    span.set_attribute("reconciliation.outcome", result)
                     return
+                span.set_attributes(
+                    {
+                        "reconciliation.queued": outcome.queued,
+                        "reconciliation.failed_installations": outcome.failed_installations,
+                        "reconciliation.lease_lost": outcome.lease_lost,
+                        "reconciliation.stopped": outcome.stopped,
+                        "reconciliation.deferred": outcome.deferred,
+                    }
+                )
                 if not outcome.complete:
                     result = "partial"
+                    span.set_attribute("reconciliation.outcome", result)
                     RECONCILIATIONS.labels(result).inc()
                     log.warning(
                         "reconciliation_partial",
@@ -3393,6 +3402,7 @@ class Reconciler:
                     )
                     return
                 result = "success"
+                span.set_attribute("reconciliation.outcome", result)
                 RECONCILIATIONS.labels(result).inc()
                 RECONCILIATION_LAST_SUCCESS.set_to_current_time()
                 log.info("reconciliation_complete", pull_requests_queued=outcome.queued)

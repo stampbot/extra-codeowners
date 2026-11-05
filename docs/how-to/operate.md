@@ -115,13 +115,41 @@ Use this order when a check is late:
 Do not use a trace as the only source of truth. Sampling intentionally omits
 some work, and a failed exporter does not affect the approval decision.
 
-Before attributing a whole scan to its phases, confirm that the trace contains
-the `reconciliation.run` root and its final outcome. Correlate the same attempt
-with its completion log, reconciliation outcome counter and last-success
-timestamp. A partial scan doesn't update that timestamp. Retained child spans
-without the root are incomplete evidence, even when export succeeded; check
-the backend's size/drop limits and query completeness rather than treating
-the missing span as an application failure.
+### Follow a reconciliation scan
+
+Start with the completion log's `trace_id` and open its `reconciliation.run`
+summary. Correlate that attempt with the outcome counter and last-success
+timestamp; a partial scan doesn't update the timestamp. The summary contains
+the final outcome and aggregate request phases. It does not contain a large
+request waterfall: each GitHub operation is a separate root linked to it.
+
+In Tempo, replace the fictional ID below with the summary's trace ID and use
+the same time range as the attempt:
+
+```traceql
+{resource.service.name="extra-codeowners" && span.reconciliation.scan_trace_id="0123456789abcdef0123456789abcdef"}
+```
+
+Tempo versions with link-scope queries can also use:
+
+```traceql
+{resource.service.name="extra-codeowners" && link:traceID="0123456789abcdef0123456789abcdef"}
+```
+
+Open any result to inspect its operation, retries and request-phase timing;
+its link leads back to the summary. Fetch every search page or split the time
+range, deduplicate trace IDs, and compare the unique count with the summary's
+`reconciliation.detail_traces`. A search result limit is not an omission
+budget. Fewer details than expected means incomplete telemetry until query
+limits, indexing delay, export and retention are checked. The layout emits
+every request for a sampled scan, but cannot guarantee backend delivery.
+`tracing.truncated_fields` reports any clipped private text on a span.
+
+The query syntax is described in
+[Tempo 2.9's TraceQL reference](https://github.com/grafana/tempo/blob/v2.9.0/docs/sources/tempo/traceql/construct-traceql-queries.md).
+Older releases used one growing scan trace. Retained request spans without
+its root are incomplete evidence even when export succeeded; inspect the
+backend's size/drop limits rather than treating that as an application failure.
 
 Phase totals are not automatically wall-clock percentages: nested token
 requests and concurrent operations can overlap. Cache and request counters
@@ -130,7 +158,7 @@ image and counter continuity before calculating deltas, and don't combine
 different releases to claim two quiet successful cycles. The
 [validation receipts](../maintainers/evidence/index.md) show the limits of the
 measured evidence; [issue #259](https://github.com/stampbot/extra-codeowners/issues/259)
-tracks the incomplete long-trace problem.
+tracks the bounded layout's live validation.
 
 Read runtime identity through an operator-only route after every rollout.
 Official images report their verified source commit in `build_revision`;

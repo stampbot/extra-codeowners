@@ -205,13 +205,50 @@ when headers arrive; `body` covers the caller's consumption and response
 closure, not just network transfer. Authentication may include a nested token
 request, so adding parent and child timings double-counts that work.
 
-The existing request span accumulates each phase across retries in
+The logical request span accumulates each phase across retries in
 `github.phase.<phase>.seconds`. Discovery spans also record
 `github.discovery.cache` (`pages` or `compact`), `github.discovery.lookup`
 (`hit`, `absent`, or `expired`), and `github.request.conditional` for the final
 physical attempt. These attributes contain no validators or request contents.
 `absent` means no entry exists now; it does not distinguish a cold cache from
 one whose entry was evicted. The cache retains no history of evicted keys.
+
+### Reconciliation trace fields
+
+When tracing is enabled, each reconciliation attempt has a small independent
+`reconciliation.run` root. Each logical GitHub operation during that attempt
+has its own root, linked to the scan and searchable by
+`reconciliation.scan_trace_id`. Nested token requests also link directly to
+the scan. Worker requests outside reconciliation retain their parent-child
+layout. No incoming webhook header supplies these relationships.
+
+| Summary attribute | Meaning |
+| --- | --- |
+| `reconciliation.outcome` | `success`, `partial`, `not_elected`, `failure`, or `cancelled`. Cancellation still propagates; this is a trace outcome, not a new metric label. |
+| `reconciliation.queued` | PRs queued by this attempt, when it returned an outcome. |
+| `reconciliation.failed_installations` | Failed installation count, when available. |
+| `reconciliation.lease_lost`, `reconciliation.stopped`, `reconciliation.deferred` | Final outcome flags, when available. |
+| `reconciliation.detail_traces` | Logical request roots started in this attempt, including nested token operations. Not proof that the receiver retained them. |
+| `reconciliation.outer_requests` | Request roots excluding nested token operations. |
+| `reconciliation.phase.<phase>.seconds` | Totals from outer logical requests for the seven fixed phases above. Absent if that phase did not run. |
+
+The scan's local sampling decision applies to all its detail roots, even when
+the configured sample ratio is between `0` and `1`. A sampled scan deliberately
+omits no request span. Search all pages and compare the unique request-root
+count with `reconciliation.detail_traces` before calling its detail complete.
+Nested token phases are excluded from the summary to avoid double-counting
+authentication, but concurrent outer operations can still overlap.
+
+Source-owned scan and request traces have a fixed shape, not an unbounded
+number of child spans. Their initial text attributes and private exception
+fields are capped at 2,048 Unicode characters each. The affected span records
+`tracing.truncated_fields`, including `0` when nothing was clipped. This cap
+does not remove the private-metadata opt-in, constrain arbitrary external
+instrumentation or operator-supplied resource attributes, or guarantee backend
+delivery. Total trace volume still grows with work; use sampling to control
+that volume. See the [operations queries](../how-to/operate.md#follow-a-reconciliation-scan).
+
+### Discovery retry diagnostics
 
 Installation-authenticated discovery GETs have one transient retry after a
 one-second wait. It covers a received `500`, `502`, `503`, or `504` without

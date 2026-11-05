@@ -1,5 +1,15 @@
 # Runtime vulnerability review
 
+## Bounded reconciliation tracing: November 5, 2026 UTC
+
+Reconciliation now exports a fixed-size summary and linked logical-request
+roots through the existing OpenTelemetry SDK. Local context variables carry
+sampling and phase totals; bounded private text uses Python string slicing
+and the existing traceback formatter. The change adds no authorization reads,
+database query, subprocess, native-library loading or TLS setting. Locked
+dependencies and image inputs are unchanged. All 26 `fixed` statements and
+their assessment dates remain unchanged; this review adds no exclusion.
+
 ## Discovery disconnect retry: November 5, 2026 UTC
 
 The discovery client can repeat one authenticated GET after HTTPX reports a

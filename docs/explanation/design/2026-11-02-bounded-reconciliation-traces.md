@@ -2,17 +2,19 @@
 
 > A full reconciliation can outgrow one trace. Compare ways to keep its
 > completion record and useful phase attribution without changing approval
-> behavior or shared backend limits. No replacement layout is selected yet.
+> behavior or shared backend limits. The selected layout keeps a small summary
+> and links one independent trace per logical GitHub request.
 
 ## Record
 
 | Field | Value |
 | --- | --- |
 | Date | 2026-11-02 |
-| Status | In review |
+| Status | Decided |
 | Owner | Maintainers |
 | Author | Extra CODEOWNERS contributors |
 | Related | [Issue #259](https://github.com/stampbot/extra-codeowners/issues/259), [performance gate #203](https://github.com/stampbot/extra-codeowners/issues/203), [November evidence](../../maintainers/evidence/2026-11-02-reconciliation-and-alpha67.md#trace-completeness) |
+| Decision | [Linked reconciliation traces](../adrs/2026-11-05-linked-reconciliation-traces.md) |
 
 ## Problem
 
@@ -22,10 +24,11 @@ GitHub operations beneath it. The measured 38-minute successful scan retained
 confirmed the scan succeeded; the fetched trace could not explain the complete
 run.
 
-The observed backend had a five-million-byte trace limit and size-related
-discard metrics. That is a lead, not proof of the missing span's cause. We
-must distinguish backend rejection from export loss, query truncation and
-delayed availability before choosing a fix.
+The initial backend observation had a five-million-byte trace limit and
+size-related discard metrics, but no trace-specific loss record. The
+[November 5 investigation](../../maintainers/evidence/2026-11-05-trace-size-investigation.md)
+later tied size rejection and compaction discards to a newly measured scan's
+exact trace. A successful fetch well after completion still lacked the root.
 
 ## Goals and non-goals
 
@@ -75,15 +78,15 @@ This does not answer the measured completeness problem.
 
 ### Keep a small scan summary and link bounded detail traces
 
-Record completion and aggregate phases in a small scan trace. Put request
-detail in separately bounded chunks linked to that scan. A repository boundary
-may be useful for navigation, but a large repository still needs a size or
-span-count bound; splitting by repository alone is insufficient.
+Record completion and aggregate phases in a small scan trace. Put each
+logical GitHub operation in its own linked root, including nested token
+operations. This avoids chunk rollover and the unbounded size of a repository
+with many pages. Each request keeps its existing retry bound.
 
-This can retain request-level explanation without one growing trace. It needs
-tests for chunk rollover, relationship semantics, cancellation and the queries
-operators use to find each chunk. Any work identifiers remain subject to
-XCO-011; no repository-valued metric label is needed.
+This retains request-level explanation without one growing trace. Linked
+roots follow the locally created scan's sampling decision. A searchable
+opaque scan trace ID supports navigation without repository-valued metric
+labels. Private text has a fixed per-field cap and a visible clipping count.
 
 ### Emit a bounded aggregate instead of every request span
 
@@ -100,34 +103,47 @@ The difference is diagnostic detail, not approval authority:
 | Option | Bounds an individual scan's trace | Per-request explanation | Main unknown |
 | --- | --- | --- | --- |
 | One growing trace | No | Present only while retained | Which stage lost the measured root? |
-| Summary plus bounded linked detail | Yes, if every chunk has an enforced bound | Retained within the chosen detail budget | Chunk policy and usable backend navigation |
+| Summary plus bounded linked detail | Yes, one fixed-shape root per logical request | Every sampled request retained | More trace records and about 17% more encoded bytes |
 | Bounded aggregate | Yes, if aggregate keys are fixed | Mostly omitted | Whether aggregates are sufficient for diagnosis |
 
 ## Recommendation
 
-Investigate bounded linked detail first because the existing request phases
-already distinguish HTTP work from quota and permit waits. That is a candidate,
-not an accepted decision. Compare it with an aggregate-only prototype before
-committing to a layout; the evidence doesn't yet establish the simplest option
-that preserves useful diagnosis.
+Use a small summary and one linked trace per request. The 10,000-request
+comparison exceeded five million bytes as one trace; the linked version
+retained every request with no individual trace above 1,185 bytes. Selecting
+only its 600-byte summary was smaller, but lost all individual request detail.
+The linked layout is the simplest tested option that retains that detail.
 
-## Open questions
+The live backend accepts the correlation-attribute query. Actual full-scan
+retention and navigation still need deployment evidence; passing the offline
+comparison is not proof that an exporter or receiver can never drop data.
 
-- Where did the root disappear? Correlate exporter results, backend discard
-  evidence and complete query responses for a controlled large trace.
-- What bounds each emitted unit? Measure encoded size and span count at sample
-  ratio `1`, including long metadata values and a repository with many pages.
-- How do operators reach linked detail? Exercise the actual backend queries
-  and document a route from completion to each retained chunk.
-- What happens on errors or shutdown? Tests must show a bounded final summary,
-  honest omission accounting and unchanged queue/deadline behavior.
+## Questions and findings
 
-Maintainers decide the layout after those checks. Any durable choice gets its
-own ADR, and the current architecture, runbook and metric reference change
-with the implementation.
+- **Where was data lost?** Trace-specific backend warnings confirm size
+  rejection and later compaction discards. They do not exclude additional
+  exporter loss; telemetry completeness still needs cross-checking.
+- **What bounds a unit?** One fixed-shape root per logical request, bounded
+  private text and no retained request list on the summary. Tests include
+  10,000 requests and very long multi-byte private text.
+- **How do operators navigate?** Each request links to the summary and carries
+  its opaque trace ID as an attribute. The live backend accepts that search;
+  counting an actual scan's returned details remains a rollout check.
+- **What about failure or shutdown?** Tests cover error outcomes, propagated
+  cancellation and context cleanup. Abrupt process loss or export failure can
+  still prevent a final summary from arriving.
+
+The live checks remain in issue #259. They validate the rollout rather than
+selecting a different approval or queue policy.
 
 ## Outcome
 
-Open. No prototype or replacement layout is implemented by this document.
-The investigation and implementation checklist remain in issue #259 rather
-than being copied here.
+Selected the summary-plus-linked-request layout, recorded in the
+[November 5 decision](../adrs/2026-11-05-linked-reconciliation-traces.md).
+The architecture, operations guide and HTTP/trace reference change with the
+implementation; the investigation and live checklist remain in issue #259.
+
+- 2026-11-02: Opened the comparison after a successful scan's root was missing.
+- 2026-11-05: Confirmed backend size rejection for a new measured trace;
+  compared growing, linked and summary-only encodings and selected linked
+  request roots. No shared receiver limits changed.

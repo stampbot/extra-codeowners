@@ -3910,6 +3910,71 @@ async def test_reconciler_preserves_webhook_accepted_while_listing_pull_pages(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("outcome", "expected"),
+    [
+        (None, "not_elected"),
+        (ReconciliationOutcome(queued=3), "success"),
+        (ReconciliationOutcome(queued=2, failed_installations=1), "partial"),
+        (ReconciliationOutcome(queued=2, deferred=True), "partial"),
+        (ReconciliationOutcome(queued=2, lease_lost=True), "partial"),
+        (ReconciliationOutcome(queued=2, stopped=True), "partial"),
+        (RuntimeError("private failure"), "failure"),
+        (asyncio.CancelledError(), "cancelled"),
+    ],
+)
+async def test_reconciliation_trace_records_final_outcome_without_changing_propagation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    outcome: ReconciliationOutcome | BaseException | None,
+    expected: str,
+) -> None:
+    exporter = InMemorySpanExporter()
+    tracing = Tracing(
+        enabled=True,
+        endpoint="http://tempo.example.test/v1/traces",
+        sample_ratio=1,
+        processor=SimpleSpanProcessor(exporter),
+    )
+    store = migrated_store(f"sqlite:///{tmp_path / 'scan-trace.db'}")
+    reconciler = Reconciler(
+        settings(),
+        FakeGitHub(changed_path="uv.lock"),  # type: ignore[arg-type]
+        store,
+        "reconciler",
+        tracing=tracing,
+    )
+
+    async def reconcile(stop: asyncio.Event | None = None) -> ReconciliationOutcome | None:
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return outcome
+
+    monkeypatch.setattr(reconciler, "reconcile_once", reconcile)
+    try:
+        if expected == "cancelled":
+            with pytest.raises(asyncio.CancelledError):
+                await reconciler.run_iteration()
+        else:
+            await reconciler.run_iteration()
+    finally:
+        tracing.shutdown()
+    [span] = exporter.get_finished_spans()
+    assert span.name == "reconciliation.run"
+    assert span.parent is None
+    assert span.attributes is not None
+    assert span.attributes["reconciliation.outcome"] == expected
+    assert span.attributes["reconciliation.detail_traces"] == 0
+    assert span.attributes["reconciliation.outer_requests"] == 0
+    if isinstance(outcome, ReconciliationOutcome):
+        assert span.attributes["reconciliation.queued"] == outcome.queued
+        assert span.attributes["reconciliation.deferred"] == outcome.deferred
+        assert span.attributes["reconciliation.lease_lost"] == outcome.lease_lost
+        assert span.attributes["reconciliation.stopped"] == outcome.stopped
+    assert span.events == ()  # Private exception text remains opt-in.
+
+
+@pytest.mark.asyncio
 async def test_unelected_reconciler_does_not_report_an_attempt(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

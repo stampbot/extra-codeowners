@@ -9,6 +9,7 @@ the older results and links newer receipts.
 ## Receipts
 
 - [November 2, 2026: reconciliation and alpha.67](2026-11-02-reconciliation-and-alpha67.md)
+- [November 5, 2026: trace-size investigation](2026-11-05-trace-size-investigation.md)
 
 ## Add a receipt
 
