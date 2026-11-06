@@ -182,7 +182,7 @@ The endpoint returns Prometheus text format. Extra CODEOWNERS defines these appl
 | `extra_codeowners_queue_work_class_depth` | gauge | Pending durable work, labeled by fixed `kind` and `work_class` values. Use it to distinguish foreground work from recovery backlog. |
 | `extra_codeowners_queue_work_class_oldest_age_seconds` | gauge | Age of the oldest pending row for the same fixed labels. |
 | `extra_codeowners_queue_wait_seconds` | histogram | Time a ready work attempt waits before a worker starts it, labeled by kind and work class. Retry backoff is not included. |
-| `extra_codeowners_webhook_to_check_completion_seconds` | histogram | Accepted work age when an evaluation finishes without a retry, labeled by work class. |
+| `extra_codeowners_webhook_to_check_completion_seconds` | histogram | Time from the work item's queue timestamp to completed evaluation, labeled by work class. A queue handoff can reset that timestamp; this is not necessarily time since the original webhook receipt. |
 | `extra_codeowners_shared_head_invalidation_depth` | gauge | Exact commit generations whose durable Check Run invalidation has not finished. |
 | `extra_codeowners_shared_head_invalidations_total` | counter | Durable exact-head invalidation attempts, labeled by `completed`, `failed`, `budget_deferred`, `rate_limited`, or `superseded`. A budget deferral leaves the job queued without opening provider backpressure. |
 | `extra_codeowners_dead_jobs` | gauge | Legacy or manually introduced terminal rows. Runtime failures remain pending, so this should remain `0`. |
