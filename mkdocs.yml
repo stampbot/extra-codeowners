@@ -84,6 +84,7 @@ nav:
           - November alpha.69 successful scan: maintainers/evidence/2026-11-05-alpha69-successful-reconciliation.md
           - November discovery validator expiry: maintainers/evidence/2026-11-06-discovery-retention.md
           - November reconciliation and alpha.73: maintainers/evidence/2026-11-06-reconciliation-and-alpha73.md
+          - November missed policy webhook: maintainers/evidence/2026-11-06-missed-policy-webhook.md
       - Respond to dependency audit: how-to/respond-to-dependency-audit.md
       - Rescan a published image: how-to/rescan-published-image.md
       - Review or recover a Renovate update: how-to/manage-renovate-updates.md
