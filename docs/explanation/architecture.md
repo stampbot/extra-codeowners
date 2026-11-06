@@ -470,10 +470,16 @@ installation, but later installations still run. A suspended installation or
 archived repository is skipped only after its record passes validation.
 
 A shorter interval narrows some missed-event windows but spends more GitHub API
-budget. `reconcile_recheck_seconds` sets how often an unchanged open pull
-request receives a full evaluation. Neither setting makes the system strongly
-consistent. Merge queues add a separate `merge_group` state that this version
-does not evaluate.
+budget. Each process waits `reconcile_interval_seconds` after its attempt
+returns before trying again. `reconcile_recheck_seconds` sets the minimum age
+of a confirmed unchanged-head evaluation before a scan can queue another one.
+Neither value is a recovery deadline: a long scan still has to reach the PR,
+and a worker then has to evaluate it. Reducing the interval doesn't interrupt
+an active scan or bound how long a missed change can leave an old success
+visible.
+
+Neither setting makes the system strongly consistent. Merge queues add a
+separate `merge_group` state that this version does not evaluate.
 
 The reconciler keeps each completed-pull fingerprint for whichever is longer:
 delivery retention, or one scan interval plus one recheck interval. A slow

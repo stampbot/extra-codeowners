@@ -15,6 +15,7 @@ the older results and links newer receipts.
 - [November 5, 2026: alpha.69 successful reconciliation](2026-11-05-alpha69-successful-reconciliation.md)
 - [November 6, 2026: discovery validator expiry](2026-11-06-discovery-retention.md)
 - [November 6, 2026: reconciliation and alpha.73 rollout](2026-11-06-reconciliation-and-alpha73.md)
+- [November 6, 2026: missed policy webhook recovery](2026-11-06-missed-policy-webhook.md)
 
 ## Add a receipt
 

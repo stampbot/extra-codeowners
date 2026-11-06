@@ -27,6 +27,11 @@ observation, and alpha.73 verification, rollout and the restored label probe.
 It distinguishes queue age from delivery latency and leaves isolated
 missed-webhook and multipage/reset validation open.
 
+The [later missed-policy webhook test](evidence/2026-11-06-missed-policy-webhook.md)
+observed periodic recovery without a redelivery or manual kick. The first
+observed denial took about 27 minutes; the original policy and receiver URL
+were restored. This does not close the other recovery or performance gates.
+
 ## Diagnostics and approval probe: November 2, 2026
 
 Alpha.65 runs on two Kubernetes nodes with shared PostgreSQL state. The
