@@ -196,7 +196,7 @@ The endpoint returns Prometheus text format. Extra CODEOWNERS defines these appl
 Discovery responses use two disposable per-process cache partitions. Separating
 large discovery pages from small branch references and empty check listings
 prevents page churn from evicting those smaller responses. Both partitions
-have a one-hour idle lifetime; their combined accounted-byte cap is 32 MiB.
+have a two-hour idle lifetime; their combined accounted-byte cap is 32 MiB.
 
 The request phases are `authentication`, `semaphore_wait`, `quota_admission`,
 `http`, `quota_accounting`, `retry_wait`, and, for streamed responses, `body`. Ordinary
