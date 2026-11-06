@@ -21,6 +21,12 @@ The [later successful-scan receipt](evidence/2026-11-05-alpha69-successful-recon
 records the completed outcome and all 6,352 linked request traces. It is one
 successful cycle; the other performance and provider gates remain separate.
 
+The [November 6 receipt](evidence/2026-11-06-reconciliation-and-alpha73.md)
+records two later successful alpha.69 attempts, a natural quota-window
+observation, and alpha.73 verification, rollout and the restored label probe.
+It distinguishes queue age from delivery latency and leaves isolated
+missed-webhook and multipage/reset validation open.
+
 ## Diagnostics and approval probe: November 2, 2026
 
 Alpha.65 runs on two Kubernetes nodes with shared PostgreSQL state. The
