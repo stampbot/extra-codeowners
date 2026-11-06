@@ -1,5 +1,15 @@
 # Runtime vulnerability review
 
+## Discovery validator retention: November 6, 2026 UTC
+
+Discovery entries now expire after two idle hours rather than one. Their
+byte and entry limits, bounded zlib decoding, authenticated HTTP revalidation
+and quota accounting are unchanged. The change adds no dependency, database
+operation, TLS option, subprocess or native-library entry point. APT remains
+outside the service's execution path. The 26 `fixed` statements and the one
+APT `not_affected` statement retain their assessments and dates; only the
+reviewed runtime binding changes.
+
 ## APT package installation: November 5, 2026 UTC
 
 [CVE-2026-109518](https://security-tracker.debian.org/tracker/CVE-2026-109518)

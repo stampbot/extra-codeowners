@@ -25,7 +25,9 @@ type CacheEvent = Literal[
 DEFAULT_MAX_BYTES: Final = 32 * 1024 * 1024
 DEFAULT_MAX_ENTRY_BYTES: Final = 1024 * 1024
 DEFAULT_MAX_ENTRIES: Final = 4096
-DEFAULT_IDLE_TTL_SECONDS: Final = 3600.0
+# A long scan plus a natural quota pause can revisit after one idle hour.
+# Retention is not freshness: every reuse still requires HTTP revalidation.
+DEFAULT_IDLE_TTL_SECONDS: Final = 7200.0
 MAX_KEY_BYTES: Final = 4096
 MAX_LINKS: Final = 128
 MAX_LINK_BYTES: Final = 16 * 1024

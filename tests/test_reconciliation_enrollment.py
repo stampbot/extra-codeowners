@@ -203,6 +203,65 @@ async def test_large_unenrolled_installation_revalidates_without_refilling_queue
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("gap_seconds", [3601, 7199, 7200])
+async def test_discovery_validators_survive_a_quota_window_but_still_expire(
+    tmp_path: Path, private_key: str, gap_seconds: int
+) -> None:
+    # Verifies XCO-014: even a retained representation needs a fresh API request.
+    provider = DiscoveryProvider(count=25)
+    store = store_at(tmp_path)
+    reconciler, github = reconciler_for(provider, store, private_key, "worker")
+    clock = 0.0
+    github._discovery_cache._clock = lambda: clock
+    github._compact_discovery_cache._clock = lambda: clock
+    try:
+        assert (await scan(reconciler)).complete
+        before = provider.remaining
+        checks_before = sum(v for k, v in provider.requests.items() if k.endswith("/check-runs"))
+        clock = float(gap_seconds)
+        result = await scan(reconciler)
+        assert result.complete and result.queued == 0
+        # A slow scan plus a quota pause can revisit after one idle hour.
+        # Only the uncached absent-policy read is charged while validators live.
+        assert before - provider.remaining == (1 if gap_seconds < 7200 else 29)
+        checks_after = sum(v for k, v in provider.requests.items() if k.endswith("/check-runs"))
+        assert checks_after - checks_before == 25
+        assert provider.requests["/repos/example/project/pulls"] == 2
+        assert store.pending_count() == 0
+    finally:
+        await github.close()
+        store.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["policy", "unreadable_policy", "managed_check"])
+async def test_retained_validators_do_not_hide_new_policy_or_managed_checks(
+    tmp_path: Path, private_key: str, change: str
+) -> None:
+    # Verifies XCO-001 and XCO-014: old absence never substitutes for revalidation.
+    provider = DiscoveryProvider(count=3)
+    store = store_at(tmp_path)
+    reconciler, github = reconciler_for(provider, store, private_key, "worker")
+    clock = 0.0
+    github._discovery_cache._clock = lambda: clock
+    github._compact_discovery_cache._clock = lambda: clock
+    try:
+        assert (await scan(reconciler)).queued == 0
+        clock = 3601.0
+        if change == "managed_check":
+            provider.managed.add(f"{1:040x}")
+        else:
+            provider.base = "c" * 40
+            provider.policy_status = 200 if change == "policy" else 403
+        result = await scan(reconciler)
+        assert result.complete and result.queued == (1 if change == "managed_check" else 3)
+        assert store.claim_shared_head_invalidation("head-worker", 60) is not None
+    finally:
+        await github.close()
+        store.close()
+
+
+@pytest.mark.asyncio
 async def test_cold_replicas_resume_inside_repository_across_quota_windows(
     tmp_path: Path, private_key: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:

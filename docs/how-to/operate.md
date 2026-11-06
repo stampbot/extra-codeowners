@@ -292,7 +292,7 @@ removing policy cannot hide a previously managed check.
 Discovery pages, branch references, and empty check listings are cached only
 within one process. The 32 MiB total budget is split: 24 MiB for pages and 8 MiB
 for the smaller branch and check responses. Large PR listings cannot evict
-entries from the smaller partition. Both remove entries idle for one hour;
+entries from the smaller partition. Both remove entries idle for two hours;
 the [metric reference](../reference/http-api.md#get-metrics) lists their entry limits.
 Page bodies are compressed in memory when that saves space. The byte gauge
 counts this retained representation, not the uncompressed response size or

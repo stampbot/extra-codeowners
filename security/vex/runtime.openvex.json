@@ -1,8 +1,8 @@
 {
   "@context": "https://openvex.dev/ns/v0.2.0",
-  "@id": "urn:uuid:d052fef5-16d5-528f-a533-5d38c1424241",
+  "@id": "urn:uuid:80fb81de-783d-592d-9ce4-8569fdfd7b03",
   "author": "Extra CODEOWNERS maintainers",
-  "last_updated": "2026-11-05T07:30:58Z",
+  "last_updated": "2026-11-06T19:47:46Z",
   "role": "VEX document producer",
   "statements": [
     {
@@ -782,9 +782,9 @@
       }
     }
   ],
-  "timestamp": "2026-11-05T07:30:58Z",
+  "timestamp": "2026-11-06T19:47:46Z",
   "tooling": "Vexcalibur + Extra CODEOWNERS runtime binding",
-  "version": 13,
+  "version": 14,
   "x_extra_codeowners_runtime": {
     "files": {
       ".dockerignore": "3f9dc9d3a79fe3085f25de88403b5563ad5c7fa7010bef94c5e55f24bd3cf691",
@@ -812,7 +812,7 @@
       "extra_codeowners/codeowners.py": "da8be54dbc8a79dcbaf39d49491f950d5405d74d6bb5e07da5247644f5ffcfd8",
       "extra_codeowners/database.py": "53f6fe731d54f371c9d970698323f3e72274e96b11c0289e078a31757541651f",
       "extra_codeowners/dco.py": "8c3a0b541fe021fb9f05500ca9278306901010c219e7e1199ca5e205c138e68d",
-      "extra_codeowners/discovery_cache.py": "3c3d0af70b21e49181c0d44ffd7b1ec5fdc929f8c3083a2eda404efbbd56f565",
+      "extra_codeowners/discovery_cache.py": "6ab8504381c2f8b627b97d40cd8a709168c11c5f1f32fde7fca8c0be18b04d8c",
       "extra_codeowners/evaluator.py": "b81b9d1c6fe81d591867b0993d413030caab8af48703c4725f14c04fe2e3f9a6",
       "extra_codeowners/github.py": "2449d79f741eacf3d60592ff6490730c7adb426a284effa577d387bfd7c4907c",
       "extra_codeowners/logging.py": "a59227e76ec7809ff8bb88fee997abb9b99f32e81a4c8d16bcfc72c0c0abf33f",
@@ -832,7 +832,7 @@
       "pyproject.toml": "bfb88e388d4590a6f52ed6d76889460a6b698f13129389b3823d2ff661bedd55",
       "uv.lock": "5514cb0448adb693fe97f3d2c8016ccd606890327a1946467fbd118356de4922"
     },
-    "review": "Reviewed CVE-2026-109518 acquisition/install prerequisites against Python entrypoint, CLI, healthcheck, ASGI routes, migrations, HTTPX client, dependency lock and pinned Dockerfile. No APT execution or acquisition API is exposed. Exact apt/libapt 3.0.3 products on Debian 13.7 are not_affected for the shipped runtime only; operator installs/custom code/post-compromise execution are excluded. Debian advisory and independent source review recorded in #268 and runtime-review.md; earlier fixed assessments unchanged.",
+    "review": "Only discovery-cache idle retention changes from one to two hours. Fresh authenticated HTTP revalidation, bounded decoding, byte/entry caps, API quotas, dependencies and native entry points are unchanged. No APT acquisition path is introduced; all 26 fixed and one APT not_affected assessments remain valid and unchanged.",
     "schema_version": 1
   }
 }
