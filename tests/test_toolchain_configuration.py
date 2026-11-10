@@ -368,6 +368,26 @@ def test_dependency_audit_uses_locked_mode_without_frozen_mode() -> None:
     assert "--preview-features audit-command" in workflow
 
 
+def test_dependency_audit_uses_project_interpreter_for_the_whole_lock() -> None:
+    workflow = cast(
+        dict[str, Any],
+        yaml.safe_load((ROOT / ".github" / "workflows" / "dependency-audit.yml").read_text()),
+    )
+    jobs = cast(dict[str, Any], workflow["jobs"])
+    job = cast(dict[str, Any], jobs["audit"])
+    assert "strategy" not in job
+    steps = cast(list[dict[str, Any]], job["steps"])
+    setup = next(
+        step for step in steps if str(step.get("uses", "")).startswith("actions/setup-python@")
+    )
+    assert setup["with"]["python-version-file"] == ".python-version"
+    assert "python-version" not in setup["with"]
+    audit = next(step for step in steps if step.get("name") == "Audit the locked environment")
+    assert "--python-version" not in audit["run"]
+    assert "--no-dev" not in audit["run"]
+    assert "--only-group" not in audit["run"]
+
+
 def test_ci_checks_lockfile_freshness_outside_frozen_mode() -> None:
     workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     lock_check = workflow.split("      - name: Verify lockfile is current\n", 1)[1].split(
