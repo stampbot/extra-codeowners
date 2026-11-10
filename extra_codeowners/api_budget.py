@@ -20,6 +20,15 @@ from extra_codeowners.database import InstallationApiBudget, QueueStore, Service
 
 REQUEST_LANE: ContextVar[str] = ContextVar("github_request_lane", default="interactive")
 BudgetDeferralReason = Literal["reserve", "exhausted", "probe_pending", "unspecified"]
+QuotaHeaderIssue = Literal[
+    "missing_resource",
+    "other_resource",
+    "missing_numbers",
+    "malformed_numbers",
+    "invalid_balance",
+    "stale_reset",
+    "reset_too_far",
+]
 
 
 @contextmanager
@@ -64,20 +73,32 @@ class CoreQuota:
     @classmethod
     def from_headers(cls, headers: Mapping[str, str]) -> CoreQuota | None:
         """Ignore other resources and incomplete, stale, or malformed headers."""
-        if headers.get("x-ratelimit-resource") != "core":
-            return None
+        return cls.inspect_headers(headers)[0]
+
+    @classmethod
+    def inspect_headers(
+        cls, headers: Mapping[str, str]
+    ) -> tuple[CoreQuota | None, QuotaHeaderIssue | None]:
+        """Classify rejection without exposing any response-header values."""
+        resource = headers.get("x-ratelimit-resource")
+        if resource != "core":
+            return None, "missing_resource" if resource is None else "other_resource"
         values = [
             headers.get(f"x-ratelimit-{name}", "") for name in ("limit", "remaining", "reset")
         ]
+        if any(value == "" for value in values):
+            return None, "missing_numbers"
         if not all(re.fullmatch(r"[0-9]{1,12}", value) for value in values):
-            return None
+            return None, "malformed_numbers"
         limit, remaining, reset = map(int, values)
         now = utcnow()
         if not (0 <= remaining <= limit <= 1_000_000_000 and limit > 0):
-            return None
-        if not now.timestamp() < reset <= now.timestamp() + 86_400:
-            return None
-        return cls(limit, remaining, datetime.fromtimestamp(reset, UTC))
+            return None, "invalid_balance"
+        if reset <= now.timestamp():
+            return None, "stale_reset"
+        if reset > now.timestamp() + 86_400:
+            return None, "reset_too_far"
+        return cls(limit, remaining, datetime.fromtimestamp(reset, UTC)), None
 
 
 @dataclass(frozen=True)

@@ -1,5 +1,21 @@
 # Runtime vulnerability review
 
+## Quota-header diagnostics: November 10, 2026 UTC
+
+Quota-header parsing now returns a fixed rejection reason alongside its
+existing result. The accepted ranges, resource check and reset-time boundary
+are unchanged. Request spans record that reason without recording header
+values. Rejected observations still cannot replace the shared quota balance;
+HTTP 401 retains its existing early exclusion.
+The latest-response state replaces earlier retry observations; this changes
+diagnostic metadata, not the retry sequence or its quota effects.
+
+This adds no request, dependency, SQL statement, TLS change, native-library
+entry point, subprocess or compression path. The 26 fixed-package assessments
+still name the same versions; the APT and two zlib gzip-file writer exclusions
+retain their existing reachability limits. All 29 statement contents and
+assessment dates are unchanged. Only the reviewed runtime binding advances.
+
 ## Budget deferral diagnostics: November 10, 2026 UTC
 
 Budget exceptions now classify three existing admission branches with fixed
