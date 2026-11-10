@@ -109,7 +109,7 @@ def test_unclassified_deferral_remains_backward_compatible() -> None:
 @pytest.mark.parametrize("reason", ["example/private", "token=fictional", "", "RESERVE"])
 def test_deferral_rejects_unbounded_diagnostic_values(reason: str) -> None:
     with pytest.raises(ValueError, match="deferral reason"):
-        RecoveryBudgetDeferredError(60, reason=reason)  # type: ignore[arg-type]
+        raise RecoveryBudgetDeferredError(60, reason=reason)  # type: ignore[arg-type]
 
 
 @pytest.mark.asyncio
