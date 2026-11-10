@@ -38,6 +38,18 @@ rollout and eventual discovery of a newly enrolled repository after a missed
 push. That recovery took about 28 minutes. It does not establish a recovery
 deadline or the separate multipage/reset contract.
 
+The [later policy and component audit](evidence/2026-11-10-policy-withdrawal-and-component-audit.md)
+records delivered policy-withdrawal tests, alpha.79 artifact verification and
+the remaining native-component catalog gap. The
+[operation-cost receipt](evidence/2026-11-10-reconciliation-operation-costs.md)
+breaks down all 6,379 linked requests in one successful alpha.73 attempt;
+check and PR listings were the largest groups.
+
+The [alpha.79 rollout and budget-boundary receipt](evidence/2026-11-10-alpha79-rollout-and-budget-boundaries.md)
+records a passing approval probe and completed 140-PR fan-outs. The timed cases
+did not establish the intended checkpoint continuation across a deadline;
+that result remains inconclusive.
+
 ## Diagnostics and approval probe: November 2, 2026
 
 Alpha.65 runs on two Kubernetes nodes with shared PostgreSQL state. The
