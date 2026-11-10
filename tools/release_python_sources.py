@@ -40,6 +40,13 @@ OPENSSL_URL = re.compile(
     r"https://github\.com/openssl/openssl/releases/download/"
     r"openssl-([0-9]+\.[0-9]+\.[0-9]+)/openssl-\1\.tar\.gz\Z"
 )
+POSTGRESQL_URL = re.compile(
+    r"https://ftp\.postgresql\.org/pub/source/v([0-9]+\.[0-9]+)/postgresql-\1\.tar\.bz2\Z"
+)
+OPENLDAP_URL = re.compile(
+    r"https://www\.openldap\.org/software/download/OpenLDAP/openldap-release/"
+    r"openldap-([0-9]+\.[0-9]+\.[0-9]+)\.tgz\Z"
+)
 RPM_URL = re.compile(
     r"https://(?:vault\.centos\.org/7\.9\.2009/(?:os|updates)/Source/SPackages/"
     r"|vault\.almalinux\.org/8\.10/BaseOS/Source/Packages/)"
@@ -240,6 +247,103 @@ def _all_sources(manifest: dict[str, Any]) -> list[dict[str, Any]]:
     return result
 
 
+def _psycopg_custom_recipe(
+    name: str, version: str, architecture: str, python: dict[str, Any]
+) -> list[dict[str, Any]]:
+    platform = _recipe_platform(name, version, architecture, python)
+    records = platform.get("custom_sources")
+    native = python.get("native_files")
+    if (
+        not isinstance(records, list)
+        or len(records) != 3
+        or not isinstance(native, list)
+        or not 1 <= len(native) <= 4096
+        or any(not isinstance(item, dict) for item in native)
+    ):
+        raise PythonSourceError("custom source recipe requires reviewed native-file evidence")
+    patterns = {"openssl": OPENSSL_URL, "libpq": POSTGRESQL_URL, "openldap": OPENLDAP_URL}
+    expected_libraries = {
+        "openssl": {"libcrypto", "libssl"},
+        "libpq": {"libpq"},
+        "openldap": {"libldap", "liblber"},
+    }
+    result = []
+    seen: set[str] = set()
+    used_files: set[str] = set()
+    for record in records:
+        if not isinstance(record, dict):
+            raise PythonSourceError("invalid custom source recipe")
+        component = record.get("name")
+        if not isinstance(component, str) or component not in patterns or component in seen:
+            raise PythonSourceError("ambiguous custom source component")
+        seen.add(component)
+        component_version = _text(record.get("version"), VERSION)
+        url = _text(record.get("url"), patterns[component])
+        match = patterns[component].fullmatch(url)
+        assert match is not None
+        if match.group(1) != component_version:
+            raise PythonSourceError("custom source identity disagrees with its URL")
+        checksum = _text(record.get("sha256"), re.compile(r"[0-9a-f]{64}\Z"))
+        size = record.get("size")
+        bindings = record.get("wheel_files")
+        if type(size) is not int or not 0 < size <= MAX_FILE:
+            raise PythonSourceError("invalid custom source archive size")
+        if not isinstance(bindings, list) or len(bindings) != len(expected_libraries[component]):
+            raise PythonSourceError("custom source recipe omits native-file bindings")
+        bound_libraries: set[str] = set()
+        for binding in bindings:
+            if not isinstance(binding, dict):
+                raise PythonSourceError("invalid custom native-file binding")
+            path = _text(
+                binding.get("path"),
+                re.compile(
+                    r"psycopg_binary\.libs/lib[A-Za-z0-9_+-][A-Za-z0-9_.+-]*\.so(?:\.[0-9.]+)?\Z"
+                ),
+            )
+            bound_hash = _text(binding.get("sha256"), re.compile(r"[0-9a-f]{64}\Z"))
+            bound_size = binding.get("size")
+            if path in used_files or type(bound_size) is not int or not 0 < bound_size <= MAX_FILE:
+                raise PythonSourceError("ambiguous custom native-file binding")
+            used_files.add(path)
+            library = path.rsplit("/", 1)[1].split("-", 1)[0]
+            if library not in expected_libraries[component] or library in bound_libraries:
+                raise PythonSourceError("custom source component has ambiguous native files")
+            bound_libraries.add(library)
+            selected = [
+                item
+                for item in native
+                if str(item.get("path", "")).endswith("/site-packages/" + path)
+            ]
+            if (
+                len(selected) != 1
+                or selected[0].get("kind") != "regular"
+                or selected[0].get("link_target") is not None
+                or selected[0].get("sha256") != bound_hash
+                or type(selected[0].get("size")) is not int
+                or selected[0].get("size") != bound_size
+            ):
+                raise PythonSourceError(
+                    "wheel native file changed; review its custom source recipe"
+                )
+        filename = url.rsplit("/", 1)[1]
+        if len(filename) > 100:
+            raise PythonSourceError("custom source filename exceeds the archive format limit")
+        result.append(
+            {
+                "distribution": name,
+                "distribution_version": version,
+                "source_component": {"name": component, "version": component_version},
+                "sbom_sha256": platform["sbom_sha256"],
+                "wheel_files": bindings,
+                "url": url,
+                "sha256": checksum,
+                "size": size,
+                "path": f"embedded/{name}/{architecture}/{filename}",
+            }
+        )
+    return result
+
+
 def plan(inventory: bytes, lock: bytes, architecture: str, digest: str) -> dict[str, Any]:
     """Select only installed distributions, matching exact locked versions."""
     if architecture not in {"amd64", "arm64"}:
@@ -283,7 +387,7 @@ def plan(inventory: bytes, lock: bytes, architecture: str, digest: str) -> dict[
         raise PythonSourceError("unexpected Python source bundle name")
     distributions = python.get("distributions") if isinstance(python, dict) else None
     recipe_schema = python.get("source_recipe_schema", 0) if isinstance(python, dict) else 0
-    if type(recipe_schema) is not int or recipe_schema not in {0, 1, 2, 3}:
+    if type(recipe_schema) is not int or recipe_schema not in {0, 1, 2, 3, 4}:
         raise PythonSourceError("unsupported source recipe schema")
     if not isinstance(distributions, list) or not 1 <= len(distributions) <= 512:
         raise PythonSourceError("invalid installed distribution list")
@@ -313,6 +417,9 @@ def plan(inventory: bytes, lock: bytes, architecture: str, digest: str) -> dict[
         if recipe_schema >= 3 and name == "cryptography":
             assert isinstance(python, dict)
             embedded_sources.extend(_embedded_recipe(name, version, architecture, python))
+        if recipe_schema >= 4 and name == "psycopg-binary":
+            assert isinstance(python, dict)
+            embedded_sources.extend(_psycopg_custom_recipe(name, version, architecture, python))
         sdist = package.get("sdist")
         if sdist is None:
             reviewed = REVIEWED_BINARY_SOURCES.get((name, version)) if recipe_schema >= 1 else None
@@ -375,6 +482,12 @@ def plan(inventory: bytes, lock: bytes, architecture: str, digest: str) -> dict[
             "sources listed in this manifest; other native components and build inputs "
             "remain separate."
         )
+    if recipe_schema >= 4:
+        manifest["scope"] = (
+            "Python sources, reviewed native source RPMs and reviewed embedded sources "
+            "listed in this manifest; unreported components and other build inputs "
+            "remain separate. No claim of exact upstream binary build inputs."
+        )
     return manifest
 
 
@@ -436,6 +549,8 @@ def fetch(source: dict[str, Any]) -> bytes:
         or PSYCOPG_URL.fullmatch(value)
         or RPM_URL.fullmatch(value)
         or OPENSSL_URL.fullmatch(value)
+        or POSTGRESQL_URL.fullmatch(value)
+        or OPENLDAP_URL.fullmatch(value)
     ):
         raise PythonSourceError("invalid source archive URL")
     url = value

@@ -75,8 +75,11 @@ a supported production release. Starting with the first release containing the
 notice-bundle workflow, it also publishes signed, attested per-platform
 [recipient notice bundles](recipient-notices.md). Releases containing the
 source delivery workflows also retain [source archives](source-archives.md)
-for CPython and installed Debian packages.
-[Issue #18][issue-18] still
+for CPython, installed Debian packages, locked Python distributions and
+reviewed wheel-native components. The latter include Cryptography's OpenSSL
+and Psycopg's libpq, OpenSSL and OpenLDAP sources, with their existing build
+recipes. These are version-matched archives, not proof of exact upstream
+binary build inputs. [Issue #18][issue-18] still
 tracks complete corresponding-source delivery and approval of the distribution
 mechanism, and
 [issue #74][issue-74] tracks clean-client verification of a published release.
