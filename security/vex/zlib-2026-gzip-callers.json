@@ -1,0 +1,183 @@
+{
+  "reviewed_release": "v0.1.0-alpha.75",
+  "source_revision": "b23515ecd2717e72ca0ed0c24c19ea71664d308c",
+  "method": "readelf --dyn-syms and --dynamic on every regular ELF file in each exported final filesystem. ARM64 was inspected statically, not executed. Import tables alone are not a whole-program reachability proof.",
+  "images": {
+    "amd64": {
+      "image_digest": "sha256:85d979f08f0bfbb57bdb8c654e12addff99e72b0279ec6f3601a4162be46858d",
+      "elf_count": 778,
+      "gzip_api_callers": [
+        {
+          "path": "usr/bin/dpkg-deb",
+          "sha256": "5346e5fdfdc81d58bbc9d2a3de20ff3738dc479cdb04cc52b91503cbb13440eb",
+          "bytes": 182816,
+          "gzip_imports": [
+            "gzclose",
+            "gzdopen",
+            "gzerror",
+            "gzread",
+            "gzwrite"
+          ],
+          "zlib_imports": [],
+          "needed": [
+            "libz.so.1",
+            "liblzma.so.5",
+            "libzstd.so.1",
+            "libbz2.so.1.0",
+            "libmd.so.0",
+            "libc.so.6"
+          ]
+        },
+        {
+          "path": "usr/lib/x86_64-linux-gnu/libapt-pkg.so.7.0.0",
+          "sha256": "d3dca8bc35a1addcc03808792768ce82ca59bb3623f8053e58b3402ac5898974",
+          "bytes": 2580592,
+          "gzip_imports": [
+            "gzclose",
+            "gzdirect",
+            "gzdopen",
+            "gzerror",
+            "gzgets",
+            "gzread",
+            "gzseek",
+            "gztell",
+            "gzwrite"
+          ],
+          "zlib_imports": [],
+          "needed": [
+            "libz.so.1",
+            "libbz2.so.1.0",
+            "liblzma.so.5",
+            "liblz4.so.1",
+            "libzstd.so.1",
+            "libudev.so.1",
+            "libsystemd.so.0",
+            "libcrypto.so.3",
+            "libxxhash.so.0",
+            "libstdc++.so.6",
+            "libm.so.6",
+            "libgcc_s.so.1",
+            "libc.so.6",
+            "ld-linux-x86-64.so.2"
+          ]
+        }
+      ],
+      "python_zlib": [
+        {
+          "path": "usr/local/lib/python3.14/lib-dynload/zlib.cpython-314-x86_64-linux-gnu.so",
+          "sha256": "94ce66ddc1a3902756e20298f47b8758d2e7b984fbd41b3fbb27912bf0e62abd",
+          "bytes": 50200,
+          "gzip_imports": [],
+          "zlib_imports": [
+            "adler32",
+            "crc32",
+            "deflate",
+            "deflateCopy",
+            "deflateEnd",
+            "deflateInit2_",
+            "deflateSetDictionary",
+            "inflate",
+            "inflateCopy",
+            "inflateEnd",
+            "inflateInit2_",
+            "inflateSetDictionary",
+            "zlibVersion"
+          ],
+          "needed": [
+            "libz.so.1",
+            "libc.so.6"
+          ]
+        }
+      ]
+    },
+    "arm64": {
+      "image_digest": "sha256:ff9693d8fc533969b199d8d8267120d4335a5346bc4c0d2a2adf700fe84875dc",
+      "elf_count": 778,
+      "gzip_api_callers": [
+        {
+          "path": "usr/bin/dpkg-deb",
+          "sha256": "496045198f358af6537c40a217ac56d43f14a36a8864778f4e6f5fc5bc6290c1",
+          "bytes": 199256,
+          "gzip_imports": [
+            "gzclose",
+            "gzdopen",
+            "gzerror",
+            "gzread",
+            "gzwrite"
+          ],
+          "zlib_imports": [],
+          "needed": [
+            "libz.so.1",
+            "liblzma.so.5",
+            "libzstd.so.1",
+            "libbz2.so.1.0",
+            "libmd.so.0",
+            "libc.so.6",
+            "ld-linux-aarch64.so.1"
+          ]
+        },
+        {
+          "path": "usr/lib/aarch64-linux-gnu/libapt-pkg.so.7.0.0",
+          "sha256": "d90696f339830485f1f1d146df1cd76bf5adf9da61ee5bf4f627330c9f6e1390",
+          "bytes": 2363792,
+          "gzip_imports": [
+            "gzclose",
+            "gzdirect",
+            "gzdopen",
+            "gzerror",
+            "gzgets",
+            "gzread",
+            "gzseek",
+            "gztell",
+            "gzwrite"
+          ],
+          "zlib_imports": [],
+          "needed": [
+            "libz.so.1",
+            "libbz2.so.1.0",
+            "liblzma.so.5",
+            "liblz4.so.1",
+            "libzstd.so.1",
+            "libudev.so.1",
+            "libsystemd.so.0",
+            "libcrypto.so.3",
+            "libxxhash.so.0",
+            "libstdc++.so.6",
+            "libm.so.6",
+            "libgcc_s.so.1",
+            "libc.so.6",
+            "ld-linux-aarch64.so.1"
+          ]
+        }
+      ],
+      "python_zlib": [
+        {
+          "path": "usr/local/lib/python3.14/lib-dynload/zlib.cpython-314-aarch64-linux-gnu.so",
+          "sha256": "f81e2b775fd97c8012bc9538d391a240ce56b3480d5fcec60d4a1fbec8104d39",
+          "bytes": 70416,
+          "gzip_imports": [],
+          "zlib_imports": [
+            "adler32",
+            "crc32",
+            "deflate",
+            "deflateCopy",
+            "deflateEnd",
+            "deflateInit2_",
+            "deflateSetDictionary",
+            "inflate",
+            "inflateCopy",
+            "inflateEnd",
+            "inflateInit2_",
+            "inflateSetDictionary",
+            "zlibVersion"
+          ],
+          "needed": [
+            "libz.so.1",
+            "libc.so.6",
+            "ld-linux-aarch64.so.1"
+          ]
+        }
+      ]
+    }
+  }
+}

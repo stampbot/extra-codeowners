@@ -1,10 +1,58 @@
 {
   "@context": "https://openvex.dev/ns/v0.2.0",
-  "@id": "urn:uuid:80fb81de-783d-592d-9ce4-8569fdfd7b03",
+  "@id": "urn:uuid:e7209838-9a17-53ed-a0c9-7df5422d3e7e",
   "author": "Extra CODEOWNERS maintainers",
-  "last_updated": "2026-11-06T19:47:46Z",
+  "last_updated": "2026-11-10T06:52:41Z",
   "role": "VEX document producer",
   "statements": [
+    {
+      "impact_statement": "The shipped Extra CODEOWNERS service uses Python zlib.compress and decompressobj for bounded in-memory discovery-cache bodies, not the C gz* file-writer interface. CPython's zlib extensions on amd64 and arm64 import deflate/inflate and checksum APIs, with no gz* imports. A scan of all 778 ELF files in each published image found gz* imports only in dpkg-deb and libapt-pkg; application entrypoints, HTTP routes, healthchecks and migrations neither invoke those programs nor load the APT library. The vulnerable gzip-writer path is outside the reviewed service execution path. The Debian zlib1g package remains present and unpatched. This does not cover operator-run package management, custom FFI or plugins, arbitrary commands, or execution after compromise.",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "products": [
+        {
+          "@id": "pkg:deb/debian/zlib1g@1:1.3.dfsg%2Breally1.3.1-1%2Bb1?arch=amd64&distro=debian-13.7",
+          "identifiers": {
+            "purl": "pkg:deb/debian/zlib1g@1:1.3.dfsg%2Breally1.3.1-1%2Bb1?arch=amd64&distro=debian-13.7"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/zlib1g@1:1.3.dfsg%2Breally1.3.1-1%2Bb1?arch=arm64&distro=debian-13.7",
+          "identifiers": {
+            "purl": "pkg:deb/debian/zlib1g@1:1.3.dfsg%2Breally1.3.1-1%2Bb1?arch=arm64&distro=debian-13.7"
+          }
+        }
+      ],
+      "status": "not_affected",
+      "status_notes": "Analysis detail: The shipped Extra CODEOWNERS service uses Python zlib.compress and decompressobj for bounded in-memory discovery-cache bodies, not the C gz* file-writer interface. CPython's zlib extensions on amd64 and arm64 import deflate/inflate and checksum APIs, with no gz* imports. A scan of all 778 ELF files in each published image found gz* imports only in dpkg-deb and libapt-pkg; application entrypoints, HTTP routes, healthchecks and migrations neither invoke those programs nor load the APT library. The vulnerable gzip-writer path is outside the reviewed service execution path. The Debian zlib1g package remains present and unpatched. This does not cover operator-run package management, custom FFI or plugins, arbitrary commands, or execution after compromise.\nSource: Extra CODEOWNERS native caller review (https://security-tracker.debian.org/tracker/CVE-2026-76844)\nOriginal Vexcalibur analysis state: not_affected",
+      "timestamp": "2026-11-10T06:52:41Z",
+      "vulnerability": {
+        "name": "CVE-2026-76844"
+      }
+    },
+    {
+      "impact_statement": "The shipped Extra CODEOWNERS service uses Python zlib.compress and decompressobj for bounded in-memory discovery-cache bodies, not the C gz* file-writer interface. CPython's zlib extensions on amd64 and arm64 import deflate/inflate and checksum APIs, with no gz* imports. A scan of all 778 ELF files in each published image found gz* imports only in dpkg-deb and libapt-pkg; application entrypoints, HTTP routes, healthchecks and migrations neither invoke those programs nor load the APT library. The vulnerable gzip-writer path is outside the reviewed service execution path. The Debian zlib1g package remains present and unpatched. This does not cover operator-run package management, custom FFI or plugins, arbitrary commands, or execution after compromise.",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "products": [
+        {
+          "@id": "pkg:deb/debian/zlib1g@1:1.3.dfsg%2Breally1.3.1-1%2Bb1?arch=amd64&distro=debian-13.7",
+          "identifiers": {
+            "purl": "pkg:deb/debian/zlib1g@1:1.3.dfsg%2Breally1.3.1-1%2Bb1?arch=amd64&distro=debian-13.7"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/zlib1g@1:1.3.dfsg%2Breally1.3.1-1%2Bb1?arch=arm64&distro=debian-13.7",
+          "identifiers": {
+            "purl": "pkg:deb/debian/zlib1g@1:1.3.dfsg%2Breally1.3.1-1%2Bb1?arch=arm64&distro=debian-13.7"
+          }
+        }
+      ],
+      "status": "not_affected",
+      "status_notes": "Analysis detail: The shipped Extra CODEOWNERS service uses Python zlib.compress and decompressobj for bounded in-memory discovery-cache bodies, not the C gz* file-writer interface. CPython's zlib extensions on amd64 and arm64 import deflate/inflate and checksum APIs, with no gz* imports. A scan of all 778 ELF files in each published image found gz* imports only in dpkg-deb and libapt-pkg; application entrypoints, HTTP routes, healthchecks and migrations neither invoke those programs nor load the APT library. The vulnerable gzip-writer path is outside the reviewed service execution path. The Debian zlib1g package remains present and unpatched. This does not cover operator-run package management, custom FFI or plugins, arbitrary commands, or execution after compromise.\nSource: Extra CODEOWNERS native caller review (https://security-tracker.debian.org/tracker/CVE-2026-85091)\nOriginal Vexcalibur analysis state: not_affected",
+      "timestamp": "2026-11-10T06:52:41Z",
+      "vulnerability": {
+        "name": "CVE-2026-85091"
+      }
+    },
     {
       "impact_statement": "CVE-2026-109518 requires APT to acquire and install packages over attacker-controlled HTTP while following redirects and retrying downloads. The shipped Extra CODEOWNERS entrypoint, healthcheck, migrations and application routes run Python; they do not invoke APT, load its Python bindings or expose its package-acquisition API. GitHub requests use HTTPX, not APT. The vulnerable APT acquisition/install code is therefore outside the reviewed service execution path. The apt packages remain present and unpatched. This assessment does not cover operator-run package installation, custom code or plugins, or arbitrary execution after compromise.",
       "justification": "vulnerable_code_not_in_execute_path",
@@ -782,9 +830,9 @@
       }
     }
   ],
-  "timestamp": "2026-11-06T19:47:46Z",
+  "timestamp": "2026-11-10T06:52:41Z",
   "tooling": "Vexcalibur + Extra CODEOWNERS runtime binding",
-  "version": 14,
+  "version": 15,
   "x_extra_codeowners_runtime": {
     "files": {
       ".dockerignore": "3f9dc9d3a79fe3085f25de88403b5563ad5c7fa7010bef94c5e55f24bd3cf691",
@@ -832,7 +880,7 @@
       "pyproject.toml": "bfb88e388d4590a6f52ed6d76889460a6b698f13129389b3823d2ff661bedd55",
       "uv.lock": "5514cb0448adb693fe97f3d2c8016ccd606890327a1946467fbd118356de4922"
     },
-    "review": "Only discovery-cache idle retention changes from one to two hours. Fresh authenticated HTTP revalidation, bounded decoding, byte/entry caps, API quotas, dependencies and native entry points are unchanged. No APT acquisition path is introduced; all 26 fixed and one APT not_affected assessments remain valid and unchanged.",
+    "review": "Reviewed both zlib gzip-writer findings against unchanged Python/Docker/lock inputs, all 778 ELF files per published native image and an amd64 import probe. Only dpkg-deb and libapt-pkg import gz APIs; neither is invoked or loaded by the shipped service. CPython zlib/cache and HTTP decoding use in-memory deflate/inflate APIs. Added only the two Debian zlib1g not_affected assessments; existing 27 statement contents and dates are unchanged. No Dockerfile version or package upgrade.",
     "schema_version": 1
   }
 }
