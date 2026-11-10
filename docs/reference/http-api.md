@@ -229,6 +229,35 @@ An expired window with a pending probe is not evidence that the interactive
 reserve was exhausted. These diagnostics change neither admission nor
 retry scheduling, and add no metric labels.
 
+The request span's `github.quota.observation` describes the latest observed
+response, even when the logical request retries. The accompanying
+`github.quota.core_headers_valid` is true only for `accepted`:
+
+| Reason | Meaning |
+| --- | --- |
+| `accepted` | The latest response supplied usable REST-core quota evidence. |
+| `missing_resource` | The response omits `x-ratelimit-resource`. |
+| `other_resource` | The resource header is present but is not `core`. |
+| `missing_numbers` | A limit, remaining balance or reset header is missing or empty. |
+| `malformed_numbers` | A numeric header is not 1–12 decimal digits. |
+| `invalid_balance` | The limit is outside 1–1,000,000,000, or remaining is outside 0–limit. |
+| `stale_reset` | The reset is not later than the validation time. |
+| `reset_too_far` | The reset is more than 24 hours ahead. |
+| `rejected_token` | HTTP 401 could expose a different identity's quota. |
+
+These fixed values contain no raw header values. An ignored observation never
+refills the shared budget. `github.quota.limit`, `remaining` and `reset_at`
+retain the most recent accepted observation in the logical request; after a
+rejected response they may therefore describe an earlier attempt. The existing
+`github.quota.ignored_rejected_token` flag records whether any attempt ignored
+a 401, not whether the latest response was rejected.
+
+`accepted` describes quota evidence, not HTTP success. A later transport error
+has no response to inspect and leaves the last observation intact. These
+fields do not establish why an earlier request failed or whether GitHub
+exhausted the quota. Header acceptance, accounting and retry behavior are
+unchanged.
+
 ### Reconciliation trace fields
 
 When tracing is enabled, each reconciliation attempt has a small independent

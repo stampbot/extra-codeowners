@@ -649,9 +649,13 @@ class GitHubClient:
         if response.status_code == 401:
             span.set_attribute("github.quota.core_headers_valid", False)
             span.set_attribute("github.quota.ignored_rejected_token", True)
+            span.set_attribute("github.quota.observation", "rejected_token")
             return
-        quota = CoreQuota.from_headers(response.headers)
+        quota, issue = CoreQuota.inspect_headers(response.headers)
         span.set_attribute("github.quota.core_headers_valid", quota is not None)
+        # A logical span can contain multiple HTTP attempts. Always replace
+        # this state, including on success after an earlier rejected response.
+        span.set_attribute("github.quota.observation", issue or "accepted")
         if quota is None:
             return
         span.set_attribute("github.quota.limit", quota.limit)
