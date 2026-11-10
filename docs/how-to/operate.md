@@ -356,8 +356,13 @@ GitHub request spans include `queue.work_class`,
 `github.quota.core_headers_valid`, and, when valid core headers are present,
 `github.quota.limit`, `github.quota.remaining`, and `github.quota.reset_at`
 (UTC epoch seconds). These are observations at response time, not live quota
-gauges. Compare physical-request counts across lanes and operations before
-raising concurrency. `reconciliation_deferred_for_recovery_budget` logs a local
+gauges or the shared budget's current balance. `github.quota.observation`
+explains whether the latest response supplied usable core headers; retained
+numbers can describe an earlier retry. The
+[trace reference](../reference/http-api.md) defines those cases and the
+conservative accounting rules. Compare physical-request counts across lanes
+and operations before raising concurrency.
+`reconciliation_deferred_for_recovery_budget` logs a local
 reserve pause; `reconciliation_rate_limited` reports provider backpressure.
 Neither means the scan completed. Check the oldest recovery work as well as
 direct-event latency when deciding whether the installation is healthy.

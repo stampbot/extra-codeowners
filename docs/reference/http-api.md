@@ -357,6 +357,22 @@ database row; a concurrent debit or stricter quota observation makes the
 refund ineligible. This avoids crediting quota that another replica already
 spent.
 
+The shared balance is not the latest response's `remaining` value. Accounting
+ignores an observation whose reset precedes its current deadline, even when
+the headers were usable to the request parser. For eligible observations,
+after any guarded `304` refund, an active budget keeps the lower balance.
+It keeps a fixed deadline even when a later response reports a different
+future reset. An explicit zero can extend that deadline so the provider's
+exhaustion delay is honored. After expiry, a fresh valid observation
+initializes the next budget; the service never assumes an hourly refill.
+
+[GitHub documents that quota values can vary between regions][github-quota-status].
+A higher later balance or a changed reset header therefore does not, by
+itself, prove that one globally synchronized window has reset. Compare request
+observations with the shared accounting state when investigating a pause.
+These trace fields describe the evidence the client parsed, not whether that
+evidence raised the database balance.
+
 Prometheus also publishes generated counter and histogram series, plus Python runtime and process collectors. Metric labels must never contain repository names, pull-request titles, actor names, paths, or delivery IDs. Those values would create unbounded cardinality and disclose private repository metadata.
 
 For a slow check, compare queue wait, worker-attempt, and GitHub API histograms
@@ -564,3 +580,5 @@ Keep setup mode disabled when operators do not register Apps through this servic
 Clients must use HTTP status codes rather than matching response text. The JSON error envelope and OpenAPI compatibility policy may change before `1.0`; release notes will identify those changes.
 
 Mapped webhook deliveries are idempotent while their delivery IDs remain in the deduplication table. The service does not offer client-controlled retries, pagination, or an HTTP version-negotiation header.
+
+[github-quota-status]: https://github.com/github/docs/blob/main/content/rest/using-the-rest-api/rate-limits-for-the-rest-api.md#checking-the-status-of-your-rate-limit

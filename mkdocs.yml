@@ -86,6 +86,9 @@ nav:
           - November reconciliation and alpha.73: maintainers/evidence/2026-11-06-reconciliation-and-alpha73.md
           - November missed policy webhook: maintainers/evidence/2026-11-06-missed-policy-webhook.md
           - November quiet reconciliation and new enrollment: maintainers/evidence/2026-11-10-quiet-reconciliation-and-new-enrollment.md
+          - November policy withdrawal and component audit: maintainers/evidence/2026-11-10-policy-withdrawal-and-component-audit.md
+          - November reconciliation operation costs: maintainers/evidence/2026-11-10-reconciliation-operation-costs.md
+          - November alpha.79 rollout and budget boundaries: maintainers/evidence/2026-11-10-alpha79-rollout-and-budget-boundaries.md
       - Respond to dependency audit: how-to/respond-to-dependency-audit.md
       - Rescan a published image: how-to/rescan-published-image.md
       - Review or recover a Renovate update: how-to/manage-renovate-updates.md

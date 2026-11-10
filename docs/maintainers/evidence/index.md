@@ -17,6 +17,9 @@ the older results and links newer receipts.
 - [November 6, 2026: reconciliation and alpha.73 rollout](2026-11-06-reconciliation-and-alpha73.md)
 - [November 6, 2026: missed policy webhook recovery](2026-11-06-missed-policy-webhook.md)
 - [November 10, 2026: quiet reconciliation and new enrollment](2026-11-10-quiet-reconciliation-and-new-enrollment.md)
+- [November 10, 2026: policy withdrawal and component audit](2026-11-10-policy-withdrawal-and-component-audit.md)
+- [November 10, 2026: reconciliation operation costs](2026-11-10-reconciliation-operation-costs.md)
+- [November 10, 2026: alpha.79 rollout and budget boundaries](2026-11-10-alpha79-rollout-and-budget-boundaries.md)
 
 ## Add a receipt
 

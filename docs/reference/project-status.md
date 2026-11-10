@@ -195,8 +195,10 @@ close before the project is presented as production-ready:
   and installation access loss. This is the
   [production enforcement blocker](#production-enforcement-blocker).
 - [Issue #203][issue-203]: bound GitHub API use for large installations whose
-  repositories are mostly unenrolled, and measure quiet reconciliation and
-  missed-webhook recovery.
+  repositories are mostly unenrolled, reduce the measured scan cost and
+  complete live checkpoint verification. Quiet scans and missed-enrollment
+  recovery have dated observations; they do not establish acceptable recovery
+  latency.
 - [Issue #18][issue-18]: review wheel-native components and their notices,
   complete corresponding-source delivery, and approve the distribution
   mechanism. Retaining a wheel's SBOM or source archive does not by itself add
