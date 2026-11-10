@@ -207,11 +207,9 @@ size, and paths to the upstream wheel and libpq build recipes. Downloads use
 the commit-specific GitHub archive URL and must match the reviewed bytes;
 the collector neither follows redirects nor runs those recipes.
 
-That archive supplies Psycopg's wrapper source and recipes, not the source of
-every bundled libpq, OpenSSL, OpenLDAP, or operating-system library. Their
-source and notice evidence remains part of [issue #18][source-work]. A later
-Psycopg version does not silently reuse the 3.3.4 recipe: it remains unresolved
-until its source identity is reviewed.
+That archive supplies Psycopg's wrapper source and recipes. Native-library
+sources are delivered separately by schemas 2 and 4 below. A later Psycopg
+version cannot silently reuse the 3.3.4 recipe; its source identity needs review.
 
 The signed inventory selects wrapper-recipe delivery with
 `python.source_recipe_schema: 1`. Schema 2 also retains the reviewed source
@@ -264,10 +262,9 @@ recipe review. This prevents a changed wheel from silently inheriting the
 previous native-source claim.
 
 These source RPMs cover the distro packages reported by those SBOMs, not
-Psycopg's custom-built libpq, OpenSSL 3, or OpenLDAP libraries, nor components
-the SBOM does not list. Those sources and the remaining notice review stay in
-[issue #18][source-work]. Keeping a version-matched source recipe is not a claim
-that rebuilding it produces byte-identical wheel binaries.
+Psycopg's custom-built libraries or components the SBOM does not list.
+Schema 4 adds the custom-library sources below. Keeping a version-matched
+source recipe is not a claim that rebuilding it produces byte-identical wheels.
 
 ### Cryptography's embedded OpenSSL source
 
@@ -298,8 +295,38 @@ A changed or missing selected SBOM, or a Cryptography version without a
 reviewed recipe, stops schema 3 collection. Review its source mapping and
 update the recipe before publishing. Historical schema 0–2 inventories keep
 their original contract; verifying an older release does not retroactively
-require this archive. Psycopg's custom libpq, OpenSSL and OpenLDAP sources,
-other unreported components and distribution approval remain in
+require this archive. Unreported components, the remaining notice review and
+distribution approval stay in [issue #18][source-work].
+
+### Psycopg's custom-library sources
+
+Schema 4 retains PostgreSQL 18.0's source for libpq, OpenSSL 3.5.4 and
+OpenLDAP 2.6.9 for Psycopg 3.3.4 on both platforms. The files live under
+`embedded/psycopg-binary/<architecture>/` in the same Python source bundle.
+Its `embedded_sources` entries record their versions, URLs, SHA-256 and size.
+The existing Psycopg repository archive supplies the build recipes and inline
+libpq patches; the distro-library RPMs above remain separate.
+
+Each platform's recipe binds both its wheel SBOM and all five custom native
+libraries by path, SHA-256 and size. A changed, missing, duplicated or linked
+library stops collection, even if the SBOM did not report that change. A new
+Psycopg version needs a new reviewed recipe. Historical schema 0–3 inventories
+keep the source contracts they originally declared.
+
+The reviewed versions were checked against libpq and OpenLDAP's runtime
+version APIs and OpenSSL's version strings, using native files matched to the
+signed inventories on both architectures. The retained archives matched
+OpenSSL's release-asset checksum, PostgreSQL's SHA-256 and OpenLDAP's SHA3-512.
+The recipe pins SHA-256 and size for subsequent collection. PostgreSQL and
+OpenLDAP downloads must use their fixed HTTPS origins without redirects;
+OpenSSL uses the one-hop release-asset rule above. No source is built,
+installed or executed during collection.
+
+These are version-matched sources, not proof of the upstream builder's exact
+inputs. In particular, Psycopg's OpenSSL recipe fetches a Git tag archive;
+this bundle retains the official release tarball of that version. License
+texts remain inside the retained archives. Notice coverage, unreported
+components and maintainer distribution approval remain in
 [issue #18][source-work].
 
 ## Rust dependencies in Python wheels
