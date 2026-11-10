@@ -32,6 +32,12 @@ observed periodic recovery without a redelivery or manual kick. The first
 observed denial took about 27 minutes; the original policy and receiver URL
 were restored. This does not close the other recovery or performance gates.
 
+The [November 10 receipt](evidence/2026-11-10-quiet-reconciliation-and-new-enrollment.md)
+records two wholly observed successful reconciliation attempts, the alpha.77
+rollout and eventual discovery of a newly enrolled repository after a missed
+push. That recovery took about 28 minutes. It does not establish a recovery
+deadline or the separate multipage/reset contract.
+
 ## Diagnostics and approval probe: November 2, 2026
 
 Alpha.65 runs on two Kubernetes nodes with shared PostgreSQL state. The
