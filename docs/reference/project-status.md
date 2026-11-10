@@ -197,8 +197,10 @@ close before the project is presented as production-ready:
 - [Issue #203][issue-203]: bound GitHub API use for large installations whose
   repositories are mostly unenrolled, and measure quiet reconciliation and
   missed-webhook recovery.
-- [Issue #18][issue-18]: complete corresponding-source delivery and approval of
-  the distribution mechanism.
+- [Issue #18][issue-18]: review wheel-native components and their notices,
+  complete corresponding-source delivery, and approve the distribution
+  mechanism. Retaining a wheel's SBOM or source archive does not by itself add
+  every bundled library to the vulnerability scanner's component catalog.
 
 ### Hardening and verification
 
