@@ -612,7 +612,7 @@ class GitHubClient:
         raise AssertionError("unreachable")  # pragma: no cover
 
     async def _admit_request(
-        self, installation_id: int | None, method: str, path: str
+        self, installation_id: int | None, method: str, path: str, span: Span
     ) -> BudgetReceipt | None:
         if installation_id is not None and path != "/graphql" and self._recovery_budget is not None:
             try:
@@ -621,7 +621,12 @@ class GitHubClient:
                     installation_id,
                     recovery=REQUEST_LANE.get() == "recovery",
                 )
-            except ProviderQuotaExhaustedError as error:
+            except RecoveryBudgetDeferredError as error:
+                # Record while the request span is still open, before the
+                # exhausted-quota path becomes a provider-style error.
+                span.set_attribute("github.quota.deferred_reason", error.reason)
+                if not isinstance(error, ProviderQuotaExhaustedError):
+                    raise
                 raise GitHubRateLimitError(
                     403,
                     method,
@@ -751,7 +756,7 @@ class GitHubClient:
                             )
                             with timing.phase("quota_admission"):
                                 receipt = await self._admit_request(
-                                    budget_installation, method, path
+                                    budget_installation, method, path, span
                                 )
                             span.set_attribute("github.retry_count", attempt)
                             GITHUB_PHYSICAL_REQUESTS.labels(
@@ -937,7 +942,7 @@ class GitHubClient:
                         )
                         async with timing.slot(self._request_semaphore):
                             with timing.phase("quota_admission"):
-                                await self._admit_request(installation_id, method, path)
+                                await self._admit_request(installation_id, method, path, span)
                             GITHUB_PHYSICAL_REQUESTS.labels(
                                 operation, "installation", REQUEST_LANE.get()
                             ).inc()

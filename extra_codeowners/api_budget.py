@@ -9,6 +9,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import Literal
 
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
@@ -18,6 +19,7 @@ from sqlalchemy.orm import Session
 from extra_codeowners.database import InstallationApiBudget, QueueStore, ServiceLease, utcnow
 
 REQUEST_LANE: ContextVar[str] = ContextVar("github_request_lane", default="interactive")
+BudgetDeferralReason = Literal["reserve", "exhausted", "probe_pending", "unspecified"]
 
 
 @contextmanager
@@ -35,7 +37,12 @@ def request_lane(lane: str) -> Iterator[None]:
 class RecoveryBudgetDeferredError(Exception):
     """Recovery must wait; this is not a provider limit on interactive work."""
 
-    def __init__(self, retry_after_seconds: int) -> None:
+    def __init__(
+        self, retry_after_seconds: int, *, reason: BudgetDeferralReason = "unspecified"
+    ) -> None:
+        if reason not in {"reserve", "exhausted", "probe_pending", "unspecified"}:
+            raise ValueError("unknown recovery budget deferral reason")
+        self.reason = reason
         self.retry_after_seconds = max(1, retry_after_seconds)
         super().__init__("recovery is preserving the installation's REST core quota")
 
@@ -123,6 +130,7 @@ class RecoveryApiBudget:
         """Charge before each physical request, including retries and pages."""
         delay = 0
         exhausted = False
+        reason: BudgetDeferralReason = "unspecified"
         receipt = None
         with self.store.session() as session:
             row = self._locked_row(session, installation_id)
@@ -132,6 +140,7 @@ class RecoveryApiBudget:
                 if row.remaining == 0 or (recovery and row.remaining <= reserve):
                     delay = math.ceil((_utc(row.reset_at) - now).total_seconds()) + 1
                     exhausted = row.remaining == 0
+                    reason = "exhausted" if exhausted else "reserve"
                 else:
                     row.remaining = max(0, row.remaining - 1)
                     row.accounting_revision += 1
@@ -141,6 +150,7 @@ class RecoveryApiBudget:
             elif recovery:
                 if _utc(row.probe_after) > now:
                     delay = math.ceil((_utc(row.probe_after) - now).total_seconds())
+                    reason = "probe_pending"
                 else:
                     # A new/reset budget gets one probe, not a guessed refill.
                     # Missing headers or a lost response permit at most one
@@ -148,8 +158,8 @@ class RecoveryApiBudget:
                     row.probe_after = now + timedelta(seconds=60)
         if delay:
             if exhausted:
-                raise ProviderQuotaExhaustedError(delay)
-            raise RecoveryBudgetDeferredError(delay)
+                raise ProviderQuotaExhaustedError(delay, reason=reason)
+            raise RecoveryBudgetDeferredError(delay, reason=reason)
         return receipt
 
     def observe(

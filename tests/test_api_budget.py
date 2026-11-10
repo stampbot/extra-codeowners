@@ -74,6 +74,105 @@ def headers(remaining: int = 99) -> dict[str, str]:
     }
 
 
+@pytest.mark.parametrize("reason", ["reserve", "exhausted", "probe_pending"])
+def test_deferral_reason_does_not_change_admission_or_balance(
+    budget_store: QueueStore, reason: str
+) -> None:
+    # Verifies XCO-011: diagnostics use fixed operational reasons, not metadata.
+    budget = RecoveryApiBudget(budget_store)
+    if reason == "probe_pending":
+        budget.admit(17, recovery=True)
+    else:
+        budget.observe(17, quota(0 if reason == "exhausted" else 20))
+    with budget_store.session() as session:
+        row = session.get(InstallationApiBudget, 17)
+        assert row is not None
+        before = (row.remaining, row.reset_at, row.probe_after, row.accounting_revision)
+    with pytest.raises(RecoveryBudgetDeferredError) as deferred:
+        budget.admit(17, recovery=True)
+    assert deferred.value.reason == reason
+    assert deferred.value.retry_after_seconds > 0
+    assert isinstance(deferred.value, ProviderQuotaExhaustedError) == (reason == "exhausted")
+    with budget_store.session() as session:
+        row = session.get(InstallationApiBudget, 17)
+        assert row is not None
+        assert (row.remaining, row.reset_at, row.probe_after, row.accounting_revision) == before
+
+
+def test_unclassified_deferral_remains_backward_compatible() -> None:
+    error = RecoveryBudgetDeferredError(0)
+    assert error.reason == "unspecified"
+    assert error.retry_after_seconds == 1
+    assert str(error) == "recovery is preserving the installation's REST core quota"
+
+
+@pytest.mark.parametrize("reason", ["example/private", "token=fictional", "", "RESERVE"])
+def test_deferral_rejects_unbounded_diagnostic_values(reason: str) -> None:
+    with pytest.raises(ValueError, match="deferral reason"):
+        raise RecoveryBudgetDeferredError(60, reason=reason)  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize("reason", ["reserve", "exhausted", "probe_pending"])
+async def test_guard_reason_is_on_the_finished_request_span_without_sending_a_request(
+    budget_store: QueueStore, private_key: str, streaming: bool, reason: str
+) -> None:
+    budget = RecoveryApiBudget(budget_store)
+    if reason == "probe_pending":
+        budget.admit(17, recovery=True)
+    else:
+        budget.observe(17, quota(0 if reason == "exhausted" else 20))
+    exporter = InMemorySpanExporter()
+    tracing = Tracing(
+        enabled=True,
+        endpoint="http://tempo.example.test/v1/traces",
+        sample_ratio=1,
+        processor=SimpleSpanProcessor(exporter),
+    )
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("/access_tokens")
+        return httpx.Response(
+            201,
+            json={
+                "token": "fictional-secret-token",
+                "expires_at": (utcnow() + timedelta(hours=1)).isoformat(),
+            },
+        )
+
+    client = GitHubClient(
+        7,
+        private_key,
+        recovery_budget=budget,
+        tracing=tracing,
+        transport=httpx.MockTransport(handle),
+    )
+    expected_error = GitHubRateLimitError if reason == "exhausted" else RecoveryBudgetDeferredError
+    try:
+        with request_lane("recovery"), pytest.raises(expected_error):
+            if streaming:
+                async with client._authenticated_streaming_response(
+                    "GET", "/repos/example/private", 17
+                ):
+                    pass
+            else:
+                await client._api_response("GET", "/repos/example/private", installation_id=17)
+    finally:
+        await client.close()
+        tracing.shutdown()
+    spans = [
+        span
+        for span in exporter.get_finished_spans()
+        if span.attributes and span.attributes.get("github.authentication") == "installation"
+    ]
+    assert len(spans) == 1
+    attributes = dict(spans[0].attributes or {})
+    assert attributes["github.quota.deferred_reason"] == reason
+    assert "example/private" not in repr(attributes)
+    assert "fictional-secret-token" not in repr(attributes)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("known_budget", [False, True])
 async def test_discovery_disconnect_keeps_its_debit_and_readmits_retry(

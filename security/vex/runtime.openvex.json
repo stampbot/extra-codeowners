@@ -1,8 +1,8 @@
 {
   "@context": "https://openvex.dev/ns/v0.2.0",
-  "@id": "urn:uuid:e7209838-9a17-53ed-a0c9-7df5422d3e7e",
+  "@id": "urn:uuid:fb877efb-61b6-5e01-83a1-04b7d915dd3f",
   "author": "Extra CODEOWNERS maintainers",
-  "last_updated": "2026-11-10T06:52:41Z",
+  "last_updated": "2026-11-10T08:07:34Z",
   "role": "VEX document producer",
   "statements": [
     {
@@ -830,9 +830,9 @@
       }
     }
   ],
-  "timestamp": "2026-11-10T06:52:41Z",
+  "timestamp": "2026-11-10T08:07:34Z",
   "tooling": "Vexcalibur + Extra CODEOWNERS runtime binding",
-  "version": 15,
+  "version": 16,
   "x_extra_codeowners_runtime": {
     "files": {
       ".dockerignore": "3f9dc9d3a79fe3085f25de88403b5563ad5c7fa7010bef94c5e55f24bd3cf691",
@@ -853,7 +853,7 @@
       "extra_codeowners/alembic/versions/0009_conditional_request_budget.py": "8356e2d4f1701030ceb275cedbe85ee6ca6e4827ddd87fb84e6b8cd1726ade00",
       "extra_codeowners/alembic/versions/0010_authority_discovery_cursor.py": "db4d488e8a193346098b2415e6c02d788365679ec631996a920270495df24d80",
       "extra_codeowners/alembic/versions/__init__.py": "c421d4569599794de9ddda269e84b775d6e8204164cb9dff2487ca86560d21ae",
-      "extra_codeowners/api_budget.py": "f61539671f308b2581a4a6494a8acd56b3f9f462eac93de7ccf764acd5e82e61",
+      "extra_codeowners/api_budget.py": "cf4dc88e19aac0d949f393ea7ca3ac966e3f6088b16ca98fc197119e53251607",
       "extra_codeowners/app.py": "d30ca24500e3b0d3ace360140d56d568d6bd06865acac406ddaa8a4c623d89ad",
       "extra_codeowners/build_identity.py": "5c3b38f087460fca37660ddeaa8a004d05348f8c947c04fc2444739ab7896968",
       "extra_codeowners/cli.py": "79a5c200397f9544492ec6071890ff5835c1ed625c623a0a86ed3a60503e65f4",
@@ -862,7 +862,7 @@
       "extra_codeowners/dco.py": "8c3a0b541fe021fb9f05500ca9278306901010c219e7e1199ca5e205c138e68d",
       "extra_codeowners/discovery_cache.py": "6ab8504381c2f8b627b97d40cd8a709168c11c5f1f32fde7fca8c0be18b04d8c",
       "extra_codeowners/evaluator.py": "b81b9d1c6fe81d591867b0993d413030caab8af48703c4725f14c04fe2e3f9a6",
-      "extra_codeowners/github.py": "2449d79f741eacf3d60592ff6490730c7adb426a284effa577d387bfd7c4907c",
+      "extra_codeowners/github.py": "1515b39e810c5ddd2a228faf0153c6224cb82cf340772c28647c79a50559141a",
       "extra_codeowners/logging.py": "a59227e76ec7809ff8bb88fee997abb9b99f32e81a4c8d16bcfc72c0c0abf33f",
       "extra_codeowners/manifest.py": "33d42ac16b8218562f2baf6c0bc7c6664b03354bbf274cb0381e94740b76681e",
       "extra_codeowners/metrics.py": "6293de9acad3d3f639fda0403fb2e0f317a733a173a6cb7bf977d16a4e3fd522",
@@ -872,7 +872,7 @@
       "extra_codeowners/py.typed": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "extra_codeowners/reconciliation_tracing.py": "0f650bf2300e26d1485fa7df71b71dccbb7739653e049d452d6b30ee9b6b9931",
       "extra_codeowners/request_timing.py": "7c53fcfdec4b8a5b1cf3427c8bd354b76bc6f255ac7374540a6cae0886a48c19",
-      "extra_codeowners/service.py": "7774e8a5633e4f235530ac094e5e44eabb5dd19c6fd05a7f6ae557cf51cc6d2d",
+      "extra_codeowners/service.py": "961b299b2708bafe5dd30aeb75aabe1002b54cc2fa2cf3d5283da1b98c454e56",
       "extra_codeowners/settings.py": "bd1d3cd0acf23ea4b26869fc1e024438aba7b9acf43f3850c4e6be2e9a5b5437",
       "extra_codeowners/trace_context.py": "f79ca91baa1dd615c80546c66a6b370ba78ec7106dece3feb201d10250078532",
       "extra_codeowners/tracing.py": "49641dd6cb9b5b6da1e6026b90925a73eb3112d13a069afd202e741d261f76f9",
@@ -880,7 +880,7 @@
       "pyproject.toml": "bfb88e388d4590a6f52ed6d76889460a6b698f13129389b3823d2ff661bedd55",
       "uv.lock": "5514cb0448adb693fe97f3d2c8016ccd606890327a1946467fbd118356de4922"
     },
-    "review": "Reviewed both zlib gzip-writer findings against unchanged Python/Docker/lock inputs, all 778 ELF files per published native image and an amd64 import probe. Only dpkg-deb and libapt-pkg import gz APIs; neither is invoked or loaded by the shipped service. CPython zlib/cache and HTTP decoding use in-memory deflate/inflate APIs. Added only the two Debian zlib1g not_affected assessments; existing 27 statement contents and dates are unchanged. No Dockerfile version or package upgrade.",
+    "review": "Budget deferrals gain fixed operational reason strings on existing admission branches and existing trace/log output. This does not change balances, transactions, retry timing, requests, approval or publication fences. No dependency, image input, compression operation, native library entry point, subprocess or TLS setting changes. All 29 existing statement contents and assessment dates, including the scoped APT and zlib gzip-file exclusions, remain valid and unchanged.",
     "schema_version": 1
   }
 }
