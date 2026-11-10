@@ -1,5 +1,19 @@
 # Runtime vulnerability review
 
+## Budget deferral diagnostics: November 10, 2026 UTC
+
+Budget exceptions now classify three existing admission branches with fixed
+reason strings. The request span records the reason before it ends, and the
+existing reconciliation/authority log events include it. Admission balances,
+transactions, delays, queue behavior and GitHub requests are unchanged.
+
+This adds Python string validation and existing trace/log attributes, not a
+subprocess, native-library entry point, compression operation or TLS setting.
+Dependencies and image inputs are unchanged. All 29 statement contents and
+assessment dates are retained; only the reviewed runtime binding advances.
+The APT and zlib gzip-file writer exclusions keep their existing scope and
+limits, and fixed-package statements still identify the same package versions.
+
 ## zlib gzip-file writers: November 10, 2026 UTC
 
 [CVE-2026-76844](https://security-tracker.debian.org/tracker/CVE-2026-76844)

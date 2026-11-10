@@ -2637,6 +2637,7 @@ class Worker:
                 installation_id=job.installation_id,
                 scope=job.repository_full_name or "installation",
                 retry_after_seconds=error.retry_after_seconds,
+                budget_deferred_reason=error.reason,
                 provider_quota_exhausted=isinstance(error, ProviderQuotaExhaustedError),
             )
             return "budget_deferred"
@@ -3328,6 +3329,7 @@ class Reconciler:
                     "reconciliation_deferred_for_recovery_budget",
                     installation_id=installation_id,
                     retry_after_seconds=error.retry_after_seconds,
+                    budget_deferred_reason=error.reason,
                 )
             except GitHubRateLimitError as error:
                 failed_installations += 1

@@ -213,6 +213,22 @@ physical attempt. These attributes contain no validators or request contents.
 `absent` means no entry exists now; it does not distinguish a cold cache from
 one whose entry was evicted. The cache retains no history of evicted keys.
 
+When the local REST-core guard denies admission, the request span records
+`github.quota.deferred_reason` before it ends. Values are `reserve` (the
+interactive reserve would be consumed), `exhausted` (the known balance is
+zero), or `probe_pending` (a new/reset window's recovery probe is still
+outstanding). `unspecified` covers a deferral raised without a classified
+reason. These are fixed operational values, not repository metadata or
+GitHub response codes. The denied attempt has not sent its installation
+request; token acquisition may already have run.
+
+The existing `reconciliation_deferred_for_recovery_budget` and
+`authority_discovery_deferred_for_recovery_budget` log events carry the same
+value as `budget_deferred_reason`, alongside their existing retry delay.
+An expired window with a pending probe is not evidence that the interactive
+reserve was exhausted. These diagnostics change neither admission nor
+retry scheduling, and add no metric labels.
+
 ### Reconciliation trace fields
 
 When tracing is enabled, each reconciliation attempt has a small independent
