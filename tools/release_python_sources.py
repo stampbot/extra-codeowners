@@ -18,6 +18,7 @@ import tarfile
 import time
 import tomllib
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
@@ -35,6 +36,10 @@ URL = re.compile(
     r"[0-9a-f]{60}/([A-Za-z0-9][A-Za-z0-9._+-]{0,199}\.(?:tar\.gz|zip))\Z"
 )
 PSYCOPG_URL = re.compile(r"https://codeload\.github\.com/psycopg/psycopg/tar\.gz/[0-9a-f]{40}\Z")
+OPENSSL_URL = re.compile(
+    r"https://github\.com/openssl/openssl/releases/download/"
+    r"openssl-([0-9]+\.[0-9]+\.[0-9]+)/openssl-\1\.tar\.gz\Z"
+)
 RPM_URL = re.compile(
     r"https://(?:vault\.centos\.org/7\.9\.2009/(?:os|updates)/Source/SPackages/"
     r"|vault\.almalinux\.org/8\.10/BaseOS/Source/Packages/)"
@@ -94,13 +99,16 @@ def _text(value: object, pattern: re.Pattern[str]) -> str:
     return value
 
 
-def _native_recipe(
+def _recipe_platform(
     name: str, version: str, architecture: str, python: dict[str, Any]
-) -> list[dict[str, Any]]:
+) -> dict[str, Any]:
     # These are reviewed checkout data, never repository policy or a URL
     # supplied by the wheel. The installed SBOM must match the reviewed bytes.
-    with (RECIPE_DIRECTORY / f"{name}-{version}.json").open("rb") as stream:
-        recipe = _json(stream.read(MAX_METADATA + 1))
+    try:
+        with (RECIPE_DIRECTORY / f"{name}-{version}.json").open("rb") as stream:
+            recipe = _json(stream.read(MAX_METADATA + 1))
+    except FileNotFoundError as error:
+        raise PythonSourceError("native source recipe requires review for this version") from error
     if (
         type(recipe.get("schema_version")) is not int
         or recipe["schema_version"] != 1
@@ -122,6 +130,13 @@ def _native_recipe(
     if any(not isinstance(item, dict) for item in sboms):
         raise PythonSourceError("invalid embedded SBOM inventory")
     selected = [item for item in sboms if item.get("distribution") == name]
+    relative_path = platform.get("sbom_relative_path")
+    if relative_path is not None:
+        relative_path = _text(
+            relative_path, re.compile(r"sboms/[A-Za-z0-9_-][A-Za-z0-9_.-]*\.json\Z")
+        )
+        suffix = f"/{name.replace('-', '_')}-{version}.dist-info/{relative_path}"
+        selected = [item for item in selected if str(item.get("path", "")).endswith(suffix)]
     if (
         len(selected) != 1
         or selected[0].get("kind") != "regular"
@@ -131,6 +146,14 @@ def _native_recipe(
         or selected[0].get("size") != expected_size
     ):
         raise PythonSourceError("wheel SBOM changed; review its native source recipe")
+    return platform
+
+
+def _native_recipe(
+    name: str, version: str, architecture: str, python: dict[str, Any]
+) -> list[dict[str, Any]]:
+    platform = _recipe_platform(name, version, architecture, python)
+    expected_hash = platform["sbom_sha256"]
     records = platform.get("sources")
     if not isinstance(records, list) or not 1 <= len(records) <= 64:
         raise PythonSourceError("invalid native source recipe archive list")
@@ -173,8 +196,47 @@ def _native_recipe(
     return result
 
 
+def _embedded_recipe(
+    name: str, version: str, architecture: str, python: dict[str, Any]
+) -> list[dict[str, Any]]:
+    platform = _recipe_platform(name, version, architecture, python)
+    records = platform.get("sources")
+    if not isinstance(records, list) or len(records) != 1 or not isinstance(records[0], dict):
+        raise PythonSourceError("invalid embedded OpenSSL source recipe")
+    record = records[0]
+    component_version = _text(record.get("version"), re.compile(r"[0-9]+\.[0-9]+\.[0-9]+\Z"))
+    url = _text(record.get("url"), OPENSSL_URL)
+    match = OPENSSL_URL.fullmatch(url)
+    assert match is not None
+    if record.get("name") != "openssl" or match.group(1) != component_version:
+        raise PythonSourceError("embedded source identity disagrees with its URL")
+    checksum = _text(record.get("sha256"), re.compile(r"[0-9a-f]{64}\Z"))
+    size = record.get("size")
+    if type(size) is not int or not 0 < size <= MAX_FILE:
+        raise PythonSourceError("invalid embedded source archive size")
+    filename = f"openssl-{component_version}.tar.gz"
+    if len(filename) > 100:
+        raise PythonSourceError("embedded source filename exceeds the archive format limit")
+    return [
+        {
+            "distribution": name,
+            "distribution_version": version,
+            "source_component": {"name": "openssl", "version": component_version},
+            "sbom_sha256": platform["sbom_sha256"],
+            "url": url,
+            "sha256": checksum,
+            "size": size,
+            "path": f"embedded/{name}/{architecture}/{filename}",
+        }
+    ]
+
+
 def _all_sources(manifest: dict[str, Any]) -> list[dict[str, Any]]:
-    result: list[dict[str, Any]] = [*manifest["sources"], *manifest.get("native_sources", [])]
+    result: list[dict[str, Any]] = [
+        *manifest["sources"],
+        *manifest.get("native_sources", []),
+        *manifest.get("embedded_sources", []),
+    ]
     return result
 
 
@@ -221,12 +283,13 @@ def plan(inventory: bytes, lock: bytes, architecture: str, digest: str) -> dict[
         raise PythonSourceError("unexpected Python source bundle name")
     distributions = python.get("distributions") if isinstance(python, dict) else None
     recipe_schema = python.get("source_recipe_schema", 0) if isinstance(python, dict) else 0
-    if type(recipe_schema) is not int or recipe_schema not in {0, 1, 2}:
+    if type(recipe_schema) is not int or recipe_schema not in {0, 1, 2, 3}:
         raise PythonSourceError("unsupported source recipe schema")
     if not isinstance(distributions, list) or not 1 <= len(distributions) <= 512:
         raise PythonSourceError("invalid installed distribution list")
     sources: list[dict[str, Any]] = []
     native_sources: list[dict[str, Any]] = []
+    embedded_sources: list[dict[str, Any]] = []
     unresolved = []
     own = []
     seen = set()
@@ -247,12 +310,15 @@ def plan(inventory: bytes, lock: bytes, architecture: str, digest: str) -> dict[
             raise PythonSourceError(f"installed distribution absent from lock: {name} {version}")
         if package.get("source") != {"registry": "https://pypi.org/simple"}:
             raise PythonSourceError("source collection only supports locked PyPI packages")
+        if recipe_schema >= 3 and name == "cryptography":
+            assert isinstance(python, dict)
+            embedded_sources.extend(_embedded_recipe(name, version, architecture, python))
         sdist = package.get("sdist")
         if sdist is None:
             reviewed = REVIEWED_BINARY_SOURCES.get((name, version)) if recipe_schema >= 1 else None
             if reviewed is not None:
                 sources.append({**identity, **reviewed})
-                if recipe_schema == 2:
+                if recipe_schema >= 2:
                     assert isinstance(python, dict)
                     native_sources.extend(_native_recipe(name, version, architecture, python))
             else:
@@ -276,7 +342,10 @@ def plan(inventory: bytes, lock: bytes, architecture: str, digest: str) -> dict[
                 "path": f"sources/{name}/{url.rsplit('/', 1)[1]}",
             }
         )
-    if sum(source["size"] for source in [*sources, *native_sources]) > MAX_BUNDLE - MAX_METADATA:
+    if (
+        sum(source["size"] for source in [*sources, *native_sources, *embedded_sources])
+        > MAX_BUNDLE - MAX_METADATA
+    ):
         raise PythonSourceError("source archives exceed bundle size limit")
     manifest = {
         "schema_version": 1,
@@ -293,11 +362,18 @@ def plan(inventory: bytes, lock: bytes, architecture: str, digest: str) -> dict[
             else "Locked Python sdists only; embedded native dependencies are not covered."
         ),
     }
-    if recipe_schema == 2:
+    if recipe_schema >= 2:
         manifest["native_sources"] = sorted(native_sources, key=lambda item: item["path"])
         manifest["scope"] = (
             "Python sources and reviewed native source RPMs listed in this manifest; "
             "other embedded native components and build inputs remain separate."
+        )
+    if recipe_schema >= 3:
+        manifest["embedded_sources"] = sorted(embedded_sources, key=lambda item: item["path"])
+        manifest["scope"] = (
+            "Python sources, reviewed native source RPMs and reviewed embedded OpenSSL "
+            "sources listed in this manifest; other native components and build inputs "
+            "remain separate."
         )
     return manifest
 
@@ -320,15 +396,50 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         raise PythonSourceError("source download unexpectedly redirected")
 
 
+class _SourceRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(
+        self,
+        req: urllib.request.Request,
+        fp: IO[bytes],
+        code: int,
+        msg: str,
+        headers: object,
+        newurl: str,
+    ) -> urllib.request.Request:
+        try:
+            target = urllib.parse.urlsplit(newurl)
+            port = target.port
+        except ValueError as error:
+            raise PythonSourceError("invalid source redirect target") from error
+        if (
+            OPENSSL_URL.fullmatch(req.full_url)
+            and req.get_method() == "GET"
+            and target.scheme == "https"
+            and target.hostname == "release-assets.githubusercontent.com"
+            and port in {None, 443}
+            and target.username is None
+            and target.password is None
+            and not target.fragment
+        ):
+            # Only this reviewed GitHub release URL may take one asset hop.
+            # A second redirect no longer matches OPENSSL_URL and is rejected.
+            # Construct a new GET rather than forwarding headers or data.
+            return urllib.request.Request(newurl)  # noqa: S310 - HTTPS asset origin checked above.
+        raise PythonSourceError("source download unexpectedly redirected")
+
+
 def fetch(source: dict[str, Any]) -> bytes:
     """Fetch an opaque archive from a permitted source origin with retries."""
     value = source.get("url")
     if not isinstance(value, str) or not (
-        URL.fullmatch(value) or PSYCOPG_URL.fullmatch(value) or RPM_URL.fullmatch(value)
+        URL.fullmatch(value)
+        or PSYCOPG_URL.fullmatch(value)
+        or RPM_URL.fullmatch(value)
+        or OPENSSL_URL.fullmatch(value)
     ):
         raise PythonSourceError("invalid source archive URL")
     url = value
-    opener = urllib.request.build_opener(_NoRedirect())
+    opener = urllib.request.build_opener(_SourceRedirect())
     for attempt in range(3):
         try:
             with opener.open(url, timeout=30) as response:

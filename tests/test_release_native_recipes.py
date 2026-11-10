@@ -47,8 +47,11 @@ source = {registry = "https://pypi.org/simple"}
 
 
 @pytest.mark.parametrize(("architecture", "count"), [("amd64", 6), ("arm64", 8)])
-def test_real_recipes_select_exact_platform_sources(architecture: str, count: int) -> None:
-    manifest = sources.plan(*inputs(architecture), architecture, DIGEST)
+@pytest.mark.parametrize("schema", [2, 3])
+def test_real_recipes_select_exact_platform_sources(
+    architecture: str, count: int, schema: int
+) -> None:
+    manifest = sources.plan(*inputs(architecture, schema), architecture, DIGEST)
     assert len(manifest["sources"]) == 1
     assert len(manifest["native_sources"]) == count
     assert all(f"/{architecture}/" in item["path"] for item in manifest["native_sources"])
