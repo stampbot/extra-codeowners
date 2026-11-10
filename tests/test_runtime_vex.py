@@ -24,6 +24,7 @@ PACKAGES = (
     ("openssl", "openssl", "3.5.7-1~deb13u3"),
     ("openssl-provider-legacy", "openssl", "3.5.7-1~deb13u3"),
     ("perl-base", "perl", "5.40.1-6+deb13u1"),
+    ("zlib1g", "zlib", "1:1.3.dfsg+really1.3.1-1+b1"),
 )
 
 
@@ -86,7 +87,7 @@ def test_review_records_glibc_caller_evidence_and_existing_openssl_fixes() -> No
     statements = document["statements"]
     assert Counter(statement["status"] for statement in statements) == {
         "fixed": 26,
-        "not_affected": 1,
+        "not_affected": 3,
     }
     by_cve = {statement["vulnerability"]["name"]: statement for statement in statements}
     assert len(by_cve) == len(statements)

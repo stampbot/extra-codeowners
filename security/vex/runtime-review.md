@@ -1,5 +1,44 @@
 # Runtime vulnerability review
 
+## zlib gzip-file writers: November 10, 2026 UTC
+
+[CVE-2026-76844](https://security-tracker.debian.org/tracker/CVE-2026-76844)
+and [CVE-2026-85091](https://security-tracker.debian.org/tracker/CVE-2026-85091)
+concern stale input buffers in zlib's C `gz*` file-writer interface after a
+write error or non-blocking stall. Debian reports the installed `zlib1g`
+`1:1.3.dfsg+really1.3.1-1+b1` as vulnerable. This assessment doesn't dispute that
+classification or claim the package is patched.
+
+The discovery cache uses Python `zlib.compress` and `decompressobj` on bounded
+in-memory bodies. CPython's zlib extensions import deflate/inflate and checksum
+APIs, not `gz*` APIs. Python's gzip and HTTP decoding use those memory-oriented
+bindings too; using gzip framing is not the same as calling C's gzip-file writer.
+
+Both published alpha.75 native images were exported and all 778 regular ELF
+files per architecture inspected with `readelf`. The only `gz*` importers were
+`dpkg-deb` and `libapt-pkg`. The [caller table](zlib-2026-gzip-callers.json)
+records their hashes and CPython's zlib imports. The service entrypoints, routes,
+healthcheck and migrations neither start package-management programs nor load
+APT. An amd64 import probe covering the application, Psycopg, SQLite, zlib and
+gzip also loaded neither caller. ARM64 received static inspection, not execution.
+Import tables are supporting evidence; the source review establishes which
+programs the service actually invokes.
+
+The two new `not_affected` statements use
+`vulnerable_code_not_in_execute_path` and name only these Debian binaries on
+amd64 and arm64 with the inventory's Debian 13.7 identity. They do not exempt
+an entire image, wheel-bundled components or other zlib findings. The optional
+source-package qualifier is omitted; binary version, architecture and
+distribution still have to match one inventory entry. Vexcalibur 1.1.1 formatted
+the reviewed local findings offline. It did not decide reachability.
+
+The Dockerfile, base-image digest and dependency lock are unchanged. All 27
+earlier statement contents and assessment dates are retained, and raw scanner
+reports remain unfiltered. Operator-run package management, custom FFI or
+plugins, arbitrary commands and execution after compromise are outside this
+assessment. The existing runtime binding still requires review when code,
+dependencies or image inputs change.
+
 ## Discovery validator retention: November 6, 2026 UTC
 
 Discovery entries now expire after two idle hours rather than one. Their
