@@ -10,8 +10,8 @@ shared by both platforms. These bundles retain version-matched upstream source
 and build recipes. They do not prove the exact inputs used by upstream binary
 builders, and the project does not rebuild dependencies to make that claim.
 
-This is not yet the complete container source. Libraries inside Python wheels
-and other missing notice material remain under
+This is not yet the complete container source. Some libraries inside Python
+wheels and other missing notice material remain under
 [issue #18](https://github.com/stampbot/extra-codeowners/issues/18).
 The bundles do not establish distribution approval.
 
@@ -268,6 +268,39 @@ Psycopg's custom-built libpq, OpenSSL 3, or OpenLDAP libraries, nor components
 the SBOM does not list. Those sources and the remaining notice review stay in
 [issue #18][source-work]. Keeping a version-matched source recipe is not a claim
 that rebuilding it produces byte-identical wheel binaries.
+
+### Cryptography's embedded OpenSSL source
+
+Schema 3 adds the OpenSSL source archive identified by Cryptography 50.0.0's
+wheel SBOM on each platform. It appears in the existing Python source bundle
+under `embedded/cryptography/<architecture>/`. The manifest's
+`embedded_sources` records the component version, archive URL, SHA-256, size
+and reviewed wheel-SBOM hash, alongside the same platform/inventory binding
+used for the other sources. The verification command above checks these bytes
+too; no new asset or command is needed.
+
+The reviewed recipe selects `sboms/sbom.json`, not Cryptography's separate
+Rust SBOM. Its two platform hashes bind the claim to the inspected wheel
+metadata. That metadata identifies OpenSSL 4.0.1 and its upstream archive's
+SHA-256; the reviewed archive also matches OpenSSL's published checksum.
+The source archive retains OpenSSL's license text. This does not make the
+recipient notice inventory complete or establish an upstream binary's exact
+build inputs.
+
+Collection accepts the reviewed OpenSSL GitHub release URL and at most one
+HTTPS redirect to GitHub's release-asset host. It forwards no request headers
+or body to that host. Other source providers still cannot redirect. Downloaded
+bytes must match the reviewed size and checksum; a redirect or download
+failure cannot waive either check. The collector never extracts or executes
+the source archive, and it does not rebuild or upgrade a dependency.
+
+A changed or missing selected SBOM, or a Cryptography version without a
+reviewed recipe, stops schema 3 collection. Review its source mapping and
+update the recipe before publishing. Historical schema 0–2 inventories keep
+their original contract; verifying an older release does not retroactively
+require this archive. Psycopg's custom libpq, OpenSSL and OpenLDAP sources,
+other unreported components and distribution approval remain in
+[issue #18][source-work].
 
 ## Rust dependencies in Python wheels
 

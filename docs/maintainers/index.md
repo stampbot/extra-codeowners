@@ -138,13 +138,25 @@ bundle for their combined package list. It retains version-matched source and
 Debian build recipes without rebuilding dependencies. Source archives use a
 SHA-256-checked download cache; cached bytes are checked again before use, and
 unused entries are removed. The cache is optional: missing or corrupt entries
-are downloaded again. Descriptors are fetched from Debian Snapshot on each run.
+are downloaded again. A complete, authenticated retained bundle with the same
+source identities can be rebound without a fresh Snapshot lookup; otherwise
+collection fetches descriptors from Debian Snapshot. The
+[source archive reference](../reference/source-archives.md#reusing-retained-debian-sources)
+defines that reuse contract.
 
 The publisher verifies `debian-source.tar` before allocating immutable release
 state, then signs and attests it alongside the other assets. Source collection
 fails if any installed Debian source package cannot be recovered or checked.
 The remaining native-wheel and notice work is tracked in #18; the source bundles
 do not claim exact upstream build provenance or legal approval.
+
+Schema 3 Python source bundles also retain the OpenSSL archive identified by
+Cryptography's reviewed wheel SBOMs. Changed SBOM bytes or a Cryptography version
+without a reviewed recipe stop collection. Review the platform SBOM identities,
+source URL, checksum, size and notice coverage before updating that recipe;
+don't change package versions to make the evidence match. The
+[embedded-source reference](../reference/source-archives.md#cryptographys-embedded-openssl-source)
+describes the archive layout and remaining limits.
 
 ### Update a VEX claim
 
