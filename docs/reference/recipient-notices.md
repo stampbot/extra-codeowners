@@ -68,6 +68,12 @@ add checksum-verified crate archives for Cargo components reported by those
 SBOMs. Their manifests connect the wheel's declarations to the retained sources;
 they do not replace the notice bundle or the remaining native-library review.
 
+The separate [wheel-native catalogs](native-components.md) make reviewed
+Cryptography and Psycopg C-library identities available as CycloneDX documents.
+They bind the wheel declarations and source recipes to the same platform
+evidence. Unknown library licenses remain explicitly unresolved; the parent
+wheel's license is not silently applied to its bundled libraries.
+
 ## Verify a bundle
 
 Check out the release tag, then download the matching inventory and notice

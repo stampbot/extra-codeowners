@@ -126,6 +126,14 @@ decide that source or notice duties have been met. The inventory also records
 the Debian distribution derived from the image's hashed canonical
 `/usr/lib/os-release` file.
 
+Native builds also produce signed, attested
+[wheel-native component catalogs](../reference/native-components.md) from the
+verified notices and reviewed source recipes. The publisher reconstructs them
+after artifact download, before allocating release state. A changed wheel SBOM
+or native binding needs a source-recipe review; unknown library licenses remain
+unresolved. These catalogs supplement the image SBOM, not the existing required
+image-vulnerability scan.
+
 The native jobs also download the CPython source archive identified by the
 image's version and SHA-256. Each platform gets a signed, attested
 [source bundle](../reference/source-archives.md), verified again before the

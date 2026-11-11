@@ -15,6 +15,10 @@ wheels and other missing notice material remain under
 [issue #18](https://github.com/stampbot/extra-codeowners/issues/18).
 The bundles do not establish distribution approval.
 
+For machine-readable C-library identities and their source-recipe bindings,
+use the companion [wheel-native catalogs](native-components.md). Those catalogs
+do not replace the source archives or establish complete source delivery.
+
 ## CPython contents and identity
 
 Each bundle has two regular files:

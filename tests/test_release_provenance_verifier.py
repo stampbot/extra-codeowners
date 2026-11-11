@@ -501,11 +501,20 @@ def _run_verifier(
     debian_delivery: bool = False,
     python_delivery: bool = False,
     rust_delivery: bool = False,
+    native_catalog_required: str | None = None,
     full_distro: object = None,
 ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
     asset_directory = tmp_path / "release-assets"
     asset_directory.mkdir()
     release_files = _release_files()
+    if native_catalog_required is not None:
+        for architecture in ("amd64", "arm64"):
+            filename = f"distribution-inventory-{architecture}.json"
+            inventory = json.loads(release_files[filename])
+            inventory["python"]["native_component_catalog"] = native_catalog_required.format(
+                architecture=architecture
+            )
+            release_files[filename] = json.dumps(inventory).encode()
     python_delivery = python_delivery or rust_delivery
     if python_delivery:
         for architecture in ("amd64", "arm64"):
@@ -533,7 +542,7 @@ def _run_verifier(
             release_files[f"recipient-notices-{architecture}.tar.gz"] = _recipient_notices(
                 architecture, digest, release_files[filename]
             )
-    if source_delivery or debian_delivery or python_delivery:
+    if source_delivery or debian_delivery or python_delivery or native_catalog_required is not None:
         _add_source_bundles(release_files)
     if debian_delivery:
         _add_debian_source_bundle(release_files)
@@ -729,6 +738,20 @@ def test_release_provenance_verifies_source_bundles_when_inventory_requires_them
             and f"cpython-source-{architecture}.tar.gz" in operation
             for operation in operations
         )
+
+
+@pytest.mark.parametrize(
+    "filename", ["native-components-{architecture}.cdx.json", "other.json", "../outside.json"]
+)
+@pytest.mark.skipif(BASH is None or JQ is None, reason="Bash and jq are required")
+def test_signed_inventory_cannot_omit_or_redirect_its_native_catalog(
+    tmp_path: Path, filename: str
+) -> None:
+    result, operations = _run_verifier(tmp_path, native_catalog_required=filename)
+    assert result.returncode != 0
+    assert any("distribution-inventory-amd64.json" in operation for operation in operations)
+    if filename.startswith("native-components-"):
+        assert "native-components-amd64.cdx.json" in result.stderr
 
 
 @pytest.mark.parametrize("suffix", ["", ".sigstore.json"])

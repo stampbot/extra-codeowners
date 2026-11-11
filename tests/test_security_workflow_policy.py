@@ -771,10 +771,14 @@ def test_completed_release_verification_covers_identity_and_required_assets() ->
         "distribution-inventory-amd64.json.sigstore.json",
         "recipient-notices-amd64.tar.gz",
         "recipient-notices-amd64.tar.gz.sigstore.json",
+        "native-components-amd64.cdx.json",
+        "native-components-amd64.cdx.json.sigstore.json",
         "distribution-inventory-arm64.json",
         "distribution-inventory-arm64.json.sigstore.json",
         "recipient-notices-arm64.tar.gz",
         "recipient-notices-arm64.tar.gz.sigstore.json",
+        "native-components-arm64.cdx.json",
+        "native-components-arm64.cdx.json.sigstore.json",
         "vulnerability-report-amd64.json",
         "vulnerability-report-arm64.json",
     ):
@@ -787,6 +791,23 @@ def test_completed_release_verification_covers_identity_and_required_assets() ->
     assert 'retry helm pull "oci://${chart_reference}"' in verify
     assert '"release-assets/extra-codeowners-${VERSION}.tgz"' in verify
     assert ".github/scripts/verify-release-provenance.sh" in verify
+
+
+def test_native_catalog_is_verified_before_release_state_and_published_with_evidence() -> None:
+    jobs = _workflow_jobs((WORKFLOWS / "release.yml").read_text(encoding="utf-8"))
+    collect = _named_step(jobs["image"], "Collect raw native filesystem inventory")
+    upload = _named_step(jobs["image"], "Upload native release evidence")
+    verify = _named_step(jobs["publish"], "Verify recipient notice release evidence")
+    attest = _named_step(jobs["publish"], "Attest native component catalogs")
+    sign = _named_step(jobs["publish"], "Sign release files")
+    assert "tools/release_native_components.py generate" in collect
+    assert "--lock uv.lock" in collect and "--notices" in collect
+    assert "native-components-${{ matrix.architecture }}.cdx.json" in upload
+    assert "tools/release_native_components.py verify" in verify
+    assert jobs["publish"].index(verify) < jobs["publish"].index("id: tag")
+    assert "actions/attest-build-provenance@" in attest
+    assert "subject-path: release/image/*/native-components-*.cdx.json" in attest
+    assert "-name 'native-components-*.cdx.json'" in sign
 
 
 def test_release_provenance_verifies_the_schema_and_platform_binding_of_raw_inventories() -> None:
@@ -809,6 +830,9 @@ def test_release_provenance_verifies_the_schema_and_platform_binding_of_raw_inve
     assert "recipient-notices-arm64.tar.gz" in source
     assert "verify_recipient_notice_bundle()" in source
     assert "tools/release_notices.py verify" in source
+    assert 'has("native_component_catalog")' in source
+    assert "tools/release_native_components.py verify" in source
+    assert 'verify_release_file "${catalog}"' in source
     assert '"${asset_directory}/digest-amd64.txt"' in source
     assert '"${asset_directory}/digest-arm64.txt"' in source
     assert 'verify_release_file "${inventory}"' in source
