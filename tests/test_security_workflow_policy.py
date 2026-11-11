@@ -838,6 +838,7 @@ def test_native_rescan_requires_authenticated_evidence_and_reuses_the_image_data
         "--security-opt=no-new-privileges",
         "GRYPE_DB_AUTO_UPDATE=false",
         "GRYPE_CHECK_FOR_APP_UPDATE=false",
+        "--add-cpes-if-none",
         "--config /work/.github/grype-inventory.yaml --output json",
     ):
         assert flag in native

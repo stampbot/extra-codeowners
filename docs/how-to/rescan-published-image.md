@@ -51,6 +51,13 @@ C libraries missing from the image report. Older releases without a declared
 catalog skip this step; a required catalog that is missing fails release
 verification first.
 
+The native scan generates missing CPE identifiers for advisory matching. These
+are heuristic identities, not new facts about the binary. As
+[Grype's matching guide](https://oss.anchore.com/docs/guides/vulnerability/ecosystems/)
+explains, CPE matches can be wrong or incomplete. RPM-origin entries also need
+the correct distribution advisory context, which this mixed catalog does not
+provide. An entry with no match has not been established to be unaffected.
+
 Native findings need separate advisory and reachability review. They do not
 yet participate in the blocking image severity check, so a green workflow
 does not mean the native report has no findings. A native scanner error does

@@ -184,7 +184,7 @@ jobs:
             --mount "type=bind,src=${RUNNER_TEMP}/grype-db,dst=/cache" \
             --env GRYPE_DB_CACHE_DIR=/cache --env GRYPE_DB_AUTO_UPDATE=false \
             --env GRYPE_CHECK_FOR_APP_UPDATE=false \
-            "${GRYPE_IMAGE}" "sbom:/work/${catalog}" --by-cve \
+            "${GRYPE_IMAGE}" "sbom:/work/${catalog}" --by-cve --add-cpes-if-none \
             --config /work/.github/grype-inventory.yaml --output json \
             >"rescan-native-${ARCHITECTURE}.json"
           printf '%s\n' \
