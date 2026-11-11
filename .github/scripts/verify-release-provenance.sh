@@ -314,6 +314,7 @@ if [[ "${debian_source_required}" == true || -e "${debian_source}" || -e "${debi
 fi
 python -I -S -B tools/release_vex.py stage \
   --source "${vex}" \
+  --lock "${temporary_directory}/release-uv.lock" \
   --inventory "${amd64_inventory}" \
   --inventory "${arm64_inventory}"
 verify_openvex_image_attestation "${vex}"

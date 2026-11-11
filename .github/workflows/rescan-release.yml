@@ -191,11 +191,31 @@ jobs:
             'Native findings are unfiltered and need separate triage; they are not part of the image severity gate.' \
             >>"${GITHUB_STEP_SUMMARY}"
 
+      - name: Apply the release VEX to native findings
+        if: ${{ always() && steps.native.outcome == 'success' && steps.native.outputs.available == 'true' }}
+        env:
+          ARCHITECTURE: ${{ matrix.architecture }}
+          VERSION: ${{ needs.select.outputs.version }}
+        run: |
+          docker run --rm --read-only --cap-drop=ALL --security-opt=no-new-privileges \
+            --network none --user "$(id -u):$(id -g)" \
+            --tmpfs /tmp:rw,nosuid,nodev,mode=1777 \
+            --mount "type=bind,src=${GITHUB_WORKSPACE},dst=/work,readonly" \
+            --mount "type=bind,src=${RUNNER_TEMP}/grype-db,dst=/cache" \
+            --env GRYPE_DB_CACHE_DIR=/cache --env GRYPE_DB_AUTO_UPDATE=false \
+            --env GRYPE_CHECK_FOR_APP_UPDATE=false \
+            "${GRYPE_IMAGE}" "sbom:/work/release-assets/native-components-${ARCHITECTURE}.cdx.json" \
+            --by-cve --add-cpes-if-none --config /work/.github/grype-inventory.yaml \
+            --vex "/work/release-assets/extra-codeowners-${VERSION}.openvex.json" --output json \
+            >"rescan-native-assessed-${ARCHITECTURE}.json"
+
       - name: Retain the unfiltered native report
         if: ${{ always() && steps.native.outputs.available == 'true' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: rescan-native-${{ needs.select.outputs.tag }}-${{ matrix.architecture }}
-          path: rescan-native-${{ matrix.architecture }}.json
+          path: |
+            rescan-native-${{ matrix.architecture }}.json
+            rescan-native-assessed-${{ matrix.architecture }}.json
           if-no-files-found: error
           retention-days: 14

@@ -84,23 +84,30 @@ before 1.0.
 ## Vulnerability statements
 
 The [current OpenVEX statement](security/vex/runtime.openvex.json) records
-reviewed assessments for exact Debian and Python package products. It is not
-a complete vulnerability assessment of every library inside those packages. Our
+reviewed assessments for exact Debian, Python and selected native package
+products. It is not a complete vulnerability assessment of every library inside
+those packages. Our
 [runtime review](security/vex/runtime-review.md) covers both image architectures.
 It records package fixes, including the earlier PCRE2 and OpenSSL findings.
-Three claims are `not_affected`: CVE-2026-109518 in APT's package-acquisition path,
+The Debian exclusions cover CVE-2026-109518 in APT's package-acquisition path,
 and CVE-2026-76844 and CVE-2026-85091 in zlib's gzip-file writer APIs.
 The shipped service doesn't invoke APT or expose its install API; its HTTP
 requests use HTTPX. APT remains installed and unpatched. This assessment does
 not cover an operator installing packages, custom code or plugins, or arbitrary
-execution after compromise. Every claim names package versions, architectures,
-and the Debian distribution.
+execution after compromise. Debian claims name package versions, architectures
+and the Debian distribution. Native claims use the separately validated source
+identities described below.
 
 Wheel-bundled OpenSSL and other C libraries have separate
 [native component catalogs](docs/reference/native-components.md) and rescan
-reports. The current VEX does not exclude those native findings, and the image
-severity gate does not yet assess them. Native advisory matching and
-reachability review remain in [issue #18](https://github.com/stampbot/extra-codeowners/issues/18).
+reports. The current VEX adds four native OpenSSL assessments for CMS, CMP and
+a 32-bit-only overflow; 55 other native candidates remain `under_investigation`.
+The [caller evidence](security/vex/native-openssl-callers.json) and runtime
+review explain their scope. TLS and certificate-processing findings are not
+blanket exclusions. The image severity gate does not yet assess the native
+catalog; its separate reports retain both raw and VEX-applied results. Native
+coverage and further reachability review remain in
+[issue #18](https://github.com/stampbot/extra-codeowners/issues/18).
 
 The OpenSSL-only statements for [3.5.6](security/vex/openssl-3.5.6.openvex.json)
 and [3.5.7](security/vex/openssl-3.5.7.openvex.json) remain as historical evidence.
@@ -116,12 +123,19 @@ checks that manifest before using VEX, and the publisher checks it again before
 allocating a release. A runtime change requires another review even when the
 Debian package versions stay the same. Documentation-only edits do not change
 the binding. Rebinding records a maintainer's assessment; it does not perform one.
+The binding also covers the native source recipes and retained caller evidence,
+so changing either requires another review.
 
 Before it creates an immutable tag or a versioned image reference, the
 workflow checks every product URL against signed `amd64` and `arm64`
 inventories. Its supported OpenVEX profile is a flat package product: matching
 `@id` and `identifiers.purl`, with no other product fields or identifier aliases.
 Hashes and nested subcomponents are rejected, not silently left unvalidated.
+Selected generic native products also require the release's exact `uv.lock`.
+The source verifier must match each wheel's reviewed SBOM and applicable
+native-file bindings on both architectures. A name/version present on only
+one platform is rejected; the flat native URL has no architecture qualifier.
+RPM-origin products and unreviewed generic names remain unsupported.
 Those inventories include Debian's major and full distribution
 versions from the image's hashed canonical `/usr/lib/os-release` file. The
 full version makes the package URLs match Grype's identities, such as

@@ -6,14 +6,17 @@ import argparse
 import base64
 import binascii
 import hashlib
+import importlib.util
 import json
 import re
 import sys
 import uuid
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from functools import cache
 from pathlib import Path
+from types import ModuleType
 from typing import Final, NoReturn, cast
 from urllib.parse import unquote
 
@@ -119,6 +122,14 @@ def _read_json(path: Path, description: str) -> object:
 
 def _runtime_files(root: Path) -> dict[str, str]:
     paths = [root / name for name in ("Dockerfile", ".dockerignore", "pyproject.toml", "uv.lock")]
+    recipes = root / "tools/source_recipes"
+    if recipes.is_symlink() or (recipes.exists() and not recipes.is_dir()):
+        _fail("runtime binding requires a regular native source recipe directory")
+    if recipes.is_dir():
+        paths.extend(sorted(recipes.glob("*.json")))
+    native_evidence = root / "security/vex/native-openssl-callers.json"
+    if native_evidence.exists() or native_evidence.is_symlink():
+        paths.append(native_evidence)
     package = root / "extra_codeowners"
     if package.is_symlink() or not package.is_dir():
         _fail("runtime binding requires an extra_codeowners source directory")
@@ -129,7 +140,7 @@ def _runtime_files(root: Path) -> dict[str, str]:
             continue
         if not path.is_dir():
             paths.append(path)
-    if len(paths) == 4:
+    if not any(path.is_relative_to(package) for path in paths):
         _fail("runtime binding requires application source files")
     result = {}
     for path in paths:
@@ -352,11 +363,56 @@ def _inventory_components(
     return frozenset(debian_packages), frozenset(python_distributions)
 
 
+def _native_source_verifier() -> ModuleType:
+    """Load only the trusted sibling verifier, independent of the import path."""
+    spec = importlib.util.spec_from_file_location(
+        "_extra_codeowners_vex_python_sources",
+        Path(__file__).resolve().with_name("release_python_sources.py"),
+    )
+    if spec is None or spec.loader is None:
+        _fail("could not load the reviewed native source verifier")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _native_component_products(
+    inventories: Sequence[Path], lock: Path
+) -> frozenset[tuple[str, str]]:
+    """Accept only reviewed embedded source identities present on both platforms."""
+    module = _native_source_verifier()
+    locked = _read_bytes(lock, "release dependency lock")
+    platforms: list[set[tuple[str, str]]] = []
+    for path in inventories:
+        raw = _read_bytes(path, "release inventory")
+        inventory = _mapping(_load_json(raw, "release inventory"), "release inventory")
+        image = _mapping(inventory.get("image"), "release inventory.image")
+        try:
+            plan = module.plan(raw, locked, image["architecture"], image["platform_digest"])
+        except ValueError as error:
+            raise ReleaseVexError(f"native VEX source evidence does not match: {error}") from error
+        identities: set[tuple[str, str]] = set()
+        for record in plan.get("embedded_sources", []):
+            component = _mapping(record.get("source_component"), "native source component")
+            identities.add(
+                (
+                    _string(component.get("name"), "native name"),
+                    _string(component.get("version"), "native version"),
+                )
+            )
+        platforms.append(identities)
+    # Inventory validation already requires exactly one amd64 and arm64 input.
+    # A flat native PURL cannot scope an assessment to just one architecture.
+    return frozenset(platforms[0] & platforms[1])
+
+
 def _validate_product(
     product_value: object,
     *,
     debian_packages: frozenset[_DebianPackage],
     python_distributions: frozenset[_PythonDistribution],
+    native_products: Callable[[], frozenset[tuple[str, str]]],
     description: str,
 ) -> None:
     product = _mapping(product_value, description)
@@ -408,10 +464,19 @@ def _validate_product(
         if len(distribution_candidates) != 1:
             _fail(f"{description} does not match exactly one released Python distribution: {purl}")
         return
+    if (
+        package_type == "generic"
+        and len(path) == 1
+        and not qualifiers
+        and (path[0], version) in native_products()
+    ):
+        return
     _fail(f"unsupported VEX product package URL: {purl}")
 
 
-def validate_release_vex(source: Path, inventories: Iterable[Path]) -> bytes:
+def validate_release_vex(
+    source: Path, inventories: Iterable[Path], *, lock: Path | None = None
+) -> bytes:
     """Return validated OpenVEX bytes whose product PURLs exist in the release."""
     source_bytes = source.read_bytes()
     document_value = _load_json(source_bytes, f"OpenVEX document {source}")
@@ -425,7 +490,15 @@ def validate_release_vex(source: Path, inventories: Iterable[Path]) -> bytes:
     if not statements:
         _fail("OpenVEX document must contain at least one statement")
 
-    debian_packages, python_distributions = _inventory_components(inventories)
+    inventory_paths = tuple(inventories)
+    debian_packages, python_distributions = _inventory_components(inventory_paths)
+
+    @cache
+    def native_products() -> frozenset[tuple[str, str]]:
+        if lock is None:
+            _fail("native VEX products require the release dependency lock")
+        return _native_component_products(inventory_paths, lock)
+
     for statement_index, statement_value in enumerate(statements):
         description = f"OpenVEX document.statements[{statement_index}]"
         statement = _mapping(statement_value, description)
@@ -444,6 +517,7 @@ def validate_release_vex(source: Path, inventories: Iterable[Path]) -> bytes:
                 product_value,
                 debian_packages=debian_packages,
                 python_distributions=python_distributions,
+                native_products=native_products,
                 description=f"{description}.products[{product_index}]",
             )
 
@@ -500,6 +574,9 @@ def _parser() -> argparse.ArgumentParser:
     stage = commands.add_parser("stage", help="validate and copy reviewed OpenVEX data")
     stage.add_argument("--source", type=Path, required=True, help="Reviewed OpenVEX document")
     stage.add_argument(
+        "--lock", type=Path, help="Release uv.lock; required for reviewed generic native products"
+    )
+    stage.add_argument(
         "--runtime-root", type=Path, help="Check runtime binding before publishing a new release"
     )
     stage.add_argument(
@@ -544,7 +621,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
         if parsed.command == "stage":
             if parsed.runtime_root is not None:
                 validate_runtime_binding(parsed.source, parsed.runtime_root)
-            source_bytes = validate_release_vex(parsed.source, parsed.inventory)
+            source_bytes = validate_release_vex(parsed.source, parsed.inventory, lock=parsed.lock)
             if parsed.output is not None:
                 if parsed.output.resolve() == parsed.source.resolve():
                     _fail("release VEX output must not overwrite the reviewed source document")

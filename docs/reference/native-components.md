@@ -91,6 +91,9 @@ component to the right advisory data.
 Source recipes pin declared versions and retained archives, not the exact
 inputs used by the original wheel builder. The catalog does not establish
 complete corresponding source, complete attribution, license approval, or
-whether a vulnerability is reachable. It adds no VEX exclusions and changes
-no package version. Native vulnerability triage and distribution review remain
+whether a vulnerability is reachable. The catalog itself adds no VEX exclusion
+and changes no package version. The separate
+[runtime security review](https://github.com/stampbot/extra-codeowners/blob/main/security/vex/runtime-review.md)
+records the selected native OpenSSL assessments and unresolved candidates.
+Native vulnerability triage and distribution review remain
 in [issue #18](https://github.com/stampbot/extra-codeowners/issues/18).

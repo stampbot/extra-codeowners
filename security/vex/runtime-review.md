@@ -1,5 +1,60 @@
 # Runtime vulnerability review
 
+## Wheel-native OpenSSL intake: November 11, 2026 UTC
+
+The independently verified alpha.83 catalogs received a separate offline Grype
+scan on both architectures. Each raw report contains 82 OpenSSL product/CVE
+pairs: 57 for Psycopg's OpenSSL 3.5.4 and 25 for Cryptography's OpenSSL 4.0.1.
+They represent 59 distinct CVEs. The database was built at
+2026-11-10T06:21:20Z; later disclosures are not established to be covered.
+Generated CPE identities are matching leads, not authoritative binary evidence.
+
+Four assessments are `not_affected` within this service's reviewed execution
+and platform scope:
+
+| CVE | Native product | Reason |
+| --- | --- | --- |
+| [CVE-2025-15467](https://openssl-library.org/news/secadv/20260127.txt) | OpenSSL 3.5.4 | The service does not parse CMS/PKCS#7 messages. |
+| [CVE-2026-34182](https://openssl-library.org/news/secadv/20260609.txt) | OpenSSL 3.5.4 | It does not decrypt CMS AuthEnvelopedData. |
+| [CVE-2026-63073](https://openssl-library.org/news/secadv/20260825.txt) | OpenSSL 3.5.4 and 4.0.1 | Neither use is a CMP client. |
+| [CVE-2026-31789](https://openssl-library.org/news/secadv/20260407.txt) | OpenSSL 3.5.4 | The required 32-bit platform is absent. |
+
+The source review covers the Python entrypoints, routes, App-key loading,
+RS256 JWT signing and isolated libpq connection setup. Cryptography handles
+the configured RSA key and App-JWT signing; it is not used as a CMP client.
+Psycopg's libpq uses the TLS client APIs, not CMS or CMP message processing.
+JSON webhooks are not passed to a CMS parser. No service subprocess or custom
+FFI path was found.
+
+Both locked Psycopg 3.3.4 wheels were checked by size and SHA-256, then their
+17 amd64 and 18 arm64 native files were matched to the signed inventories.
+Every inspected file is ELF64 with its expected machine type. None imports
+CMS or CMP symbols; libpq does import `SSL_connect` and certificate APIs.
+The [caller table](native-openssl-callers.json) retains that static evidence.
+Import absence supports the source review; it is not proof that every internal
+library function is unreachable. ARM64 was inspected statically, not executed.
+
+Vexcalibur 1.1.1 formatted the local findings offline. The four assessments
+address five of the 82 product/CVE pairs. The remaining 55 statements, covering
+77 pairs, stay `under_investigation`, including CVE-2026-35189 and
+CVE-2026-75803. In particular, `sslmode=require` is not a reason to exclude
+certificate-processing bugs. Neither a private database nor disabled trust
+validation proves that its TLS parser is unreachable.
+
+Generic native PURLs now have to match reviewed source identities on both
+platforms using the release lock, wheel-SBOM hashes and applicable native-file
+bindings. The runtime review binding includes those source recipes and the
+caller table. Existing 29 statement contents and assessment dates are retained;
+a CVE can be fixed in Debian while its bundled copy has a different status.
+
+The Dockerfile, base digest, lock and application code are unchanged. The
+libraries remain present and unpatched. These conclusions do not cover
+operator commands, plugins, custom FFI, other builds or execution after
+compromise. The native reports remain separate from the blocking image scan.
+RPM advisory context, complete native coverage, notices, source adequacy and
+distribution approval remain in
+[issue #18](https://github.com/stampbot/extra-codeowners/issues/18).
+
 ## Installation retry cadence: November 11, 2026 UTC
 
 The reconciler now tracks process-local polling deadlines and cycle membership.
