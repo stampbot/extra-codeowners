@@ -1,8 +1,8 @@
 {
   "@context": "https://openvex.dev/ns/v0.2.0",
-  "@id": "urn:uuid:6e62fad7-5399-56eb-812e-5987bbb76da9",
+  "@id": "urn:uuid:764136f0-6fe5-55df-8723-59ade049a6ae",
   "author": "Extra CODEOWNERS maintainers",
-  "last_updated": "2026-11-11T02:51:03Z",
+  "last_updated": "2026-11-11T05:24:33Z",
   "role": "VEX document producer",
   "statements": [
     {
@@ -828,11 +828,1100 @@
       "vulnerability": {
         "name": "CVE-2026-89161"
       }
+    },
+    {
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@3.5.4",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@3.5.4"
+          }
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Analysis detail: Candidate retained from the alpha.83 native report: Grype 0.118.0, database built 2026-11-10T06:21:20Z. Application-specific reachability has not been established. No fix or not-affected conclusion is made, including for TLS and certificate-processing paths. This intake is not a complete native-library assessment or distribution approval.\nSource: Grype/NVD native candidate (https://nvd.nist.gov/vuln/detail/CVE-2025-11187)\nOriginal Vexcalibur analysis state: in_triage\nSource record modified: 2026-11-11T05:20:18Z",
+      "timestamp": "2026-11-11T05:20:18Z",
+      "vulnerability": {
+        "name": "CVE-2025-11187"
+      }
+    },
+    {
+      "impact_statement": "The service does not process CMS, S/MIME or PKCS#7 messages or call CMS APIs. Psycopg's bundled OpenSSL 3.5.4 is reached through libpq's TLS client and authentication paths, not the affected CMS message parser/decryptor. Source entrypoint review and static inspection of all 17 amd64/18 arm64 Psycopg native payloads found no CMS or CMP imports. Import absence supports the source review; it is not standalone proof of every internal library call. This assessment covers only the shipped Linux amd64 and arm64 Extra CODEOWNERS service, not operator-run commands, plugins, custom FFI, execution after compromise or other builds. The library is present and unpatched; this is not a blanket OpenSSL exclusion.",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@3.5.4",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@3.5.4"
+          }
+        }
+      ],
+      "status": "not_affected",
+      "status_notes": "Analysis detail: The service does not process CMS, S/MIME or PKCS#7 messages or call CMS APIs. Psycopg's bundled OpenSSL 3.5.4 is reached through libpq's TLS client and authentication paths, not the affected CMS message parser/decryptor. Source entrypoint review and static inspection of all 17 amd64/18 arm64 Psycopg native payloads found no CMS or CMP imports. Import absence supports the source review; it is not standalone proof of every internal library call. This assessment covers only the shipped Linux amd64 and arm64 Extra CODEOWNERS service, not operator-run commands, plugins, custom FFI, execution after compromise or other builds. The library is present and unpatched; this is not a blanket OpenSSL exclusion.\nSource: Extra CODEOWNERS native source review (https://openssl-library.org/news/secadv/20260127.txt)\nOriginal Vexcalibur analysis state: not_affected\nSource record modified: 2026-11-11T05:20:18Z",
+      "timestamp": "2026-11-11T05:20:18Z",
+      "vulnerability": {
+        "name": "CVE-2025-15467"
+      }
+    },
+    {
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@3.5.4",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@3.5.4"
+          }
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Analysis detail: Candidate retained from the alpha.83 native report: Grype 0.118.0, database built 2026-11-10T06:21:20Z. Application-specific reachability has not been established. No fix or not-affected conclusion is made, including for TLS and certificate-processing paths. This intake is not a complete native-library assessment or distribution approval.\nSource: Grype/NVD native candidate (https://nvd.nist.gov/vuln/detail/CVE-2025-15468)\nOriginal Vexcalibur analysis state: in_triage\nSource record modified: 2026-11-11T05:20:18Z",
+      "timestamp": "2026-11-11T05:20:18Z",
+      "vulnerability": {
+        "name": "CVE-2025-15468"
+      }
+    },
+    {
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@3.5.4",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@3.5.4"
+          }
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Analysis detail: Candidate retained from the alpha.83 native report: Grype 0.118.0, database built 2026-11-10T06:21:20Z. Application-specific reachability has not been established. No fix or not-affected conclusion is made, including for TLS and certificate-processing paths. This intake is not a complete native-library assessment or distribution approval.\nSource: Grype/NVD native candidate (https://nvd.nist.gov/vuln/detail/CVE-2025-15469)\nOriginal Vexcalibur analysis state: in_triage\nSource record modified: 2026-11-11T05:20:18Z",
+      "timestamp": "2026-11-11T05:20:18Z",
+      "vulnerability": {
+        "name": "CVE-2025-15469"
+      }
+    },
+    {
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@3.5.4",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@3.5.4"
+          }
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Analysis detail: Candidate retained from the alpha.83 native report: Grype 0.118.0, database built 2026-11-10T06:21:20Z. Application-specific reachability has not been established. No fix or not-affected conclusion is made, including for TLS and certificate-processing paths. This intake is not a complete native-library assessment or distribution approval.\nSource: Grype/NVD native candidate (https://nvd.nist.gov/vuln/detail/CVE-2025-66199)\nOriginal Vexcalibur analysis state: in_triage\nSource record modified: 2026-11-11T05:20:18Z",
+      "timestamp": "2026-11-11T05:20:18Z",
+      "vulnerability": {
+        "name": "CVE-2025-66199"
+      }
+    },
+    {
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@3.5.4",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@3.5.4"
+          }
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Analysis detail: Candidate retained from the alpha.83 native report: Grype 0.118.0, database built 2026-11-10T06:21:20Z. Application-specific reachability has not been established. No fix or not-affected conclusion is made, including for TLS and certificate-processing paths. This intake is not a complete native-library assessment or distribution approval.\nSource: Grype/NVD native candidate (https://nvd.nist.gov/vuln/detail/CVE-2025-68160)\nOriginal Vexcalibur analysis state: in_triage\nSource record modified: 2026-11-11T05:20:18Z",
+      "timestamp": "2026-11-11T05:20:18Z",
+      "vulnerability": {
+        "name": "CVE-2025-68160"
+      }
+    },
+    {
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@3.5.4",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@3.5.4"
+          }
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Analysis detail: Candidate retained from the alpha.83 native report: Grype 0.118.0, database built 2026-11-10T06:21:20Z. Application-specific reachability has not been established. No fix or not-affected conclusion is made, including for TLS and certificate-processing paths. This intake is not a complete native-library assessment or distribution approval.\nSource: Grype/NVD native candidate (https://nvd.nist.gov/vuln/detail/CVE-2025-69418)\nOriginal Vexcalibur analysis state: in_triage\nSource record modified: 2026-11-11T05:20:18Z",
+      "timestamp": "2026-11-11T05:20:18Z",
+      "vulnerability": {
+        "name": "CVE-2025-69418"
+      }
+    },
+    {
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@3.5.4",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@3.5.4"
+          }
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Analysis detail: Candidate retained from the alpha.83 native report: Grype 0.118.0, database built 2026-11-10T06:21:20Z. Application-specific reachability has not been established. No fix or not-affected conclusion is made, including for TLS and certificate-processing paths. This intake is not a complete native-library assessment or distribution approval.\nSource: Grype/NVD native candidate (https://nvd.nist.gov/vuln/detail/CVE-2025-69419)\nOriginal Vexcalibur analysis state: in_triage\nSource record modified: 2026-11-11T05:20:18Z",
+      "timestamp": "2026-11-11T05:20:18Z",
+      "vulnerability": {
+        "name": "CVE-2025-69419"
+      }
+    },
+    {
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@3.5.4",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@3.5.4"
+          }
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Analysis detail: Candidate retained from the alpha.83 native report: Grype 0.118.0, database built 2026-11-10T06:21:20Z. Application-specific reachability has not been established. No fix or not-affected conclusion is made, including for TLS and certificate-processing paths. This intake is not a complete native-library assessment or distribution approval.\nSource: Grype/NVD native candidate (https://nvd.nist.gov/vuln/detail/CVE-2025-69420)\nOriginal Vexcalibur analysis state: in_triage\nSource record modified: 2026-11-11T05:20:18Z",
+      "timestamp": "2026-11-11T05:20:18Z",
+      "vulnerability": {
+        "name": "CVE-2025-69420"
+      }
+    },
+    {
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@3.5.4",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@3.5.4"
+          }
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Analysis detail: Candidate retained from the alpha.83 native report: Grype 0.118.0, database built 2026-11-10T06:21:20Z. Application-specific reachability has not been established. No fix or not-affected conclusion is made, including for TLS and certificate-processing paths. This intake is not a complete native-library assessment or distribution approval.\nSource: Grype/NVD native candidate (https://nvd.nist.gov/vuln/detail/CVE-2025-69421)\nOriginal Vexcalibur analysis state: in_triage\nSource record modified: 2026-11-11T05:20:18Z",
+      "timestamp": "2026-11-11T05:20:18Z",
+      "vulnerability": {
+        "name": "CVE-2025-69421"
+      }
+    },
+    {
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@3.5.4",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@3.5.4"
+          }
+        },
+        {
+          "@id": "pkg:generic/openssl@4.0.1",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@4.0.1"
+          }
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Analysis detail: Candidate retained from the alpha.83 native report: Grype 0.118.0, database built 2026-11-10T06:21:20Z. Application-specific reachability has not been established. No fix or not-affected conclusion is made, including for TLS and certificate-processing paths. This intake is not a complete native-library assessment or distribution approval.\nSource: Grype/NVD native candidate (https://nvd.nist.gov/vuln/detail/CVE-2026-14456)\nOriginal Vexcalibur analysis state: in_triage\nSource record modified: 2026-11-11T05:20:18Z",
+      "timestamp": "2026-11-11T05:20:18Z",
+      "vulnerability": {
+        "name": "CVE-2026-14456"
+      }
+    },
+    {
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@3.5.4",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@3.5.4"
+          }
+        },
+        {
+          "@id": "pkg:generic/openssl@4.0.1",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@4.0.1"
+          }
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Analysis detail: Candidate retained from the alpha.83 native report: Grype 0.118.0, database built 2026-11-10T06:21:20Z. Application-specific reachability has not been established. No fix or not-affected conclusion is made, including for TLS and certificate-processing paths. This intake is not a complete native-library assessment or distribution approval.\nSource: Grype/NVD native candidate (https://nvd.nist.gov/vuln/detail/CVE-2026-14457)\nOriginal Vexcalibur analysis state: in_triage\nSource record modified: 2026-11-11T05:20:18Z",
+      "timestamp": "2026-11-11T05:20:18Z",
+      "vulnerability": {
+        "name": "CVE-2026-14457"
+      }
+    },
+    {
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@3.5.4",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@3.5.4"
+          }
+        },
+        {
+          "@id": "pkg:generic/openssl@4.0.1",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@4.0.1"
+          }
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Analysis detail: Candidate retained from the alpha.83 native report: Grype 0.118.0, database built 2026-11-10T06:21:20Z. Application-specific reachability has not been established. No fix or not-affected conclusion is made, including for TLS and certificate-processing paths. This intake is not a complete native-library assessment or distribution approval.\nSource: Grype/NVD native candidate (https://nvd.nist.gov/vuln/detail/CVE-2026-18798)\nOriginal Vexcalibur analysis state: in_triage\nSource record modified: 2026-11-11T05:20:18Z",
+      "timestamp": "2026-11-11T05:20:18Z",
+      "vulnerability": {
+        "name": "CVE-2026-18798"
+      }
+    },
+    {
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@3.5.4",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@3.5.4"
+          }
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Analysis detail: Candidate retained from the alpha.83 native report: Grype 0.118.0, database built 2026-11-10T06:21:20Z. Application-specific reachability has not been established. No fix or not-affected conclusion is made, including for TLS and certificate-processing paths. This intake is not a complete native-library assessment or distribution approval.\nSource: Grype/NVD native candidate (https://nvd.nist.gov/vuln/detail/CVE-2026-22795)\nOriginal Vexcalibur analysis state: in_triage\nSource record modified: 2026-11-11T05:20:18Z",
+      "timestamp": "2026-11-11T05:20:18Z",
+      "vulnerability": {
+        "name": "CVE-2026-22795"
+      }
+    },
+    {
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@3.5.4",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@3.5.4"
+          }
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Analysis detail: Candidate retained from the alpha.83 native report: Grype 0.118.0, database built 2026-11-10T06:21:20Z. Application-specific reachability has not been established. No fix or not-affected conclusion is made, including for TLS and certificate-processing paths. This intake is not a complete native-library assessment or distribution approval.\nSource: Grype/NVD native candidate (https://nvd.nist.gov/vuln/detail/CVE-2026-22796)\nOriginal Vexcalibur analysis state: in_triage\nSource record modified: 2026-11-11T05:20:18Z",
+      "timestamp": "2026-11-11T05:20:18Z",
+      "vulnerability": {
+        "name": "CVE-2026-22796"
+      }
+    },
+    {
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@3.5.4",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@3.5.4"
+          }
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Analysis detail: Candidate retained from the alpha.83 native report: Grype 0.118.0, database built 2026-11-10T06:21:20Z. Application-specific reachability has not been established. No fix or not-affected conclusion is made, including for TLS and certificate-processing paths. This intake is not a complete native-library assessment or distribution approval.\nSource: Grype/NVD native candidate (https://nvd.nist.gov/vuln/detail/CVE-2026-2673)\nOriginal Vexcalibur analysis state: in_triage\nSource record modified: 2026-11-11T05:20:18Z",
+      "timestamp": "2026-11-11T05:20:18Z",
+      "vulnerability": {
+        "name": "CVE-2026-2673"
+      }
+    },
+    {
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@3.5.4",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@3.5.4"
+          }
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Analysis detail: Candidate retained from the alpha.83 native report: Grype 0.118.0, database built 2026-11-10T06:21:20Z. Application-specific reachability has not been established. No fix or not-affected conclusion is made, including for TLS and certificate-processing paths. This intake is not a complete native-library assessment or distribution approval.\nSource: Grype/NVD native candidate (https://nvd.nist.gov/vuln/detail/CVE-2026-28387)\nOriginal Vexcalibur analysis state: in_triage\nSource record modified: 2026-11-11T05:20:18Z",
+      "timestamp": "2026-11-11T05:20:18Z",
+      "vulnerability": {
+        "name": "CVE-2026-28387"
+      }
+    },
+    {
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@3.5.4",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@3.5.4"
+          }
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Analysis detail: Candidate retained from the alpha.83 native report: Grype 0.118.0, database built 2026-11-10T06:21:20Z. Application-specific reachability has not been established. No fix or not-affected conclusion is made, including for TLS and certificate-processing paths. This intake is not a complete native-library assessment or distribution approval.\nSource: Grype/NVD native candidate (https://nvd.nist.gov/vuln/detail/CVE-2026-28388)\nOriginal Vexcalibur analysis state: in_triage\nSource record modified: 2026-11-11T05:20:18Z",
+      "timestamp": "2026-11-11T05:20:18Z",
+      "vulnerability": {
+        "name": "CVE-2026-28388"
+      }
+    },
+    {
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@3.5.4",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@3.5.4"
+          }
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Analysis detail: Candidate retained from the alpha.83 native report: Grype 0.118.0, database built 2026-11-10T06:21:20Z. Application-specific reachability has not been established. No fix or not-affected conclusion is made, including for TLS and certificate-processing paths. This intake is not a complete native-library assessment or distribution approval.\nSource: Grype/NVD native candidate (https://nvd.nist.gov/vuln/detail/CVE-2026-28389)\nOriginal Vexcalibur analysis state: in_triage\nSource record modified: 2026-11-11T05:20:18Z",
+      "timestamp": "2026-11-11T05:20:18Z",
+      "vulnerability": {
+        "name": "CVE-2026-28389"
+      }
+    },
+    {
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@3.5.4",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@3.5.4"
+          }
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Analysis detail: Candidate retained from the alpha.83 native report: Grype 0.118.0, database built 2026-11-10T06:21:20Z. Application-specific reachability has not been established. No fix or not-affected conclusion is made, including for TLS and certificate-processing paths. This intake is not a complete native-library assessment or distribution approval.\nSource: Grype/NVD native candidate (https://nvd.nist.gov/vuln/detail/CVE-2026-28390)\nOriginal Vexcalibur analysis state: in_triage\nSource record modified: 2026-11-11T05:20:18Z",
+      "timestamp": "2026-11-11T05:20:18Z",
+      "vulnerability": {
+        "name": "CVE-2026-28390"
+      }
+    },
+    {
+      "impact_statement": "OpenSSL identifies this overflow as specific to 32-bit platforms. Exact locked Psycopg 3.3.4 wheel payloads were hashed against both signed platform inventories: all 17 amd64 and 18 arm64 native files are ELF64 with the expected x86-64/AArch64 machine types, including bundled OpenSSL 3.5.4. The required 32-bit environment is absent. This assessment covers only the shipped Linux amd64 and arm64 Extra CODEOWNERS service, not operator-run commands, plugins, custom FFI, execution after compromise or other builds. The library is present and unpatched; this is not a blanket OpenSSL exclusion.",
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@3.5.4",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@3.5.4"
+          }
+        }
+      ],
+      "status": "not_affected",
+      "status_notes": "Analysis detail: OpenSSL identifies this overflow as specific to 32-bit platforms. Exact locked Psycopg 3.3.4 wheel payloads were hashed against both signed platform inventories: all 17 amd64 and 18 arm64 native files are ELF64 with the expected x86-64/AArch64 machine types, including bundled OpenSSL 3.5.4. The required 32-bit environment is absent. This assessment covers only the shipped Linux amd64 and arm64 Extra CODEOWNERS service, not operator-run commands, plugins, custom FFI, execution after compromise or other builds. The library is present and unpatched; this is not a blanket OpenSSL exclusion.\nSource: Extra CODEOWNERS native source review (https://openssl-library.org/news/secadv/20260407.txt)\nOriginal Vexcalibur analysis state: not_affected\nSource record modified: 2026-11-11T05:20:18Z",
+      "timestamp": "2026-11-11T05:20:18Z",
+      "vulnerability": {
+        "name": "CVE-2026-31789"
+      }
+    },
+    {
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@3.5.4",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@3.5.4"
+          }
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Analysis detail: Candidate retained from the alpha.83 native report: Grype 0.118.0, database built 2026-11-10T06:21:20Z. Application-specific reachability has not been established. No fix or not-affected conclusion is made, including for TLS and certificate-processing paths. This intake is not a complete native-library assessment or distribution approval.\nSource: Grype/NVD native candidate (https://nvd.nist.gov/vuln/detail/CVE-2026-31790)\nOriginal Vexcalibur analysis state: in_triage\nSource record modified: 2026-11-11T05:20:18Z",
+      "timestamp": "2026-11-11T05:20:18Z",
+      "vulnerability": {
+        "name": "CVE-2026-31790"
+      }
+    },
+    {
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@3.5.4",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@3.5.4"
+          }
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Analysis detail: Candidate retained from the alpha.83 native report: Grype 0.118.0, database built 2026-11-10T06:21:20Z. Application-specific reachability has not been established. No fix or not-affected conclusion is made, including for TLS and certificate-processing paths. This intake is not a complete native-library assessment or distribution approval.\nSource: Grype/NVD native candidate (https://nvd.nist.gov/vuln/detail/CVE-2026-34180)\nOriginal Vexcalibur analysis state: in_triage\nSource record modified: 2026-11-11T05:20:18Z",
+      "timestamp": "2026-11-11T05:20:18Z",
+      "vulnerability": {
+        "name": "CVE-2026-34180"
+      }
+    },
+    {
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@3.5.4",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@3.5.4"
+          }
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Analysis detail: Candidate retained from the alpha.83 native report: Grype 0.118.0, database built 2026-11-10T06:21:20Z. Application-specific reachability has not been established. No fix or not-affected conclusion is made, including for TLS and certificate-processing paths. This intake is not a complete native-library assessment or distribution approval.\nSource: Grype/NVD native candidate (https://nvd.nist.gov/vuln/detail/CVE-2026-34181)\nOriginal Vexcalibur analysis state: in_triage\nSource record modified: 2026-11-11T05:20:18Z",
+      "timestamp": "2026-11-11T05:20:18Z",
+      "vulnerability": {
+        "name": "CVE-2026-34181"
+      }
+    },
+    {
+      "impact_statement": "The service does not process CMS, S/MIME or PKCS#7 messages or call CMS APIs. Psycopg's bundled OpenSSL 3.5.4 is reached through libpq's TLS client and authentication paths, not the affected CMS message parser/decryptor. Source entrypoint review and static inspection of all 17 amd64/18 arm64 Psycopg native payloads found no CMS or CMP imports. Import absence supports the source review; it is not standalone proof of every internal library call. This assessment covers only the shipped Linux amd64 and arm64 Extra CODEOWNERS service, not operator-run commands, plugins, custom FFI, execution after compromise or other builds. The library is present and unpatched; this is not a blanket OpenSSL exclusion.",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@3.5.4",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@3.5.4"
+          }
+        }
+      ],
+      "status": "not_affected",
+      "status_notes": "Analysis detail: The service does not process CMS, S/MIME or PKCS#7 messages or call CMS APIs. Psycopg's bundled OpenSSL 3.5.4 is reached through libpq's TLS client and authentication paths, not the affected CMS message parser/decryptor. Source entrypoint review and static inspection of all 17 amd64/18 arm64 Psycopg native payloads found no CMS or CMP imports. Import absence supports the source review; it is not standalone proof of every internal library call. This assessment covers only the shipped Linux amd64 and arm64 Extra CODEOWNERS service, not operator-run commands, plugins, custom FFI, execution after compromise or other builds. The library is present and unpatched; this is not a blanket OpenSSL exclusion.\nSource: Extra CODEOWNERS native source review (https://openssl-library.org/news/secadv/20260609.txt)\nOriginal Vexcalibur analysis state: not_affected\nSource record modified: 2026-11-11T05:20:18Z",
+      "timestamp": "2026-11-11T05:20:18Z",
+      "vulnerability": {
+        "name": "CVE-2026-34182"
+      }
+    },
+    {
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@3.5.4",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@3.5.4"
+          }
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Analysis detail: Candidate retained from the alpha.83 native report: Grype 0.118.0, database built 2026-11-10T06:21:20Z. Application-specific reachability has not been established. No fix or not-affected conclusion is made, including for TLS and certificate-processing paths. This intake is not a complete native-library assessment or distribution approval.\nSource: Grype/NVD native candidate (https://nvd.nist.gov/vuln/detail/CVE-2026-34183)\nOriginal Vexcalibur analysis state: in_triage\nSource record modified: 2026-11-11T05:20:18Z",
+      "timestamp": "2026-11-11T05:20:18Z",
+      "vulnerability": {
+        "name": "CVE-2026-34183"
+      }
+    },
+    {
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@3.5.4",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@3.5.4"
+          }
+        },
+        {
+          "@id": "pkg:generic/openssl@4.0.1",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@4.0.1"
+          }
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Analysis detail: Candidate retained from the alpha.83 native report: Grype 0.118.0, database built 2026-11-10T06:21:20Z. Application-specific reachability has not been established. No fix or not-affected conclusion is made, including for TLS and certificate-processing paths. This intake is not a complete native-library assessment or distribution approval.\nSource: Grype/NVD native candidate (https://nvd.nist.gov/vuln/detail/CVE-2026-35189)\nOriginal Vexcalibur analysis state: in_triage\nSource record modified: 2026-11-11T05:20:18Z",
+      "timestamp": "2026-11-11T05:20:18Z",
+      "vulnerability": {
+        "name": "CVE-2026-35189"
+      }
+    },
+    {
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@3.5.4",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@3.5.4"
+          }
+        },
+        {
+          "@id": "pkg:generic/openssl@4.0.1",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@4.0.1"
+          }
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Analysis detail: Candidate retained from the alpha.83 native report: Grype 0.118.0, database built 2026-11-10T06:21:20Z. Application-specific reachability has not been established. No fix or not-affected conclusion is made, including for TLS and certificate-processing paths. This intake is not a complete native-library assessment or distribution approval.\nSource: Grype/NVD native candidate (https://nvd.nist.gov/vuln/detail/CVE-2026-35191)\nOriginal Vexcalibur analysis state: in_triage\nSource record modified: 2026-11-11T05:20:18Z",
+      "timestamp": "2026-11-11T05:20:18Z",
+      "vulnerability": {
+        "name": "CVE-2026-35191"
+      }
+    },
+    {
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@3.5.4",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@3.5.4"
+          }
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Analysis detail: Candidate retained from the alpha.83 native report: Grype 0.118.0, database built 2026-11-10T06:21:20Z. Application-specific reachability has not been established. No fix or not-affected conclusion is made, including for TLS and certificate-processing paths. This intake is not a complete native-library assessment or distribution approval.\nSource: Grype/NVD native candidate (https://nvd.nist.gov/vuln/detail/CVE-2026-42764)\nOriginal Vexcalibur analysis state: in_triage\nSource record modified: 2026-11-11T05:20:18Z",
+      "timestamp": "2026-11-11T05:20:18Z",
+      "vulnerability": {
+        "name": "CVE-2026-42764"
+      }
+    },
+    {
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@3.5.4",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@3.5.4"
+          }
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Analysis detail: Candidate retained from the alpha.83 native report: Grype 0.118.0, database built 2026-11-10T06:21:20Z. Application-specific reachability has not been established. No fix or not-affected conclusion is made, including for TLS and certificate-processing paths. This intake is not a complete native-library assessment or distribution approval.\nSource: Grype/NVD native candidate (https://nvd.nist.gov/vuln/detail/CVE-2026-42766)\nOriginal Vexcalibur analysis state: in_triage\nSource record modified: 2026-11-11T05:20:18Z",
+      "timestamp": "2026-11-11T05:20:18Z",
+      "vulnerability": {
+        "name": "CVE-2026-42766"
+      }
+    },
+    {
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@3.5.4",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@3.5.4"
+          }
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Analysis detail: Candidate retained from the alpha.83 native report: Grype 0.118.0, database built 2026-11-10T06:21:20Z. Application-specific reachability has not been established. No fix or not-affected conclusion is made, including for TLS and certificate-processing paths. This intake is not a complete native-library assessment or distribution approval.\nSource: Grype/NVD native candidate (https://nvd.nist.gov/vuln/detail/CVE-2026-42767)\nOriginal Vexcalibur analysis state: in_triage\nSource record modified: 2026-11-11T05:20:18Z",
+      "timestamp": "2026-11-11T05:20:18Z",
+      "vulnerability": {
+        "name": "CVE-2026-42767"
+      }
+    },
+    {
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@3.5.4",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@3.5.4"
+          }
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Analysis detail: Candidate retained from the alpha.83 native report: Grype 0.118.0, database built 2026-11-10T06:21:20Z. Application-specific reachability has not been established. No fix or not-affected conclusion is made, including for TLS and certificate-processing paths. This intake is not a complete native-library assessment or distribution approval.\nSource: Grype/NVD native candidate (https://nvd.nist.gov/vuln/detail/CVE-2026-42768)\nOriginal Vexcalibur analysis state: in_triage\nSource record modified: 2026-11-11T05:20:18Z",
+      "timestamp": "2026-11-11T05:20:18Z",
+      "vulnerability": {
+        "name": "CVE-2026-42768"
+      }
+    },
+    {
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@3.5.4",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@3.5.4"
+          }
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Analysis detail: Candidate retained from the alpha.83 native report: Grype 0.118.0, database built 2026-11-10T06:21:20Z. Application-specific reachability has not been established. No fix or not-affected conclusion is made, including for TLS and certificate-processing paths. This intake is not a complete native-library assessment or distribution approval.\nSource: Grype/NVD native candidate (https://nvd.nist.gov/vuln/detail/CVE-2026-42769)\nOriginal Vexcalibur analysis state: in_triage\nSource record modified: 2026-11-11T05:20:18Z",
+      "timestamp": "2026-11-11T05:20:18Z",
+      "vulnerability": {
+        "name": "CVE-2026-42769"
+      }
+    },
+    {
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@3.5.4",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@3.5.4"
+          }
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Analysis detail: Candidate retained from the alpha.83 native report: Grype 0.118.0, database built 2026-11-10T06:21:20Z. Application-specific reachability has not been established. No fix or not-affected conclusion is made, including for TLS and certificate-processing paths. This intake is not a complete native-library assessment or distribution approval.\nSource: Grype/NVD native candidate (https://nvd.nist.gov/vuln/detail/CVE-2026-42770)\nOriginal Vexcalibur analysis state: in_triage\nSource record modified: 2026-11-11T05:20:18Z",
+      "timestamp": "2026-11-11T05:20:18Z",
+      "vulnerability": {
+        "name": "CVE-2026-42770"
+      }
+    },
+    {
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@3.5.4",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@3.5.4"
+          }
+        },
+        {
+          "@id": "pkg:generic/openssl@4.0.1",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@4.0.1"
+          }
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Analysis detail: Candidate retained from the alpha.83 native report: Grype 0.118.0, database built 2026-11-10T06:21:20Z. Application-specific reachability has not been established. No fix or not-affected conclusion is made, including for TLS and certificate-processing paths. This intake is not a complete native-library assessment or distribution approval.\nSource: Grype/NVD native candidate (https://nvd.nist.gov/vuln/detail/CVE-2026-42772)\nOriginal Vexcalibur analysis state: in_triage\nSource record modified: 2026-11-11T05:20:18Z",
+      "timestamp": "2026-11-11T05:20:18Z",
+      "vulnerability": {
+        "name": "CVE-2026-42772"
+      }
+    },
+    {
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@3.5.4",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@3.5.4"
+          }
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Analysis detail: Candidate retained from the alpha.83 native report: Grype 0.118.0, database built 2026-11-10T06:21:20Z. Application-specific reachability has not been established. No fix or not-affected conclusion is made, including for TLS and certificate-processing paths. This intake is not a complete native-library assessment or distribution approval.\nSource: Grype/NVD native candidate (https://nvd.nist.gov/vuln/detail/CVE-2026-45445)\nOriginal Vexcalibur analysis state: in_triage\nSource record modified: 2026-11-11T05:20:18Z",
+      "timestamp": "2026-11-11T05:20:18Z",
+      "vulnerability": {
+        "name": "CVE-2026-45445"
+      }
+    },
+    {
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@3.5.4",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@3.5.4"
+          }
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Analysis detail: Candidate retained from the alpha.83 native report: Grype 0.118.0, database built 2026-11-10T06:21:20Z. Application-specific reachability has not been established. No fix or not-affected conclusion is made, including for TLS and certificate-processing paths. This intake is not a complete native-library assessment or distribution approval.\nSource: Grype/NVD native candidate (https://nvd.nist.gov/vuln/detail/CVE-2026-45446)\nOriginal Vexcalibur analysis state: in_triage\nSource record modified: 2026-11-11T05:20:18Z",
+      "timestamp": "2026-11-11T05:20:18Z",
+      "vulnerability": {
+        "name": "CVE-2026-45446"
+      }
+    },
+    {
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@3.5.4",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@3.5.4"
+          }
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Analysis detail: Candidate retained from the alpha.83 native report: Grype 0.118.0, database built 2026-11-10T06:21:20Z. Application-specific reachability has not been established. No fix or not-affected conclusion is made, including for TLS and certificate-processing paths. This intake is not a complete native-library assessment or distribution approval.\nSource: Grype/NVD native candidate (https://nvd.nist.gov/vuln/detail/CVE-2026-45447)\nOriginal Vexcalibur analysis state: in_triage\nSource record modified: 2026-11-11T05:20:18Z",
+      "timestamp": "2026-11-11T05:20:18Z",
+      "vulnerability": {
+        "name": "CVE-2026-45447"
+      }
+    },
+    {
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@3.5.4",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@3.5.4"
+          }
+        },
+        {
+          "@id": "pkg:generic/openssl@4.0.1",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@4.0.1"
+          }
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Analysis detail: Candidate retained from the alpha.83 native report: Grype 0.118.0, database built 2026-11-10T06:21:20Z. Application-specific reachability has not been established. No fix or not-affected conclusion is made, including for TLS and certificate-processing paths. This intake is not a complete native-library assessment or distribution approval.\nSource: Grype/NVD native candidate (https://nvd.nist.gov/vuln/detail/CVE-2026-54872)\nOriginal Vexcalibur analysis state: in_triage\nSource record modified: 2026-11-11T05:20:18Z",
+      "timestamp": "2026-11-11T05:20:18Z",
+      "vulnerability": {
+        "name": "CVE-2026-54872"
+      }
+    },
+    {
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@3.5.4",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@3.5.4"
+          }
+        },
+        {
+          "@id": "pkg:generic/openssl@4.0.1",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@4.0.1"
+          }
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Analysis detail: Candidate retained from the alpha.83 native report: Grype 0.118.0, database built 2026-11-10T06:21:20Z. Application-specific reachability has not been established. No fix or not-affected conclusion is made, including for TLS and certificate-processing paths. This intake is not a complete native-library assessment or distribution approval.\nSource: Grype/NVD native candidate (https://nvd.nist.gov/vuln/detail/CVE-2026-54873)\nOriginal Vexcalibur analysis state: in_triage\nSource record modified: 2026-11-11T05:20:18Z",
+      "timestamp": "2026-11-11T05:20:18Z",
+      "vulnerability": {
+        "name": "CVE-2026-54873"
+      }
+    },
+    {
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@3.5.4",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@3.5.4"
+          }
+        },
+        {
+          "@id": "pkg:generic/openssl@4.0.1",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@4.0.1"
+          }
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Analysis detail: Candidate retained from the alpha.83 native report: Grype 0.118.0, database built 2026-11-10T06:21:20Z. Application-specific reachability has not been established. No fix or not-affected conclusion is made, including for TLS and certificate-processing paths. This intake is not a complete native-library assessment or distribution approval.\nSource: Grype/NVD native candidate (https://nvd.nist.gov/vuln/detail/CVE-2026-54874)\nOriginal Vexcalibur analysis state: in_triage\nSource record modified: 2026-11-11T05:20:18Z",
+      "timestamp": "2026-11-11T05:20:18Z",
+      "vulnerability": {
+        "name": "CVE-2026-54874"
+      }
+    },
+    {
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@3.5.4",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@3.5.4"
+          }
+        },
+        {
+          "@id": "pkg:generic/openssl@4.0.1",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@4.0.1"
+          }
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Analysis detail: Candidate retained from the alpha.83 native report: Grype 0.118.0, database built 2026-11-10T06:21:20Z. Application-specific reachability has not been established. No fix or not-affected conclusion is made, including for TLS and certificate-processing paths. This intake is not a complete native-library assessment or distribution approval.\nSource: Grype/NVD native candidate (https://nvd.nist.gov/vuln/detail/CVE-2026-54875)\nOriginal Vexcalibur analysis state: in_triage\nSource record modified: 2026-11-11T05:20:18Z",
+      "timestamp": "2026-11-11T05:20:18Z",
+      "vulnerability": {
+        "name": "CVE-2026-54875"
+      }
+    },
+    {
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@4.0.1",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@4.0.1"
+          }
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Analysis detail: Candidate retained from the alpha.83 native report: Grype 0.118.0, database built 2026-11-10T06:21:20Z. Application-specific reachability has not been established. No fix or not-affected conclusion is made, including for TLS and certificate-processing paths. This intake is not a complete native-library assessment or distribution approval.\nSource: Grype/NVD native candidate (https://nvd.nist.gov/vuln/detail/CVE-2026-54876)\nOriginal Vexcalibur analysis state: in_triage\nSource record modified: 2026-11-11T05:20:18Z",
+      "timestamp": "2026-11-11T05:20:18Z",
+      "vulnerability": {
+        "name": "CVE-2026-54876"
+      }
+    },
+    {
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@3.5.4",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@3.5.4"
+          }
+        },
+        {
+          "@id": "pkg:generic/openssl@4.0.1",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@4.0.1"
+          }
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Analysis detail: Candidate retained from the alpha.83 native report: Grype 0.118.0, database built 2026-11-10T06:21:20Z. Application-specific reachability has not been established. No fix or not-affected conclusion is made, including for TLS and certificate-processing paths. This intake is not a complete native-library assessment or distribution approval.\nSource: Grype/NVD native candidate (https://nvd.nist.gov/vuln/detail/CVE-2026-63072)\nOriginal Vexcalibur analysis state: in_triage\nSource record modified: 2026-11-11T05:20:18Z",
+      "timestamp": "2026-11-11T05:20:18Z",
+      "vulnerability": {
+        "name": "CVE-2026-63072"
+      }
+    },
+    {
+      "impact_statement": "The affected path requires a CMP client validating a configured expected sender or pinned CMP server. Extra CODEOWNERS does not use CMP. Cryptography's OpenSSL 4.0.1 handles the configured RSA App key and RS256 App-JWT signing; Psycopg's OpenSSL 3.5.4 handles libpq TLS. Neither is a CMP client. The Psycopg payload review found no CMP imports. TLS certificate processing is not excluded by this conclusion. This assessment covers only the shipped Linux amd64 and arm64 Extra CODEOWNERS service, not operator-run commands, plugins, custom FFI, execution after compromise or other builds. The library is present and unpatched; this is not a blanket OpenSSL exclusion.",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@3.5.4",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@3.5.4"
+          }
+        },
+        {
+          "@id": "pkg:generic/openssl@4.0.1",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@4.0.1"
+          }
+        }
+      ],
+      "status": "not_affected",
+      "status_notes": "Analysis detail: The affected path requires a CMP client validating a configured expected sender or pinned CMP server. Extra CODEOWNERS does not use CMP. Cryptography's OpenSSL 4.0.1 handles the configured RSA App key and RS256 App-JWT signing; Psycopg's OpenSSL 3.5.4 handles libpq TLS. Neither is a CMP client. The Psycopg payload review found no CMP imports. TLS certificate processing is not excluded by this conclusion. This assessment covers only the shipped Linux amd64 and arm64 Extra CODEOWNERS service, not operator-run commands, plugins, custom FFI, execution after compromise or other builds. The library is present and unpatched; this is not a blanket OpenSSL exclusion.\nSource: Extra CODEOWNERS native source review (https://openssl-library.org/news/secadv/20260825.txt)\nOriginal Vexcalibur analysis state: not_affected\nSource record modified: 2026-11-11T05:20:18Z",
+      "timestamp": "2026-11-11T05:20:18Z",
+      "vulnerability": {
+        "name": "CVE-2026-63073"
+      }
+    },
+    {
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@3.5.4",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@3.5.4"
+          }
+        },
+        {
+          "@id": "pkg:generic/openssl@4.0.1",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@4.0.1"
+          }
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Analysis detail: Candidate retained from the alpha.83 native report: Grype 0.118.0, database built 2026-11-10T06:21:20Z. Application-specific reachability has not been established. No fix or not-affected conclusion is made, including for TLS and certificate-processing paths. This intake is not a complete native-library assessment or distribution approval.\nSource: Grype/NVD native candidate (https://nvd.nist.gov/vuln/detail/CVE-2026-63074)\nOriginal Vexcalibur analysis state: in_triage\nSource record modified: 2026-11-11T05:20:18Z",
+      "timestamp": "2026-11-11T05:20:18Z",
+      "vulnerability": {
+        "name": "CVE-2026-63074"
+      }
+    },
+    {
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@3.5.4",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@3.5.4"
+          }
+        },
+        {
+          "@id": "pkg:generic/openssl@4.0.1",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@4.0.1"
+          }
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Analysis detail: Candidate retained from the alpha.83 native report: Grype 0.118.0, database built 2026-11-10T06:21:20Z. Application-specific reachability has not been established. No fix or not-affected conclusion is made, including for TLS and certificate-processing paths. This intake is not a complete native-library assessment or distribution approval.\nSource: Grype/NVD native candidate (https://nvd.nist.gov/vuln/detail/CVE-2026-63075)\nOriginal Vexcalibur analysis state: in_triage\nSource record modified: 2026-11-11T05:20:18Z",
+      "timestamp": "2026-11-11T05:20:18Z",
+      "vulnerability": {
+        "name": "CVE-2026-63075"
+      }
+    },
+    {
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@3.5.4",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@3.5.4"
+          }
+        },
+        {
+          "@id": "pkg:generic/openssl@4.0.1",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@4.0.1"
+          }
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Analysis detail: Candidate retained from the alpha.83 native report: Grype 0.118.0, database built 2026-11-10T06:21:20Z. Application-specific reachability has not been established. No fix or not-affected conclusion is made, including for TLS and certificate-processing paths. This intake is not a complete native-library assessment or distribution approval.\nSource: Grype/NVD native candidate (https://nvd.nist.gov/vuln/detail/CVE-2026-63076)\nOriginal Vexcalibur analysis state: in_triage\nSource record modified: 2026-11-11T05:20:18Z",
+      "timestamp": "2026-11-11T05:20:18Z",
+      "vulnerability": {
+        "name": "CVE-2026-63076"
+      }
+    },
+    {
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@3.5.4",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@3.5.4"
+          }
+        },
+        {
+          "@id": "pkg:generic/openssl@4.0.1",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@4.0.1"
+          }
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Analysis detail: Candidate retained from the alpha.83 native report: Grype 0.118.0, database built 2026-11-10T06:21:20Z. Application-specific reachability has not been established. No fix or not-affected conclusion is made, including for TLS and certificate-processing paths. This intake is not a complete native-library assessment or distribution approval.\nSource: Grype/NVD native candidate (https://nvd.nist.gov/vuln/detail/CVE-2026-72897)\nOriginal Vexcalibur analysis state: in_triage\nSource record modified: 2026-11-11T05:20:18Z",
+      "timestamp": "2026-11-11T05:20:18Z",
+      "vulnerability": {
+        "name": "CVE-2026-72897"
+      }
+    },
+    {
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@3.5.4",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@3.5.4"
+          }
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Analysis detail: Candidate retained from the alpha.83 native report: Grype 0.118.0, database built 2026-11-10T06:21:20Z. Application-specific reachability has not been established. No fix or not-affected conclusion is made, including for TLS and certificate-processing paths. This intake is not a complete native-library assessment or distribution approval.\nSource: Grype/NVD native candidate (https://nvd.nist.gov/vuln/detail/CVE-2026-7383)\nOriginal Vexcalibur analysis state: in_triage\nSource record modified: 2026-11-11T05:20:18Z",
+      "timestamp": "2026-11-11T05:20:18Z",
+      "vulnerability": {
+        "name": "CVE-2026-7383"
+      }
+    },
+    {
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@3.5.4",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@3.5.4"
+          }
+        },
+        {
+          "@id": "pkg:generic/openssl@4.0.1",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@4.0.1"
+          }
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Analysis detail: Candidate retained from the alpha.83 native report: Grype 0.118.0, database built 2026-11-10T06:21:20Z. Application-specific reachability has not been established. No fix or not-affected conclusion is made, including for TLS and certificate-processing paths. This intake is not a complete native-library assessment or distribution approval.\nSource: Grype/NVD native candidate (https://nvd.nist.gov/vuln/detail/CVE-2026-75803)\nOriginal Vexcalibur analysis state: in_triage\nSource record modified: 2026-11-11T05:20:18Z",
+      "timestamp": "2026-11-11T05:20:18Z",
+      "vulnerability": {
+        "name": "CVE-2026-75803"
+      }
+    },
+    {
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@3.5.4",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@3.5.4"
+          }
+        },
+        {
+          "@id": "pkg:generic/openssl@4.0.1",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@4.0.1"
+          }
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Analysis detail: Candidate retained from the alpha.83 native report: Grype 0.118.0, database built 2026-11-10T06:21:20Z. Application-specific reachability has not been established. No fix or not-affected conclusion is made, including for TLS and certificate-processing paths. This intake is not a complete native-library assessment or distribution approval.\nSource: Grype/NVD native candidate (https://nvd.nist.gov/vuln/detail/CVE-2026-75804)\nOriginal Vexcalibur analysis state: in_triage\nSource record modified: 2026-11-11T05:20:18Z",
+      "timestamp": "2026-11-11T05:20:18Z",
+      "vulnerability": {
+        "name": "CVE-2026-75804"
+      }
+    },
+    {
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@3.5.4",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@3.5.4"
+          }
+        },
+        {
+          "@id": "pkg:generic/openssl@4.0.1",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@4.0.1"
+          }
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Analysis detail: Candidate retained from the alpha.83 native report: Grype 0.118.0, database built 2026-11-10T06:21:20Z. Application-specific reachability has not been established. No fix or not-affected conclusion is made, including for TLS and certificate-processing paths. This intake is not a complete native-library assessment or distribution approval.\nSource: Grype/NVD native candidate (https://nvd.nist.gov/vuln/detail/CVE-2026-75805)\nOriginal Vexcalibur analysis state: in_triage\nSource record modified: 2026-11-11T05:20:18Z",
+      "timestamp": "2026-11-11T05:20:18Z",
+      "vulnerability": {
+        "name": "CVE-2026-75805"
+      }
+    },
+    {
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@3.5.4",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@3.5.4"
+          }
+        },
+        {
+          "@id": "pkg:generic/openssl@4.0.1",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@4.0.1"
+          }
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Analysis detail: Candidate retained from the alpha.83 native report: Grype 0.118.0, database built 2026-11-10T06:21:20Z. Application-specific reachability has not been established. No fix or not-affected conclusion is made, including for TLS and certificate-processing paths. This intake is not a complete native-library assessment or distribution approval.\nSource: Grype/NVD native candidate (https://nvd.nist.gov/vuln/detail/CVE-2026-75806)\nOriginal Vexcalibur analysis state: in_triage\nSource record modified: 2026-11-11T05:20:18Z",
+      "timestamp": "2026-11-11T05:20:18Z",
+      "vulnerability": {
+        "name": "CVE-2026-75806"
+      }
+    },
+    {
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@3.5.4",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@3.5.4"
+          }
+        },
+        {
+          "@id": "pkg:generic/openssl@4.0.1",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@4.0.1"
+          }
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Analysis detail: Candidate retained from the alpha.83 native report: Grype 0.118.0, database built 2026-11-10T06:21:20Z. Application-specific reachability has not been established. No fix or not-affected conclusion is made, including for TLS and certificate-processing paths. This intake is not a complete native-library assessment or distribution approval.\nSource: Grype/NVD native candidate (https://nvd.nist.gov/vuln/detail/CVE-2026-77696)\nOriginal Vexcalibur analysis state: in_triage\nSource record modified: 2026-11-11T05:20:18Z",
+      "timestamp": "2026-11-11T05:20:18Z",
+      "vulnerability": {
+        "name": "CVE-2026-77696"
+      }
+    },
+    {
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@3.5.4",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@3.5.4"
+          }
+        },
+        {
+          "@id": "pkg:generic/openssl@4.0.1",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@4.0.1"
+          }
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Analysis detail: Candidate retained from the alpha.83 native report: Grype 0.118.0, database built 2026-11-10T06:21:20Z. Application-specific reachability has not been established. No fix or not-affected conclusion is made, including for TLS and certificate-processing paths. This intake is not a complete native-library assessment or distribution approval.\nSource: Grype/NVD native candidate (https://nvd.nist.gov/vuln/detail/CVE-2026-84782)\nOriginal Vexcalibur analysis state: in_triage\nSource record modified: 2026-11-11T05:20:18Z",
+      "timestamp": "2026-11-11T05:20:18Z",
+      "vulnerability": {
+        "name": "CVE-2026-84782"
+      }
+    },
+    {
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@4.0.1",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@4.0.1"
+          }
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Analysis detail: Candidate retained from the alpha.83 native report: Grype 0.118.0, database built 2026-11-10T06:21:20Z. Application-specific reachability has not been established. No fix or not-affected conclusion is made, including for TLS and certificate-processing paths. This intake is not a complete native-library assessment or distribution approval.\nSource: Grype/NVD native candidate (https://nvd.nist.gov/vuln/detail/CVE-2026-84783)\nOriginal Vexcalibur analysis state: in_triage\nSource record modified: 2026-11-11T05:20:18Z",
+      "timestamp": "2026-11-11T05:20:18Z",
+      "vulnerability": {
+        "name": "CVE-2026-84783"
+      }
+    },
+    {
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@3.5.4",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@3.5.4"
+          }
+        },
+        {
+          "@id": "pkg:generic/openssl@4.0.1",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@4.0.1"
+          }
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Analysis detail: Candidate retained from the alpha.83 native report: Grype 0.118.0, database built 2026-11-10T06:21:20Z. Application-specific reachability has not been established. No fix or not-affected conclusion is made, including for TLS and certificate-processing paths. This intake is not a complete native-library assessment or distribution approval.\nSource: Grype/NVD native candidate (https://nvd.nist.gov/vuln/detail/CVE-2026-84784)\nOriginal Vexcalibur analysis state: in_triage\nSource record modified: 2026-11-11T05:20:18Z",
+      "timestamp": "2026-11-11T05:20:18Z",
+      "vulnerability": {
+        "name": "CVE-2026-84784"
+      }
+    },
+    {
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@3.5.4",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@3.5.4"
+          }
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Analysis detail: Candidate retained from the alpha.83 native report: Grype 0.118.0, database built 2026-11-10T06:21:20Z. Application-specific reachability has not been established. No fix or not-affected conclusion is made, including for TLS and certificate-processing paths. This intake is not a complete native-library assessment or distribution approval.\nSource: Grype/NVD native candidate (https://nvd.nist.gov/vuln/detail/CVE-2026-9076)\nOriginal Vexcalibur analysis state: in_triage\nSource record modified: 2026-11-11T05:20:18Z",
+      "timestamp": "2026-11-11T05:20:18Z",
+      "vulnerability": {
+        "name": "CVE-2026-9076"
+      }
     }
   ],
-  "timestamp": "2026-11-11T02:51:03Z",
+  "timestamp": "2026-11-11T05:24:33Z",
   "tooling": "Vexcalibur + Extra CODEOWNERS runtime binding",
-  "version": 19,
+  "version": 20,
   "x_extra_codeowners_runtime": {
     "files": {
       ".dockerignore": "3f9dc9d3a79fe3085f25de88403b5563ad5c7fa7010bef94c5e55f24bd3cf691",
@@ -879,9 +1968,12 @@
       "extra_codeowners/tracing.py": "49641dd6cb9b5b6da1e6026b90925a73eb3112d13a069afd202e741d261f76f9",
       "extra_codeowners/webhooks.py": "26bb6495d413863cd3a66488a152f0d0d89b8f5dfae96abb2ea5066861b6d114",
       "pyproject.toml": "bfb88e388d4590a6f52ed6d76889460a6b698f13129389b3823d2ff661bedd55",
+      "security/vex/native-openssl-callers.json": "7c38eb02a457c870db4d04a5df7f85381cd87355001fc88c306aa6a8989f70cd",
+      "tools/source_recipes/cryptography-50.0.0.json": "14c8c00339ada71aa1f975b2d20052582f251a44c2c8f1cdbb2d8fc0bb802779",
+      "tools/source_recipes/psycopg-binary-3.3.4.json": "ec227aa110315f82c25335837e258806930c7afbe980c8b2ff6b476343c243b5",
       "uv.lock": "5514cb0448adb693fe97f3d2c8016ccd606890327a1946467fbd118356de4922"
     },
-    "review": "Reviewed per-installation reconciliation cadence, cycle accounting, idle telemetry and cold leadership reset against all 29 existing statements. Existing authenticated API/database operations retain quota, lease, cursor, TLS and bounded in-memory compression behavior. No dependency, image input, subprocess, FFI, APT or C gz-file writer path is added. All vulnerability statuses, products and assessment dates remain unchanged; no wheel-library exclusion is inferred.",
+    "review": "Reviewed native OpenSSL 3.5.4/4.0.1 identities against both signed alpha.83 inventories, the lock and native source recipes. Source/caller and exact ELF64 evidence supports only four CMS/CMP/32-bit assessments; 55 other native candidates remain under investigation, including TLS/certificate paths. Existing 29 statements and dates are unchanged. No app code, base-image or dependency version changed; native recipe and caller evidence now join the review binding.",
     "schema_version": 1
   }
 }

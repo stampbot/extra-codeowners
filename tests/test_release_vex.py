@@ -5,9 +5,12 @@ from __future__ import annotations
 import base64
 import json
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
+from tools import release_vex
 from tools.release_vex import ReleaseVexError, main, validate_release_vex
 
 OPENVEX_CONTEXT = "https://openvex.dev/ns/v0.2.0"
@@ -162,6 +165,120 @@ def test_release_vex_rejects_additional_identifiers_even_with_a_valid_reviewed_p
 
     with pytest.raises(ReleaseVexError, match="only the reviewed package URL"):
         validate_release_vex(source, inventories)
+
+
+@pytest.mark.parametrize("status", ["fixed", "not_affected", "under_investigation"])
+def test_native_claim_requires_the_reviewed_identity_and_release_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, status: str
+) -> None:
+    source, inventories = _release_inputs(
+        tmp_path, _document("pkg:generic/openssl@99.1.2", status=status)
+    )
+    lock = tmp_path / "uv.lock"
+    lock.write_text("fictional lock\n", encoding="utf-8")
+    verifier = Mock(return_value=frozenset({("openssl", "99.1.2")}))
+    monkeypatch.setattr(release_vex, "_native_component_products", verifier)
+    assert validate_release_vex(source, inventories, lock=lock) == source.read_bytes()
+    verifier.assert_called_once_with(tuple(inventories), lock)
+
+
+def test_native_claim_without_a_release_lock_cannot_be_staged(tmp_path: Path) -> None:
+    source, inventories = _release_inputs(tmp_path, _document("pkg:generic/openssl@99.1.2"))
+    with pytest.raises(ReleaseVexError, match="require the release dependency lock"):
+        validate_release_vex(source, inventories)
+
+
+@pytest.mark.parametrize("purl", ["pkg:generic/openssl@99.1.3", "pkg:generic/unreviewed@99.1.2"])
+def test_native_version_or_component_mismatch_is_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, purl: str
+) -> None:
+    source, inventories = _release_inputs(tmp_path, _document(purl))
+    monkeypatch.setattr(
+        release_vex,
+        "_native_component_products",
+        Mock(return_value=frozenset({("openssl", "99.1.2")})),
+    )
+    with pytest.raises(ReleaseVexError, match="unsupported VEX product"):
+        validate_release_vex(source, inventories, lock=tmp_path / "uv.lock")
+
+
+def test_native_source_verification_is_platform_bound_and_uses_the_intersection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, inventories = _release_inputs(tmp_path, _document("pkg:generic/openssl@99.1.2"))
+    lock = tmp_path / "uv.lock"
+    lock.write_bytes(b"fictional lock")
+    planner = Mock(
+        side_effect=[
+            {"embedded_sources": [{"source_component": {"name": "openssl", "version": "99.1.2"}}]},
+            {"embedded_sources": [{"source_component": {"name": "openssl", "version": "99.1.3"}}]},
+        ]
+    )
+    monkeypatch.setattr(
+        release_vex, "_native_source_verifier", lambda: SimpleNamespace(plan=planner)
+    )
+    assert release_vex._native_component_products(inventories, lock) == frozenset()
+    assert planner.call_args_list[0].args == (
+        inventories[0].read_bytes(),
+        b"fictional lock",
+        "amd64",
+        f"sha256:{'a' * 64}",
+    )
+    assert planner.call_args_list[1].args == (
+        inventories[1].read_bytes(),
+        b"fictional lock",
+        "arm64",
+        f"sha256:{'a' * 64}",
+    )
+
+
+def test_native_source_failure_is_not_silently_accepted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source, inventories = _release_inputs(tmp_path, _document("pkg:generic/openssl@99.1.2"))
+    lock = tmp_path / "uv.lock"
+    lock.write_bytes(b"fictional lock")
+    planner = Mock(side_effect=ValueError("changed SBOM or native-file binding"))
+    monkeypatch.setattr(
+        release_vex, "_native_source_verifier", lambda: SimpleNamespace(plan=planner)
+    )
+    with pytest.raises(ReleaseVexError, match="native VEX source evidence does not match"):
+        validate_release_vex(source, inventories, lock=lock)
+
+
+@pytest.mark.parametrize("architecture_index", [0, 1])
+def test_real_source_verifier_rejects_an_unreviewed_wheel_sbom(
+    tmp_path: Path, architecture_index: int
+) -> None:
+    source, inventories = _release_inputs(tmp_path, _document("pkg:generic/openssl@3.5.4"))
+    lock = tmp_path / "uv.lock"
+    lock.write_text(
+        """version = 1
+[[package]]
+name = "psycopg-binary"
+version = "3.3.4"
+source = {registry = "https://pypi.org/simple"}
+""",
+        encoding="utf-8",
+    )
+    # Valid Debian/platform metadata does not authenticate arbitrary wheel SBOMs.
+    # Put the unreviewed wheel on the requested platform; the other has no native
+    # records. Both orientations must fail, not just whichever input is first.
+    for index, path in enumerate(inventories):
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        raw["python"] = {"source_recipe_schema": 4, "distributions": []}
+        if index == architecture_index:
+            raw["python"]["distributions"] = [
+                {"normalized_name": "psycopg-binary", "version": "3.3.4"}
+            ]
+            raw["python"]["embedded_sboms"] = []
+        else:
+            raw["python"]["distributions"] = [
+                {"normalized_name": "extra-codeowners", "version": "99"}
+            ]
+        _write_json(path, raw)
+    with pytest.raises(ReleaseVexError, match="wheel SBOM changed"):
+        validate_release_vex(source, inventories, lock=lock)
 
 
 @pytest.mark.parametrize("location", ["document", "statement"])

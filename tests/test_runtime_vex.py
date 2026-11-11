@@ -28,6 +28,47 @@ PACKAGES = (
 )
 
 
+def _native_python(architecture: str) -> dict[str, object]:
+    """Fixture metadata uses the checked-in reviewed recipes, not live payloads."""
+    sboms: list[dict[str, object]] = []
+    native: list[dict[str, object]] = []
+    for name, version in (("cryptography", "50.0.0"), ("psycopg-binary", "3.3.4")):
+        recipe = json.loads((ROOT / "tools/source_recipes" / f"{name}-{version}.json").read_text())
+        platform = recipe["platforms"][architecture]
+        relative = platform.get("sbom_relative_path", "sboms/auditwheel.cdx.json")
+        directory = f"{name.replace('-', '_')}-{version}.dist-info"
+        sboms.append(
+            {
+                "distribution": name,
+                "kind": "regular",
+                "link_target": None,
+                "path": f"fixture/site-packages/{directory}/{relative}",
+                "sha256": platform["sbom_sha256"],
+                "size": platform["sbom_size"],
+            }
+        )
+        for component in platform.get("custom_sources", []):
+            native.extend(
+                {
+                    "kind": "regular",
+                    "link_target": None,
+                    "path": f"fixture/site-packages/{file['path']}",
+                    "sha256": file["sha256"],
+                    "size": file["size"],
+                }
+                for file in component["wheel_files"]
+            )
+    return {
+        "source_recipe_schema": 4,
+        "distributions": [
+            {"normalized_name": "cryptography", "version": "50.0.0"},
+            {"normalized_name": "psycopg-binary", "version": "3.3.4"},
+        ],
+        "embedded_sboms": sboms,
+        "native_files": native,
+    }
+
+
 @pytest.fixture
 def inventories(tmp_path: Path) -> list[Path]:
     paths = []
@@ -54,7 +95,7 @@ def inventories(tmp_path: Path) -> list[Path]:
                     for name, source, version in PACKAGES
                 ]
             },
-            "python": {"distributions": []},
+            "python": _native_python(architecture),
         }
         path = tmp_path / f"{architecture}.json"
         path.write_text(json.dumps(inventory), encoding="utf-8")
@@ -63,7 +104,7 @@ def inventories(tmp_path: Path) -> list[Path]:
 
 
 def test_current_runtime_vex_matches_both_architectures(inventories: list[Path]) -> None:
-    assert validate_release_vex(SOURCE, inventories) == SOURCE.read_bytes()
+    assert validate_release_vex(SOURCE, inventories, lock=ROOT / "uv.lock") == SOURCE.read_bytes()
 
 
 @pytest.mark.parametrize("package", [name for name, _, _ in PACKAGES])
@@ -79,7 +120,7 @@ def test_runtime_claims_require_review_after_a_package_update(
     path.write_text(json.dumps(inventory), encoding="utf-8")
 
     with pytest.raises(ReleaseVexError, match="does not match exactly one"):
-        validate_release_vex(SOURCE, inventories)
+        validate_release_vex(SOURCE, inventories, lock=ROOT / "uv.lock")
 
 
 def test_review_records_glibc_caller_evidence_and_existing_openssl_fixes() -> None:
@@ -87,10 +128,15 @@ def test_review_records_glibc_caller_evidence_and_existing_openssl_fixes() -> No
     statements = document["statements"]
     assert Counter(statement["status"] for statement in statements) == {
         "fixed": 26,
-        "not_affected": 3,
+        "not_affected": 7,
+        "under_investigation": 55,
     }
-    by_cve = {statement["vulnerability"]["name"]: statement for statement in statements}
-    assert len(by_cve) == len(statements)
+    identities = [(s["vulnerability"]["name"], p["@id"]) for s in statements for p in s["products"]]
+    assert len(identities) == len(set(identities))
+    # One CVE can be fixed in Debian while still present in a bundled library.
+    debian = [s for s in statements if all(p["@id"].startswith("pkg:deb/") for p in s["products"])]
+    by_cve = {statement["vulnerability"]["name"]: statement for statement in debian}
+    assert len(by_cve) == len(debian) == 29
     pcre2 = by_cve["CVE-2026-103111"]
     assert pcre2["status"] == "fixed"
     assert "impact_statement" not in pcre2

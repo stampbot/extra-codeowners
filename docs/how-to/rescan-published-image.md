@@ -51,6 +51,13 @@ C libraries missing from the image report. Older releases without a declared
 catalog skip this step; a required catalog that is missing fails release
 verification first.
 
+The same artifact also contains `rescan-native-assessed-ARCHITECTURE.json`.
+This second report applies only that release's verified VEX, using the same
+catalog and database offline. Review its `ignoredMatches` alongside the raw
+report to see which product/CVE pairs a statement addresses. Findings marked
+`under_investigation` remain visible; they are not exemptions. An older
+release's VEX is not replaced with a newer assessment.
+
 The native scan generates missing CPE identifiers for advisory matching. These
 are heuristic identities, not new facts about the binary. As
 [Grype's matching guide](https://oss.anchore.com/docs/guides/vulnerability/ecosystems/)

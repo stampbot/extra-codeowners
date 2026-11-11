@@ -855,6 +855,30 @@ def test_native_rescan_requires_authenticated_evidence_and_reuses_the_image_data
     assert '--vex "/work/release-assets/extra-codeowners-${VERSION}.openvex.json"' in gate
 
 
+def test_native_assessed_report_preserves_raw_findings_and_verified_vex_scope() -> None:
+    jobs = _workflow_jobs((WORKFLOWS / "rescan-release.yml").read_text(encoding="utf-8"))
+    job = jobs["rescan"]
+    assessed = _named_step(job, "Apply the release VEX to native findings")
+    upload = _named_step(job, "Retain the unfiltered native report")
+    assert (
+        "if: ${{ always() && steps.native.outcome == 'success' && "
+        "steps.native.outputs.available == 'true' }}" in assessed
+    )
+    assert (
+        job.index("Inventory vulnerabilities in the delivered native catalog")
+        < job.index("Apply the release VEX to native findings")
+        < job.index("Retain the unfiltered native report")
+    )
+    assert '--vex "/work/release-assets/extra-codeowners-${VERSION}.openvex.json"' in assessed
+    assert "--network none" in assessed and "GRYPE_DB_AUTO_UPDATE=false" in assessed
+    assert "--add-cpes-if-none" in assessed
+    assert "--only-fixed" not in assessed and "--fail-on" not in assessed
+    assert "continue-on-error" not in assessed
+    assert '"rescan-native-assessed-${ARCHITECTURE}.json"' in assessed
+    assert "rescan-native-${{ matrix.architecture }}.json" in upload
+    assert "rescan-native-assessed-${{ matrix.architecture }}.json" in upload
+
+
 @pytest.mark.parametrize("catalog_present,scanner_status", [(False, 0), (True, 0), (True, 17)])
 def test_native_rescan_skips_legacy_catalogs_and_propagates_scanner_failure(
     tmp_path: Path, catalog_present: bool, scanner_status: int
