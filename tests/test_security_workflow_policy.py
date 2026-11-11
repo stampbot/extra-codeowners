@@ -810,6 +810,95 @@ def test_native_catalog_is_verified_before_release_state_and_published_with_evid
     assert "-name 'native-components-*.cdx.json'" in sign
 
 
+def test_native_rescan_requires_authenticated_evidence_and_reuses_the_image_database() -> None:
+    jobs = _workflow_jobs((WORKFLOWS / "rescan-release.yml").read_text(encoding="utf-8"))
+    job = jobs["rescan"]
+    evidence = _named_step(job, "Verify signatures and release evidence before scanning")
+    inventory = _named_step(job, "Inventory current vulnerabilities in the released image")
+    native = _named_step(job, "Inventory vulnerabilities in the delivered native catalog")
+    upload = _named_step(job, "Retain the unfiltered native report")
+    gate = _named_step(job, "Reject fixable high-severity vulnerabilities")
+
+    assert "if: github.ref == 'refs/heads/main'" in jobs["select"]
+    assert "id: evidence" in evidence
+    assert "id: inventory" in inventory
+    assert (
+        job.index("Verify signatures and release evidence")
+        < job.index("Inventory current vulnerabilities")
+        < job.index("Inventory vulnerabilities in the delivered native catalog")
+    )
+    assert (
+        "if: ${{ always() && steps.evidence.outcome == 'success' && "
+        "steps.inventory.outcome == 'success' }}" in native
+    )
+    for flag in (
+        "--network none",
+        "--read-only",
+        "--cap-drop=ALL",
+        "--security-opt=no-new-privileges",
+        "GRYPE_DB_AUTO_UPDATE=false",
+        "GRYPE_CHECK_FOR_APP_UPDATE=false",
+        "--config /work/.github/grype-inventory.yaml --output json",
+    ):
+        assert flag in native
+    assert 'src=${RUNNER_TEMP}/grype-db,dst=/cache"' in native
+    assert '"sbom:/work/${catalog}"' in native
+    assert "--vex" not in native
+    assert "--only-fixed" not in native
+    assert "--fail-on" not in native
+    assert "continue-on-error" not in native
+    assert "if: ${{ always() && steps.native.outputs.available == 'true' }}" in upload
+    assert "if-no-files-found: error" in upload
+    assert "retention-days: 14" in upload
+    assert "--only-fixed --fail-on high" in gate
+    assert '--vex "/work/release-assets/extra-codeowners-${VERSION}.openvex.json"' in gate
+
+
+@pytest.mark.parametrize("catalog_present,scanner_status", [(False, 0), (True, 0), (True, 17)])
+def test_native_rescan_skips_legacy_catalogs_and_propagates_scanner_failure(
+    tmp_path: Path, catalog_present: bool, scanner_status: int
+) -> None:
+    source = (WORKFLOWS / "rescan-release.yml").read_text(encoding="utf-8")
+    script = _run_script(source, "Inventory vulnerabilities in the delivered native catalog")
+    assets = tmp_path / "release-assets"
+    assets.mkdir()
+    if catalog_present:
+        (assets / "native-components-amd64.cdx.json").write_text("{}", encoding="utf-8")
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    docker = fake_bin / "docker"
+    docker.write_text('#!/bin/sh\nprintf "{}\\n"\nexit "$SCANNER_STATUS"\n', encoding="utf-8")
+    docker.chmod(0o700)
+    output = tmp_path / "outputs"
+    summary = tmp_path / "summary"
+    result = subprocess.run(  # noqa: S603 - fixed repository script and isolated fake scanner
+        [BASH or "bash", "--noprofile", "--norc", "-euo", "pipefail", "-c", script],
+        cwd=tmp_path,
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "ARCHITECTURE": "amd64",
+            "SCANNER_STATUS": str(scanner_status),
+            "GITHUB_OUTPUT": str(output),
+            "GITHUB_STEP_SUMMARY": str(summary),
+            "GITHUB_WORKSPACE": str(tmp_path),
+            "RUNNER_TEMP": str(tmp_path),
+            "GRYPE_IMAGE": "unused-test-image",
+        },
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode == (scanner_status if catalog_present else 0)
+    assert output.exists() is catalog_present
+    assert (tmp_path / "rescan-native-amd64.json").exists() is catalog_present
+    if catalog_present:
+        assert output.read_text(encoding="utf-8") == "available=true\n"
+    else:
+        assert "did not deliver a native component catalog" in summary.read_text(encoding="utf-8")
+
+
 def test_release_provenance_verifies_the_schema_and_platform_binding_of_raw_inventories() -> None:
     source = (ROOT / ".github" / "scripts" / "verify-release-provenance.sh").read_text(
         encoding="utf-8"

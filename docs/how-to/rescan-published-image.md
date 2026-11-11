@@ -43,6 +43,20 @@ statement, and the current repository's `.grype.yaml` exceptions. It fails for
 remaining high or critical findings with an available fix. The unfiltered
 report does not apply those exceptions or omit findings without fixes.
 
+Releases with signed [wheel-native component catalogs](../reference/native-components.md)
+also produce `rescan-native-TAG-ARCHITECTURE` artifacts, retained for 14 days.
+These reports scan the delivered catalog with the same database, without
+network access, VEX exclusions or severity filtering. They can expose bundled
+C libraries missing from the image report. Older releases without a declared
+catalog skip this step; a required catalog that is missing fails release
+verification first.
+
+Native findings need separate advisory and reachability review. They do not
+yet participate in the blocking image severity check, so a green workflow
+does not mean the native report has no findings. A native scanner error does
+fail the job. See [issue #18](https://github.com/stampbot/extra-codeowners/issues/18)
+for the remaining native-library triage and distribution review.
+
 A failed signature or inventory check means the image was **not scanned**.
 An interrupted database download or scanner error also needs investigation;
 neither is a clean vulnerability result. Check the failed step before deciding
@@ -64,4 +78,5 @@ without the required evidence need separate handling under
 The scanner container is pinned by digest and updated by Renovate. It runs
 without GitHub credentials or a Docker socket. The checkout and downloaded
 release evidence are mounted read-only. Its database cache is job-local;
-the first scan downloads the current database and the blocking scan reuses it.
+the image inventory downloads the current database. The blocking check and
+native catalog scan reuse it without updating it.
