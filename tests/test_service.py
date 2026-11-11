@@ -3852,6 +3852,9 @@ async def test_reconciler_enqueues_open_pull_requests(
     assert store.shared_head_generation(2, "example/project", HEAD) == 1
 
     logger.reset_mock()
+    # Simulate the next scheduled poll, not another installation's early retry.
+    now = reconciler._cadence._clock() + settings().reconcile_interval_seconds
+    monkeypatch.setattr(reconciler._cadence, "_clock", lambda: now)
     assert await reconciler.reconcile_once() == ReconciliationOutcome(queued=0)
     assert not any(
         call.args == ("reconciliation_work_enqueued",) for call in logger.info.call_args_list
@@ -3919,6 +3922,13 @@ async def test_reconciler_preserves_webhook_accepted_while_listing_pull_pages(
         (ReconciliationOutcome(queued=2, deferred=True), "partial"),
         (ReconciliationOutcome(queued=2, lease_lost=True), "partial"),
         (ReconciliationOutcome(queued=2, stopped=True), "partial"),
+        (ReconciliationOutcome(queued=0, cycle_complete=False, idle=True), "idle"),
+        (
+            ReconciliationOutcome(
+                queued=0, cycle_complete=False, installations_skipped=1, retry_after_seconds=60
+            ),
+            "partial",
+        ),
         (RuntimeError("private failure"), "failure"),
         (asyncio.CancelledError(), "cancelled"),
     ],
@@ -3971,6 +3981,14 @@ async def test_reconciliation_trace_records_final_outcome_without_changing_propa
         assert span.attributes["reconciliation.deferred"] == outcome.deferred
         assert span.attributes["reconciliation.lease_lost"] == outcome.lease_lost
         assert span.attributes["reconciliation.stopped"] == outcome.stopped
+        assert span.attributes["reconciliation.cycle_complete"] == outcome.cycle_complete
+        assert (
+            span.attributes["reconciliation.installations_skipped"] == outcome.installations_skipped
+        )
+        if outcome.retry_after_seconds is not None:
+            assert (
+                span.attributes["reconciliation.retry_after_seconds"] == outcome.retry_after_seconds
+            )
     assert span.events == ()  # Private exception text remains opt-in.
 
 
@@ -4141,7 +4159,7 @@ async def test_lost_reconciliation_lease_reports_partial_without_success_timesta
     store = migrated_store(f"sqlite:///{tmp_path / 'reconcile-lost-lease.db'}")
     reconciler = Reconciler(settings(), github, store, "reconciler")  # type: ignore[arg-type]
     outcome = await reconciler._reconcile_owned(lost)
-    assert outcome == ReconciliationOutcome(queued=0, lease_lost=True)
+    assert outcome == ReconciliationOutcome(queued=0, lease_lost=True, cycle_complete=False)
     monkeypatch.setattr(
         reconciler,
         "reconcile_once",
@@ -4272,7 +4290,7 @@ async def test_reconciliation_prunes_before_discovery_and_stops_after_lease_loss
 
     outcome = await reconciler._reconcile_owned(lost)
 
-    assert outcome == ReconciliationOutcome(queued=0, lease_lost=True)
+    assert outcome == ReconciliationOutcome(queued=0, lease_lost=True, cycle_complete=False)
     assert order == [
         "prune_deliveries",
         "prune_shared_head_epochs",
@@ -4304,7 +4322,7 @@ async def test_reconciliation_stops_between_delivery_and_shared_head_pruning_aft
 
     outcome = await reconciler._reconcile_owned(lost)
 
-    assert outcome == ReconciliationOutcome(queued=0, lease_lost=True)
+    assert outcome == ReconciliationOutcome(queued=0, lease_lost=True, cycle_complete=False)
     shared_head_prune.assert_not_called()
     github.list_installations.assert_not_awaited()  # type: ignore[attr-defined]
 
@@ -4331,7 +4349,7 @@ async def test_reconciliation_stop_after_installation_scan_prevents_repository_c
 
     outcome = await reconciler._reconcile_owned(asyncio.Event(), shutdown)
 
-    assert outcome == ReconciliationOutcome(queued=0, stopped=True)
+    assert outcome == ReconciliationOutcome(queued=0, stopped=True, cycle_complete=False)
     github.list_installation_repositories.assert_not_awaited()  # type: ignore[attr-defined]
     assert store.pending_count() == 0
 
@@ -4346,7 +4364,7 @@ async def test_reconciliation_respects_global_backpressure_before_discovery(tmp_
 
     outcome = await reconciler._reconcile_owned(asyncio.Event(), asyncio.Event())
 
-    assert outcome == ReconciliationOutcome(queued=0, deferred=True)
+    assert outcome == ReconciliationOutcome(queued=0, deferred=True, cycle_complete=False)
     assert outcome.complete is False
     github.list_installations.assert_not_awaited()  # type: ignore[attr-defined]
 
@@ -4404,7 +4422,7 @@ async def test_reconciliation_retains_fingerprints_through_scan_and_recheck_wind
 
     outcome = await reconciler._reconcile_owned(asyncio.Event(), asyncio.Event())
 
-    assert outcome == ReconciliationOutcome(queued=0, deferred=True)
+    assert outcome == ReconciliationOutcome(queued=0, deferred=True, cycle_complete=False)
     with store.session() as session:
         retained = session.get(ReconciliationState, (2, "example/project", 3))
     assert retained is not None
@@ -4423,7 +4441,7 @@ async def test_reconciliation_stopped_error_is_never_reported_as_complete(
 
     outcome = await reconciler._reconcile_owned(asyncio.Event(), asyncio.Event())
 
-    assert outcome == ReconciliationOutcome(queued=0, stopped=True)
+    assert outcome == ReconciliationOutcome(queued=0, stopped=True, cycle_complete=False)
     assert outcome.complete is False
 
 
@@ -4503,7 +4521,7 @@ async def test_reconciliation_does_not_enqueue_pulls_returned_after_lease_loss(
 
     outcome = await reconciler._reconcile_owned(lost)
 
-    assert outcome == ReconciliationOutcome(queued=0, lease_lost=True)
+    assert outcome == ReconciliationOutcome(queued=0, lease_lost=True, cycle_complete=False)
     assert store.pending_count() == 0
 
 
@@ -4548,7 +4566,7 @@ async def test_lease_loss_stops_paginated_reconciliation_listing(
 
     outcome = await reconciler._reconcile_owned(lost)
 
-    assert outcome == ReconciliationOutcome(queued=0, lease_lost=True)
+    assert outcome == ReconciliationOutcome(queued=0, lease_lost=True, cycle_complete=False)
     assert pages == [1]
     assert store.pending_count() == 0
 
@@ -4592,7 +4610,7 @@ async def test_reconciliation_stops_pull_loop_when_lease_loss_becomes_visible(
 
     outcome = await reconciler._reconcile_owned(lost)
 
-    assert outcome == ReconciliationOutcome(queued=1, lease_lost=True)
+    assert outcome == ReconciliationOutcome(queued=1, lease_lost=True, cycle_complete=False)
     assert enqueue.call_count == 1
     assert store.pending_count() == 2
     assert store.pending_shared_head_invalidation_count() == 1
@@ -4680,6 +4698,8 @@ async def test_partial_reconciliation_queues_healthy_installations_and_recovers(
 
     attempts.reset_mock()
     last_success.reset_mock()
+    now = reconciler._cadence._clock() + settings().reconcile_interval_seconds
+    monkeypatch.setattr(reconciler._cadence, "_clock", lambda: now)
     await reconciler.run_iteration()
 
     attempts.labels.assert_called_once_with("success")
@@ -4850,7 +4870,7 @@ async def test_malformed_repository_batch_is_partial_and_later_installations_con
 
     outcome = await reconciler.reconcile_once()
 
-    assert outcome == ReconciliationOutcome(queued=1, failed_installations=1)
+    assert outcome == ReconciliationOutcome(queued=1, failed_installations=1, cycle_complete=False)
     assert store.pending_count() == 2
     assert store.pending_shared_head_invalidation_count() == 1
     github.list_open_pulls.assert_awaited_once_with(  # type: ignore[attr-defined]
@@ -4904,7 +4924,7 @@ async def test_malformed_pull_batch_is_partial_and_later_installations_continue(
 
     outcome = await reconciler.reconcile_once()
 
-    assert outcome == ReconciliationOutcome(queued=1, failed_installations=1)
+    assert outcome == ReconciliationOutcome(queued=1, failed_installations=1, cycle_complete=False)
     assert store.pending_count() == 2
     assert store.pending_shared_head_invalidation_count() == 1
     logger.warning.assert_called_once_with(
@@ -4948,7 +4968,7 @@ async def test_malformed_pull_number_is_partial_and_later_installations_continue
 
     outcome = await reconciler.reconcile_once()
 
-    assert outcome == ReconciliationOutcome(queued=1, failed_installations=1)
+    assert outcome == ReconciliationOutcome(queued=1, failed_installations=1, cycle_complete=False)
     assert store.pending_count() == 2
     assert store.pending_shared_head_invalidation_count() == 1
     logger.warning.assert_called_once_with(
@@ -5002,7 +5022,7 @@ async def test_malformed_pull_head_is_partial_and_later_installations_continue(
 
     outcome = await reconciler.reconcile_once()
 
-    assert outcome == ReconciliationOutcome(queued=1, failed_installations=1)
+    assert outcome == ReconciliationOutcome(queued=1, failed_installations=1, cycle_complete=False)
     assert store.pending_count() == 2
     assert store.pending_shared_head_invalidation_count() == 1
     logger.warning.assert_called_once_with(

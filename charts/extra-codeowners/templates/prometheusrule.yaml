@@ -34,6 +34,6 @@ spec:
           annotations:
             summary: Extra CODEOWNERS reconciliation is stale
             description: >-
-              No complete reconciliation has finished for more than
+              No complete reconciliation cycle has finished for more than
               {{ .Values.monitoring.prometheusRule.reconciliationStalledSeconds }} seconds.
 {{- end }}

@@ -162,6 +162,12 @@ def reconciler_for(
     return Reconciler(settings, github, store, owner), github
 
 
+def next_poll(reconciler: Reconciler) -> None:
+    """Advance only polling time; HTTP validator/accounting clocks stay separate."""
+    now = reconciler._cadence._clock() + reconciler.settings.reconcile_interval_seconds
+    reconciler._cadence._clock = lambda: now
+
+
 async def scan(reconciler: Reconciler, stop: asyncio.Event | None = None) -> ReconciliationOutcome:
     result = await reconciler.reconcile_once(stop)
     assert result is not None
@@ -180,6 +186,8 @@ async def test_large_unenrolled_installation_revalidates_without_refilling_queue
             reconciler, github = reconciler_for(provider, store, private_key, owner)
             clients.append(github)
             for cycle in range(2):
+                if cycle:
+                    next_poll(reconciler)
                 before = provider.remaining
                 result = await scan(reconciler)
                 assert result.complete and result.queued == 0
@@ -219,6 +227,7 @@ async def test_discovery_validators_survive_a_quota_window_but_still_expire(
         before = provider.remaining
         checks_before = sum(v for k, v in provider.requests.items() if k.endswith("/check-runs"))
         clock = float(gap_seconds)
+        next_poll(reconciler)
         result = await scan(reconciler)
         assert result.complete and result.queued == 0
         # A slow scan plus a quota pause can revisit after one idle hour.
@@ -253,6 +262,7 @@ async def test_retained_validators_do_not_hide_new_policy_or_managed_checks(
         else:
             provider.base = "c" * 40
             provider.policy_status = 200 if change == "policy" else 403
+        next_poll(reconciler)
         result = await scan(reconciler)
         assert result.complete and result.queued == (1 if change == "managed_check" else 3)
         assert store.claim_shared_head_invalidation("head-worker", 60) is not None
@@ -359,6 +369,7 @@ async def test_policy_appearing_or_unreadable_is_not_skipped(
         provider.policy_status = status
         # Even malformed or disabled policy needs ordinary evaluation.
         provider.policy_body = "enabled = false"
+        next_poll(reconciler)
         result = await scan(reconciler)
         assert result.complete and result.queued == 3
     finally:
@@ -376,6 +387,7 @@ async def test_removed_policy_cannot_hide_existing_managed_check(
     try:
         assert (await scan(reconciler)).queued == 0
         provider.managed.add(f"{1:040x}")
+        next_poll(reconciler)
         result = await scan(reconciler)
         assert result.complete and result.queued == 1
         invalidation = store.claim_shared_head_invalidation("head-worker", 60)
