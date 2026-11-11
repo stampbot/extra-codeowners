@@ -80,7 +80,10 @@ using the same release revision and workflow identity.
 ## Coverage limits
 
 The catalog exposes components that the top-level image SBOM missed. It does
-not merge them into the existing required image-vulnerability scan. A scanner
+not merge them into the existing required image-vulnerability scan. The
+[published-release rescan](../how-to/rescan-published-image.md) retains a
+separate, unfiltered native report for review; a green workflow is not a
+clean native-vulnerability assessment. A scanner
 may interpret RPM origins, generic package URLs and backported versions
 differently; consuming this catalog is not proof that it matched every
 component to the right advisory data.

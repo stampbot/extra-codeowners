@@ -109,6 +109,7 @@ jobs:
           cosign-release: v3.0.6
 
       - name: Verify signatures and release evidence before scanning
+        id: evidence
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.select.outputs.tag }}
@@ -125,6 +126,7 @@ jobs:
             "${PYTHON_VERSION}" "${VERSION}" "${revision}"
 
       - name: Inventory current vulnerabilities in the released image
+        id: inventory
         env:
           SCAN_IMAGE: ${{ steps.image.outputs.scan_image }}
           ARCHITECTURE: ${{ matrix.architecture }}
@@ -148,6 +150,8 @@ jobs:
           retention-days: 14
 
       - name: Reject fixable high-severity vulnerabilities
+        # Native catalogs need separate advisory/VEX triage under issue 18.
+        # Keep the existing image gate unchanged while retaining those findings.
         env:
           SCAN_IMAGE: ${{ steps.image.outputs.scan_image }}
           VERSION: ${{ needs.select.outputs.version }}
@@ -160,3 +164,38 @@ jobs:
             "${GRYPE_IMAGE}" "registry:${SCAN_IMAGE}" --by-cve \
             --config /work/.grype.yaml --only-fixed --fail-on high \
             --vex "/work/release-assets/extra-codeowners-${VERSION}.openvex.json" --output table
+
+      - name: Inventory vulnerabilities in the delivered native catalog
+        if: ${{ always() && steps.evidence.outcome == 'success' && steps.inventory.outcome == 'success' }}
+        id: native
+        env:
+          ARCHITECTURE: ${{ matrix.architecture }}
+        run: |
+          catalog="release-assets/native-components-${ARCHITECTURE}.cdx.json"
+          if [[ ! -s "${catalog}" ]]; then
+            printf 'This release did not deliver a native component catalog.\n' >>"${GITHUB_STEP_SUMMARY}"
+            exit 0
+          fi
+          printf 'available=true\n' >>"${GITHUB_OUTPUT}"
+          docker run --rm --read-only --cap-drop=ALL --security-opt=no-new-privileges \
+            --network none --user "$(id -u):$(id -g)" \
+            --tmpfs /tmp:rw,nosuid,nodev,mode=1777 \
+            --mount "type=bind,src=${GITHUB_WORKSPACE},dst=/work,readonly" \
+            --mount "type=bind,src=${RUNNER_TEMP}/grype-db,dst=/cache" \
+            --env GRYPE_DB_CACHE_DIR=/cache --env GRYPE_DB_AUTO_UPDATE=false \
+            --env GRYPE_CHECK_FOR_APP_UPDATE=false \
+            "${GRYPE_IMAGE}" "sbom:/work/${catalog}" --by-cve --add-cpes-if-none \
+            --config /work/.github/grype-inventory.yaml --output json \
+            >"rescan-native-${ARCHITECTURE}.json"
+          printf '%s\n' \
+            'Native findings are unfiltered and need separate triage; they are not part of the image severity gate.' \
+            >>"${GITHUB_STEP_SUMMARY}"
+
+      - name: Retain the unfiltered native report
+        if: ${{ always() && steps.native.outputs.available == 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rescan-native-${{ needs.select.outputs.tag }}-${{ matrix.architecture }}
+          path: rescan-native-${{ matrix.architecture }}.json
+          if-no-files-found: error
+          retention-days: 14
