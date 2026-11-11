@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
-from collections.abc import Iterator
+from collections.abc import Coroutine, Iterator
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -229,10 +229,11 @@ async def test_loop_honors_retry_hint_without_globally_shortening_the_interval(
     monkeypatch.setattr(reconciler, "run_iteration", iteration)
     delays: list[int] = []
 
-    async def wait_for(awaitable: Any, seconds: int) -> None:
+    async def wait_for(awaitable: Coroutine[Any, Any, bool], seconds: int) -> None:
         delays.append(seconds)
         stop.set()
-        await awaitable
+        # Virtual waiting ends the loop; dispose of the unused Event.wait coroutine.
+        awaitable.close()
 
     monkeypatch.setattr(asyncio, "wait_for", wait_for)
     await reconciler.run(stop)
