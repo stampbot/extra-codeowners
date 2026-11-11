@@ -100,8 +100,8 @@ identities described below.
 
 Wheel-bundled OpenSSL and other C libraries have separate
 [native component catalogs](docs/reference/native-components.md) and rescan
-reports. The current VEX adds four native OpenSSL assessments for CMS, CMP and
-a 32-bit-only overflow; 55 other native candidates remain `under_investigation`.
+reports. The current VEX has eight native OpenSSL assessments for CMS, CMP and
+a 32-bit-only overflow; 51 other native candidates remain `under_investigation`.
 The [caller evidence](security/vex/native-openssl-callers.json) and runtime
 review explain their scope. TLS and certificate-processing findings are not
 blanket exclusions. The image severity gate does not yet assess the native
