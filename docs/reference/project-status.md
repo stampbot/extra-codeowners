@@ -202,8 +202,9 @@ close before the project is presented as production-ready:
   early retry; their live performance still needs measurement.
 - [Issue #18][issue-18]: review wheel-native components and their notices,
   complete corresponding-source delivery, and approve the distribution
-  mechanism. Retaining a wheel's SBOM or source archive does not by itself add
-  every bundled library to the vulnerability scanner's component catalog.
+  mechanism. Separate [wheel-native catalogs](native-components.md) expose the
+  reviewed C-library identities and source bindings. They do not merge those
+  libraries into the required image scan or complete their license review.
 
 ### Hardening and verification
 

@@ -642,6 +642,7 @@ def collect_inventory(
         "python": {
             "source_bundle": f"python-source-{architecture}.tar.gz",
             "rust_source_bundle": f"rust-source-{architecture}.tar.gz",
+            "native_component_catalog": f"native-components-{architecture}.cdx.json",
             "source_recipe_schema": 4,
             "distributions": distribution_records,
             "embedded_sboms": embedded_sboms,

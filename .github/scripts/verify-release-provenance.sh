@@ -275,6 +275,25 @@ for architecture in amd64 arm64; do
     --notices "${asset_directory}/recipient-notices-${architecture}.tar.gz" \
     --bundle "${source_bundle}"
 done
+for architecture in amd64 arm64; do
+  inventory="${asset_directory}/distribution-inventory-${architecture}.json"
+  catalog="${asset_directory}/native-components-${architecture}.cdx.json"
+  if jq -e '.python | objects | has("native_component_catalog")' "${inventory}" >/dev/null; then
+    jq -e --arg expected "native-components-${architecture}.cdx.json" \
+      '.python.native_component_catalog == $expected' "${inventory}" >/dev/null
+  elif [[ ! -e "${catalog}" && ! -e "${catalog}.sigstore.json" ]]; then
+    continue
+  fi
+  verify_release_file "${catalog}"
+  git show "${revision}:uv.lock" >"${temporary_directory}/release-uv.lock"
+  python -I -S -B tools/release_native_components.py verify \
+    --architecture "${architecture}" \
+    --platform-digest "$(<"${asset_directory}/digest-${architecture}.txt")" \
+    --inventory "${inventory}" \
+    --lock "${temporary_directory}/release-uv.lock" \
+    --notices "${asset_directory}/recipient-notices-${architecture}.tar.gz" \
+    --catalog "${catalog}"
+done
 verify_release_file "${vex}"
 debian_source_required=false
 for inventory in "${amd64_inventory}" "${arm64_inventory}"; do
