@@ -1,5 +1,36 @@
 # Runtime vulnerability review
 
+## Additional CMS/CMP review: November 11, 2026 UTC
+
+Four more assessments use the source and caller evidence from the initial
+intake below. They cover both bundled OpenSSL 3.5.4 and 4.0.1:
+
+| CVE | Affected path not used by this service |
+| --- | --- |
+| [CVE-2026-63072](https://openssl-library.org/news/secadv/20260825.txt) | CMS decryption and key unwrapping |
+| [CVE-2026-63074](https://openssl-library.org/news/secadv/20260825.txt) | Reused CMP server context |
+| [CVE-2026-63076](https://openssl-library.org/news/secadv/20260825.txt) | CMP password-protection verification |
+| [CVE-2026-75805](https://openssl-library.org/news/secadv/20260929.txt) | CMP CSR-based certificate revocation |
+
+The App handles its configured RSA key and RS256 signing through Cryptography,
+and database TLS through libpq. It doesn't parse CMS messages, serve CMP or
+act as a CMP client. The existing entrypoint review and hashed Psycopg caller
+table support that scope; import absence alone is not the proof. The CMS
+assessment concerns the caller's unwrap-buffer allocation, not a blanket
+exemption for AES key wrapping or other cipher uses.
+
+These four CVEs add eight assessed product pairs, for eight native assessments
+covering 13 pairs in total. The other 51 statements cover 69 pairs as
+`under_investigation`; TLS and certificate-processing candidates remain there.
+No app code, dependency, Dockerfile, base digest or caller table changed.
+Earlier 29 package statements and four native assessments keep their contents
+and dates. Vexcalibur 1.1.1 formatted the new local findings offline.
+
+The libraries remain present and unpatched. These statements cover the shipped
+amd64/arm64 service, not operator commands, plugins, custom FFI, other builds
+or execution after compromise. Native scanner matching, complete notice/source
+review and distribution approval remain separate from this reachability review.
+
 ## Wheel-native OpenSSL intake: November 11, 2026 UTC
 
 The independently verified alpha.83 catalogs received a separate offline Grype

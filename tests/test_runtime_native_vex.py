@@ -21,11 +21,15 @@ def test_native_intake_keeps_unresolved_candidates_visible() -> None:
     statements = native_statements()
     assert len(statements) == 59
     assert Counter(s["status"] for s in statements) == {
-        "not_affected": 4,
-        "under_investigation": 55,
+        "not_affected": 8,
+        "under_investigation": 51,
     }
     pairs = [(s["vulnerability"]["name"], p["@id"]) for s in statements for p in s["products"]]
     assert len(pairs) == len(set(pairs)) == 82
+    assert Counter(s["status"] for s in statements for _ in s["products"]) == {
+        "not_affected": 13,
+        "under_investigation": 69,
+    }
     assert {p["@id"] for s in statements for p in s["products"]} == {
         "pkg:generic/openssl@3.5.4",
         "pkg:generic/openssl@4.0.1",
@@ -46,6 +50,10 @@ def test_only_the_reviewed_cms_cmp_and_32bit_cases_are_excluded() -> None:
         "CVE-2026-34182",
         "CVE-2026-63073",
         "CVE-2026-31789",
+        "CVE-2026-63072",
+        "CVE-2026-63074",
+        "CVE-2026-63076",
+        "CVE-2026-75805",
     }
     for cve, statement in reviewed.items():
         assert statement["timestamp"].startswith("2026-11-11T")
@@ -58,7 +66,13 @@ def test_only_the_reviewed_cms_cmp_and_32bit_cases_are_excluded() -> None:
         else:
             assert statement["justification"] == "vulnerable_code_not_in_execute_path"
         expected = {"pkg:generic/openssl@3.5.4"}
-        if cve == "CVE-2026-63073":
+        if cve in {
+            "CVE-2026-63073",
+            "CVE-2026-63072",
+            "CVE-2026-63074",
+            "CVE-2026-63076",
+            "CVE-2026-75805",
+        }:
             expected.add("pkg:generic/openssl@4.0.1")
         assert {p["@id"] for p in statement["products"]} == expected
 

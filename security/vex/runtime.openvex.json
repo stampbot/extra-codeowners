@@ -1,8 +1,8 @@
 {
   "@context": "https://openvex.dev/ns/v0.2.0",
-  "@id": "urn:uuid:764136f0-6fe5-55df-8723-59ade049a6ae",
+  "@id": "urn:uuid:0865c9b4-c258-5177-a8b6-3caa8f9a4f61",
   "author": "Extra CODEOWNERS maintainers",
-  "last_updated": "2026-11-11T05:24:33Z",
+  "last_updated": "2026-11-11T07:24:28Z",
   "role": "VEX document producer",
   "statements": [
     {
@@ -1583,6 +1583,8 @@
       }
     },
     {
+      "impact_statement": "The affected CMS_decrypt key-unwrapping path is not used. The service uses Cryptography's OpenSSL 4.0.1 for its configured RSA App key and RS256 signing, and Psycopg's OpenSSL 3.5.4 through libpq's TLS client. It invokes neither CMS nor CMP APIs. The existing source review and both exact Psycopg payload sets support this conclusion; symbol absence alone is not a whole-program proof. TLS and certificate-processing candidates remain separate. The library is present and unpatched; this is not a blanket OpenSSL exclusion. Scope is the shipped amd64/arm64 service, not operator commands, plugins, custom FFI, other builds or execution after compromise.",
+      "justification": "vulnerable_code_not_in_execute_path",
       "products": [
         {
           "@id": "pkg:generic/openssl@3.5.4",
@@ -1597,9 +1599,9 @@
           }
         }
       ],
-      "status": "under_investigation",
-      "status_notes": "Analysis detail: Candidate retained from the alpha.83 native report: Grype 0.118.0, database built 2026-11-10T06:21:20Z. Application-specific reachability has not been established. No fix or not-affected conclusion is made, including for TLS and certificate-processing paths. This intake is not a complete native-library assessment or distribution approval.\nSource: Grype/NVD native candidate (https://nvd.nist.gov/vuln/detail/CVE-2026-63072)\nOriginal Vexcalibur analysis state: in_triage\nSource record modified: 2026-11-11T05:20:18Z",
-      "timestamp": "2026-11-11T05:20:18Z",
+      "status": "not_affected",
+      "status_notes": "Analysis detail: The affected CMS_decrypt key-unwrapping path is not used. The service uses Cryptography's OpenSSL 4.0.1 for its configured RSA App key and RS256 signing, and Psycopg's OpenSSL 3.5.4 through libpq's TLS client. It invokes neither CMS nor CMP APIs. The existing source review and both exact Psycopg payload sets support this conclusion; symbol absence alone is not a whole-program proof. TLS and certificate-processing candidates remain separate. The library is present and unpatched; this is not a blanket OpenSSL exclusion. Scope is the shipped amd64/arm64 service, not operator commands, plugins, custom FFI, other builds or execution after compromise.\nSource: Extra CODEOWNERS CMS/CMP source review (https://openssl-library.org/news/secadv/20260825.txt)\nOriginal Vexcalibur analysis state: not_affected\nSource record modified: 2026-11-11T07:21:56Z",
+      "timestamp": "2026-11-11T07:21:57Z",
       "vulnerability": {
         "name": "CVE-2026-63072"
       }
@@ -1629,6 +1631,8 @@
       }
     },
     {
+      "impact_statement": "The affected long-lived CMP server context is not used. The service uses Cryptography's OpenSSL 4.0.1 for its configured RSA App key and RS256 signing, and Psycopg's OpenSSL 3.5.4 through libpq's TLS client. It invokes neither CMS nor CMP APIs. The existing source review and both exact Psycopg payload sets support this conclusion; symbol absence alone is not a whole-program proof. TLS and certificate-processing candidates remain separate. The library is present and unpatched; this is not a blanket OpenSSL exclusion. Scope is the shipped amd64/arm64 service, not operator commands, plugins, custom FFI, other builds or execution after compromise.",
+      "justification": "vulnerable_code_not_in_execute_path",
       "products": [
         {
           "@id": "pkg:generic/openssl@3.5.4",
@@ -1643,9 +1647,9 @@
           }
         }
       ],
-      "status": "under_investigation",
-      "status_notes": "Analysis detail: Candidate retained from the alpha.83 native report: Grype 0.118.0, database built 2026-11-10T06:21:20Z. Application-specific reachability has not been established. No fix or not-affected conclusion is made, including for TLS and certificate-processing paths. This intake is not a complete native-library assessment or distribution approval.\nSource: Grype/NVD native candidate (https://nvd.nist.gov/vuln/detail/CVE-2026-63074)\nOriginal Vexcalibur analysis state: in_triage\nSource record modified: 2026-11-11T05:20:18Z",
-      "timestamp": "2026-11-11T05:20:18Z",
+      "status": "not_affected",
+      "status_notes": "Analysis detail: The affected long-lived CMP server context is not used. The service uses Cryptography's OpenSSL 4.0.1 for its configured RSA App key and RS256 signing, and Psycopg's OpenSSL 3.5.4 through libpq's TLS client. It invokes neither CMS nor CMP APIs. The existing source review and both exact Psycopg payload sets support this conclusion; symbol absence alone is not a whole-program proof. TLS and certificate-processing candidates remain separate. The library is present and unpatched; this is not a blanket OpenSSL exclusion. Scope is the shipped amd64/arm64 service, not operator commands, plugins, custom FFI, other builds or execution after compromise.\nSource: Extra CODEOWNERS CMS/CMP source review (https://openssl-library.org/news/secadv/20260825.txt)\nOriginal Vexcalibur analysis state: not_affected\nSource record modified: 2026-11-11T07:21:56Z",
+      "timestamp": "2026-11-11T07:21:57Z",
       "vulnerability": {
         "name": "CVE-2026-63074"
       }
@@ -1673,6 +1677,8 @@
       }
     },
     {
+      "impact_statement": "The affected CMP password-protection verification is not used. The service uses Cryptography's OpenSSL 4.0.1 for its configured RSA App key and RS256 signing, and Psycopg's OpenSSL 3.5.4 through libpq's TLS client. It invokes neither CMS nor CMP APIs. The existing source review and both exact Psycopg payload sets support this conclusion; symbol absence alone is not a whole-program proof. TLS and certificate-processing candidates remain separate. The library is present and unpatched; this is not a blanket OpenSSL exclusion. Scope is the shipped amd64/arm64 service, not operator commands, plugins, custom FFI, other builds or execution after compromise.",
+      "justification": "vulnerable_code_not_in_execute_path",
       "products": [
         {
           "@id": "pkg:generic/openssl@3.5.4",
@@ -1687,9 +1693,9 @@
           }
         }
       ],
-      "status": "under_investigation",
-      "status_notes": "Analysis detail: Candidate retained from the alpha.83 native report: Grype 0.118.0, database built 2026-11-10T06:21:20Z. Application-specific reachability has not been established. No fix or not-affected conclusion is made, including for TLS and certificate-processing paths. This intake is not a complete native-library assessment or distribution approval.\nSource: Grype/NVD native candidate (https://nvd.nist.gov/vuln/detail/CVE-2026-63076)\nOriginal Vexcalibur analysis state: in_triage\nSource record modified: 2026-11-11T05:20:18Z",
-      "timestamp": "2026-11-11T05:20:18Z",
+      "status": "not_affected",
+      "status_notes": "Analysis detail: The affected CMP password-protection verification is not used. The service uses Cryptography's OpenSSL 4.0.1 for its configured RSA App key and RS256 signing, and Psycopg's OpenSSL 3.5.4 through libpq's TLS client. It invokes neither CMS nor CMP APIs. The existing source review and both exact Psycopg payload sets support this conclusion; symbol absence alone is not a whole-program proof. TLS and certificate-processing candidates remain separate. The library is present and unpatched; this is not a blanket OpenSSL exclusion. Scope is the shipped amd64/arm64 service, not operator commands, plugins, custom FFI, other builds or execution after compromise.\nSource: Extra CODEOWNERS CMS/CMP source review (https://openssl-library.org/news/secadv/20260825.txt)\nOriginal Vexcalibur analysis state: not_affected\nSource record modified: 2026-11-11T07:21:56Z",
+      "timestamp": "2026-11-11T07:21:57Z",
       "vulnerability": {
         "name": "CVE-2026-63076"
       }
@@ -1777,6 +1783,8 @@
       }
     },
     {
+      "impact_statement": "The affected CMP CSR-based revocation response path is not used. The service uses Cryptography's OpenSSL 4.0.1 for its configured RSA App key and RS256 signing, and Psycopg's OpenSSL 3.5.4 through libpq's TLS client. It invokes neither CMS nor CMP APIs. The existing source review and both exact Psycopg payload sets support this conclusion; symbol absence alone is not a whole-program proof. TLS and certificate-processing candidates remain separate. The library is present and unpatched; this is not a blanket OpenSSL exclusion. Scope is the shipped amd64/arm64 service, not operator commands, plugins, custom FFI, other builds or execution after compromise.",
+      "justification": "vulnerable_code_not_in_execute_path",
       "products": [
         {
           "@id": "pkg:generic/openssl@3.5.4",
@@ -1791,9 +1799,9 @@
           }
         }
       ],
-      "status": "under_investigation",
-      "status_notes": "Analysis detail: Candidate retained from the alpha.83 native report: Grype 0.118.0, database built 2026-11-10T06:21:20Z. Application-specific reachability has not been established. No fix or not-affected conclusion is made, including for TLS and certificate-processing paths. This intake is not a complete native-library assessment or distribution approval.\nSource: Grype/NVD native candidate (https://nvd.nist.gov/vuln/detail/CVE-2026-75805)\nOriginal Vexcalibur analysis state: in_triage\nSource record modified: 2026-11-11T05:20:18Z",
-      "timestamp": "2026-11-11T05:20:18Z",
+      "status": "not_affected",
+      "status_notes": "Analysis detail: The affected CMP CSR-based revocation response path is not used. The service uses Cryptography's OpenSSL 4.0.1 for its configured RSA App key and RS256 signing, and Psycopg's OpenSSL 3.5.4 through libpq's TLS client. It invokes neither CMS nor CMP APIs. The existing source review and both exact Psycopg payload sets support this conclusion; symbol absence alone is not a whole-program proof. TLS and certificate-processing candidates remain separate. The library is present and unpatched; this is not a blanket OpenSSL exclusion. Scope is the shipped amd64/arm64 service, not operator commands, plugins, custom FFI, other builds or execution after compromise.\nSource: Extra CODEOWNERS CMS/CMP source review (https://openssl-library.org/news/secadv/20260929.txt)\nOriginal Vexcalibur analysis state: not_affected\nSource record modified: 2026-11-11T07:21:56Z",
+      "timestamp": "2026-11-11T07:21:57Z",
       "vulnerability": {
         "name": "CVE-2026-75805"
       }
@@ -1919,9 +1927,9 @@
       }
     }
   ],
-  "timestamp": "2026-11-11T05:24:33Z",
+  "timestamp": "2026-11-11T07:24:28Z",
   "tooling": "Vexcalibur + Extra CODEOWNERS runtime binding",
-  "version": 20,
+  "version": 21,
   "x_extra_codeowners_runtime": {
     "files": {
       ".dockerignore": "3f9dc9d3a79fe3085f25de88403b5563ad5c7fa7010bef94c5e55f24bd3cf691",
@@ -1973,7 +1981,7 @@
       "tools/source_recipes/psycopg-binary-3.3.4.json": "ec227aa110315f82c25335837e258806930c7afbe980c8b2ff6b476343c243b5",
       "uv.lock": "5514cb0448adb693fe97f3d2c8016ccd606890327a1946467fbd118356de4922"
     },
-    "review": "Reviewed native OpenSSL 3.5.4/4.0.1 identities against both signed alpha.83 inventories, the lock and native source recipes. Source/caller and exact ELF64 evidence supports only four CMS/CMP/32-bit assessments; 55 other native candidates remain under investigation, including TLS/certificate paths. Existing 29 statements and dates are unchanged. No app code, base-image or dependency version changed; native recipe and caller evidence now join the review binding.",
+    "review": "Reviewed four additional CMS/CMP advisory paths against the existing RSA/RS256, libpq TLS and exact two-platform caller evidence. No app, package or image input changed; TLS/certificate findings and other unassessed cases remain under investigation.",
     "schema_version": 1
   }
 }
