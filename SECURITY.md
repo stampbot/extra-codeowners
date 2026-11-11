@@ -83,16 +83,24 @@ before 1.0.
 
 ## Vulnerability statements
 
-The [current OpenVEX statement](security/vex/runtime.openvex.json) records which
-reported vulnerabilities affect the shipped service. Our
+The [current OpenVEX statement](security/vex/runtime.openvex.json) records
+reviewed assessments for exact Debian and Python package products. It is not
+a complete vulnerability assessment of every library inside those packages. Our
 [runtime review](security/vex/runtime-review.md) covers both image architectures.
 It records package fixes, including the earlier PCRE2 and OpenSSL findings.
-One claim is `not_affected`: CVE-2026-109518 in APT's package-acquisition path.
+Three claims are `not_affected`: CVE-2026-109518 in APT's package-acquisition path,
+and CVE-2026-76844 and CVE-2026-85091 in zlib's gzip-file writer APIs.
 The shipped service doesn't invoke APT or expose its install API; its HTTP
 requests use HTTPX. APT remains installed and unpatched. This assessment does
 not cover an operator installing packages, custom code or plugins, or arbitrary
 execution after compromise. Every claim names package versions, architectures,
 and the Debian distribution.
+
+Wheel-bundled OpenSSL and other C libraries have separate
+[native component catalogs](docs/reference/native-components.md) and rescan
+reports. The current VEX does not exclude those native findings, and the image
+severity gate does not yet assess them. Native advisory matching and
+reachability review remain in [issue #18](https://github.com/stampbot/extra-codeowners/issues/18).
 
 The OpenSSL-only statements for [3.5.6](security/vex/openssl-3.5.6.openvex.json)
 and [3.5.7](security/vex/openssl-3.5.7.openvex.json) remain as historical evidence.
@@ -111,7 +119,10 @@ the binding. Rebinding records a maintainer's assessment; it does not perform on
 
 Before it creates an immutable tag or a versioned image reference, the
 workflow checks every product URL against signed `amd64` and `arm64`
-inventories. Those inventories include Debian's major and full distribution
+inventories. Its supported OpenVEX profile is a flat package product: matching
+`@id` and `identifiers.purl`, with no other product fields or identifier aliases.
+Hashes and nested subcomponents are rejected, not silently left unvalidated.
+Those inventories include Debian's major and full distribution
 versions from the image's hashed canonical `/usr/lib/os-release` file. The
 full version makes the package URLs match Grype's identities, such as
 `debian-13.6`, without guessing a point release from `VERSION_ID=13`. The workflow then
@@ -141,7 +152,7 @@ builds without BuildKit cache.
 
 Each container job runs two vulnerability scans:
 
-1. A nonblocking scan records the scanner's raw High and Critical inventory as
+1. A nonblocking scan records the scanner's unfiltered findings at every severity as
    a CI artifact.
 2. A blocking scan rejects every High or Critical finding for which the
    scanner reports an available fix.

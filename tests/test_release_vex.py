@@ -127,6 +127,43 @@ def test_validate_release_vex_accepts_a_python_product_from_both_native_inventor
     assert validate_release_vex(source, inventories) == source.read_bytes()
 
 
+@pytest.mark.parametrize(
+    "extra",
+    [
+        {"hashes": {"sha-256": "a" * 64}},
+        {"subcomponents": [_product("pkg:generic/unreviewed@99")]},
+        {"subcomponents": []},
+        {"supplier": "https://example.invalid/unsupported-product-metadata"},
+    ],
+)
+def test_release_vex_rejects_unvalidated_product_matching_fields(
+    tmp_path: Path, extra: dict[str, object]
+) -> None:
+    document = _document("pkg:pypi/extra_codeowners@0.1.0a27")
+    statements = document["statements"]
+    assert isinstance(statements, list)
+    statements[0]["products"][0].update(extra)
+    source, inventories = _release_inputs(tmp_path, document)
+
+    with pytest.raises(ReleaseVexError, match="flat package-product profile"):
+        validate_release_vex(source, inventories)
+
+
+@pytest.mark.parametrize("alias", ["cpe22", "cpe23", "unrecognized"])
+def test_release_vex_rejects_additional_identifiers_even_with_a_valid_reviewed_purl(
+    tmp_path: Path, alias: str
+) -> None:
+    document = _document("pkg:pypi/extra_codeowners@0.1.0a27")
+    statements = document["statements"]
+    assert isinstance(statements, list)
+    # The consumer compares aliases as strings, regardless of their label.
+    statements[0]["products"][0]["identifiers"][alias] = "pkg:generic/unreviewed@99"
+    source, inventories = _release_inputs(tmp_path, document)
+
+    with pytest.raises(ReleaseVexError, match="only the reviewed package URL"):
+        validate_release_vex(source, inventories)
+
+
 @pytest.mark.parametrize("location", ["document", "statement"])
 @pytest.mark.parametrize("field", ["timestamp", "last_updated"])
 @pytest.mark.parametrize("value", ["not-a-date", "2026-02-30T00:00:00Z", "2026-09-02T00:00:00"])
