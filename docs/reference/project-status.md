@@ -198,13 +198,17 @@ close before the project is presented as production-ready:
   repositories are mostly unenrolled, reduce the measured scan cost and
   complete live checkpoint verification. Quiet scans and missed-enrollment
   recovery have dated observations; they do not establish acceptable recovery
-  latency. Per-installation retry deadlines avoid replaying healthy scans on an
-  early retry; their live performance still needs measurement.
+  latency. The [alpha.82 observations][alpha82-cadence] exercise early retry
+  deadlines and healthy-installation skipping. A resumed cohort still used
+  7,411 outer requests; active-sweep prefix replay and serial installation
+  fairness need investigation.
 - [Issue #18][issue-18]: review wheel-native components and their notices,
   complete corresponding-source delivery, and approve the distribution
   mechanism. Separate [wheel-native catalogs](native-components.md) expose the
   reviewed C-library identities and source bindings. They do not merge those
   libraries into the required image scan or complete their license review.
+  Separate native scans retain both raw findings and a VEX-applied report;
+  a passing image gate is not a clean native assessment.
 
 ### Hardening and verification
 
@@ -264,3 +268,4 @@ on this list opens or closes.
 [issue-76]: https://github.com/stampbot/extra-codeowners/issues/76
 [issue-124]: https://github.com/stampbot/extra-codeowners/issues/124
 [issue-203]: https://github.com/stampbot/extra-codeowners/issues/203
+[alpha82-cadence]: ../maintainers/evidence/2026-11-11-alpha82-cadence-and-scan-cost.md

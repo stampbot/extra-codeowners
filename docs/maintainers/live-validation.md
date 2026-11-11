@@ -50,6 +50,17 @@ records a passing approval probe and completed 140-PR fan-outs. The timed cases
 did not establish the intended checkpoint continuation across a deadline;
 that result remains inconclusive.
 
+The [November 11 cadence receipt](evidence/2026-11-11-alpha82-cadence-and-scan-cost.md)
+records alpha.82 verification, rollout, a restored approval probe and two
+completed reconciliation cohorts. Healthy-installation skipping and early
+retry timing were observed; request cost and recovery latency remain open.
+
+The [native catalog and VEX receipt](evidence/2026-11-11-native-catalog-and-vex.md)
+records independently verified publication and a real scanner comparison on
+both architectures. Five assessed product/CVE pairs were excluded; the other
+77 raw native pairs remained visible. This is not a complete native-security
+or distribution approval.
+
 ## Diagnostics and approval probe: November 2, 2026
 
 Alpha.65 runs on two Kubernetes nodes with shared PostgreSQL state. The

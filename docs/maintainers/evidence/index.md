@@ -20,6 +20,8 @@ the older results and links newer receipts.
 - [November 10, 2026: policy withdrawal and component audit](2026-11-10-policy-withdrawal-and-component-audit.md)
 - [November 10, 2026: reconciliation operation costs](2026-11-10-reconciliation-operation-costs.md)
 - [November 10, 2026: alpha.79 rollout and budget boundaries](2026-11-10-alpha79-rollout-and-budget-boundaries.md)
+- [November 11, 2026: alpha.82 cadence and scan cost](2026-11-11-alpha82-cadence-and-scan-cost.md)
+- [November 11, 2026: native catalogs and VEX](2026-11-11-native-catalog-and-vex.md)
 
 ## Add a receipt
 
