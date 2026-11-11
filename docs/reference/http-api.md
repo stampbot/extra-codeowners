@@ -187,9 +187,9 @@ The endpoint returns Prometheus text format. Extra CODEOWNERS defines these appl
 | `extra_codeowners_shared_head_invalidations_total` | counter | Durable exact-head invalidation attempts, labeled by `completed`, `failed`, `budget_deferred`, `rate_limited`, or `superseded`. A budget deferral leaves the job queued without opening provider backpressure. |
 | `extra_codeowners_dead_jobs` | gauge | Legacy or manually introduced terminal rows. Runtime failures remain pending, so this should remain `0`. |
 | `extra_codeowners_insecure_changes_enabled` | gauge | `1` while built-in non-delegable paths are disabled; otherwise `0`. |
-| `extra_codeowners_reconciliations_total` | counter | Reconciliation outcomes, labeled with `result="success"`, `result="partial"`, or `result="failure"`. A process that observes another lease owner does not increment the counter. An open provider circuit records a partial result; an election error counts as a failure. |
+| `extra_codeowners_reconciliations_total` | counter | Reconciliation outcomes, labeled with `result="success"`, `result="partial"`, `result="idle"`, or `result="failure"`. Success means every current active installation completed a scan within this leader's cycle, possibly across several attempts. An elected attempt with no due installation is idle. A process that observes another lease owner does not increment the counter. An open provider circuit records a partial result; an election error counts as a failure. |
 | `extra_codeowners_reconciliation_seconds` | histogram | Wall-clock duration of a reconciliation attempt, including the explicit `not_elected` outcome for a replica that did not own the scan lease. |
-| `extra_codeowners_reconciliation_last_success_timestamp_seconds` | gauge | Unix timestamp of the most recent complete reconciliation by this process. A partial or failed attempt does not update it. |
+| `extra_codeowners_reconciliation_last_success_timestamp_seconds` | gauge | Unix timestamp of the most recent complete reconciliation cycle by this process. Partial, idle and failed attempts do not update it. A leader change discards unfinished cycle progress. |
 | `extra_codeowners_reconciliation_unenrolled_skips_total` | counter | PRs omitted from recovery after GitHub confirms both missing policy at the current target-branch commit and no managed check on the head. No labels. |
 | `extra_codeowners_trace_exports_total` | counter | Trace exporter batches, labeled by success or failure. A failure does not change the approval decision or worker retry behavior. |
 
@@ -269,13 +269,21 @@ layout. No incoming webhook header supplies these relationships.
 
 | Summary attribute | Meaning |
 | --- | --- |
-| `reconciliation.outcome` | `success`, `partial`, `not_elected`, `failure`, or `cancelled`. Cancellation still propagates; this is a trace outcome, not a new metric label. |
+| `reconciliation.outcome` | `success`, `partial`, `idle`, `not_elected`, `failure`, or `cancelled`. Cancellation still propagates; `cancelled` is a trace outcome, not a new metric label. |
 | `reconciliation.queued` | PRs queued by this attempt, when it returned an outcome. |
 | `reconciliation.failed_installations` | Failed installation count, when available. |
 | `reconciliation.lease_lost`, `reconciliation.stopped`, `reconciliation.deferred` | Final outcome flags, when available. |
+| `reconciliation.cycle_complete` | Every current active installation completed within this leader's cycle. Not necessarily within this attempt. |
+| `reconciliation.installations_skipped` | Active installations not yet due in this attempt. No installation IDs are recorded here. |
+| `reconciliation.retry_after_seconds` | Next wake delay when shorter than the configured interval. It may be one second when another installation's scan outlasted a deferred deadline. Not a recovery guarantee. |
 | `reconciliation.detail_traces` | Logical request roots started in this attempt, including nested token operations. Not proof that the receiver retained them. |
 | `reconciliation.outer_requests` | Request roots excluding nested token operations. |
 | `reconciliation.phase.<phase>.seconds` | Totals from outer logical requests for the seven fixed phases above. Absent if that phase did not run. |
+
+Durations, request counts and phase totals cover the current attempt, not the
+whole multi-attempt cycle. A `success` summary may therefore skip an installation
+completed in an earlier attempt. Use the cycle flag and last-success gauge for
+completion, not the number of requests in that one summary.
 
 The scan's local sampling decision applies to all its detail roots, even when
 the configured sample ratio is between `0` and `1`. A sampled scan deliberately

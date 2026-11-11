@@ -1,8 +1,8 @@
 {
   "@context": "https://openvex.dev/ns/v0.2.0",
-  "@id": "urn:uuid:f123a56c-1442-50b8-988c-70d3450f4ec4",
+  "@id": "urn:uuid:6e62fad7-5399-56eb-812e-5987bbb76da9",
   "author": "Extra CODEOWNERS maintainers",
-  "last_updated": "2026-11-10T10:20:12Z",
+  "last_updated": "2026-11-11T02:51:03Z",
   "role": "VEX document producer",
   "statements": [
     {
@@ -830,9 +830,9 @@
       }
     }
   ],
-  "timestamp": "2026-11-10T10:20:12Z",
+  "timestamp": "2026-11-11T02:51:03Z",
   "tooling": "Vexcalibur + Extra CODEOWNERS runtime binding",
-  "version": 18,
+  "version": 19,
   "x_extra_codeowners_runtime": {
     "files": {
       ".dockerignore": "3f9dc9d3a79fe3085f25de88403b5563ad5c7fa7010bef94c5e55f24bd3cf691",
@@ -865,14 +865,15 @@
       "extra_codeowners/github.py": "feed97858af13a7628f5465c0670f0975fed2f2961edc96dfa31f7bbf9cb48a6",
       "extra_codeowners/logging.py": "a59227e76ec7809ff8bb88fee997abb9b99f32e81a4c8d16bcfc72c0c0abf33f",
       "extra_codeowners/manifest.py": "33d42ac16b8218562f2baf6c0bc7c6664b03354bbf274cb0381e94740b76681e",
-      "extra_codeowners/metrics.py": "6293de9acad3d3f639fda0403fb2e0f317a733a173a6cb7bf977d16a4e3fd522",
+      "extra_codeowners/metrics.py": "64785df4eef0b99bacd2cda27ae7a6bae2142a3b246b3b7fb00996631edae9c6",
       "extra_codeowners/migrations.py": "a86d239779ed7b0e38118a3f7c1dee9b33c71519656699f101ac556eed671a46",
       "extra_codeowners/models.py": "dc59959f56e35111fae00f8f60ef054ba80eb839eb2dae5b09165d4cdc349a48",
       "extra_codeowners/policy.py": "844abb482a7c9cc3190d624cc92ece2476128644718e4096f98bfa8a0abedf8a",
       "extra_codeowners/py.typed": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "extra_codeowners/reconciliation_cadence.py": "0cea8e7d8f171a4db873f8bd94e12423e7ded686ec686b77ba62a0059e9299f1",
       "extra_codeowners/reconciliation_tracing.py": "0f650bf2300e26d1485fa7df71b71dccbb7739653e049d452d6b30ee9b6b9931",
       "extra_codeowners/request_timing.py": "7c53fcfdec4b8a5b1cf3427c8bd354b76bc6f255ac7374540a6cae0886a48c19",
-      "extra_codeowners/service.py": "961b299b2708bafe5dd30aeb75aabe1002b54cc2fa2cf3d5283da1b98c454e56",
+      "extra_codeowners/service.py": "461240995a041e243cd04ef5d7c78b29767622aa58e01797b796368a4db130a5",
       "extra_codeowners/settings.py": "bd1d3cd0acf23ea4b26869fc1e024438aba7b9acf43f3850c4e6be2e9a5b5437",
       "extra_codeowners/trace_context.py": "f79ca91baa1dd615c80546c66a6b370ba78ec7106dece3feb201d10250078532",
       "extra_codeowners/tracing.py": "49641dd6cb9b5b6da1e6026b90925a73eb3112d13a069afd202e741d261f76f9",
@@ -880,7 +881,7 @@
       "pyproject.toml": "bfb88e388d4590a6f52ed6d76889460a6b698f13129389b3823d2ff661bedd55",
       "uv.lock": "5514cb0448adb693fe97f3d2c8016ccd606890327a1946467fbd118356de4922"
     },
-    "review": "2026-11-10: Latest-response quota diagnostics only, including retries; parser acceptance, quota accounting and requests unchanged. No new native, TLS, compression, subprocess or dependency path. Existing 29 statement contents and assessment dates retained; APT and zlib gzip-writer exclusions retain their reviewed scope.",
+    "review": "Reviewed per-installation reconciliation cadence, cycle accounting, idle telemetry and cold leadership reset against all 29 existing statements. Existing authenticated API/database operations retain quota, lease, cursor, TLS and bounded in-memory compression behavior. No dependency, image input, subprocess, FFI, APT or C gz-file writer path is added. All vulnerability statuses, products and assessment dates remain unchanged; no wheel-library exclusion is inferred.",
     "schema_version": 1
   }
 }

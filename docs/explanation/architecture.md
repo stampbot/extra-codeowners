@@ -292,7 +292,7 @@ Webhooks are a change signal, not a complete recovery system. The endpoint may
 be unavailable, GitHub may not redeliver, and access loss can make an old check
 unreachable. The reconciler covers the recoverable middle ground.
 
-At each interval, one elected reconciler scans accessible open pull requests.
+One elected reconciler scans accessible open pull requests in due installations.
 It compares GitHub's current head with the durable completion record for that
 pull request. A head that changed since the last successful evaluation is
 queued immediately, because that is the missed-`synchronize`-webhook case. An
@@ -469,14 +469,37 @@ scoped to one installation. Malformed data in either list fails that
 installation, but later installations still run. A suspended installation or
 archived repository is skipped only after its record passes validation.
 
-A shorter interval narrows some missed-event windows but spends more GitHub API
-budget. Each process waits `reconcile_interval_seconds` after its attempt
-returns before trying again. `reconcile_recheck_seconds` sets the minimum age
-of a confirmed unchanged-head evaluation before a scan can queue another one.
-Neither value is a recovery deadline: a long scan still has to reach the PR,
-and a worker then has to evaluate it. Reducing the interval doesn't interrupt
-an active scan or bound how long a missed change can leave an old success
-visible.
+A successful installation scan waits `reconcile_interval_seconds` before its
+next scan. A deferred installation instead uses its budget or provider retry
+delay. The loop wakes for the earliest deadline, or after the configured
+interval to discover App scope changes. It still validates the complete current
+installation list before selecting due installations. An early retry for one
+installation does not replay another installation's healthy scan. If a retry
+deadline passes while another scan is running, the next attempt can start after
+one second; it does not restart the deferred delay.
+
+These deadlines are process-local hints, not authorization evidence. Losing
+election, stopping, or an unhandled attempt failure discards them. A cold leader
+starts fresh and can repeat an installation scan earlier than its predecessor would
+have. The shared lease, provider backpressure, API budgets and repository/pull
+cursors still coordinate replicas. No database migration is needed for this
+cadence state. The [cadence decision](adrs/2026-11-11-installation-retry-cadence.md)
+records that tradeoff.
+
+A reconciliation cycle completes when every currently active installation has
+completed a scan in that leader's cycle. A cycle can span several attempts;
+one successful retry need not repeat installations already covered. A newly
+visible installation joins the pending cycle, while a validated removal or
+suspension removes it. Losing leadership discards partial cycle progress. An
+attempt with no due installation is idle, not a new success. Cycle completion
+does not mean all installations were read at once, all queued evaluations
+finished, or a recovery deadline was met.
+
+`reconcile_recheck_seconds` sets the minimum age of a confirmed unchanged-head
+evaluation before a scan can queue another one. Neither setting bounds
+missed-event recovery: a long scan still has to reach the PR, and a worker then
+has to evaluate it. A shorter interval spends more GitHub API budget; it does
+not interrupt an active scan or bound how long an old success remains visible.
 
 Neither setting makes the system strongly consistent. Merge queues add a
 separate `merge_group` state that this version does not evaluate.

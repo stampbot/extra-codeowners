@@ -136,13 +136,13 @@ RECONCILIATIONS = Counter(
 )
 RECONCILIATION_SECONDS = Histogram(
     "extra_codeowners_reconciliation_seconds",
-    "Wall-clock time for one elected reconciliation scan",
+    "Wall-clock time for one reconciliation attempt, including idle and not elected",
     ("outcome",),
     buckets=(1, 2.5, 5, 10, 30, 60, 120, 300, 600, 1800),
 )
 RECONCILIATION_LAST_SUCCESS = Gauge(
     "extra_codeowners_reconciliation_last_success_timestamp_seconds",
-    "Unix timestamp of the latest complete open pull request reconciliation",
+    "Unix timestamp of the latest complete open pull request reconciliation cycle",
 )
 RECONCILIATION_UNENROLLED_SKIPS = Counter(
     "extra_codeowners_reconciliation_unenrolled_skips_total",

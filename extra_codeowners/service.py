@@ -84,6 +84,7 @@ from extra_codeowners.models import (
     ReviewState,
 )
 from extra_codeowners.policy import BUILTIN_NON_DELEGABLE_PATHS
+from extra_codeowners.reconciliation_cadence import ReconciliationCadence
 from extra_codeowners.settings import Settings
 from extra_codeowners.trace_context import TrustedTraceContext
 from extra_codeowners.tracing import Tracing
@@ -127,15 +128,21 @@ class ReconciliationOutcome:
     lease_lost: bool = False
     stopped: bool = False
     deferred: bool = False
+    cycle_complete: bool = True
+    idle: bool = False
+    installations_skipped: int = 0
+    retry_after_seconds: int | None = None
 
     @property
     def complete(self) -> bool:
-        """Whether the reconciler inspected every visible, unsuspended installation."""
+        """Whether every current active installation completed this leader's cycle."""
         return (
             self.failed_installations == 0
             and not self.lease_lost
             and not self.stopped
             and not self.deferred
+            and self.cycle_complete
+            and not self.idle
         )
 
 
@@ -2997,6 +3004,7 @@ class Reconciler:
         self.store = store
         self.owner = owner
         self.tracing = tracing or Tracing(enabled=False)
+        self._cadence = ReconciliationCadence()
 
     async def _renew_lease(
         self,
@@ -3034,14 +3042,17 @@ class Reconciler:
         """Discover open pull requests, or return ``None`` when another process is elected."""
         stop_event = stop or asyncio.Event()
         if stop_event.is_set():
+            self._cadence.reset()
             return None
         lease_seconds = max(300, self.settings.reconcile_interval_seconds * 2)
         acquired = await asyncio.to_thread(
             self.store.acquire_service_lease, "open-pr-reconciler", self.owner, lease_seconds
         )
         if not acquired:
+            self._cadence.reset()
             return None
         if stop_event.is_set():
+            self._cadence.reset()
             await asyncio.to_thread(
                 self.store.release_service_lease,
                 "open-pr-reconciler",
@@ -3056,6 +3067,9 @@ class Reconciler:
         )
         try:
             outcome = await self._reconcile_owned(lost, stop_event)
+        except BaseException:
+            self._cadence.reset()
+            raise
         finally:
             done.set()
             await asyncio.gather(heartbeat)
@@ -3063,6 +3077,9 @@ class Reconciler:
             outcome = replace(outcome, lease_lost=True)
         if stop_event.is_set() and not outcome.stopped:
             outcome = replace(outcome, stopped=True)
+        if outcome.lease_lost or outcome.stopped:
+            self._cadence.reset()
+            outcome = replace(outcome, cycle_complete=False, idle=False, retry_after_seconds=None)
         return outcome
 
     async def _reconcile_owned(
@@ -3086,6 +3103,8 @@ class Reconciler:
         queued = 0
         failed_installations = 0
         budget_deferred = False
+        installations_skipped = 0
+        attempted_installations = 0
         budget = RecoveryApiBudget(self.store, self.settings.github_recovery_reserve_percent)
 
         def interrupted() -> bool:
@@ -3097,6 +3116,8 @@ class Reconciler:
                 failed_installations=failed_installations,
                 lease_lost=lost.is_set(),
                 stopped=stop_event.is_set() or operation_stopped,
+                cycle_complete=False,
+                installations_skipped=installations_skipped,
             )
 
         if interrupted():
@@ -3140,6 +3161,7 @@ class Reconciler:
                 lease_lost=lost.is_set(),
                 stopped=stop_event.is_set(),
                 deferred=True,
+                cycle_complete=False,
             )
         try:
             installation_records = await self.github.list_installations(stop=request_stop)
@@ -3162,23 +3184,36 @@ class Reconciler:
                 failed_installations=1,
                 lease_lost=lost.is_set(),
                 stopped=stop_event.is_set(),
+                cycle_complete=False,
             )
         if interrupted():
             return interruption_outcome()
         installations = _reconciliation_installations(installation_records)
+        due = self._cadence.begin(
+            installation_id for installation_id, suspended in installations if not suspended
+        )
         for installation_id, suspended in installations:
             if interrupted():
                 return interruption_outcome()
             if suspended:
                 await asyncio.to_thread(budget.clear_pull_cursor, installation_id, self.owner)
                 continue
+            if installation_id not in due:
+                installations_skipped += 1
+                continue
+            attempted_installations += 1
             if await asyncio.to_thread(self.store.provider_is_backpressured, installation_id):
                 failed_installations += 1
+                self._cadence.record(
+                    installation_id, self.settings.reconcile_interval_seconds, complete=False
+                )
                 log.info(
                     "reconciliation_deferred_for_provider_backpressure",
                     installation_id=installation_id,
                 )
                 continue
+            retry_after = self.settings.reconcile_interval_seconds
+            installation_complete = False
             try:
                 repository_records = await self.github.list_installation_repositories(
                     installation_id,
@@ -3321,10 +3356,12 @@ class Reconciler:
                     await asyncio.to_thread(
                         budget.advance_repository, installation_id, full_name, self.owner
                     )
+                installation_complete = True
             except GitHubOperationStoppedError:
                 return interruption_outcome(operation_stopped=not interrupted())
             except RecoveryBudgetDeferredError as error:
                 budget_deferred = True
+                retry_after = error.retry_after_seconds
                 log.info(
                     "reconciliation_deferred_for_recovery_budget",
                     installation_id=installation_id,
@@ -3333,6 +3370,7 @@ class Reconciler:
                 )
             except GitHubRateLimitError as error:
                 failed_installations += 1
+                retry_after = error.retry_after_seconds
                 await asyncio.to_thread(
                     self.store.record_provider_backpressure,
                     None if error.global_scope else installation_id,
@@ -3354,15 +3392,30 @@ class Reconciler:
             except Exception:
                 failed_installations += 1
                 log.exception("installation_reconciliation_failed", installation_id=installation_id)
+            if interrupted():
+                return interruption_outcome()
+            self._cadence.record(installation_id, retry_after, complete=installation_complete)
+        if interrupted():
+            return interruption_outcome()
+        cycle_complete = self._cadence.finish()
+        next_delay = self._cadence.delay(self.settings.reconcile_interval_seconds)
         return ReconciliationOutcome(
             queued=queued,
             failed_installations=failed_installations,
             lease_lost=lost.is_set(),
             stopped=stop_event.is_set(),
             deferred=budget_deferred,
+            cycle_complete=cycle_complete,
+            idle=not cycle_complete and attempted_installations == 0,
+            installations_skipped=installations_skipped,
+            retry_after_seconds=(
+                next_delay if next_delay < self.settings.reconcile_interval_seconds else None
+            ),
         )
 
-    async def run_iteration(self, stop: asyncio.Event | None = None) -> None:
+    async def run_iteration(
+        self, stop: asyncio.Event | None = None
+    ) -> ReconciliationOutcome | None:
         """Run and report one scheduled reconciliation attempt."""
         started = time.perf_counter()
         result = "failure"
@@ -3371,16 +3424,17 @@ class Reconciler:
                 try:
                     outcome = await self.reconcile_once(stop)
                 except Exception as error:
+                    self._cadence.reset()
                     result = "failure"
                     span.set_attribute("reconciliation.outcome", result)
                     self.tracing.mark_error(span, type(error).__name__)
                     RECONCILIATIONS.labels(result).inc()
                     log.exception("reconciliation_failed")
-                    return
+                    return None
                 if outcome is None:
                     result = "not_elected"
                     span.set_attribute("reconciliation.outcome", result)
-                    return
+                    return None
                 span.set_attributes(
                     {
                         "reconciliation.queued": outcome.queued,
@@ -3388,8 +3442,24 @@ class Reconciler:
                         "reconciliation.lease_lost": outcome.lease_lost,
                         "reconciliation.stopped": outcome.stopped,
                         "reconciliation.deferred": outcome.deferred,
+                        "reconciliation.cycle_complete": outcome.cycle_complete,
+                        "reconciliation.installations_skipped": outcome.installations_skipped,
                     }
                 )
+                if outcome.retry_after_seconds is not None:
+                    span.set_attribute(
+                        "reconciliation.retry_after_seconds", outcome.retry_after_seconds
+                    )
+                if outcome.idle:
+                    result = "idle"
+                    span.set_attribute("reconciliation.outcome", result)
+                    RECONCILIATIONS.labels(result).inc()
+                    log.info(
+                        "reconciliation_waiting",
+                        installations_skipped=outcome.installations_skipped,
+                        retry_after_seconds=outcome.retry_after_seconds,
+                    )
+                    return outcome
                 if not outcome.complete:
                     result = "partial"
                     span.set_attribute("reconciliation.outcome", result)
@@ -3401,13 +3471,23 @@ class Reconciler:
                         lease_lost=outcome.lease_lost,
                         stopped=outcome.stopped,
                         deferred=outcome.deferred,
+                        installations_skipped=outcome.installations_skipped,
+                        cycle_complete=outcome.cycle_complete,
+                        retry_after_seconds=outcome.retry_after_seconds,
                     )
-                    return
+                    return outcome
                 result = "success"
                 span.set_attribute("reconciliation.outcome", result)
                 RECONCILIATIONS.labels(result).inc()
                 RECONCILIATION_LAST_SUCCESS.set_to_current_time()
-                log.info("reconciliation_complete", pull_requests_queued=outcome.queued)
+                log.info(
+                    "reconciliation_complete",
+                    pull_requests_queued=outcome.queued,
+                    installations_skipped=outcome.installations_skipped,
+                    cycle_complete=outcome.cycle_complete,
+                    retry_after_seconds=outcome.retry_after_seconds,
+                )
+                return outcome
         finally:
             # A non-elected replica is intentionally a distinct, low-cost
             # outcome rather than a failed scan. This finally also preserves
@@ -3415,8 +3495,11 @@ class Reconciler:
             RECONCILIATION_SECONDS.labels(result).observe(time.perf_counter() - started)
 
     async def run(self, stop: asyncio.Event) -> None:
-        """Reconcile immediately and then at the configured interval."""
+        """Poll due installations without replaying healthy scopes on an early retry."""
         while not stop.is_set():
-            await self.run_iteration(stop)
+            outcome = await self.run_iteration(stop)
+            delay = self.settings.reconcile_interval_seconds
+            if outcome is not None and outcome.retry_after_seconds is not None:
+                delay = min(delay, max(1, outcome.retry_after_seconds))
             with suppress(TimeoutError):
-                await asyncio.wait_for(stop.wait(), self.settings.reconcile_interval_seconds)
+                await asyncio.wait_for(stop.wait(), delay)

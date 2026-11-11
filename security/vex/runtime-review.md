@@ -1,5 +1,21 @@
 # Runtime vulnerability review
 
+## Installation retry cadence: November 11, 2026 UTC
+
+The reconciler now tracks process-local polling deadlines and cycle membership.
+It can wake earlier for a deferred installation while leaving healthy ones at
+their normal interval. A cold leader can repeat discovery, but every physical
+request still passes the existing authentication, quota and backpressure checks.
+The shared lease and durable repository/pull cursors are unchanged.
+
+This changes when existing API and database operations run, not their TLS,
+compression or native-library paths. It adds no dependency, subprocess, FFI or
+package-management entry point. Image and locked package versions are unchanged.
+The 26 fixed statements and the APT and two zlib gzip-file writer exclusions
+retain their existing scope and assessment dates. All 29 statement contents are
+unchanged; only their reviewed runtime binding advances. No exclusion is added
+for wheel-bundled OpenSSL or the separate certificate-processing investigation.
+
 ## Quota-header diagnostics: November 10, 2026 UTC
 
 Quota-header parsing now returns a fixed rejection reason alongside its

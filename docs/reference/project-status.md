@@ -198,7 +198,8 @@ close before the project is presented as production-ready:
   repositories are mostly unenrolled, reduce the measured scan cost and
   complete live checkpoint verification. Quiet scans and missed-enrollment
   recovery have dated observations; they do not establish acceptable recovery
-  latency.
+  latency. Per-installation retry deadlines avoid replaying healthy scans on an
+  early retry; their live performance still needs measurement.
 - [Issue #18][issue-18]: review wheel-native components and their notices,
   complete corresponding-source delivery, and approve the distribution
   mechanism. Retaining a wheel's SBOM or source archive does not by itself add
