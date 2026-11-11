@@ -360,7 +360,13 @@ def _validate_product(
     description: str,
 ) -> None:
     product = _mapping(product_value, description)
+    # Consumers match aliases, hashes and nested products too. Validating only
+    # one PURL must not authenticate other, unchecked matching identities.
+    if set(product) != {"@id", "identifiers"}:
+        _fail(f"{description} must use the flat package-product profile")
     identifiers = _mapping(product.get("identifiers"), f"{description}.identifiers")
+    if set(identifiers) != {"purl"}:
+        _fail(f"{description}.identifiers must contain only the reviewed package URL")
     purl = _string(identifiers.get("purl"), f"{description}.identifiers.purl")
     if product.get("@id") != purl:
         _fail(f"{description} must use the package URL as its @id")
