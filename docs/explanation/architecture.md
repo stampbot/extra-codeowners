@@ -325,8 +325,9 @@ An installation yields after one scan interval at a repository boundary when
 more work remains, then requests a one-second continuation. Other due
 installations get a turn before that continuation. Membership discovery and
 one large repository can exceed that interval; this is not a hard timeout or
-a recovery-latency guarantee. Missing immutable IDs disable advisory skipping
-and cooperative yielding, not discovery itself.
+a recovery-latency guarantee. A repository without an immutable ID cannot be
+skipped; if any pending repository lacks one, cooperative yielding is disabled
+for that attempt. Discovery still runs.
 
 The reconciler compares GitHub's current head with the durable completion record for that
 pull request. A head that changed since the last successful evaluation is

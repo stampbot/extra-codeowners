@@ -14,6 +14,7 @@ from extra_codeowners.service import Reconciler
 from extra_codeowners.settings import Settings
 
 
+# Verifies XCO-019.
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "change", ["unchanged", "new_id", "renamed", "missing_id", "new_member", "cold"]

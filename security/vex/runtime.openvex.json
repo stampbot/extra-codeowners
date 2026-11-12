@@ -1,8 +1,8 @@
 {
   "@context": "https://openvex.dev/ns/v0.2.0",
-  "@id": "urn:uuid:ba072394-7955-5111-acf1-cf15a4d21789",
+  "@id": "urn:uuid:91fb5b84-c98d-5830-88b1-bc23ac330f9a",
   "author": "Extra CODEOWNERS maintainers",
-  "last_updated": "2026-11-12T15:02:20Z",
+  "last_updated": "2026-11-12T15:19:11Z",
   "role": "VEX document producer",
   "statements": [
     {
@@ -1944,9 +1944,9 @@
       }
     }
   ],
-  "timestamp": "2026-11-12T15:02:20Z",
+  "timestamp": "2026-11-12T15:19:11Z",
   "tooling": "Vexcalibur + Extra CODEOWNERS runtime binding",
-  "version": 25,
+  "version": 26,
   "x_extra_codeowners_runtime": {
     "files": {
       ".dockerignore": "3f9dc9d3a79fe3085f25de88403b5563ad5c7fa7010bef94c5e55f24bd3cf691",
@@ -1983,12 +1983,14 @@
       "extra_codeowners/metrics.py": "64785df4eef0b99bacd2cda27ae7a6bae2142a3b246b3b7fb00996631edae9c6",
       "extra_codeowners/migrations.py": "a86d239779ed7b0e38118a3f7c1dee9b33c71519656699f101ac556eed671a46",
       "extra_codeowners/models.py": "dc59959f56e35111fae00f8f60ef054ba80eb839eb2dae5b09165d4cdc349a48",
+      "extra_codeowners/ordered_prefetch.py": "98cdf42138ac836914960d52e334b14baa7432c51c5b4a4728c86b6591772a0d",
       "extra_codeowners/policy.py": "844abb482a7c9cc3190d624cc92ece2476128644718e4096f98bfa8a0abedf8a",
       "extra_codeowners/py.typed": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "extra_codeowners/reconciliation_cadence.py": "0cea8e7d8f171a4db873f8bd94e12423e7ded686ec686b77ba62a0059e9299f1",
+      "extra_codeowners/reconciliation_sweep.py": "dbb3d31ba2ab206aa80b0d3bfed29691d92cc5ff0f8e47722cf8b515d0a21717",
       "extra_codeowners/reconciliation_tracing.py": "0f650bf2300e26d1485fa7df71b71dccbb7739653e049d452d6b30ee9b6b9931",
       "extra_codeowners/request_timing.py": "7c53fcfdec4b8a5b1cf3427c8bd354b76bc6f255ac7374540a6cae0886a48c19",
-      "extra_codeowners/service.py": "d8c60e35140738a6f4669c2ad7af1f9d82a21b9e99e0194d9782fd1d2a2531c8",
+      "extra_codeowners/service.py": "8f6e425215b418f501cb847db5a9960b7fa8d3ae8a8af5f04a37acbb7d15193f",
       "extra_codeowners/settings.py": "bd1d3cd0acf23ea4b26869fc1e024438aba7b9acf43f3850c4e6be2e9a5b5437",
       "extra_codeowners/trace_context.py": "f79ca91baa1dd615c80546c66a6b370ba78ec7106dece3feb201d10250078532",
       "extra_codeowners/tracing.py": "49641dd6cb9b5b6da1e6026b90925a73eb3112d13a069afd202e741d261f76f9",
@@ -1999,7 +2001,7 @@
       "tools/source_recipes/psycopg-binary-3.3.4.json": "ec227aa110315f82c25335837e258806930c7afbe980c8b2ff6b476343c243b5",
       "uv.lock": "5514cb0448adb693fe97f3d2c8016ccd606890327a1946467fbd118356de4922"
     },
-    "review": "Base rechecks require matching successful-audit fingerprints from fresh pinned policy, effective CODEOWNERS, complete changed paths, labels and PR identity before retaining success. GitHub CODEOWNERS diagnostics and immutable branch sources are shared only within one bounded authority attempt. Existing review and authority fences remain; GitHub reads, SHA-256 and database operations add no native, compression, subprocess or TLS path. Prior 88 claims retain their content and scope. One CPython 3.14.10 FIPS-mode assessment is added for default non-FIPS amd64/arm64 images, supported by native probes and matching source identities; custom FIPS deployments are excluded.",
+    "review": "Reviewed bounded asyncio discovery read-ahead and ordered queue/cursor commits, immutable-ID active-sweep progress with expiry, and cooperative per-installation yielding. Readers only use existing GitHub endpoints and shared admission; no dependency, subprocess, FFI, compression, provider configuration or TLS path is added. Existing RSA signing and libpq TLS callers are unchanged. All 89 assessments retain their contents and dates, including the default non-FIPS CPython scope and existing unpatched-library limits; only runtime hashes advance.",
     "schema_version": 1
   }
 }

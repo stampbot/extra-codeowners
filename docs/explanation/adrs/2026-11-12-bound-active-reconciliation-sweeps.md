@@ -65,9 +65,10 @@ Every physical request still needs the existing shared admission checks.
 After one scan interval of work, an installation yields at the next repository
 boundary if work remains. It requests a one-second continuation and lets other
 due installations run. This is cooperative fairness, not a hard timeout: one
-repository, pagination or membership discovery can take longer. If discovery
-omits immutable IDs, the service uses the conservative full-scan path without
-advisory skipping or this yield optimization.
+repository, pagination or membership discovery can take longer. A repository
+without an immutable ID cannot be skipped. If any pending repository lacks
+one, the service disables cooperative yielding for that attempt so incomplete
+progress cannot keep restarting the same unfinished sweep.
 
 ## Consequences
 

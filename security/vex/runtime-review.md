@@ -1,5 +1,20 @@
 # Runtime vulnerability review
 
+## Bounded reconciliation readers: November 12, 2026 UTC
+
+Reconciliation now overlaps bounded read-only GitHub discovery streams while
+one consumer commits queue and cursor progress in order. Short continuations
+retain advisory completed-repository identities; expiry, scope changes and
+lost election discard them. The change adds asyncio tasks and local sets, not
+a new dependency, subprocess, native entrypoint, compression or TLS setting.
+App signing and database connections keep their existing call paths.
+
+All 89 statement contents and assessment dates remain unchanged, including the
+default non-FIPS CPython scope below. The Dockerfile, base digest, dependency
+lock, native identities and source recipes are unchanged. Only the reviewed
+runtime binding advances; concurrency does not establish a new vulnerability
+exclusion or complete the separate native-library investigation.
+
 ## CPython FIPS assessment and base rechecks: November 12, 2026 UTC
 
 [CVE-2026-119170](https://mail.python.org/archives/list/security-announce@python.org/thread/PXVTTOBPUMFJSSUXN6XCS7FC5DZOSZXK/)

@@ -276,8 +276,9 @@ count toward cost. Sum every attempt in a resumed cohort when comparing scans.
 `reconciliation_installation_yielded` records completed and pending repository
 counts when an installation gives other due installations a turn. It yields
 at a repository boundary after one scan interval and asks for a one-second
-continuation. One large repository can take longer. Missing immutable IDs use
-full discovery without skipping or yielding. Neither the interval nor the
+continuation. One large repository can take longer. A repository without an
+immutable ID cannot be skipped. A pending repository without one also disables
+yielding for that attempt. Neither the interval nor the
 retry delay guarantees convergence through provider backoff.
 
 Each attempt fetches and validates every open-PR page before processing PRs in

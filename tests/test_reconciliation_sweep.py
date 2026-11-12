@@ -3,6 +3,7 @@
 from extra_codeowners.reconciliation_sweep import ReconciliationSweeps
 
 
+# Verifies XCO-019.
 def test_short_continuation_skips_only_completed_current_repository_identities() -> None:
     sweeps = ReconciliationSweeps(lambda: 0)
     scope = {"example/a": 101, "example/b": 102}
@@ -26,6 +27,7 @@ def test_removed_scope_missing_identity_and_new_cycle_cannot_keep_skips() -> Non
     assert sweeps.begin(1, {"example/a": 101}, lifetime_seconds=900) == set()
 
 
+# Verifies XCO-019.
 def test_progress_expires_even_when_a_sweep_never_finishes() -> None:
     now = 0.0
     sweeps = ReconciliationSweeps(lambda: now)

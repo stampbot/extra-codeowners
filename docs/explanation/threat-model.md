@@ -142,6 +142,11 @@ stable ID; a test that verifies one names that ID in a comment.
     extend a preserving recheck's original deadline, or bypass authority,
     generation and publication checks. Failure, worker loss or a retry beyond
     one recheck interval makes that recheck revoke-first work.
+15. **XCO-019.** Active-sweep skips require a completed repository's immutable
+    ID and current route in fresh authenticated membership. Progress expires
+    and is discarded after completion or lost election. Read-ahead cannot
+    commit jobs or cursors past an earlier discovery error, and unused readers
+    are cancelled and drained before the attempt returns.
 
 A repository base push requests a fresh assessment; it doesn't prove an
 approval was withdrawn. Discovery compares fresh base-side inputs with the

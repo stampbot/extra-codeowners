@@ -8,6 +8,7 @@ import pytest
 from extra_codeowners.ordered_prefetch import ordered_prefetch
 
 
+# Verifies XCO-019.
 @pytest.mark.asyncio
 async def test_reads_overlap_but_results_and_errors_stay_in_source_order() -> None:
     started: set[int] = set()
@@ -33,6 +34,7 @@ async def test_reads_overlap_but_results_and_errors_stay_in_source_order() -> No
     assert committed == [(1, 10), (1, 11), (2, 20)]
 
 
+# Verifies XCO-019.
 @pytest.mark.asyncio
 async def test_early_exit_drains_readers_and_bounds_tasks_and_buffering() -> None:
     started: set[int] = set()
