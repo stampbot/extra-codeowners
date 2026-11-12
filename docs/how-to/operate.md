@@ -202,6 +202,15 @@ Each reconciliation request has a 20-second wall-clock deadline. PostgreSQL
 connect, pool, and statement waits also have fixed limits, but a
 multi-statement database operation and local cleanup add to the shutdown time.
 
+After the scan, read-ahead tasks and heartbeat have drained on cooperative exit,
+the reconciler releases its own leadership lease. It keeps that lease between
+normal attempts. A late-stopping replica cannot delete a replacement's lease.
+If deletion fails, look for `reconciliation_shutdown_lease_release_failed`;
+the log records the error type, not the database error text. Forced task
+cancellation before the drain completes, process death and failed cleanup rely
+on lease expiry. A standby may still wait its normal scan interval before
+trying election again.
+
 Kubernetes applies one grace period to the whole pod. The server may finish
 active HTTP work before application shutdown begins, and the worker finishes
 an active invalidation, authority, or evaluation job before observing the stop
