@@ -55,8 +55,10 @@ in an enrolled repository:
    approval evidence is collected. A repository with no policy and no existing
    managed check remains unenrolled and gets no check.
 
-   A first eligible timer or base-branch recheck of a confirmed head leaves
-   the existing result in place instead. It still fetches fresh evidence and
+   A first eligible timer recheck leaves a confirmed result in place instead.
+   A base-branch recheck does so only after fresh base-side inputs match the
+   prior successful audit; changed or unprovable inputs block first. Both
+   still fetch fresh approval evidence and
    publishes only after the remaining checks below. If the result and output
    match, it makes no Check Run write. Other triggers and new or unconfirmed
    heads still block first. Failure, worker loss or prolonged deferral ends

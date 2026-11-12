@@ -1048,6 +1048,9 @@ def claim_scheduled_recheck(store: QueueStore) -> ClaimedJob:
     claimed = store.claim("foreground-worker", 60, "interactive", require_shared_head_ready=True)
     assert claimed is not None
     assert store.complete(claimed, "foreground-worker") is True
+    store.record_audit(
+        "example/project", 41, "a" * 40, "success", {"base_evidence_fingerprint": "f" * 64}
+    )
     with store.session() as session:
         state = session.get(ReconciliationState, (17, "example/project", 41))
         assert state is not None
@@ -1100,7 +1103,7 @@ def test_base_recheck_does_not_wait_for_timer_or_advance_confirmed_head(tmp_path
     assert store.complete(previous, "recovery-worker")
     generation = store.shared_head_generation(17, "example/project", "a" * 40)
 
-    assert store.enqueue_base_recheck(base_recheck_request(), 900)
+    assert store.enqueue_base_recheck(base_recheck_request(), 900, fingerprint="f" * 64)
     claimed = store.claim("replacement", 60, "recovery", require_shared_head_ready=True)
     assert claimed is not None and claimed.reason == BASE_RECHECK_REASON
     assert claimed.keeps_published_check
@@ -1112,9 +1115,9 @@ def test_base_recheck_supersedes_old_observation_without_extending_deadline(tmp_
     store = make_store(tmp_path)
     previous = claim_scheduled_recheck(store)
     original_requested_at = previous.requested_at
-    assert store.enqueue_base_recheck(base_recheck_request(), 900)
+    assert store.enqueue_base_recheck(base_recheck_request(), 900, fingerprint="f" * 64)
     assert not store.is_current_claim(previous)
-    assert store.enqueue_base_recheck(base_recheck_request(), 900)
+    assert store.enqueue_base_recheck(base_recheck_request(), 900, fingerprint="f" * 64)
     claimed = store.claim("replacement", 60, "recovery", require_shared_head_ready=True)
     assert claimed is not None and claimed.reason == BASE_RECHECK_REASON
     assert claimed.requested_at == original_requested_at
@@ -1135,7 +1138,7 @@ def test_base_refresh_cannot_disguise_an_unsafe_recheck(tmp_path: Path, unsafe: 
             row.requested_at = utcnow() - timedelta(seconds=901)
         else:
             row.attempts = 2
-    assert not store.enqueue_base_recheck(base_recheck_request(), 900)
+    assert not store.enqueue_base_recheck(base_recheck_request(), 900, fingerprint="f" * 64)
     assert store.claim_shared_head_invalidation("head-worker", 60) is not None
     with store.session() as session:
         row = session.get(EvaluationJob, previous.id)
@@ -1184,6 +1187,18 @@ def test_base_push_cannot_weaken_coalesced_authority(tmp_path: Path, base_first:
     claimed = store.claim_authority("worker", 60)
     assert claimed is not None and claimed.reason == "label.deleted"
     assert not claimed.target_base_refs
+
+
+# Verifies XCO-018.
+@pytest.mark.parametrize("proof", [None, "e" * 64, "not-a-hash"])
+def test_base_refresh_without_matching_successful_audit_revokes(
+    tmp_path: Path, proof: str | None
+) -> None:
+    store = make_store(tmp_path)
+    previous = claim_scheduled_recheck(store)
+    assert store.complete(previous, "recovery-worker")
+    assert not store.enqueue_base_recheck(base_recheck_request(), 900, fingerprint=proof)
+    assert store.claim_shared_head_invalidation("head-worker", 60) is not None
 
 
 # Verifies XCO-016.

@@ -159,6 +159,9 @@ def install_authority_page_bridge(github: Any) -> None:
 
 
 class EnrolledAuthorityEvaluator:
+    async def base_refresh_fingerprint(self, request: JobRequest, sources: Any) -> None:
+        return None
+
     async def authority_followup_required(
         self,
         request: JobRequest,
@@ -2261,7 +2264,7 @@ async def test_scheduled_recheck_keeps_the_published_result_until_it_changes(
 
 # Verifies XCO-001, XCO-017.
 @pytest.mark.asyncio
-@pytest.mark.parametrize("path,conclusion", [("uv.lock", "success"), ("README.md", "failure")])
+@pytest.mark.parametrize("path,conclusion", [("uv.lock", "success")])
 async def test_base_recheck_publishes_new_assessment_without_interim_reset(
     tmp_path: Path, path: str, conclusion: str
 ) -> None:
@@ -2269,6 +2272,9 @@ async def test_base_recheck_publishes_new_assessment_without_interim_reset(
     github.checks.append({"status": "completed", "conclusion": "success"})
     store = migrated_store(f"sqlite:///{tmp_path / 'base-recheck.db'}")
     assert store.complete(job(store), "test-worker")
+    store.record_audit(
+        "example/project", 3, HEAD, "success", {"base_evidence_fingerprint": "f" * 64}
+    )
     assert store.enqueue_base_recheck(
         JobRequest(
             2,
@@ -2280,6 +2286,7 @@ async def test_base_recheck_publishes_new_assessment_without_interim_reset(
             base_ref_hint="main",
         ),
         900,
+        fingerprint="f" * 64,
     )
     claimed = store.claim("test-worker", 60)
     assert claimed is not None and claimed.reason == BASE_RECHECK_REASON
@@ -2299,7 +2306,10 @@ async def test_base_fanout_keeps_confirmed_check_and_waits_for_authority(tmp_pat
         return_value=[{"number": 3, "head": {"sha": HEAD}, "base": {"ref": "main"}}]
     )
     store = migrated_store(f"sqlite:///{tmp_path / 'base-fanout.db'}")
-    assert store.complete(job(store), "test-worker")
+    initial = job(store)
+    await EvaluationService(settings(), github, store).evaluate_job(initial)  # type: ignore[arg-type]
+    assert store.complete(initial, "test-worker")
+    github.checks[:] = [github.checks[-1]]
     store.enqueue_authority(AuthorityRequest(2, "example/project", "main", "push.repository_base"))
     claimed = store.claim_authority("test-worker", 60)
     assert claimed is not None
@@ -2316,6 +2326,86 @@ async def test_base_fanout_keeps_confirmed_check_and_waits_for_authority(tmp_pat
 
 # Verifies XCO-001, XCO-018.
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "change",
+    [
+        "owners",
+        "policy",
+        "paths",
+        "labels",
+        "missing_audit",
+        "lookup_error",
+        "github_owners_error",
+        "base_moves",
+        "head_moves",
+    ],
+)
+async def test_changed_or_unprovable_base_inputs_revoke_before_evaluation(
+    tmp_path: Path, change: str
+) -> None:
+    github = FakeGitHub(changed_path="uv.lock")
+    github.list_open_pulls = AsyncMock(  # type: ignore[attr-defined]
+        return_value=[{"number": 3, "head": {"sha": HEAD}, "base": {"ref": "main"}}]
+    )
+    store = migrated_store(f"sqlite:///{tmp_path / 'base-change-proof.db'}")
+    evaluator = EvaluationService(settings(), github, store)  # type: ignore[arg-type]
+    initial = job(store)
+    await evaluator.evaluate_job(initial)
+    assert store.complete(initial, "test-worker")
+    github.checks[:] = [github.checks[-1]]
+    assert github.checks[0]["conclusion"] == "success"
+    original_file = github.get_file_text
+    original_pull = github.get_pull
+
+    async def changed_file(
+        installation_id: int, repository: str, path: str, **kwargs: Any
+    ) -> str | None:
+        if change == "owners" and path == ".github/CODEOWNERS":
+            return "* @example/different-team\n"
+        if (
+            change == "policy"
+            and repository == "example/project"
+            and path.endswith("extra-codeowners.toml")
+        ):
+            return "schema_version = 1\nenabled = false\n"
+        return await original_file(installation_id, repository, path, **kwargs)
+
+    observed_pulls = 0
+
+    async def changed_pull(installation_id: int, repository: str, number: int) -> dict[str, Any]:
+        nonlocal observed_pulls
+        observed_pulls += 1
+        pull = await original_pull(installation_id, repository, number)
+        if change == "labels":
+            pull["labels"] = []
+        if change == "head_moves" and observed_pulls >= 3:
+            pull["head"]["sha"] = "d" * 40
+        return pull
+
+    github.get_file_text = changed_file  # type: ignore[method-assign]
+    github.get_pull = changed_pull  # type: ignore[method-assign]
+    if change == "paths":
+        github.changed_path = "README.md"
+    elif change == "missing_audit":
+        store.record_audit("example/project", 3, HEAD, "success", {})
+    elif change == "lookup_error":
+        github.get_pull_files = AsyncMock(side_effect=GitHubError("files unavailable"))  # type: ignore[method-assign]
+    elif change == "github_owners_error":
+        github.get_codeowners_errors = AsyncMock(return_value=[{"message": "invalid owner"}])  # type: ignore[method-assign]
+    elif change == "base_moves":
+        github.get_branch_head = AsyncMock(side_effect=[BASE, "d" * 40, "d" * 40, "d" * 40])  # type: ignore[method-assign]
+    store.enqueue_authority(AuthorityRequest(2, "example/project", "main", "push.repository_base"))
+    authority = store.claim_authority("test-worker", 60)
+    assert authority is not None
+    worker = Worker(settings(), store, evaluator, "test-worker")
+
+    assert await worker._process_authority(authority) == "completed"
+    assert github.checks[-1]["status"] == "in_progress"
+    assert store.claim_shared_head_invalidation("head-worker", 60) is not None
+
+
+# Verifies XCO-001, XCO-018.
+@pytest.mark.asyncio
 async def test_failed_base_recheck_queues_revocation_instead_of_retaining_success(
     tmp_path: Path,
 ) -> None:
@@ -2324,9 +2414,13 @@ async def test_failed_base_recheck_queues_revocation_instead_of_retaining_succes
     github.get_reviews = AsyncMock(side_effect=GitHubError("review evidence unavailable"))  # type: ignore[method-assign]
     store = migrated_store(f"sqlite:///{tmp_path / 'base-failed.db'}")
     assert store.complete(job(store), "test-worker")
+    store.record_audit(
+        "example/project", 3, HEAD, "success", {"base_evidence_fingerprint": "f" * 64}
+    )
     assert store.enqueue_base_recheck(
         JobRequest(2, "example/project", 3, "push.repository_base", HEAD, work_class="recovery"),
         900,
+        fingerprint="f" * 64,
     )
     claimed = store.claim("test-worker", 60)
     assert claimed is not None
@@ -2354,9 +2448,13 @@ async def test_base_advancement_during_recheck_retries_without_reset(tmp_path: P
     github.get_branch_head = moving_base  # type: ignore[method-assign]
     store = migrated_store(f"sqlite:///{tmp_path / 'base-advances.db'}")
     assert store.complete(job(store), "test-worker")
+    store.record_audit(
+        "example/project", 3, HEAD, "success", {"base_evidence_fingerprint": "f" * 64}
+    )
     assert store.enqueue_base_recheck(
         JobRequest(2, "example/project", 3, "push.repository_base", HEAD, work_class="recovery"),
         900,
+        fingerprint="f" * 64,
     )
     claimed = store.claim("test-worker", 60)
     assert claimed is not None

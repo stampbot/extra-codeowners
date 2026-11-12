@@ -32,16 +32,27 @@ cover this path because base pushes used revoke-first authority fan-out.
 
 ## Decision
 
-**Y statement:** We will queue a preserving recheck for a base push affecting
-a confirmed PR head, because the push requests a new assessment rather than
-proving that approval was withdrawn, so an unchanged assessment leaves the
-published check alone.
+**Y statement:** We will retain a confirmed success after a base push only
+when fresh base-side inputs match the successful assessment, so unrelated
+merges leave the check alone without treating changed approval rules as valid.
 
 The repository authority job still lists affected PRs and remains a publication
-fence until discovery finishes. A confirmed head gets `base_branch_recheck`
-work bound to its current shared-head generation. It does not advance that
-generation or reset the check. The worker fetches fresh policy, changed paths,
-reviews and ownership evidence, then writes only a changed result or output.
+fence until discovery finishes. Before choosing the preserving path, fan-out
+fetches the current PR, pins the target branch revision, and reads policy,
+CODEOWNERS and the complete changed-file list. It verifies GitHub's CODEOWNERS
+diagnostics, then checks the PR and target branch again for movement.
+
+A fingerprint compares parsed policy, effective owners for both rename paths,
+changed paths and statuses, labels, head, base ref, applicable author identity
+and runtime policy options against the previous successful audit. Comments,
+unrelated ownership rules and the base commit itself do not change that
+fingerprint. It is a comparison aid, not approval evidence. Missing audits,
+lookup errors, malformed input or any mismatch take the revoke-first path.
+
+A matching, confirmed head gets `base_branch_recheck` work bound to its current
+shared-head generation without resetting the check. The worker still fetches
+fresh reviews and ownership evidence, then writes only a changed result or
+output. Other authority changes keep their existing revoke-first behavior.
 
 A later base refresh supersedes the queued observation without extending its
 original recheck deadline. It preserves stronger queued work, and coalescing
@@ -57,17 +68,21 @@ base-ref or label change still takes the blocking path.
 
 ## Consequences
 
-An old success can remain visible while a base update is queued, discovered
-and assessed. If new ownership or policy makes it invalid, the completed
-assessment replaces it with failure. This is an intentional consistency
-trade-off, not a promise that every old approval stays valid after a push.
+An old success can remain visible until discovery reaches the PR. If the
+base-side inputs changed or cannot be proven unchanged, discovery revokes it
+before queuing the full assessment. Otherwise it stays visible during that
+assessment. Webhook delivery and discovery are still eventually consistent;
+this does not remove the approval-withdrawal race described in the security
+documentation.
 
 The retry limit controls when an attempted recheck becomes revoke-first work;
 it is not a wall-clock recovery guarantee. Queue backlog, provider outages
 and lost webhooks still affect convergence. Operators must retain the documented
 shadow-mode restriction until the separate production contracts are proven.
 
-There is no schema migration. Older workers treat the new reason as ordinary
+There is no schema migration. Older audits have no fingerprint and take the
+blocking path until a fresh successful evaluation records one. Older workers
+treat the new reason as ordinary
 work and can still reset checks during a rolling deployment. Rolling back
 restores base-push flapping, not a different approval policy.
 

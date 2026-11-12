@@ -89,8 +89,9 @@ testing missed-webhook recovery. The enqueue record alone does not prove that
 evaluation completed or that no other trigger arrived.
 
 `evaluation_started` includes the job's current `reason`. A repository base
-push can queue `base_branch_recheck` for a confirmed head; it leaves the check
-alone until the assessment changes. A timer uses `scheduled_recheck`.
+push can queue `base_branch_recheck` when fresh base-side inputs match a
+confirmed head's successful audit. It leaves the check alone until the
+assessment changes. Changed or unprovable inputs block first. A timer uses `scheduled_recheck`.
 `shared_head_invalidation` or a direct review reason follows the blocking path.
 Use the current job reason and its trace, not the discovery log alone, to
 explain a reset.
@@ -352,8 +353,9 @@ upgrade; the optimization does not delete them.
 An upgrade to `0007_reconciliation_completion` rechecks retained completions from older workers on the next scan, regardless of the recheck interval. Expect additional recovery work once after upgrading. Follow the [controlled upgrade procedure](upgrade.md); a rolling image replacement alone is not sufficient for this database change.
 
 Reconciliation blocks the check first when it discovers a changed head or
-cannot confirm the previous completion. A timer or base-branch recheck keeps the
-published result until fresh evidence produces a different result. Failure,
+cannot confirm the previous completion. An eligible timer recheck keeps the
+published result until fresh evidence produces a different result. A base
+recheck also requires fresh inputs matching the prior successful audit. Failure,
 worker loss, or a sufficiently long deferral converts it back to revoke-first
 work, as the [base-refresh decision](../explanation/adrs/2026-11-12-keep-valid-results-on-base-refresh.md)
 describes. Choose the scan and recheck intervals with that stale-evidence
@@ -361,9 +363,12 @@ window and the installation's API budget in mind.
 
 Base refreshes still fetch current ownership, policy, changed files and reviews.
 They don't infer approval from an unchanged head or the push's filenames.
-The existing result remains visible while discovery and evaluation run. If the
-base update invalidated approval, the completed assessment replaces success
-with failure. Direct review dismissal and other revoking triggers still block
+Discovery retains success only after matching parsed policy, effective owners,
+changed paths and statuses, labels, head, base ref, applicable author identity
+and runtime options to the successful audit. Changed or unprovable inputs
+revoke success before full evaluation. Older audits lack this comparison and
+take the blocking path until a fresh successful evaluation records it.
+Direct review dismissal and other revoking triggers still block
 first. A long queue can extend convergence; the recheck retry limit is not a
 promise to update GitHub within that interval.
 

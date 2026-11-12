@@ -206,7 +206,11 @@ after binding. This bookkeeping does not perform the security review or choose
 a vulnerability status.
 
 The publisher copies the reviewed bytes only when every product URL matches the
-signed native inventories. Debian URLs must identify the released architecture
+signed native inventories. A generic CPython URL, such as
+`pkg:generic/python@3.14.10`, requires the same interpreter version, official
+source URL and source SHA-256 in both platform inventories. It accepts no
+qualifiers. Generic embedded-library URLs still require their reviewed native
+source recipes and lock bindings. Debian URLs must identify the released architecture
 and distribution. For Grype, use the inventory's `distro_full` identity, which
 comes from `DEBIAN_VERSION_FULL` in the hashed `os-release` file, falling back
 to `VERSION_ID` when that field is absent. An `upstream` qualifier must match the

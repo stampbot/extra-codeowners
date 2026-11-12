@@ -1,5 +1,31 @@
 # Runtime vulnerability review
 
+## CPython FIPS assessment and base rechecks: November 12, 2026 UTC
+
+[CVE-2026-119170](https://mail.python.org/archives/list/security-announce@python.org/thread/PXVTTOBPUMFJSSUXN6XCS7FC5DZOSZXK/)
+affects CPython 3.14.10's handling of `hashlib` in FIPS mode. The upstream
+fix corrects the OpenSSL property selection for the `usedforsecurity` flag.
+The shipped service does not enable FIPS mode or rely on that flag for a FIPS
+security boundary. Native probes on amd64 and arm64 both report FIPS mode
+disabled and no FIPS provider module. The [versioned evidence](cpython-fips-2026-119170.json)
+records the pinned base and interpreter source identity.
+
+One new `not_affected` statement covers `pkg:generic/python@3.14.10` in the
+default shipped service only. CPython remains present and unpatched. Custom
+OpenSSL providers or configuration, FIPS-enabled deployments, other builds,
+operator commands, plugins and execution after compromise are outside this
+assessment. This is not a FIPS compliance claim. Vexcalibur 1.1.1 formatted
+the new finding offline; all 88 earlier statement contents and dates remain
+unchanged. The publisher now binds this interpreter URL to matching version,
+official source URL and SHA-256 in both platform inventories.
+
+The base-recheck change compares fresh authorization inputs with a prior
+successful audit before keeping a check green. It adds bounded hashing,
+existing GitHub reads and database operations, not a dependency, subprocess,
+FFI, compression or TLS path. None of the previous exclusions gains a new
+caller. The Dockerfile, base digest and dependency lock are unchanged. The
+runtime binding advances after review of these code changes.
+
 ## Additional CMS/CMP review: November 11, 2026 UTC
 
 Four more assessments use the source and caller evidence from the initial

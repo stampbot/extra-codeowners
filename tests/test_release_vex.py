@@ -131,6 +131,43 @@ def test_validate_release_vex_accepts_a_python_product_from_both_native_inventor
 
 
 @pytest.mark.parametrize(
+    "mutation", [None, "version", "source_hash", "source_url", "missing", "qualifier"]
+)
+def test_cpython_vex_requires_matching_source_identity_on_both_platforms(
+    tmp_path: Path, mutation: str | None
+) -> None:
+    purl = "pkg:generic/python@3.14.10"
+    source, inventories = _release_inputs(
+        tmp_path, _document(purl + ("?arch=amd64" if mutation == "qualifier" else ""))
+    )
+    for index, path in enumerate(inventories):
+        inventory = _inventory("amd64" if index == 0 else "arm64")
+        runtime = {
+            "version": "3.14.10",
+            "source_sha256": "d" * 64,
+            "source_url": "https://www.python.org/ftp/python/3.14.10/Python-3.14.10.tar.xz",
+        }
+        if index == 1:
+            if mutation == "version":
+                runtime["version"] = "3.14.11"
+                runtime["source_url"] = (
+                    "https://www.python.org/ftp/python/3.14.11/Python-3.14.11.tar.xz"
+                )
+            elif mutation == "source_hash":
+                runtime["source_sha256"] = "e" * 64
+            elif mutation == "source_url":
+                runtime["source_url"] = "https://example.invalid/not-the-reviewed-source.tar.xz"
+        if not (index == 1 and mutation == "missing"):
+            inventory["cpython"] = runtime
+        _write_json(path, inventory)
+    if mutation is None:
+        assert validate_release_vex(source, inventories) == source.read_bytes()
+    else:
+        with pytest.raises(ReleaseVexError):
+            validate_release_vex(source, inventories)
+
+
+@pytest.mark.parametrize(
     "extra",
     [
         {"hashes": {"sha-256": "a" * 64}},

@@ -63,14 +63,17 @@ def test_postgres_base_refresh_and_dismissal_keep_stronger_work_across_replicas(
         assert invalidation is not None and store.complete_shared_head_invalidation(invalidation)
         initial = store.claim("initial-worker", 60, require_shared_head_ready=True)
         assert initial is not None and store.complete(initial, "initial-worker")
-        assert peer.enqueue_base_recheck(base, 900)
+        store.record_audit(
+            "example/project", 41, head, "success", {"base_evidence_fingerprint": "f" * 64}
+        )
+        assert peer.enqueue_base_recheck(base, 900, fingerprint="f" * 64)
         old = store.claim("old-worker", 60, "recovery", require_shared_head_ready=True)
         assert old is not None and old.reason == BASE_RECHECK_REASON
         start = threading.Barrier(2)
 
         def refresh() -> None:
             start.wait(timeout=5)
-            store.enqueue_base_recheck(base, 900)
+            store.enqueue_base_recheck(base, 900, fingerprint="f" * 64)
 
         def dismiss() -> None:
             start.wait(timeout=5)

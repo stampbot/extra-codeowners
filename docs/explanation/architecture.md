@@ -23,8 +23,9 @@ is covered by threat-model invariants XCO-001 and XCO-002.
    network and database adapters.
 4. Let missing, stale, truncated, or contradictory evidence block success
    ([XCO-001 and XCO-002](threat-model.md#invariants)).
-5. **XCO-017.** Keep a confirmed head's published result during a timer or
-   base-branch recheck, and write only a changed assessment. Other triggers,
+5. **XCO-017.** Keep a confirmed head's published result during a timer recheck,
+   or a base-branch recheck whose fresh inputs match its successful audit, and
+   write only a changed assessment. Other triggers,
    new heads and uncertain evaluations block first
    ([base-refresh decision](adrs/2026-11-12-keep-valid-results-on-base-refresh.md)).
 
@@ -201,12 +202,16 @@ broader, but cannot grow that queue without limit or make the work disappear.
 The shared job conservatively blocks publication for the whole repository,
 including queued PRs outside its selected branches, until discovery finishes.
 
-A base-branch push still creates this discovery fence, but it doesn't by itself
-revoke a confirmed head's result. Fan-out queues a `base_branch_recheck` bound
-to the current shared-head generation. The evaluation waits for discovery to
-finish and fetches fresh evidence. An unchanged assessment makes no Check Run
-write. A new or unconfirmed head, or stronger queued work, still blocks first.
-Other authority events retain revoke-first fan-out.
+A base-branch push still creates this discovery fence. Fan-out compares fresh
+base-side inputs with the confirmed head's successful audit: parsed policy,
+effective owners, changed paths and statuses, labels, head, base ref, applicable
+author identity and runtime policy options. It checks GitHub's CODEOWNERS
+diagnostics and revalidates the PR and branch after collection. A match queues
+`base_branch_recheck` bound to the current shared-head generation without
+resetting the check. Changed or unprovable inputs, new or unconfirmed heads,
+and stronger queued work still block first. The evaluation waits for discovery
+to finish and fetches fresh approval evidence. An unchanged assessment makes
+no Check Run write. Other authority events retain revoke-first fan-out.
 
 Repository routes are mutable names, so each job also records the
 installation's authority epoch at enqueue time. A repository rename, transfer,
@@ -246,8 +251,9 @@ pretending the App can update a repository it can no longer access.
 
 For each job, the worker first fetches the current revisions and moves the
 named check on that head to a blocking state: a new check starts `in_progress`,
-while an existing check receives an explicit `failure`. A `scheduled_recheck`
-or `base_branch_recheck` skips that step and leaves the published result in place, as the
+while an existing check receives an explicit `failure`. An eligible first
+`scheduled_recheck`, or a proven unchanged `base_branch_recheck`, skips that
+step and leaves the published result in place, as the
 [reconciler](#reconciler) section explains. It then confirms that it owns the
 newest database generation before collecting mutable reviews, labels,
 membership, and policy.

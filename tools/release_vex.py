@@ -407,12 +407,36 @@ def _native_component_products(
     return frozenset(platforms[0] & platforms[1])
 
 
+def _cpython_component_products(paths: Iterable[Path]) -> frozenset[tuple[str, str]]:
+    """Accept only a source-bound interpreter identity common to both platforms."""
+    identities: list[tuple[str, str, str]] = []
+    for path in paths:
+        inventory = _mapping(_read_json(path, "release inventory"), "release inventory")
+        if "cpython" not in inventory:
+            return frozenset()
+        runtime = _mapping(inventory["cpython"], "release inventory.cpython")
+        version = _string(runtime.get("version"), "release inventory.cpython.version")
+        url = _string(runtime.get("source_url"), "release inventory.cpython.source_url")
+        digest = _string(runtime.get("source_sha256"), "release inventory.cpython.source_sha256")
+        if (
+            re.fullmatch(r"3\.[0-9]+\.[0-9]+", version) is None
+            or url != f"https://www.python.org/ftp/python/{version}/Python-{version}.tar.xz"
+            or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+        ):
+            _fail("release inventory has an invalid CPython source identity")
+        identities.append((version, url, digest))
+    if len(identities) == 2 and identities[0] == identities[1]:
+        return frozenset({("python", identities[0][0])})
+    return frozenset()
+
+
 def _validate_product(
     product_value: object,
     *,
     debian_packages: frozenset[_DebianPackage],
     python_distributions: frozenset[_PythonDistribution],
     native_products: Callable[[], frozenset[tuple[str, str]]],
+    cpython_products: Callable[[], frozenset[tuple[str, str]]],
     description: str,
 ) -> None:
     product = _mapping(product_value, description)
@@ -468,7 +492,11 @@ def _validate_product(
         package_type == "generic"
         and len(path) == 1
         and not qualifiers
-        and (path[0], version) in native_products()
+        and (
+            (path[0], version) in cpython_products()
+            if path[0] == "python"
+            else (path[0], version) in native_products()
+        )
     ):
         return
     _fail(f"unsupported VEX product package URL: {purl}")
@@ -499,6 +527,10 @@ def validate_release_vex(
             _fail("native VEX products require the release dependency lock")
         return _native_component_products(inventory_paths, lock)
 
+    @cache
+    def cpython_products() -> frozenset[tuple[str, str]]:
+        return _cpython_component_products(inventory_paths)
+
     for statement_index, statement_value in enumerate(statements):
         description = f"OpenVEX document.statements[{statement_index}]"
         statement = _mapping(statement_value, description)
@@ -518,6 +550,7 @@ def validate_release_vex(
                 debian_packages=debian_packages,
                 python_distributions=python_distributions,
                 native_products=native_products,
+                cpython_products=cpython_products,
                 description=f"{description}.products[{product_index}]",
             )
 

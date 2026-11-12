@@ -1990,7 +1990,25 @@ class QueueStore:
             raise ValueError("recheck_seconds must be positive")
         return self._enqueue_recheck(request, recheck_seconds) != "unchanged"
 
-    def enqueue_base_recheck(self, request: JobRequest, recheck_seconds: int) -> bool:
+    def base_recheck_fingerprint(self, request: JobRequest) -> str | None:
+        """Return a prior successful base fingerprint, never raw audit evidence."""
+        with self._sessions() as session:
+            row = session.scalar(
+                select(EvaluationAudit).where(
+                    EvaluationAudit.repository_full_name == request.repository_full_name,
+                    EvaluationAudit.pull_number == request.pull_number,
+                    EvaluationAudit.head_sha == request.head_sha_hint,
+                    EvaluationAudit.conclusion == "success",
+                )
+            )
+            value = None if row is None else row.details.get("base_evidence_fingerprint")
+            return (
+                value if isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) else None
+            )
+
+    def enqueue_base_recheck(
+        self, request: JobRequest, recheck_seconds: int, *, fingerprint: str | None = None
+    ) -> bool:
         """Reassess a base push without revoking a confirmed unchanged head.
 
         Supersede older queued observations, but preserve a stronger trigger
@@ -2005,13 +2023,21 @@ class QueueStore:
             raise ValueError("recheck_seconds must be positive")
         return (
             self._enqueue_recheck(
-                replace(request, observed_at=utcnow()), recheck_seconds, force=True
+                replace(request, observed_at=utcnow()),
+                recheck_seconds,
+                force=True,
+                fingerprint=fingerprint,
             )
             == "preserving"
         )
 
     def _enqueue_recheck(
-        self, request: JobRequest, recheck_seconds: int, *, force: bool = False
+        self,
+        request: JobRequest,
+        recheck_seconds: int,
+        *,
+        force: bool = False,
+        fingerprint: str | None = None,
     ) -> Literal["unchanged", "preserving", "revoking"]:
         if request.work_class != WORK_CLASS_RECOVERY:
             raise ValueError("reconciliation work must use the recovery class")
@@ -2039,6 +2065,30 @@ class QueueStore:
                     self._lock_shared_head_epoch_in_session(session, request)
                     existing = session.scalar(select(EvaluationJob).where(*key).with_for_update())
                     state = session.get(ReconciliationState, state_key, with_for_update=True)
+                    proven = False
+                    if (
+                        force
+                        and fingerprint is not None
+                        and re.fullmatch(r"[0-9a-f]{64}", fingerprint)
+                    ):
+                        audit = session.scalar(
+                            select(EvaluationAudit)
+                            .where(
+                                EvaluationAudit.repository_full_name
+                                == request.repository_full_name,
+                                EvaluationAudit.pull_number == request.pull_number,
+                                EvaluationAudit.head_sha == request.head_sha_hint,
+                                EvaluationAudit.conclusion == "success",
+                            )
+                            .with_for_update()
+                        )
+                        proven = (
+                            audit is not None
+                            and audit.details.get("base_evidence_fingerprint") == fingerprint
+                            and state is not None
+                            and state.head_sha == request.head_sha_hint
+                            and state.confirmed_completed_at == state.completed_at
+                        )
                     if existing is not None:
                         if existing.head_sha_hint == request.head_sha_hint:
                             disposition: Literal["unchanged", "preserving", "revoking"] = (
@@ -2046,7 +2096,7 @@ class QueueStore:
                             )
                             if force:
                                 disposition = self._refresh_recheck_in_session(
-                                    session, request, existing, recheck_seconds, now
+                                    session, request, existing, recheck_seconds, now, proven=proven
                                 )
                             if state is not None:
                                 state.observed_at = now
@@ -2088,6 +2138,7 @@ class QueueStore:
                         if state is not None
                         and state.head_sha == request.head_sha_hint
                         and state.confirmed_completed_at == state.completed_at
+                        and (not force or proven)
                         else None
                     )
                     if confirmed_at is not None and confirmed_at.tzinfo is None:
@@ -2180,6 +2231,8 @@ class QueueStore:
         existing: EvaluationJob,
         recheck_seconds: int,
         now: datetime,
+        *,
+        proven: bool,
     ) -> Literal["preserving", "revoking"]:
         """Supersede one same-head observation under the epoch and queue locks."""
         original_requested_at = existing.requested_at
@@ -2192,6 +2245,7 @@ class QueueStore:
         was_preserving = existing.reason in PRESERVING_RECHECK_REASONS
         preserving = (
             was_preserving
+            and proven
             and existing.attempts <= 1
             and (lease_until is None or lease_until >= now)
             and requested_at > now - timedelta(seconds=recheck_seconds)
