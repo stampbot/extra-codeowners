@@ -4,6 +4,10 @@ The [validation evidence](../maintainers/evidence/index.md) records which
 releases and environments have been tested. Those observations do not replace
 the release gates below.
 
+The [base-refresh receipt](../maintainers/evidence/2026-11-12-base-refresh-stability.md)
+confirms stable publication after an unchanged base update and denial after
+policy withdrawal on alpha.89. Large-installation performance remains open.
+
 Extra CODEOWNERS is ready for source review and non-required shadow-mode
 testing. It is not ready to replace GitHub's native code-owner enforcement on
 production repositories.
@@ -200,11 +204,10 @@ close before the project is presented as production-ready:
   recovery have dated observations; they do not establish acceptable recovery
   latency. The [alpha.82 observations][alpha82-cadence] exercise early retry
   deadlines and healthy-installation skipping. A resumed cohort still used
-  7,411 outer requests; active-sweep prefix replay and serial installation
-  fairness need investigation.
-- [Issue #296][issue-296]: validate stable check publication after base pushes.
-  Confirmed-head rechecks retain their result until the fresh assessment
-  changes; live rollout verification remains separate from the unit tests.
+  7,411 outer requests. Active-sweep progress, bounded concurrent reads and
+  cooperative installation yielding now have regression tests; their deployed
+  cost and latency still need measurement, along with the strict live
+  checkpoint proof.
 - [Issue #18][issue-18]: review wheel-native components and their notices,
   complete corresponding-source delivery, and approve the distribution
   mechanism. Separate [wheel-native catalogs](native-components.md) expose the
@@ -271,5 +274,4 @@ on this list opens or closes.
 [issue-76]: https://github.com/stampbot/extra-codeowners/issues/76
 [issue-124]: https://github.com/stampbot/extra-codeowners/issues/124
 [issue-203]: https://github.com/stampbot/extra-codeowners/issues/203
-[issue-296]: https://github.com/stampbot/extra-codeowners/issues/296
 [alpha82-cadence]: ../maintainers/evidence/2026-11-11-alpha82-cadence-and-scan-cost.md

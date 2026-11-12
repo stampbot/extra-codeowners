@@ -22,6 +22,7 @@ old one.
 | 2026-11-05 | [Reuse authenticated, version-matched Debian sources](2026-11-05-reuse-authenticated-debian-sources.md) | Accepted |
 | 2026-11-11 | [Retry due installations without replaying healthy scans](2026-11-11-installation-retry-cadence.md) | Accepted |
 | 2026-11-12 | [Keep valid results while reassessing a base update](2026-11-12-keep-valid-results-on-base-refresh.md) | Accepted |
+| 2026-11-12 | [Bound read-ahead and resume an active reconciliation sweep](2026-11-12-bound-active-reconciliation-sweeps.md) | Accepted |
 
 These first five were written in October 2026 to record decisions already in
 effect. Their dates come from the commits and pull requests that made each

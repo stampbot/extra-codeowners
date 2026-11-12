@@ -56,10 +56,15 @@ completed reconciliation cohorts. Healthy-installation skipping and early
 retry timing were observed; request cost and recovery latency remain open.
 
 The [native catalog and VEX receipt](evidence/2026-11-11-native-catalog-and-vex.md)
-records independently verified publication and a real scanner comparison on
-both architectures. Five assessed product/CVE pairs were excluded; the other
-77 raw native pairs remained visible. This is not a complete native-security
-or distribution approval.
+records independently verified publication, scoped OpenSSL exclusions and real
+scanner comparisons on both architectures. Remaining findings stay visible;
+this is not a complete native-security or distribution approval.
+
+The [November 12 base-refresh receipt](evidence/2026-11-12-base-refresh-stability.md)
+records alpha.89 verification and rollout. An unchanged base update retained
+success without a Check Run write in its completed worker trace; policy
+withdrawal denied approval and restoration passed. The performance and other
+provider gates remain separate.
 
 ## Diagnostics and approval probe: November 2, 2026
 

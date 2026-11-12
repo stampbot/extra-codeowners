@@ -16,10 +16,18 @@ from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
-from extra_codeowners.database import InstallationApiBudget, QueueStore, ServiceLease, utcnow
+from extra_codeowners.database import (
+    InstallationApiBudget,
+    ProviderBackpressure,
+    QueueStore,
+    ServiceLease,
+    utcnow,
+)
 
 REQUEST_LANE: ContextVar[str] = ContextVar("github_request_lane", default="interactive")
-BudgetDeferralReason = Literal["reserve", "exhausted", "probe_pending", "unspecified"]
+BudgetDeferralReason = Literal[
+    "reserve", "exhausted", "probe_pending", "provider_backpressure", "unspecified"
+]
 QuotaHeaderIssue = Literal[
     "missing_resource",
     "other_resource",
@@ -44,12 +52,18 @@ def request_lane(lane: str) -> Iterator[None]:
 
 
 class RecoveryBudgetDeferredError(Exception):
-    """Recovery must wait; this is not a provider limit on interactive work."""
+    """Shared admission paused work without making a new provider request."""
 
     def __init__(
         self, retry_after_seconds: int, *, reason: BudgetDeferralReason = "unspecified"
     ) -> None:
-        if reason not in {"reserve", "exhausted", "probe_pending", "unspecified"}:
+        if reason not in {
+            "reserve",
+            "exhausted",
+            "probe_pending",
+            "provider_backpressure",
+            "unspecified",
+        }:
             raise ValueError("unknown recovery budget deferral reason")
         self.reason = reason
         self.retry_after_seconds = max(1, retry_after_seconds)
@@ -58,6 +72,14 @@ class RecoveryBudgetDeferredError(Exception):
 
 class ProviderQuotaExhaustedError(RecoveryBudgetDeferredError):
     """GitHub reported zero remaining requests in the current core window."""
+
+
+class ProviderBackpressureActiveError(RecoveryBudgetDeferredError):
+    """An already recorded provider pause applies to every request lane."""
+
+    def __init__(self, retry_after_seconds: int) -> None:
+        super().__init__(retry_after_seconds, reason="provider_backpressure")
+        self.args = ("GitHub provider backpressure is active",)
 
 
 def _utc(value: datetime) -> datetime:
@@ -123,6 +145,29 @@ class RecoveryApiBudget:
             raise ValueError("recovery reserve must be from 1 through 90 percent")
         self.store = store
         self.reserve_percent = reserve_percent
+
+    def check_provider_backpressure(self, installation_id: int | None) -> None:
+        """Honor shared pauses before each physical request, without renewing them."""
+        if installation_id is not None and (
+            type(installation_id) is not int or installation_id <= 0
+        ):
+            raise ValueError("installation_id must be positive or None")
+        scopes = (0,) if installation_id is None else (0, installation_id)
+        now = utcnow()
+        with self.store.session() as session:
+            deadline = session.scalar(
+                select(ProviderBackpressure.blocked_until)
+                .where(
+                    ProviderBackpressure.installation_id.in_(scopes),
+                    ProviderBackpressure.blocked_until > now,
+                )
+                .order_by(ProviderBackpressure.blocked_until.desc())
+                .limit(1)
+            )
+        if deadline is not None:
+            raise ProviderBackpressureActiveError(
+                max(1, math.ceil((_utc(deadline) - now).total_seconds()))
+            )
 
     def _locked_row(self, session: Session, installation_id: int) -> InstallationApiBudget:
         if installation_id <= 0:

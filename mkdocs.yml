@@ -71,6 +71,7 @@ nav:
           - Reuse authenticated Debian sources: explanation/adrs/2026-11-05-reuse-authenticated-debian-sources.md
           - Installation retry cadence: explanation/adrs/2026-11-11-installation-retry-cadence.md
           - Results during base refresh: explanation/adrs/2026-11-12-keep-valid-results-on-base-refresh.md
+          - Active reconciliation sweeps: explanation/adrs/2026-11-12-bound-active-reconciliation-sweeps.md
       - Design comparisons:
           - Bounded reconciliation traces: explanation/design/2026-11-02-bounded-reconciliation-traces.md
   - Maintainer and release engineering:
@@ -94,6 +95,7 @@ nav:
           - November alpha.79 rollout and budget boundaries: maintainers/evidence/2026-11-10-alpha79-rollout-and-budget-boundaries.md
           - November alpha.82 cadence and scan cost: maintainers/evidence/2026-11-11-alpha82-cadence-and-scan-cost.md
           - November native catalogs and VEX: maintainers/evidence/2026-11-11-native-catalog-and-vex.md
+          - November base-refresh stability: maintainers/evidence/2026-11-12-base-refresh-stability.md
       - Respond to dependency audit: how-to/respond-to-dependency-audit.md
       - Rescan a published image: how-to/rescan-published-image.md
       - Review or recover a Renovate update: how-to/manage-renovate-updates.md

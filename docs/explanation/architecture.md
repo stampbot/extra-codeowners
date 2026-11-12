@@ -306,7 +306,38 @@ be unavailable, GitHub may not redeliver, and access loss can make an old check
 unreachable. The reconciler covers the recoverable middle ground.
 
 One elected reconciler scans accessible open pull requests in due installations.
-It compares GitHub's current head with the durable completion record for that
+It revalidates current membership on every attempt. During a short continuation,
+it omits repositories already completed in that active sweep only when their
+immutable IDs and current routes still match. Read-skip evidence expires after
+the greater of the scan and recheck intervals. Separate cycle coverage survives
+that expiry so a slow sweep can finish; it cannot authorize skipped reads or
+Check Runs. Both disappear when the sweep finishes or election is lost.
+A new periodic sweep still visits every current
+repository. The [active-sweep decision](adrs/2026-11-12-bound-active-reconciliation-sweeps.md)
+records the limits of this optimization.
+
+At most four repository streams fetch discovery evidence concurrently, subject
+to the configured GitHub request limit and shared quota. A single consumer
+commits jobs and cursors in repository/PR order. It never commits a later
+repository past an earlier reader's error. Unused reads are cancelled and
+drained on interruption or early exit. Each stream retains its PR listing and
+one buffered result, so concurrency also increases the possible memory use.
+Provider-limit observations are not disposable results: readers persist them
+immediately and drain those transactions even when their other work is
+cancelled. The runtime client checks that shared backoff before every physical
+request, including streams, GraphQL and App authentication. Denied requests
+neither spend quota nor renew the stored pause. Already admitted requests may
+finish; a running job cannot use its earlier admission to start further calls.
+
+An installation yields after one scan interval at a repository boundary when
+more work remains, then requests a one-second continuation. Other due
+installations get a turn before that continuation. Membership discovery and
+one large repository can exceed that interval; this is not a hard timeout or
+a recovery-latency guarantee. A repository without an immutable ID cannot be
+skipped; if any pending repository lacks one, cooperative yielding is disabled
+for that attempt. Discovery still runs.
+
+The reconciler compares GitHub's current head with the durable completion record for that
 pull request. A head that changed since the last successful evaluation is
 queued immediately, because that is the missed-`synchronize`-webhook case. An
 unchanged head is also queued when its bounded recheck deadline arrives. This
