@@ -4,6 +4,10 @@ The [validation evidence](../maintainers/evidence/index.md) records which
 releases and environments have been tested. Those observations do not replace
 the release gates below.
 
+The [base-refresh receipt](../maintainers/evidence/2026-11-12-base-refresh-stability.md)
+confirms stable publication after an unchanged base update and denial after
+policy withdrawal on alpha.89. Large-installation performance remains open.
+
 Extra CODEOWNERS is ready for source review and non-required shadow-mode
 testing. It is not ready to replace GitHub's native code-owner enforcement on
 production repositories.
@@ -204,10 +208,6 @@ close before the project is presented as production-ready:
   cooperative installation yielding now have regression tests; their deployed
   cost and latency still need measurement, along with the strict live
   checkpoint proof.
-- [Issue #296][issue-296]: validate stable check publication after base pushes.
-  Confirmed-head base rechecks retain success only when fresh inputs match the
-  successful audit; changed or unprovable inputs block first. Live rollout
-  verification remains separate from the unit tests.
 - [Issue #18][issue-18]: review wheel-native components and their notices,
   complete corresponding-source delivery, and approve the distribution
   mechanism. Separate [wheel-native catalogs](native-components.md) expose the
@@ -274,5 +274,4 @@ on this list opens or closes.
 [issue-76]: https://github.com/stampbot/extra-codeowners/issues/76
 [issue-124]: https://github.com/stampbot/extra-codeowners/issues/124
 [issue-203]: https://github.com/stampbot/extra-codeowners/issues/203
-[issue-296]: https://github.com/stampbot/extra-codeowners/issues/296
 [alpha82-cadence]: ../maintainers/evidence/2026-11-11-alpha82-cadence-and-scan-cost.md

@@ -148,16 +148,26 @@ def store_at(tmp_path: Path) -> QueueStore:
 
 
 def reconciler_for(
-    provider: DiscoveryProvider, store: QueueStore, private_key: str, owner: str
+    provider: DiscoveryProvider,
+    store: QueueStore,
+    private_key: str,
+    owner: str,
+    *,
+    max_in_flight_requests: int = 8,
 ) -> tuple[Reconciler, GitHubClient]:
     github = GitHubClient(
         7,
         private_key,
         transport=httpx.MockTransport(provider.respond),
         recovery_budget=RecoveryApiBudget(store),
+        max_in_flight_requests=max_in_flight_requests,
     )
     settings = Settings(
-        _env_file=None, environment="test", worker_enabled=False, reconcile_enabled=False
+        _env_file=None,
+        environment="test",
+        worker_enabled=False,
+        reconcile_enabled=False,
+        github_max_in_flight_requests=max_in_flight_requests,
     )
     return Reconciler(settings, github, store, owner), github
 
@@ -272,8 +282,9 @@ async def test_retained_validators_do_not_hide_new_policy_or_managed_checks(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("max_requests", [1, 8])
 async def test_cold_replicas_resume_inside_repository_across_quota_windows(
-    tmp_path: Path, private_key: str, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, private_key: str, monkeypatch: pytest.MonkeyPatch, max_requests: int
 ) -> None:
     now = datetime.now(UTC)
     monkeypatch.setattr("extra_codeowners.api_budget.utcnow", lambda: now)
@@ -289,7 +300,9 @@ async def test_cold_replicas_resume_inside_repository_across_quota_windows(
             owner = f"cold-replica-{cycle}"
             provider.remaining = provider.limit
             provider.reset = int((now + timedelta(hours=1)).timestamp())
-            reconciler, github = reconciler_for(provider, store, private_key, owner)
+            reconciler, github = reconciler_for(
+                provider, store, private_key, owner, max_in_flight_requests=max_requests
+            )
             try:
                 result = await scan(reconciler)
             finally:
@@ -315,7 +328,13 @@ async def test_cold_replicas_resume_inside_repository_across_quota_windows(
         }
         assert len(checks) == 140
         assert set(checks.values()) == {1}
-        assert provider.requests["/repos/example/zempty/pulls"] == 1
+        # Serial discovery reads the tail only after the partial repository
+        # finishes. Parallel discovery spends one speculative tail read per
+        # cold attempt, but never commits it past the earlier deferral. The
+        # per-head assertions above still forbid replay of all 140 PRs.
+        assert provider.requests["/repos/example/zempty/pulls"] == (
+            1 if max_requests == 1 else cycle + 1
+        )
     finally:
         store.close()
 
