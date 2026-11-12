@@ -1,8 +1,8 @@
 {
   "@context": "https://openvex.dev/ns/v0.2.0",
-  "@id": "urn:uuid:91fb5b84-c98d-5830-88b1-bc23ac330f9a",
+  "@id": "urn:uuid:7ed9f687-8ec9-5db3-a893-b410a294f315",
   "author": "Extra CODEOWNERS maintainers",
-  "last_updated": "2026-11-12T15:19:11Z",
+  "last_updated": "2026-11-12T15:26:35Z",
   "role": "VEX document producer",
   "statements": [
     {
@@ -1944,9 +1944,9 @@
       }
     }
   ],
-  "timestamp": "2026-11-12T15:19:11Z",
+  "timestamp": "2026-11-12T15:26:35Z",
   "tooling": "Vexcalibur + Extra CODEOWNERS runtime binding",
-  "version": 26,
+  "version": 27,
   "x_extra_codeowners_runtime": {
     "files": {
       ".dockerignore": "3f9dc9d3a79fe3085f25de88403b5563ad5c7fa7010bef94c5e55f24bd3cf691",
@@ -1983,7 +1983,7 @@
       "extra_codeowners/metrics.py": "64785df4eef0b99bacd2cda27ae7a6bae2142a3b246b3b7fb00996631edae9c6",
       "extra_codeowners/migrations.py": "a86d239779ed7b0e38118a3f7c1dee9b33c71519656699f101ac556eed671a46",
       "extra_codeowners/models.py": "dc59959f56e35111fae00f8f60ef054ba80eb839eb2dae5b09165d4cdc349a48",
-      "extra_codeowners/ordered_prefetch.py": "98cdf42138ac836914960d52e334b14baa7432c51c5b4a4728c86b6591772a0d",
+      "extra_codeowners/ordered_prefetch.py": "44c1e7383f94916e6d6c8da13976605440cb771c0b79e1c444c540bf6c14149a",
       "extra_codeowners/policy.py": "844abb482a7c9cc3190d624cc92ece2476128644718e4096f98bfa8a0abedf8a",
       "extra_codeowners/py.typed": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "extra_codeowners/reconciliation_cadence.py": "0cea8e7d8f171a4db873f8bd94e12423e7ded686ec686b77ba62a0059e9299f1",
@@ -2001,7 +2001,7 @@
       "tools/source_recipes/psycopg-binary-3.3.4.json": "ec227aa110315f82c25335837e258806930c7afbe980c8b2ff6b476343c243b5",
       "uv.lock": "5514cb0448adb693fe97f3d2c8016ccd606890327a1946467fbd118356de4922"
     },
-    "review": "Reviewed bounded asyncio discovery read-ahead and ordered queue/cursor commits, immutable-ID active-sweep progress with expiry, and cooperative per-installation yielding. Readers only use existing GitHub endpoints and shared admission; no dependency, subprocess, FFI, compression, provider configuration or TLS path is added. Existing RSA signing and libpq TLS callers are unchanged. All 89 assessments retain their contents and dates, including the default non-FIPS CPython scope and existing unpatched-library limits; only runtime hashes advance.",
+    "review": "Reviewed bounded read-only asyncio discovery, ordered commits, source-order error propagation, task joins, and cancellation cleanup. Explicit TypeVar annotations avoid CodeQL nested PEP 695 scoping diagnostics without suppressing its checks. Active-sweep identity/expiry and cooperative scheduling retain shared admission and authorization fences. No dependency, subprocess, native, compression, OpenSSL provider or TLS path is added. All 89 statement contents/dates and the non-FIPS CPython scope remain unchanged.",
     "schema_version": 1
   }
 }

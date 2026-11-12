@@ -7,11 +7,15 @@ from collections import deque
 from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterable
 from contextlib import aclosing, asynccontextmanager
 from dataclasses import dataclass
+from typing import TypeVar
+
+Item = TypeVar("Item")
+Result = TypeVar("Result")
 
 
 @dataclass(frozen=True)
-class _Value[Result]:
-    value: Result
+class _Value[Value]:
+    value: Value
 
 
 @dataclass(frozen=True)
@@ -25,7 +29,8 @@ class _End:
 
 
 @asynccontextmanager
-async def ordered_prefetch[Item, Result](
+# CodeQL mis-scopes PEP 695 function parameters captured by these nested readers.
+async def ordered_prefetch(  # noqa: UP047
     items: Iterable[Item],
     read: Callable[[Item], AsyncGenerator[Result, None]],
     *,
@@ -85,7 +90,7 @@ async def ordered_prefetch[Item, Result](
         while pending:
             item, task, queue = pending[0]
             yield item, receive(queue)
-            await task
+            await asyncio.gather(task)
             pending.popleft()
             fill()
 
