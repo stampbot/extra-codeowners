@@ -13,7 +13,7 @@ def native_statements() -> list[dict[str, Any]]:
     return [
         s
         for s in document["statements"]
-        if all(p["@id"].startswith("pkg:generic/") for p in s["products"])
+        if all(p["@id"].startswith("pkg:generic/openssl@") for p in s["products"])
     ]
 
 

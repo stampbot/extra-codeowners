@@ -59,6 +59,8 @@ WORK_CLASS_RECOVERY: Final = "recovery"
 # no new evidence, so the evaluator keeps the published result until the new
 # evaluation differs. Any trigger that coalesces into the row replaces it.
 SCHEDULED_RECHECK_REASON: Final = "scheduled_recheck"
+BASE_RECHECK_REASON: Final = "base_branch_recheck"
+PRESERVING_RECHECK_REASONS: Final = frozenset({SCHEDULED_RECHECK_REASON, BASE_RECHECK_REASON})
 # Reconciler work the scan cannot vouch for: a missed head change, an
 # unconfirmed completion, or a pull request with no completion record.
 PERIODIC_RECONCILIATION_REASON: Final = "periodic_reconciliation"
@@ -549,13 +551,13 @@ class ClaimedJob:
     def keeps_published_check(self) -> bool:
         """Whether this attempt may leave the published result in place.
 
-        A scheduled recheck carries no new evidence, so it keeps the result
-        until its evaluation differs. Any trigger replaces the reason, and
+        A timer or base recheck requests a fresh assessment, so it keeps the result
+        until its evaluation differs. Stronger triggers replace the reason, and
         ``QueueStore.fail`` and a long ``defer`` turn it into revoke-first
         work. Only the first attempt qualifies: a lease reclaimed after a
         crash or shutdown blocks first as well.
         """
-        return self.reason == SCHEDULED_RECHECK_REASON and self.attempts <= 1
+        return self.reason in PRESERVING_RECHECK_REASONS and self.attempts <= 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -1984,14 +1986,65 @@ class QueueStore:
         ``SCHEDULED_RECHECK_REASON`` without advancing the exact-head epoch,
         so a quiet pull request's published check is not reset on a timer.
         """
+        if recheck_seconds < 1:
+            raise ValueError("recheck_seconds must be positive")
+        return self._enqueue_recheck(request, recheck_seconds) != "unchanged"
+
+    def base_recheck_fingerprint(self, request: JobRequest) -> str | None:
+        """Return a prior successful base fingerprint, never raw audit evidence."""
+        with self._sessions() as session:
+            row = session.scalar(
+                select(EvaluationAudit).where(
+                    EvaluationAudit.repository_full_name == request.repository_full_name,
+                    EvaluationAudit.pull_number == request.pull_number,
+                    EvaluationAudit.head_sha == request.head_sha_hint,
+                    EvaluationAudit.conclusion == "success",
+                )
+            )
+            value = None if row is None else row.details.get("base_evidence_fingerprint")
+            return (
+                value if isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) else None
+            )
+
+    def enqueue_base_recheck(
+        self, request: JobRequest, recheck_seconds: int, *, fingerprint: str | None = None
+    ) -> bool:
+        """Reassess a base push without revoking a confirmed unchanged head.
+
+        Supersede older queued observations, but preserve a stronger trigger
+        and the oldest recheck deadline. Publication still waits for authority
+        discovery and fetches current approval and policy evidence. Return
+        whether the queued work may retain the published check; false means
+        the caller must also run its usual fast invalidation.
+        """
+        if request.reason != "push.repository_base":
+            raise ValueError("base rechecks require a repository base push")
+        if recheck_seconds < 1:
+            raise ValueError("recheck_seconds must be positive")
+        return (
+            self._enqueue_recheck(
+                replace(request, observed_at=utcnow()),
+                recheck_seconds,
+                force=True,
+                fingerprint=fingerprint,
+            )
+            == "preserving"
+        )
+
+    def _enqueue_recheck(
+        self,
+        request: JobRequest,
+        recheck_seconds: int,
+        *,
+        force: bool = False,
+        fingerprint: str | None = None,
+    ) -> Literal["unchanged", "preserving", "revoking"]:
         if request.work_class != WORK_CLASS_RECOVERY:
             raise ValueError("reconciliation work must use the recovery class")
         if request.head_sha_hint is None:
             raise ValueError("reconciliation work requires an exact head SHA")
         if request.observed_at is None:
             raise ValueError("reconciliation work requires a GitHub observation timestamp")
-        if recheck_seconds < 1:
-            raise ValueError("recheck_seconds must be positive")
         key = (
             EvaluationJob.installation_id == request.installation_id,
             EvaluationJob.repository_full_name == request.repository_full_name,
@@ -2012,11 +2065,42 @@ class QueueStore:
                     self._lock_shared_head_epoch_in_session(session, request)
                     existing = session.scalar(select(EvaluationJob).where(*key).with_for_update())
                     state = session.get(ReconciliationState, state_key, with_for_update=True)
+                    proven = False
+                    if (
+                        force
+                        and fingerprint is not None
+                        and re.fullmatch(r"[0-9a-f]{64}", fingerprint)
+                    ):
+                        audit = session.scalar(
+                            select(EvaluationAudit)
+                            .where(
+                                EvaluationAudit.repository_full_name
+                                == request.repository_full_name,
+                                EvaluationAudit.pull_number == request.pull_number,
+                                EvaluationAudit.head_sha == request.head_sha_hint,
+                                EvaluationAudit.conclusion == "success",
+                            )
+                            .with_for_update()
+                        )
+                        proven = (
+                            audit is not None
+                            and audit.details.get("base_evidence_fingerprint") == fingerprint
+                            and state is not None
+                            and state.head_sha == request.head_sha_hint
+                            and state.confirmed_completed_at == state.completed_at
+                        )
                     if existing is not None:
                         if existing.head_sha_hint == request.head_sha_hint:
+                            disposition: Literal["unchanged", "preserving", "revoking"] = (
+                                "unchanged"
+                            )
+                            if force:
+                                disposition = self._refresh_recheck_in_session(
+                                    session, request, existing, recheck_seconds, now, proven=proven
+                                )
                             if state is not None:
                                 state.observed_at = now
-                            return False
+                            return disposition
                         if existing.work_class == WORK_CLASS_INTERACTIVE:
                             requested_at = existing.requested_at
                             if requested_at.tzinfo is None:
@@ -2028,7 +2112,7 @@ class QueueStore:
                                 # consistent listing, so preserve it.
                                 if state is not None:
                                     state.observed_at = now
-                                return False
+                                return "unchanged"
                         # GitHub shows a different current head than the job
                         # durable state. This is the missed-webhook repair
                         # case; advance the exact head fence now rather than
@@ -2046,7 +2130,7 @@ class QueueStore:
                         )
                         if state is not None:
                             state.observed_at = now
-                        return True
+                        return "revoking"
                     # A confirmed completion of this exact head is the only
                     # state that lets a scan skip work or keep the result.
                     confirmed_at = (
@@ -2054,22 +2138,28 @@ class QueueStore:
                         if state is not None
                         and state.head_sha == request.head_sha_hint
                         and state.confirmed_completed_at == state.completed_at
+                        and (not force or proven)
                         else None
                     )
                     if confirmed_at is not None and confirmed_at.tzinfo is None:
                         confirmed_at = confirmed_at.replace(tzinfo=UTC)
-                    if confirmed_at is not None and confirmed_at > now - timedelta(
-                        seconds=recheck_seconds
+                    if (
+                        not force
+                        and confirmed_at is not None
+                        and confirmed_at > now - timedelta(seconds=recheck_seconds)
                     ):
                         assert state is not None
                         state.observed_at = now
-                        return False
+                        return "unchanged"
                     if confirmed_at is not None:
-                        # Only the clock changed. Advancing the exact-head
-                        # epoch would reset the published check, so bind to
-                        # the current generation and let the evaluator keep
+                        # A confirmed head can be reassessed without resetting
+                        # its published check. Bind to the current generation
+                        # and let the evaluator keep
                         # the result unless the new evaluation differs.
-                        request = replace(request, reason=SCHEDULED_RECHECK_REASON)
+                        request = replace(
+                            request,
+                            reason=BASE_RECHECK_REASON if force else SCHEDULED_RECHECK_REASON,
+                        )
                         generation = self._touch_shared_head_epoch_in_session(session, request)
                     else:
                         generation = self._advance_shared_head_epoch_in_session(
@@ -2127,12 +2217,67 @@ class QueueStore:
                         # The exact-head update above must roll back if a
                         # webhook won the unique-row race.
                         raise _EvaluationJobAlreadyPresentError
-                return True
+                return "preserving" if confirmed_at is not None else "revoking"
             except _EvaluationJobAlreadyPresentError:
-                return False
+                return "unchanged"
             except IntegrityError:
                 continue
         raise RuntimeError("could not enqueue due reconciliation work after concurrent inserts")
+
+    def _refresh_recheck_in_session(
+        self,
+        session: Session,
+        request: JobRequest,
+        existing: EvaluationJob,
+        recheck_seconds: int,
+        now: datetime,
+        *,
+        proven: bool,
+    ) -> Literal["preserving", "revoking"]:
+        """Supersede one same-head observation under the epoch and queue locks."""
+        original_requested_at = existing.requested_at
+        requested_at = original_requested_at
+        if requested_at.tzinfo is None:
+            requested_at = requested_at.replace(tzinfo=UTC)
+        lease_until = existing.lease_until
+        if lease_until is not None and lease_until.tzinfo is None:
+            lease_until = lease_until.replace(tzinfo=UTC)
+        was_preserving = existing.reason in PRESERVING_RECHECK_REASONS
+        preserving = (
+            was_preserving
+            and proven
+            and existing.attempts <= 1
+            and (lease_until is None or lease_until >= now)
+            and requested_at > now - timedelta(seconds=recheck_seconds)
+        )
+        reason = existing.reason
+        if preserving:
+            reason = BASE_RECHECK_REASON
+        elif was_preserving:
+            reason = PERIODIC_RECONCILIATION_REASON
+        generation = (
+            self._advance_shared_head_epoch_in_session(session, request, shared_head_locked=True)
+            if was_preserving and not preserving
+            else self._touch_shared_head_epoch_in_session(session, request)
+        )
+        self._enqueue_in_session(
+            session, replace(request, reason=reason), shared_head_generation=generation
+        )
+        if preserving:
+            session.execute(
+                update(EvaluationJob)
+                .where(EvaluationJob.id == existing.id)
+                .values(requested_at=original_requested_at)
+            )
+        return "preserving" if preserving else "revoking"
+
+    @staticmethod
+    def _authority_reason(*reasons: str) -> str:
+        """A base refresh must not weaken coalesced revoke-first authority."""
+        return next(
+            (reason for reason in reversed(reasons) if reason != "push.repository_base"),
+            reasons[-1],
+        )
 
     @staticmethod
     def _enqueue_authority_in_session(
@@ -2173,24 +2318,34 @@ class QueueStore:
                     existing.target_base_refs = {}
                 elif existing.target_base_refs:
                     targets = dict(existing.target_base_refs)
-                    targets[target_ref] = request.reason
+                    targets[target_ref] = QueueStore._authority_reason(
+                        targets.get(target_ref, request.reason), request.reason
+                    )
                     existing.target_base_refs = (
                         targets
                         if len(targets) <= MAX_BASE_SCOPED_AUTHORITY_JOBS_PER_REPOSITORY
                         else {}
                     )
-                existing.reason = request.reason
+                existing.reason = QueueStore._authority_reason(existing.reason, request.reason)
             elif target_ref is None:
                 existing.pending_full_rescan = True
-                existing.pending_rescan_reason = request.reason
+                existing.pending_rescan_reason = QueueStore._authority_reason(
+                    *existing.pending_base_refs.values(),
+                    existing.pending_rescan_reason or request.reason,
+                    request.reason,
+                )
                 existing.pending_base_refs = {}
             else:
                 if not existing.pending_full_rescan:
                     pending_refs = dict(existing.pending_base_refs)
-                    pending_refs[target_ref] = request.reason
+                    pending_refs[target_ref] = QueueStore._authority_reason(
+                        pending_refs.get(target_ref, request.reason), request.reason
+                    )
                     if len(pending_refs) > MAX_BASE_SCOPED_AUTHORITY_JOBS_PER_REPOSITORY:
                         existing.pending_full_rescan = True
-                        existing.pending_rescan_reason = request.reason
+                        existing.pending_rescan_reason = QueueStore._authority_reason(
+                            *pending_refs.values(), request.reason
+                        )
                         existing.pending_base_refs = {}
                     else:
                         existing.pending_base_refs = pending_refs
@@ -3502,9 +3657,9 @@ class QueueStore:
             return True
 
     @staticmethod
-    def _scheduled_recheck_revocation(job: ClaimedJob) -> JobRequest | None:
-        """Return the revoke-first request that replaces a scheduled recheck."""
-        if job.reason != SCHEDULED_RECHECK_REASON or job.head_sha_hint is None:
+    def _recheck_revocation(job: ClaimedJob) -> JobRequest | None:
+        """Return the revoke-first request that replaces a preserving recheck."""
+        if job.reason not in PRESERVING_RECHECK_REASONS or job.head_sha_hint is None:
             return None
         return JobRequest(
             installation_id=job.installation_id,
@@ -3575,7 +3730,7 @@ class QueueStore:
                 session,
                 job,
                 owner,
-                self._scheduled_recheck_revocation(job),
+                self._recheck_revocation(job),
                 state="pending",
                 available_at=utcnow() + timedelta(seconds=delay_seconds),
                 lease_owner=None,
@@ -3608,7 +3763,7 @@ class QueueStore:
                 requested_at = requested_at.replace(tzinfo=UTC)
             retry_at = utcnow() + timedelta(seconds=delay_seconds)
             if retry_at - requested_at > timedelta(seconds=scheduled_recheck_limit_seconds):
-                revocation = self._scheduled_recheck_revocation(job)
+                revocation = self._recheck_revocation(job)
         with self.session() as session:
             return self._release_claim_in_session(
                 session,

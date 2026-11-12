@@ -1,0 +1,32 @@
+{
+  "vulnerability": "CVE-2026-119170",
+  "scope": "Default shipped service images, without custom OpenSSL providers or FIPS configuration. Not a FIPS compliance claim.",
+  "source_version": "3.14.10",
+  "source_url": "https://www.python.org/ftp/python/3.14.10/Python-3.14.10.tar.xz",
+  "source_sha256": "de414a57119abef52784d8993e341d53aed635fc2b05c2607d9f98a2c5b72032",
+  "base_image": "python:3.14.10-slim-trixie@sha256:930e1abba7c4e8f96ed93e8012c35d174d7732752731bbd5e8e757d7ec6f3966",
+  "primary_advisory": "https://mail.python.org/archives/list/security-announce@python.org/thread/PXVTTOBPUMFJSSUXN6XCS7FC5DZOSZXK/",
+  "upstream_fix": "https://github.com/python/cpython/pull/160984",
+  "platforms": [
+    {
+      "architecture": "amd64",
+      "observed_date": "2026-11-12",
+      "image_digest": "sha256:ec1c39438e2973b185b26df921824c6acbbbdf435c765c42667c16747648f05e",
+      "method": "Native isolated read-only container probe with no network or added environment/configuration",
+      "python_version": "3.14.10",
+      "openssl_version": "OpenSSL 3.5.7 9 Jun 2026",
+      "fips_mode": 0,
+      "provider_modules": ["legacy.so"]
+    },
+    {
+      "architecture": "arm64",
+      "observed_date": "2026-11-12",
+      "image_index_digest": "sha256:5e9dbaa68d67d28d91a2a00312c9c5af3a64a0a13bd41df299807b3b41df3422",
+      "method": "Read-only native interpreter probe in the deployed alpha82 image, using the same frozen CPython base",
+      "python_version": "3.14.10",
+      "openssl_version": "OpenSSL 3.5.7 9 Jun 2026",
+      "fips_mode": 0,
+      "provider_modules": ["legacy.so"]
+    }
+  ]
+}

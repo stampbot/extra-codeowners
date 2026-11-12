@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import json
 import time
+from collections import OrderedDict
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, replace
@@ -22,6 +23,7 @@ from extra_codeowners.api_budget import (
     RecoveryBudgetDeferredError,
     request_lane,
 )
+from extra_codeowners.base_evidence import base_evidence_fingerprint
 from extra_codeowners.codeowners import CodeownersDocument, parse_codeowners
 from extra_codeowners.database import (
     PERIODIC_RECONCILIATION_REASON,
@@ -105,6 +107,16 @@ class EvidenceLimitError(GitHubError):
 
 class AuthorityChangePendingError(RuntimeError):
     """An accepted authority change must fan out before evaluation can finish."""
+
+
+class BaseRecheckChangedError(RuntimeError):
+    """The same PR head needs another current-base observation before publication."""
+
+
+@dataclass(frozen=True)
+class _Assessment:
+    result: EvaluationResult
+    base_fingerprint: str | None = None
 
 
 class SharedHeadLeaseLostError(RuntimeError):
@@ -1012,22 +1024,26 @@ class EvaluationService:
         policy_sha: str,
         expected_changed_files: int,
         repository_policy: RepositoryPolicy,
-    ) -> EvaluationResult:
+    ) -> _Assessment:
         if not repository_policy.enabled:
-            return evaluate(
-                EvaluationInput(
-                    head_sha=head_sha,
-                    codeowners_text="",
-                    changed_files=(),
-                    organization_policy=OrganizationPolicy(),
-                    repository_policy=repository_policy,
+            return _Assessment(
+                evaluate(
+                    EvaluationInput(
+                        head_sha=head_sha,
+                        codeowners_text="",
+                        changed_files=(),
+                        organization_policy=OrganizationPolicy(),
+                        repository_policy=repository_policy,
+                    )
                 )
             )
 
         if expected_changed_files >= MAX_PULL_FILES:
-            return _failure(
-                "pull_request_too_large",
-                f"pull request has at least GitHub's {MAX_PULL_FILES:,}-file API limit",
+            return _Assessment(
+                _failure(
+                    "pull_request_too_large",
+                    f"pull request has at least GitHub's {MAX_PULL_FILES:,}-file API limit",
+                )
             )
 
         try:
@@ -1037,17 +1053,19 @@ class EvaluationService:
                 job.authority_generation,
             )
         except OrganizationPolicyRepositoryUnavailableError as error:
-            return _failure("organization_policy_repository_unavailable", str(error))
+            return _Assessment(_failure("organization_policy_repository_unavailable", str(error)))
         except (ValidationError, ValueError) as error:
-            return _failure("invalid_policy", str(error))
+            return _Assessment(_failure("invalid_policy", str(error)))
 
         codeowners = await self._find_codeowners(
             job.installation_id, job.repository_full_name, policy_sha
         )
         if codeowners is None:
-            return _failure(
-                "codeowners_missing",
-                "enabled repository has no CODEOWNERS file in .github/, the root, or docs/",
+            return _Assessment(
+                _failure(
+                    "codeowners_missing",
+                    "enabled repository has no CODEOWNERS file in .github/, the root, or docs/",
+                )
             )
         _, codeowners_text = codeowners
         try:
@@ -1071,9 +1089,11 @@ class EvaluationService:
             changed_path_upper_bound * (len(document.rules) + policy_pattern_count)
             > MAX_PATH_MATCH_OPERATIONS
         ):
-            return _failure(
-                "evaluation_complexity_exceeded",
-                "changed paths and policy patterns exceed the bounded evaluation budget",
+            return _Assessment(
+                _failure(
+                    "evaluation_complexity_exceeded",
+                    "changed paths and policy patterns exceed the bounded evaluation budget",
+                )
             )
 
         files_task = self.github.get_pull_files(
@@ -1090,11 +1110,13 @@ class EvaluationService:
                 files_task, reviews_task, errors_task
             )
         except PullRequestTooLargeError as error:
-            return _failure("evidence_limit_exceeded", str(error))
+            return _Assessment(_failure("evidence_limit_exceeded", str(error)))
         if len(file_values) != expected_changed_files:
-            return _failure(
-                "incomplete_changed_files",
-                "GitHub's pull files response did not match pull_request.changed_files",
+            return _Assessment(
+                _failure(
+                    "incomplete_changed_files",
+                    "GitHub's pull files response did not match pull_request.changed_files",
+                )
             )
         if github_errors:
             messages = []
@@ -1103,7 +1125,7 @@ class EvaluationService:
                 message = item.get("message", "invalid CODEOWNERS entry")
                 prefix = f"line {line}: " if isinstance(line, int) else ""
                 messages.append(prefix + str(message))
-            return _failure("github_codeowners_error", "; ".join(messages))
+            return _Assessment(_failure("github_codeowners_error", "; ".join(messages)))
 
         try:
             author_identity = (
@@ -1138,11 +1160,11 @@ class EvaluationService:
                 )
             changed_files = self._changed_files(file_values)
         except EvidenceLimitError as error:
-            return _failure("evidence_limit_exceeded", str(error))
+            return _Assessment(_failure("evidence_limit_exceeded", str(error)))
         except (ValidationError, ValueError) as error:
-            return _failure("malformed_github_evidence", str(error))
+            return _Assessment(_failure("malformed_github_evidence", str(error)))
         labels = _label_names(pull)
-        return evaluate(
+        result = evaluate(
             EvaluationInput(
                 head_sha=head_sha,
                 codeowners_text=codeowners_text,
@@ -1159,6 +1181,108 @@ class EvaluationService:
                 ),
             )
         )
+        fingerprint = None
+        if result.conclusion is EvaluationConclusion.SUCCESS:
+            fingerprint = base_evidence_fingerprint(
+                head_sha=head_sha,
+                base_ref=_required_string(
+                    _required_object(pull.get("base"), "base").get("ref"), "base.ref"
+                ),
+                repository_policy=repository_policy,
+                codeowners_text=codeowners_text,
+                changed_files=changed_files,
+                labels=labels,
+                author_identity=author_identity,
+                allow_insecure_changes=self.settings.allow_insecure_changes,
+                policy_path=self.settings.policy_path,
+            )
+        return _Assessment(result, fingerprint)
+
+    async def base_refresh_fingerprint(
+        self,
+        job: JobRequest,
+        sources: Callable[[str, str], Awaitable[tuple[str | None, str | None]]],
+    ) -> str | None:
+        """Prove a base update left a previously successful assessment's inputs unchanged."""
+        expected = await asyncio.to_thread(self.store.base_recheck_fingerprint, job)
+        if expected is None:
+            return None
+        pull = await self.github.get_pull(
+            job.installation_id, job.repository_full_name, job.pull_number
+        )
+        head = _required_object(pull.get("head"), "pull_request.head")
+        base = _required_object(pull.get("base"), "pull_request.base")
+        repository = _required_object(base.get("repo"), "pull_request.base.repo")
+        if (
+            pull.get("state") != "open"
+            or head.get("sha") != job.head_sha_hint
+            or normalize_repository_full_name(
+                _required_string(repository.get("full_name"), "base.repo.full_name")
+            )
+            != job.repository_full_name
+        ):
+            return None
+        base_ref = _required_string(base.get("ref"), "base.ref")
+        count = _required_nonnegative_int(pull.get("changed_files"), "changed_files")
+        if count >= MAX_PULL_FILES:
+            return None
+        revision = await self.github.get_branch_head(
+            job.installation_id, job.repository_full_name, base_ref
+        )
+        text, codeowners = await sources(base_ref, revision)
+        if text is None or codeowners is None:
+            return None
+        try:
+            policy = RepositoryPolicy.from_toml(text)
+            files = await self.github.get_pull_files(
+                job.installation_id, job.repository_full_name, job.pull_number
+            )
+            if len(files) != count:
+                return None
+            author_identity = (
+                self._pull_request_author_identity(pull)
+                if policy.allow_author_as_codeowner
+                else None
+            )
+            fingerprint = base_evidence_fingerprint(
+                head_sha=validate_head_sha(job.head_sha_hint or ""),
+                base_ref=base_ref,
+                repository_policy=policy,
+                codeowners_text=codeowners,
+                changed_files=self._changed_files(files),
+                labels=_label_names(pull),
+                author_identity=author_identity,
+                allow_insecure_changes=self.settings.allow_insecure_changes,
+                policy_path=self.settings.policy_path,
+            )
+            if fingerprint != expected:
+                return None
+            current = await self.github.get_pull(
+                job.installation_id, job.repository_full_name, job.pull_number
+            )
+            current_base = _required_object(current.get("base"), "base")
+            current_head = _required_object(current.get("head"), "head")
+            current_repository = _required_object(current_base.get("repo"), "base.repo")
+            if (
+                current.get("state") != "open"
+                or current_head.get("sha") != job.head_sha_hint
+                or current_base.get("ref") != base_ref
+                or current.get("changed_files") != count
+                or current_repository.get("full_name") != repository.get("full_name")
+                or _label_names(current) != _label_names(pull)
+                or (
+                    policy.allow_author_as_codeowner
+                    and self._pull_request_author_identity(current) != author_identity
+                )
+                or await self.github.get_branch_head(
+                    job.installation_id, job.repository_full_name, base_ref
+                )
+                != revision
+            ):
+                return None
+            return fingerprint
+        except (ValidationError, ValueError, PullRequestTooLargeError):
+            return None
 
     async def authority_followup_required(
         self,
@@ -1611,9 +1735,9 @@ class EvaluationService:
                 )
 
             if managed_check:
-                # Fetch only after revoking a prior success. Oversized,
-                # malformed, or unavailable policy content must leave the
-                # required check blocking while the durable job retries.
+                # Preserving rechecks retain the result while reading policy.
+                # Invalid content publishes failure; unavailable content makes
+                # the failed recheck revoke-first before its retry.
                 policy_sha = await self.github.get_branch_head(
                     job.installation_id, job.repository_full_name, base_ref
                 )
@@ -1628,6 +1752,7 @@ class EvaluationService:
             )
 
             labels = _label_names(pull)
+            base_fingerprint = None
             try:
                 repository_policy = (
                     RepositoryPolicy()
@@ -1637,7 +1762,7 @@ class EvaluationService:
             except (ValidationError, ValueError) as error:
                 result = _failure("invalid_policy", str(error))
             else:
-                result = await self._evaluate_current(
+                assessment = await self._evaluate_current(
                     job,
                     pull,
                     head_sha,
@@ -1645,6 +1770,8 @@ class EvaluationService:
                     expected_changed_files,
                     repository_policy,
                 )
+                result = assessment.result
+                base_fingerprint = assessment.base_fingerprint
 
             # Close the check-after-race window: evidence collected for an old
             # head or base is never published as current.
@@ -1662,7 +1789,7 @@ class EvaluationService:
             if current_state == "closed":
                 await self._finish_closed_pull_check(job, head_sha, details_url)
                 return
-            if (
+            pull_changed = (
                 current_head_sha != head_sha
                 or current_base_sha != base_sha
                 or current_base_ref != base_ref
@@ -1671,11 +1798,23 @@ class EvaluationService:
                 )
                 != expected_changed_files
                 or _label_names(current) != labels
-                or await self.github.get_branch_head(
+            )
+            current_policy_sha = (
+                policy_sha
+                if pull_changed
+                else await self.github.get_branch_head(
                     job.installation_id, job.repository_full_name, base_ref
                 )
-                != policy_sha
-            ):
+            )
+            if pull_changed or current_policy_sha != policy_sha:
+                if (
+                    scheduled_recheck
+                    and current_head_sha == head_sha
+                    and current_base_ref == base_ref
+                    and _label_names(current) == labels
+                    and (current_base_sha != base_sha or current_policy_sha != policy_sha)
+                ):
+                    raise BaseRecheckChangedError("target branch advanced during recheck")
                 await asyncio.to_thread(
                     self.store.enqueue_shared_head_trigger,
                     JobRequest(
@@ -1860,6 +1999,7 @@ class EvaluationService:
                 result.conclusion.value,
                 {
                     **result.model_dump(mode="json"),
+                    "base_evidence_fingerprint": base_fingerprint,
                     "trigger": {
                         "reason": job.reason,
                         "delivery_id": job.last_delivery_id,
@@ -2121,6 +2261,7 @@ class Worker:
             head_sha=job.head_sha_hint,
             generation=job.generation,
             last_delivery_id=job.last_delivery_id,
+            reason=job.reason,
         )
         done = asyncio.Event()
         heartbeat = asyncio.create_task(self._renew_lease(job, done), name=f"job-lease-{job.id}")
@@ -2158,7 +2299,7 @@ class Worker:
                 scheduled_recheck_limit_seconds=self.settings.reconcile_recheck_seconds,
             )
             return "rate_limited"
-        except AuthorityChangePendingError as error:
+        except (AuthorityChangePendingError, BaseRecheckChangedError) as error:
             log.info(
                 "evaluation_deferred_for_authority",
                 repository=job.repository_full_name,
@@ -2170,8 +2311,9 @@ class Worker:
                 owner,
                 str(error),
                 max(5, int(self.settings.worker_poll_seconds * 10)),
-                # Authority fan-out already resets the check for this PR.
-                scheduled_recheck_limit_seconds=None,
+                # Base-push discovery may retain the result. Don't let a
+                # repeatedly deferred recheck extend its original deadline.
+                scheduled_recheck_limit_seconds=self.settings.reconcile_recheck_seconds,
             )
             return "authority_deferred"
         except SharedHeadInvalidationPendingError as error:
@@ -2413,6 +2555,37 @@ class Worker:
         policies: dict[str, bool] = {}
         policy_errors: dict[str, Exception] = {}
         policy_locks: dict[str, asyncio.Lock] = {}
+        base_sources: OrderedDict[tuple[str, str], tuple[str | None, str | None] | Exception] = (
+            OrderedDict()
+        )
+        source_lock = asyncio.Lock()
+
+        async def preserving_sources(base_ref: str, revision: str) -> tuple[str | None, str | None]:
+            key = (base_ref, revision)
+            async with source_lock:
+                if key not in base_sources:
+                    try:
+                        text, owners, errors = await asyncio.gather(
+                            self.evaluator._repository_policy_text(
+                                job.installation_id, full_name, revision
+                            ),
+                            self.evaluator._find_codeowners(
+                                job.installation_id, full_name, revision
+                            ),
+                            self.evaluator.github.get_codeowners_errors(
+                                job.installation_id, full_name, revision
+                            ),
+                        )
+                        base_sources[key] = (text, None if owners is None or errors else owners[1])
+                    except Exception as error:
+                        base_sources[key] = error
+                    if len(base_sources) > 4:
+                        base_sources.popitem(last=False)
+                base_sources.move_to_end(key)
+                value = base_sources[key]
+                if isinstance(value, Exception):
+                    raise value.with_traceback(None)
+                return value
 
         async def policy_present(base_ref: str) -> bool:
             # Share one current branch/policy observation only within this
@@ -2455,7 +2628,26 @@ class Worker:
                         return
                     # Queue before revocation: it may discover and queue a
                     # newer head, which this listed-head request must not replace.
-                    await asyncio.to_thread(self.store.enqueue, request)
+                    if request.reason == "push.repository_base":
+                        try:
+                            fingerprint = await self.evaluator.base_refresh_fingerprint(
+                                request, preserving_sources
+                            )
+                        except (GitHubRateLimitError, RecoveryBudgetDeferredError):
+                            raise
+                        except (GitHubError, ValueError):
+                            # Failed preflight is not permission to retain a
+                            # success. Still try the normal fast revocation.
+                            fingerprint = None
+                        if await asyncio.to_thread(
+                            self.store.enqueue_base_recheck,
+                            request,
+                            self.settings.reconcile_recheck_seconds,
+                            fingerprint=fingerprint,
+                        ):
+                            return
+                    else:
+                        await asyncio.to_thread(self.store.enqueue, request)
                     with request_lane("authority"):
                         await self.evaluator.invalidate_for_trigger(
                             replace(request, work_class="interactive"),

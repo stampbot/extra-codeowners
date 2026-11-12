@@ -96,6 +96,11 @@ def inventories(tmp_path: Path) -> list[Path]:
                 ]
             },
             "python": _native_python(architecture),
+            "cpython": {
+                "version": "3.14.10",
+                "source_url": "https://www.python.org/ftp/python/3.14.10/Python-3.14.10.tar.xz",
+                "source_sha256": "d" * 64,
+            },
         }
         path = tmp_path / f"{architecture}.json"
         path.write_text(json.dumps(inventory), encoding="utf-8")
@@ -128,7 +133,7 @@ def test_review_records_glibc_caller_evidence_and_existing_openssl_fixes() -> No
     statements = document["statements"]
     assert Counter(statement["status"] for statement in statements) == {
         "fixed": 26,
-        "not_affected": 11,
+        "not_affected": 12,
         "under_investigation": 51,
     }
     identities = [(s["vulnerability"]["name"], p["@id"]) for s in statements for p in s["products"]]
