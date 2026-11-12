@@ -70,6 +70,11 @@ before returning. Discarded read-ahead cannot discard GitHub's backoff, and
 delayed consumption cannot restart its original retry clock.
 If that observation cannot be stored, discovery aborts rather than continuing
 to other installations without the shared pause.
+The runtime client checks stored provider backpressure before every physical
+request, including streamed, GraphQL and App-authenticated requests. A sibling
+or another replica cannot keep starting requests just because its job began
+before the limit arrived. A request denied by that existing circuit does not
+charge quota or renew the pause. Already admitted requests may still finish.
 
 After one scan interval of work, an installation yields at the next repository
 boundary if work remains. It requests a one-second continuation and lets other

@@ -17,6 +17,7 @@ from sqlalchemy.engine import make_url
 from extra_codeowners.api_budget import (
     REQUEST_LANE,
     CoreQuota,
+    ProviderBackpressureActiveError,
     ProviderQuotaExhaustedError,
     RecoveryApiBudget,
     RecoveryBudgetDeferredError,
@@ -26,13 +27,14 @@ from extra_codeowners.database import (
     AuthorityRequest,
     Base,
     InstallationApiBudget,
+    ProviderBackpressure,
     QueueStore,
     ServiceLease,
     utcnow,
 )
 from extra_codeowners.github import GitHubClient, GitHubRateLimitError
 from extra_codeowners.migrations import upgrade_database
-from extra_codeowners.service import EvaluationService, Worker
+from extra_codeowners.service import EvaluationService, Reconciler, Worker
 from extra_codeowners.settings import Settings
 from extra_codeowners.tracing import Tracing
 
@@ -104,6 +106,171 @@ def test_unclassified_deferral_remains_backward_compatible() -> None:
     assert error.reason == "unspecified"
     assert error.retry_after_seconds == 1
     assert str(error) == "recovery is preserving the installation's REST core quota"
+
+
+# Verifies XCO-019.
+@pytest.mark.parametrize("scope", [None, 17])
+def test_shared_provider_guard_neither_renews_pause_nor_charges_quota(
+    budget_store: QueueStore, scope: int | None
+) -> None:
+    budget = RecoveryApiBudget(budget_store)
+    budget.observe(17, quota())
+    budget_store.record_provider_backpressure(scope, "provider pause", 30)
+    with budget_store.session() as session:
+        circuit = session.get(ProviderBackpressure, 0 if scope is None else scope)
+        balance = session.get(InstallationApiBudget, 17)
+        assert circuit is not None and balance is not None
+        before = (circuit.blocked_until, balance.remaining, balance.accounting_revision)
+    for _ in range(3):
+        with pytest.raises(ProviderBackpressureActiveError) as denied:
+            budget.check_provider_backpressure(17)
+        assert denied.value.reason == "provider_backpressure"
+        assert 1 <= denied.value.retry_after_seconds <= 30
+    with budget_store.session() as session:
+        circuit = session.get(ProviderBackpressure, 0 if scope is None else scope)
+        balance = session.get(InstallationApiBudget, 17)
+        assert circuit is not None and balance is not None
+        assert (circuit.blocked_until, balance.remaining, balance.accounting_revision) == before
+    if scope is not None:
+        budget.check_provider_backpressure(None)
+        budget.check_provider_backpressure(18)
+    with budget_store.session() as session:
+        circuit = session.get(ProviderBackpressure, 0 if scope is None else scope)
+        assert circuit is not None
+        circuit.blocked_until = utcnow() - timedelta(seconds=1)
+    budget.check_provider_backpressure(17)
+
+
+# Verifies XCO-019.
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["rest", "stream", "graphql", "app"])
+@pytest.mark.parametrize("lane", ["interactive", "recovery", "authority"])
+async def test_peer_observed_provider_pause_prevents_every_subsequent_physical_request(
+    budget_store: QueueStore, private_key: str, kind: str, lane: str
+) -> None:
+    budget = RecoveryApiBudget(budget_store)
+    budget.observe(17, quota())
+    sent: list[str] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        sent.append(request.url.path)
+        if request.url.path.endswith("/access_tokens"):
+            return httpx.Response(
+                201,
+                json={
+                    "token": "fictional-token",
+                    "expires_at": (utcnow() + timedelta(hours=1)).isoformat(),
+                },
+            )
+        return httpx.Response(200, json={}, headers=headers())
+
+    client = GitHubClient(
+        7, private_key, recovery_budget=budget, transport=httpx.MockTransport(handle)
+    )
+    peer = QueueStore(budget_store.engine.url.render_as_string(hide_password=False))
+    try:
+        # Warm the client before a different process/store records the pause.
+        await client._api_response("GET", "/repos/example/one", installation_id=17)
+        before = len(sent)
+        peer.record_provider_backpressure(None, "secondary limit observed by peer", 30)
+        with request_lane(lane), pytest.raises(ProviderBackpressureActiveError):
+            if kind == "stream":
+                async with client._authenticated_streaming_response(
+                    "GET", "/repos/example/two", 17
+                ):
+                    pass
+            else:
+                await client._api_response(
+                    "POST" if kind == "graphql" else "GET",
+                    "/graphql"
+                    if kind == "graphql"
+                    else "/app/installations"
+                    if kind == "app"
+                    else "/repos/example/two",
+                    installation_id=None if kind == "app" else 17,
+                    app_authenticated=kind == "app",
+                )
+        assert len(sent) == before
+    finally:
+        await client.close()
+        peer.close()
+
+
+# Verifies XCO-019.
+@pytest.mark.asyncio
+async def test_prefetched_limit_stops_current_readers_next_branch_request(
+    budget_store: QueueStore, private_key: str
+) -> None:
+    budget = RecoveryApiBudget(budget_store)
+    budget.observe(17, quota())
+    observed = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    record = budget_store.record_provider_backpressure
+
+    def record_and_signal(installation_id: int | None, error: str, delay_seconds: int) -> None:
+        record(installation_id, error, delay_seconds)
+        loop.call_soon_threadsafe(observed.set)
+
+    budget_store.record_provider_backpressure = record_and_signal  # type: ignore[method-assign]
+    sent: list[str] = []
+
+    async def handle(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        sent.append(path)
+        if path.endswith("/access_tokens"):
+            return httpx.Response(
+                201,
+                json={
+                    "token": "fictional-token",
+                    "expires_at": (utcnow() + timedelta(hours=1)).isoformat(),
+                },
+            )
+        if path == "/app/installations":
+            return httpx.Response(200, json=[{"id": 17, "suspended_at": None}])
+        if path == "/installation/repositories":
+            return httpx.Response(
+                200,
+                json={
+                    "total_count": 2,
+                    "repositories": [
+                        {"id": 101, "full_name": "example/a", "archived": False},
+                        {"id": 102, "full_name": "example/b", "archived": False},
+                    ],
+                },
+                headers=headers(),
+            )
+        if path == "/repos/example/b/pulls":
+            return httpx.Response(
+                429, json={"message": "secondary rate limit"}, headers={"retry-after": "30"}
+            )
+        if path == "/repos/example/a/pulls":
+            await asyncio.wait_for(observed.wait(), 5)
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "number": 1,
+                        "head": {"sha": "a" * 40},
+                        "base": {"ref": "main"},
+                    }
+                ],
+                headers=headers(),
+            )
+        raise AssertionError(f"request was not stopped after sibling backoff: {path}")
+
+    configuration = Settings(_env_file=None, environment="test", github_max_in_flight_requests=4)
+    client = GitHubClient(
+        7, private_key, recovery_budget=budget, transport=httpx.MockTransport(handle)
+    )
+    try:
+        result = await asyncio.wait_for(
+            Reconciler(configuration, client, budget_store, "one").reconcile_once(), 10
+        )
+        assert result is not None and result.deferred and not result.complete
+        assert budget_store.provider_is_backpressured(None)
+        assert not any("/git/ref/" in path or "/contents/" in path for path in sent)
+    finally:
+        await client.close()
 
 
 @pytest.mark.parametrize("reason", ["example/private", "token=fictional", "", "RESERVE"])

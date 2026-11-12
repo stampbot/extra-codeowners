@@ -11,6 +11,9 @@ App signing and database connections keep their existing call paths.
 Readers persist observed provider limits through the existing backpressure
 transaction even when their other work is cancelled. Expiring permission to
 skip a read is separate from cycle coverage, which cannot authorize a check.
+The runtime client also reads the existing shared provider circuit before each
+physical request. An active circuit defers the request without another HTTP
+call, quota debit or renewal. This adds a database read, not a new TLS caller.
 
 All 89 statement contents and assessment dates remain unchanged, including the
 default non-FIPS CPython scope below. The Dockerfile, base digest, dependency

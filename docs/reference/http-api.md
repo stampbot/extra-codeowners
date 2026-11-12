@@ -213,11 +213,13 @@ physical attempt. These attributes contain no validators or request contents.
 `absent` means no entry exists now; it does not distinguish a cold cache from
 one whose entry was evicted. The cache retains no history of evicted keys.
 
-When the local REST-core guard denies admission, the request span records
+When a shared admission guard denies a request, its span records
 `github.quota.deferred_reason` before it ends. Values are `reserve` (the
 interactive reserve would be consumed), `exhausted` (the known balance is
-zero), or `probe_pending` (a new/reset window's recovery probe is still
-outstanding). `unspecified` covers a deferral raised without a classified
+zero), `probe_pending` (a new/reset window's recovery probe is still
+outstanding), or `provider_backpressure` (a previously recorded provider pause
+is still active). The latter applies to every lane and to streamed, GraphQL
+and App-authenticated requests too. `unspecified` covers a deferral without a classified
 reason. These are fixed operational values, not repository metadata or
 GitHub response codes. The denied attempt has not sent its installation
 request; token acquisition may already have run.
@@ -226,8 +228,9 @@ The existing `reconciliation_deferred_for_recovery_budget` and
 `authority_discovery_deferred_for_recovery_budget` log events carry the same
 value as `budget_deferred_reason`, alongside their existing retry delay.
 An expired window with a pending probe is not evidence that the interactive
-reserve was exhausted. These diagnostics change neither admission nor
-retry scheduling, and add no metric labels.
+reserve was exhausted. The reason strings add no metric labels. A request
+denied by an existing provider pause does not debit quota or extend the pause;
+it waits for the stored deadline rather than recording another provider response.
 
 The request span's `github.quota.observation` describes the latest observed
 response, even when the logical request retries. The accompanying

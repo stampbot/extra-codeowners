@@ -148,7 +148,9 @@ stable ID; a test that verifies one names that ID in a comment.
     after completion or lost election. Read-ahead cannot
     commit jobs or cursors past an earlier discovery error, and unused readers
     are cancelled and drained before the attempt returns. An observed provider
-    limit is persisted even when its reader's result is discarded.
+    limit is persisted even when its reader's result is discarded. The runtime
+    client checks that shared pause before each physical request, without
+    renewing its deadline merely because another request was denied.
 
 A repository base push requests a fresh assessment; it doesn't prove an
 approval was withdrawn. Discovery compares fresh base-side inputs with the

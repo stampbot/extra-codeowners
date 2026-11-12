@@ -279,6 +279,10 @@ even if that prefetched reader's result is later discarded. Cancellation drains
 the observation transaction; other replicas still see the shared pause.
 If storage fails, the attempt fails instead of continuing to other installations
 without recording the pause.
+The runtime client checks the shared pause before each physical request, so
+sibling readers and other replicas stop starting calls while it is active.
+Their request spans use `github.quota.deferred_reason="provider_backpressure"`.
+Those denials do not spend quota or restart the pause's clock.
 
 `reconciliation_installation_yielded` records completed and pending repository
 counts when an installation gives other due installations a turn. It yields

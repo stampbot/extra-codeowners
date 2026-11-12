@@ -19,6 +19,7 @@ import structlog
 from pydantic import ValidationError
 
 from extra_codeowners.api_budget import (
+    ProviderBackpressureActiveError,
     ProviderQuotaExhaustedError,
     RecoveryApiBudget,
     RecoveryBudgetDeferredError,
@@ -3511,6 +3512,16 @@ class Reconciler:
             installation_records = await self.github.list_installations(stop=request_stop)
         except GitHubOperationStoppedError:
             return interruption_outcome(operation_stopped=not interrupted())
+        except ProviderBackpressureActiveError as error:
+            log.info("reconciliation_deferred_for_provider_backpressure", scope="global")
+            return ReconciliationOutcome(
+                queued=queued,
+                deferred=True,
+                cycle_complete=False,
+                retry_after_seconds=min(
+                    self.settings.reconcile_interval_seconds, error.retry_after_seconds
+                ),
+            )
         except GitHubRateLimitError as error:
             await asyncio.to_thread(
                 self.store.record_provider_backpressure,

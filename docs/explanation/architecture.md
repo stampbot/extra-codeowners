@@ -324,7 +324,10 @@ drained on interruption or early exit. Each stream retains its PR listing and
 one buffered result, so concurrency also increases the possible memory use.
 Provider-limit observations are not disposable results: readers persist them
 immediately and drain those transactions even when their other work is
-cancelled. All replicas still honor the shared backoff.
+cancelled. The runtime client checks that shared backoff before every physical
+request, including streams, GraphQL and App authentication. Denied requests
+neither spend quota nor renew the stored pause. Already admitted requests may
+finish; a running job cannot use its earlier admission to start further calls.
 
 An installation yields after one scan interval at a repository boundary when
 more work remains, then requests a one-second continuation. Other due

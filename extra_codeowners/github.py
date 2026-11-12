@@ -614,8 +614,16 @@ class GitHubClient:
     async def _admit_request(
         self, installation_id: int | None, method: str, path: str, span: Span
     ) -> BudgetReceipt | None:
-        if installation_id is not None and path != "/graphql" and self._recovery_budget is not None:
+        if self._recovery_budget is not None:
             try:
+                # A different reader or replica may have observed a limit
+                # after this job began. Check before every physical attempt,
+                # including App-authenticated, streamed and GraphQL requests.
+                await asyncio.to_thread(
+                    self._recovery_budget.check_provider_backpressure, installation_id
+                )
+                if installation_id is None or path == "/graphql":
+                    return None
                 return await asyncio.to_thread(
                     self._recovery_budget.admit,
                     installation_id,
