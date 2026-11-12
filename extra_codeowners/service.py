@@ -3880,10 +3880,34 @@ class Reconciler:
 
     async def run(self, stop: asyncio.Event) -> None:
         """Poll due installations without replaying healthy scopes on an early retry."""
-        while not stop.is_set():
-            outcome = await self.run_iteration(stop)
-            delay = self.settings.reconcile_interval_seconds
-            if outcome is not None and outcome.retry_after_seconds is not None:
-                delay = min(delay, max(1, outcome.retry_after_seconds))
-            with suppress(TimeoutError):
-                await asyncio.wait_for(stop.wait(), delay)
+        try:
+            while not stop.is_set():
+                outcome = await self.run_iteration(stop)
+                delay = self.settings.reconcile_interval_seconds
+                if outcome is not None and outcome.retry_after_seconds is not None:
+                    delay = min(delay, max(1, outcome.retry_after_seconds))
+                with suppress(TimeoutError):
+                    await asyncio.wait_for(stop.wait(), delay)
+        finally:
+            self._reset_advisory_state()
+        # Only cooperative exit reaches here. A cancelled election/renewal may
+        # still commit in its worker thread; leave that case to lease expiry.
+        # Normal attempts retain the lease so continuations keep their advisory
+        # progress. The scan and heartbeat have both drained before this delete.
+        release = asyncio.create_task(
+            asyncio.to_thread(self.store.release_service_lease, "open-pr-reconciler", self.owner)
+        )
+        try:
+            await asyncio.shield(release)
+        except asyncio.CancelledError:
+            try:
+                await asyncio.gather(release)
+            except Exception as error:
+                log.warning(
+                    "reconciliation_shutdown_lease_release_failed", error_type=type(error).__name__
+                )
+            raise
+        except Exception as error:
+            log.warning(
+                "reconciliation_shutdown_lease_release_failed", error_type=type(error).__name__
+            )

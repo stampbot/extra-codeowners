@@ -306,6 +306,11 @@ be unavailable, GitHub may not redeliver, and access loss can make an old check
 unreachable. The reconciler covers the recoverable middle ground.
 
 One elected reconciler scans accessible open pull requests in due installations.
+It retains its lease between attempts so a short continuation can reuse advisory
+progress. After cooperative shutdown drains the scan and heartbeat, it deletes
+the lease only if it still owns it. A standby still follows its polling interval;
+release is not an instant takeover signal. Forced cancellation, process death or
+a failed delete falls back to lease expiry.
 It revalidates current membership on every attempt. During a short continuation,
 it omits repositories already completed in that active sweep only when their
 immutable IDs and current routes still match. Read-skip evidence expires after

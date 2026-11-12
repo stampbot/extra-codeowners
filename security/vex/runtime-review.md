@@ -1,5 +1,16 @@
 # Runtime vulnerability review
 
+## Reconciler shutdown cleanup: November 12, 2026 UTC
+
+The run loop now releases its own leadership lease after cooperative shutdown
+drains discovery and the heartbeat. The delete uses the existing owner-fenced
+SQLAlchemy method. Normal attempts retain the lease; forced cancellation keeps
+the expiry fallback rather than racing an unfinished database operation.
+Cleanup adds no GitHub request, dependency, native entrypoint, TLS setting,
+subprocess or input format. The Dockerfile, base digest, lock and source
+recipes are unchanged. All 89 vulnerability statements and assessment dates
+remain unchanged; only the reviewed runtime binding advances.
+
 ## Bounded reconciliation readers: November 12, 2026 UTC
 
 Reconciliation now overlaps bounded read-only GitHub discovery streams while

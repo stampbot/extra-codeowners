@@ -1,8 +1,8 @@
 {
   "@context": "https://openvex.dev/ns/v0.2.0",
-  "@id": "urn:uuid:c7e81d24-e452-550f-91e9-3e4cbb9ecf52",
+  "@id": "urn:uuid:3c808c82-f139-5545-a143-1689d2fdb9e6",
   "author": "Extra CODEOWNERS maintainers",
-  "last_updated": "2026-11-12T16:08:02Z",
+  "last_updated": "2026-11-12T17:41:41Z",
   "role": "VEX document producer",
   "statements": [
     {
@@ -1944,9 +1944,9 @@
       }
     }
   ],
-  "timestamp": "2026-11-12T16:08:02Z",
+  "timestamp": "2026-11-12T17:41:41Z",
   "tooling": "Vexcalibur + Extra CODEOWNERS runtime binding",
-  "version": 30,
+  "version": 31,
   "x_extra_codeowners_runtime": {
     "files": {
       ".dockerignore": "3f9dc9d3a79fe3085f25de88403b5563ad5c7fa7010bef94c5e55f24bd3cf691",
@@ -1990,7 +1990,7 @@
       "extra_codeowners/reconciliation_sweep.py": "075cedff6f789a39b4171d2a49eb461ccffdf3fb546183fa421af588f0443d9c",
       "extra_codeowners/reconciliation_tracing.py": "0f650bf2300e26d1485fa7df71b71dccbb7739653e049d452d6b30ee9b6b9931",
       "extra_codeowners/request_timing.py": "7c53fcfdec4b8a5b1cf3427c8bd354b76bc6f255ac7374540a6cae0886a48c19",
-      "extra_codeowners/service.py": "b0c702ca11366a5371eec8172a47a0c049da2828c3bf0e8104e29483e640f493",
+      "extra_codeowners/service.py": "91bc466d802d37abf5deed860c73a5f2df483e5b7f61f99d52fd9b6cbaee0f2f",
       "extra_codeowners/settings.py": "bd1d3cd0acf23ea4b26869fc1e024438aba7b9acf43f3850c4e6be2e9a5b5437",
       "extra_codeowners/trace_context.py": "f79ca91baa1dd615c80546c66a6b370ba78ec7106dece3feb201d10250078532",
       "extra_codeowners/tracing.py": "49641dd6cb9b5b6da1e6026b90925a73eb3112d13a069afd202e741d261f76f9",
@@ -2001,7 +2001,7 @@
       "tools/source_recipes/psycopg-binary-3.3.4.json": "ec227aa110315f82c25335837e258806930c7afbe980c8b2ff6b476343c243b5",
       "uv.lock": "5514cb0448adb693fe97f3d2c8016ccd606890327a1946467fbd118356de4922"
     },
-    "review": "Reviewed bounded discovery and ordered commits with independent durable provider observations, cancellation-safe draining and fatal handling of observation storage errors. Every physical runtime-client request now checks the existing shared provider circuit, including streams, GraphQL and App authentication; circuit denials neither charge quota nor renew the pause. This adds existing-database reads, not new native, TLS, subprocess, compression, provider configuration or dependency paths. All 89 statement contents/dates and their default non-FIPS and unpatched-library scope remain unchanged.",
+    "review": "Reviewed cooperative reconciler shutdown: existing owner-fenced SQLAlchemy lease deletion only after the scan/heartbeat drain. Normal attempts and forced-cancellation expiry fallback unchanged. No native/TLS/dependency/image/source-recipe change; all 89 statements remain unchanged.",
     "schema_version": 1
   }
 }
