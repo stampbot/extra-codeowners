@@ -1,5 +1,17 @@
 # Runtime vulnerability review
 
+## Repository team-grant routing: November 12, 2026 UTC
+
+The parser can scope a signed repository access grant after checking ordinary
+Python dictionaries, integer identities, names and owning-organization fields.
+Ambiguous context still produces installation-wide authority work. The delivery
+transaction also records the typed installation and routed repository in
+existing columns; it retains no raw payload. Evaluation and current GitHub
+membership checks use the existing paths. There is no new input format,
+dependency, native entrypoint, subprocess, TLS setting, Dockerfile, base digest,
+lock or source recipe. All 89 vulnerability statements and assessment dates
+remain unchanged; only the reviewed runtime binding advances.
+
 ## Reconciler shutdown cleanup: November 12, 2026 UTC
 
 The run loop now releases its own leadership lease after cooperative shutdown

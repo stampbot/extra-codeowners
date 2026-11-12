@@ -297,6 +297,13 @@ def _single_added_repository(payload: dict[str, Any], org_config_repository: str
     account = installation.get("account")
     if not isinstance(account, dict):
         return None
+    return _ordinary_repository_name(repository, account, org_config_repository)
+
+
+def _ordinary_repository_name(
+    repository: dict[str, Any], account: dict[str, Any], org_config_repository: str
+) -> str | None:
+    """Validate a repository identity against its declared owning account."""
     login = account.get("login")
     full_name = repository.get("full_name")
     name = repository.get("name")
@@ -315,6 +322,53 @@ def _single_added_repository(payload: dict[str, Any], org_config_repository: str
     ):
         return None
     return full_name.lower()
+
+
+def _team_added_repository(payload: dict[str, Any], org_config_repository: str) -> str | None:
+    """Limit a repository access grant only when its signed context agrees."""
+    repository = payload.get("repository")
+    organization = payload.get("organization")
+    team = payload.get("team")
+    installation = payload.get("installation")
+    if (
+        not isinstance(repository, dict)
+        or not isinstance(organization, dict)
+        or not isinstance(team, dict)
+        or not isinstance(installation, dict)
+    ):
+        return None
+    owner = repository.get("owner")
+    organization_id = organization.get("id")
+    login = organization.get("login")
+    team_id = team.get("id")
+    if (
+        type(organization_id) is not int
+        or organization_id <= 0
+        or not isinstance(login, str)
+        or type(team_id) is not int
+        or team_id <= 0
+        or not isinstance(owner, dict)
+        or type(owner.get("id")) is not int
+        or owner["id"] != organization_id
+        or owner.get("type") != "Organization"
+        or not isinstance(owner.get("login"), str)
+        or owner["login"].lower() != login.lower()
+    ):
+        return None
+    # Most team deliveries carry only installation.id/node_id. If richer
+    # account context is supplied, a conflict must retain the broad fallback.
+    if "account" in installation:
+        account = installation["account"]
+        if (
+            not isinstance(account, dict)
+            or type(account.get("id")) is not int
+            or account["id"] != organization_id
+            or account.get("type", "Organization") != "Organization"
+            or not isinstance(account.get("login"), str)
+            or account["login"].lower() != login.lower()
+        ):
+            return None
+    return _ordinary_repository_name(repository, organization, org_config_repository)
 
 
 def evaluation_job(
@@ -388,6 +442,13 @@ def evaluation_job(
             repository_full_name=_repository_name(webhook.payload),
             base_ref=None,
             reason=f"{webhook.event}.{webhook.action or 'received'}",
+        )
+    if webhook.event == "team" and webhook.action == "added_to_repository":
+        return AuthorityRequest(
+            installation_id=_installation_id(webhook.payload),
+            repository_full_name=_team_added_repository(webhook.payload, org_config_repository),
+            base_ref=None,
+            reason="team.added_to_repository",
         )
     if webhook.event in {"membership", "organization", "team"}:
         return AuthorityRequest(

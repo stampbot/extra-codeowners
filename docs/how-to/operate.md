@@ -523,6 +523,18 @@ members, memberships, teams, team additions, organizations, installations,
 installation targets, repositories, and installation repository selection.
 Unsupported actions are authenticated and acknowledged without durable work.
 
+A `team.added_to_repository` grant queues only the affected ordinary repository
+when its signed identity fields agree. Missing or conflicting metadata and
+grants for the configured organization-policy repository keep installation-wide
+work. Other team actions and membership events remain global. This does not
+cancel global work accepted by an older release.
+
+New authority-delivery rows retain the installation ID and routed repository
+in the existing metadata columns, without retaining the raw payload. A null
+repository means global work when the authority row has that installation
+context. Older rows may lack it; their null fields cannot reconstruct the
+original event's scope.
+
 Pull-request events for the organization-policy repository are also
 acknowledged without retention. A relevant push or lifecycle event for that
 repository is retained and fans out across the installation. Removal of that

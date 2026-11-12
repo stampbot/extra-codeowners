@@ -2478,6 +2478,8 @@ class QueueStore:
                                 shared_head_generation,
                             )
                         elif isinstance(request, AuthorityRequest):
+                            delivery.installation_id = request.installation_id
+                            delivery.repository_full_name = request.repository_full_name
                             if request.repository_full_name is None:
                                 self._bump_authority_epoch_in_session(
                                     session, request.installation_id
