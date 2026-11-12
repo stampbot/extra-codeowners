@@ -46,10 +46,13 @@ and missing IDs cannot establish a completed match. Losing election or stopping
 forgets the advisory state; a replacement leader uses the existing durable
 cursors and may repeat reads.
 
-Progress expires after the greater of the scan and PR-recheck intervals,
+Permission to skip reads expires after the greater of the scan and PR-recheck intervals,
 measured from the sweep's start, not its latest retry. A perpetually incomplete
-sweep cannot suppress completed repositories indefinitely. Finishing a sweep
-also discards its progress, so the next periodic scan starts fresh. Neither
+sweep cannot keep those reads ineligible indefinitely. Cycle coverage is
+separate: it remembers which current identities were visited, even after their
+read-skip evidence expires. That lets a slow sweep finish instead of endlessly
+forgetting its prefix. Coverage does not authorize a skip or a check result.
+Finishing a sweep discards both, so the next periodic scan starts fresh. Neither
 expiry nor a due time promises a wall-clock recovery bound during provider
 backoff or queue backlog.
 
@@ -61,6 +64,12 @@ cursors. The consumer handles repositories and PRs in deterministic order and
 commits each completed PR before moving on. A reader's partial results precede
 its error. Failure, interruption or early exit cancels and drains unused reads.
 Every physical request still needs the existing shared admission checks.
+Readers persist provider-limit observations immediately, independently of
+ordered result consumption. Cancellation drains an in-progress observation
+before returning. Discarded read-ahead cannot discard GitHub's backoff, and
+delayed consumption cannot restart its original retry clock.
+If that observation cannot be stored, discovery aborts rather than continuing
+to other installations without the shared pause.
 
 After one scan interval of work, an installation yields at the next repository
 boundary if work remains. It requests a one-second continuation and lets other

@@ -11,6 +11,8 @@ from dataclasses import dataclass, field
 class _Progress:
     started_at: float
     completed: set[tuple[int, str]] = field(default_factory=set)
+    recent: set[tuple[int, str]] = field(default_factory=set)
+    remaining: set[tuple[int, str]] = field(default_factory=set)
 
 
 class ReconciliationSweeps:
@@ -43,14 +45,28 @@ class ReconciliationSweeps:
         """Return completed routes still present in this bounded active sweep."""
         now = self._clock()
         progress = self._progress.get(installation_id)
-        if progress is None or now - progress.started_at >= lifetime_seconds:
+        if progress is None:
             progress = self._progress[installation_id] = _Progress(now)
+        elif now - progress.started_at >= lifetime_seconds:
+            # Expire permission to omit a read, not evidence that this cycle
+            # already visited the repository. Slow cycles must still finish.
+            progress.recent.clear()
         current = {(repository_id, route.lower()) for route, repository_id in identities.items()}
         progress.completed.intersection_update(current)
-        return frozenset(route for _, route in progress.completed)
+        progress.recent.intersection_update(current)
+        progress.remaining = current - progress.completed
+        return frozenset(route for _, route in progress.recent)
 
     def complete_repository(self, installation_id: int, route: str, repository_id: int) -> None:
-        self._progress[installation_id].completed.add((repository_id, route.lower()))
+        progress = self._progress[installation_id]
+        identity = (repository_id, route.lower())
+        progress.completed.add(identity)
+        progress.recent.add(identity)
+        progress.remaining.discard(identity)
+
+    def covered(self, installation_id: int) -> bool:
+        """Cycle coverage survives read-skip expiry, but not scope/election changes."""
+        return not self._progress[installation_id].remaining
 
     def finish(self, installation_id: int) -> None:
         """The next due scan must revisit every repository, even if unchanged."""

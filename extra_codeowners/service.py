@@ -5,10 +5,11 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import math
 import time
 from collections import OrderedDict
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
-from contextlib import asynccontextmanager, suppress
+from contextlib import aclosing, asynccontextmanager, suppress
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from functools import partial
@@ -3194,6 +3195,19 @@ class _DiscoveredPull:
     unenrolled: bool
 
 
+class _ObservedDiscoveryRateLimitError(RuntimeError):
+    """A prefetched provider limit already persisted by its observing reader."""
+
+    def __init__(self, error: GitHubRateLimitError, retry_at: float) -> None:
+        super().__init__(str(error))
+        self.error = error
+        self.retry_at = retry_at
+
+
+class _DiscoveryBackpressureObservationError(RuntimeError):
+    """A provider limit could not be persisted; the scan must not continue."""
+
+
 class Reconciler:
     """Periodically enqueue every open pull request to recover missed webhooks."""
 
@@ -3219,7 +3233,68 @@ class Reconciler:
         self._cadence.reset()
         self._sweeps.reset()
 
+    @asynccontextmanager
+    async def _provider_observation_guard(self) -> AsyncIterator[list[Exception]]:
+        failures: list[Exception] = []
+        try:
+            yield failures
+        finally:
+            # The prefetch context exits first, draining every reader before
+            # this guard checks for a failed provider-limit transaction.
+            if failures:
+                raise _DiscoveryBackpressureObservationError(
+                    "provider backoff observation failed; aborting discovery"
+                ) from failures[0]
+
     async def _discover_repository(
+        self,
+        installation_id: int,
+        full_name: str,
+        partial_repository: str,
+        partial_number: int,
+        stop: asyncio.Event,
+        *,
+        observation_failures: list[Exception],
+    ) -> AsyncGenerator[_DiscoveredPull, None]:
+        """Observe provider limits even if the ordered consumer discards this reader."""
+        try:
+            async with aclosing(
+                self._read_repository(
+                    installation_id, full_name, partial_repository, partial_number, stop
+                )
+            ) as stream:
+                async for pull in stream:
+                    yield pull
+        except GitHubRateLimitError as error:
+            retry_at = self._work_clock() + error.retry_after_seconds
+            observed = asyncio.create_task(
+                asyncio.to_thread(
+                    self.store.record_provider_backpressure,
+                    None if error.global_scope else installation_id,
+                    str(error),
+                    error.retry_after_seconds,
+                )
+            )
+            try:
+                try:
+                    await asyncio.shield(observed)
+                except asyncio.CancelledError:
+                    # An observed limit is not disposable read-ahead.
+                    await observed
+                    raise
+            except Exception as failure:
+                observation_failures.append(failure)
+                stop.set()
+                raise
+            log.info(
+                "reconciliation_provider_backoff_observed",
+                installation_id=installation_id,
+                retry_after_seconds=error.retry_after_seconds,
+                global_scope=error.global_scope,
+            )
+            raise _ObservedDiscoveryRateLimitError(error, retry_at) from error
+
+    async def _read_repository(
         self,
         installation_id: int,
         full_name: str,
@@ -3549,17 +3624,21 @@ class Reconciler:
                 deadline = self._work_clock() + self.settings.reconcile_interval_seconds
                 can_yield = all(name.lower() in identities for name in pending)
                 slots = max(1, min(4, self.settings.github_max_in_flight_requests // 2))
-                async with ordered_prefetch(
-                    pending,
-                    partial(
-                        self._discover_repository,
-                        installation_id,
-                        partial_repository=partial_repository,
-                        partial_number=partial_number,
-                        stop=request_stop,
-                    ),
-                    slots=slots,
-                ) as discoveries:
+                async with (
+                    self._provider_observation_guard() as observation_failures,
+                    ordered_prefetch(
+                        pending,
+                        partial(
+                            self._discover_repository,
+                            installation_id,
+                            partial_repository=partial_repository,
+                            partial_number=partial_number,
+                            stop=request_stop,
+                            observation_failures=observation_failures,
+                        ),
+                        slots=slots,
+                    ) as discoveries,
+                ):
                     completed_count = 0
                     async for full_name, pulls in discoveries:
                         async for pull in pulls:
@@ -3610,6 +3689,10 @@ class Reconciler:
                                 installation_id, full_name, repository_id
                             )
                         completed_count += 1
+                        if can_yield and self._sweeps.covered(installation_id):
+                            installation_complete = True
+                            self._sweeps.finish(installation_id)
+                            break
                         if (
                             can_yield
                             and completed_count < len(pending)
@@ -3627,6 +3710,8 @@ class Reconciler:
                     else:
                         installation_complete = True
                         self._sweeps.finish(installation_id)
+            except _DiscoveryBackpressureObservationError:
+                raise
             except GitHubOperationStoppedError:
                 return interruption_outcome(operation_stopped=not interrupted())
             except RecoveryBudgetDeferredError as error:
@@ -3637,6 +3722,14 @@ class Reconciler:
                     installation_id=installation_id,
                     retry_after_seconds=error.retry_after_seconds,
                     budget_deferred_reason=error.reason,
+                )
+            except _ObservedDiscoveryRateLimitError as observed_limit:
+                failed_installations += 1
+                retry_after = max(1, math.ceil(observed_limit.retry_at - self._work_clock()))
+                log.warning(
+                    "reconciliation_rate_limited",
+                    installation_id=installation_id,
+                    retry_after_seconds=retry_after,
                 )
             except GitHubRateLimitError as error:
                 failed_installations += 1

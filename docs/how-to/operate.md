@@ -262,8 +262,10 @@ finishes that repository first, even on a replica with an empty cache.
 
 Short continuations omit repositories already completed in the active sweep
 only after fresh membership confirms their immutable IDs and current routes.
-Renamed or recreated repositories are new work. Progress expires after the
+Renamed or recreated repositories are new work. Read-skip evidence expires after the
 greater of the scan and recheck intervals, and finishing a sweep clears it.
+Separate cycle coverage survives expiry so a slow sweep can finish, but cannot
+authorize omitted reads or check results. A new cycle revisits every repository.
 A replacement leader may repeat reads because this optimization is local and
 disposable; durable cursors, leases and quota accounting remain shared.
 
@@ -272,6 +274,11 @@ GitHub request concurrency rounded down, with a minimum of one. Queue and
 cursor commits stay ordered. A failed earlier reader prevents commits from
 later readers, even if their HTTP requests completed. Those requests still
 count toward cost. Sum every attempt in a resumed cohort when comparing scans.
+`reconciliation_provider_backoff_observed` records a provider limit immediately,
+even if that prefetched reader's result is later discarded. Cancellation drains
+the observation transaction; other replicas still see the shared pause.
+If storage fails, the attempt fails instead of continuing to other installations
+without recording the pause.
 
 `reconciliation_installation_yielded` records completed and pending repository
 counts when an installation gives other due installations a turn. It yields

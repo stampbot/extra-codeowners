@@ -308,9 +308,11 @@ unreachable. The reconciler covers the recoverable middle ground.
 One elected reconciler scans accessible open pull requests in due installations.
 It revalidates current membership on every attempt. During a short continuation,
 it omits repositories already completed in that active sweep only when their
-immutable IDs and current routes still match. Progress expires after the
-greater of the scan and recheck intervals and disappears when the sweep
-finishes or election is lost. A new periodic sweep still visits every current
+immutable IDs and current routes still match. Read-skip evidence expires after
+the greater of the scan and recheck intervals. Separate cycle coverage survives
+that expiry so a slow sweep can finish; it cannot authorize skipped reads or
+Check Runs. Both disappear when the sweep finishes or election is lost.
+A new periodic sweep still visits every current
 repository. The [active-sweep decision](adrs/2026-11-12-bound-active-reconciliation-sweeps.md)
 records the limits of this optimization.
 
@@ -320,6 +322,9 @@ commits jobs and cursors in repository/PR order. It never commits a later
 repository past an earlier reader's error. Unused reads are cancelled and
 drained on interruption or early exit. Each stream retains its PR listing and
 one buffered result, so concurrency also increases the possible memory use.
+Provider-limit observations are not disposable results: readers persist them
+immediately and drain those transactions even when their other work is
+cancelled. All replicas still honor the shared backoff.
 
 An installation yields after one scan interval at a repository boundary when
 more work remains, then requests a one-second continuation. Other due

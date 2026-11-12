@@ -1,5 +1,7 @@
 """Active sweeps avoid replay without losing new identities or cold recovery."""
 
+import asyncio
+import threading
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -8,7 +10,7 @@ import pytest
 
 from extra_codeowners.api_budget import RecoveryApiBudget, RecoveryBudgetDeferredError
 from extra_codeowners.database import QueueStore
-from extra_codeowners.github import GitHubClient
+from extra_codeowners.github import GitHubClient, GitHubRateLimitError
 from extra_codeowners.migrations import upgrade_database
 from extra_codeowners.service import Reconciler
 from extra_codeowners.settings import Settings
@@ -166,4 +168,142 @@ async def test_work_quantum_visits_other_installations_then_resumes_tail(tmp_pat
         assert second is not None and second.complete
         assert visited == [(2, "example/b"), (2, "example/c")]
     finally:
+        store.close()
+
+
+# Verifies XCO-019.
+@pytest.mark.asyncio
+async def test_slow_cycle_completes_when_read_skip_evidence_expires(tmp_path: Path) -> None:
+    github = MagicMock(spec=GitHubClient)
+    github.list_installations = AsyncMock(return_value=[{"id": 2, "suspended_at": None}])
+    github.list_installation_repositories = AsyncMock(
+        return_value=[
+            {"id": index, "full_name": f"example/{name}", "archived": False}
+            for index, name in enumerate(("a", "b", "c", "d"), start=101)
+        ]
+    )
+    now = 0.0
+    visited: list[str] = []
+
+    async def pulls(installation_id: int, name: str, **kwargs: Any) -> list[Any]:
+        nonlocal now
+        now += 301
+        visited.append(name)
+        return []
+
+    github.list_open_pulls = AsyncMock(side_effect=pulls)
+    url = f"sqlite:///{tmp_path / 'slow-cycle.db'}"
+    upgrade_database(url)
+    store = QueueStore(url)
+    store.initialize()
+    configuration = Settings(_env_file=None, environment="test", github_max_in_flight_requests=1)
+    reconciler = Reconciler(configuration, github, store, "one")
+    reconciler._cadence._clock = lambda: now
+    reconciler._sweeps._clock = lambda: now
+    reconciler._work_clock = lambda: now
+    try:
+        for attempt in range(4):
+            result = await reconciler.reconcile_once()
+            assert result is not None
+            assert result.complete == (attempt == 3)
+            if attempt < 3:
+                assert result.retry_after_seconds == 1
+            now += 1
+        assert visited == ["example/a", "example/b", "example/c", "example/d"]
+        assert now > configuration.reconcile_recheck_seconds
+        # Coverage is gone after completion: the next cycle really reads again.
+        visited.clear()
+        now += configuration.reconcile_interval_seconds
+        result = await reconciler.reconcile_once()
+        assert result is not None and not result.complete
+        assert visited == ["example/a"]
+    finally:
+        store.close()
+
+
+# Verifies XCO-019.
+@pytest.mark.asyncio
+@pytest.mark.parametrize("global_scope", [False, True])
+@pytest.mark.parametrize("persist_fails", [False, True])
+async def test_discarded_prefetch_persists_backoff_even_when_cancelled_during_observation(
+    tmp_path: Path, global_scope: bool, persist_fails: bool
+) -> None:
+    github = MagicMock(spec=GitHubClient)
+    github.list_installations = AsyncMock(
+        return_value=[
+            {"id": 2, "suspended_at": None},
+            {"id": 3, "suspended_at": None},
+        ]
+    )
+    github.list_installation_repositories = AsyncMock(
+        return_value=[
+            {"id": index, "full_name": f"example/{name}", "archived": False}
+            for index, name in enumerate(("a", "b", "c"), start=101)
+        ]
+    )
+    url = f"sqlite:///{tmp_path / 'discarded-backoff.db'}"
+    upgrade_database(url)
+    store = QueueStore(url)
+    store.initialize()
+    configuration = Settings(_env_file=None, environment="test", github_max_in_flight_requests=4)
+    reconciler = Reconciler(configuration, github, store, "one")
+    now = 0.0
+    reconciler._cadence._clock = lambda: now
+    reconciler._work_clock = lambda: now
+    entered = asyncio.Event()
+    release = threading.Event()
+    loop = asyncio.get_running_loop()
+    original = store.record_provider_backpressure
+
+    def delayed_record(installation_id: int | None, error: str, delay_seconds: int) -> None:
+        loop.call_soon_threadsafe(entered.set)
+        assert release.wait(5), "test must release the observed backoff transaction"
+        if persist_fails:
+            raise OSError("observation write unavailable")
+        original(installation_id, error, delay_seconds)
+
+    store.record_provider_backpressure = delayed_record  # type: ignore[method-assign]
+    visited: list[tuple[int, str]] = []
+
+    async def pulls(installation_id: int, name: str, **kwargs: Any) -> list[Any]:
+        nonlocal now
+        visited.append((installation_id, name))
+        if installation_id == 2 and name == "example/b":
+            raise GitHubRateLimitError(
+                429,
+                "GET",
+                "/repos/example/b/pulls",
+                "provider pause",
+                30,
+                global_scope=global_scope,
+            )
+        if installation_id == 2:
+            await asyncio.wait_for(entered.wait(), 5)
+            now += 301
+        return []
+
+    github.list_open_pulls = AsyncMock(side_effect=pulls)
+    task = asyncio.create_task(reconciler.reconcile_once())
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        # A completes and discards B, but cleanup must drain B's observation.
+        await asyncio.sleep(0.02)
+        assert not task.done()
+        release.set()
+        if persist_fails:
+            with pytest.raises(RuntimeError, match="provider backoff observation failed"):
+                await asyncio.wait_for(task, 5)
+            assert not any(installation == 3 for installation, _ in visited)
+            return
+        result = await asyncio.wait_for(task, 5)
+        assert result is not None and not result.complete
+        assert store.provider_is_backpressured(2)
+        assert store.provider_is_backpressured(3) == global_scope
+        assert ((3, "example/a") in visited) != global_scope
+        assert RecoveryApiBudget(store).repository_cursor(2) == "example/a"
+    finally:
+        release.set()
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
         store.close()

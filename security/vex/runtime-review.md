@@ -8,6 +8,9 @@ retain advisory completed-repository identities; expiry, scope changes and
 lost election discard them. The change adds asyncio tasks and local sets, not
 a new dependency, subprocess, native entrypoint, compression or TLS setting.
 App signing and database connections keep their existing call paths.
+Readers persist observed provider limits through the existing backpressure
+transaction even when their other work is cancelled. Expiring permission to
+skip a read is separate from cycle coverage, which cannot authorize a check.
 
 All 89 statement contents and assessment dates remain unchanged, including the
 default non-FIPS CPython scope below. The Dockerfile, base digest, dependency

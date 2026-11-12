@@ -1,8 +1,8 @@
 {
   "@context": "https://openvex.dev/ns/v0.2.0",
-  "@id": "urn:uuid:7ed9f687-8ec9-5db3-a893-b410a294f315",
+  "@id": "urn:uuid:2f5ac916-baca-5208-bfae-2ba38c305bc4",
   "author": "Extra CODEOWNERS maintainers",
-  "last_updated": "2026-11-12T15:26:35Z",
+  "last_updated": "2026-11-12T15:46:21Z",
   "role": "VEX document producer",
   "statements": [
     {
@@ -1944,9 +1944,9 @@
       }
     }
   ],
-  "timestamp": "2026-11-12T15:26:35Z",
+  "timestamp": "2026-11-12T15:46:21Z",
   "tooling": "Vexcalibur + Extra CODEOWNERS runtime binding",
-  "version": 27,
+  "version": 29,
   "x_extra_codeowners_runtime": {
     "files": {
       ".dockerignore": "3f9dc9d3a79fe3085f25de88403b5563ad5c7fa7010bef94c5e55f24bd3cf691",
@@ -1987,10 +1987,10 @@
       "extra_codeowners/policy.py": "844abb482a7c9cc3190d624cc92ece2476128644718e4096f98bfa8a0abedf8a",
       "extra_codeowners/py.typed": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "extra_codeowners/reconciliation_cadence.py": "0cea8e7d8f171a4db873f8bd94e12423e7ded686ec686b77ba62a0059e9299f1",
-      "extra_codeowners/reconciliation_sweep.py": "dbb3d31ba2ab206aa80b0d3bfed29691d92cc5ff0f8e47722cf8b515d0a21717",
+      "extra_codeowners/reconciliation_sweep.py": "075cedff6f789a39b4171d2a49eb461ccffdf3fb546183fa421af588f0443d9c",
       "extra_codeowners/reconciliation_tracing.py": "0f650bf2300e26d1485fa7df71b71dccbb7739653e049d452d6b30ee9b6b9931",
       "extra_codeowners/request_timing.py": "7c53fcfdec4b8a5b1cf3427c8bd354b76bc6f255ac7374540a6cae0886a48c19",
-      "extra_codeowners/service.py": "8f6e425215b418f501cb847db5a9960b7fa8d3ae8a8af5f04a37acbb7d15193f",
+      "extra_codeowners/service.py": "a91e61607408e1e15b86a0d55df2f0e372304e8a1c58434a6ac093ede7a52cfe",
       "extra_codeowners/settings.py": "bd1d3cd0acf23ea4b26869fc1e024438aba7b9acf43f3850c4e6be2e9a5b5437",
       "extra_codeowners/trace_context.py": "f79ca91baa1dd615c80546c66a6b370ba78ec7106dece3feb201d10250078532",
       "extra_codeowners/tracing.py": "49641dd6cb9b5b6da1e6026b90925a73eb3112d13a069afd202e741d261f76f9",
@@ -2001,7 +2001,7 @@
       "tools/source_recipes/psycopg-binary-3.3.4.json": "ec227aa110315f82c25335837e258806930c7afbe980c8b2ff6b476343c243b5",
       "uv.lock": "5514cb0448adb693fe97f3d2c8016ccd606890327a1946467fbd118356de4922"
     },
-    "review": "Reviewed bounded read-only asyncio discovery, ordered commits, source-order error propagation, task joins, and cancellation cleanup. Explicit TypeVar annotations avoid CodeQL nested PEP 695 scoping diagnostics without suppressing its checks. Active-sweep identity/expiry and cooperative scheduling retain shared admission and authorization fences. No dependency, subprocess, native, compression, OpenSSL provider or TLS path is added. All 89 statement contents/dates and the non-FIPS CPython scope remain unchanged.",
+    "review": "Reviewed bounded discovery, ordered commits, and immediate durable provider-limit observations independently of result consumption. Cancellation drains observation transactions; storage failure aborts discovery after reader cleanup rather than losing a discarded error. Retry clocks are not extended by buffering. Separate cycle coverage survives read-skip expiry but cannot authorize a skip or check, allowing slow sweeps to finish. Existing GitHub/database/asyncio paths add no dependency, executable, FFI, compression, OpenSSL provider or TLS behavior. All 89 vulnerability statement contents/dates and their non-FIPS and unpatched-library limits remain unchanged.",
     "schema_version": 1
   }
 }
