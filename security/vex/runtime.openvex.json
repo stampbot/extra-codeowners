@@ -1,8 +1,8 @@
 {
   "@context": "https://openvex.dev/ns/v0.2.0",
-  "@id": "urn:uuid:3c808c82-f139-5545-a143-1689d2fdb9e6",
+  "@id": "urn:uuid:b08a861b-f265-53dc-a199-fdf3a5d89071",
   "author": "Extra CODEOWNERS maintainers",
-  "last_updated": "2026-11-12T17:41:41Z",
+  "last_updated": "2026-11-12T18:28:25Z",
   "role": "VEX document producer",
   "statements": [
     {
@@ -1944,9 +1944,9 @@
       }
     }
   ],
-  "timestamp": "2026-11-12T17:41:41Z",
+  "timestamp": "2026-11-12T18:28:25Z",
   "tooling": "Vexcalibur + Extra CODEOWNERS runtime binding",
-  "version": 31,
+  "version": 32,
   "x_extra_codeowners_runtime": {
     "files": {
       ".dockerignore": "3f9dc9d3a79fe3085f25de88403b5563ad5c7fa7010bef94c5e55f24bd3cf691",
@@ -1973,7 +1973,7 @@
       "extra_codeowners/build_identity.py": "5c3b38f087460fca37660ddeaa8a004d05348f8c947c04fc2444739ab7896968",
       "extra_codeowners/cli.py": "79a5c200397f9544492ec6071890ff5835c1ed625c623a0a86ed3a60503e65f4",
       "extra_codeowners/codeowners.py": "da8be54dbc8a79dcbaf39d49491f950d5405d74d6bb5e07da5247644f5ffcfd8",
-      "extra_codeowners/database.py": "d29c5cb3ef33a65ae6ab4bb28a1396b17561976c20d0a1e30eae8bd3ae18ff98",
+      "extra_codeowners/database.py": "afad7cef3bb60b50e7641ca302f534a94958f9a492992054092bde30663afa3a",
       "extra_codeowners/dco.py": "8c3a0b541fe021fb9f05500ca9278306901010c219e7e1199ca5e205c138e68d",
       "extra_codeowners/discovery_cache.py": "6ab8504381c2f8b627b97d40cd8a709168c11c5f1f32fde7fca8c0be18b04d8c",
       "extra_codeowners/evaluator.py": "b81b9d1c6fe81d591867b0993d413030caab8af48703c4725f14c04fe2e3f9a6",
@@ -1994,14 +1994,14 @@
       "extra_codeowners/settings.py": "bd1d3cd0acf23ea4b26869fc1e024438aba7b9acf43f3850c4e6be2e9a5b5437",
       "extra_codeowners/trace_context.py": "f79ca91baa1dd615c80546c66a6b370ba78ec7106dece3feb201d10250078532",
       "extra_codeowners/tracing.py": "49641dd6cb9b5b6da1e6026b90925a73eb3112d13a069afd202e741d261f76f9",
-      "extra_codeowners/webhooks.py": "26bb6495d413863cd3a66488a152f0d0d89b8f5dfae96abb2ea5066861b6d114",
+      "extra_codeowners/webhooks.py": "59372c12590ee2008cac47d3aff8d1bc48ca6ebc7ecb1146b1e64daa3b4e4fbd",
       "pyproject.toml": "bfb88e388d4590a6f52ed6d76889460a6b698f13129389b3823d2ff661bedd55",
       "security/vex/native-openssl-callers.json": "7c38eb02a457c870db4d04a5df7f85381cd87355001fc88c306aa6a8989f70cd",
       "tools/source_recipes/cryptography-50.0.0.json": "14c8c00339ada71aa1f975b2d20052582f251a44c2c8f1cdbb2d8fc0bb802779",
       "tools/source_recipes/psycopg-binary-3.3.4.json": "ec227aa110315f82c25335837e258806930c7afbe980c8b2ff6b476343c243b5",
       "uv.lock": "5514cb0448adb693fe97f3d2c8016ccd606890327a1946467fbd118356de4922"
     },
-    "review": "Reviewed cooperative reconciler shutdown: existing owner-fenced SQLAlchemy lease deletion only after the scan/heartbeat drain. Normal attempts and forced-cancellation expiry fallback unchanged. No native/TLS/dependency/image/source-recipe change; all 89 statements remain unchanged.",
+    "review": "Reviewed signed repository-team-grant scope validation and existing authority/publication fences; missing/conflicting context, shared policy and other actions retain global work. Persist only typed authority routing metadata in existing columns. No native/TLS/dependency/image/source-recipe change; all 89 statements remain unchanged.",
     "schema_version": 1
   }
 }

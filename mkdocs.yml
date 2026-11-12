@@ -72,6 +72,7 @@ nav:
           - Installation retry cadence: explanation/adrs/2026-11-11-installation-retry-cadence.md
           - Results during base refresh: explanation/adrs/2026-11-12-keep-valid-results-on-base-refresh.md
           - Active reconciliation sweeps: explanation/adrs/2026-11-12-bound-active-reconciliation-sweeps.md
+          - Repository team access grants: explanation/adrs/2026-11-12-scope-repository-team-grants.md
       - Design comparisons:
           - Bounded reconciliation traces: explanation/design/2026-11-02-bounded-reconciliation-traces.md
   - Maintainer and release engineering:

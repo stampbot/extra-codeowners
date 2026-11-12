@@ -227,7 +227,13 @@ None of these controls can revoke a success after a transfer or installation
 change has already removed the App's access.
 
 Organization team/member events can name repositories outside a selected
-installation. Before processing a repository authority job, the worker checks
+installation. An unambiguous `team.added_to_repository` for an ordinary
+repository queues authority work only there. Missing or conflicting identity
+fields, the configured organization-policy repository and all other team
+actions keep installation-wide work. The [routing decision](adrs/2026-11-12-scope-repository-team-grants.md)
+records the validation and fallback rules.
+
+Before processing a repository authority job, the worker checks
 current App membership—even if the repository is public and readable. If that
 check excludes the repository, or a later read returns a redirect, `404`, or
 `410`, the worker checks the complete installation listing and repeats the
