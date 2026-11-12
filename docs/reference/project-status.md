@@ -200,11 +200,14 @@ close before the project is presented as production-ready:
   recovery have dated observations; they do not establish acceptable recovery
   latency. The [alpha.82 observations][alpha82-cadence] exercise early retry
   deadlines and healthy-installation skipping. A resumed cohort still used
-  7,411 outer requests; active-sweep prefix replay and serial installation
-  fairness need investigation.
+  7,411 outer requests. Active-sweep progress, bounded concurrent reads and
+  cooperative installation yielding now have regression tests; their deployed
+  cost and latency still need measurement, along with the strict live
+  checkpoint proof.
 - [Issue #296][issue-296]: validate stable check publication after base pushes.
-  Confirmed-head rechecks retain their result until the fresh assessment
-  changes; live rollout verification remains separate from the unit tests.
+  Confirmed-head base rechecks retain success only when fresh inputs match the
+  successful audit; changed or unprovable inputs block first. Live rollout
+  verification remains separate from the unit tests.
 - [Issue #18][issue-18]: review wheel-native components and their notices,
   complete corresponding-source delivery, and approve the distribution
   mechanism. Separate [wheel-native catalogs](native-components.md) expose the

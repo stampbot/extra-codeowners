@@ -260,6 +260,26 @@ including retries and pagination. A deferred scan saves its last completed
 repository and its progress within an unfinished repository. The next scan
 finishes that repository first, even on a replica with an empty cache.
 
+Short continuations omit repositories already completed in the active sweep
+only after fresh membership confirms their immutable IDs and current routes.
+Renamed or recreated repositories are new work. Progress expires after the
+greater of the scan and recheck intervals, and finishing a sweep clears it.
+A replacement leader may repeat reads because this optimization is local and
+disposable; durable cursors, leases and quota accounting remain shared.
+
+Discovery overlaps up to four repository readers, or half the configured
+GitHub request concurrency rounded down, with a minimum of one. Queue and
+cursor commits stay ordered. A failed earlier reader prevents commits from
+later readers, even if their HTTP requests completed. Those requests still
+count toward cost. Sum every attempt in a resumed cohort when comparing scans.
+
+`reconciliation_installation_yielded` records completed and pending repository
+counts when an installation gives other due installations a turn. It yields
+at a repository boundary after one scan interval and asks for a one-second
+continuation. One large repository can take longer. Missing immutable IDs use
+full discovery without skipping or yielding. Neither the interval nor the
+retry delay guarantees convergence through provider backoff.
+
 Each attempt fetches and validates every open-PR page before processing PRs in
 number order. After a PR is queued or confirmed unenrolled, its number becomes
 the durable resume point. The next attempt handles higher numbers; completion

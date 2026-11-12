@@ -3983,11 +3983,20 @@ async def test_reconciliation_resumes_after_completed_repository_and_continues_o
     assert visited == [
         (2, "example/a"),
         (2, "example/b"),
+        (2, "example/c"),
         (3, "example/a"),
         (3, "example/b"),
         (3, "example/c"),
     ]
     assert RecoveryApiBudget(store).repository_cursor(2) == "example/a"
+    # C was prefetched, not committed past B's failed discovery.
+    with store.session() as session:
+        assert session.scalar(
+            select(EvaluationJob).where(
+                EvaluationJob.installation_id == 2,
+                EvaluationJob.repository_full_name == "example/c",
+            )
+        ) is None
     assert not store.provider_is_backpressured(2)
     assert REQUEST_LANE.get() == "interactive"
     store.release_service_lease("open-pr-reconciler", "one")

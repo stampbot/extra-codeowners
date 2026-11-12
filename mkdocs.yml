@@ -71,6 +71,7 @@ nav:
           - Reuse authenticated Debian sources: explanation/adrs/2026-11-05-reuse-authenticated-debian-sources.md
           - Installation retry cadence: explanation/adrs/2026-11-11-installation-retry-cadence.md
           - Results during base refresh: explanation/adrs/2026-11-12-keep-valid-results-on-base-refresh.md
+          - Active reconciliation sweeps: explanation/adrs/2026-11-12-bound-active-reconciliation-sweeps.md
       - Design comparisons:
           - Bounded reconciliation traces: explanation/design/2026-11-02-bounded-reconciliation-traces.md
   - Maintainer and release engineering:

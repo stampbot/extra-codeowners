@@ -275,6 +275,8 @@ layout. No incoming webhook header supplies these relationships.
 | `reconciliation.lease_lost`, `reconciliation.stopped`, `reconciliation.deferred` | Final outcome flags, when available. |
 | `reconciliation.cycle_complete` | Every current active installation completed within this leader's cycle. Not necessarily within this attempt. |
 | `reconciliation.installations_skipped` | Active installations not yet due in this attempt. No installation IDs are recorded here. |
+| `reconciliation.active_sweep_skips` | Completed repositories omitted from a short continuation after fresh membership confirms their immutable IDs and current routes. No repository identities are recorded here. |
+| `reconciliation.installation_yields` | Installations that yielded at a repository boundary after one scan interval of work. This is cooperative scheduling, not a timeout count. |
 | `reconciliation.retry_after_seconds` | Next wake delay when shorter than the configured interval. It may be one second when another installation's scan outlasted a deferred deadline. Not a recovery guarantee. |
 | `reconciliation.detail_traces` | Logical request roots started in this attempt, including nested token operations. Not proof that the receiver retained them. |
 | `reconciliation.outer_requests` | Request roots excluding nested token operations. |

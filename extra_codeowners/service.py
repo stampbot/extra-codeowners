@@ -7,7 +7,7 @@ import hashlib
 import json
 import time
 from collections import OrderedDict
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
@@ -85,8 +85,10 @@ from extra_codeowners.models import (
     ReviewActor,
     ReviewState,
 )
+from extra_codeowners.ordered_prefetch import ordered_prefetch
 from extra_codeowners.policy import BUILTIN_NON_DELEGABLE_PATHS
 from extra_codeowners.reconciliation_cadence import ReconciliationCadence
+from extra_codeowners.reconciliation_sweep import ReconciliationSweeps
 from extra_codeowners.settings import Settings
 from extra_codeowners.trace_context import TrustedTraceContext
 from extra_codeowners.tracing import Tracing
@@ -143,6 +145,8 @@ class ReconciliationOutcome:
     cycle_complete: bool = True
     idle: bool = False
     installations_skipped: int = 0
+    active_sweep_skips: int = 0
+    installation_yields: int = 0
     retry_after_seconds: int | None = None
 
     @property
@@ -204,6 +208,8 @@ class _ReconciliationPayloadError(ValueError):
             "invalid_installation_suspended_at",
             "invalid_repository_batch",
             "invalid_repository_record",
+            "invalid_repository_id",
+            "duplicate_repository_id",
             "invalid_repository_full_name",
             "duplicate_repository_full_name",
             "invalid_repository_archived",
@@ -3179,6 +3185,15 @@ class Worker:
             await stop.wait()
 
 
+@dataclass(frozen=True, slots=True)
+class _DiscoveredPull:
+    number: int
+    head_sha: str
+    base_ref: str | None
+    observed_at: datetime
+    unenrolled: bool
+
+
 class Reconciler:
     """Periodically enqueue every open pull request to recover missed webhooks."""
 
@@ -3197,6 +3212,64 @@ class Reconciler:
         self.owner = owner
         self.tracing = tracing or Tracing(enabled=False)
         self._cadence = ReconciliationCadence()
+        self._sweeps = ReconciliationSweeps()
+        self._work_clock = time.monotonic
+
+    def _reset_advisory_state(self) -> None:
+        self._cadence.reset()
+        self._sweeps.reset()
+
+    async def _discover_repository(
+        self,
+        installation_id: int,
+        full_name: str,
+        partial_repository: str,
+        partial_number: int,
+        stop: asyncio.Event,
+    ) -> AsyncGenerator[_DiscoveredPull, None]:
+        """Fetch discovery evidence without mutating queue or cursor state."""
+        observed_at = datetime.now(UTC)
+        records = await self.github.list_open_pulls(installation_id, full_name, stop=stop)
+        pulls = _reconciliation_pulls(records)
+        policies: dict[str, bool] = {}
+        for (number, head_sha), record in sorted(
+            zip(pulls, records, strict=True), key=lambda item: item[0][0]
+        ):
+            if stop.is_set():
+                raise GitHubOperationStoppedError("discovery interrupted")
+            if full_name.lower() == partial_repository and number <= partial_number:
+                continue
+            base = record.get("base")
+            base_ref = base.get("ref") if isinstance(base, dict) else None
+            unenrolled = False
+            # Missing discovery fields cannot establish absence of policy.
+            if isinstance(base_ref, str) and base_ref:
+                if base_ref not in policies:
+                    try:
+                        revision = await self.github.get_branch_head(
+                            installation_id, full_name, base_ref, stop=stop
+                        )
+                        policies[base_ref] = (
+                            await self.github.get_file_text(
+                                installation_id, full_name, self.settings.policy_path, ref=revision
+                            )
+                            is not None
+                        )
+                    except (GitHubRateLimitError, GitHubOperationStoppedError):
+                        raise
+                    except GitHubError:
+                        policies[base_ref] = True
+                if not policies[base_ref]:
+                    unenrolled = not await self.github.has_reconciliation_check(
+                        installation_id, full_name, head_sha, self.settings.check_name, stop=stop
+                    )
+            yield _DiscoveredPull(
+                number,
+                head_sha,
+                base_ref if isinstance(base_ref, str) and 0 < len(base_ref) <= 255 else None,
+                observed_at,
+                unenrolled,
+            )
 
     async def _renew_lease(
         self,
@@ -3234,17 +3307,17 @@ class Reconciler:
         """Discover open pull requests, or return ``None`` when another process is elected."""
         stop_event = stop or asyncio.Event()
         if stop_event.is_set():
-            self._cadence.reset()
+            self._reset_advisory_state()
             return None
         lease_seconds = max(300, self.settings.reconcile_interval_seconds * 2)
         acquired = await asyncio.to_thread(
             self.store.acquire_service_lease, "open-pr-reconciler", self.owner, lease_seconds
         )
         if not acquired:
-            self._cadence.reset()
+            self._reset_advisory_state()
             return None
         if stop_event.is_set():
-            self._cadence.reset()
+            self._reset_advisory_state()
             await asyncio.to_thread(
                 self.store.release_service_lease,
                 "open-pr-reconciler",
@@ -3260,7 +3333,7 @@ class Reconciler:
         try:
             outcome = await self._reconcile_owned(lost, stop_event)
         except BaseException:
-            self._cadence.reset()
+            self._reset_advisory_state()
             raise
         finally:
             done.set()
@@ -3270,7 +3343,7 @@ class Reconciler:
         if stop_event.is_set() and not outcome.stopped:
             outcome = replace(outcome, stopped=True)
         if outcome.lease_lost or outcome.stopped:
-            self._cadence.reset()
+            self._reset_advisory_state()
             outcome = replace(outcome, cycle_complete=False, idle=False, retry_after_seconds=None)
         return outcome
 
@@ -3296,6 +3369,8 @@ class Reconciler:
         failed_installations = 0
         budget_deferred = False
         installations_skipped = 0
+        active_sweep_skips = 0
+        installation_yields = 0
         attempted_installations = 0
         budget = RecoveryApiBudget(self.store, self.settings.github_recovery_reserve_percent)
 
@@ -3310,6 +3385,8 @@ class Reconciler:
                 stopped=stop_event.is_set() or operation_stopped,
                 cycle_complete=False,
                 installations_skipped=installations_skipped,
+                active_sweep_skips=active_sweep_skips,
+                installation_yields=installation_yields,
             )
 
         if interrupted():
@@ -3384,6 +3461,9 @@ class Reconciler:
         due = self._cadence.begin(
             installation_id for installation_id, suspended in installations if not suspended
         )
+        self._sweeps.retain(
+            installation_id for installation_id, suspended in installations if not suspended
+        )
         for installation_id, suspended in installations:
             if interrupted():
                 return interruption_outcome()
@@ -3414,6 +3494,33 @@ class Reconciler:
                 if interrupted():
                     return interruption_outcome()
                 repositories = sorted(_reconciliation_repositories(repository_records))
+                # Older/malformed discovery without an immutable ID cannot
+                # suppress a repository read. Validate supplied IDs as one
+                # batch before consulting advisory progress.
+                identities: dict[str, int] = {}
+                seen_ids: set[int] = set()
+                for record in repository_records:
+                    repository_id = record.get("id")
+                    if repository_id is None:
+                        continue
+                    if type(repository_id) is not int or repository_id <= 0:
+                        raise _ReconciliationPayloadError("invalid_repository_id")
+                    if repository_id in seen_ids:
+                        raise _ReconciliationPayloadError("duplicate_repository_id")
+                    seen_ids.add(repository_id)
+                    if not record[
+                        "archived"
+                    ] and not self.settings.is_organization_config_repository(record["full_name"]):
+                        identities[record["full_name"].lower()] = repository_id
+                completed_routes = self._sweeps.begin(
+                    installation_id,
+                    identities,
+                    lifetime_seconds=max(
+                        self.settings.reconcile_interval_seconds,
+                        self.settings.reconcile_recheck_seconds,
+                    ),
+                )
+                active_sweep_skips += len(completed_routes)
                 cursor = await asyncio.to_thread(budget.repository_cursor, installation_id)
                 repositories = [item for item in repositories if item[0].lower() > cursor] + [
                     item for item in repositories if item[0].lower() <= cursor
@@ -3432,123 +3539,94 @@ class Reconciler:
                 # Finish the interrupted repository before newly added names
                 # can displace its progress. Membership still comes from GitHub.
                 repositories.sort(key=lambda item: item[0].lower() != partial_repository)
-                for full_name, archived in repositories:
-                    if interrupted():
-                        return interruption_outcome()
-                    if archived:
-                        continue
-                    if self.settings.is_organization_config_repository(full_name):
-                        continue
-                    # This boundary must precede every paginated API page. A
-                    # direct webhook accepted while the listing is in flight
-                    # is newer durable evidence than any page in its result.
-                    observed_at = datetime.now(UTC)
-                    pull_records = await self.github.list_open_pulls(
+                pending = [
+                    name
+                    for name, archived in repositories
+                    if not archived
+                    and not self.settings.is_organization_config_repository(name)
+                    and name.lower() not in completed_routes
+                ]
+                deadline = self._work_clock() + self.settings.reconcile_interval_seconds
+                can_yield = all(name.lower() in identities for name in pending)
+                slots = max(1, min(4, self.settings.github_max_in_flight_requests // 2))
+                async with ordered_prefetch(
+                    pending,
+                    partial(
+                        self._discover_repository,
                         installation_id,
-                        full_name,
+                        partial_repository=partial_repository,
+                        partial_number=partial_number,
                         stop=request_stop,
-                    )
-                    if interrupted():
-                        return interruption_outcome()
-                    pulls = _reconciliation_pulls(pull_records)
-                    # PR metadata can retain an older base SHA after a branch
-                    # push. Resolve each target branch during this scan, then
-                    # read policy at that immutable commit.
-                    policy_present: dict[str, bool] = {}
-                    records = sorted(
-                        zip(pulls, pull_records, strict=True), key=lambda item: item[0][0]
-                    )
-                    for (number, head_sha), pull_record in records:
-                        if interrupted():
-                            return interruption_outcome()
-                        if full_name.lower() == partial_repository and number <= partial_number:
-                            continue
-                        base = pull_record.get("base")
-                        base_ref = base.get("ref") if isinstance(base, dict) else None
-                        # Older/incomplete discovery representations fall back
-                        # to full evaluation; missing metadata cannot skip work.
-                        if isinstance(base_ref, str) and base_ref:
-                            if base_ref not in policy_present:
-                                try:
-                                    policy_sha = await self.github.get_branch_head(
-                                        installation_id, full_name, base_ref, stop=request_stop
-                                    )
-                                    policy_present[base_ref] = (
-                                        await self.github.get_file_text(
-                                            installation_id,
-                                            full_name,
-                                            self.settings.policy_path,
-                                            ref=policy_sha,
-                                        )
-                                        is not None
-                                    )
-                                except (GitHubRateLimitError, GitHubOperationStoppedError):
-                                    raise
-                                except GitHubError:
-                                    # Unreadable policy is not absence. Queue
-                                    # evaluation so managed success is revoked.
-                                    policy_present[base_ref] = True
+                    ),
+                    slots=slots,
+                ) as discoveries:
+                    completed_count = 0
+                    async for full_name, pulls in discoveries:
+                        async for pull in pulls:
                             if interrupted():
                                 return interruption_outcome()
-                            if not policy_present[base_ref]:
-                                managed = await self.github.has_reconciliation_check(
-                                    installation_id,
-                                    full_name,
-                                    head_sha,
-                                    self.settings.check_name,
-                                    stop=request_stop,
+                            if pull.unenrolled:
+                                RECONCILIATION_UNENROLLED_SKIPS.inc()
+                            else:
+                                added = await asyncio.to_thread(
+                                    self.store.enqueue_reconciliation_if_due,
+                                    JobRequest(
+                                        installation_id=installation_id,
+                                        repository_full_name=full_name,
+                                        pull_number=pull.number,
+                                        reason=PERIODIC_RECONCILIATION_REASON,
+                                        head_sha_hint=pull.head_sha,
+                                        work_class="recovery",
+                                        observed_at=pull.observed_at,
+                                        base_ref_hint=pull.base_ref,
+                                    ),
+                                    self.settings.reconcile_recheck_seconds,
                                 )
-                                if interrupted():
-                                    return interruption_outcome()
-                                if not managed:
-                                    # Both absence observations came from GitHub
-                                    # in this scan. A prior managed check always
-                                    # follows the ordinary invalidation path.
-                                    RECONCILIATION_UNENROLLED_SKIPS.inc()
-                                    await asyncio.to_thread(
-                                        budget.advance_pull,
-                                        installation_id,
-                                        full_name,
-                                        number,
-                                        self.owner,
+                                queued += int(added)
+                                if added:
+                                    log.info(
+                                        "reconciliation_work_enqueued",
+                                        installation_id=installation_id,
+                                        repository=full_name,
+                                        pull_number=pull.number,
+                                        head_sha=pull.head_sha,
+                                        discovery_reason=PERIODIC_RECONCILIATION_REASON,
+                                        work_class="recovery",
                                     )
-                                    continue
-                        added = await asyncio.to_thread(
-                            self.store.enqueue_reconciliation_if_due,
-                            JobRequest(
-                                installation_id=installation_id,
-                                repository_full_name=full_name,
-                                pull_number=number,
-                                reason=PERIODIC_RECONCILIATION_REASON,
-                                head_sha_hint=head_sha,
-                                work_class="recovery",
-                                observed_at=observed_at,
-                                base_ref_hint=(
-                                    base_ref
-                                    if isinstance(base_ref, str) and 0 < len(base_ref) <= 255
-                                    else None
-                                ),
-                            ),
-                            self.settings.reconcile_recheck_seconds,
-                        )
-                        queued += int(added)
-                        if added:
-                            log.info(
-                                "reconciliation_work_enqueued",
-                                installation_id=installation_id,
-                                repository=full_name,
-                                pull_number=number,
-                                head_sha=head_sha,
-                                discovery_reason=PERIODIC_RECONCILIATION_REASON,
-                                work_class="recovery",
+                            await asyncio.to_thread(
+                                budget.advance_pull,
+                                installation_id,
+                                full_name,
+                                pull.number,
+                                self.owner,
                             )
+                        if interrupted():
+                            return interruption_outcome()
                         await asyncio.to_thread(
-                            budget.advance_pull, installation_id, full_name, number, self.owner
+                            budget.advance_repository, installation_id, full_name, self.owner
                         )
-                    await asyncio.to_thread(
-                        budget.advance_repository, installation_id, full_name, self.owner
-                    )
-                installation_complete = True
+                        if (repository_id := identities.get(full_name.lower())) is not None:
+                            self._sweeps.complete_repository(
+                                installation_id, full_name, repository_id
+                            )
+                        completed_count += 1
+                        if (
+                            can_yield
+                            and completed_count < len(pending)
+                            and self._work_clock() >= deadline
+                        ):
+                            retry_after = 1
+                            installation_yields += 1
+                            log.info(
+                                "reconciliation_installation_yielded",
+                                installation_id=installation_id,
+                                completed_repositories=completed_count,
+                                pending_repositories=len(pending) - completed_count,
+                            )
+                            break
+                    else:
+                        installation_complete = True
+                        self._sweeps.finish(installation_id)
             except GitHubOperationStoppedError:
                 return interruption_outcome(operation_stopped=not interrupted())
             except RecoveryBudgetDeferredError as error:
@@ -3600,6 +3678,8 @@ class Reconciler:
             cycle_complete=cycle_complete,
             idle=not cycle_complete and attempted_installations == 0,
             installations_skipped=installations_skipped,
+            active_sweep_skips=active_sweep_skips,
+            installation_yields=installation_yields,
             retry_after_seconds=(
                 next_delay if next_delay < self.settings.reconcile_interval_seconds else None
             ),
@@ -3616,7 +3696,7 @@ class Reconciler:
                 try:
                     outcome = await self.reconcile_once(stop)
                 except Exception as error:
-                    self._cadence.reset()
+                    self._reset_advisory_state()
                     result = "failure"
                     span.set_attribute("reconciliation.outcome", result)
                     self.tracing.mark_error(span, type(error).__name__)
@@ -3636,6 +3716,8 @@ class Reconciler:
                         "reconciliation.deferred": outcome.deferred,
                         "reconciliation.cycle_complete": outcome.cycle_complete,
                         "reconciliation.installations_skipped": outcome.installations_skipped,
+                        "reconciliation.active_sweep_skips": outcome.active_sweep_skips,
+                        "reconciliation.installation_yields": outcome.installation_yields,
                     }
                 )
                 if outcome.retry_after_seconds is not None:
@@ -3649,6 +3731,8 @@ class Reconciler:
                     log.info(
                         "reconciliation_waiting",
                         installations_skipped=outcome.installations_skipped,
+                        active_sweep_skips=outcome.active_sweep_skips,
+                        installation_yields=outcome.installation_yields,
                         retry_after_seconds=outcome.retry_after_seconds,
                     )
                     return outcome
@@ -3664,6 +3748,8 @@ class Reconciler:
                         stopped=outcome.stopped,
                         deferred=outcome.deferred,
                         installations_skipped=outcome.installations_skipped,
+                        active_sweep_skips=outcome.active_sweep_skips,
+                        installation_yields=outcome.installation_yields,
                         cycle_complete=outcome.cycle_complete,
                         retry_after_seconds=outcome.retry_after_seconds,
                     )
@@ -3676,6 +3762,8 @@ class Reconciler:
                     "reconciliation_complete",
                     pull_requests_queued=outcome.queued,
                     installations_skipped=outcome.installations_skipped,
+                    active_sweep_skips=outcome.active_sweep_skips,
+                    installation_yields=outcome.installation_yields,
                     cycle_complete=outcome.cycle_complete,
                     retry_after_seconds=outcome.retry_after_seconds,
                 )
