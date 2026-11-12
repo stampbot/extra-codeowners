@@ -23,10 +23,10 @@ is covered by threat-model invariants XCO-001 and XCO-002.
    network and database adapters.
 4. Let missing, stale, truncated, or contradictory evidence block success
    ([XCO-001 and XCO-002](threat-model.md#invariants)).
-5. **XCO-017.** Block the check before evaluating any trigger that might change
-   the result, but never change a published result on a timer alone until a
-   new evaluation produces a different one
-   ([decision record](adrs/2026-10-11-keep-results-on-scheduled-rechecks.md)).
+5. **XCO-017.** Keep a confirmed head's published result during a timer or
+   base-branch recheck, and write only a changed assessment. Other triggers,
+   new heads and uncertain evaluations block first
+   ([base-refresh decision](adrs/2026-11-12-keep-valid-results-on-base-refresh.md)).
 
 ## From event to decision
 
@@ -201,6 +201,13 @@ broader, but cannot grow that queue without limit or make the work disappear.
 The shared job conservatively blocks publication for the whole repository,
 including queued PRs outside its selected branches, until discovery finishes.
 
+A base-branch push still creates this discovery fence, but it doesn't by itself
+revoke a confirmed head's result. Fan-out queues a `base_branch_recheck` bound
+to the current shared-head generation. The evaluation waits for discovery to
+finish and fetches fresh evidence. An unchanged assessment makes no Check Run
+write. A new or unconfirmed head, or stronger queued work, still blocks first.
+Other authority events retain revoke-first fan-out.
+
 Repository routes are mutable names, so each job also records the
 installation's authority epoch at enqueue time. A repository rename, transfer,
 or installation-owner change advances the epoch before rediscovery. Work under
@@ -240,7 +247,7 @@ pretending the App can update a repository it can no longer access.
 For each job, the worker first fetches the current revisions and moves the
 named check on that head to a blocking state: a new check starts `in_progress`,
 while an existing check receives an explicit `failure`. A `scheduled_recheck`
-skips that step and leaves the published result in place, as the
+or `base_branch_recheck` skips that step and leaves the published result in place, as the
 [reconciler](#reconciler) section explains. It then confirms that it owns the
 newest database generation before collecting mutable reviews, labels,
 membership, and policy.
@@ -335,8 +342,11 @@ than one recheck interval after the recheck was queued. An authority or
 exact-head deferral never converts the job, because a reset is already on its
 way.
 
-Any trigger that lands on a queued `scheduled_recheck` row replaces its reason
-and generation, so that evaluation goes back to blocking first. A direct webhook promotes an existing
+An ordinary trigger that lands on a queued preserving recheck replaces its
+reason and generation, so that evaluation goes back to blocking first. A base
+refresh supersedes the older observation without advancing the shared-head
+generation or extending the original recheck deadline. It never demotes a
+stronger pending trigger. A direct webhook promotes an existing
 recovery row and its head invalidation in the same transaction. A later scan
 can never demote it again. If the internal job did not know its head when
 queued, its first authoritative pull-request read advances the head and binds
@@ -350,12 +360,20 @@ nothing to recover. Every evaluation still waits for its own exact-head reset
 and any relevant authority fence. Priority changes waiting time; it never lets
 a result pass a security fence.
 
-Authority fan-out revokes affected checks in its own lane, then leaves the
+Authority fan-out normally revokes affected checks in its own lane, then leaves the
 follow-up evaluations and exact-head work in recovery. A real PR webhook
 promotes that PR's pending work to foreground priority; a bulk refresh cannot
 demote it. If fast revocation fails, its retry is promoted too, so preserving
 the recovery reserve does not postpone an unsuccessful revocation. Failure to
 store that promotion leaves the authority fence pending.
+
+Base-push fan-out is the exception: a confirmed head's current result stays
+visible while the queued recheck fetches the new evidence. If a new policy or
+ownership requirement invalidates approval, that assessment publishes failure.
+This adds queue, discovery and evaluation time to the old-result window; it
+doesn't declare a base update harmless. A failed or reclaimed attempt blocks
+first, and authority deferrals now share the recheck retry limit because no
+reset may be in flight. The limit is not a wall-clock convergence guarantee.
 GitHub's rate-limit delay still applies if promotion fails. A head discovered
 during fast revocation is queued in foreground priority, as is a new invalidation
 needed by a direct evaluation that has not finished yet.

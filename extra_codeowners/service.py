@@ -107,6 +107,10 @@ class AuthorityChangePendingError(RuntimeError):
     """An accepted authority change must fan out before evaluation can finish."""
 
 
+class BaseRecheckChangedError(RuntimeError):
+    """The same PR head needs another current-base observation before publication."""
+
+
 class SharedHeadLeaseLostError(RuntimeError):
     """An exact-head reset lost its generation or lease before completion."""
 
@@ -1611,9 +1615,9 @@ class EvaluationService:
                 )
 
             if managed_check:
-                # Fetch only after revoking a prior success. Oversized,
-                # malformed, or unavailable policy content must leave the
-                # required check blocking while the durable job retries.
+                # Preserving rechecks retain the result while reading policy.
+                # Invalid content publishes failure; unavailable content makes
+                # the failed recheck revoke-first before its retry.
                 policy_sha = await self.github.get_branch_head(
                     job.installation_id, job.repository_full_name, base_ref
                 )
@@ -1662,7 +1666,7 @@ class EvaluationService:
             if current_state == "closed":
                 await self._finish_closed_pull_check(job, head_sha, details_url)
                 return
-            if (
+            pull_changed = (
                 current_head_sha != head_sha
                 or current_base_sha != base_sha
                 or current_base_ref != base_ref
@@ -1671,11 +1675,23 @@ class EvaluationService:
                 )
                 != expected_changed_files
                 or _label_names(current) != labels
-                or await self.github.get_branch_head(
+            )
+            current_policy_sha = (
+                policy_sha
+                if pull_changed
+                else await self.github.get_branch_head(
                     job.installation_id, job.repository_full_name, base_ref
                 )
-                != policy_sha
-            ):
+            )
+            if pull_changed or current_policy_sha != policy_sha:
+                if (
+                    scheduled_recheck
+                    and current_head_sha == head_sha
+                    and current_base_ref == base_ref
+                    and _label_names(current) == labels
+                    and (current_base_sha != base_sha or current_policy_sha != policy_sha)
+                ):
+                    raise BaseRecheckChangedError("target branch advanced during recheck")
                 await asyncio.to_thread(
                     self.store.enqueue_shared_head_trigger,
                     JobRequest(
@@ -2121,6 +2137,7 @@ class Worker:
             head_sha=job.head_sha_hint,
             generation=job.generation,
             last_delivery_id=job.last_delivery_id,
+            reason=job.reason,
         )
         done = asyncio.Event()
         heartbeat = asyncio.create_task(self._renew_lease(job, done), name=f"job-lease-{job.id}")
@@ -2158,7 +2175,7 @@ class Worker:
                 scheduled_recheck_limit_seconds=self.settings.reconcile_recheck_seconds,
             )
             return "rate_limited"
-        except AuthorityChangePendingError as error:
+        except (AuthorityChangePendingError, BaseRecheckChangedError) as error:
             log.info(
                 "evaluation_deferred_for_authority",
                 repository=job.repository_full_name,
@@ -2170,8 +2187,9 @@ class Worker:
                 owner,
                 str(error),
                 max(5, int(self.settings.worker_poll_seconds * 10)),
-                # Authority fan-out already resets the check for this PR.
-                scheduled_recheck_limit_seconds=None,
+                # Base-push discovery may retain the result. Don't let a
+                # repeatedly deferred recheck extend its original deadline.
+                scheduled_recheck_limit_seconds=self.settings.reconcile_recheck_seconds,
             )
             return "authority_deferred"
         except SharedHeadInvalidationPendingError as error:
@@ -2455,7 +2473,15 @@ class Worker:
                         return
                     # Queue before revocation: it may discover and queue a
                     # newer head, which this listed-head request must not replace.
-                    await asyncio.to_thread(self.store.enqueue, request)
+                    if request.reason == "push.repository_base":
+                        if await asyncio.to_thread(
+                            self.store.enqueue_base_recheck,
+                            request,
+                            self.settings.reconcile_recheck_seconds,
+                        ):
+                            return
+                    else:
+                        await asyncio.to_thread(self.store.enqueue, request)
                     with request_lane("authority"):
                         await self.evaluator.invalidate_for_trigger(
                             replace(request, work_class="interactive"),

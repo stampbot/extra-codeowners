@@ -202,6 +202,9 @@ close before the project is presented as production-ready:
   deadlines and healthy-installation skipping. A resumed cohort still used
   7,411 outer requests; active-sweep prefix replay and serial installation
   fairness need investigation.
+- [Issue #296][issue-296]: validate stable check publication after base pushes.
+  Confirmed-head rechecks retain their result until the fresh assessment
+  changes; live rollout verification remains separate from the unit tests.
 - [Issue #18][issue-18]: review wheel-native components and their notices,
   complete corresponding-source delivery, and approve the distribution
   mechanism. Separate [wheel-native catalogs](native-components.md) expose the
@@ -268,4 +271,5 @@ on this list opens or closes.
 [issue-76]: https://github.com/stampbot/extra-codeowners/issues/76
 [issue-124]: https://github.com/stampbot/extra-codeowners/issues/124
 [issue-203]: https://github.com/stampbot/extra-codeowners/issues/203
+[issue-296]: https://github.com/stampbot/extra-codeowners/issues/296
 [alpha82-cadence]: ../maintainers/evidence/2026-11-11-alpha82-cadence-and-scan-cost.md

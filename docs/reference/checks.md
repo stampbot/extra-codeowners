@@ -54,6 +54,13 @@ in an enrolled repository:
    check to `completed` with conclusion `failure`. This revokes an earlier success before mutable
    approval evidence is collected. A repository with no policy and no existing
    managed check remains unenrolled and gets no check.
+
+   A first eligible timer or base-branch recheck of a confirmed head leaves
+   the existing result in place instead. It still fetches fresh evidence and
+   publishes only after the remaining checks below. If the result and output
+   match, it makes no Check Run write. Other triggers and new or unconfirmed
+   heads still block first. Failure, worker loss or prolonged deferral ends
+   that retention; see the [base-refresh decision](../explanation/adrs/2026-11-12-keep-valid-results-on-base-refresh.md).
 3. Confirms that the worker still owns the current leased pull-request
    generation. The captured shared generation must be current and its
    exact-head invalidation must have finished. A newer direct trigger on any
@@ -76,7 +83,10 @@ in an enrolled repository:
     count, or label set changed, the worker discards the result. It also
     revalidates the target branch and discards the result if the branch moved.
     It advances the current head's shared generation and queues
-    another evaluation in the same transaction.
+    another evaluation in the same transaction. If only the target branch
+    advanced during a preserving recheck, it instead retries the assessment
+    under the original recheck deadline without resetting the check. It never
+    publishes evidence collected for the older base.
 13. Under the publication guards, rechecks the pull-request generation, the
     shared-head generation, its completed exact-head invalidation, and the
     installation authority epoch stored when the row was enqueued. It also

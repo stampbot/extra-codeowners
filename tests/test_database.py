@@ -10,6 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session as SQLAlchemySession
 
 from extra_codeowners.database import (
+    BASE_RECHECK_REASON,
     LIBPQ_DISABLED_ROOT_CERT,
     SCHEDULED_RECHECK_REASON,
     AuthorityJob,
@@ -1078,6 +1079,111 @@ def test_scheduled_recheck_keeps_its_epoch_out_of_retention_pruning(tmp_path: Pa
     # The fence was 60 days old before the recheck touched it.
     assert store.prune_shared_head_epochs(utcnow() - timedelta(days=30)) == 0
     assert store.shared_head_generation(17, "example/project", "a" * 40) == 1
+
+
+def base_recheck_request() -> JobRequest:
+    return JobRequest(
+        17,
+        "example/project",
+        41,
+        "push.repository_base",
+        "a" * 40,
+        work_class="recovery",
+        base_ref_hint="main",
+    )
+
+
+# Verifies XCO-017, XCO-010.
+def test_base_recheck_does_not_wait_for_timer_or_advance_confirmed_head(tmp_path: Path) -> None:
+    store = make_store(tmp_path)
+    previous = claim_scheduled_recheck(store)
+    assert store.complete(previous, "recovery-worker")
+    generation = store.shared_head_generation(17, "example/project", "a" * 40)
+
+    assert store.enqueue_base_recheck(base_recheck_request(), 900)
+    claimed = store.claim("replacement", 60, "recovery", require_shared_head_ready=True)
+    assert claimed is not None and claimed.reason == BASE_RECHECK_REASON
+    assert claimed.keeps_published_check
+    assert store.shared_head_generation(17, "example/project", "a" * 40) == generation
+    assert store.claim_shared_head_invalidation("head-worker", 60) is None
+
+
+def test_base_recheck_supersedes_old_observation_without_extending_deadline(tmp_path: Path) -> None:
+    store = make_store(tmp_path)
+    previous = claim_scheduled_recheck(store)
+    original_requested_at = previous.requested_at
+    assert store.enqueue_base_recheck(base_recheck_request(), 900)
+    assert not store.is_current_claim(previous)
+    assert store.enqueue_base_recheck(base_recheck_request(), 900)
+    claimed = store.claim("replacement", 60, "recovery", require_shared_head_ready=True)
+    assert claimed is not None and claimed.reason == BASE_RECHECK_REASON
+    assert claimed.requested_at == original_requested_at
+    assert claimed.generation == previous.generation + 2
+    assert store.claim_shared_head_invalidation("head-worker", 60) is None
+
+
+@pytest.mark.parametrize("unsafe", ["expired", "old", "reclaimed"])
+def test_base_refresh_cannot_disguise_an_unsafe_recheck(tmp_path: Path, unsafe: str) -> None:
+    store = make_store(tmp_path)
+    previous = claim_scheduled_recheck(store)
+    with store.session() as session:
+        row = session.get(EvaluationJob, previous.id)
+        assert row is not None
+        if unsafe == "expired":
+            row.lease_until = utcnow() - timedelta(seconds=1)
+        elif unsafe == "old":
+            row.requested_at = utcnow() - timedelta(seconds=901)
+        else:
+            row.attempts = 2
+    assert not store.enqueue_base_recheck(base_recheck_request(), 900)
+    assert store.claim_shared_head_invalidation("head-worker", 60) is not None
+    with store.session() as session:
+        row = session.get(EvaluationJob, previous.id)
+        assert row is not None and row.reason == "periodic_reconciliation"
+
+
+# Verifies XCO-002, XCO-010.
+@pytest.mark.parametrize("changed_head", [False, True])
+def test_base_refresh_revokes_new_or_unconfirmed_heads(tmp_path: Path, changed_head: bool) -> None:
+    store = make_store(tmp_path)
+    request = base_recheck_request()
+    if changed_head:
+        previous = claim_scheduled_recheck(store)
+        assert store.complete(previous, "recovery-worker")
+        request = replace(request, head_sha_hint="b" * 40)
+    assert not store.enqueue_base_recheck(request, 900)
+    invalidation = store.claim_shared_head_invalidation("head-worker", 60)
+    assert invalidation is not None and invalidation.head_sha == request.head_sha_hint
+
+
+def test_base_refresh_preserves_stronger_queued_trigger(tmp_path: Path) -> None:
+    store = make_store(tmp_path)
+    store.accept_delivery(
+        "dismissal",
+        "pull_request_review",
+        replace(
+            base_recheck_request(), reason="pull_request_review.dismissed", work_class="interactive"
+        ),
+    )
+    assert not store.enqueue_base_recheck(base_recheck_request(), 900)
+    invalidation = store.claim_shared_head_invalidation("head-worker", 60)
+    assert invalidation is not None and invalidation.work_class == "interactive"
+    with store.session() as session:
+        row = session.scalar(select(EvaluationJob))
+        assert row is not None and row.reason == "pull_request_review.dismissed"
+        assert row.work_class == "interactive" and row.last_delivery_id == "dismissal"
+
+
+@pytest.mark.parametrize("base_first", [False, True])
+def test_base_push_cannot_weaken_coalesced_authority(tmp_path: Path, base_first: bool) -> None:
+    store = make_store(tmp_path)
+    base = AuthorityRequest(17, "example/project", "main", "push.repository_base")
+    stronger = AuthorityRequest(17, "example/project", None, "label.deleted")
+    for request in (base, stronger) if base_first else (stronger, base):
+        store.enqueue_authority(request)
+    claimed = store.claim_authority("worker", 60)
+    assert claimed is not None and claimed.reason == "label.deleted"
+    assert not claimed.target_base_refs
 
 
 # Verifies XCO-016.

@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 
 import extra_codeowners.migrations as migrations
 from extra_codeowners.database import (
+    BASE_RECHECK_REASON,
     DATABASE_MIGRATION_HEAD,
     AuthorityJob,
     AuthorityRequest,
@@ -38,6 +39,70 @@ current_revision = migrations.current_revision
 upgrade_database = migrations.upgrade_database
 
 pytestmark = pytest.mark.integration
+
+
+# Verifies XCO-009, XCO-010, XCO-018.
+def test_postgres_base_refresh_and_dismissal_keep_stronger_work_across_replicas(
+    postgres_store: QueueStore,
+) -> None:
+    store = postgres_store
+    peer = QueueStore(postgres_url())
+    head = "a" * 40
+    base = JobRequest(
+        17,
+        "example/project",
+        41,
+        "push.repository_base",
+        head,
+        work_class="recovery",
+        base_ref_hint="main",
+    )
+    try:
+        store.enqueue(JobRequest(17, "example/project", 41, "pull_request.opened", head))
+        invalidation = store.claim_shared_head_invalidation("initial-head", 60)
+        assert invalidation is not None and store.complete_shared_head_invalidation(invalidation)
+        initial = store.claim("initial-worker", 60, require_shared_head_ready=True)
+        assert initial is not None and store.complete(initial, "initial-worker")
+        assert peer.enqueue_base_recheck(base, 900)
+        old = store.claim("old-worker", 60, "recovery", require_shared_head_ready=True)
+        assert old is not None and old.reason == BASE_RECHECK_REASON
+        start = threading.Barrier(2)
+
+        def refresh() -> None:
+            start.wait(timeout=5)
+            store.enqueue_base_recheck(base, 900)
+
+        def dismiss() -> None:
+            start.wait(timeout=5)
+            peer.accept_delivery(
+                "review-dismissed",
+                "pull_request_review",
+                JobRequest(
+                    17,
+                    "example/project",
+                    41,
+                    "pull_request_review.dismissed",
+                    head,
+                    base_ref_hint="main",
+                ),
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = [executor.submit(refresh), executor.submit(dismiss)]
+            for future in futures:
+                future.result(timeout=10)
+        assert not peer.is_current_claim(old)
+        with store.session() as session:
+            row = session.scalar(select(EvaluationJob))
+            assert row is not None and row.reason == "pull_request_review.dismissed"
+            assert row.work_class == "interactive" and row.last_delivery_id == "review-dismissed"
+        invalidation = peer.claim_shared_head_invalidation("new-head", 60, "interactive")
+        assert invalidation is not None and peer.complete_shared_head_invalidation(invalidation)
+        latest = peer.claim("new-worker", 60, "interactive", require_shared_head_ready=True)
+        assert latest is not None and not latest.keeps_published_check
+        assert store.shared_head_generation_is_publishable(latest, head)
+    finally:
+        peer.close()
 
 
 def postgres_url() -> str:

@@ -88,6 +88,13 @@ later trigger may replace it. Correlate this record with evaluation logs when
 testing missed-webhook recovery. The enqueue record alone does not prove that
 evaluation completed or that no other trigger arrived.
 
+`evaluation_started` includes the job's current `reason`. A repository base
+push can queue `base_branch_recheck` for a confirmed head; it leaves the check
+alone until the assessment changes. A timer uses `scheduled_recheck`.
+`shared_head_invalidation` or a direct review reason follows the blocking path.
+Use the current job reason and its trace, not the discovery log alone, to
+explain a reset.
+
 When a verified direct webhook is sampled, Extra CODEOWNERS stores its local
 span identity with the retained delivery. The later evaluation starts its own
 root span and links back to that webhook span. This still works when another
@@ -345,12 +352,25 @@ upgrade; the optimization does not delete them.
 An upgrade to `0007_reconciliation_completion` rechecks retained completions from older workers on the next scan, regardless of the recheck interval. Expect additional recovery work once after upgrading. Follow the [controlled upgrade procedure](upgrade.md); a rolling image replacement alone is not sufficient for this database change.
 
 Reconciliation blocks the check first when it discovers a changed head or
-cannot confirm the previous completion. A timer-only recheck keeps the
+cannot confirm the previous completion. A timer or base-branch recheck keeps the
 published result until fresh evidence produces a different result. Failure,
 worker loss, or a sufficiently long deferral converts it back to revoke-first
-work, as the [scheduled-recheck decision](../explanation/adrs/2026-10-11-keep-results-on-scheduled-rechecks.md)
+work, as the [base-refresh decision](../explanation/adrs/2026-11-12-keep-valid-results-on-base-refresh.md)
 describes. Choose the scan and recheck intervals with that stale-evidence
 window and the installation's API budget in mind.
+
+Base refreshes still fetch current ownership, policy, changed files and reviews.
+They don't infer approval from an unchanged head or the push's filenames.
+The existing result remains visible while discovery and evaluation run. If the
+base update invalidated approval, the completed assessment replaces success
+with failure. Direct review dismissal and other revoking triggers still block
+first. A long queue can extend convergence; the recheck retry limit is not a
+promise to update GitHub within that interval.
+
+During a rolling upgrade, older workers don't recognize `base_branch_recheck`
+and can still reset those checks. Verify both replicas' runtime identities
+before judging whether the new behavior is active. No database migration or
+configuration change is needed for this reason value.
 
 GitHub request spans include `queue.work_class`,
 `github.quota.core_headers_valid`, and, when valid core headers are present,

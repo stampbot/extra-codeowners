@@ -136,6 +136,20 @@ stable ID; a test that verifies one names that ID in a comment.
     place only for its first attempt. A failure, a lost worker, or a deferral
     that would retry more than one recheck interval after the recheck was
     queued blocks the check before the retry evaluates.
+14. **XCO-018.** A base refresh may retain a result only for a confirmed current
+    head and an eligible first attempt. It cannot weaken stronger queued work,
+    extend a preserving recheck's original deadline, or bypass authority,
+    generation and publication checks. Failure, worker loss or a retry beyond
+    one recheck interval makes that recheck revoke-first work.
+
+A repository base push requests a fresh assessment; it doesn't prove an
+approval was withdrawn. For a confirmed head, the published result stays
+visible through discovery and evaluation. That means an old success can remain
+visible after a policy or ownership change until the new assessment replaces
+it. The [base-refresh decision](adrs/2026-11-12-keep-valid-results-on-base-refresh.md)
+records this trade-off and supersedes the older timer-only restriction.
+Direct review, label and PR triggers and other authority changes still revoke
+first. No new success may bypass pending authority discovery (XCO-009).
 
 XCO-007 has an important limit. GitHub does not offer a pull-request-scoped
 required Check Run, so two pull requests can inherit the check attached to one

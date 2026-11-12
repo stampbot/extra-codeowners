@@ -24,6 +24,7 @@ from extra_codeowners.api_budget import (
 )
 from extra_codeowners.codeowners import parse_codeowners
 from extra_codeowners.database import (
+    BASE_RECHECK_REASON,
     SCHEDULED_RECHECK_REASON,
     AuthorityJob,
     AuthorityRequest,
@@ -2256,6 +2257,118 @@ async def test_scheduled_recheck_keeps_the_published_result_until_it_changes(
     assert [check.get("status") for check in github.checks[1:]] == ["completed"]
     assert github.checks[-1]["conclusion"] == "success"
     assert github.checks[-1]["skip_if_unchanged"] is True
+
+
+# Verifies XCO-001, XCO-017.
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path,conclusion", [("uv.lock", "success"), ("README.md", "failure")])
+async def test_base_recheck_publishes_new_assessment_without_interim_reset(
+    tmp_path: Path, path: str, conclusion: str
+) -> None:
+    github = FakeGitHub(changed_path=path)
+    github.checks.append({"status": "completed", "conclusion": "success"})
+    store = migrated_store(f"sqlite:///{tmp_path / 'base-recheck.db'}")
+    assert store.complete(job(store), "test-worker")
+    assert store.enqueue_base_recheck(
+        JobRequest(
+            2,
+            "example/project",
+            3,
+            "push.repository_base",
+            HEAD,
+            work_class="recovery",
+            base_ref_hint="main",
+        ),
+        900,
+    )
+    claimed = store.claim("test-worker", 60)
+    assert claimed is not None and claimed.reason == BASE_RECHECK_REASON
+
+    await EvaluationService(settings(), github, store).evaluate_job(claimed)  # type: ignore[arg-type]
+
+    assert [check["status"] for check in github.checks[1:]] == ["completed"]
+    assert github.checks[-1]["conclusion"] == conclusion
+    assert github.checks[-1]["skip_if_unchanged"] is True
+
+
+@pytest.mark.asyncio
+async def test_base_fanout_keeps_confirmed_check_and_waits_for_authority(tmp_path: Path) -> None:
+    github = FakeGitHub(changed_path="uv.lock")
+    github.checks.append({"status": "completed", "conclusion": "success"})
+    github.list_open_pulls = AsyncMock(  # type: ignore[attr-defined]
+        return_value=[{"number": 3, "head": {"sha": HEAD}, "base": {"ref": "main"}}]
+    )
+    store = migrated_store(f"sqlite:///{tmp_path / 'base-fanout.db'}")
+    assert store.complete(job(store), "test-worker")
+    store.enqueue_authority(AuthorityRequest(2, "example/project", "main", "push.repository_base"))
+    claimed = store.claim_authority("test-worker", 60)
+    assert claimed is not None
+    worker = Worker(settings(), store, EvaluationService(settings(), github, store), "test-worker")  # type: ignore[arg-type]
+
+    assert await worker._process_authority(claimed) == "completed"
+    assert len(github.checks) == 1
+    assert store.claim_shared_head_invalidation("head-worker", 60) is None
+    evaluation = store.claim("test-worker", 60)
+    assert evaluation is not None and evaluation.keeps_published_check
+    await worker.evaluator.evaluate_job(evaluation)
+    assert [check["status"] for check in github.checks[1:]] == ["completed"]
+
+
+# Verifies XCO-001, XCO-018.
+@pytest.mark.asyncio
+async def test_failed_base_recheck_queues_revocation_instead_of_retaining_success(
+    tmp_path: Path,
+) -> None:
+    github = FakeGitHub(changed_path="uv.lock")
+    github.checks.append({"status": "completed", "conclusion": "success"})
+    github.get_reviews = AsyncMock(side_effect=GitHubError("review evidence unavailable"))  # type: ignore[method-assign]
+    store = migrated_store(f"sqlite:///{tmp_path / 'base-failed.db'}")
+    assert store.complete(job(store), "test-worker")
+    assert store.enqueue_base_recheck(
+        JobRequest(2, "example/project", 3, "push.repository_base", HEAD, work_class="recovery"),
+        900,
+    )
+    claimed = store.claim("test-worker", 60)
+    assert claimed is not None
+    worker = Worker(settings(), store, EvaluationService(settings(), github, store), "test-worker")  # type: ignore[arg-type]
+
+    assert await worker._process(claimed) == "failed"
+    assert store.claim_shared_head_invalidation("head-worker", 60) is not None
+    with store.session() as session:
+        row = session.get(EvaluationJob, claimed.id)
+        assert row is not None and row.reason == "periodic_reconciliation"
+
+
+# Verifies XCO-018.
+@pytest.mark.asyncio
+async def test_base_advancement_during_recheck_retries_without_reset(tmp_path: Path) -> None:
+    github = FakeGitHub(changed_path="uv.lock")
+    github.checks.append({"status": "completed", "conclusion": "success"})
+    calls = 0
+
+    async def moving_base(installation_id: int, repository: str, branch: str) -> str:
+        nonlocal calls
+        calls += 1
+        return BASE if calls == 1 else "c" * 40
+
+    github.get_branch_head = moving_base  # type: ignore[method-assign]
+    store = migrated_store(f"sqlite:///{tmp_path / 'base-advances.db'}")
+    assert store.complete(job(store), "test-worker")
+    assert store.enqueue_base_recheck(
+        JobRequest(2, "example/project", 3, "push.repository_base", HEAD, work_class="recovery"),
+        900,
+    )
+    claimed = store.claim("test-worker", 60)
+    assert claimed is not None
+    worker = Worker(settings(), store, EvaluationService(settings(), github, store), "test-worker")  # type: ignore[arg-type]
+
+    assert await worker._process(claimed) == "authority_deferred"
+    assert len(github.checks) == 1
+    assert store.claim_shared_head_invalidation("head-worker", 60) is None
+    with store.session() as session:
+        row = session.get(EvaluationJob, claimed.id)
+        assert row is not None and row.reason == BASE_RECHECK_REASON
+        assert row.attempts == 0
 
 
 # Verifies XCO-016.
