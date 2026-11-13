@@ -53,7 +53,8 @@ that result remains inconclusive.
 The [November 11 cadence receipt](evidence/2026-11-11-alpha82-cadence-and-scan-cost.md)
 records alpha.82 verification, rollout, a restored approval probe and two
 completed reconciliation cohorts. Healthy-installation skipping and early
-retry timing were observed; request cost and recovery latency remain open.
+retry timing were observed. Those observations left request cost and checkpoint
+recovery unresolved; the later alpha.92 receipt below covers the follow-up.
 
 The [native catalog and VEX receipt](evidence/2026-11-11-native-catalog-and-vex.md)
 records independently verified publication, scoped OpenSSL exclusions and real
@@ -65,6 +66,14 @@ records alpha.89 verification and rollout. An unchanged base update retained
 success without a Check Run write in its completed worker trace; policy
 withdrawal denied approval and restoration passed. The performance and other
 provider gates remain separate.
+
+The [alpha.92 checkpoint receipt](evidence/2026-11-12-checkpoint-continuation-and-alpha92.md)
+records verified publication, two complete quiet reconciliation cohorts, and
+the strict checkpoint proof across a stored accounting deadline. The direct
+label probe passed while background work was pending. It also records an
+incomplete telemetry candidate rather than counting it as a pass. These
+observations complete the performance validation in issue #203, not the
+separate provider/lifecycle and distribution-review gates.
 
 ## Diagnostics and approval probe: November 2, 2026
 

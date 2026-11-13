@@ -6,7 +6,12 @@ the release gates below.
 
 The [base-refresh receipt](../maintainers/evidence/2026-11-12-base-refresh-stability.md)
 confirms stable publication after an unchanged base update and denial after
-policy withdrawal on alpha.89. Large-installation performance remains open.
+policy withdrawal on alpha.89. The
+[alpha.92 receipt][alpha92-performance] records two complete quiet cohorts,
+checkpoint continuation across an accounting deadline, and a passing direct
+label probe under recovery work. These complete the validation tracked in
+[issue #203][issue-203]; they do not establish a recovery-latency guarantee or
+close the other release gates.
 
 Extra CODEOWNERS is ready for source review and non-required shadow-mode
 testing. It is not ready to replace GitHub's native code-owner enforcement on
@@ -198,16 +203,6 @@ close before the project is presented as production-ready:
 - [Issue #1][issue-1]: prove live check invalidation, shared-head behavior,
   and installation access loss. This is the
   [production enforcement blocker](#production-enforcement-blocker).
-- [Issue #203][issue-203]: bound GitHub API use for large installations whose
-  repositories are mostly unenrolled, reduce the measured scan cost and
-  complete live checkpoint verification. Quiet scans and missed-enrollment
-  recovery have dated observations; they do not establish acceptable recovery
-  latency. The [alpha.82 observations][alpha82-cadence] exercise early retry
-  deadlines and healthy-installation skipping. A resumed cohort still used
-  7,411 outer requests. Active-sweep progress, bounded concurrent reads and
-  cooperative installation yielding now have regression tests; their deployed
-  cost and latency still need measurement, along with the strict live
-  checkpoint proof.
 - [Issue #18][issue-18]: review wheel-native components and their notices,
   complete corresponding-source delivery, and approve the distribution
   mechanism. Separate [wheel-native catalogs](native-components.md) expose the
@@ -218,6 +213,10 @@ close before the project is presented as production-ready:
 
 ### Hardening and verification
 
+- [Issue #302][issue-302]: investigate repeated invalidation retries when a
+  commit lookup returns HTTP 422. Preserve authorization fences while checking
+  whether the work is obsolete, temporarily unavailable, or affected by access
+  loss.
 - [Issue #40][issue-40]: run DCO evaluation where a pull request can't modify
   its own checker.
 - [Issue #22][issue-22]: rescan published image digests for newly disclosed
@@ -274,4 +273,5 @@ on this list opens or closes.
 [issue-76]: https://github.com/stampbot/extra-codeowners/issues/76
 [issue-124]: https://github.com/stampbot/extra-codeowners/issues/124
 [issue-203]: https://github.com/stampbot/extra-codeowners/issues/203
-[alpha82-cadence]: ../maintainers/evidence/2026-11-11-alpha82-cadence-and-scan-cost.md
+[issue-302]: https://github.com/stampbot/extra-codeowners/issues/302
+[alpha92-performance]: ../maintainers/evidence/2026-11-12-checkpoint-continuation-and-alpha92.md

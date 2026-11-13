@@ -138,19 +138,28 @@ the same time range as the attempt:
 {resource.service.name="extra-codeowners" && span.reconciliation.scan_trace_id="0123456789abcdef0123456789abcdef"}
 ```
 
-Tempo versions with link-scope queries can also use:
+Tempo 2.9's [trace-ID formatter](https://github.com/grafana/tempo/blob/v2.9.0/pkg/util/traceid.go)
+drops leading zeroes. Use that form for its span-link lookup, but keep all 32
+digits in the string-attribute query above. These examples refer to the same
+scan:
 
 ```traceql
-{resource.service.name="extra-codeowners" && link:traceID="0123456789abcdef0123456789abcdef"}
+{resource.service.name="extra-codeowners" && link:traceID="123456789abcdef0123456789abcdef"}
 ```
 
 Open any result to inspect its operation, retries and request-phase timing;
-its link leads back to the summary. Fetch every search page or split the time
-range, deduplicate trace IDs, and compare the unique count with the summary's
-`reconciliation.detail_traces`. A search result limit is not an omission
-budget. Fewer details than expected means incomplete telemetry until query
-limits, indexing delay, export and retention are checked. The layout emits
-every request for a sampled scan, but cannot guarantee backend delivery.
+its link leads back to the summary. For a complete count, split the attempt's
+time range into windows that stay below Tempo's result limit. Deduplicate
+trace IDs across those windows, then compare the count with the summary's
+`reconciliation.detail_traces`.
+
+Fewer details than expected means incomplete evidence, not proof that spans
+were lost. Check the ID format and query limits first, then indexing delay,
+export and retention. A successful App export is not proof of backend
+retention. If you use a collector, check its downstream export failures and
+dropped-span counts too.
+
+The layout emits every request for a sampled scan.
 `tracing.truncated_fields` reports any clipped private text on a span.
 
 The query syntax is described in
@@ -161,12 +170,21 @@ backend's size/drop limits rather than treating that as an application failure.
 
 Phase totals are not automatically wall-clock percentages: nested token
 requests and concurrent operations can overlap. Cache and request counters
-also include other work in the same process. Compare each pod's identity,
-image and counter continuity before calculating deltas, and don't combine
-different releases to claim two quiet successful cycles. The
+also include other work in the same process. Completion counters can include
+neighboring scans when continuations run a second apart. Account for those
+completions instead of attributing the whole delta to one cohort.
+Compare each pod's identity, image and counter continuity before calculating
+deltas, and don't combine different releases to claim two quiet successful
+cycles. The
 [validation receipts](../maintainers/evidence/index.md) show the limits of the
 measured evidence; [issue #259](https://github.com/stampbot/extra-codeowners/issues/259)
 tracks the bounded layout's live validation.
+
+For a whole cycle, choose a counter scrape that finished before the previous
+`reconciliation_complete` log. Match every elected completion through the next
+cycle's success against the traces, including partial attempts and scheduled
+waits. Keep `not_elected` histogram observations separate; those iterations
+perform no GitHub requests.
 
 Read runtime identity through an operator-only route after every rollout.
 Official images report their verified source commit in `build_revision`;
