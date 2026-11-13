@@ -292,8 +292,9 @@ completion, not the number of requests in that one summary.
 
 The scan's local sampling decision applies to all its detail roots, even when
 the configured sample ratio is between `0` and `1`. A sampled scan deliberately
-omits no request span. Search all pages and compare the unique request-root
-count with `reconciliation.detail_traces` before calling its detail complete.
+omits no request span. Search in bounded time windows that stay below the
+backend's result limit, then deduplicate request roots by trace ID. Their count
+must match `reconciliation.detail_traces` before calling the detail complete.
 Nested token phases are excluded from the summary to avoid double-counting
 authentication, but concurrent outer operations can still overlap.
 
