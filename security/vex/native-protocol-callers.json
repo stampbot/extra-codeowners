@@ -1,0 +1,45 @@
+{
+  "reviewed_at": "2026-11-13T17:13:27.525152Z",
+  "reviewed_runtime_revision": "cd4cac4d0cd72ccb2cc216b86e227db5bcafd18a",
+  "input_release": "v0.1.0-alpha.88",
+  "source_authentication": "Official release-workflow GitHub provenance, main ref, exact release source revision and no self-hosted signer; source bundle verified against both platform inventories and the lock.",
+  "libpq": {
+    "version": "18.0",
+    "source_sha256": "0d5b903b1e5fe361bca7aa9507519933773eb34266b1357c4e7780fdee6d6078",
+    "inspected_c_and_header_files": 33,
+    "scope": "postgresql-18.0/src/interfaces/libpq/",
+    "tls_source": {
+      "path": "postgresql-18.0/src/interfaces/libpq/fe-secure-openssl.c",
+      "sha256": "d476a87130d64e6a70ca7830f1810d6b91a0c74c8797dd09f6eba36ba9b67f16",
+      "context_line": 771,
+      "context": "SSL_CTX_new(SSLv23_method())",
+      "handshake_line": 1344,
+      "handshake": "SSL_connect(conn->ssl)"
+    },
+    "dtls_quic_server_context_call_matches": 0
+  },
+  "openssl_method_alias": {
+    "version": "3.5.4",
+    "source_sha256": "967311f84955316969bdb1d8d4b983718ef42338639c621ec4c34fddef355e99",
+    "path": "openssl-3.5.4/include/openssl/ssl.h.in",
+    "sha256": "0aaff378c20b266718209b62244adb7d3c16bc5633a30ad70e305e9338d4c364",
+    "SSLv23_method": "TLS_method"
+  },
+  "runtime_callers": [
+    {
+      "path": "extra_codeowners/cli.py",
+      "line": 98,
+      "sha256": "79a5c200397f9544492ec6071890ff5835c1ed625c623a0a86ed3a60503e65f4",
+      "observation": "The shipped uvicorn.run call has no TLS configuration; HTTPS terminates outside this process."
+    },
+    {
+      "path": "extra_codeowners/github.py",
+      "line": 501,
+      "sha256": "99acb7d362445eeaf36ad6df6ff49eb0401bb94158b3a49be73e7f23a85f36c4",
+      "observation": "App JWT encoding uses the configured private key and the fixed RS256 algorithm, not a Cryptography transport API."
+    }
+  ],
+  "architectures": ["amd64", "arm64"],
+  "native_payload_evidence": "native-openssl-callers.json",
+  "scope": "Source caller review supported by exact native payload evidence, not a whole-program proof from name or symbol absence. Ordinary TLS-client and certificate processing remain separate. No library absence, patch, complete vulnerability coverage or distribution approval is asserted."
+}

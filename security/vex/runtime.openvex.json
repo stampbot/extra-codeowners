@@ -1,8 +1,8 @@
 {
   "@context": "https://openvex.dev/ns/v0.2.0",
-  "@id": "urn:uuid:b08a861b-f265-53dc-a199-fdf3a5d89071",
+  "@id": "urn:uuid:fed4ef3a-f8d3-543a-85c9-4be829568e87",
   "author": "Extra CODEOWNERS maintainers",
-  "last_updated": "2026-11-12T18:28:25Z",
+  "last_updated": "2026-11-13T17:21:52Z",
   "role": "VEX document producer",
   "statements": [
     {
@@ -1291,6 +1291,8 @@
       }
     },
     {
+      "impact_statement": "The QUIC server credit-accounting prerequisite is absent: the service does not run an OpenSSL QUIC server. Psycopg's libpq 18.0 creates an SSLv23_method context (the OpenSSL 3.5.4 alias for TLS_method) and starts a TLS client handshake with SSL_connect; its reviewed sources use no DTLS/QUIC method or SSL_set_SSL_CTX call. Cryptography's OpenSSL 4.0.1 is used for the configured RSA App key and RS256 JWT signing, not a network protocol. The shipped Uvicorn entrypoint serves HTTP without native TLS settings. Source entrypoint/caller review supports this conclusion; name searches and the existing static payload evidence are not a whole-program proof. Ordinary TLS client and certificate-processing findings remain separate. The library is present and unpatched; this is not a blanket OpenSSL exclusion. Scope is the shipped Linux amd64/arm64 service, not operator commands, custom FFI, plugins, other builds or execution after compromise.",
+      "justification": "vulnerable_code_not_in_execute_path",
       "products": [
         {
           "@id": "pkg:generic/openssl@3.5.4",
@@ -1305,9 +1307,9 @@
           }
         }
       ],
-      "status": "under_investigation",
-      "status_notes": "Analysis detail: Candidate retained from the alpha.83 native report: Grype 0.118.0, database built 2026-11-10T06:21:20Z. Application-specific reachability has not been established. No fix or not-affected conclusion is made, including for TLS and certificate-processing paths. This intake is not a complete native-library assessment or distribution approval.\nSource: Grype/NVD native candidate (https://nvd.nist.gov/vuln/detail/CVE-2026-35191)\nOriginal Vexcalibur analysis state: in_triage\nSource record modified: 2026-11-11T05:20:18Z",
-      "timestamp": "2026-11-11T05:20:18Z",
+      "status": "not_affected",
+      "status_notes": "Analysis detail: The QUIC server credit-accounting prerequisite is absent: the service does not run an OpenSSL QUIC server. Psycopg's libpq 18.0 creates an SSLv23_method context (the OpenSSL 3.5.4 alias for TLS_method) and starts a TLS client handshake with SSL_connect; its reviewed sources use no DTLS/QUIC method or SSL_set_SSL_CTX call. Cryptography's OpenSSL 4.0.1 is used for the configured RSA App key and RS256 JWT signing, not a network protocol. The shipped Uvicorn entrypoint serves HTTP without native TLS settings. Source entrypoint/caller review supports this conclusion; name searches and the existing static payload evidence are not a whole-program proof. Ordinary TLS client and certificate-processing findings remain separate. The library is present and unpatched; this is not a blanket OpenSSL exclusion. Scope is the shipped Linux amd64/arm64 service, not operator commands, custom FFI, plugins, other builds or execution after compromise.\nSource: Extra CODEOWNERS native protocol source review (https://openssl-library.org/news/secadv/20260929.txt)\nOriginal Vexcalibur analysis state: not_affected\nSource record modified: 2026-11-13T17:19:42Z",
+      "timestamp": "2026-11-13T17:19:42Z",
       "vulnerability": {
         "name": "CVE-2026-35191"
       }
@@ -1409,6 +1411,8 @@
       }
     },
     {
+      "impact_statement": "The QUIC stream reassembly prerequisite is absent: neither reviewed native caller creates a QUIC connection. Psycopg's libpq 18.0 creates an SSLv23_method context (the OpenSSL 3.5.4 alias for TLS_method) and starts a TLS client handshake with SSL_connect; its reviewed sources use no DTLS/QUIC method or SSL_set_SSL_CTX call. Cryptography's OpenSSL 4.0.1 is used for the configured RSA App key and RS256 JWT signing, not a network protocol. The shipped Uvicorn entrypoint serves HTTP without native TLS settings. Source entrypoint/caller review supports this conclusion; name searches and the existing static payload evidence are not a whole-program proof. Ordinary TLS client and certificate-processing findings remain separate. The library is present and unpatched; this is not a blanket OpenSSL exclusion. Scope is the shipped Linux amd64/arm64 service, not operator commands, custom FFI, plugins, other builds or execution after compromise.",
+      "justification": "vulnerable_code_not_in_execute_path",
       "products": [
         {
           "@id": "pkg:generic/openssl@3.5.4",
@@ -1423,9 +1427,9 @@
           }
         }
       ],
-      "status": "under_investigation",
-      "status_notes": "Analysis detail: Candidate retained from the alpha.83 native report: Grype 0.118.0, database built 2026-11-10T06:21:20Z. Application-specific reachability has not been established. No fix or not-affected conclusion is made, including for TLS and certificate-processing paths. This intake is not a complete native-library assessment or distribution approval.\nSource: Grype/NVD native candidate (https://nvd.nist.gov/vuln/detail/CVE-2026-42772)\nOriginal Vexcalibur analysis state: in_triage\nSource record modified: 2026-11-11T05:20:18Z",
-      "timestamp": "2026-11-11T05:20:18Z",
+      "status": "not_affected",
+      "status_notes": "Analysis detail: The QUIC stream reassembly prerequisite is absent: neither reviewed native caller creates a QUIC connection. Psycopg's libpq 18.0 creates an SSLv23_method context (the OpenSSL 3.5.4 alias for TLS_method) and starts a TLS client handshake with SSL_connect; its reviewed sources use no DTLS/QUIC method or SSL_set_SSL_CTX call. Cryptography's OpenSSL 4.0.1 is used for the configured RSA App key and RS256 JWT signing, not a network protocol. The shipped Uvicorn entrypoint serves HTTP without native TLS settings. Source entrypoint/caller review supports this conclusion; name searches and the existing static payload evidence are not a whole-program proof. Ordinary TLS client and certificate-processing findings remain separate. The library is present and unpatched; this is not a blanket OpenSSL exclusion. Scope is the shipped Linux amd64/arm64 service, not operator commands, custom FFI, plugins, other builds or execution after compromise.\nSource: Extra CODEOWNERS native protocol source review (https://openssl-library.org/news/secadv/20260929.txt)\nOriginal Vexcalibur analysis state: not_affected\nSource record modified: 2026-11-13T17:19:42Z",
+      "timestamp": "2026-11-13T17:19:42Z",
       "vulnerability": {
         "name": "CVE-2026-42772"
       }
@@ -1501,6 +1505,8 @@
       }
     },
     {
+      "impact_statement": "The QUIC packet-retention prerequisite is absent: neither reviewed native caller creates a QUIC connection. Psycopg's libpq 18.0 creates an SSLv23_method context (the OpenSSL 3.5.4 alias for TLS_method) and starts a TLS client handshake with SSL_connect; its reviewed sources use no DTLS/QUIC method or SSL_set_SSL_CTX call. Cryptography's OpenSSL 4.0.1 is used for the configured RSA App key and RS256 JWT signing, not a network protocol. The shipped Uvicorn entrypoint serves HTTP without native TLS settings. Source entrypoint/caller review supports this conclusion; name searches and the existing static payload evidence are not a whole-program proof. Ordinary TLS client and certificate-processing findings remain separate. The library is present and unpatched; this is not a blanket OpenSSL exclusion. Scope is the shipped Linux amd64/arm64 service, not operator commands, custom FFI, plugins, other builds or execution after compromise.",
+      "justification": "vulnerable_code_not_in_execute_path",
       "products": [
         {
           "@id": "pkg:generic/openssl@3.5.4",
@@ -1515,9 +1521,9 @@
           }
         }
       ],
-      "status": "under_investigation",
-      "status_notes": "Analysis detail: Candidate retained from the alpha.83 native report: Grype 0.118.0, database built 2026-11-10T06:21:20Z. Application-specific reachability has not been established. No fix or not-affected conclusion is made, including for TLS and certificate-processing paths. This intake is not a complete native-library assessment or distribution approval.\nSource: Grype/NVD native candidate (https://nvd.nist.gov/vuln/detail/CVE-2026-54873)\nOriginal Vexcalibur analysis state: in_triage\nSource record modified: 2026-11-11T05:20:18Z",
-      "timestamp": "2026-11-11T05:20:18Z",
+      "status": "not_affected",
+      "status_notes": "Analysis detail: The QUIC packet-retention prerequisite is absent: neither reviewed native caller creates a QUIC connection. Psycopg's libpq 18.0 creates an SSLv23_method context (the OpenSSL 3.5.4 alias for TLS_method) and starts a TLS client handshake with SSL_connect; its reviewed sources use no DTLS/QUIC method or SSL_set_SSL_CTX call. Cryptography's OpenSSL 4.0.1 is used for the configured RSA App key and RS256 JWT signing, not a network protocol. The shipped Uvicorn entrypoint serves HTTP without native TLS settings. Source entrypoint/caller review supports this conclusion; name searches and the existing static payload evidence are not a whole-program proof. Ordinary TLS client and certificate-processing findings remain separate. The library is present and unpatched; this is not a blanket OpenSSL exclusion. Scope is the shipped Linux amd64/arm64 service, not operator commands, custom FFI, plugins, other builds or execution after compromise.\nSource: Extra CODEOWNERS native protocol source review (https://openssl-library.org/news/secadv/20260929.txt)\nOriginal Vexcalibur analysis state: not_affected\nSource record modified: 2026-11-13T17:19:42Z",
+      "timestamp": "2026-11-13T17:19:42Z",
       "vulnerability": {
         "name": "CVE-2026-54873"
       }
@@ -1701,6 +1707,8 @@
       }
     },
     {
+      "impact_statement": "The mid-handshake SSL_set_SSL_CTX server-context switch is not used by the reviewed native callers. Psycopg's libpq 18.0 creates an SSLv23_method context (the OpenSSL 3.5.4 alias for TLS_method) and starts a TLS client handshake with SSL_connect; its reviewed sources use no DTLS/QUIC method or SSL_set_SSL_CTX call. Cryptography's OpenSSL 4.0.1 is used for the configured RSA App key and RS256 JWT signing, not a network protocol. The shipped Uvicorn entrypoint serves HTTP without native TLS settings. Source entrypoint/caller review supports this conclusion; name searches and the existing static payload evidence are not a whole-program proof. Ordinary TLS client and certificate-processing findings remain separate. The library is present and unpatched; this is not a blanket OpenSSL exclusion. Scope is the shipped Linux amd64/arm64 service, not operator commands, custom FFI, plugins, other builds or execution after compromise.",
+      "justification": "vulnerable_code_not_in_execute_path",
       "products": [
         {
           "@id": "pkg:generic/openssl@3.5.4",
@@ -1715,9 +1723,9 @@
           }
         }
       ],
-      "status": "under_investigation",
-      "status_notes": "Analysis detail: Candidate retained from the alpha.83 native report: Grype 0.118.0, database built 2026-11-10T06:21:20Z. Application-specific reachability has not been established. No fix or not-affected conclusion is made, including for TLS and certificate-processing paths. This intake is not a complete native-library assessment or distribution approval.\nSource: Grype/NVD native candidate (https://nvd.nist.gov/vuln/detail/CVE-2026-72897)\nOriginal Vexcalibur analysis state: in_triage\nSource record modified: 2026-11-11T05:20:18Z",
-      "timestamp": "2026-11-11T05:20:18Z",
+      "status": "not_affected",
+      "status_notes": "Analysis detail: The mid-handshake SSL_set_SSL_CTX server-context switch is not used by the reviewed native callers. Psycopg's libpq 18.0 creates an SSLv23_method context (the OpenSSL 3.5.4 alias for TLS_method) and starts a TLS client handshake with SSL_connect; its reviewed sources use no DTLS/QUIC method or SSL_set_SSL_CTX call. Cryptography's OpenSSL 4.0.1 is used for the configured RSA App key and RS256 JWT signing, not a network protocol. The shipped Uvicorn entrypoint serves HTTP without native TLS settings. Source entrypoint/caller review supports this conclusion; name searches and the existing static payload evidence are not a whole-program proof. Ordinary TLS client and certificate-processing findings remain separate. The library is present and unpatched; this is not a blanket OpenSSL exclusion. Scope is the shipped Linux amd64/arm64 service, not operator commands, custom FFI, plugins, other builds or execution after compromise.\nSource: Extra CODEOWNERS native protocol source review (https://openssl-library.org/news/secadv/20260929.txt)\nOriginal Vexcalibur analysis state: not_affected\nSource record modified: 2026-11-13T17:19:42Z",
+      "timestamp": "2026-11-13T17:19:42Z",
       "vulnerability": {
         "name": "CVE-2026-72897"
       }
@@ -1761,6 +1769,8 @@
       }
     },
     {
+      "impact_statement": "The QUIC connection flow-control prerequisite is absent: neither reviewed native caller creates a QUIC connection. Psycopg's libpq 18.0 creates an SSLv23_method context (the OpenSSL 3.5.4 alias for TLS_method) and starts a TLS client handshake with SSL_connect; its reviewed sources use no DTLS/QUIC method or SSL_set_SSL_CTX call. Cryptography's OpenSSL 4.0.1 is used for the configured RSA App key and RS256 JWT signing, not a network protocol. The shipped Uvicorn entrypoint serves HTTP without native TLS settings. Source entrypoint/caller review supports this conclusion; name searches and the existing static payload evidence are not a whole-program proof. Ordinary TLS client and certificate-processing findings remain separate. The library is present and unpatched; this is not a blanket OpenSSL exclusion. Scope is the shipped Linux amd64/arm64 service, not operator commands, custom FFI, plugins, other builds or execution after compromise.",
+      "justification": "vulnerable_code_not_in_execute_path",
       "products": [
         {
           "@id": "pkg:generic/openssl@3.5.4",
@@ -1775,9 +1785,9 @@
           }
         }
       ],
-      "status": "under_investigation",
-      "status_notes": "Analysis detail: Candidate retained from the alpha.83 native report: Grype 0.118.0, database built 2026-11-10T06:21:20Z. Application-specific reachability has not been established. No fix or not-affected conclusion is made, including for TLS and certificate-processing paths. This intake is not a complete native-library assessment or distribution approval.\nSource: Grype/NVD native candidate (https://nvd.nist.gov/vuln/detail/CVE-2026-75804)\nOriginal Vexcalibur analysis state: in_triage\nSource record modified: 2026-11-11T05:20:18Z",
-      "timestamp": "2026-11-11T05:20:18Z",
+      "status": "not_affected",
+      "status_notes": "Analysis detail: The QUIC connection flow-control prerequisite is absent: neither reviewed native caller creates a QUIC connection. Psycopg's libpq 18.0 creates an SSLv23_method context (the OpenSSL 3.5.4 alias for TLS_method) and starts a TLS client handshake with SSL_connect; its reviewed sources use no DTLS/QUIC method or SSL_set_SSL_CTX call. Cryptography's OpenSSL 4.0.1 is used for the configured RSA App key and RS256 JWT signing, not a network protocol. The shipped Uvicorn entrypoint serves HTTP without native TLS settings. Source entrypoint/caller review supports this conclusion; name searches and the existing static payload evidence are not a whole-program proof. Ordinary TLS client and certificate-processing findings remain separate. The library is present and unpatched; this is not a blanket OpenSSL exclusion. Scope is the shipped Linux amd64/arm64 service, not operator commands, custom FFI, plugins, other builds or execution after compromise.\nSource: Extra CODEOWNERS native protocol source review (https://openssl-library.org/news/secadv/20260929.txt)\nOriginal Vexcalibur analysis state: not_affected\nSource record modified: 2026-11-13T17:19:42Z",
+      "timestamp": "2026-11-13T17:19:42Z",
       "vulnerability": {
         "name": "CVE-2026-75804"
       }
@@ -1851,6 +1861,8 @@
       }
     },
     {
+      "impact_statement": "The DTLS retransmission prerequisite is absent: neither reviewed native caller creates a DTLS connection. Psycopg's libpq 18.0 creates an SSLv23_method context (the OpenSSL 3.5.4 alias for TLS_method) and starts a TLS client handshake with SSL_connect; its reviewed sources use no DTLS/QUIC method or SSL_set_SSL_CTX call. Cryptography's OpenSSL 4.0.1 is used for the configured RSA App key and RS256 JWT signing, not a network protocol. The shipped Uvicorn entrypoint serves HTTP without native TLS settings. Source entrypoint/caller review supports this conclusion; name searches and the existing static payload evidence are not a whole-program proof. Ordinary TLS client and certificate-processing findings remain separate. The library is present and unpatched; this is not a blanket OpenSSL exclusion. Scope is the shipped Linux amd64/arm64 service, not operator commands, custom FFI, plugins, other builds or execution after compromise.",
+      "justification": "vulnerable_code_not_in_execute_path",
       "products": [
         {
           "@id": "pkg:generic/openssl@3.5.4",
@@ -1865,9 +1877,9 @@
           }
         }
       ],
-      "status": "under_investigation",
-      "status_notes": "Analysis detail: Candidate retained from the alpha.83 native report: Grype 0.118.0, database built 2026-11-10T06:21:20Z. Application-specific reachability has not been established. No fix or not-affected conclusion is made, including for TLS and certificate-processing paths. This intake is not a complete native-library assessment or distribution approval.\nSource: Grype/NVD native candidate (https://nvd.nist.gov/vuln/detail/CVE-2026-84782)\nOriginal Vexcalibur analysis state: in_triage\nSource record modified: 2026-11-11T05:20:18Z",
-      "timestamp": "2026-11-11T05:20:18Z",
+      "status": "not_affected",
+      "status_notes": "Analysis detail: The DTLS retransmission prerequisite is absent: neither reviewed native caller creates a DTLS connection. Psycopg's libpq 18.0 creates an SSLv23_method context (the OpenSSL 3.5.4 alias for TLS_method) and starts a TLS client handshake with SSL_connect; its reviewed sources use no DTLS/QUIC method or SSL_set_SSL_CTX call. Cryptography's OpenSSL 4.0.1 is used for the configured RSA App key and RS256 JWT signing, not a network protocol. The shipped Uvicorn entrypoint serves HTTP without native TLS settings. Source entrypoint/caller review supports this conclusion; name searches and the existing static payload evidence are not a whole-program proof. Ordinary TLS client and certificate-processing findings remain separate. The library is present and unpatched; this is not a blanket OpenSSL exclusion. Scope is the shipped Linux amd64/arm64 service, not operator commands, custom FFI, plugins, other builds or execution after compromise.\nSource: Extra CODEOWNERS native protocol source review (https://openssl-library.org/news/secadv/20260929.txt)\nOriginal Vexcalibur analysis state: not_affected\nSource record modified: 2026-11-13T17:19:42Z",
+      "timestamp": "2026-11-13T17:19:42Z",
       "vulnerability": {
         "name": "CVE-2026-84782"
       }
@@ -1944,9 +1956,9 @@
       }
     }
   ],
-  "timestamp": "2026-11-12T18:28:25Z",
+  "timestamp": "2026-11-13T17:21:52Z",
   "tooling": "Vexcalibur + Extra CODEOWNERS runtime binding",
-  "version": 32,
+  "version": 33,
   "x_extra_codeowners_runtime": {
     "files": {
       ".dockerignore": "3f9dc9d3a79fe3085f25de88403b5563ad5c7fa7010bef94c5e55f24bd3cf691",
@@ -2001,7 +2013,7 @@
       "tools/source_recipes/psycopg-binary-3.3.4.json": "ec227aa110315f82c25335837e258806930c7afbe980c8b2ff6b476343c243b5",
       "uv.lock": "5514cb0448adb693fe97f3d2c8016ccd606890327a1946467fbd118356de4922"
     },
-    "review": "Reviewed signed repository-team-grant scope validation and existing authority/publication fences; missing/conflicting context, shared policy and other actions retain global work. Persist only typed authority routing metadata in existing columns. No native/TLS/dependency/image/source-recipe change; all 89 statements remain unchanged.",
+    "review": "Six native OpenSSL protocol assessments were reviewed against the existing RSA/JWT and libpq TLS-client entrypoints, authenticated libpq 18.0 source and its OpenSSL 3.5.4 TLS method alias. Neither native caller uses DTLS, QUIC or mid-handshake TLS server context switching. No runtime, dependency, Dockerfile, base image or TLS configuration changed. Only those six native statement objects change; prior Debian, CPython and native assessments and their dates remain intact. Ordinary TLS/certificate cases stay under investigation.",
     "schema_version": 1
   }
 }
