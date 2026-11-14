@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import io
 import json
+import os
+import shutil
+import subprocess
+import tarfile
 from pathlib import Path
 from typing import Any
 from unittest.mock import Mock
@@ -247,13 +252,44 @@ def test_changed_source_or_inventory_requires_review(evidence: dict[str, Any], c
 
 
 def test_cli_generates_and_verifies_without_overwriting(
-    evidence: dict[str, Any], tmp_path: Path
+    evidence: dict[str, Any], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     inventory = tmp_path / "inventory.json"
     inventory.write_text(json.dumps(evidence["inventory"]))
     lock = tmp_path / "uv.lock"
     lock.write_bytes(b"fictional lock")
     output = tmp_path / "catalog.json"
+    sources = tmp_path / "sources.tar.gz"
+    sources.write_bytes(b"fictional verified source bundle")
+    payloads = {}
+    for item in evidence["plan"]["embedded_sources"]:
+        name = item["source_component"]["name"]
+        prefix, filenames = {
+            "openssl": ("openssl", ["LICENSE.txt"]),
+            "libpq": ("postgresql", ["COPYRIGHT"]),
+            "openldap": ("openldap", ["COPYRIGHT", "LICENSE"]),
+        }[name]
+        archive = io.BytesIO()
+        with tarfile.open(fileobj=archive, mode="w:gz") as tar:
+            for filename in filenames:
+                member = tarfile.TarInfo(
+                    f"{prefix}-{item['source_component']['version']}/{filename}"
+                )
+                member.size = 7
+                tar.addfile(member, io.BytesIO(b"fiction"))
+        payloads[item["path"]] = archive.getvalue()
+    verifier = Mock(return_value=payloads)
+    monkeypatch.setattr(catalog._python, "verify", verifier)
+    _exercise_cli(inventory, lock, output, sources)
+    verifier.assert_called_with(evidence["plan"], b"fictional verified source bundle")
+    verifier.side_effect = ValueError("fictional source hash mismatch")
+    with pytest.raises(ValueError, match="source hash mismatch"):
+        catalog.build(
+            inventory.read_bytes(), lock.read_bytes(), Path("fictional"), "amd64", DIGEST, sources
+        )
+
+
+def _exercise_cli(inventory: Path, lock: Path, output: Path, sources: Path) -> None:
     args = [
         "--inventory",
         str(inventory),
@@ -261,6 +297,8 @@ def test_cli_generates_and_verifies_without_overwriting(
         str(lock),
         "--notices",
         "fictional.tar.gz",
+        "--python-sources",
+        str(sources),
         "--architecture",
         "amd64",
         "--platform-digest",
@@ -270,11 +308,92 @@ def test_cli_generates_and_verifies_without_overwriting(
     ]
     assert catalog.main(["generate", *args]) == 0
     assert catalog.main(["verify", *args]) == 0
+    legacy_args = args.copy()
+    start = legacy_args.index("--python-sources")
+    del legacy_args[start : start + 2]
+    with pytest.raises(SystemExit):
+        catalog.main(["verify", *legacy_args])
+    document = json.loads(output.read_bytes())
+    customs = [item for item in document["components"] if item["purl"].startswith("pkg:generic/")]
+    assert len(customs) == 4
+    for item in customs:
+        props = {entry["name"]: entry["value"] for entry in item["properties"]}
+        assert json.loads(props["extra-codeowners:source-notice-files"])
+        assert "not complete binary attribution" in props["extra-codeowners:source-notice-review"]
     with pytest.raises(SystemExit):
         catalog.main(["generate", *args])
     output.write_bytes(b"{}")
     with pytest.raises(SystemExit):
         catalog.main(["verify", *args])
+
+
+def test_provenance_verifier_selects_sources_only_for_the_versioned_notice_contract(
+    tmp_path: Path,
+) -> None:
+    bash = shutil.which("bash")
+    if bash is None or shutil.which("jq") is None:
+        pytest.skip("Bash and jq are required")
+    source = (
+        Path(__file__).parents[1] / ".github/scripts/verify-release-provenance.sh"
+    ).read_text()
+    selection = source.split("  native_notice_args=()", 1)[1].split("  python -I -S -B", 1)[0]
+    for marker, expected in (
+        (None, []),
+        ("1", ["--python-sources", f"{tmp_path}/python-source-amd64.tar.gz"]),
+        ("2", []),
+    ):
+        path = tmp_path / "catalog.json"
+        props = (
+            []
+            if marker is None
+            else [{"name": "extra-codeowners:source-notice-evidence", "value": marker}]
+        )
+        path.write_text(json.dumps({"metadata": {"properties": props}}))
+        command = (
+            "native_notice_args=()\n" + selection + '\nprintf "%s\\n" "${native_notice_args[@]}"'
+        )
+        result = subprocess.run(  # noqa: S603 - reviewed shell selection and fictional inputs
+            [bash, "-euo", "pipefail", "-c", command],
+            env={
+                **os.environ,
+                "catalog": str(path),
+                "asset_directory": str(tmp_path),
+                "architecture": "amd64",
+            },
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=5,
+        )
+        assert result.stdout.strip().splitlines() == expected
+
+
+def test_generate_requires_sources_but_legacy_verify_remains_available(
+    evidence: dict[str, Any], tmp_path: Path
+) -> None:
+    inventory = tmp_path / "inventory.json"
+    inventory.write_text(json.dumps(evidence["inventory"]))
+    lock = tmp_path / "uv.lock"
+    lock.write_bytes(b"fictional lock")
+    output = tmp_path / "catalog.json"
+    output.write_bytes(build(evidence))
+    args = [
+        "--inventory",
+        str(inventory),
+        "--lock",
+        str(lock),
+        "--notices",
+        "fictional",
+        "--architecture",
+        "amd64",
+        "--platform-digest",
+        DIGEST,
+        "--catalog",
+        str(output),
+    ]
+    assert catalog.main(["verify", *args]) == 0
+    with pytest.raises(SystemExit):
+        catalog.main(["generate", *args])
 
 
 def test_metadata_reader_is_bounded(tmp_path: Path) -> None:

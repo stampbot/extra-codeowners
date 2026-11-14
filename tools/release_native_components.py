@@ -44,6 +44,7 @@ def _sibling(name: str) -> ModuleType:
 
 _python = _sibling("release_python_sources")
 _notices = _sibling("release_notices")
+_native_notices = _sibling("release_native_notices")
 
 
 def _json(data: bytes) -> dict[str, Any]:
@@ -131,7 +132,12 @@ def _reported_components(
 
 
 def build(
-    inventory: bytes, lock: bytes, notice_bundle: Path, architecture: str, digest: str
+    inventory: bytes,
+    lock: bytes,
+    notice_bundle: Path,
+    architecture: str,
+    digest: str,
+    python_sources: Path | None = None,
 ) -> bytes:
     """Bind a deterministic CycloneDX catalog to verified platform evidence."""
     raw = _json(inventory)
@@ -139,6 +145,11 @@ def build(
     if not isinstance(python, dict) or python.get("source_recipe_schema") != 4:
         raise NativeComponentError("native component catalog requires source recipe schema 4")
     source_plan: dict[str, Any] = _python.plan(inventory, lock, architecture, digest)
+    source_payloads = None
+    if python_sources is not None:
+        with python_sources.open("rb") as stream:
+            bundle = stream.read(_python.MAX_BUNDLE + 1)
+        source_payloads = _python.verify(source_plan, bundle)
     notice_files: dict[str, bytes] = _notices.verify_notice_bundle(
         notice_bundle, inventory, architecture=architecture, platform_digest=digest
     )
@@ -193,6 +204,18 @@ def build(
         }
         if source.get("wheel_files"):
             properties["native-files"] = json.dumps(source["wheel_files"], sort_keys=True)
+        if source_payloads is not None:
+            if custom is None:
+                properties["source-notice-review"] = (
+                    "unresolved; RPM component notices not selected"
+                )
+            else:
+                properties["source-notice-files"] = json.dumps(
+                    _native_notices.inspect(source, source_payloads[source["path"]]), sort_keys=True
+                )
+                properties["source-notice-review"] = (
+                    "selected upstream texts only; not complete binary attribution or approval"
+                )
         ref = "native:" + hashlib.sha256(f"{parent}\n{purl}".encode()).hexdigest()
         if ref in refs:
             raise NativeComponentError("duplicate native source component")
@@ -210,6 +233,9 @@ def build(
         dependencies[parent].append(ref)
     if consumed != set(reported):
         raise NativeComponentError("wheel SBOM has a native component without a reviewed source")
+    evidence_properties = {}
+    if source_payloads is not None:
+        evidence_properties["source-notice-evidence"] = "1"
     document = {
         "bomFormat": "CycloneDX",
         "specVersion": "1.5",
@@ -217,6 +243,7 @@ def build(
         "metadata": {
             "properties": _properties(
                 {
+                    **evidence_properties,
                     "architecture": architecture,
                     "platform-digest": digest,
                     "inventory-sha256": hashlib.sha256(inventory).hexdigest(),
@@ -250,10 +277,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--inventory", type=Path, required=True)
     parser.add_argument("--lock", type=Path, required=True)
     parser.add_argument("--notices", type=Path, required=True)
+    parser.add_argument("--python-sources", type=Path)
     parser.add_argument("--architecture", choices=("amd64", "arm64"), required=True)
     parser.add_argument("--platform-digest", required=True)
     parser.add_argument("--catalog", type=Path, required=True)
     args = parser.parse_args(argv)
+    if args.command == "generate" and args.python_sources is None:
+        parser.error("generation requires --python-sources for native notice evidence")
     try:
         data = build(
             _read(args.inventory),
@@ -261,6 +291,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.notices,
             args.architecture,
             args.platform_digest,
+            args.python_sources,
         )
         if args.command == "generate":
             with args.catalog.open("xb") as output:

@@ -73,6 +73,11 @@ Cryptography and Psycopg C-library identities available as CycloneDX documents.
 They bind the wheel declarations and source recipes to the same platform
 evidence. Unknown library licenses remain explicitly unresolved; the parent
 wheel's license is not silently applied to its bundled libraries.
+Catalogs with source notice evidence also point to selected OpenSSL, libpq and
+OpenLDAP notice files inside the separately delivered Python source bundles.
+Those files are not added to the runtime notice bundle. See the
+[selected upstream notice contract](native-components.md#selected-upstream-notices)
+for the paths, hashes and remaining attribution limits.
 
 ## Verify a bundle
 

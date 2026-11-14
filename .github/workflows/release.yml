@@ -487,13 +487,6 @@ jobs:
             --platform-digest "${platform_digest}" \
             --inventory "distribution-inventory-${ARCHITECTURE}.json" \
             --bundle "recipient-notices-${ARCHITECTURE}.tar.gz"
-          python -I -S -B tools/release_native_components.py generate \
-            --architecture "${ARCHITECTURE}" \
-            --platform-digest "${platform_digest}" \
-            --inventory "distribution-inventory-${ARCHITECTURE}.json" \
-            --lock uv.lock \
-            --notices "recipient-notices-${ARCHITECTURE}.tar.gz" \
-            --catalog "native-components-${ARCHITECTURE}.cdx.json"
           python -I -S -B tools/release_sources.py fetch \
             --architecture "${ARCHITECTURE}" \
             --platform-digest "${platform_digest}" \
@@ -505,6 +498,14 @@ jobs:
             --inventory "distribution-inventory-${ARCHITECTURE}.json" \
             --lock uv.lock \
             --bundle "python-source-${ARCHITECTURE}.tar.gz"
+          python -I -S -B tools/release_native_components.py generate \
+            --architecture "${ARCHITECTURE}" \
+            --platform-digest "${platform_digest}" \
+            --inventory "distribution-inventory-${ARCHITECTURE}.json" \
+            --lock uv.lock \
+            --notices "recipient-notices-${ARCHITECTURE}.tar.gz" \
+            --python-sources "python-source-${ARCHITECTURE}.tar.gz" \
+            --catalog "native-components-${ARCHITECTURE}.cdx.json"
           python -I -S -B tools/release_rust_sources.py fetch \
             --architecture "${ARCHITECTURE}" \
             --platform-digest "${platform_digest}" \
@@ -723,6 +724,7 @@ jobs:
               --inventory "release/image/${architecture}/distribution-inventory-${architecture}.json" \
               --lock uv.lock \
               --notices "release/image/${architecture}/recipient-notices-${architecture}.tar.gz" \
+              --python-sources "release/image/${architecture}/python-source-${architecture}.tar.gz" \
               --catalog "release/image/${architecture}/native-components-${architecture}.cdx.json"
             python -I -S -B tools/release_sources.py verify \
               --architecture "${architecture}" \

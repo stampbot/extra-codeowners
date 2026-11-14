@@ -31,7 +31,7 @@ run = [
   "uv run python -I -S -B tools/release_vex.py check-runtime --source security/vex/runtime.openvex.json --runtime-root .",
   "uv run ruff format --check .",
   "uv run ruff check .",
-  "uv run mypy extra_codeowners tests tools/evaluation_beta.py tools/evaluation_beta_bootstrap.py tools/readthedocs_bootstrap.py tools/release_inventory.py tools/release_notices.py tools/release_vex.py tools/release_rescan.py tools/release_sources.py tools/release_debian_sources.py tools/release_python_sources.py tools/release_rust_sources.py tools/release_native_components.py .github/scripts/release_plan.py",
+  "uv run mypy extra_codeowners tests tools/evaluation_beta.py tools/evaluation_beta_bootstrap.py tools/readthedocs_bootstrap.py tools/release_inventory.py tools/release_notices.py tools/release_vex.py tools/release_rescan.py tools/release_sources.py tools/release_debian_sources.py tools/release_python_sources.py tools/release_rust_sources.py tools/release_native_components.py tools/release_native_notices.py .github/scripts/release_plan.py",
 ]
 
 [tasks."lint:workflows"]
