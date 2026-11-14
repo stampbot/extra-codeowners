@@ -13,6 +13,7 @@ import pytest
 from fastapi.testclient import TestClient
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 
 import extra_codeowners.app as app_module
 from extra_codeowners import __version__
@@ -347,9 +348,18 @@ def test_health_and_signed_webhook_ingestion(tmp_path: Path) -> None:
     assert [check["status"] for check in github.checks] == ["in_progress"]
 
 
+@pytest.mark.parametrize(
+    "external_traceparent",
+    [
+        f"00-{'f' * 32}-{'e' * 16}-01",
+        f"01-{'f' * 32}-{'e' * 16}-01-" + " " * 4096 + "\nx",
+    ],
+    ids=["valid-parent", "oversized-newline-carrier"],
+)
 def test_verified_webhook_persists_a_local_trace_context(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    external_traceparent: str,
 ) -> None:
     store = migrated_store(f"sqlite:///{tmp_path / 'app-trace-link.db'}")
     exporter = InMemorySpanExporter()
@@ -364,6 +374,11 @@ def test_verified_webhook_persists_a_local_trace_context(
         return tracing
 
     monkeypatch.setattr(Tracing, "from_settings", classmethod(tracing_from_settings))
+
+    def reject_external_extraction(*_: Any, **__: Any) -> None:
+        raise AssertionError("webhook ingress must not parse external trace context")
+
+    monkeypatch.setattr(TraceContextTextMapPropagator, "extract", reject_external_extraction)
     app = app_module.create_app(configured_settings(), github=StubGitHub(), store=store)  # type: ignore[arg-type]
     body = json.dumps(
         {
@@ -372,10 +387,12 @@ def test_verified_webhook_persists_a_local_trace_context(
             "repository": {"full_name": "example/project"},
             "number": 7,
             "pull_request": {"number": 7, "state": "open", "head": {"sha": HEAD}},
+            "_meta": {"traceparent": external_traceparent},
         }
     ).encode()
     headers = webhook_headers(body, "trace-context-delivery")
-    headers["traceparent"] = f"00-{'f' * 32}-{'e' * 16}-01"
+    # ASGI also lets this fixture inject header values real HTTP would reject.
+    headers["traceparent"] = external_traceparent
 
     with TestClient(app) as client:
         response = client.post("/webhooks/github", content=body, headers=headers)

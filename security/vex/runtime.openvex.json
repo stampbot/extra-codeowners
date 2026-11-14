@@ -1,8 +1,8 @@
 {
   "@context": "https://openvex.dev/ns/v0.2.0",
-  "@id": "urn:uuid:53cf7b7d-1347-5710-abdb-36bc232fc40e",
+  "@id": "urn:uuid:9a3f1a66-ca79-59e6-a2c1-6cefe1c38332",
   "author": "Extra CODEOWNERS maintainers",
-  "last_updated": "2026-11-14T04:14:04Z",
+  "last_updated": "2026-11-14T04:17:26Z",
   "role": "VEX document producer",
   "statements": [
     {
@@ -1956,9 +1956,9 @@
       }
     }
   ],
-  "timestamp": "2026-11-14T04:14:04Z",
+  "timestamp": "2026-11-14T04:17:26Z",
   "tooling": "Vexcalibur + Extra CODEOWNERS runtime binding",
-  "version": 34,
+  "version": 35,
   "x_extra_codeowners_runtime": {
     "files": {
       ".dockerignore": "3f9dc9d3a79fe3085f25de88403b5563ad5c7fa7010bef94c5e55f24bd3cf691",
@@ -2012,9 +2012,9 @@
       "security/vex/native-protocol-callers.json": "d31e0df96a1901843552b6f14c76eeed966880ebf75ea17562fae9180c1d6cfb",
       "tools/source_recipes/cryptography-50.0.0.json": "14c8c00339ada71aa1f975b2d20052582f251a44c2c8f1cdbb2d8fc0bb802779",
       "tools/source_recipes/psycopg-binary-3.3.4.json": "ec227aa110315f82c25335837e258806930c7afbe980c8b2ff6b476343c243b5",
-      "uv.lock": "5514cb0448adb693fe97f3d2c8016ccd606890327a1946467fbd118356de4922"
+      "uv.lock": "9b38f0929d3ea110b3d016bc638547e9f6244949009d2bc4dadff6141d496f90"
     },
-    "review": "Six native OpenSSL protocol assessments were reviewed against the existing RSA/JWT and libpq TLS-client entrypoints, authenticated libpq 18.0 source and its OpenSSL 3.5.4 TLS method alias. Neither native caller uses DTLS, QUIC or mid-handshake TLS server context switching. Bind the exact native-protocol-callers.json receipt alongside the existing caller table; additions, edits, removal and symlinks invalidate the review. No runtime, dependency, Dockerfile, base image or TLS configuration changed. Only the six reviewed native statement objects differ from the pre-assessment document; all prior statements and dates remain intact. Ordinary TLS/certificate cases stay under investigation.",
+    "review": "Reviewed OpenTelemetry API 1.45.2 traceparent length/regex patch and the paired SDK 1.45.2/semantic-conventions 0.66b2 lock updates. Webhook ingress creates local roots without extracting untrusted carriers; tests reject extraction for both ordinary and oversized newline-bearing inputs. SDK metric-cardinality changes do not affect the service Prometheus-client metrics path. Exporter versions, native library identities and source recipes, Dockerfile/base, TLS configuration and cryptographic callers are unchanged. Preserve the protocol caller receipt binding. All 89 VEX statement objects and dates remain unchanged; only the reviewed lock binding advances.",
     "schema_version": 1
   }
 }

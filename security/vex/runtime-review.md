@@ -1,5 +1,24 @@
 # Runtime vulnerability review
 
+## OpenTelemetry patch review: November 14, 2026 UTC
+
+The lock updates OpenTelemetry API and SDK from 1.45.1 to 1.45.2 and semantic
+conventions from 0.66b1 to 0.66b2. The API patch bounds `traceparent` parsing
+and changes its regular expression; upstream identifies 1.45.2 as the fix for
+[CVE-2026-126360](https://github.com/open-telemetry/opentelemetry-python/security/advisories/GHSA-mf5v-w3w3-f6cg).
+
+Webhook ingress creates a local root span without extracting incoming trace
+context. Its regression test rejects any call to the affected propagator,
+including signed JSON metadata and an oversized carrier containing a newline.
+The SDK patch also adds metric cardinality limits. This service uses the SDK
+for traces and `prometheus_client` for metrics, not the changed SDK metric
+aggregation path. The exporter version and application call sites are unchanged.
+
+The dependency update changes no native-library identity, source recipe,
+Dockerfile, base digest, TLS setting or cryptographic caller. All 89 existing
+VEX statement objects and dates remain unchanged; the runtime binding records
+the reviewed lock. No new vulnerability exclusion is added for this patch.
+
 ## Repository team-grant routing: November 12, 2026 UTC
 
 The parser can scope a signed repository access grant after checking ordinary
