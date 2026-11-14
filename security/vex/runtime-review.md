@@ -70,6 +70,55 @@ FFI, compression or TLS path. None of the previous exclusions gains a new
 caller. The Dockerfile, base digest and dependency lock are unchanged. The
 runtime binding advances after review of these code changes.
 
+## Native protocol review: November 13, 2026 UTC
+
+Six more assessments cover both native OpenSSL identities, 3.5.4 and 4.0.1.
+The [September 29 advisory](https://openssl-library.org/news/secadv/20260929.txt)
+requires protocol paths that these callers do not use:
+
+| CVE | Required path absent from the reviewed service |
+| --- | --- |
+| CVE-2026-84782 | DTLS handshake retransmission |
+| CVE-2026-35191 | QUIC server address-validation accounting |
+| CVE-2026-42772 | QUIC stream reassembly |
+| CVE-2026-54873 | QUIC packet retention |
+| CVE-2026-75804 | QUIC connection flow control |
+| CVE-2026-72897 | A mid-handshake TLS server context switch |
+
+Libpq 18.0 creates an `SSLv23_method` context and calls `SSL_connect` as a
+client. OpenSSL 3.5.4 defines that method as the stream-TLS `TLS_method`, not
+a DTLS or QUIC method. The review read 33 libpq C/header files from each
+platform's authenticated source bundle. Cryptography handles the configured
+RSA App key and fixed RS256 signing; the shipped Uvicorn command serves HTTP
+without native TLS settings. The
+[caller receipt](native-protocol-callers.json) records the source hashes and
+call sites. Name searches and the existing native import table support the
+source review; neither is a whole-program proof on its own.
+The runtime binding records this caller receipt's bytes. Adding, changing,
+removing or linking that file requires another review.
+
+These statements use `vulnerable_code_not_in_execute_path`. The libraries
+remain present and unpatched. They cover the shipped Linux amd64/arm64
+service, not operator commands, custom FFI, plugins, other builds or execution
+after compromise. They do not extend an exclusion to ordinary TLS client or
+certificate processing: CVE-2026-35189 and CVE-2026-75803 remain under
+investigation. No dependency, Dockerfile or application input changed. Earlier
+Debian, CPython and native assessments keep their contents and dates.
+Vexcalibur 1.1.1 formatted these twelve product/CVE findings offline; it did
+not decide reachability.
+
+The November 13 comparison used Grype 0.118.0 and one database built at
+15:40:34 UTC that day. On each architecture, the raw native report retained
+82 product/CVE matches. VEX version 32 left 69 visible; version 33 left 57,
+with exactly twelve additional exclusions attributed to VEX. All
+earlier exclusions remained, and no fix, severity or project-ignore filter
+removed a native finding. These are scans of the authenticated alpha.88
+catalogs, whose native identities remain unchanged in the reviewed runtime;
+they are not observations of a newly published release. Complete native
+coverage and distribution approval remain open in issue #18.
+The later binding-only revision adds the caller receipt to the reviewed
+inputs without changing those statement objects or their assessment dates.
+
 ## Additional CMS/CMP review: November 11, 2026 UTC
 
 Four more assessments use the source and caller evidence from the initial

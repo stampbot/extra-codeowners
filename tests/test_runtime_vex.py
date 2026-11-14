@@ -133,8 +133,8 @@ def test_review_records_glibc_caller_evidence_and_existing_openssl_fixes() -> No
     statements = document["statements"]
     assert Counter(statement["status"] for statement in statements) == {
         "fixed": 26,
-        "not_affected": 12,
-        "under_investigation": 51,
+        "not_affected": 18,
+        "under_investigation": 45,
     }
     identities = [(s["vulnerability"]["name"], p["@id"]) for s in statements for p in s["products"]]
     assert len(identities) == len(set(identities))
