@@ -94,13 +94,15 @@ without native TLS settings. The
 [caller receipt](native-protocol-callers.json) records the source hashes and
 call sites. Name searches and the existing native import table support the
 source review; neither is a whole-program proof on its own.
+The runtime binding records this caller receipt's bytes. Adding, changing,
+removing or linking that file requires another review.
 
 These statements use `vulnerable_code_not_in_execute_path`. The libraries
 remain present and unpatched. They cover the shipped Linux amd64/arm64
 service, not operator commands, custom FFI, plugins, other builds or execution
 after compromise. They do not extend an exclusion to ordinary TLS client or
 certificate processing: CVE-2026-35189 and CVE-2026-75803 remain under
-investigation. No dependency, Dockerfile or runtime input changed. Earlier
+investigation. No dependency, Dockerfile or application input changed. Earlier
 Debian, CPython and native assessments keep their contents and dates.
 Vexcalibur 1.1.1 formatted these twelve product/CVE findings offline; it did
 not decide reachability.
@@ -114,6 +116,8 @@ removed a native finding. These are scans of the authenticated alpha.88
 catalogs, whose native identities remain unchanged in the reviewed runtime;
 they are not observations of a newly published release. Complete native
 coverage and distribution approval remain open in issue #18.
+The later binding-only revision adds the caller receipt to the reviewed
+inputs without changing those statement objects or their assessment dates.
 
 ## Additional CMS/CMP review: November 11, 2026 UTC
 

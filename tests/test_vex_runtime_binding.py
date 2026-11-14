@@ -109,7 +109,11 @@ def test_new_statement_cannot_inherit_an_old_assessment_date(runtime: tuple[Path
 
 @pytest.mark.parametrize(
     "relative",
-    ["tools/source_recipes/fictional-99.json", "security/vex/native-openssl-callers.json"],
+    [
+        "tools/source_recipes/fictional-99.json",
+        "security/vex/native-openssl-callers.json",
+        "security/vex/native-protocol-callers.json",
+    ],
 )
 def test_native_review_inputs_cannot_change_without_another_review(
     runtime: tuple[Path, Path], relative: str
@@ -123,6 +127,29 @@ def test_native_review_inputs_cannot_change_without_another_review(
     before = source.read_bytes()
     evidence.write_text('{"fictional": 2}\n', encoding="utf-8")
     with pytest.raises(ReleaseVexError, match="stale"):
+        validate_runtime_binding(source, root)
+    assert source.read_bytes() == before
+
+
+@pytest.mark.parametrize("operation", ["add", "delete", "symlink"])
+def test_protocol_receipt_set_and_file_kind_require_review(
+    runtime: tuple[Path, Path], operation: str
+) -> None:
+    source, root = runtime
+    evidence = root / "security/vex/native-protocol-callers.json"
+    evidence.parent.mkdir(parents=True)
+    if operation != "add":
+        evidence.write_text('{"fictional": 1}\n', encoding="utf-8")
+        bind_runtime(source, root, "Reviewed fictional protocol caller evidence.")
+    before = source.read_bytes()
+    if operation == "add":
+        evidence.write_text('{"fictional": 1}\n', encoding="utf-8")
+    elif operation == "delete":
+        evidence.unlink()
+    else:
+        evidence.unlink()
+        evidence.symlink_to(root / "uv.lock")
+    with pytest.raises(ReleaseVexError):
         validate_runtime_binding(source, root)
     assert source.read_bytes() == before
 
