@@ -43,6 +43,33 @@ verifier rejects missing catalogs, changed bytes or evidence from another
 platform. Older inventories without that field remain verifiable without
 claiming that a catalog was published.
 
+### Selected upstream notices
+
+Catalogs with metadata property `extra-codeowners:source-notice-evidence` set
+to `1` also identify selected notice files inside the retained upstream
+sources. These references supplement the runtime notice bundle; they don't
+add files to it.
+
+For OpenSSL, the selection is the archive's top-level `LICENSE.txt`. For
+libpq, it is PostgreSQL's top-level `COPYRIGHT`. OpenLDAP supplies top-level
+`COPYRIGHT` and `LICENSE`. Each selected component has a
+`extra-codeowners:source-notice-files` property containing JSON records with
+the inner archive path, byte size and SHA-256. Its existing `source-archive`
+property identifies the enclosing tarball in `python-source-ARCHITECTURE.tar.gz`.
+
+The verifier checks the complete Python source bundle against the inventory,
+lockfile and source recipes before reading these files. It rejects missing,
+duplicate, linked, sparse or oversized selected notices. It reads compressed
+archives without extracting or executing them, with limits of 512 MiB expanded
+bytes, 50,000 members and 1 MiB per notice file.
+
+These are selected upstream texts, not a complete map of copyright holders to
+compiled code. RPM-origin component notices remain unselected, and every
+native component's license review remains unresolved. A matching notice hash
+does not approve binary redistribution or establish corresponding-source
+adequacy. Older catalogs omit these properties and make no notice-selection
+claim.
+
 ## Verify a catalog
 
 Check out the release tag and download these assets from that same release:
@@ -51,6 +78,7 @@ Check out the release tag and download these assets from that same release:
 - `distribution-inventory-amd64.json`
 - `recipient-notices-amd64.tar.gz`
 - `native-components-amd64.cdx.json`
+- `python-source-amd64.tar.gz` for catalogs with source notice evidence
 
 Use Bash and Python 3.12 or newer. This command reads local files, makes no network
 request, and does not start the application:
@@ -62,6 +90,7 @@ python -I -S -B tools/release_native_components.py verify \
   --inventory distribution-inventory-amd64.json \
   --lock uv.lock \
   --notices recipient-notices-amd64.tar.gz \
+  --python-sources python-source-amd64.tar.gz \
   --catalog native-components-amd64.cdx.json
 ```
 
@@ -76,6 +105,13 @@ This comparison does not authenticate a downloaded file. The
 shows how to verify a release asset's adjacent Sigstore bundle and GitHub
 attestation. Apply that procedure to the catalog as well as its input assets,
 using the same release revision and workflow identity.
+
+For an older catalog without `extra-codeowners:source-notice-evidence`, omit
+`--python-sources`; the verifier reconstructs the original catalog without
+adding a later notice claim. New catalog generation requires that argument.
+Generation runs after source collection, and publication verifies the notice
+references again before allocating immutable release state. Missing or changed
+source evidence fails the release rather than publishing a catalog without it.
 
 ## Coverage limits
 

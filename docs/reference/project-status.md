@@ -208,6 +208,9 @@ close before the project is presented as production-ready:
   mechanism. Separate [wheel-native catalogs](native-components.md) expose the
   reviewed C-library identities and source bindings. They do not merge those
   libraries into the required image scan or complete their license review.
+  New catalogs also identify selected upstream notice files for OpenSSL,
+  libpq and OpenLDAP; RPM-origin notice selection and complete binary
+  attribution remain open.
   Separate native scans retain both raw findings and a VEX-applied report;
   a passing image gate is not a clean native assessment.
 

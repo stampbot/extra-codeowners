@@ -66,6 +66,7 @@ jobs:
           tools/release_debian_sources.py tools/release_python_sources.py
           tools/release_rust_sources.py
           tools/release_native_components.py
+          tools/release_native_notices.py
           .github/scripts/release_plan.py
 
       - name: Lint YAML
