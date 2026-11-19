@@ -24,6 +24,7 @@ the older results and links newer receipts.
 - [November 11, 2026: native catalogs and VEX](2026-11-11-native-catalog-and-vex.md)
 - [November 12, 2026: base-refresh stability](2026-11-12-base-refresh-stability.md)
 - [November 12–13, 2026: checkpoint continuation and alpha.92](2026-11-12-checkpoint-continuation-and-alpha92.md)
+- [November 19, 2026: installation suspension and recovery](2026-11-19-installation-suspend-resume.md)
 
 ## Add a receipt
 

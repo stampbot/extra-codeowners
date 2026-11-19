@@ -178,6 +178,12 @@ delivery, and it does not remove the production blocker while success can be
 inherited before invalidation. Its delivery-log probe follows GitHub's
 pagination metadata within fixed bounds. When another page remains, an unseen
 delivery is incomplete evidence, not evidence that the delivery was absent.
+
+In the [November 19 playground test](../maintainers/evidence/2026-11-19-installation-suspend-resume.md),
+GitHub blocked the suspended installation's access but kept a passing advisory
+Check Run visible. The separate fixture with native code-owner enforcement
+remained blocked. Recovery after resume does not replace the handback needed
+before intentional access removal.
 The same rule applies to cleanup: after an ambiguous repository create,
 repeated 404 responses trigger manual verification rather than a successful
 cleanup claim.

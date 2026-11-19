@@ -75,6 +75,12 @@ incomplete telemetry candidate rather than counting it as a pass. These
 observations complete the performance validation in issue #203, not the
 separate provider/lifecycle and distribution-review gates.
 
+The [November 19 suspension receipt](evidence/2026-11-19-installation-suspend-resume.md)
+records a playground suspension and resume on alpha.95. A passing advisory
+check remained visible with App access blocked. The native-review fixture
+stayed blocked, and the resume event started installation-wide recovery.
+This does not establish the separate uninstall or shared-commit contracts.
+
 ## Diagnostics and approval probe: November 2, 2026
 
 Alpha.65 runs on two Kubernetes nodes with shared PostgreSQL state. The
