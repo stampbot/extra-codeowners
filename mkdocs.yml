@@ -99,6 +99,7 @@ nav:
           - November base-refresh stability: maintainers/evidence/2026-11-12-base-refresh-stability.md
           - November checkpoint continuation and alpha.92: maintainers/evidence/2026-11-12-checkpoint-continuation-and-alpha92.md
           - November installation suspension and recovery: maintainers/evidence/2026-11-19-installation-suspend-resume.md
+          - November installation uninstall: maintainers/evidence/2026-11-20-installation-uninstall.md
       - Respond to dependency audit: how-to/respond-to-dependency-audit.md
       - Rescan a published image: how-to/rescan-published-image.md
       - Review or recover a Renovate update: how-to/manage-renovate-updates.md

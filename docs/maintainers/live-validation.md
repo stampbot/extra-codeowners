@@ -79,7 +79,12 @@ The [November 19 suspension receipt](evidence/2026-11-19-installation-suspend-re
 records a playground suspension and resume on alpha.95. A passing advisory
 check remained visible with App access blocked. The native-review fixture
 stayed blocked, and the resume event started installation-wide recovery.
-This does not establish the separate uninstall or shared-commit contracts.
+
+The [November 20 uninstall receipt](evidence/2026-11-20-installation-uninstall.md)
+records how recovery finished and what GitHub showed after the playground
+installation was removed. The old advisory success remained visible, and
+native review still blocked the other fixture. This did not validate
+reinstallation or the shared-commit enforcement boundary.
 
 ## Diagnostics and approval probe: November 2, 2026
 
