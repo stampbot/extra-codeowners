@@ -26,6 +26,7 @@ the older results and links newer receipts.
 - [November 12–13, 2026: checkpoint continuation and alpha.92](2026-11-12-checkpoint-continuation-and-alpha92.md)
 - [November 19, 2026: installation suspension and recovery](2026-11-19-installation-suspend-resume.md)
 - [November 20, 2026: installation uninstall](2026-11-20-installation-uninstall.md)
+- [November 20, 2026: selected-repository reinstall](2026-11-20-installation-reinstall.md)
 
 ## Add a receipt
 

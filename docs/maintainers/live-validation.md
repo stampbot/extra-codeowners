@@ -83,8 +83,10 @@ stayed blocked, and the resume event started installation-wide recovery.
 The [November 20 uninstall receipt](evidence/2026-11-20-installation-uninstall.md)
 records how recovery finished and what GitHub showed after the playground
 installation was removed. The old advisory success remained visible, and
-native review still blocked the other fixture. This did not validate
-reinstallation or the shared-commit enforcement boundary.
+native review still blocked the other fixture. A separate
+[reinstall test](evidence/2026-11-20-installation-reinstall.md) restored
+access to three selected repositories and reevaluated both fixture PRs.
+Neither run validated the shared-commit enforcement boundary.
 
 ## Diagnostics and approval probe: November 2, 2026
 
