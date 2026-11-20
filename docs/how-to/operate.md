@@ -858,7 +858,10 @@ Before deselecting an ordinary target:
 
 A well-formed `installation_repositories.removed` event containing only
 ordinary targets is acknowledged without work. By delivery time, the App can
-no longer update those repositories.
+no longer update those repositories. In the
+[single-repository access test](../maintainers/evidence/2026-11-20-selected-repository-access.md),
+GitHub denied a new token for the removed repository but still displayed
+its old passing check.
 
 Removing the organization-policy repository affects the whole installation.
 Restore native enforcement and remove the Extra CODEOWNERS requirement on

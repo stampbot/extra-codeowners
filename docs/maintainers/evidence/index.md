@@ -27,6 +27,7 @@ the older results and links newer receipts.
 - [November 19, 2026: installation suspension and recovery](2026-11-19-installation-suspend-resume.md)
 - [November 20, 2026: installation uninstall](2026-11-20-installation-uninstall.md)
 - [November 20, 2026: selected-repository reinstall](2026-11-20-installation-reinstall.md)
+- [November 20, 2026: removing and restoring one repository](2026-11-20-selected-repository-access.md)
 
 ## Add a receipt
 

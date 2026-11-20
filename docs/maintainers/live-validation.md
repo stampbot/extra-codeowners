@@ -86,7 +86,11 @@ installation was removed. The old advisory success remained visible, and
 native review still blocked the other fixture. A separate
 [reinstall test](evidence/2026-11-20-installation-reinstall.md) restored
 access to three selected repositories and reevaluated both fixture PRs.
-Neither run validated the shared-commit enforcement boundary.
+
+The [single-repository access test](evidence/2026-11-20-selected-repository-access.md)
+found that deselection also left the old check visible. Reselecting the
+repository queued work for that repository and refreshed the advisory check.
+These tests did not validate the shared-commit enforcement boundary.
 
 ## Diagnostics and approval probe: November 2, 2026
 
