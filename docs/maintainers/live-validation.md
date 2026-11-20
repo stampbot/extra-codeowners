@@ -90,7 +90,13 @@ access to three selected repositories and reevaluated both fixture PRs.
 The [single-repository access test](evidence/2026-11-20-selected-repository-access.md)
 found that deselection also left the old check visible. Reselecting the
 repository queued work for that repository and refreshed the advisory check.
-These tests did not validate the shared-commit enforcement boundary.
+
+The [transfer, deletion, and queue receipt](evidence/2026-11-20-repository-lifecycle-and-queue.md)
+records a transfer that kept native review in force and a deletion that
+removed the repository. A separate merge-queue fixture required an App
+check on its candidate even after the PR head passed. The queue probe
+used manual results; it did not validate automatic merge-group evaluation
+or close the shared-commit enforcement gap.
 
 ## Diagnostics and approval probe: November 2, 2026
 
