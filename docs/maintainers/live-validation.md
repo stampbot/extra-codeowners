@@ -98,6 +98,11 @@ check on its candidate even after the PR head passed. The queue probe
 used manual results; it did not validate automatic merge-group evaluation
 or close the shared-commit enforcement gap.
 
+The [November 21 delivery probe](evidence/2026-11-21-merge-group-delivery.md)
+matched two real App deliveries to separate candidates for the same PR.
+GitHub waited for a candidate check both times. The receiver accepted the
+events but didn't evaluate the candidates.
+
 ## Diagnostics and approval probe: November 2, 2026
 
 Alpha.65 runs on two Kubernetes nodes with shared PostgreSQL state. The

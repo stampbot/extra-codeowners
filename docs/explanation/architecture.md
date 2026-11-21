@@ -622,8 +622,9 @@ turning incidental internal imports into another compatibility contract.
 
 ## What a `202` means
 
-A successful webhook response means that the trigger is durably queued. It is
-not a merge decision.
+A `202` with `queued: true` means the trigger is durably queued. It is not
+a merge decision. A `202` with `queued: false` can acknowledge an unmapped
+event without scheduling an evaluation.
 
 ```text
 GitHub             ingress             durable store        workers
