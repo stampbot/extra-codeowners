@@ -75,6 +75,29 @@ incomplete telemetry candidate rather than counting it as a pass. These
 observations complete the performance validation in issue #203, not the
 separate provider/lifecycle and distribution-review gates.
 
+The [November 19 suspension receipt](evidence/2026-11-19-installation-suspend-resume.md)
+records a playground suspension and resume on alpha.95. A passing advisory
+check remained visible with App access blocked. The native-review fixture
+stayed blocked, and the resume event started installation-wide recovery.
+
+The [November 20 uninstall receipt](evidence/2026-11-20-installation-uninstall.md)
+records how recovery finished and what GitHub showed after the playground
+installation was removed. The old advisory success remained visible, and
+native review still blocked the other fixture. A separate
+[reinstall test](evidence/2026-11-20-installation-reinstall.md) restored
+access to three selected repositories and reevaluated both fixture PRs.
+
+The [single-repository access test](evidence/2026-11-20-selected-repository-access.md)
+found that deselection also left the old check visible. Reselecting the
+repository queued work for that repository and refreshed the advisory check.
+
+The [transfer, deletion, and queue receipt](evidence/2026-11-20-repository-lifecycle-and-queue.md)
+records a transfer that kept native review in force and a deletion that
+removed the repository. A separate merge-queue fixture required an App
+check on its candidate even after the PR head passed. The queue probe
+used manual results; it did not validate automatic merge-group evaluation
+or close the shared-commit enforcement gap.
+
 ## Diagnostics and approval probe: November 2, 2026
 
 Alpha.65 runs on two Kubernetes nodes with shared PostgreSQL state. The

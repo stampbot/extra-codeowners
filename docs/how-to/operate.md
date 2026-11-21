@@ -828,6 +828,26 @@ Never put a database password on a command line or in a support transcript.
 
 ## Change repository access safely
 
+### Suspend or uninstall an installation
+
+Before removing access, identify every repository where the installation's
+check is required. Restore and verify GitHub's native **Require review from
+Code Owners** rule on each one, then remove the Extra CODEOWNERS requirement.
+Do this while the App still has access. GitHub can keep showing an old
+passing Check Run after it blocks the App from updating it, as observed in
+the [playground suspension test](../maintainers/evidence/2026-11-19-installation-suspend-resume.md).
+
+Suspend the installation for a temporary interruption. If you intend to
+uninstall it, confirm you can restore the required repository access before
+uninstalling. Check the installation account so you don't interrupt a
+different installation of the same App.
+
+After resume or reinstall, verify access to the policy source and the intended
+repositories. Check that the corresponding lifecycle delivery reaches the
+service and wait for authority work and pull-request evaluations to finish.
+Verify current check results before relying on them for evaluation. Keep
+native enforcement in place where merges require code-owner review.
+
 ### Remove or add selected repositories
 
 Before deselecting an ordinary target:
@@ -838,7 +858,10 @@ Before deselecting an ordinary target:
 
 A well-formed `installation_repositories.removed` event containing only
 ordinary targets is acknowledged without work. By delivery time, the App can
-no longer update those repositories.
+no longer update those repositories. In the
+[single-repository access test](../maintainers/evidence/2026-11-20-selected-repository-access.md),
+GitHub denied a new token for the removed repository but still displayed
+its old passing check.
 
 Removing the organization-policy repository affects the whole installation.
 Restore native enforcement and remove the Extra CODEOWNERS requirement on

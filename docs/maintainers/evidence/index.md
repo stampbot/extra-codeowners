@@ -24,6 +24,11 @@ the older results and links newer receipts.
 - [November 11, 2026: native catalogs and VEX](2026-11-11-native-catalog-and-vex.md)
 - [November 12, 2026: base-refresh stability](2026-11-12-base-refresh-stability.md)
 - [November 12–13, 2026: checkpoint continuation and alpha.92](2026-11-12-checkpoint-continuation-and-alpha92.md)
+- [November 19, 2026: installation suspension and recovery](2026-11-19-installation-suspend-resume.md)
+- [November 20, 2026: installation uninstall](2026-11-20-installation-uninstall.md)
+- [November 20, 2026: selected-repository reinstall](2026-11-20-installation-reinstall.md)
+- [November 20, 2026: removing and restoring one repository](2026-11-20-selected-repository-access.md)
+- [November 20, 2026: repository access loss and merge-queue checks](2026-11-20-repository-lifecycle-and-queue.md)
 
 ## Add a receipt
 

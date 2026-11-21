@@ -153,8 +153,7 @@ pull request GitHub omitted.
 [Issue #1][issue-1] owns the remaining live tests:
 
 - repeated validation of the explicit failure reset used during reevaluation
-- shared-head opening and retargeting with delayed or lost webhooks
-- installation lifecycle, repository transfer, and access loss.
+- shared-head opening and retargeting with delayed or lost webhooks.
 
 Live tests have confirmed that an expected App source works in both
 repository and organization rulesets, that an App review can satisfy the
@@ -164,6 +163,14 @@ reset didn't reliably block one. The reusable fixture writes a versioned report
 so an older observation isn't mistaken for a test of current behavior. The
 [live validation results](../maintainers/live-validation.md) record each run's
 date and release.
+
+The [access-loss tests](../maintainers/live-validation.md) covered suspension,
+uninstall and reinstall, transfer, deletion, and removal of one selected
+repository. A prior green check can stay visible after access is gone. A
+[separate queue probe](../maintainers/evidence/2026-11-20-repository-lifecycle-and-queue.md)
+showed that GitHub waited for a candidate check from the expected App. The
+probe used manual Check Runs, so it does not establish that Extra CODEOWNERS
+can safely evaluate merge groups.
 
 Keep GitHub's native **Require review from Code Owners** rule on production
 repositories until that contract is proven.

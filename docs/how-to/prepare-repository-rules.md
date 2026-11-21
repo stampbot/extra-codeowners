@@ -112,3 +112,7 @@ Use this order if evaluation is unavailable, wrong, or being retired:
 Restoring human enforcement first prevents a period in which neither system
 protects code-owner obligations. It also gives Extra CODEOWNERS a chance to
 revoke its own managed result while it still has repository access.
+The [suspension test](../maintainers/evidence/2026-11-19-installation-suspend-resume.md)
+observed that an old passing check remained visible after GitHub blocked App
+access. For an installation-wide change, follow the
+[operator handback steps](operate.md#suspend-or-uninstall-an-installation).

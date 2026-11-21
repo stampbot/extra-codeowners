@@ -182,6 +182,13 @@ The same rule applies to cleanup: after an ambiguous repository create,
 repeated 404 responses trigger manual verification rather than a successful
 cleanup claim.
 
+In the [November 19 playground test](../maintainers/evidence/2026-11-19-installation-suspend-resume.md),
+GitHub blocked the suspended installation's access but kept a passing advisory
+Check Run visible. The separate fixture with native code-owner enforcement
+remained blocked. The [November 20 uninstall test](../maintainers/evidence/2026-11-20-installation-uninstall.md)
+showed the same result after GitHub deleted the installation. Restore native
+enforcement before intentionally removing access.
+
 The [dated live results](../maintainers/live-validation.md) distinguish tested
 behavior from the merge and access-loss paths that remain open. Successful
 approval tests do not remove the shared-head limitation above.
