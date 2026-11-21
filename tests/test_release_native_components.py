@@ -280,7 +280,11 @@ def test_cli_generates_and_verifies_without_overwriting(
         payloads[item["path"]] = archive.getvalue()
     verifier = Mock(return_value=payloads)
     monkeypatch.setattr(catalog._python, "verify", verifier)
-    _exercise_cli(inventory, lock, output, sources)
+    source = evidence["plan"]["native_sources"][0]
+    receipt = tmp_path / "rpm-notices.json"
+    receipt.write_text(json.dumps({"schema_version": 1, "archives": rpm_notices(source)}))
+    monkeypatch.setattr(catalog, "_RPM_NOTICE_RECEIPT", receipt)
+    _exercise_cli(inventory, lock, output, sources, receipt)
     verifier.assert_called_with(evidence["plan"], b"fictional verified source bundle")
     verifier.side_effect = ValueError("fictional source hash mismatch")
     with pytest.raises(ValueError, match="source hash mismatch"):
@@ -289,7 +293,62 @@ def test_cli_generates_and_verifies_without_overwriting(
         )
 
 
-def _exercise_cli(inventory: Path, lock: Path, output: Path, sources: Path) -> None:
+def rpm_notices(source: dict[str, Any]) -> dict[str, Any]:
+    return {
+        source["path"]: {
+            "archive_sha256": source["sha256"],
+            "reported_package": source["reported_package"],
+            "files": [
+                {
+                    "member": "sources.tar.gz",
+                    "path": "fictional/COPYING",
+                    "size": 7,
+                    "sha256": "d" * 64,
+                }
+            ],
+        }
+    }
+
+
+@pytest.mark.parametrize(
+    ("change", "message"),
+    [
+        ("missing", "needs review"),
+        ("archive", "needs review"),
+        ("package", "needs review"),
+        ("member", "invalid RPM notice member path"),
+        ("path", "invalid RPM notice member path"),
+        ("size", "invalid RPM notice size"),
+        ("sha256", "invalid RPM notice checksum"),
+        ("duplicates", "duplicate RPM notice path"),
+    ],
+)
+def test_rpm_notice_receipt_rejects_mismatched_or_malformed_records(
+    evidence: dict[str, Any], change: str, message: str
+) -> None:
+    source = evidence["plan"]["native_sources"][0]
+    archives = rpm_notices(source)
+    entry = archives[source["path"]]
+    if change == "missing":
+        archives.clear()
+    elif change == "archive":
+        entry["archive_sha256"] = "a" * 64
+    elif change == "package":
+        entry["reported_package"] = {"name": "other", "version": "8.1.2-1.el7"}
+    elif change == "duplicates":
+        entry["files"].append(entry["files"][0].copy())
+    else:
+        entry["files"][0][change] = {
+            "member": "/sources.tar.gz",
+            "path": "fictional/../COPYING",
+            "size": True,
+            "sha256": "xyz",
+        }[change]
+    with pytest.raises(catalog.NativeComponentError, match=message):
+        catalog._rpm_notice_files(archives, source)
+
+
+def _exercise_cli(inventory: Path, lock: Path, output: Path, sources: Path, receipt: Path) -> None:
     args = [
         "--inventory",
         str(inventory),
@@ -308,6 +367,8 @@ def _exercise_cli(inventory: Path, lock: Path, output: Path, sources: Path) -> N
     ]
     assert catalog.main(["generate", *args]) == 0
     assert catalog.main(["verify", *args]) == 0
+    with pytest.raises(SystemExit):
+        catalog.main(["verify", *args, "--rpm-notices"])
     legacy_args = args.copy()
     start = legacy_args.index("--python-sources")
     del legacy_args[start : start + 2]
@@ -325,6 +386,40 @@ def _exercise_cli(inventory: Path, lock: Path, output: Path, sources: Path) -> N
     output.write_bytes(b"{}")
     with pytest.raises(SystemExit):
         catalog.main(["verify", *args])
+    output.unlink()
+    assert catalog.main(["generate", *args, "--rpm-notices"]) == 0
+    assert catalog.main(["verify", *args]) == 0
+    assert catalog.main(["verify", *args, "--rpm-notices"]) == 0
+    document = json.loads(output.read_bytes())
+    metadata = {item["name"]: item["value"] for item in document["metadata"]["properties"]}
+    assert metadata["extra-codeowners:source-notice-evidence"] == "2"
+    assert (
+        metadata["extra-codeowners:rpm-notice-receipt-sha256"]
+        == hashlib.sha256(receipt.read_bytes()).hexdigest()
+    )
+    rpm = next(item for item in document["components"] if item["name"] == "fictional-libs")
+    props = {item["name"]: item["value"] for item in rpm["properties"]}
+    assert json.loads(props["extra-codeowners:source-notice-files"]) == [
+        {
+            "member": "sources.tar.gz",
+            "path": "fictional/COPYING",
+            "size": 7,
+            "sha256": "d" * 64,
+        }
+    ]
+    assert "not complete binary attribution" in props["extra-codeowners:source-notice-review"]
+    assert props["extra-codeowners:license-review"].startswith("unresolved")
+    assert "licenses" not in rpm
+    with pytest.raises(SystemExit):
+        catalog.main(["verify", *legacy_args])
+    historical_receipt = receipt.with_name("historical-rpm-notices.json")
+    historical_receipt.write_bytes(receipt.read_bytes())
+    receipt.write_bytes(receipt.read_bytes() + b"\n")
+    with pytest.raises(SystemExit):
+        catalog.main(["verify", *args])
+    assert catalog.main(["verify", *args, "--rpm-notice-receipt", str(historical_receipt)]) == 0
+    with pytest.raises(SystemExit):
+        catalog.main(["generate", *args, "--rpm-notice-receipt", str(historical_receipt)])
 
 
 def test_provenance_verifier_selects_sources_only_for_the_versioned_notice_contract(
@@ -340,7 +435,16 @@ def test_provenance_verifier_selects_sources_only_for_the_versioned_notice_contr
     for marker, expected in (
         (None, []),
         ("1", ["--python-sources", f"{tmp_path}/python-source-amd64.tar.gz"]),
-        ("2", []),
+        (
+            "2",
+            [
+                "--python-sources",
+                f"{tmp_path}/python-source-amd64.tar.gz",
+                "--rpm-notice-receipt",
+                f"{tmp_path}/release-rpm-notices.json",
+            ],
+        ),
+        ("3", []),
     ):
         path = tmp_path / "catalog.json"
         props = (
@@ -350,6 +454,10 @@ def test_provenance_verifier_selects_sources_only_for_the_versioned_notice_contr
         )
         path.write_text(json.dumps({"metadata": {"properties": props}}))
         command = (
+            "git() {\n"
+            '  test "$*" = "show fictional-revision:tools/release_rpm_notice_evidence.json"\n'
+            "  printf 'fixture receipt'\n"
+            "}\n"
             "native_notice_args=()\n" + selection + '\nprintf "%s\\n" "${native_notice_args[@]}"'
         )
         result = subprocess.run(  # noqa: S603 - reviewed shell selection and fictional inputs
@@ -359,6 +467,8 @@ def test_provenance_verifier_selects_sources_only_for_the_versioned_notice_contr
                 "catalog": str(path),
                 "asset_directory": str(tmp_path),
                 "architecture": "amd64",
+                "temporary_directory": str(tmp_path),
+                "revision": "fictional-revision",
             },
             capture_output=True,
             text=True,
@@ -366,6 +476,8 @@ def test_provenance_verifier_selects_sources_only_for_the_versioned_notice_contr
             timeout=5,
         )
         assert result.stdout.strip().splitlines() == expected
+        if marker == "2":
+            assert (tmp_path / "release-rpm-notices.json").read_text() == "fixture receipt"
 
 
 def test_generate_requires_sources_but_legacy_verify_remains_available(
