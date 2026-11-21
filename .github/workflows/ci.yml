@@ -61,6 +61,7 @@ jobs:
         run: >-
           uv run mypy extra_codeowners tests tools/evaluation_beta.py
           tools/evaluation_beta_bootstrap.py tools/readthedocs_bootstrap.py
+          tools/release_component_review.py
           tools/release_inventory.py tools/release_notices.py tools/release_vex.py
           tools/release_rescan.py tools/release_sources.py
           tools/release_debian_sources.py tools/release_python_sources.py
@@ -361,6 +362,32 @@ jobs:
           0.0.0+git.${{ github.sha }}
           0.0.0+git.${{ github.sha }}
           ${{ github.sha }}
+
+      - name: Compare third-party runtime inventory
+        id: component-review
+        env:
+          ARCHITECTURE: ${{ matrix.architecture }}
+        run: |
+          set -euo pipefail
+          image="extra-codeowners:ci-${ARCHITECTURE}"
+          image_digest="$(docker image inspect --format '{{.Id}}' "${image}")"
+          inventory="${RUNNER_TEMP}/distribution-inventory-${ARCHITECTURE}.json"
+          container="$(docker create --platform "linux/${ARCHITECTURE}" "${image}")"
+          trap 'docker container rm "${container}" >/dev/null' EXIT
+          docker export "${container}" | python3 -I -S -B tools/release_inventory.py \
+            --architecture "${ARCHITECTURE}" --platform-digest "${image_digest}" \
+            --rootfs-tar - --output "${inventory}"
+          python3 -I -S -B tools/release_component_review.py check \
+            --architecture "${ARCHITECTURE}" --image-digest "${image_digest}" \
+            --inventory "${inventory}" --baseline "security/distribution-review-${ARCHITECTURE}.json"
+
+      - name: Upload inventory for review
+        if: ${{ !cancelled() && steps.component-review.outcome == 'failure' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: distribution-inventory-review-${{ matrix.architecture }}
+          path: ${{ runner.temp }}/distribution-inventory-${{ matrix.architecture }}.json
+          if-no-files-found: ignore
 
       - name: Scan native image
         uses: ./.github/actions/scan-image
