@@ -172,6 +172,11 @@ showed that GitHub waited for a candidate check from the expected App. The
 probe used manual Check Runs, so it does not establish that Extra CODEOWNERS
 can safely evaluate merge groups.
 
+A [later operator probe](../maintainers/evidence/2026-11-21-queued-policy-proof.md)
+evaluated live policy and proved that GitHub merged a verified candidate in the
+single-entry fixture. It also refused a PR whose head was based on an older
+target tip. The deployed service still doesn't evaluate `merge_group` events.
+
 Keep GitHub's native **Require review from Code Owners** rule on production
 repositories until that contract is proven.
 
