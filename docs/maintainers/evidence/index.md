@@ -30,6 +30,7 @@ the older results and links newer receipts.
 - [November 20, 2026: removing and restoring one repository](2026-11-20-selected-repository-access.md)
 - [November 20, 2026: repository access loss and merge-queue checks](2026-11-20-repository-lifecycle-and-queue.md)
 - [November 21, 2026: merge-group delivery and candidate identity](2026-11-21-merge-group-delivery.md)
+- [November 21, 2026: policy evaluation on a queue candidate](2026-11-21-queued-policy-proof.md)
 
 ## Add a receipt
 

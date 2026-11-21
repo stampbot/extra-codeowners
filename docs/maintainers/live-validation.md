@@ -103,6 +103,12 @@ matched two real App deliveries to separate candidates for the same PR.
 GitHub waited for a candidate check both times. The receiver accepted the
 events but didn't evaluate the candidates.
 
+The [November 21 policy probe](evidence/2026-11-21-queued-policy-proof.md)
+evaluated live approval evidence outside the deployed worker. A dismissed
+App review changed the result to failure on the same candidate. A separate
+pass let GitHub merge only into the disposable branch. The verifier refused
+a PR based on the earlier tip.
+
 ## Diagnostics and approval probe: November 2, 2026
 
 Alpha.65 runs on two Kubernetes nodes with shared PostgreSQL state. The
