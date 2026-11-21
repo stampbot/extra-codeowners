@@ -8,7 +8,7 @@ check.
 
 ## Test conditions
 
-The probes ran from 22:58 to 23:10 UTC on November 21, 2026, in the
+The probes ran from 22:58 to 23:19 UTC on November 21, 2026, in the
 same private fixture as the [delivery test](2026-11-21-merge-group-delivery.md).
 The shared App's deployed receiver ran [alpha.95][alpha95]. The local
 probe used the evaluator from [alpha.97][alpha97], source
@@ -47,15 +47,25 @@ writes.
   The new candidate's parent was the current target tip and its tree
   differed from the PR head. The verifier refused that case, so the
   probe didn't post a candidate result.
+- **Shared head.** Two open PRs had the same head SHA. Their distinct
+  target branches also pointed to the same base SHA. GitHub created
+  different candidate SHAs and held both for checks. Each App delivery
+  matched its own queue entry; the verifier rejected it against the
+  other queue. Neither PR merged.
+
+We revoked the temporary tokens, closed the unmerged PRs, and removed
+the temporary branches and rulesets. The original branch and rule
+remained in place.
 
 ## Limits
 
 The checks came from an operator probe, not a durable merge-group worker.
 These observations don't establish safe publication after delivery loss,
 review changes during a write, or queue and base movement outside the
-tested cases. The verifier accepts only the tested, single-entry case
-where both commits are direct children of the verified base. A normal PR
-can fall outside that case, as the older-base probe showed.
+tested cases. The shared-head probe had one entry per target; it did
+not test two entries in one queue. The verifier accepts only one entry
+and requires both commits to be direct children of the verified base.
+A normal PR can fall outside that case, as the older-base probe showed.
 
 [Issue #4][queue-work] tracks the remaining implementation and tests.
 Retain native code-owner enforcement on production repositories.
