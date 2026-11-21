@@ -476,6 +476,10 @@ jobs:
             --output "distribution-inventory-${ARCHITECTURE}.json"
           jq -e '.cpython | type == "object"' \
             "distribution-inventory-${ARCHITECTURE}.json" >/dev/null
+          python -I -S -B tools/release_component_review.py check \
+            --architecture "${ARCHITECTURE}" --image-digest "${platform_digest}" \
+            --inventory "distribution-inventory-${ARCHITECTURE}.json" \
+            --baseline "security/distribution-review-${ARCHITECTURE}.json"
           python -I -S -B tools/release_notices.py build \
             --architecture "${ARCHITECTURE}" \
             --platform-digest "${platform_digest}" \

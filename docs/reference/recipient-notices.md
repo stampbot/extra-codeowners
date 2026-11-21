@@ -100,6 +100,21 @@ cryptographic verification, also verify the release asset's GitHub attestation
 and its adjacent `.sigstore.json` bundle. Maintainers do that automatically
 when the release workflow retries or verifies an existing release.
 
+## Third-party inventory baseline
+
+Container CI and the release build both compare the collected third-party
+inventory with the baseline for that architecture. The check covers Debian
+packages and their notice files, CPython source and license evidence,
+and installed Python distributions, native files and embedded SBOMs. It
+ignores the image digest and first-party distribution metadata in the
+comparison, so a new Extra CODEOWNERS version doesn't require a new baseline.
+
+The initial baselines record the inventory of the verified
+[alpha.95 release](https://github.com/stampbot/extra-codeowners/releases/tag/v0.1.0-alpha.95).
+A matching baseline is a check for changes, not a license review or
+permission to distribute. The [contributor guide][review-changes] explains
+how to review a difference and propose an update.
+
 ## What this does not establish
 
 The bundle is intentionally narrow. It does not establish that every notice
@@ -114,3 +129,4 @@ mechanism and maintainer approval of the distribution process. Those remaining
 decisions are tracked in [issue #18][issue-18].
 
 [issue-18]: https://github.com/stampbot/extra-codeowners/issues/18
+[review-changes]: https://github.com/stampbot/extra-codeowners/blob/main/CONTRIBUTING.md#review-changes-to-container-components

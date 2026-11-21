@@ -217,6 +217,37 @@ parallel, publishes the OCI image and Helm chart, and finishes with an immutable
 GitHub release. The Python wheel and source distribution are attached to that
 release; the project does not publish to PyPI.
 
+### Review changes to container components
+
+The container jobs compare what they built with the third-party inventory
+baselines in `security/distribution-review-*.json`. An App version bump
+doesn't change those baselines. A new or updated runtime component can.
+
+If **Compare third-party runtime inventory** reports a difference, download
+the corresponding `distribution-inventory-review-<architecture>` artifact
+from that PR run. The job log names the changed records. Review their
+licenses, notices, and source evidence, then record what you found in the
+PR or link to the review. Don't regenerate a baseline just to turn CI green.
+
+After review, run the following in Bash at the repository root. This
+example uses the amd64 inventory extracted into the current directory.
+Use `arm64` for the architecture, inventory, and baseline if that job
+reported a difference.
+
+```bash
+inventory=distribution-inventory-amd64.json
+digest="$(jq -er '.image.platform_digest' "${inventory}")"
+python3 -I -S -B tools/release_component_review.py snapshot \
+  --architecture amd64 --image-digest "${digest}" --inventory "${inventory}" \
+  --baseline security/distribution-review-amd64.json
+```
+
+A successful command writes the candidate baseline. Review that diff
+before committing it with the dependency and evidence changes. Rerun CI;
+the container job should report that the inventory matches. See the
+[notice bundle reference](docs/reference/recipient-notices.md) for what
+that match does and doesn't establish.
+
 ### Choose a release channel
 
 Ordinary pull requests need no release trailer. The default follows the latest
