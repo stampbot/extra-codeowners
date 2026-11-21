@@ -75,6 +75,7 @@ nav:
           - Repository team access grants: explanation/adrs/2026-11-12-scope-repository-team-grants.md
       - Design comparisons:
           - Bounded reconciliation traces: explanation/design/2026-11-02-bounded-reconciliation-traces.md
+          - Merge-queue candidate checks: explanation/design/2026-11-21-merge-queue-candidate-checks.md
   - Maintainer and release engineering:
       - Overview: maintainers/index.md
       - Run the live GitHub contract: how-to/run-live-github-contract.md
