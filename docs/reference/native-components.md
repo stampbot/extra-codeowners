@@ -45,10 +45,10 @@ claiming that a catalog was published.
 
 ### Selected upstream notices
 
-Catalogs with metadata property `extra-codeowners:source-notice-evidence` set
-to `1` also identify selected notice files inside the retained upstream
-sources. These references supplement the runtime notice bundle; they don't
-add files to it.
+The metadata property `extra-codeowners:source-notice-evidence` tells you
+where the catalog points: `1` covers standalone upstream tarballs; `2` also
+covers upstream tarballs inside source RPMs. The files stay in the Python
+source bundle, not the runtime notice bundle.
 
 For OpenSSL, the selection is the archive's top-level `LICENSE.txt`. For
 libpq, it is PostgreSQL's top-level `COPYRIGHT`. OpenLDAP supplies top-level
@@ -57,18 +57,30 @@ libpq, it is PostgreSQL's top-level `COPYRIGHT`. OpenLDAP supplies top-level
 the inner archive path, byte size and SHA-256. Its existing `source-archive`
 property identifies the enclosing tarball in `python-source-ARCHITECTURE.tar.gz`.
 
-The verifier checks the complete Python source bundle against the inventory,
-lockfile and source recipes before reading these files. It rejects missing,
-duplicate, linked, sparse or oversized selected notices. It reads compressed
-archives without extracting or executing them, with limits of 512 MiB expanded
-bytes, 50,000 members and 1 MiB per notice file.
+For standalone tarballs, the verifier checks the complete Python source
+bundle against the inventory, lockfile and recipes before reading the files.
+It rejects missing, duplicate, linked, sparse or oversized notices. It reads
+compressed archives without extracting or executing them, with limits of
+512 MiB expanded bytes, 50,000 members and 1 MiB per notice file.
 
-These are selected upstream texts, not a complete map of copyright holders to
-compiled code. RPM-origin component notices remain unselected, and every
-native component's license review remains unresolved. A matching notice hash
-does not approve binary redistribution or establish corresponding-source
-adequacy. Older catalogs omit these properties and make no notice-selection
-claim.
+For an RPM-origin component in a version 2 catalog, `source-archive`
+identifies the source RPM. Each notice record also has a `member` field:
+open that tarball within the RPM, then find the file at `path` and compare its
+size and SHA-256. The release verifier checks each enclosing RPM against the
+notice receipt in the release checkout; it does not unpack the RPM. The
+catalog records the receipt's SHA-256 as
+`extra-codeowners:rpm-notice-receipt-sha256`.
+
+When a new wheel changes a source RPM, release generation stops until
+`tools/release_rpm_notice_evidence.json` covers the new archive. Review the
+RPM recipe for the reported library, then record the exact member paths,
+sizes and hashes from the new source archive. Keep the RPM and notice
+checks separate from the decision about binary redistribution.
+
+These files give reviewers a place to start. They don't map every copyright
+holder to compiled code, establish corresponding-source adequacy, or approve
+redistribution. Native license review remains unresolved. Catalogs without
+the metadata property make no notice-selection claim.
 
 ## Verify a catalog
 

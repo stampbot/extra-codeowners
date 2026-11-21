@@ -503,6 +503,7 @@ jobs:
             --lock uv.lock \
             --bundle "python-source-${ARCHITECTURE}.tar.gz"
           python -I -S -B tools/release_native_components.py generate \
+            --rpm-notices \
             --architecture "${ARCHITECTURE}" \
             --platform-digest "${platform_digest}" \
             --inventory "distribution-inventory-${ARCHITECTURE}.json" \
@@ -723,6 +724,7 @@ jobs:
               --inventory "release/image/${architecture}/distribution-inventory-${architecture}.json" \
               --bundle "release/image/${architecture}/recipient-notices-${architecture}.tar.gz"
             python -I -S -B tools/release_native_components.py verify \
+              --rpm-notices \
               --architecture "${architecture}" \
               --platform-digest "${platform_digest}" \
               --inventory "release/image/${architecture}/distribution-inventory-${architecture}.json" \

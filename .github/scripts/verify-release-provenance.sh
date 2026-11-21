@@ -287,9 +287,15 @@ for architecture in amd64 arm64; do
   verify_release_file "${catalog}"
   git show "${revision}:uv.lock" >"${temporary_directory}/release-uv.lock"
   native_notice_args=()
-  if jq -e '.metadata.properties[] | select(.name == "extra-codeowners:source-notice-evidence") |
-    .value == "1"' "${catalog}" >/dev/null; then
+  native_notice_evidence="$(jq -r '.metadata.properties[]? |
+    select(.name == "extra-codeowners:source-notice-evidence") | .value' "${catalog}")"
+  if [[ "${native_notice_evidence}" == 1 || "${native_notice_evidence}" == 2 ]]; then
     native_notice_args+=(--python-sources "${asset_directory}/python-source-${architecture}.tar.gz")
+  fi
+  if [[ "${native_notice_evidence}" == 2 ]]; then
+    release_receipt="${temporary_directory}/release-rpm-notices.json"
+    git show "${revision}:tools/release_rpm_notice_evidence.json" >"${release_receipt}"
+    native_notice_args+=(--rpm-notice-receipt "${release_receipt}")
   fi
   python -I -S -B tools/release_native_components.py verify \
     --architecture "${architecture}" \

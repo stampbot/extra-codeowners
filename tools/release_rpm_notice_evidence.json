@@ -1,0 +1,239 @@
+{
+  "schema_version": 1,
+  "archives": {
+    "native/psycopg-binary/amd64/cyrus-sasl-2.1.26-24.el7_9.src.rpm": {
+      "archive_sha256": "c49472bd08c6060f53a9dace005b81cf466836790d2dcb407a536820f6319e77",
+      "reported_package": {
+        "name": "cyrus-sasl-lib",
+        "version": "2.1.26-24.el7_9"
+      },
+      "files": [
+        {
+          "member": "cyrus-sasl-2.1.26-nodlcompatorsrp.tar.gz",
+          "path": "cyrus-sasl-2.1.26/COPYING",
+          "size": 1861,
+          "sha256": "9d6e5d1632140a6c135b251260953650d17d87cd1124f87aaf72192aa4580d4b"
+        }
+      ]
+    },
+    "native/psycopg-binary/amd64/e2fsprogs-1.42.9-19.el7.src.rpm": {
+      "archive_sha256": "718f64bd465d1770eaf6490157a861d3dba2846b4a636a67d27bd4d38e6b86cf",
+      "reported_package": {
+        "name": "libcom_err",
+        "version": "1.42.9-19.el7"
+      },
+      "files": [
+        {
+          "member": "e2fsprogs-1.42.9.tar.xz",
+          "path": "e2fsprogs-1.42.9/COPYING",
+          "size": 44569,
+          "sha256": "680f852df303874fe9c722283a7da571ae9a0477768df8af1e363298e2adc51e"
+        }
+      ]
+    },
+    "native/psycopg-binary/amd64/keyutils-1.5.8-3.el7.src.rpm": {
+      "archive_sha256": "eff16e16f707fd28436afe4cf7b7c2e34b9f827e7f6beacf3c6eecbf74e9f850",
+      "reported_package": {
+        "name": "keyutils-libs",
+        "version": "1.5.8-3.el7"
+      },
+      "files": [
+        {
+          "member": "keyutils-1.5.8.tar.bz2",
+          "path": "keyutils-1.5.8/LICENCE.LGPL",
+          "size": 26450,
+          "sha256": "0d15593e3a8ad90917f8509b5ac1e4b5e5d196434a68029aa9dc0858a4a4c521"
+        }
+      ]
+    },
+    "native/psycopg-binary/amd64/krb5-1.15.1-55.el7_9.src.rpm": {
+      "archive_sha256": "d154824d46dff5aece0cdb8e4c9df299058bacadbaf7fb16be8d9163ca2814bb",
+      "reported_package": {
+        "name": "krb5-libs",
+        "version": "1.15.1-55.el7_9"
+      },
+      "files": [
+        {
+          "member": "krb5-1.15.1.tar.gz",
+          "path": "krb5-1.15.1/NOTICE",
+          "size": 61301,
+          "sha256": "f83512c49bc8cbc44ca6b8783e989a03b4051508b30563b3f9d7956eefae9151"
+        }
+      ]
+    },
+    "native/psycopg-binary/amd64/libselinux-2.5-15.el7.src.rpm": {
+      "archive_sha256": "978ed00b9c7ca78a51e0aff48070c69ebe4fbfca0e64f618627ebdbe8786a089",
+      "reported_package": {
+        "name": "libselinux",
+        "version": "2.5-15.el7"
+      },
+      "files": [
+        {
+          "member": "libselinux-2.5.tar.gz",
+          "path": "libselinux-2.5/LICENSE",
+          "size": 1034,
+          "sha256": "86657b4c0fe868d7cbd977cb04c63b6c667e08fa51595a7bc846ad4bed8fc364"
+        }
+      ]
+    },
+    "native/psycopg-binary/amd64/pcre-8.32-17.el7.src.rpm": {
+      "archive_sha256": "b96493d8ea6def2e9a40dade4feedcea2b4bbfe8ce4c13a3465e99f21ef2c43d",
+      "reported_package": {
+        "name": "pcre",
+        "version": "8.32-17.el7"
+      },
+      "files": [
+        {
+          "member": "pcre-8.32.tar.bz2",
+          "path": "pcre-8.32/COPYING",
+          "size": 95,
+          "sha256": "17abe1dbb92b21ab173cf9757dd57b0b15cd8d863b2ccdef635fdbef03077fb0"
+        },
+        {
+          "member": "pcre-8.32.tar.bz2",
+          "path": "pcre-8.32/LICENCE",
+          "size": 3099,
+          "sha256": "9ccbdd877d602470f8ec02a47c32048887e49bd64b081c48132a32dcd6f46eed"
+        }
+      ]
+    },
+    "native/psycopg-binary/arm64/cyrus-sasl-2.1.27-6.el8_5.src.rpm": {
+      "archive_sha256": "f388fd13b3b10aec374f61bc1753b19ae019b0ab4937bf9bd9cbdf0f445c079a",
+      "reported_package": {
+        "name": "cyrus-sasl-lib",
+        "version": "2.1.27-6.el8_5"
+      },
+      "files": [
+        {
+          "member": "cyrus-sasl-2.1.27-nodlcompatorsrp.tar.gz",
+          "path": "cyrus-sasl-2.1.27/COPYING",
+          "size": 1861,
+          "sha256": "9d6e5d1632140a6c135b251260953650d17d87cd1124f87aaf72192aa4580d4b"
+        }
+      ]
+    },
+    "native/psycopg-binary/arm64/e2fsprogs-1.45.6-7.el8_10.src.rpm": {
+      "archive_sha256": "7042d97c138a6b6c8d5a9282bf9bb736f8d377d4055fe0da2e0d3f459141b2a0",
+      "reported_package": {
+        "name": "libcom_err",
+        "version": "1.45.6-7.el8_10"
+      },
+      "files": [
+        {
+          "member": "e2fsprogs-1.45.6.tar.xz",
+          "path": "e2fsprogs-1.45.6/NOTICE",
+          "size": 44585,
+          "sha256": "5da5ef153e559c1d990d4c3eedbedd4442db892d37eae1f35fff069de8ec9020"
+        }
+      ]
+    },
+    "native/psycopg-binary/arm64/keyutils-1.5.10-9.el8.src.rpm": {
+      "archive_sha256": "13fec652f642858757755b64195189abef7c0ff8025e9807ddba467e4ad8fbb6",
+      "reported_package": {
+        "name": "keyutils-libs",
+        "version": "1.5.10-9.el8"
+      },
+      "files": [
+        {
+          "member": "keyutils-1.5.10.tar.bz2",
+          "path": "keyutils-1.5.10/LICENCE.LGPL",
+          "size": 26450,
+          "sha256": "0d15593e3a8ad90917f8509b5ac1e4b5e5d196434a68029aa9dc0858a4a4c521"
+        }
+      ]
+    },
+    "native/psycopg-binary/arm64/krb5-1.18.2-32.el8_10.src.rpm": {
+      "archive_sha256": "4f9591ca0a56d6a5558930d8054cd78ba9c621d44a139d8de65915fb974d6b28",
+      "reported_package": {
+        "name": "krb5-libs",
+        "version": "1.18.2-32.el8_10"
+      },
+      "files": [
+        {
+          "member": "krb5-1.18.2.tar.gz",
+          "path": "krb5-1.18.2/NOTICE",
+          "size": 62857,
+          "sha256": "b7a5f14a8719bce5e49a761998aa55438fc890fb40f71228d6a49546f6d5690d"
+        }
+      ]
+    },
+    "native/psycopg-binary/arm64/libselinux-2.9-11.el8_10.src.rpm": {
+      "archive_sha256": "1a9f9af679cb4f57c4433012f829dccec9b38fe3ac749b63785f2b70f2875afd",
+      "reported_package": {
+        "name": "libselinux",
+        "version": "2.9-11.el8_10"
+      },
+      "files": [
+        {
+          "member": "libselinux-2.9.tar.gz",
+          "path": "libselinux-2.9/LICENSE",
+          "size": 1034,
+          "sha256": "86657b4c0fe868d7cbd977cb04c63b6c667e08fa51595a7bc846ad4bed8fc364"
+        }
+      ]
+    },
+    "native/psycopg-binary/arm64/libxcrypt-4.1.1-6.el8.src.rpm": {
+      "archive_sha256": "3c492b21903329f611e7945134ed851beb2f8a38a2909109fb94c5fa20ae08bb",
+      "reported_package": {
+        "name": "libxcrypt",
+        "version": "4.1.1-6.el8"
+      },
+      "files": [
+        {
+          "member": "libxcrypt-4.1.1.tar.gz",
+          "path": "libxcrypt-4.1.1/AUTHORS",
+          "size": 1682,
+          "sha256": "46cfa431806b5fce8e9ea2736b1f4bbaa2a5f2048f18a3515a9e1f3925a83a2d"
+        },
+        {
+          "member": "libxcrypt-4.1.1.tar.gz",
+          "path": "libxcrypt-4.1.1/COPYING.LIB",
+          "size": 26530,
+          "sha256": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551"
+        },
+        {
+          "member": "libxcrypt-4.1.1.tar.gz",
+          "path": "libxcrypt-4.1.1/LICENSING",
+          "size": 3015,
+          "sha256": "eaa47c6ebef90e3180e24f1a2c4086a925bdea8159f97998a9ad7c8f6d336d98"
+        }
+      ]
+    },
+    "native/psycopg-binary/arm64/openssl-1.1.1k-15.el8_6.src.rpm": {
+      "archive_sha256": "5893c3a0c060ca1ef83274f22e30c89c6f4ecd602760df21cdbb10b788d15325",
+      "reported_package": {
+        "name": "openssl-libs",
+        "version": "1.1.1k-15.el8_6"
+      },
+      "files": [
+        {
+          "member": "openssl-1.1.1k-hobbled.tar.xz",
+          "path": "openssl-1.1.1k/LICENSE",
+          "size": 6121,
+          "sha256": "c32913b33252e71190af2066f08115c69bc9fddadf3bf29296e20c835389841c"
+        }
+      ]
+    },
+    "native/psycopg-binary/arm64/pcre2-10.32-3.el8_6.src.rpm": {
+      "archive_sha256": "c995278b025eaa5598ceb2117a5710338210839fa5bca2a3b4a279e8afd25cb9",
+      "reported_package": {
+        "name": "pcre2",
+        "version": "10.32-3.el8_6"
+      },
+      "files": [
+        {
+          "member": "pcre2-10.32.tar.bz2",
+          "path": "pcre2-10.32/COPYING",
+          "size": 97,
+          "sha256": "99272c55f3dcfa07a8a7e15a5c1a33096e4727de74241d65fa049fccfdd59507"
+        },
+        {
+          "member": "pcre2-10.32.tar.bz2",
+          "path": "pcre2-10.32/LICENCE",
+          "size": 3456,
+          "sha256": "c4a8b89cd38d6a7501d5b11a472fa15e71a051b66d6331c6cda364101389d6ee"
+        }
+      ]
+    }
+  }
+}

@@ -252,6 +252,8 @@ patches, and RPM build recipe. Files appear under
 `native/psycopg-binary/<architecture>/`; `manifest.json` lists them in
 `native_sources` with their source package, reported binary package, SHA-256,
 and size. The same verification command above checks these files too.
+To locate selected notices inside those RPMs, use the
+[version 2 native catalog](native-components.md#selected-upstream-notices).
 
 The recipe is checked in under `tools/source_recipes/`. Its package identities
 were matched against CentOS and AlmaLinux repository metadata; the source

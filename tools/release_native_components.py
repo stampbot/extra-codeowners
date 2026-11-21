@@ -23,6 +23,9 @@ MAX_COMPONENTS = 128
 _WHEELS = frozenset({"cryptography", "psycopg-binary"})
 _RPM_PURL = re.compile(r"pkg:rpm/(?:centos|almalinux)/([^/@?#]+)@([^/?#]+)\Z")
 _TEXT = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.+!~%-]{0,199}\Z")
+_NOTICE_PATH = re.compile(r"[A-Za-z0-9_.+/-]{1,512}\Z")
+_SHA256 = re.compile(r"[0-9a-f]{64}\Z")
+_RPM_NOTICE_RECEIPT = Path(__file__).with_name("release_rpm_notice_evidence.json")
 
 
 class NativeComponentError(ValueError):
@@ -71,6 +74,62 @@ def _identity(value: object) -> str:
     if not isinstance(value, str) or _TEXT.fullmatch(value) is None:
         raise NativeComponentError("invalid native component identity")
     return value
+
+
+def _relative_notice_path(value: object) -> str:
+    if (
+        not isinstance(value, str)
+        or _NOTICE_PATH.fullmatch(value) is None
+        or any(part in {"", ".", ".."} for part in value.split("/"))
+    ):
+        raise NativeComponentError("invalid RPM notice member path")
+    return value
+
+
+def _rpm_notice_files(archives: dict[str, Any], source: dict[str, Any]) -> list[dict[str, Any]]:
+    """Use a receipt only for the SRPM bytes and reported package it records."""
+    entry = archives.get(source["path"])
+    if (
+        not isinstance(entry, dict)
+        or set(entry) != {"archive_sha256", "reported_package", "files"}
+        or entry["archive_sha256"] != source["sha256"]
+        or entry["reported_package"] != source["reported_package"]
+    ):
+        raise NativeComponentError(f"RPM source notice needs review: {source['path']}")
+    files = entry["files"]
+    if not isinstance(files, list) or not 1 <= len(files) <= 32:
+        raise NativeComponentError("invalid RPM notice file list")
+    seen = set()
+    for item in files:
+        if not isinstance(item, dict) or set(item) != {"member", "path", "size", "sha256"}:
+            raise NativeComponentError("invalid RPM notice file record")
+        member = _relative_notice_path(item["member"])
+        path = _relative_notice_path(item["path"])
+        identity = member, path
+        if identity in seen:
+            raise NativeComponentError("duplicate RPM notice path")
+        seen.add(identity)
+        size, checksum = item["size"], item["sha256"]
+        if type(size) is not int or not 0 < size <= _native_notices.MAX_NOTICE:
+            raise NativeComponentError("invalid RPM notice size")
+        if not isinstance(checksum, str) or _SHA256.fullmatch(checksum) is None:
+            raise NativeComponentError("invalid RPM notice checksum")
+    return sorted(files, key=lambda item: (item["member"], item["path"]))
+
+
+def _rpm_notice_receipt(path: Path) -> tuple[dict[str, Any], str]:
+    data = _read(path)
+    record = _json(data)
+    archives = record.get("archives")
+    if (
+        set(record) != {"schema_version", "archives"}
+        or type(record["schema_version"]) is not int
+        or record["schema_version"] != 1
+        or not isinstance(archives, dict)
+        or not 1 <= len(archives) <= MAX_COMPONENTS
+    ):
+        raise NativeComponentError("invalid RPM notice receipt")
+    return archives, hashlib.sha256(data).hexdigest()
 
 
 def _reported_components(
@@ -138,6 +197,9 @@ def build(
     architecture: str,
     digest: str,
     python_sources: Path | None = None,
+    *,
+    rpm_notices: bool = False,
+    rpm_notice_receipt: Path | None = None,
 ) -> bytes:
     """Bind a deterministic CycloneDX catalog to verified platform evidence."""
     raw = _json(inventory)
@@ -146,6 +208,14 @@ def build(
         raise NativeComponentError("native component catalog requires source recipe schema 4")
     source_plan: dict[str, Any] = _python.plan(inventory, lock, architecture, digest)
     source_payloads = None
+    rpm_archives = None
+    rpm_receipt_hash = None
+    if rpm_notices:
+        if python_sources is None:
+            raise NativeComponentError("RPM notice evidence requires the verified Python sources")
+        rpm_archives, rpm_receipt_hash = _rpm_notice_receipt(
+            rpm_notice_receipt if rpm_notice_receipt is not None else _RPM_NOTICE_RECEIPT
+        )
     if python_sources is not None:
         with python_sources.open("rb") as stream:
             bundle = stream.read(_python.MAX_BUNDLE + 1)
@@ -206,9 +276,18 @@ def build(
             properties["native-files"] = json.dumps(source["wheel_files"], sort_keys=True)
         if source_payloads is not None:
             if custom is None:
-                properties["source-notice-review"] = (
-                    "unresolved; RPM component notices not selected"
-                )
+                if rpm_archives is None:
+                    properties["source-notice-review"] = (
+                        "unresolved; RPM component notices not selected"
+                    )
+                else:
+                    properties["source-notice-files"] = json.dumps(
+                        _rpm_notice_files(rpm_archives, source), sort_keys=True
+                    )
+                    properties["source-notice-review"] = (
+                        "selected SRPM upstream texts only; "
+                        "not complete binary attribution or approval"
+                    )
             else:
                 properties["source-notice-files"] = json.dumps(
                     _native_notices.inspect(source, source_payloads[source["path"]]), sort_keys=True
@@ -235,7 +314,9 @@ def build(
         raise NativeComponentError("wheel SBOM has a native component without a reviewed source")
     evidence_properties = {}
     if source_payloads is not None:
-        evidence_properties["source-notice-evidence"] = "1"
+        evidence_properties["source-notice-evidence"] = "2" if rpm_archives is not None else "1"
+    if rpm_receipt_hash is not None:
+        evidence_properties["rpm-notice-receipt-sha256"] = rpm_receipt_hash
     document = {
         "bomFormat": "CycloneDX",
         "specVersion": "1.5",
@@ -278,13 +359,29 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--lock", type=Path, required=True)
     parser.add_argument("--notices", type=Path, required=True)
     parser.add_argument("--python-sources", type=Path)
+    parser.add_argument(
+        "--rpm-notices", action="store_true", help="require RPM source notice evidence (version 2)"
+    )
+    parser.add_argument("--rpm-notice-receipt", type=Path, help="receipt from the release revision")
     parser.add_argument("--architecture", choices=("amd64", "arm64"), required=True)
     parser.add_argument("--platform-digest", required=True)
     parser.add_argument("--catalog", type=Path, required=True)
     args = parser.parse_args(argv)
     if args.command == "generate" and args.python_sources is None:
         parser.error("generation requires --python-sources for native notice evidence")
+    if args.command == "generate" and args.rpm_notice_receipt is not None:
+        parser.error("generation uses the checked-in RPM notice receipt")
     try:
+        existing = _read(args.catalog) if args.command == "verify" else None
+        rpm_notices = args.rpm_notices
+        if existing is not None:
+            metadata = _json(existing).get("metadata")
+            if not isinstance(metadata, dict) or not isinstance(metadata.get("properties"), list):
+                raise NativeComponentError("invalid catalog metadata")
+            rpm_notices |= {
+                "name": "extra-codeowners:source-notice-evidence",
+                "value": "2",
+            } in metadata["properties"]
         data = build(
             _read(args.inventory),
             _read(args.lock),
@@ -292,11 +389,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.architecture,
             args.platform_digest,
             args.python_sources,
+            rpm_notices=rpm_notices,
+            rpm_notice_receipt=args.rpm_notice_receipt,
         )
         if args.command == "generate":
             with args.catalog.open("xb") as output:
                 output.write(data)
-        elif _read(args.catalog) != data:
+        elif existing != data:
             raise NativeComponentError("native catalog differs from verified platform evidence")
     except (OSError, ValueError) as error:
         parser.exit(1, f"Native component evidence: {error}\n")
