@@ -215,8 +215,9 @@ close before the project is presented as production-ready:
   and installation access loss. This is the
   [production enforcement blocker](#production-enforcement-blocker).
 - [Issue #18][issue-18]: finish notice attribution for CPython and libraries
-  shipped in Python wheels, complete corresponding-source delivery, and check
-  that release evidence stays current when the component inventory changes.
+  shipped in Python wheels and complete corresponding-source delivery.
+  The release gate already rejects changes to captured third-party records
+  when they differ from the reviewed inventory on either platform.
   Separate [wheel-native catalogs](native-components.md) expose the
   reviewed C-library identities and source bindings. They do not merge those
   libraries into the required image scan or complete their license review.
