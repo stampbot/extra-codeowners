@@ -133,7 +133,7 @@ def test_review_records_glibc_caller_evidence_and_existing_openssl_fixes() -> No
     statements = document["statements"]
     assert Counter(statement["status"] for statement in statements) == {
         "fixed": 26,
-        "not_affected": 18,
+        "not_affected": 20,
         "under_investigation": 45,
     }
     identities = [(s["vulnerability"]["name"], p["@id"]) for s in statements for p in s["products"]]
@@ -141,7 +141,7 @@ def test_review_records_glibc_caller_evidence_and_existing_openssl_fixes() -> No
     # One CVE can be fixed in Debian while still present in a bundled library.
     debian = [s for s in statements if all(p["@id"].startswith("pkg:deb/") for p in s["products"])]
     by_cve = {statement["vulnerability"]["name"]: statement for statement in debian}
-    assert len(by_cve) == len(debian) == 29
+    assert len(by_cve) == len(debian) == 31
     pcre2 = by_cve["CVE-2026-103111"]
     assert pcre2["status"] == "fixed"
     assert "impact_statement" not in pcre2
@@ -154,6 +154,12 @@ def test_review_records_glibc_caller_evidence_and_existing_openssl_fixes() -> No
     glibc = by_cve["CVE-2026-5450"]
     assert glibc["status"] == "fixed"
     assert len(glibc["products"]) == 4
+    for cve in ("CVE-2026-19499", "CVE-2026-5435"):
+        scoped = by_cve[cve]
+        assert scoped["status"] == "not_affected"
+        assert scoped["justification"] == "vulnerable_code_not_in_execute_path"
+        assert scoped["products"] == glibc["products"]
+        assert "installed and unpatched" in scoped["impact_statement"]
     # Retain the historical caller evidence without treating it as a claim
     # about the updated runtime. Its glibc package now contains the fixes.
     evidence = json.loads(

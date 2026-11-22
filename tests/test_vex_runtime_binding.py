@@ -111,6 +111,7 @@ def test_new_statement_cannot_inherit_an_old_assessment_date(runtime: tuple[Path
     "relative",
     [
         "tools/source_recipes/fictional-99.json",
+        "security/vex/glibc-format-callers.json",
         "security/vex/native-openssl-callers.json",
         "security/vex/native-protocol-callers.json",
     ],
