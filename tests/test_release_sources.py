@@ -137,7 +137,7 @@ def test_rejects_extra_or_duplicate_entries(path: str) -> None:
 
 
 def test_rejects_tampered_manifest_and_source() -> None:
-    with pytest.raises(sources.SourceError, match="manifest differs"):
+    with pytest.raises(sources.SourceError, match="unsupported source manifest schema"):
         _verify(_repack(_bundle(), "manifest.json", b"{}"))
     with pytest.raises(sources.SourceError, match="checksum"):
         _verify(_repack(_bundle(), SOURCE_NAME, b"tampered"))
@@ -224,7 +224,7 @@ def test_source_downloader_rejects_redirects() -> None:
 def test_manifest_rejects_boolean_schema_and_floating_point_size() -> None:
     manifest = _verify(_bundle())
     manifest["schema_version"] = True
-    with pytest.raises(sources.SourceError, match="manifest differs"):
+    with pytest.raises(sources.SourceError, match="unsupported source manifest schema"):
         _verify(_repack(_bundle(), "manifest.json", json.dumps(manifest).encode()))
     manifest = _verify(_bundle())
     source = manifest["source"]
@@ -254,3 +254,59 @@ def test_cli_fetch_and_verify(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
     assert sources.main(["fetch", *arguments]) == 1  # Refuse to overwrite existing evidence.
     bundle.write_bytes(b"tampered")
     assert sources.main(["verify", *arguments]) == 1
+
+
+def test_notice_manifest_is_bound_to_exact_source_bytes(monkeypatch: pytest.MonkeyPatch) -> None:
+    archive_hash = hashlib.sha256(SOURCE).hexdigest()
+    notice_hash = hashlib.sha256(b"fixture notice").hexdigest()
+    monkeypatch.setattr(
+        sources,
+        "_BUNDLED_NOTICES",
+        {("3.14.7", archive_hash): (("fixture", "1.2.3", "Modules/fixture/NOTICE", notice_hash),)},
+    )
+    bundle = sources.build_bundle(
+        _inventory(),
+        SOURCE,
+        architecture="amd64",
+        platform_digest=DIGEST,
+        require_bundled_notices=True,
+    )
+    manifest = _verify(bundle)
+    assert manifest["schema_version"] == 2
+    assert manifest["bundled_notices"] == [
+        {
+            "component": "fixture",
+            "version": "1.2.3",
+            "path": "Python-3.14.7/Modules/fixture/NOTICE",
+            "sha256": notice_hash,
+        }
+    ]
+    manifest["bundled_notices"] = []
+    with pytest.raises(sources.SourceError, match="manifest differs"):
+        _verify(_repack(bundle, "manifest.json", json.dumps(manifest).encode()))
+
+    modified_source = SOURCE + b" changed with the same version"
+    inventory = _inventory().replace(
+        archive_hash.encode(), hashlib.sha256(modified_source).hexdigest().encode()
+    )
+    with pytest.raises(sources.SourceError, match="no bundled notice review"):
+        sources.build_bundle(
+            inventory,
+            modified_source,
+            architecture="amd64",
+            platform_digest=DIGEST,
+            require_bundled_notices=True,
+        )
+
+
+def test_release_verifier_requires_notices_but_legacy_bundles_still_verify() -> None:
+    legacy = _bundle()
+    assert _verify(legacy)["schema_version"] == 1
+    with pytest.raises(sources.SourceError, match="omitted the required bundled notices"):
+        sources.verify_bundle(
+            _inventory(),
+            legacy,
+            architecture="amd64",
+            platform_digest=DIGEST,
+            require_bundled_notices=True,
+        )
