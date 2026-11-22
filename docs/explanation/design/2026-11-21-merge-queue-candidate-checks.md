@@ -89,10 +89,14 @@ The following order keeps the evaluation tied to what GitHub may merge:
    Record the queue entry ID and its associated open PR and head. Null queue
    commits get a bounded retry. Missing, contradictory or truncated reads
    don't authorize a check.
-3. Read the policy from the candidate's verified target-branch base. Read
-   fresh reviews for the PR head and verify that the candidate preserves
-   the change the PR was reviewed for. Candidate equivalence is an open
-   proof obligation: if GitHub can't supply enough evidence, stop.
+3. Read the policy from the candidate's verified target-branch base and
+   fresh reviews for the PR head. Check the paths introduced by the
+   candidate relative to that base against the paths covered by the PR
+   evaluation, including both names of renames. Don't require identical
+   full trees or a single PR commit. The
+   [relative-path probe](../../maintainers/evidence/2026-11-22-relative-queue-candidate.md)
+   observed this for one PR. If the candidate's scope can't be proved,
+   don't publish success.
 4. Recheck the entry, refs, PR and relevant generations at publication.
    Bind the result to the candidate and the App. If the candidate moved,
    discard the old work rather than copying its result to the new commit.

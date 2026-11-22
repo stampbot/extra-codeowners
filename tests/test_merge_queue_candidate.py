@@ -1,4 +1,4 @@
-"""The experiment proves identity and tree equivalence, not authorization."""
+"""The experiment checks candidate identity and ownership coverage."""
 
 from __future__ import annotations
 
@@ -6,9 +6,14 @@ from typing import Any
 
 import pytest
 
-from tools.merge_queue_candidate import CandidateEvidenceError, bind_candidate
+from tools.merge_queue_candidate import (
+    CandidateEvidenceError,
+    ChangedPaths,
+    identify_candidate,
+    verify_candidate_paths,
+)
 
-BASE, REVIEWED, CANDIDATE, TREE = (digit * 40 for digit in "abcd")
+BASE, REVIEWED, CANDIDATE = (digit * 40 for digit in "abc")
 BASE_REF = "refs/heads/main"
 # The ref text looks like a different PR; its encoded number is not evidence.
 QUEUE_REF = "refs/heads/gh-readonly-queue/main/pr-999-fixture"
@@ -48,13 +53,11 @@ def evidence() -> dict[str, Any]:
             },
         },
         "candidate_ref": {"ref": QUEUE_REF, "object": {"sha": CANDIDATE, "type": "commit"}},
-        "candidate_commit": {"sha": CANDIDATE, "tree": {"sha": TREE}, "parents": [{"sha": BASE}]},
-        "reviewed_commit": {"sha": REVIEWED, "tree": {"sha": TREE}, "parents": [{"sha": BASE}]},
     }
 
 
 def test_binds_the_queued_pr_without_using_the_ref_name(evidence: dict[str, Any]) -> None:
-    binding = bind_candidate(**evidence)
+    binding = identify_candidate(**evidence)
     assert binding.pull_number == 17
     assert binding.reviewed_head == REVIEWED
     assert binding.candidate_sha == CANDIDATE
@@ -90,9 +93,6 @@ def test_binds_the_queued_pr_without_using_the_ref_name(evidence: dict[str, Any]
         ("graph.mergeQueue.entries.nodes.0.pullRequest.id", "a-different-pr"),
         ("candidate_ref.object.sha", "e" * 40),
         ("candidate_ref.object.type", "blob"),
-        ("candidate_commit.tree.sha", "e" * 40),
-        ("candidate_commit.parents", [{"sha": BASE}, {"sha": REVIEWED}]),
-        ("reviewed_commit.parents", []),
     ],
 )
 def test_rejects_stale_incomplete_or_contradictory_evidence(
@@ -105,4 +105,43 @@ def test_rejects_stale_incomplete_or_contradictory_evidence(
         target = target[int(part) if part.isdigit() else part]
     target[leaf] = value
     with pytest.raises(CandidateEvidenceError):
-        bind_candidate(**evidence)
+        identify_candidate(**evidence)
+
+
+def test_candidate_can_touch_a_subset_of_the_evaluated_paths(evidence: dict[str, Any]) -> None:
+    binding = identify_candidate(**evidence)
+    verify_candidate_paths(
+        binding,
+        reviewed=ChangedPaths(BASE, REVIEWED, frozenset({"one.txt", "two.txt"})),
+        candidate=ChangedPaths(BASE, CANDIDATE, frozenset({"one.txt"})),
+    )
+
+
+@pytest.mark.parametrize(
+    ("target", "head", "paths"),
+    [
+        ("d" * 40, CANDIDATE, {"old.txt", "new.txt"}),
+        (BASE, REVIEWED, {"old.txt", "new.txt"}),
+        (BASE, CANDIDATE, {"old.txt", "new.txt", ".github/CODEOWNERS"}),
+    ],
+)
+def test_candidate_paths_must_be_covered_and_bound(
+    evidence: dict[str, Any], target: str, head: str, paths: set[str]
+) -> None:
+    # Verifies XCO-001 for path coverage and commit binding.
+    with pytest.raises(CandidateEvidenceError):
+        verify_candidate_paths(
+            identify_candidate(**evidence),
+            reviewed=ChangedPaths(BASE, REVIEWED, frozenset({"old.txt", "new.txt"})),
+            candidate=ChangedPaths(target, head, frozenset(paths)),
+        )
+
+
+def test_candidate_rename_source_needs_coverage(evidence: dict[str, Any]) -> None:
+    # Verifies XCO-006 when the candidate also removes the old pathname.
+    with pytest.raises(CandidateEvidenceError, match="not covered"):
+        verify_candidate_paths(
+            identify_candidate(**evidence),
+            reviewed=ChangedPaths(BASE, REVIEWED, frozenset({"new.txt"})),
+            candidate=ChangedPaths(BASE, CANDIDATE, frozenset({"old.txt", "new.txt"})),
+        )

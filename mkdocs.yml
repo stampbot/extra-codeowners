@@ -106,6 +106,7 @@ nav:
           - November repository access loss and merge queue: maintainers/evidence/2026-11-20-repository-lifecycle-and-queue.md
           - November merge-group delivery: maintainers/evidence/2026-11-21-merge-group-delivery.md
           - November queued policy evaluation: maintainers/evidence/2026-11-21-queued-policy-proof.md
+          - November relative candidate paths: maintainers/evidence/2026-11-22-relative-queue-candidate.md
       - Respond to dependency audit: how-to/respond-to-dependency-audit.md
       - Rescan a published image: how-to/rescan-published-image.md
       - Review or recover a Renovate update: how-to/manage-renovate-updates.md

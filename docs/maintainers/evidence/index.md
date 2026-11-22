@@ -31,6 +31,7 @@ the older results and links newer receipts.
 - [November 20, 2026: repository access loss and merge-queue checks](2026-11-20-repository-lifecycle-and-queue.md)
 - [November 21, 2026: merge-group delivery and candidate identity](2026-11-21-merge-group-delivery.md)
 - [November 21, 2026: policy evaluation on a queue candidate](2026-11-21-queued-policy-proof.md)
+- [November 22, 2026: a behind-base PR in the merge queue](2026-11-22-relative-queue-candidate.md)
 
 ## Add a receipt
 

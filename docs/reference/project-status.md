@@ -173,8 +173,10 @@ can safely evaluate merge groups.
 
 A [later operator probe](../maintainers/evidence/2026-11-21-queued-policy-proof.md)
 evaluated live policy and proved that GitHub merged a verified candidate in the
-single-entry fixture. It also refused a PR whose head was based on an older
-target tip. The deployed service still doesn't evaluate `merge_group` events.
+single-entry fixture. The first verifier rejected a PR based on an older
+target tip; a [relative-path follow-up](../maintainers/evidence/2026-11-22-relative-queue-candidate.md)
+evaluated that kind of PR successfully without requiring a rebase or squash.
+The deployed service still doesn't evaluate `merge_group` events.
 
 Keep GitHub's native **Require review from Code Owners** rule on production
 repositories until that contract is proven.

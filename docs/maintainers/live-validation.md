@@ -109,6 +109,11 @@ App review changed the result to failure on the same candidate. A separate
 pass let GitHub merge only into the disposable branch. The verifier refused
 a PR based on the earlier tip.
 
+The [November 22 relative-path test](evidence/2026-11-22-relative-queue-candidate.md)
+evaluated an approved two-commit PR based on an older tip. GitHub combined
+its changes with non-conflicting edits on the target. The revised verifier
+didn't require the candidate and PR head to have the same tree.
+
 ## Diagnostics and approval probe: November 2, 2026
 
 Alpha.65 runs on two Kubernetes nodes with shared PostgreSQL state. The

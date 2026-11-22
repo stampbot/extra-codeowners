@@ -1,7 +1,8 @@
 """Read-only evidence checks for a single-entry merge-queue experiment.
 
-The caller authenticates the App and obtains all snapshots from GitHub.
-This tool neither evaluates policy nor publishes a Check Run.
+The caller authenticates the App, obtains the snapshots from GitHub, and
+computes complete path evidence for the pinned revisions. This tool neither
+evaluates policy nor publishes a Check Run.
 """
 
 from __future__ import annotations
@@ -29,6 +30,19 @@ class CandidateIdentity:
     reviewed_head: str
     candidate_ref: str
     candidate_sha: str
+
+
+@dataclass(frozen=True, slots=True)
+class ChangedPaths:
+    """A complete comparison against one target tip.
+
+    For a PR, compare its merge base with the PR head. For a candidate, compare
+    the target tip with the candidate. Include both names of a rename.
+    """
+
+    target_sha: str
+    head_sha: str
+    paths: frozenset[str]
 
 
 def _require(condition: bool, message: str) -> None:
@@ -73,29 +87,15 @@ def _one_entry(queue: dict[str, Any]) -> dict[str, Any]:
     return _object(nodes[0])
 
 
-def _tree_at_base(commit: dict[str, Any], sha: str, base: str) -> str:
-    parents = commit.get("parents")
-    _require(
-        commit.get("sha") == sha
-        and isinstance(parents, list)
-        and len(parents) == 1
-        and _object(parents[0]).get("sha") == base,
-        "commit is not the expected single child of the base",
-    )
-    return _oid(_object(commit.get("tree")).get("sha"))
-
-
-def bind_candidate(
+def identify_candidate(
     *,
     delivery: dict[str, Any],
     installation_id: int,
     repository: dict[str, Any],
     graph: dict[str, Any],
     candidate_ref: dict[str, Any],
-    candidate_commit: dict[str, Any],
-    reviewed_commit: dict[str, Any],
 ) -> CandidateIdentity:
-    """Bind separately fetched GitHub snapshots; never infer a PR from its ref name."""
+    """Bind GitHub identities; don't infer a PR from its ref name or grant approval."""
     install_id, repo_id = _positive_id(installation_id), _positive_id(repository.get("id"))
     _require(
         delivery.get("action") == "checks_requested"
@@ -148,11 +148,6 @@ def bind_candidate(
         and target.get("sha") == sha,
         "queue ref no longer points to the expected candidate",
     )
-    _require(
-        _tree_at_base(candidate_commit, sha, base_sha)
-        == _tree_at_base(reviewed_commit, head, base_sha),
-        "candidate tree differs from the PR head",
-    )
     return CandidateIdentity(
         install_id,
         repo_id,
@@ -164,4 +159,20 @@ def bind_candidate(
         head,
         ref_name,
         sha,
+    )
+
+
+def verify_candidate_paths(
+    identity: CandidateIdentity, *, reviewed: ChangedPaths, candidate: ChangedPaths
+) -> None:
+    """Ensure the bound candidate touches only paths the PR evaluation covers."""
+    _require(
+        reviewed.target_sha == candidate.target_sha == identity.base_sha
+        and reviewed.head_sha == identity.reviewed_head
+        and candidate.head_sha == identity.candidate_sha,
+        "path evidence doesn't match the bound target, PR head and candidate",
+    )
+    _require(
+        candidate.paths <= reviewed.paths,
+        "candidate changes paths not covered by the PR",
     )
