@@ -30,6 +30,7 @@ MAX_INVENTORY_BYTES = 16 * 1024 * 1024
 # Bind the reviewed file paths and hashes to the exact upstream archive, not
 # just to a version string. The two-platform runtime evidence is in #18:
 # https://github.com/stampbot/extra-codeowners/issues/18#issuecomment-7069586882
+# https://github.com/stampbot/extra-codeowners/issues/18#issuecomment-7083094097
 _BUNDLED_NOTICES = {
     ("3.14.10", "de414a57119abef52784d8993e341d53aed635fc2b05c2607d9f98a2c5b72032"): (
         (
@@ -37,6 +38,12 @@ _BUNDLED_NOTICES = {
             "2.9.0",
             "Modules/expat/COPYING",
             "31b15de82aa19a845156169a17a5488bf597e561b2c318d159ed583139b25e87",
+        ),
+        (
+            "hacl-star",
+            "8ba599b2f6c9701b3dc961db895b0856a2210f76",
+            "Modules/_hacl/Hacl_Hash_SHA3.c",
+            "8744f5b6e054c3e5c44f413a60f9154b76dd7230135dcee26fd063755ec64be1",
         ),
         (
             "libmpdec",
