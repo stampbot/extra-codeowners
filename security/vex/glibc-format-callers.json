@@ -1,0 +1,38 @@
+{
+  "release": "v0.1.0-alpha.99",
+  "source_revision": "4a890d04e4b7cef23a379cc695d847aeaf43aedb",
+  "image_index": "sha256:c248b6de016e25cb42360a694668bd09c3eed038bfd26dba40f6c5dc4d1bd4e4",
+  "base_index": "sha256:930e1abba7c4e8f96ed93e8012c35d174d7732752731bbd5e8e757d7ec6f3966",
+  "debian_source": {
+    "version": "2.41-12+deb13u4",
+    "release_archive_sha256": "6588230928cf4f9bf3f65de105b5ab61599caf3a2a6fe4ba24ecb09ec4fc391b",
+    "upstream_tar_sha256": "f24aa441021121a79266f0d75242706cab8843a47901fefe74527491807f1998",
+    "debian_tar_sha256": "dda4153511bfd543502d18e5bc9323110996fe9c531f14ae3fad6eb17f027c7d"
+  },
+  "advisories": [
+    "https://security-tracker.debian.org/tracker/CVE-2026-19499",
+    "https://security-tracker.debian.org/tracker/CVE-2026-5435"
+  ],
+  "method": "Checked the platform manifest and each layer by SHA-256. Inspected dynamic ELF symbols and Python source names for the affected APIs and their aliases and reviewed glibc source and Debian patches for internal callers. Neither package was executed to test the vulnerabilities.",
+  "functions": ["strfmon", "strfmon_l", "__strfmon_l", "ns_sprintrr", "ns_sprintrrf", "__fp_nquery", "__fp_query", "__p_query"],
+  "platforms": {
+    "amd64": {
+      "digest": "sha256:4b22ee519739e03068c35b343182c53f66d9d5f80bb56abbdd8cc32d7d92e6c2",
+      "elf_paths_reviewed": 778,
+      "matching_undefined_symbols": [],
+      "sha256": {
+        "usr/lib/x86_64-linux-gnu/libc.so.6": "9792e3cbb541c8f44c7acf5f14f4022ea62998ecc787d326bed4d8b6547dfd92",
+        "usr/lib/x86_64-linux-gnu/libresolv.so.2": "d41dd4adacf5a35df426461dd8a92d7bdd5ba29bb61a1c3531bec0ada386f8dd"
+      }
+    },
+    "arm64": {
+      "digest": "sha256:e81be3bc687d1d43575e82fcc8c06ea55cee942c002f54afd21a3a3adc088132",
+      "elf_paths_reviewed": 778,
+      "matching_undefined_symbols": [],
+      "sha256": {
+        "usr/lib/aarch64-linux-gnu/libc.so.6": "70fa4c4cf57eabeb96097cce47582d02379c4cd1de3db3e98ade4dd7089a1b13",
+        "usr/lib/aarch64-linux-gnu/libresolv.so.2": "cb9756963306434c0fbe3351ded4041a5cc6e6ce37efc175de1093e13b3747fc"
+      }
+    }
+  }
+}

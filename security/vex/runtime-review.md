@@ -1,5 +1,35 @@
 # Runtime vulnerability review
 
+## glibc formatting paths: November 22, 2026 UTC
+
+[CVE-2026-19499][glibc-monetary] affects the monetary formatting functions
+`strfmon` and `strfmon_l`. Neither platform's runtime imports them. In the
+retained glibc source, those entry points and their long-double compatibility
+wrappers call the affected formatter; the ordinary numeric `printf` path
+doesn't. CPython's `locale.currency` formats its result in Python.
+
+[CVE-2026-5435][glibc-resolver-debug] affects the deprecated DNS debug printers.
+The retained glibc source shows that `p_query` and `fp_query` forward to
+`fp_nquery`, which uses `ns_sprintrr` and `ns_sprintrrf` to display records.
+The ordinary resolver path doesn't call those printers. Neither platform's
+runtime imports the printers or the forwarding APIs.
+
+The [caller receipt](glibc-format-callers.json) identifies both alpha.99
+platform images, the glibc source archives, and the libraries that define
+these functions. Static symbol results alone don't establish reachability.
+The service has no API for calling arbitrary native functions. Its Psycopg
+fallback bindings resolve the libpq API, not glibc formatting symbols.
+
+Two `not_affected` statements cover the shipped service and the exact
+Debian `libc6` and `libc-bin` versions on amd64 and arm64. The packages are
+present and unpatched. The review excludes other builds, operator-run
+commands, custom native extensions, and code run after compromise.
+Debian lists the fix in `2.41-12+deb13u5`; the upstream Python image
+available for this review still shipped `2.41-12+deb13u4`.
+
+[glibc-monetary]: https://security-tracker.debian.org/tracker/CVE-2026-19499
+[glibc-resolver-debug]: https://security-tracker.debian.org/tracker/CVE-2026-5435
+
 ## OpenTelemetry patch review: November 14, 2026 UTC
 
 The lock updates OpenTelemetry API and SDK from 1.45.1 to 1.45.2 and semantic

@@ -1,8 +1,8 @@
 {
   "@context": "https://openvex.dev/ns/v0.2.0",
-  "@id": "urn:uuid:9a3f1a66-ca79-59e6-a2c1-6cefe1c38332",
+  "@id": "urn:uuid:f678ad84-efa7-5e99-b45f-b977118ce4c2",
   "author": "Extra CODEOWNERS maintainers",
-  "last_updated": "2026-11-14T04:17:26Z",
+  "last_updated": "2026-11-22T17:42:45Z",
   "role": "VEX document producer",
   "statements": [
     {
@@ -1954,11 +1954,83 @@
       "vulnerability": {
         "name": "CVE-2026-119170"
       }
+    },
+    {
+      "impact_statement": "The affected glibc monetary formatter is called by strfmon, strfmon_l and their compatibility variants, not by ordinary numeric printf. No inspected ELF on either platform imports those functions. CPython locale.currency formats in Python, and the service exposes no arbitrary native call interface. The alpha.99 caller and source review covers the shipped Linux amd64 and arm64 service only. The affected glibc packages remain installed and unpatched at 2.41-12+deb13u4. Other builds, operator-run commands, custom native extensions, and execution after compromise are outside the assessment.",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "products": [
+        {
+          "@id": "pkg:deb/debian/libc-bin@2.41-12%2Bdeb13u4?arch=amd64&distro=debian-13.7&upstream=glibc",
+          "identifiers": {
+            "purl": "pkg:deb/debian/libc-bin@2.41-12%2Bdeb13u4?arch=amd64&distro=debian-13.7&upstream=glibc"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/libc-bin@2.41-12%2Bdeb13u4?arch=arm64&distro=debian-13.7&upstream=glibc",
+          "identifiers": {
+            "purl": "pkg:deb/debian/libc-bin@2.41-12%2Bdeb13u4?arch=arm64&distro=debian-13.7&upstream=glibc"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/libc6@2.41-12%2Bdeb13u4?arch=amd64&distro=debian-13.7&upstream=glibc",
+          "identifiers": {
+            "purl": "pkg:deb/debian/libc6@2.41-12%2Bdeb13u4?arch=amd64&distro=debian-13.7&upstream=glibc"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/libc6@2.41-12%2Bdeb13u4?arch=arm64&distro=debian-13.7&upstream=glibc",
+          "identifiers": {
+            "purl": "pkg:deb/debian/libc6@2.41-12%2Bdeb13u4?arch=arm64&distro=debian-13.7&upstream=glibc"
+          }
+        }
+      ],
+      "status": "not_affected",
+      "status_notes": "Analysis detail: The affected glibc monetary formatter is called by strfmon, strfmon_l and their compatibility variants, not by ordinary numeric printf. No inspected ELF on either platform imports those functions. CPython locale.currency formats in Python, and the service exposes no arbitrary native call interface. The alpha.99 caller and source review covers the shipped Linux amd64 and arm64 service only. The affected glibc packages remain installed and unpatched at 2.41-12+deb13u4. Other builds, operator-run commands, custom native extensions, and execution after compromise are outside the assessment.\nSource: Extra CODEOWNERS runtime caller review (https://security-tracker.debian.org/tracker/CVE-2026-19499)\nOriginal Vexcalibur analysis state: not_affected\nSource record modified: 2026-11-22T17:42:28Z",
+      "timestamp": "2026-11-22T17:42:28Z",
+      "vulnerability": {
+        "name": "CVE-2026-19499"
+      }
+    },
+    {
+      "impact_statement": "The affected glibc DNS record printers are called by the deprecated resolver debug printing path, not ordinary DNS lookups. Neither platform imports the printers or the forwarding entry points. The service and its libpq fallback bindings do not dynamically resolve those printing symbols. The alpha.99 caller and source review covers the shipped Linux amd64 and arm64 service only. The affected glibc packages remain installed and unpatched at 2.41-12+deb13u4. Other builds, operator-run commands, custom native extensions, and execution after compromise are outside the assessment.",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "products": [
+        {
+          "@id": "pkg:deb/debian/libc-bin@2.41-12%2Bdeb13u4?arch=amd64&distro=debian-13.7&upstream=glibc",
+          "identifiers": {
+            "purl": "pkg:deb/debian/libc-bin@2.41-12%2Bdeb13u4?arch=amd64&distro=debian-13.7&upstream=glibc"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/libc-bin@2.41-12%2Bdeb13u4?arch=arm64&distro=debian-13.7&upstream=glibc",
+          "identifiers": {
+            "purl": "pkg:deb/debian/libc-bin@2.41-12%2Bdeb13u4?arch=arm64&distro=debian-13.7&upstream=glibc"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/libc6@2.41-12%2Bdeb13u4?arch=amd64&distro=debian-13.7&upstream=glibc",
+          "identifiers": {
+            "purl": "pkg:deb/debian/libc6@2.41-12%2Bdeb13u4?arch=amd64&distro=debian-13.7&upstream=glibc"
+          }
+        },
+        {
+          "@id": "pkg:deb/debian/libc6@2.41-12%2Bdeb13u4?arch=arm64&distro=debian-13.7&upstream=glibc",
+          "identifiers": {
+            "purl": "pkg:deb/debian/libc6@2.41-12%2Bdeb13u4?arch=arm64&distro=debian-13.7&upstream=glibc"
+          }
+        }
+      ],
+      "status": "not_affected",
+      "status_notes": "Analysis detail: The affected glibc DNS record printers are called by the deprecated resolver debug printing path, not ordinary DNS lookups. Neither platform imports the printers or the forwarding entry points. The service and its libpq fallback bindings do not dynamically resolve those printing symbols. The alpha.99 caller and source review covers the shipped Linux amd64 and arm64 service only. The affected glibc packages remain installed and unpatched at 2.41-12+deb13u4. Other builds, operator-run commands, custom native extensions, and execution after compromise are outside the assessment.\nSource: Extra CODEOWNERS runtime caller review (https://security-tracker.debian.org/tracker/CVE-2026-5435)\nOriginal Vexcalibur analysis state: not_affected\nSource record modified: 2026-11-22T17:42:28Z",
+      "timestamp": "2026-11-22T17:42:28Z",
+      "vulnerability": {
+        "name": "CVE-2026-5435"
+      }
     }
   ],
-  "timestamp": "2026-11-14T04:17:26Z",
+  "timestamp": "2026-11-22T17:42:45Z",
   "tooling": "Vexcalibur + Extra CODEOWNERS runtime binding",
-  "version": 35,
+  "version": 36,
   "x_extra_codeowners_runtime": {
     "files": {
       ".dockerignore": "3f9dc9d3a79fe3085f25de88403b5563ad5c7fa7010bef94c5e55f24bd3cf691",
@@ -2008,13 +2080,14 @@
       "extra_codeowners/tracing.py": "49641dd6cb9b5b6da1e6026b90925a73eb3112d13a069afd202e741d261f76f9",
       "extra_codeowners/webhooks.py": "59372c12590ee2008cac47d3aff8d1bc48ca6ebc7ecb1146b1e64daa3b4e4fbd",
       "pyproject.toml": "bfb88e388d4590a6f52ed6d76889460a6b698f13129389b3823d2ff661bedd55",
+      "security/vex/glibc-format-callers.json": "a06a8c36b621b44f049c11befe07699f805ee518c1d5bf14b03a62a760d4412f",
       "security/vex/native-openssl-callers.json": "7c38eb02a457c870db4d04a5df7f85381cd87355001fc88c306aa6a8989f70cd",
       "security/vex/native-protocol-callers.json": "d31e0df96a1901843552b6f14c76eeed966880ebf75ea17562fae9180c1d6cfb",
       "tools/source_recipes/cryptography-50.0.0.json": "14c8c00339ada71aa1f975b2d20052582f251a44c2c8f1cdbb2d8fc0bb802779",
       "tools/source_recipes/psycopg-binary-3.3.4.json": "ec227aa110315f82c25335837e258806930c7afbe980c8b2ff6b476343c243b5",
       "uv.lock": "9b38f0929d3ea110b3d016bc638547e9f6244949009d2bc4dadff6141d496f90"
     },
-    "review": "Reviewed OpenTelemetry API 1.45.2 traceparent length/regex patch and the paired SDK 1.45.2/semantic-conventions 0.66b2 lock updates. Webhook ingress creates local roots without extracting untrusted carriers; tests reject extraction for both ordinary and oversized newline-bearing inputs. SDK metric-cardinality changes do not affect the service Prometheus-client metrics path. Exporter versions, native library identities and source recipes, Dockerfile/base, TLS configuration and cryptographic callers are unchanged. Preserve the protocol caller receipt binding. All 89 VEX statement objects and dates remain unchanged; only the reviewed lock binding advances.",
+    "review": "November 22 two-platform release caller review: glibc monetary formatting and DNS debug printers are outside the shipped service execution path. Exact base, packages and caller receipt are bound; no change to the other vulnerability assessments.",
     "schema_version": 1
   }
 }

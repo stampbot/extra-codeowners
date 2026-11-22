@@ -127,7 +127,11 @@ def _runtime_files(root: Path) -> dict[str, str]:
         _fail("runtime binding requires a regular native source recipe directory")
     if recipes.is_dir():
         paths.extend(sorted(recipes.glob("*.json")))
-    for name in ("native-openssl-callers.json", "native-protocol-callers.json"):
+    for name in (
+        "glibc-format-callers.json",
+        "native-openssl-callers.json",
+        "native-protocol-callers.json",
+    ):
         native_evidence = root / "security/vex" / name
         if native_evidence.exists() or native_evidence.is_symlink():
             paths.append(native_evidence)
