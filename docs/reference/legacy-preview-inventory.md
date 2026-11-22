@@ -87,9 +87,8 @@ older image.
 The previews have signature, SBOM, and provenance evidence. They don't have the
 immutable GitHub release binding or signed per-platform distribution
 inventories and recipient notice bundles used by the current release process.
-Complete corresponding-source delivery and approval of the distribution
-mechanism remain open in [issue #18][issue-18]. A valid signature doesn't settle
-those questions.
+Complete corresponding-source delivery remains open in [issue #18][issue-18].
+A valid signature doesn't show whether a release contains all required sources.
 
 This inventory is a dated observation, not a new release attestation or a
 vulnerability scan. GHCR's package page is shared by old and current images;

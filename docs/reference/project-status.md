@@ -88,9 +88,8 @@ for CPython, installed Debian packages, locked Python distributions and
 reviewed wheel-native components. The latter include Cryptography's OpenSSL
 and Psycopg's libpq, OpenSSL and OpenLDAP sources, with their existing build
 recipes. These are version-matched archives, not proof of exact upstream
-binary build inputs. [Issue #18][issue-18] still
-tracks complete corresponding-source delivery and approval of the distribution
-mechanism, and
+binary build inputs. [Issue #18][issue-18] tracks complete
+corresponding-source delivery, and
 [issue #74][issue-74] tracks clean-client verification of a published release.
 
 ### Raw container inventory
@@ -130,8 +129,8 @@ This is raw review evidence. The release workflow uses it to construct and
 verify the accompanying [recipient notice bundle](recipient-notices.md), while
 keeping missing declared license files visible. Neither artifact decides
 whether package metadata, bundled material, or source availability satisfies a
-redistribution obligation. Corresponding-source delivery and approval remain
-part of [issue #18][issue-18].
+redistribution obligation. [Issue #18][issue-18] tracks the remaining notices
+and source coverage.
 
 ## Production enforcement blocker {#production-enforcement-blocker}
 
@@ -215,14 +214,14 @@ close before the project is presented as production-ready:
 - [Issue #1][issue-1]: prove live check invalidation, shared-head behavior,
   and installation access loss. This is the
   [production enforcement blocker](#production-enforcement-blocker).
-- [Issue #18][issue-18]: review wheel-native components and their notices,
-  complete corresponding-source delivery, and approve the distribution
-  mechanism. Separate [wheel-native catalogs](native-components.md) expose the
+- [Issue #18][issue-18]: finish notice attribution for CPython and libraries
+  shipped in Python wheels, complete corresponding-source delivery, and check
+  that release evidence stays current when the component inventory changes.
+  Separate [wheel-native catalogs](native-components.md) expose the
   reviewed C-library identities and source bindings. They do not merge those
   libraries into the required image scan or complete their license review.
   Catalogs with version 2 source-notice evidence also identify selected files
-  in the retained distro source RPMs. Complete binary attribution and
-  distribution approval remain open.
+  in the retained distro source RPMs. They don't yet attribute every binary.
   Separate native scans retain both raw findings and a VEX-applied report;
   a passing image gate is not a clean native assessment.
 

@@ -41,8 +41,8 @@ For a validation receipt, record the tested version and source revision,
 environment, UTC window, method, observed results, and what the run did not
 prove. Separate queue insertion from completed evaluation, and process-wide
 metrics from evidence about one scan. Publish sanitized summaries, not private
-payloads, credentials, or raw infrastructure logs. A successful artifact check
-is not distribution approval.
+payloads, credentials, or raw infrastructure logs. Verifying a signature does
+not establish that the artifacts contain every required notice or source file.
 
 List new pages in `mkdocs.yml` and new ADRs in their index, in date order.
 Run `mise run docs` and `mise run lint:markdown` from the prepared repository
