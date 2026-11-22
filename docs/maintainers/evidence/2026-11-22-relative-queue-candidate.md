@@ -7,7 +7,7 @@ target were covered by the PR's approval.
 
 ## What we tested
 
-The test ran from 17:11 to 17:16 UTC on November 22, 2026. The disposable
+The policy test ran from 17:11 to 17:16 UTC on November 22, 2026. The disposable
 repository used the shared App and the same one-entry queue setup as the
 [previous probe](2026-11-21-queued-policy-proof.md).
 The local probe used the evaluator from source revision
@@ -39,6 +39,20 @@ on that head let the PR enter the queue.
 
 The default branch and both branch tips were unchanged after the probe.
 The PR closed, the queue emptied, and the probe tokens were revoked.
+
+## Check on an obsolete candidate
+
+A separate provider control ran from 17:19 to 17:22 UTC. It queued a
+benign PR, retained the candidate commit on a temporary branch, then
+dequeued and requeued the PR. GitHub reused the queue ref but pointed
+it at a different commit. The App posted a passing fixture check only
+on the old commit after the replacement was already waiting.
+
+GitHub recorded the check on the old commit. The replacement still
+had no required check and remained waiting throughout the 45-second
+observation. We closed the PR without merging and removed the temporary
+branches. This was a check from the required App, not an ordinary
+commit status or a different check name.
 
 ## What this doesn't prove
 
