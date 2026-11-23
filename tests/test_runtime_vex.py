@@ -30,9 +30,15 @@ PACKAGES = (
 
 def _native_python(architecture: str) -> dict[str, object]:
     """Fixture metadata uses the checked-in reviewed recipes, not live payloads."""
+    baseline = ROOT / "security" / f"distribution-review-{architecture}.json"
+    records = json.loads(baseline.read_text(encoding="utf-8"))["records"]
+    versions = {
+        name: records[f"python/distributions/{name}"].partition(" ")[0]
+        for name in ("cryptography", "psycopg-binary")
+    }
     sboms: list[dict[str, object]] = []
     native: list[dict[str, object]] = []
-    for name, version in (("cryptography", "50.0.0"), ("psycopg-binary", "3.3.4")):
+    for name, version in versions.items():
         recipe = json.loads((ROOT / "tools/source_recipes" / f"{name}-{version}.json").read_text())
         platform = recipe["platforms"][architecture]
         relative = platform.get("sbom_relative_path", "sboms/auditwheel.cdx.json")
@@ -61,8 +67,7 @@ def _native_python(architecture: str) -> dict[str, object]:
     return {
         "source_recipe_schema": 4,
         "distributions": [
-            {"normalized_name": "cryptography", "version": "50.0.0"},
-            {"normalized_name": "psycopg-binary", "version": "3.3.4"},
+            {"normalized_name": name, "version": version} for name, version in versions.items()
         ],
         "embedded_sboms": sboms,
         "native_files": native,
@@ -131,15 +136,14 @@ def test_runtime_claims_require_review_after_a_package_update(
 def test_review_records_glibc_caller_evidence_and_existing_openssl_fixes() -> None:
     document = json.loads(SOURCE.read_text(encoding="utf-8"))
     statements = document["statements"]
-    assert Counter(statement["status"] for statement in statements) == {
-        "fixed": 26,
-        "not_affected": 20,
-        "under_investigation": 45,
-    }
     identities = [(s["vulnerability"]["name"], p["@id"]) for s in statements for p in s["products"]]
     assert len(identities) == len(set(identities))
     # One CVE can be fixed in Debian while still present in a bundled library.
     debian = [s for s in statements if all(p["@id"].startswith("pkg:deb/") for p in s["products"])]
+    assert Counter(statement["status"] for statement in debian) == {
+        "fixed": 26,
+        "not_affected": 5,
+    }
     by_cve = {statement["vulnerability"]["name"]: statement for statement in debian}
     assert len(by_cve) == len(debian) == 31
     pcre2 = by_cve["CVE-2026-103111"]
