@@ -11,6 +11,7 @@ import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable
+from email.message import Message
 from pathlib import Path
 from typing import Any
 from unittest.mock import Mock
@@ -303,6 +304,96 @@ def test_fetch_retries_network_errors_but_never_redirects(monkeypatch: pytest.Mo
         sources.fetch(plan()["sources"][0])
     with pytest.raises(sources.PythonSourceError, match="redirected"):
         sources._NoRedirect().redirect_request(Mock(), Mock(), 302, "Found", {}, URL)
+
+
+def test_verified_download_cache_works_offline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = plan()["sources"][0]
+    opener = Mock()
+    response = Mock(status=200)
+    response.read.return_value = DATA
+    context = Mock()
+    context.__enter__ = Mock(return_value=response)
+    context.__exit__ = Mock(return_value=False)
+    opener.open.return_value = context
+    monkeypatch.setattr(urllib.request, "build_opener", lambda *_: opener)
+
+    assert sources.fetch(source, cache=tmp_path) == DATA
+    entry = tmp_path / source["sha256"]
+    assert entry.read_bytes() == DATA
+    opener.open.side_effect = urllib.error.URLError("offline")
+    assert sources.fetch(source, cache=tmp_path) == DATA
+    opener.open.assert_called_once()
+    with pytest.raises(sources.PythonSourceError, match="invalid source archive URL"):
+        sources.fetch({**source, "url": "https://example.org/not-reviewed.tar.gz"}, cache=tmp_path)
+
+
+def test_bad_cached_bytes_require_verified_replacement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = plan()["sources"][0]
+    entry = tmp_path / source["sha256"]
+    entry.write_bytes(b"x" * len(DATA))
+    opener = Mock()
+    response = Mock(status=200)
+    response.read.return_value = b"bad replacement"
+    context = Mock()
+    context.__enter__ = Mock(return_value=response)
+    context.__exit__ = Mock(return_value=False)
+    opener.open.return_value = context
+    monkeypatch.setattr(urllib.request, "build_opener", lambda *_: opener)
+
+    with pytest.raises(sources.PythonSourceError, match="SHA-256"):
+        sources.fetch(source, cache=tmp_path)
+    assert entry.read_bytes() == b"x" * len(DATA)
+    response.read.return_value = DATA
+    assert sources.fetch(source, cache=tmp_path) == DATA
+    assert entry.read_bytes() == DATA
+
+
+def test_cache_rejects_symlinks_and_non_digest_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = plan()["sources"][0]
+    opener = Mock()
+    monkeypatch.setattr(urllib.request, "build_opener", opener)
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    outside = tmp_path / "outside-cache"
+    outside.write_bytes(DATA)
+    (cache / source["sha256"]).symlink_to(outside)
+    with pytest.raises(sources.PythonSourceError, match="not a regular file"):
+        sources.fetch(source, cache=cache)
+    with pytest.raises(sources.PythonSourceError, match="cache digest"):
+        sources.fetch({**source, "sha256": "../outside-cache"}, cache=cache)
+    alias = tmp_path / "cache-alias"
+    alias.symlink_to(cache, target_is_directory=True)
+    with pytest.raises(sources.PythonSourceError, match="not a symlink"):
+        sources.fetch(source, cache=alias)
+    opener.assert_not_called()
+
+
+def test_download_failure_names_reviewed_source_not_redirect_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = plan()["sources"][0]
+    opener = Mock()
+    opener.open.side_effect = urllib.error.HTTPError(
+        "https://release-assets.githubusercontent.com/example?signature=private",
+        503,
+        "temporarily unavailable",
+        Message(),
+        None,
+    )
+    monkeypatch.setattr(urllib.request, "build_opener", lambda *_: opener)
+    monkeypatch.setattr(time, "sleep", lambda _: None)
+    with pytest.raises(
+        sources.PythonSourceError, match=r"files\.pythonhosted\.org/.*HTTP 503"
+    ) as error:
+        sources.fetch(source)
+    assert "signature" not in str(error.value)
+    assert opener.open.call_count == 3
 
 
 def test_cli_roundtrip_and_exclusive_output(

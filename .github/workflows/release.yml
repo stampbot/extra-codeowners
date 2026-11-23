@@ -461,6 +461,17 @@ jobs:
           printf '%s\n' "${DIGEST}" >"build-index-${ARCHITECTURE}.txt"
           printf '%s\n' "${platform_digest}" >"digest-${ARCHITECTURE}.txt"
 
+      - name: Restore Python source downloads
+        id: python-source-cache
+        continue-on-error: true
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/python-source-downloads
+          key: >-
+            ${{ format('python-sources-v1-{0}-{1}', matrix.architecture,
+            hashFiles('Dockerfile', 'uv.lock', 'tools/release_python_sources.py')) }}
+          restore-keys: python-sources-v1-${{ matrix.architecture }}-
+
       - name: Collect raw native filesystem inventory
         env:
           ARCHITECTURE: ${{ matrix.architecture }}
@@ -516,6 +527,7 @@ jobs:
             --platform-digest "${platform_digest}" \
             --inventory "distribution-inventory-${ARCHITECTURE}.json" \
             --lock uv.lock \
+            --cache "${RUNNER_TEMP}/python-source-downloads" \
             --bundle "python-source-${ARCHITECTURE}.tar.gz"
           python -I -S -B tools/release_native_components.py generate \
             --rpm-notices \
@@ -570,6 +582,16 @@ jobs:
             "${VERSION}" \
             "${PYTHON_VERSION}" \
             "${REVISION}"
+
+      - name: Save verified Python source downloads
+        if: steps.python-source-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/python-source-downloads
+          key: >-
+            ${{ format('python-sources-v1-{0}-{1}', matrix.architecture,
+            hashFiles('Dockerfile', 'uv.lock', 'tools/release_python_sources.py')) }}
 
       - name: Scan native image
         uses: ./.github/actions/scan-image
