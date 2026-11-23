@@ -315,7 +315,7 @@ def test_github_pagination_stops_only_after_a_short_page(
 
     async def exercise() -> list[dict[str, Any]]:
         client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
-        client._tokens[2] = InstallationToken(
+        client._tokens[(2, False)] = InstallationToken(
             "synthetic-token",
             datetime.now(UTC) + timedelta(hours=1),
         )
@@ -348,7 +348,7 @@ def test_github_pagination_fails_closed_above_caller_limit(
 
     async def exercise() -> None:
         client = GitHubClient(1, private_key, transport=httpx.MockTransport(handler))
-        client._tokens[2] = InstallationToken(
+        client._tokens[(2, False)] = InstallationToken(
             "synthetic-token",
             datetime.now(UTC) + timedelta(hours=1),
         )
