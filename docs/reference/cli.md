@@ -96,7 +96,7 @@ The migration options are:
 On success, the final line names the bundled revision:
 
 ```text
-Database is at migration 0010_authority_discovery_cursor.
+Database is at migration 0011_merge_group_work.
 ```
 
 Production mode applies the same PostgreSQL and transport checks as `serve`. A
@@ -131,7 +131,7 @@ uv run python -m extra_codeowners database check
 On success, the final line names the compatible revision:
 
 ```text
-Database migration 0010_authority_discovery_cursor is compatible.
+Database migration 0011_merge_group_work is compatible.
 ```
 
 The command exits nonzero when it cannot connect or when the required release

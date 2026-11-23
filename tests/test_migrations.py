@@ -34,6 +34,29 @@ def test_fresh_database_upgrades_to_packaged_head(tmp_path: Path) -> None:
     assert store.database_available() is True
 
 
+def test_merge_group_upgrade_keeps_existing_deliveries(tmp_path: Path) -> None:
+    url = database_url(tmp_path)
+    upgrade_database(url, revision="0010_authority_discovery_cursor")
+    engine = create_engine(url)
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO webhook_deliveries "
+                "(delivery_id, event, received_at, invalidation_required) "
+                "VALUES ('earlier-delivery', 'ping', CURRENT_TIMESTAMP, false)"
+            )
+        )
+    engine.dispose()
+    upgrade_database(url)
+    store = QueueStore(url)
+    try:
+        store.initialize()
+        assert not store.accept_delivery("earlier-delivery", "ping", None)
+        assert current_revision(url) == "0011_merge_group_work"
+    finally:
+        store.close()
+
+
 def test_all_migration_identifiers_fit_postgresql_alembic_storage() -> None:
     """Keep every revision within Alembic's PostgreSQL VARCHAR(32) default."""
     config = Config()
