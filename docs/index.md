@@ -7,7 +7,7 @@ built for teams whose automation, such as
 for approving routine work.
 
 GitHub's normal `CODEOWNERS` file still names people and teams. Extra
-CODEOWNERS adds a required check and a separate delegation policy for Apps.
+CODEOWNERS adds a check and a separate delegation policy for Apps.
 Regular pull requests keep going to their human owners.
 
 !!! warning "Use a disposable environment"
@@ -23,19 +23,21 @@ Regular pull requests keep going to their human owners.
 
 Before you register anything, make sure this is the rule you want. Extra
 CODEOWNERS evaluates each distinct effective owner set separately. For each
-owner set, the `Extra CODEOWNERS / approval` check accepts either:
+owner set, the `Extra CODEOWNERS / approval` check accepts any of these:
 
 - an appropriate human CODEOWNER approves the current head
 - an enrolled App approves the current head and its delegation matches the
-  changed paths and owners.
+  changed paths and owners
+- if enabled, the pull-request author is an eligible code owner for that set.
 
 Every owner set must pass. A pull request may use human evidence for one set
 and App evidence for another. Paths with no effective `CODEOWNERS` match create
 no code-owner requirement.
 
-The check is meant to replace GitHub's **Require review from Code Owners**
-switch. It doesn't replace your minimum approval count, stale-review setting,
-signed-commit policy, or other required checks.
+The check evaluates the decision behind GitHub's **Require review from Code
+Owners** rule. Leave that rule enabled in production. The check doesn't replace
+your minimum approval count, stale-review setting, signed-commit policy, or
+other required checks.
 
 GitHub doesn't publicly promise that a third-party App review counts toward
 the ordinary approval minimum. It did in the project's
@@ -67,8 +69,8 @@ After the first check works, continue with the pieces you need:
 3. [Exercise the replacement rule and its rollback](how-to/prepare-repository-rules.md).
 
 Keep GitHub's native code-owner rule enabled on production repositories. The
-[project status](reference/project-status.md) names the live contracts that
-are still open.
+[project status](reference/project-status.md#production-enforcement-blocker)
+explains why the live tests don't make a required check on the PR head safe.
 
 ## Configure policy
 

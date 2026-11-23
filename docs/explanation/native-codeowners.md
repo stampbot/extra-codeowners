@@ -23,8 +23,8 @@ sets out the boundaries that choice has to keep.
 ## The decision in one pull request
 
 For each changed path, Extra CODEOWNERS applies the last matching `CODEOWNERS`
-rule and groups paths by their effective owner set. It then looks for one of
-two kinds of evidence:
+rule and groups paths by their effective owner set. It then looks for an
+approval that applies to the current head:
 
 ```text
 Appropriate human approved the exact current head
@@ -34,6 +34,10 @@ Appropriate human approved the exact current head
 Enrolled App approved the exact current head
 and a delegation covers the path and owner
 ```
+
+Repositories that enable author approval can also count an eligible code owner
+who opened the pull request. That option doesn't submit a review or increase
+GitHub's ordinary approval count.
 
 Every distinct owner set represented by the pull request must be satisfied. In
 the implemented evaluator contract, a human can cover an ordinary application
@@ -68,7 +72,7 @@ a new App or remove an organization guardrail.
 
 ```text
 CODEOWNERS: people and teams --------+
-Organization policy: App + guards ---+-> evaluator -> required check
+Organization policy: App + guards ---+-> evaluator -> Check Run
 Repository policy: delegation -------+
 ```
 
@@ -136,10 +140,11 @@ CODEOWNERS revoke and recompute the result. Shared-head detection, durable
 invalidation, and generation guards reduce that window after the event
 arrives. They can't protect the time before delivery.
 
-This is the project's main production blocker. Keep native code-owner
-enforcement on production repositories until the
-[project status](../reference/project-status.md#production-enforcement-blocker)
-says the live contract is closed.
+In a [disposable one-entry queue](../maintainers/evidence/2026-11-23-candidate-checks-during-delivery-loss.md),
+GitHub waited for a fresh check on the candidate it would merge, even while
+the PR head showed an old pass. That test didn't make a required check on the
+PR head safe, or prove the same behavior for larger groups. Keep native
+code-owner enforcement on production repositories.
 
 ## Keep CODEOWNERS valid
 
