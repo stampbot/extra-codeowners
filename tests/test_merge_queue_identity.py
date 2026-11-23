@@ -219,6 +219,17 @@ def test_waiting_entries_do_not_change_the_only_built_candidate(count: int) -> N
     assert binding == bind_candidate(TARGET, _graph(), effective_rules=_rules())
 
 
+@pytest.mark.parametrize("state", ["MERGEABLE", "LOCKED"])
+def test_green_lifecycle_states_are_only_eligible_for_an_existing_result(state: str) -> None:
+    graph = _graph()
+    graph["mergeQueue"]["entries"]["nodes"][0]["state"] = state
+    with pytest.raises(MergeQueueEvidenceError):
+        bind_candidate(TARGET, graph, effective_rules=_rules())
+    assert (
+        bind_candidate(TARGET, graph, effective_rules=_rules(), rechecking=True).pull_number == 17
+    )
+
+
 @pytest.mark.parametrize(
     ("path", "value"),
     [

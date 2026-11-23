@@ -123,7 +123,9 @@ alone doesn't establish that a candidate represents one PR.
 
 If the first candidate delivery is lost, this worker doesn't discover it
 by polling. GitHub should wait for its check; redeliver the event or queue
-a new candidate to try again. To end the test, remove the fixture-only
+a new candidate to try again. The timer only rechecks a pass the worker
+already confirmed. A check on a replacement candidate needs its own delivery
+and evaluation. To end the test, remove the fixture-only
 required check and clear both opt-in settings. Clearing the settings
 doesn't withdraw results that GitHub already recorded.
 

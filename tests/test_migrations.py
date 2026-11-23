@@ -52,7 +52,39 @@ def test_merge_group_upgrade_keeps_existing_deliveries(tmp_path: Path) -> None:
     try:
         store.initialize()
         assert not store.accept_delivery("earlier-delivery", "ping", None)
-        assert current_revision(url) == "0011_merge_group_work"
+        assert current_revision(url) == DATABASE_MIGRATION_HEAD
+    finally:
+        store.close()
+
+
+def test_candidate_recheck_upgrade_does_not_adopt_an_old_completion(tmp_path: Path) -> None:
+    url = database_url(tmp_path)
+    upgrade_database(url, revision="0011_merge_group_work")
+    engine = create_engine(url)
+    with engine.begin() as connection:
+        connection.execute(
+            text("""
+            INSERT INTO merge_group_work
+                (installation_id, repository_id, head_sha, repository_full_name,
+                 base_ref, base_sha, head_ref, destroyed, pull_number, entry_id,
+                 pull_id, pull_head_sha, generation, completed_generation, attempts,
+                 requested_at, available_at)
+            VALUES (18, 33, :head, 'example/project', 'refs/heads/main', :base,
+                    'refs/heads/gh-readonly-queue/main/pr-7-fictional', false, 7,
+                    'MQE_example', 'PR_example', :pr_head, 1, 1, 1,
+                    CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        """),
+            {"head": "b" * 40, "base": "a" * 40, "pr_head": "c" * 40},
+        )
+    engine.dispose()
+    upgrade_database(url)
+    store = QueueStore(url)
+    try:
+        store.initialize()
+        with store.session() as session:
+            row = session.get(database.MergeGroupWork, (18, 33, "b" * 40))
+            assert row is not None and row.recheck_check_id is None
+            assert row.generation == row.completed_generation == 1
     finally:
         store.close()
 

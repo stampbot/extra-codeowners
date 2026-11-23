@@ -1229,7 +1229,7 @@ class EvaluationService:
         return _Assessment(result, fingerprint)
 
     async def assess_merge_candidate(
-        self, trigger: MergeGroupTrigger, *, authority_generation: int
+        self, trigger: MergeGroupTrigger, *, authority_generation: int, rechecking: bool = False
     ) -> MergeCandidateAssessment:
         """Evaluate a current queue candidate without changing work, audits or checks.
 
@@ -1241,7 +1241,8 @@ class EvaluationService:
         if type(authority_generation) is not int or authority_generation < 0:
             raise ValueError("authority_generation must be a nonnegative integer")
 
-        identity = await self.github.get_merge_candidate(trigger)
+        queue_state = {"rechecking": True} if rechecking else {}
+        identity = await self.github.get_merge_candidate(trigger, **queue_state)
         if identity.trigger != trigger:
             raise GitHubError("GitHub returned evidence for a different merge candidate")
         scope = _CandidatePolicyScope(
@@ -1304,7 +1305,7 @@ class EvaluationService:
             != file_count
             or _label_names(observed) != labels
             or (check_author and self._pull_request_author_identity(observed) != author_identity)
-            or await self.github.get_merge_candidate(trigger) != identity
+            or await self.github.get_merge_candidate(trigger, **queue_state) != identity
         ):
             raise GitHubError("pull request or merge queue entry changed during evaluation")
         return MergeCandidateAssessment(identity, result)

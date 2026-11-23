@@ -289,6 +289,7 @@ class Settings(BaseSettings):
     check_name: str = "Extra CODEOWNERS / approval"
     experimental_merge_queue_repository: str | None = None
     experimental_merge_queue_repository_id: int | None = Field(default=None, gt=0, le=2**63 - 1)
+    experimental_merge_queue_recheck_seconds: int = Field(default=30, ge=5, le=300)
     allow_insecure_changes: bool = False
 
     setup_enabled: bool = False

@@ -33,7 +33,7 @@ from extra_codeowners.database import (
     utcnow,
 )
 from extra_codeowners.merge_group_work import ClaimedMergeGroup, MergeGroupQueue
-from extra_codeowners.merge_queue import MergeGroupTrigger
+from extra_codeowners.merge_queue import MergeCandidateIdentity, MergeGroupTrigger
 
 BASELINE_REVISION = migrations.BASELINE_REVISION
 MIGRATION_LOCK_KEY = migrations.MIGRATION_LOCK_KEY
@@ -43,8 +43,9 @@ upgrade_database = migrations.upgrade_database
 pytestmark = pytest.mark.integration
 
 
+@pytest.mark.parametrize("recheck", [False, True])
 def test_postgres_merge_group_claim_is_exclusive_and_revoked_across_replicas(
-    postgres_store: QueueStore,
+    postgres_store: QueueStore, monkeypatch: pytest.MonkeyPatch, recheck: bool
 ) -> None:
     # Verifies XCO-001 and XCO-013 across two independent production-style pools.
     trigger = MergeGroupTrigger(
@@ -71,11 +72,29 @@ def test_postgres_merge_group_claim_is_exclusive_and_revoked_across_replicas(
     try:
         assert postgres_store.accept_delivery("queued", "merge_group", trigger)
         first, second = MergeGroupQueue(postgres_store), MergeGroupQueue(peer)
+        if recheck:
+            publication = first.claim("original-publication", 60)
+            assert publication is not None
+            assert first.bind(
+                publication,
+                MergeCandidateIdentity(
+                    trigger,
+                    "R_fictional",
+                    "MQ_fictional",
+                    "MQE_fictional",
+                    "PR_fictional",
+                    7,
+                    "c" * 40,
+                ),
+            )
+            assert first.complete(publication, check_id=88, recheck_seconds=5)
+            due = utcnow() + timedelta(seconds=6)
+            monkeypatch.setattr("extra_codeowners.merge_group_work.utcnow", lambda: due)
         start = threading.Barrier(2)
 
         def claim(queue: MergeGroupQueue, owner: str) -> ClaimedMergeGroup | None:
             start.wait(timeout=5)
-            return queue.claim(owner, 60)
+            return queue.claim(owner, 60, recheck=recheck)
 
         with ThreadPoolExecutor(max_workers=2) as pool:
             a = pool.submit(claim, first, "replica-a")
@@ -84,8 +103,19 @@ def test_postgres_merge_group_claim_is_exclusive_and_revoked_across_replicas(
         assert len(claimed) == 1
         running = claimed[0]
         assert second.is_current(running)
+        assert (running.published is not None) == recheck
+        if recheck:
+            assert second.complete(running, check_id=88, recheck_seconds=5)
+            next_due = due + timedelta(seconds=6)
+            monkeypatch.setattr("extra_codeowners.merge_group_work.utcnow", lambda: next_due)
+            next_claim = first.claim(running.lease_owner, 60, recheck=True)
+            assert next_claim is not None and next_claim.attempts == running.attempts == 1
+            assert next_claim.generation == running.generation + 1
+            assert not second.is_current(running)
+            running = next_claim
         assert peer.accept_delivery("cancelled", "merge_group", destroyed)
         assert not first.complete(running)
+        assert first.claim("obsolete-recheck", 60, recheck=True) is None
         revocation = second.claim("revocation", 60)
         assert revocation is not None and revocation.trigger == destroyed
         assert revocation.generation == running.generation + 1

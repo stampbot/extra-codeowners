@@ -1,5 +1,13 @@
 # Runtime vulnerability review
 
+## Candidate rechecks: November 23, 2026 UTC
+
+The candidate timer reuses the GitHub client, policy evaluation, and
+SQLAlchemy queue operations. The migration adds a nullable row field and
+an index. It adds no native caller, FTS, package upgrade, or transport
+change. The vulnerability statements and dates are unchanged; only the
+reviewed runtime binding advances.
+
 ## Experimental queue rule reads: November 23, 2026 UTC
 
 The candidate worker now reads effective branch rules using the existing

@@ -20,6 +20,15 @@ from extra_codeowners.merge_queue import MergeCandidateIdentity, MergeGroupTrigg
 
 
 @dataclass(frozen=True, slots=True)
+class PublishedMergeCandidate:
+    """Identity of a confirmed pass that can be rechecked but not recreated."""
+
+    check_id: int
+    pull_id: str
+    pull_number: int
+
+
+@dataclass(frozen=True, slots=True)
 class ClaimedMergeGroup:
     """One attempt at a candidate generation, not authority to publish."""
 
@@ -27,6 +36,7 @@ class ClaimedMergeGroup:
     generation: int
     attempts: int
     lease_owner: str
+    published: PublishedMergeCandidate | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,13 +64,20 @@ def _unleased(now: datetime) -> ColumnElement[bool]:
 
 
 def _owns(job: ClaimedMergeGroup, now: datetime) -> tuple[ColumnElement[bool], ...]:
-    return (
+    claim = (
         *_key(job.trigger),
-        _pending(),
         MergeGroupWork.generation == job.generation,
         MergeGroupWork.attempts == job.attempts,
         MergeGroupWork.lease_owner == job.lease_owner,
         MergeGroupWork.lease_until > now,
+    )
+    if job.published is None:
+        return (*claim, _pending())
+    return (
+        *claim,
+        MergeGroupWork.completed_generation == job.generation,
+        MergeGroupWork.destroyed.is_(False),
+        MergeGroupWork.recheck_check_id == job.published.check_id,
     )
 
 
@@ -80,19 +97,29 @@ class MergeGroupQueue:
         lease_seconds: int,
         *,
         repository_scope: tuple[str, int] | None = None,
+        recheck: bool = False,
     ) -> ClaimedMergeGroup | None:
-        """Claim available work across replicas, putting cancellations first."""
+        """Claim an event first, or independently claim a due published result."""
         if not 0 < len(owner) <= 128 or lease_seconds <= 0:
             raise ValueError("merge group claim needs an owner and a positive lease")
         for _ in range(3):
             now = utcnow()
             with self.store.session() as session:
                 ready: tuple[ColumnElement[bool], ...] = (
-                    _pending(),
                     MergeGroupWork.available_at <= now,
                     _unleased(now),
                     self.store._provider_available_condition(MergeGroupWork.installation_id, now),
                 )
+                if recheck:
+                    ready += (
+                        MergeGroupWork.completed_generation == MergeGroupWork.generation,
+                        MergeGroupWork.destroyed.is_(False),
+                        MergeGroupWork.recheck_check_id > 0,
+                        MergeGroupWork.pull_id.is_not(None),
+                        MergeGroupWork.pull_number > 0,
+                    )
+                else:
+                    ready += (_pending(),)
                 if repository_scope is not None:
                     repository, repository_id = repository_scope
                     ready += (
@@ -115,6 +142,17 @@ class MergeGroupQueue:
                 )
                 if row is None:
                     return None
+                published = None
+                if recheck:
+                    if (
+                        row.recheck_check_id is None
+                        or row.pull_id is None
+                        or row.pull_number is None
+                    ):
+                        raise RuntimeError("published candidate lost its check or PR identity")
+                    published = PublishedMergeCandidate(
+                        row.recheck_check_id, row.pull_id, row.pull_number
+                    )
                 trigger = MergeGroupTrigger(
                     action="destroyed" if row.destroyed else "checks_requested",
                     installation_id=row.installation_id,
@@ -136,7 +174,9 @@ class MergeGroupQueue:
                     .execution_options(synchronize_session=False)
                 )
                 if getattr(result, "rowcount", 0) == 1:
-                    return ClaimedMergeGroup(trigger, row.generation, row.attempts + 1, owner)
+                    return ClaimedMergeGroup(
+                        trigger, row.generation, row.attempts + 1, owner, published
+                    )
         return None
 
     def is_current(self, job: ClaimedMergeGroup) -> bool:
@@ -238,14 +278,44 @@ class MergeGroupQueue:
             lease_until=None,
         )
 
-    def complete(self, job: ClaimedMergeGroup) -> bool:
-        """Finish this attempt without deleting its identity or cancellation."""
+    def complete(
+        self,
+        job: ClaimedMergeGroup,
+        *,
+        check_id: int | None = None,
+        recheck_seconds: int | None = None,
+    ) -> bool:
+        """Finish an attempt, scheduling only a confirmed pass for another read."""
+        now = utcnow()
+        finished_generation = job.generation
+        schedule: dict[str, object] = {"recheck_check_id": None}
+        if check_id is not None or recheck_seconds is not None:
+            if (
+                type(check_id) is not int
+                or check_id <= 0
+                or type(recheck_seconds) is not int
+                or recheck_seconds <= 0
+                or (job.published is not None and check_id != job.published.check_id)
+                or job.trigger.action != "checks_requested"
+            ):
+                raise ValueError("a candidate recheck needs its confirmed check and delay")
+            schedule = {
+                "recheck_check_id": check_id,
+                "available_at": now + timedelta(seconds=recheck_seconds),
+                "attempts": 0,
+            }
+            if job.published is not None:
+                # Advance both counters together. Reusing attempt 1 with the
+                # same owner must not let a finished timer borrow a later lease.
+                finished_generation += 1
+                schedule["generation"] = finished_generation
         return self._update(
             job,
-            utcnow(),
-            completed_generation=job.generation,
+            now,
+            completed_generation=finished_generation,
             lease_owner=None,
             lease_until=None,
+            **schedule,
         )
 
     def _update(self, job: ClaimedMergeGroup, now: datetime, **values: object) -> bool:

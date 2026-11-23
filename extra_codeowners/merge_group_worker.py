@@ -11,8 +11,16 @@ import structlog
 from extra_codeowners.api_budget import request_lane
 from extra_codeowners.database import QueueStore
 from extra_codeowners.github import GitHubClient, GitHubError, GitHubRateLimitError
-from extra_codeowners.merge_group_work import ClaimedMergeGroup, MergeGroupQueue
-from extra_codeowners.merge_queue import MergeCandidateAssessment, MergeGroupTrigger
+from extra_codeowners.merge_group_work import (
+    ClaimedMergeGroup,
+    MergeGroupEvidenceEpoch,
+    MergeGroupQueue,
+)
+from extra_codeowners.merge_queue import (
+    MergeCandidateAssessment,
+    MergeGroupTrigger,
+    candidate_pull_is_closed,
+)
 from extra_codeowners.models import EvaluationConclusion
 from extra_codeowners.settings import Settings
 
@@ -35,7 +43,7 @@ class CandidateEvaluator(Protocol):
         raise NotImplementedError
 
     async def assess_merge_candidate(
-        self, trigger: MergeGroupTrigger, *, authority_generation: int
+        self, trigger: MergeGroupTrigger, *, authority_generation: int, rechecking: bool = False
     ) -> MergeCandidateAssessment:
         raise NotImplementedError
 
@@ -106,8 +114,119 @@ class MergeGroupWorker:
         except (Exception, asyncio.CancelledError) as error:
             log.warning("merge_group_check_reset_uncertain", error_type=type(error).__name__)
 
+    async def _complete(self, job: ClaimedMergeGroup, *, keep_check: int | None = None) -> None:
+        if not await asyncio.to_thread(
+            self.queue.complete,
+            job,
+            check_id=keep_check,
+            recheck_seconds=(
+                self.settings.experimental_merge_queue_recheck_seconds
+                if keep_check is not None
+                else None
+            ),
+        ):
+            raise GitHubError("merge candidate lease or generation changed before completion")
+
+    async def _read_assessment(
+        self, job: ClaimedMergeGroup, *, rechecking: bool = False
+    ) -> tuple[MergeCandidateAssessment, MergeGroupEvidenceEpoch]:
+        flags = {"rechecking": True} if rechecking else {}
+        identity = await self.github.get_merge_candidate(job.trigger, **flags)
+        if not await asyncio.to_thread(self.queue.bind, job, identity):
+            raise GitHubError("merge candidate no longer has this lease or queue entry")
+        epoch = await asyncio.to_thread(self.queue.evidence_epoch, job, identity)
+        if epoch is None:
+            raise GitHubError("merge candidate awaits authority or PR-head invalidation")
+        assessment = await self.evaluator.assess_merge_candidate(
+            job.trigger, authority_generation=epoch.installation, **flags
+        )
+        if assessment.identity != identity:
+            raise GitHubError("merge candidate changed during policy assessment")
+        return assessment, epoch
+
+    async def _require_recorded_check(self, job: ClaimedMergeGroup) -> None:
+        published = job.published
+        if published is None:
+            raise ValueError("candidate recheck has no confirmed check")
+        existing = await self.github.existing_merge_group_check(
+            job.trigger, self.settings.check_name
+        )
+        if existing != published.check_id:
+            raise GitHubError("the current candidate check is not the recorded pass")
+
+    async def _withdraw_or_retire(self, job: ClaimedMergeGroup) -> None:
+        trigger, published = job.trigger, job.published
+        if published is None:
+            raise ValueError("candidate recheck has no confirmed check")
+        async with self.evaluator._check_write_guard(trigger.installation_id, trigger.head_sha):
+            await self._require_attempt(job)
+            await self._require_repository(trigger)
+            try:
+                pull = await self.github.get_pull(
+                    trigger.installation_id, trigger.repository, published.pull_number
+                )
+                closed = candidate_pull_is_closed(
+                    trigger, published.pull_id, published.pull_number, pull
+                )
+            except GitHubRateLimitError:
+                raise
+            except Exception:
+                closed = False  # A failed read isn't proof that the check is historical.
+            await self._require_attempt(job)
+            if not closed:
+                await self._require_recorded_check(job)
+                await self._require_attempt(job)
+                await self._revoke(trigger, published.check_id)
+            await self._complete(job)
+
+    async def _process_recheck(self, job: ClaimedMergeGroup) -> None:
+        """Revalidate a previously confirmed pass; never publish or restore success."""
+        trigger, published = job.trigger, job.published
+        if published is None:
+            raise ValueError("candidate recheck has no confirmed check")
+        await self._require_attempt(job)
+        await self._require_repository(trigger)
+        try:
+            await self._require_recorded_check(job)
+            if not await self.github.merge_group_check_is_passing(
+                trigger, self.settings.check_name, published.check_id
+            ):
+                await self._complete(job)
+                return
+            if job.attempts == 1:
+                assessment, epoch = await self._read_assessment(job, rechecking=True)
+                if assessment.result.conclusion is EvaluationConclusion.SUCCESS:
+                    async with (
+                        self.evaluator._authority_publish_guard(trigger.installation_id),
+                        self.evaluator._check_write_guard(
+                            trigger.installation_id, trigger.head_sha
+                        ),
+                    ):
+                        await self._require_attempt(job)
+                        if (
+                            await self.github.get_merge_candidate(trigger, rechecking=True)
+                            == assessment.identity
+                            and await asyncio.to_thread(
+                                self.queue.evidence_epoch, job, assessment.identity
+                            )
+                            == epoch
+                        ):
+                            await self._complete(job, keep_check=published.check_id)
+                            return
+        except GitHubRateLimitError:
+            raise
+        except Exception as error:
+            log.warning("merge_group_recheck_unconfirmed", error_type=type(error).__name__)
+
+        # A reclaimed or failed recheck does not leave a pass active while we
+        # try to reconstruct its evidence. A proved closed PR is history.
+        await self._withdraw_or_retire(job)
+
     async def process(self, job: ClaimedMergeGroup) -> None:
         """Revoke a previous result or publish once for a new, still-waiting candidate."""
+        if job.published is not None:
+            await self._process_recheck(job)
+            return
         trigger = job.trigger
         name = self.settings.check_name
         async with self.evaluator._check_write_guard(trigger.installation_id, trigger.head_sha):
@@ -118,21 +237,11 @@ class MergeGroupWorker:
             if existing is not None or trigger.action == "destroyed":
                 if existing is not None:
                     await self._revoke(trigger, existing)
-                if not await asyncio.to_thread(self.queue.complete, job):
-                    raise GitHubError("merge candidate changed during revocation")
+                await self._complete(job)
                 return
 
-        identity = await self.github.get_merge_candidate(trigger)
-        if not await asyncio.to_thread(self.queue.bind, job, identity):
-            raise GitHubError("merge candidate no longer has this lease or queue entry")
-        epoch = await asyncio.to_thread(self.queue.evidence_epoch, job, identity)
-        if epoch is None:
-            raise GitHubError("merge candidate awaits authority or PR-head invalidation")
-        assessment = await self.evaluator.assess_merge_candidate(
-            trigger, authority_generation=epoch.installation
-        )
-        if assessment.identity != identity:
-            raise GitHubError("merge candidate changed during policy assessment")
+        assessment, epoch = await self._read_assessment(job)
+        identity = assessment.identity
 
         async with (
             self.evaluator._authority_publish_guard(trigger.installation_id),
@@ -147,13 +256,14 @@ class MergeGroupWorker:
                 raise GitHubError("merge candidate authorization evidence changed")
             approved = assessment.result.conclusion is EvaluationConclusion.SUCCESS
             try:
-                await self.github.write_merge_group_check(
+                check_id = await self.github.write_merge_group_check(
                     trigger, name, approved=approved, summary=assessment.result.summary
                 )
-                if await asyncio.to_thread(
-                    self.queue.evidence_epoch, job, identity
-                ) != epoch or not await asyncio.to_thread(self.queue.complete, job):
+                if await asyncio.to_thread(self.queue.evidence_epoch, job, identity) != epoch:
                     raise GitHubError("merge candidate changed during check publication")
+                if approved and type(check_id) is not int:
+                    raise GitHubError("a confirmed candidate pass must identify its Check Run")
+                await self._complete(job, keep_check=check_id if approved else None)
             except (Exception, asyncio.CancelledError):
                 if approved:
                     await self._compensate_uncertain_write(trigger)
@@ -198,6 +308,14 @@ class MergeGroupWorker:
                     self.settings.worker_lease_seconds,
                     repository_scope=self.repository,
                 )
+                if job is None:
+                    job = await asyncio.to_thread(
+                        self.queue.claim,
+                        self.owner,
+                        self.settings.worker_lease_seconds,
+                        repository_scope=self.repository,
+                        recheck=True,
+                    )
                 if job is not None:
                     await self._run_attempt(job)
                     continue

@@ -13,11 +13,11 @@ The alpha series establishes this compatibility contract:
 
 | Field | Contract |
 | --- | --- |
-| Database head | `0011_merge_group_work` |
-| Head change | Yes; the database can retain merge candidate work and cancellation records. |
-| Supported source releases | Alpha releases at `0010_authority_discovery_cursor`, `0.1.0-alpha.58` through `0.1.0-alpha.61` at `0009_conditional_request_budget`, `0.1.0-alpha.56` and `0.1.0-alpha.57` at `0008_recovery_api_budget`, `0.1.0-alpha.43` at `0007_reconciliation_completion`, `0.1.0-alpha.42` at `0006_webhook_trace_links`, or `0.1.0-alpha.14` at `0005_reconciliation_state_index`, after a controlled migration. |
+| Database head | `0012_merge_candidate_recheck` |
+| Head change | Yes; a candidate work row can record a confirmed pass for rechecking. |
+| Supported source releases | Alpha releases at `0011_merge_group_work` or `0010_authority_discovery_cursor`, `0.1.0-alpha.58` through `0.1.0-alpha.61` at `0009_conditional_request_budget`, `0.1.0-alpha.56` and `0.1.0-alpha.57` at `0008_recovery_api_budget`, `0.1.0-alpha.43` at `0007_reconciliation_completion`, `0.1.0-alpha.42` at `0006_webhook_trace_links`, or `0.1.0-alpha.14` at `0005_reconciliation_state_index`, after a controlled migration. |
 | Target application compatible before migration | No; startup requires the exact head. |
-| Required process state | Stop webhook ingress and every older worker before applying `0011_merge_group_work`. Remove the HPA and either commit a zero-replica drain state or suspend GitOps reconciliation before scaling down; see the [drain procedure](../how-to/upgrade.md#drain-a-kubernetes-release). |
+| Required process state | Stop webhook ingress and every older worker before applying `0012_merge_candidate_recheck`. Remove the HPA and either commit a zero-replica drain state or suspend GitOps reconciliation before scaling down; see the [drain procedure](../how-to/upgrade.md#drain-a-kubernetes-release). |
 | In-place database downgrade | Not supported. |
 | Rollback after head change | Restore the verified pre-migration backup. An older image rejects this head. |
 | Backup required | Yes, before deployment and before every pre-release schema adoption. |
@@ -194,6 +194,12 @@ nullable digest on webhook deliveries. The digest identifies the accepted
 candidate fields without retaining the payload. Existing deliveries, jobs and
 checks are unchanged. The compatibility marker moves from `9` to `10`.
 This revision doesn't enable merge queue enforcement.
+
+Revision `0012_merge_candidate_recheck` adds a nullable Check Run ID and an
+index for due rechecks. It leaves old candidate rows untracked by the timer;
+it doesn't infer which old checks passed or withdraw them at upgrade. Empty
+an active experimental fixture queue before draining the deployment. The
+compatibility marker moves from `10` to `11`.
 
 No supported application release predates the planned `0.1.0`. Databases
 created by pre-release builds have no Alembic revision, so the current `0.1.0`

@@ -7,6 +7,7 @@ import hmac
 import json
 from collections.abc import Iterator
 from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, Mock
@@ -57,7 +58,7 @@ def stack(
     client.get_repository = AsyncMock(return_value={"id": 33, "full_name": "Example/Queue-Lab"})
     client.get_merge_candidate = AsyncMock(return_value=IDENTITY)
     client.existing_merge_group_check = AsyncMock(return_value=None)
-    client.write_merge_group_check = AsyncMock()
+    client.write_merge_group_check = AsyncMock(return_value=88)
     service = EvaluationService(Settings(), client, store)
     assess = AsyncMock(
         return_value=MergeCandidateAssessment(
@@ -175,6 +176,78 @@ async def test_signed_review_dismissal_revokes_a_confirmed_candidate_pass(
     assert withdrawn.kwargs["check_id"] == 88 and withdrawn.kwargs["approved"] is False
     assess.assert_awaited_once()
     assert worker.queue.claim("observer", 60) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "change", ["none", "review", "unknown", "merged", "different-check", "retry"]
+)
+async def test_timer_rechecks_published_candidate_without_a_webhook(
+    stack: tuple[MergeGroupWorker, QueueStore, Mock, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+    change: str,
+) -> None:
+    # Verifies XCO-001 and XCO-007. The timer can withdraw the same check,
+    # but never projects a result to a different candidate or rewrites a pass.
+    worker, store, github, assess = stack
+    now = datetime.now(UTC) + timedelta(seconds=1)
+    clock = Mock(return_value=now)
+    monkeypatch.setattr("extra_codeowners.merge_group_work.utcnow", clock)
+    first = queued(worker, store)
+    await worker.process(first)
+    assert worker.queue.claim("observer", 60, recheck=True) is None
+    clock.return_value = now + timedelta(seconds=31)
+    due = worker.queue.claim("replica-2", 60, recheck=True)
+    assert due is not None and due.published is not None and due.published.check_id == 88
+    assert worker.queue.claim("replica-3", 60, recheck=True) is None
+    if change == "retry":
+        clock.return_value = now + timedelta(seconds=92)
+        recovered = worker.queue.claim("replica-3", 60, recheck=True)
+        assert recovered is not None and recovered.attempts == 2
+        assert not worker.queue.is_current(due)
+        due = recovered
+    github.existing_merge_group_check.return_value = 89 if change == "different-check" else 88
+    github.merge_group_check_is_passing = AsyncMock(return_value=True)
+    github.get_pull = AsyncMock(
+        return_value={
+            "number": IDENTITY.pull_number,
+            "node_id": IDENTITY.pull_id,
+            "state": "closed" if change == "merged" else "open",
+            "merged": change == "merged",
+            "base": {"repo": {"id": TRIGGER.repository_id, "full_name": TRIGGER.repository}},
+        }
+    )
+    if change == "review":
+        assess.return_value = MergeCandidateAssessment(
+            IDENTITY,
+            EvaluationResult(conclusion=EvaluationConclusion.FAILURE, summary="review removed"),
+        )
+    if change in {"unknown", "merged"}:
+        github.get_merge_candidate.side_effect = GitHubError("candidate evidence unavailable")
+    if change == "different-check":
+        with pytest.raises(GitHubError, match="not the recorded pass"):
+            await worker.process(due)
+        assert worker.queue.is_current(due)
+    else:
+        await worker.process(due)
+    calls = github.write_merge_group_check.await_args_list
+    assert calls[0].kwargs["approved"] is True
+    if change in {"review", "unknown", "retry"}:
+        assert len(calls) == 2 and calls[1].args == (TRIGGER, worker.settings.check_name)
+        assert calls[1].kwargs["approved"] is False and calls[1].kwargs["check_id"] == 88
+    else:
+        assert len(calls) == 1
+    if change in {"none", "review"}:
+        assert assess.await_args is not None and assess.await_args.kwargs["rechecking"] is True
+    if change == "retry":
+        assess.assert_awaited_once()
+    clock.return_value += timedelta(seconds=31)
+    future = worker.queue.claim("replica-2", 60, recheck=True)
+    assert (future is not None) == (change == "none")
+    if future is not None:
+        assert future.lease_owner == due.lease_owner and future.attempts == due.attempts == 1
+        assert future.generation == due.generation + 1
+        assert not worker.queue.is_current(due)
 
 
 @pytest.mark.asyncio

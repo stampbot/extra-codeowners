@@ -48,8 +48,8 @@ from sqlalchemy.sql.elements import ColumnElement
 from extra_codeowners.merge_queue import MergeGroupTrigger
 from extra_codeowners.trace_context import TrustedTraceContext
 
-SCHEMA_VERSION = 10
-DATABASE_MIGRATION_HEAD = "0011_merge_group_work"
+SCHEMA_VERSION = 11
+DATABASE_MIGRATION_HEAD = "0012_merge_candidate_recheck"
 DATABASE_CONNECT_TIMEOUT_SECONDS = 3
 DATABASE_POOL_TIMEOUT_SECONDS = 2
 DATABASE_STATEMENT_TIMEOUT_MILLISECONDS = 3_000
@@ -272,6 +272,13 @@ class MergeGroupWork(Base):
     __table_args__ = (
         Index("ix_merge_group_claim", "available_at", "lease_until"),
         Index("ix_merge_group_pull", "installation_id", "repository_full_name", "pull_number"),
+        Index(
+            "ix_merge_group_recheck",
+            "repository_id",
+            "available_at",
+            sqlite_where=text("recheck_check_id > 0"),
+            postgresql_where=text("recheck_check_id > 0"),
+        ),
         CheckConstraint(
             "generation >= 1 AND completed_generation >= 0 AND completed_generation <= generation",
             name="ck_merge_group_generation",
@@ -291,6 +298,7 @@ class MergeGroupWork(Base):
     entry_id: Mapped[str | None] = mapped_column(String(256))
     pull_id: Mapped[str | None] = mapped_column(String(256))
     pull_head_sha: Mapped[str | None] = mapped_column(String(40))
+    recheck_check_id: Mapped[int | None] = mapped_column(BigInteger)
     generation: Mapped[int] = mapped_column(BigInteger, nullable=False, default=1)
     completed_generation: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     attempts: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
@@ -355,6 +363,7 @@ def _enqueue_merge_group(session: Session, request: MergeGroupTrigger) -> None:
         work.available_at = now
         work.lease_owner = None
         work.lease_until = None
+        work.recheck_check_id = None
 
 
 def _requeue_merge_groups(
@@ -379,6 +388,7 @@ def _requeue_merge_groups(
             attempts=0,
             lease_owner=None,
             lease_until=None,
+            recheck_check_id=None,
         )
     )
 
