@@ -78,9 +78,25 @@ sizes and hashes from the new source archive. Keep the RPM and notice
 checks separate from the decision about binary redistribution.
 
 These files give reviewers a place to start. They don't map every copyright
-holder to compiled code, establish corresponding-source adequacy, or approve
-redistribution. Native license review remains unresolved. Catalogs without
-the metadata property make no notice-selection claim.
+holder to compiled code or establish that the bundles contain all required
+source. Catalogs without the metadata property make no notice-selection claim.
+
+### License texts from the standalone sources
+
+Catalogs with `extra-codeowners:source-license-evidence` set to `1` also
+carry the top-level license texts for OpenSSL, libpq, and OpenLDAP. Each
+affected component records an SPDX identifier and the exact text as base64
+in the CycloneDX `evidence.licenses` field. The matching file path and SHA-256
+are in `extra-codeowners:source-notice-files`.
+
+The verifier checks the source archive and the selected file against reviewed
+hashes. If an archive changes, update the selection in
+`tools/release_native_notices.py` after checking the new license text. An
+older catalog without this marker still verifies without the embedded text.
+
+These are license texts from the source archives. They don't assign a license
+to a compiled library or to its parent wheel. RPM-origin components still
+have notice references without an embedded license assertion.
 
 ## Verify a catalog
 
@@ -138,9 +154,8 @@ component to the right advisory data.
 
 Source recipes pin declared versions and retained archives, not the exact
 inputs used by the original wheel builder. The catalog does not establish
-complete corresponding source, complete attribution, license approval, or
-whether a vulnerability is reachable. The catalog itself adds no VEX exclusion
-and changes no package version. The separate
+complete corresponding source, complete attribution, or whether a vulnerability
+is reachable. It adds no VEX exclusion and changes no package version. The separate
 [runtime security review](https://github.com/stampbot/extra-codeowners/blob/main/security/vex/runtime-review.md)
 records the selected native OpenSSL assessments and unresolved candidates.
 Native vulnerability triage and distribution review remain

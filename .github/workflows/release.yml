@@ -505,6 +505,7 @@ jobs:
             --bundle "python-source-${ARCHITECTURE}.tar.gz"
           python -I -S -B tools/release_native_components.py generate \
             --rpm-notices \
+            --source-licenses \
             --architecture "${ARCHITECTURE}" \
             --platform-digest "${platform_digest}" \
             --inventory "distribution-inventory-${ARCHITECTURE}.json" \
@@ -726,6 +727,7 @@ jobs:
               --bundle "release/image/${architecture}/recipient-notices-${architecture}.tar.gz"
             python -I -S -B tools/release_native_components.py verify \
               --rpm-notices \
+              --source-licenses \
               --architecture "${architecture}" \
               --platform-digest "${platform_digest}" \
               --inventory "release/image/${architecture}/distribution-inventory-${architecture}.json" \

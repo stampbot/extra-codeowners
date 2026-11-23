@@ -149,3 +149,28 @@ def test_expansion_limit_also_covers_bytes_after_the_tar_end_marker(
             },
             gzip.compress(raw + b"x" * 20),
         )
+
+
+def test_source_license_requires_exact_archive_and_notice_hashes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = {
+        "source_component": {"name": "openssl", "version": "9.8.7"},
+        "sha256": "a" * 64,
+    }
+    path = "openssl-9.8.7/LICENSE.txt"
+    text = b"fictional\n"
+    monkeypatch.setattr(
+        notices,
+        "_SOURCE_LICENSES",
+        {("openssl", "9.8.7", "a" * 64): (path, hashlib.sha256(text).hexdigest(), "MIT")},
+    )
+    assert (
+        notices.source_license_evidence(source, {path: text})["licenses"][0]["license"]["id"]
+        == "MIT"
+    )
+    with pytest.raises(notices.NativeNoticeError, match="needs review"):
+        notices.source_license_evidence({**source, "sha256": "b" * 64}, {path: text})
+    for invalid in ({}, {path: b"changed"}):
+        with pytest.raises(notices.NativeNoticeError, match="differs"):
+            notices.source_license_evidence(source, invalid)
