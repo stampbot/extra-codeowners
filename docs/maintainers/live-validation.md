@@ -109,6 +109,12 @@ App review changed the result to failure on the same candidate. A separate
 pass let GitHub merge only into the disposable branch. The verifier refused
 a PR based on the earlier tip.
 
+The [November 22 relative-path probe](evidence/2026-11-22-relative-queue-candidate.md)
+evaluated a behind-base PR with two commits. GitHub had preserved both sides
+of a clean merge, and the PR review covered the paths the candidate changed
+relative to its target. A separate control published success on an obsolete
+candidate; GitHub kept waiting for a check on the replacement.
+
 The [November 23 deployed-worker receipt](evidence/2026-11-23-candidate-checks-during-delivery-loss.md)
 records a new PR and a retargeted PR that inherited an old pass. GitHub
 waited for a check on each candidate instead of merging on the old pass.

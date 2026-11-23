@@ -108,6 +108,7 @@ nav:
           - November repository access loss and merge queue: maintainers/evidence/2026-11-20-repository-lifecycle-and-queue.md
           - November merge-group delivery: maintainers/evidence/2026-11-21-merge-group-delivery.md
           - November queued policy evaluation: maintainers/evidence/2026-11-21-queued-policy-proof.md
+          - November behind-base queue candidate: maintainers/evidence/2026-11-22-relative-queue-candidate.md
           - November candidate checks during webhook loss: maintainers/evidence/2026-11-23-candidate-checks-during-delivery-loss.md
           - November alpha.107 source and notices: maintainers/evidence/2026-11-23-alpha107-source-and-notices.md
       - Respond to dependency audit: how-to/respond-to-dependency-audit.md
