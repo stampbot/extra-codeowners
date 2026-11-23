@@ -139,6 +139,12 @@ Extra CODEOWNERS had already passed on the same PR head. A separate required
 check kept the candidate waiting. An ordinary PR test showed the App change
 the head's check to failure after review dismissal, not a candidate check.
 
+The [November 23 missed-dismissal probe](evidence/2026-11-23-missed-review-dismissal.md)
+ran alpha.115 in an isolated Job. The worker kept a valid candidate check
+passing through a timer recheck, then changed it to failure after a real
+Stampbot review was dismissed. The worker didn't receive the dismissal event.
+GitHub removed the candidate without merging the PR.
+
 ## Diagnostics and approval probe: November 2, 2026
 
 Alpha.65 runs on two Kubernetes nodes with shared PostgreSQL state. The

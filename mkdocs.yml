@@ -114,6 +114,7 @@ nav:
           - November queue entry waiting: maintainers/evidence/2026-11-23-queue-entry-waiting.md
           - November held candidate withdrawal: maintainers/evidence/2026-11-23-held-candidate-check-withdrawal.md
           - November independent review count: maintainers/evidence/2026-11-23-independent-review-count.md
+          - November missed review dismissal: maintainers/evidence/2026-11-23-missed-review-dismissal.md
       - Respond to dependency audit: how-to/respond-to-dependency-audit.md
       - Rescan a published image: how-to/rescan-published-image.md
       - Review or recover a Renovate update: how-to/manage-renovate-updates.md
