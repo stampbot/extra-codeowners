@@ -27,6 +27,7 @@ _TEXT = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.+!~%-]{0,199}\Z")
 _NOTICE_PATH = re.compile(r"[A-Za-z0-9_.+/-]{1,512}\Z")
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _RPM_NOTICE_RECEIPT = Path(__file__).with_name("release_rpm_notice_evidence.json")
+_RPM_BINARY_RECEIPT = Path(__file__).with_name("release_rpm_binary_evidence.json")
 
 
 class NativeComponentError(ValueError):
@@ -49,6 +50,7 @@ def _sibling(name: str) -> ModuleType:
 _python = _sibling("release_python_sources")
 _notices = _sibling("release_notices")
 _native_notices = _sibling("release_native_notices")
+_rpm_binaries = _sibling("release_rpm_binary_evidence")
 
 
 def _json(data: bytes) -> dict[str, Any]:
@@ -135,7 +137,7 @@ def _rpm_notice_receipt(path: Path) -> tuple[dict[str, Any], str]:
 
 def _reported_components(
     source_plan: dict[str, Any], notice_files: dict[str, bytes]
-) -> dict[tuple[str, str, str], str]:
+) -> tuple[dict[tuple[str, str, str], str], bytes | None]:
     """Keep only the exact reviewed C-library SBOMs, not unrelated build SBOMs."""
     sources = [*source_plan["native_sources"], *source_plan["embedded_sources"]]
     expected = {(source["distribution"], source["sbom_sha256"]) for source in sources}
@@ -143,6 +145,7 @@ def _reported_components(
     manifest = _json(notice_files["NOTICE-MANIFEST.json"])
     found: set[tuple[str, str]] = set()
     result: dict[tuple[str, str, str], str] = {}
+    rpm_sbom: bytes | None = None
     for notice in manifest["files"]:
         if notice["role"] != "python-embedded-sbom":
             continue
@@ -153,7 +156,12 @@ def _reported_components(
         if key in found:
             raise NativeComponentError("ambiguous reviewed wheel SBOM")
         found.add(key)
-        sbom = _json(notice_files[notice["archive_path"]])
+        data = notice_files[notice["archive_path"]]
+        if distribution == "psycopg-binary":
+            if rpm_sbom is not None:
+                raise NativeComponentError("ambiguous RPM wheel SBOM")
+            rpm_sbom = data
+        sbom = _json(data)
         components = sbom.get("components")
         if (
             sbom.get("bomFormat") != "CycloneDX"
@@ -188,7 +196,36 @@ def _reported_components(
             result[identity] = purl
     if found != expected:
         raise NativeComponentError("notice bundle omitted a reviewed native SBOM")
-    return result
+    return result, rpm_sbom
+
+
+def _rpm_binary_packages(
+    receipt: Path,
+    architecture: str,
+    lock: bytes,
+    sbom: bytes | None,
+    python: dict[str, Any],
+) -> tuple[dict[str, dict[str, Any]], str]:
+    data = _read(receipt)
+    record = _json(data)
+    platforms = record.get("platforms")
+    if (
+        type(record.get("schema_version")) is not int
+        or record["schema_version"] != 1
+        or not isinstance(platforms, dict)
+        or architecture not in platforms
+        or sbom is None
+    ):
+        raise NativeComponentError("binary RPM evidence needs a supported receipt and wheel SBOM")
+    version = next(
+        item["version"]
+        for item in python["distributions"]
+        if item["normalized_name"] == "psycopg-binary"
+    )
+    packages: dict[str, dict[str, Any]] = _rpm_binaries.review(
+        platforms[architecture], lock, sbom, python["native_files"], version
+    )
+    return packages, hashlib.sha256(data).hexdigest()
 
 
 def build(
@@ -202,6 +239,7 @@ def build(
     rpm_notices: bool = False,
     rpm_notice_receipt: Path | None = None,
     source_licenses: bool = False,
+    rpm_binary_receipt: Path | None = None,
 ) -> bytes:
     """Bind a deterministic CycloneDX catalog to verified platform evidence."""
     raw = _json(inventory)
@@ -231,7 +269,15 @@ def build(
     notice_files: dict[str, bytes] = _notices.verify_notice_bundle(
         notice_bundle, inventory, architecture=architecture, platform_digest=digest
     )
-    reported = _reported_components(source_plan, notice_files)
+    reported, rpm_sbom = _reported_components(source_plan, notice_files)
+    rpm_packages = None
+    rpm_binary_hash = None
+    if rpm_binary_receipt is not None:
+        if rpm_archives is None:
+            raise NativeComponentError("binary RPM evidence requires RPM source notices")
+        rpm_packages, rpm_binary_hash = _rpm_binary_packages(
+            rpm_binary_receipt, architecture, lock, rpm_sbom, python
+        )
     sources = [*source_plan["native_sources"], *source_plan["embedded_sources"]]
     if not 1 <= len(sources) <= MAX_COMPONENTS:
         raise NativeComponentError("invalid reviewed native component count")
@@ -295,9 +341,16 @@ def build(
                         "unresolved; RPM component notices not selected"
                     )
                 else:
-                    properties["source-notice-files"] = json.dumps(
-                        _rpm_notice_files(rpm_archives, source), sort_keys=True
-                    )
+                    selected_notices = _rpm_notice_files(rpm_archives, source)
+                    properties["source-notice-files"] = json.dumps(selected_notices, sort_keys=True)
+                    if rpm_packages is not None:
+                        if purl not in rpm_packages:
+                            raise NativeComponentError("source RPM is missing a binary attribution")
+                        properties.update(
+                            _rpm_binaries.package_properties(
+                                rpm_packages.pop(purl), source, selected_notices
+                            )
+                        )
                     properties["source-notice-review"] = (
                         "selected SRPM upstream texts only; "
                         "not complete binary attribution or approval"
@@ -334,6 +387,8 @@ def build(
         dependencies[parent].append(ref)
     if consumed != set(reported):
         raise NativeComponentError("wheel SBOM has a native component without a reviewed source")
+    if rpm_packages:
+        raise NativeComponentError("binary RPM attribution without a reviewed source")
     evidence_properties = {}
     if source_payloads is not None:
         evidence_properties["source-notice-evidence"] = "2" if rpm_archives is not None else "1"
@@ -341,6 +396,9 @@ def build(
         evidence_properties["rpm-notice-receipt-sha256"] = rpm_receipt_hash
     if source_licenses:
         evidence_properties["source-license-evidence"] = "1"
+    if rpm_binary_hash is not None:
+        evidence_properties["rpm-binary-evidence"] = "1"
+        evidence_properties["rpm-binary-receipt-sha256"] = rpm_binary_hash
     document = {
         "bomFormat": "CycloneDX",
         "specVersion": "1.5",
@@ -387,6 +445,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--rpm-notices", action="store_true", help="require RPM source notice evidence (version 2)"
     )
     parser.add_argument("--rpm-notice-receipt", type=Path, help="receipt from the release revision")
+    parser.add_argument("--rpm-binaries", action="store_true", help="require RPM binary evidence")
+    parser.add_argument("--rpm-binary-receipt", type=Path, help="receipt from the release revision")
     parser.add_argument(
         "--source-licenses", action="store_true", help="require reviewed upstream license texts"
     )
@@ -398,10 +458,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error("generation requires --python-sources for native notice evidence")
     if args.command == "generate" and args.rpm_notice_receipt is not None:
         parser.error("generation uses the checked-in RPM notice receipt")
+    if args.command == "generate" and args.rpm_binary_receipt is not None:
+        parser.error("generation uses the checked-in binary RPM receipt")
     try:
         existing = _read(args.catalog) if args.command == "verify" else None
         rpm_notices = args.rpm_notices
         source_licenses = args.source_licenses
+        rpm_binaries = args.rpm_binaries
         if existing is not None:
             metadata = _json(existing).get("metadata")
             if not isinstance(metadata, dict) or not isinstance(metadata.get("properties"), list):
@@ -414,6 +477,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "name": "extra-codeowners:source-license-evidence",
                 "value": "1",
             } in metadata["properties"]
+            rpm_binaries |= {
+                "name": "extra-codeowners:rpm-binary-evidence",
+                "value": "1",
+            } in metadata["properties"]
+        if args.rpm_binary_receipt is not None and not rpm_binaries:
+            raise NativeComponentError("binary RPM receipt supplied without its evidence contract")
         data = build(
             _read(args.inventory),
             _read(args.lock),
@@ -424,6 +493,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             rpm_notices=rpm_notices,
             rpm_notice_receipt=args.rpm_notice_receipt,
             source_licenses=source_licenses,
+            rpm_binary_receipt=(args.rpm_binary_receipt or _RPM_BINARY_RECEIPT)
+            if rpm_binaries
+            else None,
         )
         if args.command == "generate":
             with args.catalog.open("xb") as output:

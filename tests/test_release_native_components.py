@@ -470,19 +470,16 @@ def test_provenance_verifier_selects_sources_only_for_the_versioned_notice_contr
         Path(__file__).parents[1] / ".github/scripts/verify-release-provenance.sh"
     ).read_text()
     selection = source.split("  native_notice_args=()", 1)[1].split("  python -I -S -B", 1)[0]
-    for marker, expected in (
-        (None, []),
-        ("1", ["--python-sources", f"{tmp_path}/python-source-amd64.tar.gz"]),
-        (
-            "2",
-            [
-                "--python-sources",
-                f"{tmp_path}/python-source-amd64.tar.gz",
-                "--rpm-notice-receipt",
-                f"{tmp_path}/release-rpm-notices.json",
-            ],
-        ),
-        ("3", []),
+    sources = ["--python-sources", f"{tmp_path}/python-source-amd64.tar.gz"]
+    rpm_notices = ["--rpm-notice-receipt", f"{tmp_path}/release-rpm-notices.json"]
+    rpm_binaries = ["--rpm-binary-receipt", f"{tmp_path}/release-rpm-binaries.json"]
+    for marker, binary_marker, expected in (
+        (None, None, []),
+        ("1", None, sources),
+        ("2", None, [*sources, *rpm_notices]),
+        ("2", "1", [*sources, *rpm_notices, *rpm_binaries]),
+        ("2", "2", [*sources, *rpm_notices]),
+        ("3", None, []),
     ):
         path = tmp_path / "catalog.json"
         props = (
@@ -490,11 +487,18 @@ def test_provenance_verifier_selects_sources_only_for_the_versioned_notice_contr
             if marker is None
             else [{"name": "extra-codeowners:source-notice-evidence", "value": marker}]
         )
+        if binary_marker is not None:
+            props.append({"name": "extra-codeowners:rpm-binary-evidence", "value": binary_marker})
         path.write_text(json.dumps({"metadata": {"properties": props}}))
         command = (
             "git() {\n"
-            '  test "$*" = "show fictional-revision:tools/release_rpm_notice_evidence.json"\n'
-            "  printf 'fixture receipt'\n"
+            '  case "$*" in\n'
+            '    "show fictional-revision:tools/release_rpm_notice_evidence.json")\n'
+            "      printf 'fixture notice receipt';;\n"
+            '    "show fictional-revision:tools/release_rpm_binary_evidence.json")\n'
+            "      printf 'fixture binary receipt';;\n"
+            "    *) return 1;;\n"
+            "  esac\n"
             "}\n"
             "native_notice_args=()\n" + selection + '\nprintf "%s\\n" "${native_notice_args[@]}"'
         )
@@ -515,7 +519,9 @@ def test_provenance_verifier_selects_sources_only_for_the_versioned_notice_contr
         )
         assert result.stdout.strip().splitlines() == expected
         if marker == "2":
-            assert (tmp_path / "release-rpm-notices.json").read_text() == "fixture receipt"
+            assert (tmp_path / "release-rpm-notices.json").read_text() == "fixture notice receipt"
+        if binary_marker == "1":
+            assert (tmp_path / "release-rpm-binaries.json").read_text() == "fixture binary receipt"
 
 
 def test_generate_requires_sources_but_legacy_verify_remains_available(

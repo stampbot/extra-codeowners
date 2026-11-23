@@ -297,6 +297,13 @@ for architecture in amd64 arm64; do
     git show "${revision}:tools/release_rpm_notice_evidence.json" >"${release_receipt}"
     native_notice_args+=(--rpm-notice-receipt "${release_receipt}")
   fi
+  rpm_binary_evidence="$(jq -r '.metadata.properties[]? |
+    select(.name == "extra-codeowners:rpm-binary-evidence") | .value' "${catalog}")"
+  if [[ "${rpm_binary_evidence}" == 1 ]]; then
+    binary_receipt="${temporary_directory}/release-rpm-binaries.json"
+    git show "${revision}:tools/release_rpm_binary_evidence.json" >"${binary_receipt}"
+    native_notice_args+=(--rpm-binary-receipt "${binary_receipt}")
+  fi
   python -I -S -B tools/release_native_components.py verify \
     --architecture "${architecture}" \
     --platform-digest "$(<"${asset_directory}/digest-${architecture}.txt")" \

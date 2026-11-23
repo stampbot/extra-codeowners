@@ -1,0 +1,300 @@
+{
+  "schema_version": 1,
+  "platforms": {
+    "amd64": {
+      "packages": {
+        "pkg:rpm/centos/cyrus-sasl-lib@2.1.26-24.el7_9": {
+          "source_archive": "native/psycopg-binary/amd64/cyrus-sasl-2.1.26-24.el7_9.src.rpm",
+          "source_sha256": "c49472bd08c6060f53a9dace005b81cf466836790d2dcb407a536820f6319e77",
+          "rpm_filename": "cyrus-sasl-lib-2.1.26-24.el7_9.x86_64.rpm",
+          "rpm_sha256": "e1d065bfaef705d407c6134352d1afc64ecf26a5970a0e5282f6dda745483db8",
+          "rpm_declared_license": "BSD with advertising",
+          "notices": {},
+          "files": {
+            "libsasl2-84219a89.so.3.0.0": {
+              "rpm_path": "/usr/lib64/libsasl2.so.3.0.0",
+              "original_sha256": "84219a89b635c809c66b297f2970df52f1f38dd429426c213d0340dea5e7ec9d",
+              "sha256": "ae3f8967d5fa191dac7c6ae5f9130f659cf2f5cb66b2f7e5c5a1a5a47369fe5a",
+              "size": 134753
+            }
+          }
+        },
+        "pkg:rpm/centos/keyutils-libs@1.5.8-3.el7": {
+          "source_archive": "native/psycopg-binary/amd64/keyutils-1.5.8-3.el7.src.rpm",
+          "source_sha256": "eff16e16f707fd28436afe4cf7b7c2e34b9f827e7f6beacf3c6eecbf74e9f850",
+          "rpm_filename": "keyutils-libs-1.5.8-3.el7.x86_64.rpm",
+          "rpm_sha256": "16c7cb17dd4eced77c44697bc431c0ac9eb012da78fc91abacd828d3aa8e5dd3",
+          "rpm_declared_license": "GPLv2+ and LGPLv2+",
+          "notices": {},
+          "files": {
+            "libkeyutils-dfe70bd6.so.1.5": {
+              "rpm_path": "/lib64/libkeyutils.so.1.5",
+              "original_sha256": "dfe70bd63f57aa3fc805f88ffb04b9440794faacbf7cffd080fc68984d25f3fb",
+              "sha256": "c29e41b03cf4b2dffbfb4960946e2b42f82c0ca5d53d231d3f0fc597ba274488",
+              "size": 17913
+            }
+          }
+        },
+        "pkg:rpm/centos/krb5-libs@1.15.1-55.el7_9": {
+          "source_archive": "native/psycopg-binary/amd64/krb5-1.15.1-55.el7_9.src.rpm",
+          "source_sha256": "d154824d46dff5aece0cdb8e4c9df299058bacadbaf7fb16be8d9163ca2814bb",
+          "rpm_filename": "krb5-libs-1.15.1-55.el7_9.x86_64.rpm",
+          "rpm_sha256": "0b514834510f57ab09a2051d0b0c2be8a61777452ad125d1b3e5e90abeb6fa22",
+          "rpm_declared_license": "MIT",
+          "notices": {
+            "/usr/share/licenses/krb5-libs-1.15.1/LICENSE": "f83512c49bc8cbc44ca6b8783e989a03b4051508b30563b3f9d7956eefae9151"
+          },
+          "files": {
+            "libgssapi_krb5-497db0c6.so.2.2": {
+              "rpm_path": "/usr/lib64/libgssapi_krb5.so.2.2",
+              "original_sha256": "497db0c6049bd447c873af5e262950d544adf23b1812c85457d836225f147582",
+              "sha256": "2a74b0330ee973281b26f8ebe4acef0ebf9ee99c6b68497cf9151fff6c4c34e1",
+              "size": 345209
+            },
+            "libk5crypto-b1f99d5c.so.3.1": {
+              "rpm_path": "/usr/lib64/libk5crypto.so.3.1",
+              "original_sha256": "b1f99d5c69d39204a197d12b6e647068b38373982ee39f77be19aec82ee65787",
+              "sha256": "9844e5009e70a6ad2fb22b587306810fe2a7b1b9f6b9922daa1c78ba3466de27",
+              "size": 219953
+            },
+            "libkrb5-fcafa220.so.3.3": {
+              "rpm_path": "/usr/lib64/libkrb5.so.3.3",
+              "original_sha256": "fcafa2202eb41916a526c8f4b07df4f389c2ca2d55f1684f77006fad56433742",
+              "sha256": "b2aab528ff4cab2144e5ce01b246ac09f574a072a53ff63ea81d6bb29b26b8f1",
+              "size": 1018953
+            },
+            "libkrb5support-d0bcff84.so.0.1": {
+              "rpm_path": "/usr/lib64/libkrb5support.so.0.1",
+              "original_sha256": "d0bcff84b227e7cc1eefcee71e1dc5aaabf5cf5802c0595458b6c1b5867eac73",
+              "sha256": "6a71f57d748fef79b4e736d5348875545d0a224fa8928b5d62a3cf2647fc109f",
+              "size": 76873
+            }
+          }
+        },
+        "pkg:rpm/centos/libcom_err@1.42.9-19.el7": {
+          "source_archive": "native/psycopg-binary/amd64/e2fsprogs-1.42.9-19.el7.src.rpm",
+          "source_sha256": "718f64bd465d1770eaf6490157a861d3dba2846b4a636a67d27bd4d38e6b86cf",
+          "rpm_filename": "libcom_err-1.42.9-19.el7.x86_64.rpm",
+          "rpm_sha256": "b98e19c3bbf6de458697a895654db0d75e93e7738ef22bc1540e2c78fa91748b",
+          "rpm_declared_license": "MIT",
+          "notices": {},
+          "files": {
+            "libcom_err-2abe824b.so.2.1": {
+              "rpm_path": "/usr/lib64/libcom_err.so.2.1",
+              "original_sha256": "2abe824bc4b40f400391ad327090796ecc2cd48df173c2f82134ec5c1d3d6c91",
+              "sha256": "5426dcb54dd01c9eedda05e2179f0e47114e8b48a534ffe9e94916e79471b257",
+              "size": 17497
+            }
+          }
+        },
+        "pkg:rpm/centos/libselinux@2.5-15.el7": {
+          "source_archive": "native/psycopg-binary/amd64/libselinux-2.5-15.el7.src.rpm",
+          "source_sha256": "978ed00b9c7ca78a51e0aff48070c69ebe4fbfca0e64f618627ebdbe8786a089",
+          "rpm_filename": "libselinux-2.5-15.el7.x86_64.rpm",
+          "rpm_sha256": "06a5ab8e6feff677b312426988773600996a0a299878bf661e149a53d42c3edb",
+          "rpm_declared_license": "Public Domain",
+          "notices": {},
+          "files": {
+            "libselinux-0922c95c.so.1": {
+              "rpm_path": "/usr/lib64/libselinux.so.1",
+              "original_sha256": "0922c95c5680d2e9633205df5b5533f44809bb36a9bdb47c0d5c44d0eaa20630",
+              "sha256": "d4fa8e7fb3add960a68325a59c9694244aea3213fd739a50815cb067c4965654",
+              "size": 178337
+            }
+          }
+        },
+        "pkg:rpm/centos/pcre@8.32-17.el7": {
+          "source_archive": "native/psycopg-binary/amd64/pcre-8.32-17.el7.src.rpm",
+          "source_sha256": "b96493d8ea6def2e9a40dade4feedcea2b4bbfe8ce4c13a3465e99f21ef2c43d",
+          "rpm_filename": "pcre-8.32-17.el7.x86_64.rpm",
+          "rpm_sha256": "cf2b84402e9a9fcf92c8a8a965c4e8d217e82e80c0945de2ce8d46c17131ad28",
+          "rpm_declared_license": "BSD",
+          "notices": {},
+          "files": {
+            "libpcre-9513aab5.so.1.2.0": {
+              "rpm_path": "/usr/lib64/libpcre.so.1.2.0",
+              "original_sha256": "9513aab50d64bb4655550e1ba0c62fbcf6e7cbe0d64cba0814224d2631a85027",
+              "sha256": "02eda850e04931656d8af81f5171bff74d8bec1553d3d85c3d32d7fc5efe8864",
+              "size": 406817
+            }
+          }
+        }
+      },
+      "wheel_filename": "psycopg_binary-3.3.4-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.whl",
+      "wheel_sha256": "8c0056529e68dbe9184cd4019a1f3d8f3a4ead2f6fc7a5afcf27d3314edd1277",
+      "wheel_sbom_sha256": "bdd4795c96b666a64d1410b509851d1ad397c739e7e741673d10d5be2b130eb6"
+    },
+    "arm64": {
+      "packages": {
+        "pkg:rpm/almalinux/cyrus-sasl-lib@2.1.27-6.el8_5": {
+          "source_archive": "native/psycopg-binary/arm64/cyrus-sasl-2.1.27-6.el8_5.src.rpm",
+          "source_sha256": "f388fd13b3b10aec374f61bc1753b19ae019b0ab4937bf9bd9cbdf0f445c079a",
+          "rpm_filename": "cyrus-sasl-lib-2.1.27-6.el8_5.aarch64.rpm",
+          "rpm_sha256": "f75d1b8631a9271be94a1d7cbdae9def711995cb5331aa7de223cf7473a0bb2d",
+          "rpm_declared_license": "BSD with advertising",
+          "notices": {
+            "/usr/share/licenses/cyrus-sasl-lib/COPYING": "9d6e5d1632140a6c135b251260953650d17d87cd1124f87aaf72192aa4580d4b"
+          },
+          "files": {
+            "libsasl2-076b3c1f.so.3.0.0": {
+              "rpm_path": "/usr/lib64/libsasl2.so.3.0.0",
+              "original_sha256": "076b3c1f61606df2c3e298c6ed2349cf8499eb05b50c0f62e6f8e48908754d0f",
+              "sha256": "4e4ec55bf66c72705ac0c03b770dc02ed07c27987c5b714e92cdb5c79ede29c0",
+              "size": 265761
+            }
+          }
+        },
+        "pkg:rpm/almalinux/keyutils-libs@1.5.10-9.el8": {
+          "source_archive": "native/psycopg-binary/arm64/keyutils-1.5.10-9.el8.src.rpm",
+          "source_sha256": "13fec652f642858757755b64195189abef7c0ff8025e9807ddba467e4ad8fbb6",
+          "rpm_filename": "keyutils-libs-1.5.10-9.el8.aarch64.rpm",
+          "rpm_sha256": "87e96ac645e1deb805d1314776cfb0bdd992e5c65c268b9ef65347f26094eba3",
+          "rpm_declared_license": "GPLv2+ and LGPLv2+",
+          "notices": {
+            "/usr/share/licenses/keyutils-libs/LICENCE.LGPL": "0d15593e3a8ad90917f8509b5ac1e4b5e5d196434a68029aa9dc0858a4a4c521"
+          },
+          "files": {
+            "libkeyutils-fe6e95a9.so.1.6": {
+              "rpm_path": "/usr/lib64/libkeyutils.so.1.6",
+              "original_sha256": "fe6e95a96416fb372f304ca612810071a67b63794d6eff255515562633d6a113",
+              "sha256": "0d2a628040cf8f759447db3556701af6aa4b5b3e36a7a55d07a944c52ce33d22",
+              "size": 132697
+            }
+          }
+        },
+        "pkg:rpm/almalinux/krb5-libs@1.18.2-32.el8_10": {
+          "source_archive": "native/psycopg-binary/arm64/krb5-1.18.2-32.el8_10.src.rpm",
+          "source_sha256": "4f9591ca0a56d6a5558930d8054cd78ba9c621d44a139d8de65915fb974d6b28",
+          "rpm_filename": "krb5-libs-1.18.2-32.el8_10.aarch64.rpm",
+          "rpm_sha256": "3c895582596e55b031ecfe547cb3009f40a9ec7382372b46ba3eafb64e9459f5",
+          "rpm_declared_license": "MIT",
+          "notices": {
+            "/usr/share/licenses/krb5-libs/LICENSE": "b7a5f14a8719bce5e49a761998aa55438fc890fb40f71228d6a49546f6d5690d"
+          },
+          "files": {
+            "libgssapi_krb5-fe951f80.so.2.2": {
+              "rpm_path": "/usr/lib64/libgssapi_krb5.so.2.2",
+              "original_sha256": "fe951f80dbf298faa45f739fe057eaf2f600206196ccee4b3bb555b35ce1c2c7",
+              "sha256": "b8e98fce957511ca70baec649256725b988973a874cd144216aa63d1ab6c19e9",
+              "size": 468689
+            },
+            "libk5crypto-84470bb3.so.3.1": {
+              "rpm_path": "/usr/lib64/libk5crypto.so.3.1",
+              "original_sha256": "84470bb3e299578adc6808ec4d2d95b33cc5318518bf1dec97d9920af9b74324",
+              "sha256": "bfcf150ced08552ec53730d1c5e7a319933043a9920cbf758c53fd6f20376c9c",
+              "size": 265777
+            },
+            "libkrb5-26ef5d84.so.3.3": {
+              "rpm_path": "/usr/lib64/libkrb5.so.3.3",
+              "original_sha256": "26ef5d84e5674fe0fefdb02f539044b94454f2388807f2d3cb4c080b694841f5",
+              "sha256": "337ac8f9378ef1cd717309e798a0b4ce87434321ac587211faca130d6da6cba4",
+              "size": 1133585
+            },
+            "libkrb5support-875e89dc.so.0.1": {
+              "rpm_path": "/usr/lib64/libkrb5support.so.0.1",
+              "original_sha256": "875e89dc99f68eaee8ab16468f46540632380109b9dfebf109ca6ed91d3b8a1e",
+              "sha256": "7026a8f13accd3c988f914768ce49a0f2ef905ed83ae3bd014ffecfa98772d3a",
+              "size": 199833
+            }
+          }
+        },
+        "pkg:rpm/almalinux/libcom_err@1.45.6-7.el8_10": {
+          "source_archive": "native/psycopg-binary/arm64/e2fsprogs-1.45.6-7.el8_10.src.rpm",
+          "source_sha256": "7042d97c138a6b6c8d5a9282bf9bb736f8d377d4055fe0da2e0d3f459141b2a0",
+          "rpm_filename": "libcom_err-1.45.6-7.el8_10.aarch64.rpm",
+          "rpm_sha256": "be7f7c2c75976f72aa4d0bb6995aeb6dc3da292ae53f6aad3bbec8c53edbe24f",
+          "rpm_declared_license": "MIT",
+          "notices": {
+            "/usr/share/licenses/libcom_err/NOTICE": "5da5ef153e559c1d990d4c3eedbedd4442db892d37eae1f35fff069de8ec9020"
+          },
+          "files": {
+            "libcom_err-6d8d18aa.so.2.1": {
+              "rpm_path": "/usr/lib64/libcom_err.so.2.1",
+              "original_sha256": "6d8d18aa08233430a78edb7e366b9685058de66e52bc4d4364fddcb5aa6b8a89",
+              "sha256": "b335a27b7304dfd71b7539777c47d5600930ab63f7c5f47cbb5a12257d60aaae",
+              "size": 132169
+            }
+          }
+        },
+        "pkg:rpm/almalinux/libselinux@2.9-11.el8_10": {
+          "source_archive": "native/psycopg-binary/arm64/libselinux-2.9-11.el8_10.src.rpm",
+          "source_sha256": "1a9f9af679cb4f57c4433012f829dccec9b38fe3ac749b63785f2b70f2875afd",
+          "rpm_filename": "libselinux-2.9-11.el8_10.aarch64.rpm",
+          "rpm_sha256": "14424d89f5a38204635d898251b5c1822664e583774c0da9468e086e4e99c207",
+          "rpm_declared_license": "Public Domain",
+          "notices": {
+            "/usr/share/licenses/libselinux/LICENSE": "86657b4c0fe868d7cbd977cb04c63b6c667e08fa51595a7bc846ad4bed8fc364"
+          },
+          "files": {
+            "libselinux-be7a4dc7.so.1": {
+              "rpm_path": "/usr/lib64/libselinux.so.1",
+              "original_sha256": "be7a4dc71f6734a47e7eec5a64e507b8ef17e5ebe2b452130b3500319aec308c",
+              "sha256": "58019414d2ee2751e77c4afe45c72c880f3f74e053c368b04a01d983f8bbf851",
+              "size": 334337
+            }
+          }
+        },
+        "pkg:rpm/almalinux/libxcrypt@4.1.1-6.el8": {
+          "source_archive": "native/psycopg-binary/arm64/libxcrypt-4.1.1-6.el8.src.rpm",
+          "source_sha256": "3c492b21903329f611e7945134ed851beb2f8a38a2909109fb94c5fa20ae08bb",
+          "rpm_filename": "libxcrypt-4.1.1-6.el8.aarch64.rpm",
+          "rpm_sha256": "b574668ace5378e9c18d278aa776e51c9e65961f1c796c4583783900c87d5bf7",
+          "rpm_declared_license": "LGPLv2+ and BSD and Public Domain",
+          "notices": {
+            "/usr/share/licenses/libxcrypt/AUTHORS": "46cfa431806b5fce8e9ea2736b1f4bbaa2a5f2048f18a3515a9e1f3925a83a2d",
+            "/usr/share/licenses/libxcrypt/COPYING.LIB": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551",
+            "/usr/share/licenses/libxcrypt/LICENSING": "eaa47c6ebef90e3180e24f1a2c4086a925bdea8159f97998a9ad7c8f6d336d98"
+          },
+          "files": {
+            "libcrypt-258f54d5.so.1.1.0": {
+              "rpm_path": "/lib64/libcrypt.so.1.1.0",
+              "original_sha256": "258f54d5a25341bc920f901c2b1301ced84374bb7944cd29aca5d7f8029fe43d",
+              "sha256": "980d4781ae9ad8d1b2f60be52cfbbf176d32cc62ecf888920f347e9957636ee2",
+              "size": 198433
+            }
+          }
+        },
+        "pkg:rpm/almalinux/openssl-libs@1.1.1k-15.el8_6": {
+          "source_archive": "native/psycopg-binary/arm64/openssl-1.1.1k-15.el8_6.src.rpm",
+          "source_sha256": "5893c3a0c060ca1ef83274f22e30c89c6f4ecd602760df21cdbb10b788d15325",
+          "rpm_filename": "openssl-libs-1.1.1k-15.el8_6.aarch64.rpm",
+          "rpm_sha256": "7321104a08421b98a123f8e92a8d088d8ab6c6a4fded5772af1e6fbe4060b264",
+          "rpm_declared_license": "OpenSSL and ASL 2.0",
+          "notices": {
+            "/usr/share/licenses/openssl-libs/LICENSE": "c32913b33252e71190af2066f08115c69bc9fddadf3bf29296e20c835389841c"
+          },
+          "files": {
+            "libcrypto-6aa7cfbd.so.1.1.1k": {
+              "rpm_path": "/usr/lib64/libcrypto.so.1.1.1k",
+              "original_sha256": "6aa7cfbd043131d706e112d16834eb72f3d23abc15f7a8066fc1b0f58f430f03",
+              "sha256": "812beb4bad6faa3bf1e191ad301f7a5a55bbcae360b63dca50ad262f585c4e2d",
+              "size": 2945609
+            }
+          }
+        },
+        "pkg:rpm/almalinux/pcre2@10.32-3.el8_6": {
+          "source_archive": "native/psycopg-binary/arm64/pcre2-10.32-3.el8_6.src.rpm",
+          "source_sha256": "c995278b025eaa5598ceb2117a5710338210839fa5bca2a3b4a279e8afd25cb9",
+          "rpm_filename": "pcre2-10.32-3.el8_6.aarch64.rpm",
+          "rpm_sha256": "0428a49605bb6b3c549cf8d58f1c336a902a48f875e0989de6ff62832f382930",
+          "rpm_declared_license": "BSD",
+          "notices": {
+            "/usr/share/licenses/pcre2/COPYING": "99272c55f3dcfa07a8a7e15a5c1a33096e4727de74241d65fa049fccfdd59507",
+            "/usr/share/licenses/pcre2/LICENCE": "c4a8b89cd38d6a7501d5b11a472fa15e71a051b66d6331c6cda364101389d6ee"
+          },
+          "files": {
+            "libpcre2-8-8701a61e.so.0.7.1": {
+              "rpm_path": "/usr/lib64/libpcre2-8.so.0.7.1",
+              "original_sha256": "8701a61e7f49703f0e361482c37f9f6493b7ed09efc26806fecac4a4bcce16d5",
+              "sha256": "8f1645c7955deb69cc005acb6235b2c44561189aefb1ad2c23376c5876930cf9",
+              "size": 592849
+            }
+          }
+        }
+      },
+      "wheel_filename": "psycopg_binary-3.3.4-cp314-cp314-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl",
+      "wheel_sha256": "2c09aad7051326e7603c14e50636db9c01f78272dc54b3accff03d46370461e6",
+      "wheel_sbom_sha256": "2784478d9c73890a63d0e17da32f8a773e18760df09e7b22701e9a0d873c027a"
+    }
+  }
+}
