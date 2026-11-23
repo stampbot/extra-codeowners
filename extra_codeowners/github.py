@@ -39,6 +39,13 @@ from extra_codeowners.dco import (
     RepositoryIdentity,
 )
 from extra_codeowners.discovery_cache import CacheEntry, CacheLookupStatus, DiscoveryCache
+from extra_codeowners.merge_queue import (
+    QUEUE_CANDIDATE_QUERY,
+    MergeCandidateIdentity,
+    MergeGroupTrigger,
+    MergeQueueEvidenceError,
+    bind_candidate,
+)
 from extra_codeowners.merge_queue_paths import (
     CandidateChangedPaths,
     MergeTreeEvidenceError,
@@ -69,6 +76,7 @@ MAX_DCO_AGGREGATE_MESSAGE_BYTES: Final = 16 * 1024 * 1024
 MAX_DCO_DETAIL_CONCURRENCY: Final = 2
 MAX_MERGE_COMMIT_RESPONSE_BYTES: Final = 2 * 1024 * 1024
 MAX_MERGE_TREE_RESPONSE_BYTES: Final = 8 * 1024 * 1024
+MAX_MERGE_QUEUE_RESPONSE_BYTES: Final = 64 * 1024
 MAX_JSON_RESPONSE_DEPTH: Final = 64
 PENDING_CHECK_EXTERNAL_ID_PREFIX: Final = "extra-codeowners:pending:"
 MAX_CONFIG_BYTES: Final = 1_000_000
@@ -478,8 +486,8 @@ class GitHubClient:
             msg = "GitHub App private key must be an RSA private key"
             raise ValueError(msg)
         self._private_key = loaded_key
-        self._tokens: dict[int, InstallationToken] = {}
-        self._token_locks: dict[int, asyncio.Lock] = {}
+        self._tokens: dict[tuple[int, bool], InstallationToken] = {}
+        self._token_locks: dict[tuple[int, bool], asyncio.Lock] = {}
         # ``authority_generation`` comes from the durable PostgreSQL fence on
         # each claimed job. A repository-selection or identity webhook bumps
         # that generation, so every replica naturally bypasses its local cache
@@ -540,17 +548,19 @@ class GitHubClient:
         installation_id: int,
         *,
         stop: asyncio.Event | None = None,
+        queue_read: bool = False,
     ) -> str:
+        key = (installation_id, queue_read)
         self._raise_if_stopped(stop)
-        cached = self._tokens.get(installation_id)
+        cached = self._tokens.get(key)
         now = datetime.now(UTC)
         if cached is not None and cached.expires_at > now + timedelta(minutes=5):
             return cached.value
 
-        lock = self._token_locks.setdefault(installation_id, asyncio.Lock())
+        lock = self._token_locks.setdefault(key, asyncio.Lock())
         async with lock:
             self._raise_if_stopped(stop)
-            cached = self._tokens.get(installation_id)
+            cached = self._tokens.get(key)
             if cached is not None and cached.expires_at > now + timedelta(minutes=5):
                 return cached.value
             response = await self._request(
@@ -558,12 +568,16 @@ class GitHubClient:
                 f"/app/installations/{installation_id}/access_tokens",
                 app_authenticated=True,
                 json={
-                    "permissions": {
-                        "checks": "write",
-                        "contents": "read",
-                        "members": "read",
-                        "pull_requests": "read",
-                    }
+                    "permissions": (
+                        {"contents": "read", "pull_requests": "read", "merge_queues": "read"}
+                        if queue_read
+                        else {
+                            "checks": "write",
+                            "contents": "read",
+                            "members": "read",
+                            "pull_requests": "read",
+                        }
+                    )
                 },
                 stop=stop,
             )
@@ -574,7 +588,7 @@ class GitHubClient:
                 msg = "installation-token response omitted token or expiry"
                 raise GitHubError(msg)
             parsed_expiry = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
-            self._tokens[installation_id] = InstallationToken(token, parsed_expiry)
+            self._tokens[key] = InstallationToken(token, parsed_expiry)
             return token
 
     async def _request(
@@ -837,9 +851,9 @@ class GitHubClient:
                         ):
                             assert installation_id is not None
                             assert token is not None
-                            cached = self._tokens.get(installation_id)
+                            cached = self._tokens.get((installation_id, False))
                             if cached is not None and cached.value == token:
-                                self._tokens.pop(installation_id, None)
+                                self._tokens.pop((installation_id, False), None)
                             refreshed_token = True
                             continue
                         if response is None or (
@@ -925,6 +939,7 @@ class GitHubClient:
         json: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,
         allow_not_found: bool = False,
+        queue_read: bool = False,
     ) -> AsyncIterator[httpx.Response]:
         """Return an open streamed response, refreshing a rejected token once.
 
@@ -957,7 +972,11 @@ class GitHubClient:
                 async with asyncio.timeout(self._request_deadline_seconds):
                     for attempt in range(2):
                         with timing.phase("authentication"):
-                            token = await self._installation_token(installation_id)
+                            token = (
+                                await self._installation_token(installation_id, queue_read=True)
+                                if queue_read
+                                else await self._installation_token(installation_id)
+                            )
                         request = self._http.build_request(
                             method,
                             path,
@@ -981,9 +1000,10 @@ class GitHubClient:
                                 raise
                             if response.status_code == 401 and attempt == 0:
                                 await response.aclose()
-                                cached = self._tokens.get(installation_id)
+                                key = (installation_id, queue_read)
+                                cached = self._tokens.get(key)
                                 if cached is not None and cached.value == token:
-                                    self._tokens.pop(installation_id, None)
+                                    self._tokens.pop(key, None)
                                 continue
                             outcome = _request_outcome(
                                 response,
@@ -1464,6 +1484,7 @@ class GitHubClient:
         params: dict[str, Any] | None = None,
         json: dict[str, Any] | None = None,
         max_bytes: int,
+        queue_read: bool = False,
     ) -> _BoundedJsonResponse:
         """Read and parse one size-limited JSON response."""
         async with self._authenticated_streaming_response(
@@ -1472,6 +1493,7 @@ class GitHubClient:
             installation_id,
             params=params,
             json=json,
+            queue_read=queue_read,
         ) as response:
             if not response.is_success:
                 error_response = await self._bounded_error_response(response, 1000)
@@ -1787,6 +1809,7 @@ class GitHubClient:
         variables: dict[str, Any],
         operation: str,
         max_bytes: int,
+        queue_read: bool = False,
     ) -> dict[str, Any]:
         """Run one bounded GraphQL query and reject partial/error responses."""
         response = await self._bounded_json_request(
@@ -1795,6 +1818,7 @@ class GitHubClient:
             installation_id,
             json={"query": query, "variables": variables},
             max_bytes=max_bytes,
+            queue_read=queue_read,
         )
         payload = response.payload
         if not isinstance(payload, dict):
@@ -1826,6 +1850,34 @@ class GitHubClient:
         if not isinstance(data, dict):
             raise GitHubError(f"GraphQL {operation} omitted its data object")
         return data
+
+    async def get_merge_candidate(self, trigger: MergeGroupTrigger) -> MergeCandidateIdentity:
+        """Identify a waiting candidate using fresh, read-only GitHub evidence."""
+        if trigger.action != "checks_requested":
+            raise GitHubError("destroyed candidates are not eligible for evaluation")
+        if not await self.installation_includes_repository(
+            trigger.installation_id, trigger.repository, refresh=True
+        ):
+            raise GitHubError("merge candidate repository is outside the installation")
+        owner, name = trigger.repository.split("/", 1)
+        data = await self._graphql(
+            trigger.installation_id,
+            query=QUEUE_CANDIDATE_QUERY,
+            variables={
+                "owner": owner,
+                "repo": name,
+                "branch": trigger.base_branch,
+                "base": trigger.base_ref,
+                "head": trigger.head_ref,
+            },
+            operation="merge queue candidate",
+            max_bytes=MAX_MERGE_QUEUE_RESPONSE_BYTES,
+            queue_read=True,
+        )
+        try:
+            return bind_candidate(trigger, data.get("repository"))
+        except MergeQueueEvidenceError as error:
+            raise GitHubError(str(error)) from error
 
     @staticmethod
     def _graphql_errors_are_rate_limited(

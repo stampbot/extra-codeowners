@@ -7,13 +7,18 @@ import hmac
 import json
 import re
 from dataclasses import dataclass
-from typing import Any, Final
+from typing import Any, Final, cast
 
 from extra_codeowners.database import (
     AuthorityRequest,
     JobRequest,
     validate_base_ref_hint,
     validate_head_sha,
+)
+from extra_codeowners.merge_queue import (
+    MergeGroupAction,
+    MergeGroupTrigger,
+    MergeQueueEvidenceError,
 )
 
 MAX_WEBHOOK_BYTES: Final = 10 * 1024 * 1024
@@ -49,6 +54,19 @@ class VerifiedWebhook:
     event: str
     action: str
     payload: dict[str, Any]
+
+
+def merge_group_trigger(webhook: VerifiedWebhook) -> MergeGroupTrigger | None:
+    """Read candidate identity from a delivery after signature verification."""
+    if webhook.event != "merge_group":
+        return None
+    action = webhook.action
+    if action != "checks_requested" and action != "destroyed":
+        return None
+    try:
+        return MergeGroupTrigger.from_payload(cast(MergeGroupAction, action), webhook.payload)
+    except MergeQueueEvidenceError as error:
+        raise WebhookError(str(error)) from error
 
 
 def verify_webhook(
