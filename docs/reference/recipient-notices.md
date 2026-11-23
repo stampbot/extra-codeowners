@@ -125,6 +125,9 @@ It does not make alpha releases supported for production use.
 
 The raw inventory records installed Debian package identities and Python
 metadata so you can check those questions against the exact image.
+It describes the final filesystem, not the full layer history. The
+[CPython source bundle](source-archives.md#pip-in-an-earlier-image-layer)
+also retains pip source for the reviewed layer that still ships it.
 [Issue #18][issue-18] tracks missing notice attribution and the remaining
 work to deliver corresponding source.
 
