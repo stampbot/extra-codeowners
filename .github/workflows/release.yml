@@ -506,6 +506,7 @@ jobs:
           python -I -S -B tools/release_native_components.py generate \
             --rpm-notices \
             --rpm-binaries \
+            --static-wheel-receipt tools/release_crypto_static_evidence.json \
             --source-licenses \
             --architecture "${ARCHITECTURE}" \
             --platform-digest "${platform_digest}" \
@@ -729,6 +730,7 @@ jobs:
             python -I -S -B tools/release_native_components.py verify \
               --rpm-notices \
               --rpm-binaries \
+              --static-wheel-receipt tools/release_crypto_static_evidence.json \
               --source-licenses \
               --architecture "${architecture}" \
               --platform-digest "${platform_digest}" \

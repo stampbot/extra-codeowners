@@ -460,6 +460,61 @@ def _exercise_source_license_cli(args: list[str], output: Path) -> None:
         catalog.main(["verify", *args])
 
 
+def _crypto_receipt(source: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]], bytes]:
+    path = catalog._STATIC_EXTENSION
+    filename = "cryptography-99.0.0-cp311-abi3-manylinux_2_34_x86_64.whl"
+    extension = {"path": path, "size": 100, "sha256": "d" * 64}
+    native = [
+        {**extension, "path": f"opt/venv/lib/python3.14/site-packages/{path}", "kind": "regular"}
+    ]
+    lock = (
+        '[[package]]\nname = "cryptography"\nversion = "99.0.0"\n'
+        f'wheels = [{{url = "https://example.com/{filename}", hash = "sha256:{"e" * 64}"}}]\n'
+    ).encode()
+    receipt = {
+        "schema_version": 1,
+        "distribution_version": "99.0.0",
+        "component": {"name": "openssl", "version": "8.1.2", "source_sha256": source["sha256"]},
+        "platforms": {
+            "amd64": {
+                "wheel_filename": filename,
+                "wheel_sha256": "e" * 64,
+                "sbom_sha256": source["sbom_sha256"],
+                "extension": extension,
+            }
+        },
+    }
+    return receipt, native, lock
+
+
+@pytest.mark.parametrize("change", [None, "compiled", "duplicate", "wheel", "sbom", "source"])
+def test_static_attribution_binds_exact_cryptography_extension(
+    evidence: dict[str, Any], change: str | None
+) -> None:
+    source = evidence["plan"]["embedded_sources"][0]
+    receipt, native, lock = _crypto_receipt(source)
+    if change == "compiled":
+        native[0]["sha256"] = "a" * 64
+    elif change == "duplicate":
+        native.append(dict(native[0]))
+    elif change == "wheel":
+        lock = lock.replace(b"e" * 64, b"9" * 64)
+    elif change == "sbom":
+        source["sbom_sha256"] = "a" * 64
+    elif change == "source":
+        source["sha256"] = "a" * 64
+    if change is not None:
+        with pytest.raises(
+            ValueError, match=r"(native file changed|locked wheel|reviewed OpenSSL source)"
+        ):
+            catalog._static_wheel_properties(receipt, "amd64", source, lock, native)
+    else:
+        properties = catalog._static_wheel_properties(receipt, "amd64", source, lock, native)
+        assert properties["native-linkage"] == "static"
+        assert properties["wheel-sha256"] == "e" * 64
+        assert json.loads(properties["native-files"])[0]["sha256"] == "d" * 64
+
+
 def test_provenance_verifier_selects_sources_only_for_the_versioned_notice_contract(
     tmp_path: Path,
 ) -> None:
@@ -473,13 +528,15 @@ def test_provenance_verifier_selects_sources_only_for_the_versioned_notice_contr
     sources = ["--python-sources", f"{tmp_path}/python-source-amd64.tar.gz"]
     rpm_notices = ["--rpm-notice-receipt", f"{tmp_path}/release-rpm-notices.json"]
     rpm_binaries = ["--rpm-binary-receipt", f"{tmp_path}/release-rpm-binaries.json"]
-    for marker, binary_marker, expected in (
-        (None, None, []),
-        ("1", None, sources),
-        ("2", None, [*sources, *rpm_notices]),
-        ("2", "1", [*sources, *rpm_notices, *rpm_binaries]),
-        ("2", "2", [*sources, *rpm_notices]),
-        ("3", None, []),
+    static_wheel = ["--static-wheel-receipt", f"{tmp_path}/release-crypto-static.json"]
+    for marker, binary_marker, static_marker, expected in (
+        (None, None, None, []),
+        ("1", None, None, sources),
+        ("2", None, None, [*sources, *rpm_notices]),
+        ("2", "1", None, [*sources, *rpm_notices, *rpm_binaries]),
+        ("2", "1", "1", [*sources, *rpm_notices, *rpm_binaries, *static_wheel]),
+        ("2", "2", None, [*sources, *rpm_notices]),
+        ("3", None, None, []),
     ):
         path = tmp_path / "catalog.json"
         props = (
@@ -489,6 +546,8 @@ def test_provenance_verifier_selects_sources_only_for_the_versioned_notice_contr
         )
         if binary_marker is not None:
             props.append({"name": "extra-codeowners:rpm-binary-evidence", "value": binary_marker})
+        if static_marker is not None:
+            props.append({"name": "extra-codeowners:static-wheel-evidence", "value": static_marker})
         path.write_text(json.dumps({"metadata": {"properties": props}}))
         command = (
             "git() {\n"
@@ -497,6 +556,8 @@ def test_provenance_verifier_selects_sources_only_for_the_versioned_notice_contr
             "      printf 'fixture notice receipt';;\n"
             '    "show fictional-revision:tools/release_rpm_binary_evidence.json")\n'
             "      printf 'fixture binary receipt';;\n"
+            '    "show fictional-revision:tools/release_crypto_static_evidence.json")\n'
+            "      printf 'fixture static receipt';;\n"
             "    *) return 1;;\n"
             "  esac\n"
             "}\n"
@@ -522,6 +583,8 @@ def test_provenance_verifier_selects_sources_only_for_the_versioned_notice_contr
             assert (tmp_path / "release-rpm-notices.json").read_text() == "fixture notice receipt"
         if binary_marker == "1":
             assert (tmp_path / "release-rpm-binaries.json").read_text() == "fixture binary receipt"
+        if static_marker == "1":
+            assert (tmp_path / "release-crypto-static.json").read_text() == "fixture static receipt"
 
 
 def test_generate_requires_sources_but_legacy_verify_remains_available(

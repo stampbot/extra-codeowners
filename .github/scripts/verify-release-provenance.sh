@@ -304,6 +304,13 @@ for architecture in amd64 arm64; do
     git show "${revision}:tools/release_rpm_binary_evidence.json" >"${binary_receipt}"
     native_notice_args+=(--rpm-binary-receipt "${binary_receipt}")
   fi
+  static_wheel_evidence="$(jq -r '.metadata.properties[]? |
+    select(.name == "extra-codeowners:static-wheel-evidence") | .value' "${catalog}")"
+  if [[ "${static_wheel_evidence}" == 1 ]]; then
+    static_receipt="${temporary_directory}/release-crypto-static.json"
+    git show "${revision}:tools/release_crypto_static_evidence.json" >"${static_receipt}"
+    native_notice_args+=(--static-wheel-receipt "${static_receipt}")
+  fi
   python -I -S -B tools/release_native_components.py verify \
     --architecture "${architecture}" \
     --platform-digest "$(<"${asset_directory}/digest-${architecture}.txt")" \

@@ -125,6 +125,22 @@ read-only data against the wheel, and confirm the license file hashes in
 the source notice receipt. Verify older catalogs with their own release
 checkout; they don't gain attribution from a later receipt.
 
+### OpenSSL in Cryptography
+
+When `extra-codeowners:static-wheel-evidence` is `1`, Cryptography's
+OpenSSL record identifies the extension that contains the compiled code.
+`native-files` gives the extension's path relative to the installed wheel,
+size, and SHA-256. `wheel-filename` and `wheel-sha256` identify the
+wheel in the lockfile. `native-linkage: static` describes the reviewed
+extension; it does not mean that the whole wheel links statically.
+
+The verifier checks those values against the signed inventory and lockfile.
+It also checks the OpenSSL source archive and wheel SBOM already bound
+to that component. It does not run tools on the binary again. If the wheel
+changes, inspect the extension from the new locked wheel before updating
+`tools/release_crypto_static_evidence.json`. The catalog still records a
+source license, not a license conclusion for the compiled extension.
+
 ## Verify a catalog
 
 Check out the release tag and download these assets from that same release:
