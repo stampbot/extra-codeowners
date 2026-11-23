@@ -6,6 +6,7 @@ import bz2
 import gzip
 import hashlib
 import io
+import lzma
 import tarfile
 from collections.abc import Sequence
 
@@ -45,6 +46,22 @@ def test_notice_identity_comes_from_source_bytes(extension: str) -> None:
             "sha256": hashlib.sha256(b"fictional upstream notice\n").hexdigest(),
         }
     ]
+
+
+def test_libxcrypt_xz_supplies_both_selected_notices() -> None:
+    members = [
+        ("libxcrypt-9.8.7/COPYING.LIB", b"fictional license"),
+        ("libxcrypt-9.8.7/LICENSING", b"fictional file-level guidance"),
+        ("libxcrypt-9.8.7/contrib/COPYING.LIB", b"not the top-level license"),
+    ]
+    source = {
+        "source_component": {"name": "libxcrypt", "version": "9.8.7"},
+        "path": "embedded/libxcrypt-9.8.7.tar.xz",
+    }
+    compressed = lzma.compress(archive(members))
+    assert notices.read_notices(source, compressed) == dict(members[:2])
+    with pytest.raises(notices.NativeNoticeError, match="compressed"):
+        notices.read_notices(source, compressed[:-3])
 
 
 @pytest.mark.parametrize(

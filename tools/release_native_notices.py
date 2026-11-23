@@ -11,7 +11,9 @@ import bz2
 import gzip
 import hashlib
 import io
+import lzma
 import tarfile
+from contextlib import ExitStack
 from typing import Any
 
 MAX_EXPANDED = 512 * 1024 * 1024
@@ -21,6 +23,7 @@ _NOTICES = {
     "openssl": ("openssl", ("LICENSE.txt",)),
     "libpq": ("postgresql", ("COPYRIGHT",)),
     "openldap": ("openldap", ("COPYRIGHT", "LICENSE")),
+    "libxcrypt": ("libxcrypt", ("COPYING.LIB", "LICENSING")),
 }
 # Each reviewed label identifies a top-level source text, not all code in a wheel.
 _SOURCE_LICENSES = {
@@ -44,6 +47,11 @@ _SOURCE_LICENSES = {
         "310fe25c858a9515fc8c8d7d1f24a67c9496f84a91e0a0e41ea9975b1371e569",
         "OLDAP-2.8",
     ),
+    ("libxcrypt", "4.5.2", "71513a31c01a428bccd5367a32fd95f115d6dac50fb5b60c779d5c7942aec071"): (
+        "libxcrypt-4.5.2/COPYING.LIB",
+        "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551",
+        "LGPL-2.1-or-later",
+    ),
 }
 
 
@@ -52,7 +60,7 @@ class NativeNoticeError(ValueError):
 
 
 class _BoundedReader(io.RawIOBase):
-    def __init__(self, stream: gzip.GzipFile | bz2.BZ2File) -> None:
+    def __init__(self, stream: gzip.GzipFile | bz2.BZ2File | lzma.LZMAFile) -> None:
         self.stream = stream
         self.remaining = MAX_EXPANDED
 
@@ -87,14 +95,18 @@ def read_notices(source: dict[str, Any], contents: bytes) -> dict[str, bytes]:
     expected = {f"{prefix}-{version}/{filename}" for filename in filenames}
     found: dict[str, bytes] = {}
     path = source["path"]
-    if path.endswith((".tar.gz", ".tgz")):
-        compressed: gzip.GzipFile | bz2.BZ2File = gzip.GzipFile(fileobj=io.BytesIO(contents))
-    elif path.endswith(".tar.bz2"):
-        compressed = bz2.BZ2File(io.BytesIO(contents))
-    else:
-        raise NativeNoticeError("unsupported native source notice archive")
     try:
-        with compressed:
+        with ExitStack() as stack:
+            compressed: gzip.GzipFile | bz2.BZ2File | lzma.LZMAFile
+            buffer = io.BytesIO(contents)
+            if path.endswith((".tar.gz", ".tgz")):
+                compressed = stack.enter_context(gzip.GzipFile(fileobj=buffer))
+            elif path.endswith(".tar.bz2"):
+                compressed = stack.enter_context(bz2.BZ2File(buffer))
+            elif path.endswith(".tar.xz"):
+                compressed = stack.enter_context(lzma.LZMAFile(buffer))
+            else:
+                raise NativeNoticeError("unsupported native source notice archive")
             reader = _BoundedReader(compressed)
             with tarfile.open(fileobj=reader, mode="r|") as archive:
                 for index, member in enumerate(archive):
@@ -119,7 +131,7 @@ def read_notices(source: dict[str, Any], contents: bytes) -> dict[str, bytes]:
             # after the tar end marker cannot escape the same byte budget.
             while reader.read(64 * 1024):
                 pass
-    except (OSError, EOFError, tarfile.TarError) as error:
+    except (OSError, EOFError, lzma.LZMAError, tarfile.TarError) as error:
         raise NativeNoticeError("invalid compressed native notice source") from error
     if set(found) != expected:
         raise NativeNoticeError("native source omitted a selected upstream notice")

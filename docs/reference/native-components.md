@@ -25,9 +25,11 @@ The collector combines two kinds of evidence:
 - Cryptography's OpenSSL declaration and Psycopg's RPM-origin library
   declarations come from the exact retained wheel SBOMs. Repeated declarations
   of one RPM package become one catalog component.
-- Psycopg's custom OpenSSL, libpq and OpenLDAP identities come from reviewed
-  source recipes bound to native files in the signed inventory. Auditwheel's
-  SBOM does not declare those custom libraries.
+- Psycopg's custom OpenSSL, libpq, and OpenLDAP, and its amd64 libxcrypt build,
+  come from reviewed source recipes bound to installed files in the signed
+  inventory. Auditwheel's SBOM does not declare those libraries. The
+  [libxcrypt recipe entry](source-archives.md#the-amd64-psycopg-libxcrypt-build)
+  also points to the pinned builder image and install script.
 
 The wheel's own license does not describe every library it bundles. Native
 entries therefore say `license-review: unresolved` rather than inheriting
@@ -52,7 +54,8 @@ source bundle, not the runtime notice bundle.
 
 For OpenSSL, the selection is the archive's top-level `LICENSE.txt`. For
 libpq, it is PostgreSQL's top-level `COPYRIGHT`. OpenLDAP supplies top-level
-`COPYRIGHT` and `LICENSE`. Each selected component has a
+`COPYRIGHT` and `LICENSE`; libxcrypt supplies `COPYING.LIB` and `LICENSING`.
+Each selected component has a
 `extra-codeowners:source-notice-files` property containing JSON records with
 the inner archive path, byte size and SHA-256. Its existing `source-archive`
 property identifies the enclosing tarball in `python-source-ARCHITECTURE.tar.gz`.
@@ -84,10 +87,11 @@ source. Catalogs without the metadata property make no notice-selection claim.
 ### License texts from the standalone sources
 
 Catalogs with `extra-codeowners:source-license-evidence` set to `1` also
-carry the top-level license texts for OpenSSL, libpq, and OpenLDAP. Each
-affected component records an SPDX identifier and the exact text as base64
-in the CycloneDX `evidence.licenses` field. The matching file path and SHA-256
-are in `extra-codeowners:source-notice-files`.
+carry selected top-level license texts. Each affected component records an
+SPDX identifier and the exact text as base64 in the CycloneDX
+`evidence.licenses` field. For amd64 libxcrypt this is `COPYING.LIB`;
+`LICENSING` in the same archive describes per-file terms. The matching file
+paths and SHA-256 hashes are in `extra-codeowners:source-notice-files`.
 
 The verifier checks the source archive and the selected file against reviewed
 hashes. If an archive changes, update the selection in
