@@ -1,0 +1,407 @@
+{
+  "checked_import_prefixes": {
+    "cert_flags": "SSL_CTX_set_cert_flags",
+    "cms": "(?:CMS_|PKCS7_|SMIME_)",
+    "dane": "(?:DANE_|(?:SSL|BIO)_.*dane)",
+    "dtls": "(?:DTLS|(?:BIO|SSL)_.*(?:dgram|datagram))",
+    "evp_encode": "EVP_EncodeBlock",
+    "general_cipher": "(?:EVP_CIPHER_fetch|EVP_EncryptInit|EVP_DecryptInit|EVP_CipherInit)",
+    "pem_stack": "PEM_X509_INFO_read_bio",
+    "quic": "(?:OSSL_QUIC|(?:SSL|BIO)_.*quic)"
+  },
+  "method": "Match wheel ELF bytes to both signed distribution inventories, inspect readelf imports without execution, and read the version-matched callers' source.",
+  "platforms": [
+    {
+      "architecture": "amd64",
+      "image_digest": "sha256:f66285597f25f93c5da65c22f5c9ac9f21e21349aa229199f8b5e34d37f7d08c",
+      "inventory_sha256": "a214c1cd1d4e55feec845552e92abfb9da078e2cb78a6d6ac5b1ba328d2a65e6",
+      "wheels": {
+        "cryptography": {
+          "filename": "cryptography-50.0.2-cp311-abi3-manylinux_2_34_x86_64.whl",
+          "native_files": [
+            {
+              "linked_openssl": [],
+              "matched_imports": [],
+              "path": "cryptography/hazmat/bindings/_rust.abi3.so",
+              "role": "caller-side",
+              "sha256": "1e5d23fa66915204b9b67202a46993844d81cda56f6ad52cead2def37617ee29",
+              "size": 14434376
+            }
+          ],
+          "sha256": "9dab55f57c74c3cad24c323bacbbd04be4705ba6eb0d92e920b1fc4837ed5079"
+        },
+        "psycopg_binary": {
+          "filename": "psycopg_binary-3.3.9-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.whl",
+          "native_files": [
+            {
+              "linked_openssl": [],
+              "matched_imports": [],
+              "path": "psycopg_binary.libs/libcom_err-2abe824b.so.2.1",
+              "role": "caller-side",
+              "sha256": "5426dcb54dd01c9eedda05e2179f0e47114e8b48a534ffe9e94916e79471b257",
+              "size": 17497
+            },
+            {
+              "linked_openssl": [],
+              "matched_imports": [],
+              "path": "psycopg_binary.libs/libcom_err-55c5739a.so.3.0",
+              "role": "caller-side",
+              "sha256": "c4455194ec84307401ae1dc0049e53703d383c1f1094e613e4a54b19f90094e3",
+              "size": 25257
+            },
+            {
+              "linked_openssl": [],
+              "matched_imports": [],
+              "path": "psycopg_binary.libs/libcrypt-bc2db45e.so.1",
+              "role": "caller-side",
+              "sha256": "e2a6f6ff300e287a60dfc0c6fdb76ee01e333068df7c60b4e87453d942ccda65",
+              "size": 221657
+            },
+            {
+              "linked_openssl": [],
+              "matched_imports": [],
+              "path": "psycopg_binary.libs/libcrypto-3a0647ea.so.3",
+              "role": "embedded-openssl-provider",
+              "sha256": "e1a48391f48cb5f8392140b43ef9f2fa52f58321f8eadd8a83dc20f7fe398b9e",
+              "size": 5863273
+            },
+            {
+              "linked_openssl": [],
+              "matched_imports": [],
+              "path": "psycopg_binary.libs/libgssapi_krb5-923083ce.so.2.2",
+              "role": "caller-side",
+              "sha256": "7355c441d02abe41d34959c6f51caa5fac17014799935673ad3cb987b03226e4",
+              "size": 329425
+            },
+            {
+              "linked_openssl": [],
+              "matched_imports": [],
+              "path": "psycopg_binary.libs/libk5crypto-459efceb.so.3.1",
+              "role": "caller-side",
+              "sha256": "f4901987c99506969fb156c455d3774fad5aad7bff950fd572dfab8a59a901a6",
+              "size": 178817
+            },
+            {
+              "linked_openssl": [],
+              "matched_imports": [],
+              "path": "psycopg_binary.libs/libkeyutils-dfe70bd6.so.1.5",
+              "role": "caller-side",
+              "sha256": "c29e41b03cf4b2dffbfb4960946e2b42f82c0ca5d53d231d3f0fc597ba274488",
+              "size": 17913
+            },
+            {
+              "linked_openssl": [],
+              "matched_imports": [],
+              "path": "psycopg_binary.libs/libkrb5-f18b4d11.so.3.3",
+              "role": "caller-side",
+              "sha256": "066e6f8c94967fa3f91f0c723834bde429a18a387e8ec791d34ac56c05bf975b",
+              "size": 821993
+            },
+            {
+              "linked_openssl": [],
+              "matched_imports": [],
+              "path": "psycopg_binary.libs/libkrb5support-93fbab13.so.0.1",
+              "role": "caller-side",
+              "sha256": "3404c3db9216ffbbe10f13e5b65b122e1ac6744082c639891f69f0ef28711a2f",
+              "size": 55905
+            },
+            {
+              "linked_openssl": [],
+              "matched_imports": [],
+              "path": "psycopg_binary.libs/liblber-7b3e3cc5.so.2.0.200",
+              "role": "caller-side",
+              "sha256": "42e1b323980f325b3fc45b888d026a8fd8cb669997b54885f863f50e48f8f6ef",
+              "size": 56881
+            },
+            {
+              "linked_openssl": [
+                "libcrypto-3a0647ea.so.3",
+                "libssl-6a9b88ec.so.3"
+              ],
+              "matched_imports": [],
+              "path": "psycopg_binary.libs/libldap-fb847fea.so.2.0.200",
+              "role": "caller-side",
+              "sha256": "841d1b8a667ab165835b08203fb10cf18904e161d5c3a8b1e4b2c623b04ad505",
+              "size": 402281
+            },
+            {
+              "linked_openssl": [
+                "libcrypto-3a0647ea.so.3",
+                "libssl-6a9b88ec.so.3"
+              ],
+              "matched_imports": [],
+              "path": "psycopg_binary.libs/libpq-e9b5c9ac.so.5.18",
+              "role": "caller-side",
+              "sha256": "ee8ad7e6497816c693acc1a9691528e3600db2dc0f5f97634653ec5c025ac565",
+              "size": 420153,
+              "stream_tls_apis": [
+                "SSL_CTX_new",
+                "SSL_connect",
+                "SSL_set_bio"
+              ]
+            },
+            {
+              "linked_openssl": [],
+              "matched_imports": [],
+              "path": "psycopg_binary.libs/libsasl2-84219a89.so.3.0.0",
+              "role": "caller-side",
+              "sha256": "a01821d4716316892f28751616ad586f679ec66bc18a775205e1a0fab579f00b",
+              "size": 142953
+            },
+            {
+              "linked_openssl": [
+                "libcrypto-3a0647ea.so.3"
+              ],
+              "matched_imports": [],
+              "path": "psycopg_binary.libs/libssl-6a9b88ec.so.3",
+              "role": "embedded-openssl-provider",
+              "sha256": "5b9d9f1923a0ffd4fd2666819846d61c5bad31f1bf3a16c65bf1fccf5aa37d17",
+              "size": 1048985
+            },
+            {
+              "linked_openssl": [],
+              "matched_imports": [],
+              "path": "psycopg_binary/_psycopg.cpython-314-x86_64-linux-gnu.so",
+              "role": "caller-side",
+              "sha256": "46d47fe3e1a509caca98f8ff4e1d3f45f92b3872f5b4c9352fd6d0c06614cd00",
+              "size": 825057
+            },
+            {
+              "linked_openssl": [],
+              "matched_imports": [],
+              "path": "psycopg_binary/pq.cpython-314-x86_64-linux-gnu.so",
+              "role": "caller-side",
+              "sha256": "0ff188f70e7050e21e6eb4e4f1932473994c6314efb96f8a21645f9d0d80ed40",
+              "size": 354009
+            }
+          ],
+          "sha256": "4992acd5a7479013d52615b8c23fdce9bc22f3cacbfb1007fa474e6b5ebe94c7"
+        }
+      }
+    },
+    {
+      "architecture": "arm64",
+      "image_digest": "sha256:4a7e3fae3e46bded0a4a5d89a03c4069c1bf7c20b93b614df8b0a0fb59e3c9b8",
+      "inventory_sha256": "fe4f3bd2f7912ebbb8dd78f08067320be05176d5aaa3a3437a583339bd853f4a",
+      "wheels": {
+        "cryptography": {
+          "filename": "cryptography-50.0.2-cp311-abi3-manylinux_2_34_aarch64.whl",
+          "native_files": [
+            {
+              "linked_openssl": [],
+              "matched_imports": [],
+              "path": "cryptography/hazmat/bindings/_rust.abi3.so",
+              "role": "caller-side",
+              "sha256": "b52e6ae53c343ce97478ee10d93a0263576d778de65333c234577298d1e9ef07",
+              "size": 13652416
+            }
+          ],
+          "sha256": "87e9ce85beb6b328ba370cc6e6aea483c92617b4c95b1d33a49297eb662bfb04"
+        },
+        "psycopg_binary": {
+          "filename": "psycopg_binary-3.3.9-cp314-cp314-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl",
+          "native_files": [
+            {
+              "linked_openssl": [],
+              "matched_imports": [],
+              "path": "psycopg_binary.libs/libcom_err-6d8d18aa.so.2.1",
+              "role": "caller-side",
+              "sha256": "b335a27b7304dfd71b7539777c47d5600930ab63f7c5f47cbb5a12257d60aaae",
+              "size": 132169
+            },
+            {
+              "linked_openssl": [],
+              "matched_imports": [],
+              "path": "psycopg_binary.libs/libcom_err-ade663e2.so.3.0",
+              "role": "caller-side",
+              "sha256": "04ee759572b2a05a6200a480c15dd122a7aca9c6463263ade7e641b415ef79ba",
+              "size": 393889
+            },
+            {
+              "linked_openssl": [],
+              "matched_imports": [],
+              "path": "psycopg_binary.libs/libcrypt-258f54d5.so.1.1.0",
+              "role": "caller-side",
+              "sha256": "980d4781ae9ad8d1b2f60be52cfbbf176d32cc62ecf888920f347e9957636ee2",
+              "size": 198433
+            },
+            {
+              "linked_openssl": [],
+              "matched_imports": [],
+              "path": "psycopg_binary.libs/libcrypto-5e36fb0e.so.3",
+              "role": "embedded-openssl-provider",
+              "sha256": "07c01e7f3ac614267f752806ed5b02a5ba46c0c5442e921888b4ab33f7681046",
+              "size": 5543705
+            },
+            {
+              "linked_openssl": [],
+              "matched_imports": [],
+              "path": "psycopg_binary.libs/libgssapi_krb5-2d78fad2.so.2.2",
+              "role": "caller-side",
+              "sha256": "bebf29bbc91252d85fcfc63d8fed11cb63d0c19fee396cc4648fcb83ad9a91b6",
+              "size": 534225
+            },
+            {
+              "linked_openssl": [],
+              "matched_imports": [],
+              "path": "psycopg_binary.libs/libk5crypto-08068307.so.3.1",
+              "role": "caller-side",
+              "sha256": "95663ee5a44bdcf6605c5d34f99b9df29dba817a1b42926ecd0423cf841ae777",
+              "size": 461433
+            },
+            {
+              "linked_openssl": [],
+              "matched_imports": [],
+              "path": "psycopg_binary.libs/libkeyutils-fe6e95a9.so.1.6",
+              "role": "caller-side",
+              "sha256": "0d2a628040cf8f759447db3556701af6aa4b5b3e36a7a55d07a944c52ce33d22",
+              "size": 132697
+            },
+            {
+              "linked_openssl": [],
+              "matched_imports": [],
+              "path": "psycopg_binary.libs/libkrb5-138a6e7a.so.3.3",
+              "role": "caller-side",
+              "sha256": "699a5d77386702975951fb4d719ecc7f2a8a99e3bf07c04901bb4e508fc6b163",
+              "size": 1067705
+            },
+            {
+              "linked_openssl": [],
+              "matched_imports": [],
+              "path": "psycopg_binary.libs/libkrb5support-bba7dd31.so.0.1",
+              "role": "caller-side",
+              "sha256": "dcd22fcb775157912400d3fc70d38cb722c81539b340f00596a556807e87c61c",
+              "size": 395881
+            },
+            {
+              "linked_openssl": [],
+              "matched_imports": [],
+              "path": "psycopg_binary.libs/liblber-39a5c986.so.2.0.200",
+              "role": "caller-side",
+              "sha256": "ba34d65e9311738220963ada65eb8af1c21fc1aa21a59b67f9d90257dfeb9b6d",
+              "size": 265745
+            },
+            {
+              "linked_openssl": [
+                "libcrypto-5e36fb0e.so.3",
+                "libssl-8f8630a8.so.3"
+              ],
+              "matched_imports": [],
+              "path": "psycopg_binary.libs/libldap-ed13728f.so.2.0.200",
+              "role": "caller-side",
+              "sha256": "14bdab9186c092030749f6441771dee20eef27be68bfcbd349829602b4ec4d79",
+              "size": 607033
+            },
+            {
+              "linked_openssl": [
+                "libcrypto-5e36fb0e.so.3",
+                "libssl-8f8630a8.so.3"
+              ],
+              "matched_imports": [],
+              "path": "psycopg_binary.libs/libpq-53e4e5f8.so.5.18",
+              "role": "caller-side",
+              "sha256": "005cf0155d5c6712950445d67c6773c322481f4a35d825e7e802b7118f419360",
+              "size": 661793,
+              "stream_tls_apis": [
+                "SSL_CTX_new",
+                "SSL_connect",
+                "SSL_set_bio"
+              ]
+            },
+            {
+              "linked_openssl": [],
+              "matched_imports": [],
+              "path": "psycopg_binary.libs/libsasl2-076b3c1f.so.3.0.0",
+              "role": "caller-side",
+              "sha256": "101ed25950445ee037d948864059f53ce76b6d057e35f51b2a4f1b97e146108a",
+              "size": 331305
+            },
+            {
+              "linked_openssl": [
+                "libcrypto-5e36fb0e.so.3"
+              ],
+              "matched_imports": [],
+              "path": "psycopg_binary.libs/libssl-8f8630a8.so.3",
+              "role": "embedded-openssl-provider",
+              "sha256": "f43ad55c18136e899edbb199863032d0d32b02bfc4c97ce5183f7cb35d7a1800",
+              "size": 1204601
+            },
+            {
+              "linked_openssl": [],
+              "matched_imports": [],
+              "path": "psycopg_binary/_psycopg.cpython-314-aarch64-linux-gnu.so",
+              "role": "caller-side",
+              "sha256": "a05b61c3926266cd9ae64c25691e997a081923b61791ef56727af91ef0aea4ae",
+              "size": 988865
+            },
+            {
+              "linked_openssl": [],
+              "matched_imports": [],
+              "path": "psycopg_binary/pq.cpython-314-aarch64-linux-gnu.so",
+              "role": "caller-side",
+              "sha256": "5edabda09a1c9a59669131cd35ac17582cd26ab6ce7d1f16b668a7a02c00c5ff",
+              "size": 530089
+            }
+          ],
+          "sha256": "eed1ac135d652e4454777afb4e4bb52cf88520bbfa2f30ae83066cd4df656697"
+        }
+      }
+    }
+  ],
+  "release": "v0.1.0-alpha.111",
+  "revision": "2bc0e98f60286c30e76b7bcc260faeb39eed31f0",
+  "schema_version": 1,
+  "scope": "Default Extra CODEOWNERS service paths, not standalone library behavior, operator commands, or whole-program reachability.",
+  "source_checks": {
+    "cryptography_private_key": {
+      "entrypoint": "load_pem_private_key",
+      "file": "src/rust/src/backend/keys.rs",
+      "rsa_key_parser": "parse_pkcs1_private_key"
+    },
+    "openssl": {
+      "certificate_lookup": {
+        "existing_stack_argument": "NULL",
+        "file": "crypto/x509/by_file.c",
+        "versions": [
+          "3.5.9",
+          "4.0.3"
+        ]
+      },
+      "dane_enablement": {
+        "file": "doc/man3/SSL_CTX_dane_enable.pod",
+        "required_setup": [
+          "SSL_CTX_dane_enable",
+          "SSL_dane_enable"
+        ],
+        "versions": [
+          "3.5.9",
+          "4.0.3"
+        ]
+      },
+      "stream_alias": {
+        "SSLv23_method": "TLS_method",
+        "file": "include/openssl/ssl.h.in"
+      }
+    },
+    "postgres_libpq": {
+      "absent": [
+        "DTLS_method",
+        "OSSL_QUIC",
+        "SSL_dane_enable",
+        "CMS_verify",
+        "SSL_CTX_set_cert_flags",
+        "SSL_accept"
+      ],
+      "context": "SSL_CTX_new(SSLv23_method())",
+      "file": "src/interfaces/libpq/fe-secure-openssl.c",
+      "handshake": "SSL_connect(conn->ssl)"
+    }
+  },
+  "sources": {
+    "cryptography-50.0.2.tar.gz": "7b46165bb56eb4704e2eaaf86f3c940d19154535d9b0ca7d6d590b04060e00d5",
+    "openldap-2.6.16.tgz": "8d8452bc3f56aa7a392c62dd377733f83d1314eed6c52fe44028439a3bb4df18",
+    "openssl-3.5.9.tar.gz": "796831ec533bf41998eaaee9d632d921b8a69f57394fa4086ff01a941113d26d",
+    "openssl-4.0.3.tar.gz": "325b5c806167c13b40b1ffeadfe0248197c00eccc4cf123ec1e28d2d2fd216d9",
+    "postgres-REL_18_6.tar.gz": "ff9b1187e3ab120282b9f3e09a5efba2425838b3a843150c5cb2f019f47ac400"
+  }
+}
