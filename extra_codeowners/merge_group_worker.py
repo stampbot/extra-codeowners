@@ -3,28 +3,47 @@
 from __future__ import annotations
 
 import asyncio
-from contextlib import suppress
-from typing import TYPE_CHECKING
+from contextlib import AbstractAsyncContextManager, suppress
+from typing import Protocol
 
 import structlog
 
 from extra_codeowners.api_budget import request_lane
-from extra_codeowners.github import GitHubError, GitHubRateLimitError
+from extra_codeowners.database import QueueStore
+from extra_codeowners.github import GitHubClient, GitHubError, GitHubRateLimitError
 from extra_codeowners.merge_group_work import ClaimedMergeGroup, MergeGroupQueue
-from extra_codeowners.merge_queue import MergeGroupTrigger
+from extra_codeowners.merge_queue import MergeCandidateAssessment, MergeGroupTrigger
 from extra_codeowners.models import EvaluationConclusion
-
-if TYPE_CHECKING:
-    from extra_codeowners.service import EvaluationService
+from extra_codeowners.settings import Settings
 
 log = structlog.get_logger()
+
+
+class CandidateEvaluator(Protocol):
+    """The policy read and writer guards used by the candidate lane."""
+
+    store: QueueStore
+    github: GitHubClient
+    settings: Settings
+
+    def _check_write_guard(
+        self, installation_id: int, head_sha: str
+    ) -> AbstractAsyncContextManager[None]: ...
+
+    def _authority_publish_guard(
+        self, installation_id: int
+    ) -> AbstractAsyncContextManager[None]: ...
+
+    async def assess_merge_candidate(
+        self, trigger: MergeGroupTrigger, *, authority_generation: int
+    ) -> MergeCandidateAssessment: ...
 
 
 class MergeGroupWorker:
     """Run the leased candidate queue for one explicitly configured repository."""
 
     def __init__(
-        self, evaluator: EvaluationService, owner: str, repository: tuple[str, int]
+        self, evaluator: CandidateEvaluator, owner: str, repository: tuple[str, int]
     ) -> None:
         self.evaluator = evaluator
         self.queue = MergeGroupQueue(evaluator.store)

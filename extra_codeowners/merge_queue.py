@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from extra_codeowners.merge_queue_paths import MergeTreeEvidenceError, require_object_id
-from extra_codeowners.models import ChangedFile, ChangedFileStatus
+from extra_codeowners.models import ChangedFile, ChangedFileStatus, EvaluationResult
 
 MergeGroupAction = Literal["checks_requested", "destroyed"]
 
@@ -180,6 +180,14 @@ class MergeCandidateIdentity:
     pull_id: str
     pull_number: int
     pull_head_sha: str
+
+
+@dataclass(frozen=True, slots=True)
+class MergeCandidateAssessment:
+    """Read-only result, tied to a candidate and the PR head whose reviews it used."""
+
+    identity: MergeCandidateIdentity
+    result: EvaluationResult
 
 
 def _require_ref(value: object, ref: str, sha: str) -> None:

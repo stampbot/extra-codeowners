@@ -54,7 +54,7 @@ from extra_codeowners.github import (
 )
 from extra_codeowners.merge_group_worker import MergeGroupWorker
 from extra_codeowners.merge_queue import (
-    MergeCandidateIdentity,
+    MergeCandidateAssessment,
     MergeGroupTrigger,
     MergeQueueEvidenceError,
     require_candidate_pull,
@@ -137,14 +137,6 @@ class _CandidatePolicyScope:
     repository_full_name: str
     pull_number: int
     authority_generation: int
-
-
-@dataclass(frozen=True, slots=True)
-class MergeCandidateAssessment:
-    """Read-only result, tied to a candidate and the PR head whose reviews it used."""
-
-    identity: MergeCandidateIdentity
-    result: EvaluationResult
 
 
 class SharedHeadLeaseLostError(RuntimeError):

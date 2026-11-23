@@ -15,10 +15,14 @@ from extra_codeowners.database import AuthorityRequest, JobRequest, QueueStore
 from extra_codeowners.github import GitHubClient, GitHubError
 from extra_codeowners.merge_group_work import ClaimedMergeGroup
 from extra_codeowners.merge_group_worker import MergeGroupWorker
-from extra_codeowners.merge_queue import MergeCandidateIdentity, MergeGroupTrigger
+from extra_codeowners.merge_queue import (
+    MergeCandidateAssessment,
+    MergeCandidateIdentity,
+    MergeGroupTrigger,
+)
 from extra_codeowners.migrations import upgrade_database
 from extra_codeowners.models import EvaluationConclusion, EvaluationResult
-from extra_codeowners.service import EvaluationService, MergeCandidateAssessment
+from extra_codeowners.service import EvaluationService
 from extra_codeowners.settings import Settings
 
 TRIGGER = MergeGroupTrigger(
