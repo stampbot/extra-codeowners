@@ -40,6 +40,10 @@ OPENSSL_URL = re.compile(
     r"https://github\.com/openssl/openssl/releases/download/"
     r"openssl-([0-9]+\.[0-9]+\.[0-9]+)/openssl-\1\.tar\.gz\Z"
 )
+OPENSSL_TAG_URL = re.compile(
+    r"https://codeload\.github\.com/openssl/openssl/tar\.gz/refs/tags/"
+    r"openssl-([0-9]+\.[0-9]+\.[0-9]+)\Z"
+)
 LIBXCRYPT_URL = re.compile(
     r"https://github\.com/besser82/libxcrypt/releases/download/"
     r"v([0-9]+\.[0-9]+\.[0-9]+)/libxcrypt-\1\.tar\.xz\Z"
@@ -47,6 +51,10 @@ LIBXCRYPT_URL = re.compile(
 LIBXCRYPT_RECIPE_URL = re.compile(
     r"https://raw\.githubusercontent\.com/pypa/manylinux/[0-9a-f]{40}/"
     r"docker/build_scripts/install-libxcrypt\.sh\Z"
+)
+LIBXCRYPT_HELPER_URL = re.compile(
+    r"https://raw\.githubusercontent\.com/pypa/manylinux/[0-9a-f]{40}/"
+    r"docker/build_scripts/build_utils\.sh\Z"
 )
 LIBFFI_URL = re.compile(
     r"https://codeload\.github\.com/libffi/libffi/tar\.gz/refs/tags/v([0-9]+\.[0-9]+\.[0-9]+)\Z"
@@ -67,9 +75,15 @@ SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 POSTGRESQL_URL = re.compile(
     r"https://ftp\.postgresql\.org/pub/source/v([0-9]+\.[0-9]+)/postgresql-\1\.tar\.bz2\Z"
 )
+POSTGRESQL_TAG_URL = re.compile(
+    r"https://codeload\.github\.com/postgres/postgres/tar\.gz/refs/tags/REL_([0-9]+_[0-9]+)\Z"
+)
 OPENLDAP_URL = re.compile(
     r"https://www\.openldap\.org/software/download/OpenLDAP/openldap-release/"
     r"openldap-([0-9]+\.[0-9]+\.[0-9]+)\.tgz\Z"
+)
+KERBEROS_URL = re.compile(
+    r"https://kerberos\.org/dist/krb5/([0-9]+\.[0-9]+)/krb5-(\1\.[0-9]+)\.tar\.gz\Z"
 )
 RPM_URL = re.compile(
     r"https://(?:vault\.centos\.org/7\.9\.2009/(?:os|updates)/Source/SPackages/"
@@ -94,6 +108,25 @@ REVIEWED_BINARY_SOURCES: dict[tuple[str, str], dict[str, Any]] = {
         "delivery_scope": (
             "Version-matched Psycopg wrapper source and upstream build recipes only; "
             "bundled native-library source and build-environment inputs remain separate gaps."
+        ),
+    },
+    ("psycopg-binary", "3.3.9"): {
+        "url": "https://codeload.github.com/psycopg/psycopg/tar.gz/bced8a8993064a378d5ca852215d99f73f4c6cae",
+        "sha256": "4f2d829269920e7f55697b89d460adfdab8515e694769b29abd0430353b7fb4c",
+        "size": 799219,
+        "path": "sources/psycopg-binary/psycopg-bced8a8993064a378d5ca852215d99f73f4c6cae.tar.gz",
+        "source_commit": "bced8a8993064a378d5ca852215d99f73f4c6cae",
+        "source_tag": "3.3.9",
+        "source_tag_object": "bdf05275c90ed4053905c23cba1bc288ba136b4a",
+        "recipe_paths": [
+            ".github/workflows/packages-bin.yml",
+            ".github/workflows/build-and-cache-libpq.yml",
+            "tools/ci/build_libpq.sh",
+            "tools/ci/strip_wheel.sh",
+        ],
+        "delivery_scope": (
+            "Version-matched Psycopg wrapper source and upstream build recipes. "
+            "Bundled native-library sources are recorded separately."
         ),
     },
 }
@@ -132,7 +165,7 @@ def _text(value: object, pattern: re.Pattern[str]) -> str:
 
 def _recipe_platform(
     name: str, version: str, architecture: str, python: dict[str, Any]
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], int]:
     # These are reviewed checkout data, never repository policy or a URL
     # supplied by the wheel. The installed SBOM must match the reviewed bytes.
     try:
@@ -140,9 +173,10 @@ def _recipe_platform(
             recipe = _json(stream.read(MAX_METADATA + 1))
     except FileNotFoundError as error:
         raise PythonSourceError("native source recipe requires review for this version") from error
+    schema = recipe.get("schema_version")
     if (
-        type(recipe.get("schema_version")) is not int
-        or recipe["schema_version"] != 1
+        type(schema) is not int
+        or schema not in ({1, 2} if name == "psycopg-binary" else {1})
         or recipe.get("distribution") != name
         or recipe.get("version") != version
         or not isinstance(recipe.get("platforms"), dict)
@@ -177,13 +211,13 @@ def _recipe_platform(
         or selected[0].get("size") != expected_size
     ):
         raise PythonSourceError("wheel SBOM changed; review its native source recipe")
-    return platform
+    return platform, schema
 
 
 def _native_recipe(
     name: str, version: str, architecture: str, python: dict[str, Any]
 ) -> list[dict[str, Any]]:
-    platform = _recipe_platform(name, version, architecture, python)
+    platform, _ = _recipe_platform(name, version, architecture, python)
     expected_hash = platform["sbom_sha256"]
     records = platform.get("sources")
     if not isinstance(records, list) or not 1 <= len(records) <= 64:
@@ -230,7 +264,7 @@ def _native_recipe(
 def _embedded_recipe(
     name: str, version: str, architecture: str, python: dict[str, Any]
 ) -> list[dict[str, Any]]:
-    platform = _recipe_platform(name, version, architecture, python)
+    platform, _ = _recipe_platform(name, version, architecture, python)
     records = platform.get("sources")
     if not isinstance(records, list) or len(records) != 1 or not isinstance(records[0], dict):
         raise PythonSourceError("invalid embedded OpenSSL source recipe")
@@ -269,6 +303,7 @@ def _all_sources(manifest: dict[str, Any]) -> list[dict[str, Any]]:
         *manifest.get("native_sources", []),
         *embedded,
         *(source["build_recipe"] for source in embedded if "build_recipe" in source),
+        *(helper for source in embedded for helper in source.get("build_recipe_dependencies", [])),
         *(
             artifact
             for item in manifest.get("wheel_supplements", [])
@@ -282,7 +317,7 @@ def _libxcrypt_recipe(
     name: str, version: str, architecture: str, python: dict[str, Any], package: dict[str, Any]
 ) -> dict[str, Any]:
     """Bind the amd64 libxcrypt archive and script to the locked Psycopg wheel."""
-    platform = _recipe_platform(name, version, architecture, python)
+    platform, platform_schema = _recipe_platform(name, version, architecture, python)
     path = RECIPE_DIRECTORY / f"libxcrypt-{name}-{version}-{architecture}.json"
     try:
         with path.open("rb") as stream:
@@ -291,7 +326,7 @@ def _libxcrypt_recipe(
         raise PythonSourceError("libxcrypt source recipe requires review for this wheel") from error
     if (
         type(recipe.get("schema_version")) is not int
-        or recipe["schema_version"] != 1
+        or recipe["schema_version"] != platform_schema
         or recipe.get("distribution") != name
         or recipe.get("distribution_version") != version
         or recipe.get("architecture") != architecture
@@ -344,7 +379,9 @@ def _libxcrypt_recipe(
         builder.get("image"),
         re.compile(r"quay\.io/pypa/manylinux2014_x86_64@sha256:[0-9a-f]{64}\Z"),
     )
-    return {
+    script_url = _text(script.get("url"), LIBXCRYPT_RECIPE_URL)
+    recipe_dir = f"recipes/{name}/{architecture}/libxcrypt-{version_of_source}"
+    result = {
         "distribution": name,
         "distribution_version": version,
         "source_component": {"name": "libxcrypt", "version": version_of_source},
@@ -360,13 +397,33 @@ def _libxcrypt_recipe(
         "size": size,
         "path": f"embedded/{name}/{architecture}/libxcrypt-{version_of_source}.tar.xz",
         "build_recipe": {
-            "url": _text(script.get("url"), LIBXCRYPT_RECIPE_URL),
+            "url": script_url,
             "sha256": _text(script.get("sha256"), SHA256),
             "size": script_size,
-            "path": f"recipes/{name}/{architecture}/libxcrypt-{version_of_source}/"
-            "install-libxcrypt.sh",
+            "path": f"{recipe_dir}/install-libxcrypt.sh",
         },
     }
+    if platform_schema == 2:
+        helper = builder.get("helper_script")
+        if not isinstance(helper, dict):
+            raise PythonSourceError("libxcrypt recipe omitted its build helper")
+        helper_url = _text(helper.get("url"), LIBXCRYPT_HELPER_URL)
+        helper_size = helper.get("size")
+        if (
+            helper_url != f"{script_url.rsplit('/', 1)[0]}/build_utils.sh"
+            or type(helper_size) is not int
+            or not 0 < helper_size <= 64 * 1024
+        ):
+            raise PythonSourceError("invalid libxcrypt build helper identity")
+        result["build_recipe_dependencies"] = [
+            {
+                "url": helper_url,
+                "sha256": _text(helper.get("sha256"), SHA256),
+                "size": helper_size,
+                "path": f"{recipe_dir}/build_utils.sh",
+            },
+        ]
+    return result
 
 
 def _verify_wheel_file(native: object, path: str, binding: dict[str, Any]) -> None:
@@ -518,12 +575,12 @@ def _wheel_supplement(
 def _psycopg_custom_recipe(
     name: str, version: str, architecture: str, python: dict[str, Any]
 ) -> list[dict[str, Any]]:
-    platform = _recipe_platform(name, version, architecture, python)
+    platform, schema = _recipe_platform(name, version, architecture, python)
     records = platform.get("custom_sources")
     native = python.get("native_files")
     if (
         not isinstance(records, list)
-        or len(records) != 3
+        or len(records) != (4 if schema == 2 else 3)
         or not isinstance(native, list)
         or not 1 <= len(native) <= 4096
         or any(not isinstance(item, dict) for item in native)
@@ -535,6 +592,15 @@ def _psycopg_custom_recipe(
         "libpq": {"libpq"},
         "openldap": {"libldap", "liblber"},
     }
+    if schema == 2:
+        patterns.update(openssl=OPENSSL_TAG_URL, libpq=POSTGRESQL_TAG_URL, krb5=KERBEROS_URL)
+        expected_libraries["krb5"] = {
+            "libcom_err",
+            "libgssapi_krb5",
+            "libk5crypto",
+            "libkrb5",
+            "libkrb5support",
+        }
     result = []
     seen: set[str] = set()
     used_files: set[str] = set()
@@ -549,7 +615,8 @@ def _psycopg_custom_recipe(
         url = _text(record.get("url"), patterns[component])
         match = patterns[component].fullmatch(url)
         assert match is not None
-        if match.group(1) != component_version:
+        url_version = match.group(2) if component == "krb5" else match.group(1).replace("_", ".")
+        if url_version != component_version:
             raise PythonSourceError("custom source identity disagrees with its URL")
         checksum = _text(record.get("sha256"), re.compile(r"[0-9a-f]{64}\Z"))
         size = record.get("size")
@@ -572,11 +639,21 @@ def _psycopg_custom_recipe(
                 raise PythonSourceError("ambiguous custom native-file binding")
             used_files.add(path)
             library = path.rsplit("/", 1)[1].split("-", 1)[0]
-            if library not in expected_libraries[component] or library in bound_libraries:
+            if (
+                library not in expected_libraries[component]
+                or library in bound_libraries
+                or (
+                    component == "krb5" and library == "libcom_err" and not path.endswith(".so.3.0")
+                )
+            ):
                 raise PythonSourceError("custom source component has ambiguous native files")
             bound_libraries.add(library)
             _verify_wheel_file(native, path, binding)
-        filename = url.rsplit("/", 1)[1]
+        if schema == 2 and component in {"openssl", "libpq"}:
+            prefix = "openssl" if component == "openssl" else "postgresql"
+            filename = f"{prefix}-{component_version}.tar.gz"
+        else:
+            filename = url.rsplit("/", 1)[1]
         if len(filename) > 100:
             raise PythonSourceError("custom source filename exceeds the archive format limit")
         result.append(
@@ -819,14 +896,18 @@ def fetch(source: dict[str, Any]) -> bytes:
         or PSYCOPG_URL.fullmatch(value)
         or RPM_URL.fullmatch(value)
         or OPENSSL_URL.fullmatch(value)
+        or OPENSSL_TAG_URL.fullmatch(value)
         or LIBXCRYPT_URL.fullmatch(value)
         or LIBXCRYPT_RECIPE_URL.fullmatch(value)
+        or LIBXCRYPT_HELPER_URL.fullmatch(value)
         or LIBFFI_URL.fullmatch(value)
         or CFFI_RECIPE_URL.fullmatch(value)
         or UTF8_RANGE_NOTICE_URL.fullmatch(value)
         or MYPYC_NOTICE_URL.fullmatch(value)
         or POSTGRESQL_URL.fullmatch(value)
+        or POSTGRESQL_TAG_URL.fullmatch(value)
         or OPENLDAP_URL.fullmatch(value)
+        or KERBEROS_URL.fullmatch(value)
     ):
         raise PythonSourceError("invalid source archive URL")
     url = value

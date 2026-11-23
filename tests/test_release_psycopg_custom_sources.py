@@ -18,13 +18,16 @@ RECIPE = "psycopg-binary-3.3.4.json"
 LIBXCRYPT_RECIPE = "libxcrypt-psycopg-binary-3.3.4-amd64.json"
 
 
-def recipe() -> dict[str, Any]:
-    value: dict[str, Any] = json.loads((sources.RECIPE_DIRECTORY / RECIPE).read_bytes())
+def recipe(version: str = "3.3.4") -> dict[str, Any]:
+    path = sources.RECIPE_DIRECTORY / f"psycopg-binary-{version}.json"
+    value: dict[str, Any] = json.loads(path.read_bytes())
     return value
 
 
-def inputs(architecture: str = "amd64", schema: int = 4) -> tuple[bytes, bytes]:
-    platform = recipe()["platforms"][architecture]
+def inputs(
+    architecture: str = "amd64", schema: int = 4, version: str = "3.3.4"
+) -> tuple[bytes, bytes]:
+    platform = recipe(version)["platforms"][architecture]
     native = [
         {
             **binding,
@@ -40,7 +43,7 @@ def inputs(architecture: str = "amd64", schema: int = 4) -> tuple[bytes, bytes]:
         "image": {"architecture": architecture, "platform_digest": DIGEST},
         "python": {
             "source_recipe_schema": schema,
-            "distributions": [{"normalized_name": "psycopg-binary", "version": "3.3.4"}],
+            "distributions": [{"normalized_name": "psycopg-binary", "version": version}],
             "embedded_sboms": [
                 {
                     "distribution": "psycopg-binary",
@@ -59,7 +62,7 @@ name = "psycopg-binary"
 version = "3.3.4"
 source = {registry = "https://pypi.org/simple"}
 """
-    return json.dumps(inventory).encode(), lock
+    return json.dumps(inventory).encode(), lock.replace(b"3.3.4", version.encode())
 
 
 def libxcrypt_inputs() -> tuple[dict[str, Any], dict[str, Any], bytes]:
@@ -308,6 +311,99 @@ def test_new_psycopg_version_requires_custom_recipe_review() -> None:
         sources.plan(
             inventory.replace(b"3.3.4", b"3.3.5"), lock.replace(b"3.3.4", b"3.3.5"), "amd64", DIGEST
         )
+
+
+@pytest.mark.parametrize(("architecture", "rpm_count"), [("amd64", 3), ("arm64", 4)])
+def test_new_wheel_retains_custom_kerberos_separately_from_the_distro_rpm(
+    architecture: str, rpm_count: int
+) -> None:
+    manifest = sources.plan(*inputs(architecture, version="3.3.9"), architecture, DIGEST)
+    kerberos = next(
+        source
+        for source in manifest["embedded_sources"]
+        if source["source_component"]["name"] == "krb5"
+    )
+    assert kerberos["source_component"]["version"] == "1.22.2"
+    assert len(kerberos["wheel_files"]) == 5
+    (com_err,) = [row["path"] for row in kerberos["wheel_files"] if "/libcom_err-" in row["path"]]
+    assert com_err.endswith(".so.3.0")
+    assert len(manifest["native_sources"]) == rpm_count
+    assert any(
+        row["reported_package"]["name"] == "libcom_err" for row in manifest["native_sources"]
+    )
+
+
+@pytest.mark.parametrize("change", ["missing_kerberos", "distro_com_err"])
+def test_new_wheel_rejects_incomplete_or_misattributed_kerberos(
+    change: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    raw, lock = inputs(version="3.3.9")
+    reviewed = recipe("3.3.9")
+    custom = reviewed["platforms"]["amd64"]["custom_sources"]
+    if change == "missing_kerberos":
+        custom.pop()
+    else:
+        kerberos = next(row for row in custom if row["name"] == "krb5")
+        binding = next(row for row in kerberos["wheel_files"] if "/libcom_err-" in row["path"])
+        wrong = binding["path"].removesuffix(".so.3.0") + ".so.2.1"
+        inventory = json.loads(raw)
+        native = next(
+            row
+            for row in inventory["python"]["native_files"]
+            if row["path"].endswith(binding["path"])
+        )
+        native["path"] = native["path"].removesuffix(binding["path"]) + wrong
+        raw = json.dumps(inventory).encode()
+        binding["path"] = wrong
+    (tmp_path / "psycopg-binary-3.3.9.json").write_text(json.dumps(reviewed))
+    monkeypatch.setattr(sources, "RECIPE_DIRECTORY", tmp_path)
+    with pytest.raises(sources.PythonSourceError):
+        sources.plan(raw, lock, "amd64", DIGEST)
+
+
+@pytest.mark.parametrize("helper_change", [None, "missing", "wrong_revision"])
+def test_new_libxcrypt_recipe_requires_a_helper_from_the_pinned_revision(
+    helper_change: str | None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    raw, lock = inputs(schema=5, version="3.3.9")
+    inventory = json.loads(raw)
+    name = "libxcrypt-psycopg-binary-3.3.9-amd64.json"
+    reviewed = json.loads((sources.RECIPE_DIRECTORY / name).read_bytes())
+    binding = reviewed["wheel_file"]
+    inventory["python"]["native_files"].append(
+        {
+            **binding,
+            "path": "opt/venv/lib/python3.14/site-packages/" + binding["path"],
+            "kind": "regular",
+            "link_target": None,
+        }
+    )
+    wheel = "psycopg_binary-3.3.9-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.whl"
+    lock += f'wheels = [{{url = "https://files.pythonhosted.org/{wheel}", '.encode()
+    lock += f'hash = "sha256:{reviewed["wheel_sha256"]}"}}]\n'.encode()
+    if helper_change == "missing":
+        del reviewed["builder"]["helper_script"]
+    elif helper_change == "wrong_revision":
+        reviewed["builder"]["helper_script"]["url"] = (
+            f"https://raw.githubusercontent.com/pypa/manylinux/{'a' * 40}/"
+            "docker/build_scripts/build_utils.sh"
+        )
+    (tmp_path / name).write_text(json.dumps(reviewed))
+    (tmp_path / "psycopg-binary-3.3.9.json").write_text(json.dumps(recipe("3.3.9")))
+    monkeypatch.setattr(sources, "RECIPE_DIRECTORY", tmp_path)
+    if helper_change is not None:
+        with pytest.raises(sources.PythonSourceError, match="helper"):
+            sources.plan(json.dumps(inventory).encode(), lock, "amd64", DIGEST)
+        return
+
+    plan = sources.plan(json.dumps(inventory).encode(), lock, "amd64", DIGEST)
+    libxcrypt = next(
+        row for row in plan["embedded_sources"] if row["source_component"]["name"] == "libxcrypt"
+    )
+    (helper,) = libxcrypt["build_recipe_dependencies"]
+    assert helper["path"] == "recipes/psycopg-binary/amd64/libxcrypt-4.5.2/build_utils.sh"
+    subplan = {**plan, "sources": [], "native_sources": [], "embedded_sources": [libxcrypt]}
+    assert helper in sources._all_sources(subplan)
 
 
 @pytest.mark.parametrize(

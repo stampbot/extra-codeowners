@@ -1,5 +1,32 @@
 # Runtime vulnerability review
 
+## Psycopg's OpenSSL update: November 23, 2026 UTC
+
+Psycopg Binary 3.3.9 bundles OpenSSL 3.5.9 on amd64 and arm64. Both locked
+wheel hashes match the files from the upstream build of the signed 3.3.9
+source tag. The amd64 PostgreSQL tests connected over TLS 1.3 with the binary
+driver and covered migration and recovery.
+
+Two `fixed` statements name the bundled 3.5.9 component. OpenSSL documents
+the fixes for [CVE-2026-35189](https://openssl-library.org/news/secadv/20260929.txt)
+in 3.5.9 and [CVE-2026-75803](https://openssl-library.org/news/secadv/20260825.txt)
+in 3.5.8. Vexcalibur formatted those two findings offline. The application
+still processes certificates on database TLS connections. The statements
+don't rely on a claim that this code is unreachable.
+
+The current statement no longer lists the 3.5.4 component or carries its
+exclusions over to the new wheel. For shared findings, the remaining
+Cryptography assessments describe that component's unchanged RSA signing
+path. Its two candidate findings above remain under investigation.
+Debian and CPython keep their own existing statements. Neither new wheel
+imports the reviewed glibc formatting, resolver-debug or zlib gzip-writer
+functions. The application, TLS settings and Dockerfile are unchanged.
+
+The [source-archive reference](../../docs/reference/source-archives.md#psycopgs-custom-library-sources)
+describes the wheel's new native source recipes. See
+[#341](https://github.com/stampbot/extra-codeowners/issues/341) for the build
+and library evidence.
+
 ## glibc formatting paths: November 22, 2026 UTC
 
 [CVE-2026-19499][glibc-monetary] affects the monetary formatting functions

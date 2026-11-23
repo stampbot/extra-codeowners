@@ -24,11 +24,17 @@ _NOTICES = {
     "libpq": ("postgresql", ("COPYRIGHT",)),
     "openldap": ("openldap", ("COPYRIGHT", "LICENSE")),
     "libxcrypt": ("libxcrypt", ("COPYING.LIB", "LICENSING")),
+    "krb5": ("krb5", ("NOTICE",)),
 }
 # Each reviewed label identifies a top-level source text, not all code in a wheel.
 _SOURCE_LICENSES = {
     ("openssl", "3.5.4", "967311f84955316969bdb1d8d4b983718ef42338639c621ec4c34fddef355e99"): (
         "openssl-3.5.4/LICENSE.txt",
+        "7d5450cb2d142651b8afa315b5f238efc805dad827d91ba367d8516bc9d49e7a",
+        "Apache-2.0",
+    ),
+    ("openssl", "3.5.9", "796831ec533bf41998eaaee9d632d921b8a69f57394fa4086ff01a941113d26d"): (
+        "openssl-openssl-3.5.9/LICENSE.txt",
         "7d5450cb2d142651b8afa315b5f238efc805dad827d91ba367d8516bc9d49e7a",
         "Apache-2.0",
     ),
@@ -42,8 +48,18 @@ _SOURCE_LICENSES = {
         "5ed3ce5c9373dff7f98b1fae7a6c7ccd98df7d734d46d24c1bcebf1240be8307",
         "PostgreSQL",
     ),
+    ("libpq", "18.6", "ff9b1187e3ab120282b9f3e09a5efba2425838b3a843150c5cb2f019f47ac400"): (
+        "postgres-REL_18_6/COPYRIGHT",
+        "3d6af92ff8a4c2cdf69afb1cf44edea727922f5cd0cf8b5f72b11cdecac8fdfd",
+        "PostgreSQL",
+    ),
     ("openldap", "2.6.9", "2cb7dc73e9c8340dff0d99357fbaa578abf30cc6619f0521972c555681e6b2ff"): (
         "openldap-2.6.9/LICENSE",
+        "310fe25c858a9515fc8c8d7d1f24a67c9496f84a91e0a0e41ea9975b1371e569",
+        "OLDAP-2.8",
+    ),
+    ("openldap", "2.6.16", "8d8452bc3f56aa7a392c62dd377733f83d1314eed6c52fe44028439a3bb4df18"): (
+        "openldap-2.6.16/LICENSE",
         "310fe25c858a9515fc8c8d7d1f24a67c9496f84a91e0a0e41ea9975b1371e569",
         "OLDAP-2.8",
     ),
@@ -51,6 +67,11 @@ _SOURCE_LICENSES = {
         "libxcrypt-4.5.2/COPYING.LIB",
         "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551",
         "LGPL-2.1-or-later",
+    ),
+    ("krb5", "1.22.2", "3243ffbc8ea4d4ac22ddc7dd2a1dc54c57874c40648b60ff97009763554eaf13"): (
+        "krb5-1.22.2/NOTICE",
+        "d37fcb886de2ad1c602f61c99c6893bcbd9a1949f54d9a6bb40d191204eb605e",
+        "MIT Kerberos distribution notice",
     ),
 }
 
@@ -92,7 +113,10 @@ def read_notices(source: dict[str, Any], contents: bytes) -> dict[str, bytes]:
     if name not in _NOTICES:
         raise NativeNoticeError("native source notice selection requires review")
     prefix, filenames = _NOTICES[name]
-    expected = {f"{prefix}-{version}/{filename}" for filename in filenames}
+    checksum = source.get("sha256")
+    review = _SOURCE_LICENSES.get((name, version, checksum)) if isinstance(checksum, str) else None
+    archive_root = review[0].partition("/")[0] if review else f"{prefix}-{version}"
+    expected = {f"{archive_root}/{filename}" for filename in filenames}
     found: dict[str, bytes] = {}
     path = source["path"]
     try:
@@ -145,7 +169,7 @@ def source_license_evidence(source: dict[str, Any], notices: dict[str, bytes]) -
     review = _SOURCE_LICENSES.get(key)
     if review is None:
         raise NativeNoticeError("source license needs review for this archive")
-    path, notice_sha256, license_id = review
+    path, notice_sha256, label = review
     text = notices.get(path)
     if text is None or hashlib.sha256(text).hexdigest() != notice_sha256:
         raise NativeNoticeError("source license text differs from the reviewed notice")
@@ -153,7 +177,7 @@ def source_license_evidence(source: dict[str, Any], notices: dict[str, bytes]) -
         "licenses": [
             {
                 "license": {
-                    "id": license_id,
+                    "name" if component["name"] == "krb5" else "id": label,
                     "text": {
                         "contentType": "text/plain",
                         "encoding": "base64",

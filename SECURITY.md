@@ -103,12 +103,16 @@ Wheel-bundled OpenSSL and other C libraries have separate
 reports. For the alpha.107 baseline, OpenVEX excludes 25 native OpenSSL
 component/CVE pairs within the reviewed paths. It leaves 57 pairs
 `under_investigation`.
-The [caller evidence](security/vex/native-openssl-callers.json) and runtime
-review explain their scope. TLS and certificate-processing findings are not
-blanket exclusions. The image severity gate does not yet assess the native
+Those assessments remain in the alpha.107 release. The Psycopg 3.3.9 update
+replaces its bundled OpenSSL 3.5.4 with 3.5.9 on both architectures. Its VEX
+records the [certificate-processing fix](https://openssl-library.org/news/secadv/20260929.txt)
+and the [one-shot cipher fix](https://openssl-library.org/news/secadv/20260825.txt)
+for that copy only. The 3.5.4 exclusions don't apply to the new wheel.
+Cryptography and Debian still have separate OpenSSL identities.
+
+The image severity gate does not yet assess the native
 catalog; its separate reports retain both raw and VEX-applied results. See
-[recurring scans](https://github.com/stampbot/extra-codeowners/issues/22) and
-the [Psycopg wheel update](https://github.com/stampbot/extra-codeowners/issues/341)
+[recurring scans](https://github.com/stampbot/extra-codeowners/issues/22)
 for further security work.
 
 The OpenSSL-only statements for [3.5.6](security/vex/openssl-3.5.6.openvex.json)

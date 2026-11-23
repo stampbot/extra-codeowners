@@ -122,6 +122,24 @@ def review(
     return packages
 
 
+def verify_grafted_library_coverage(
+    native_files: list[dict[str, Any]],
+    rpm_packages: dict[str, dict[str, Any]],
+    embedded_sources: list[dict[str, Any]],
+) -> None:
+    """Require one source binding for every file in psycopg_binary.libs."""
+    shipped = _shipped_files(native_files)
+    candidates = [filename for package in rpm_packages.values() for filename in package["files"]]
+    candidates.extend(
+        PurePosixPath(file["path"]).name
+        for source in embedded_sources
+        if source["distribution"] == "psycopg-binary"
+        for file in source["wheel_files"]
+    )
+    if len(candidates) != len(set(candidates)) or set(candidates) != set(shipped):
+        raise RpmBinaryEvidenceError("incomplete or overlapping Psycopg grafted library sources")
+
+
 def package_properties(
     package: dict[str, Any], source: dict[str, Any], selected_notices: list[dict[str, Any]]
 ) -> dict[str, str]:

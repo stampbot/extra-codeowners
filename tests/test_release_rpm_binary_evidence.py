@@ -82,6 +82,37 @@ def test_vendor_attribution_stays_separate_from_license_conclusion(
     assert "license" not in properties
 
 
+@pytest.mark.parametrize("defect", [None, "missing", "duplicate", "unknown"])
+def test_all_grafted_libraries_need_one_source(
+    inputs: tuple[dict[str, Any], bytes, dict[str, Any], list[dict[str, Any]]],
+    defect: str | None,
+) -> None:
+    platform, _, _, native = inputs
+    custom_name = "libfixture-aabbccdd.so.1"
+    grafted = {
+        **native[0],
+        "path": native[0]["path"].rsplit("/", 1)[0] + "/" + custom_name,
+    }
+    native.append(grafted)
+    custom: list[dict[str, Any]] = [
+        {
+            "distribution": "psycopg-binary",
+            "wheel_files": [{"path": f"psycopg_binary.libs/{custom_name}"}],
+        }
+    ]
+    if defect == "missing":
+        custom[0]["wheel_files"].clear()
+    elif defect == "duplicate":
+        custom[0]["wheel_files"].append({"path": f"psycopg_binary.libs/{FILENAME}"})
+    elif defect == "unknown":
+        native.append({**grafted, "path": grafted["path"].replace("libfixture", "libunknown")})
+    if defect is None:
+        evidence.verify_grafted_library_coverage(native, platform["packages"], custom)
+    else:
+        with pytest.raises(evidence.RpmBinaryEvidenceError, match="grafted library"):
+            evidence.verify_grafted_library_coverage(native, platform["packages"], custom)
+
+
 @pytest.mark.parametrize(
     "change, message",
     [

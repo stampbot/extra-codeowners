@@ -1,0 +1,32 @@
+{
+  "schema_version": 2,
+  "distribution": "psycopg-binary",
+  "distribution_version": "3.3.9",
+  "architecture": "amd64",
+  "wheel_sha256": "4992acd5a7479013d52615b8c23fdce9bc22f3cacbfb1007fa474e6b5ebe94c7",
+  "source": {
+    "version": "4.5.2",
+    "url": "https://github.com/besser82/libxcrypt/releases/download/v4.5.2/libxcrypt-4.5.2.tar.xz",
+    "sha256": "71513a31c01a428bccd5367a32fd95f115d6dac50fb5b60c779d5c7942aec071",
+    "size": 669820
+  },
+  "wheel_file": {
+    "path": "psycopg_binary.libs/libcrypt-bc2db45e.so.1",
+    "sha256": "e2a6f6ff300e287a60dfc0c6fdb76ee01e333068df7c60b4e87453d942ccda65",
+    "size": 221657
+  },
+  "builder": {
+    "image": "quay.io/pypa/manylinux2014_x86_64@sha256:c163a278006f45883c117b4166b93cdc7b574b62e58292ed9e52879579841d77",
+    "library_sha256": "bc2db45ec146e845246bd2610dd4d8bf8c9176adda585ba15f51dd30dbf36459",
+    "script": {
+      "url": "https://raw.githubusercontent.com/pypa/manylinux/f35117eba15fd6819d78a706c10d6e16eedf007d/docker/build_scripts/install-libxcrypt.sh",
+      "sha256": "2a1e4846c84b32c02e6ebf93b3b8dc0837f67ed5a0b89be1c9200ae5d2f8dde8",
+      "size": 1893
+    },
+    "helper_script": {
+      "url": "https://raw.githubusercontent.com/pypa/manylinux/f35117eba15fd6819d78a706c10d6e16eedf007d/docker/build_scripts/build_utils.sh",
+      "sha256": "8d1a9b3bad070ac388e28063ec777b479d5fbaaeb08a0a8de812013471f5082b",
+      "size": 3723
+    }
+  }
+}
