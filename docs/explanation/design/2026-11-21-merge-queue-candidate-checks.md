@@ -10,7 +10,7 @@ check on GitHub's queue candidate could close that particular gap.
 | Field | Value |
 | --- | --- |
 | Date | 2026-11-21 |
-| Status | Proposed; experimental worker implemented, live validation incomplete |
+| Status | Proposed; first deployed one-entry fixture tested |
 | Owner | Maintainers |
 | Scope | A first proof with one queue entry and one disposable repository |
 | Related | [Shared-commit blocker][shared-head], [merge-queue work][queue-work], [November 20 provider test][provider-test] |
@@ -31,6 +31,12 @@ stayed the same. That's one observation, not a guarantee against reuse.
 We wrote those checks by hand. They don't establish the contents of a
 `merge_group` delivery, prove that a candidate contains only the expected
 PR, or show that the policy evaluator can publish to one safely.
+
+The [November 23 deployed test][worker-test] exercised authentic deliveries
+with the opt-in worker. GitHub blocked an undelivered candidate and a
+redelivered candidate without approval, then merged an eligible control.
+That result applies to one entry in the test queue. It doesn't cover
+larger groups, all queue rebuilds, or every change to approval evidence.
 
 The service's read-only assessment uses the normal PR evaluator. It reads
 policy at the candidate's target commit and checks approvals against the PR
@@ -148,5 +154,6 @@ The [shared-commit issue][shared-head] remains the release gate.
 [shared-head]: https://github.com/stampbot/extra-codeowners/issues/1
 [queue-work]: https://github.com/stampbot/extra-codeowners/issues/4
 [provider-test]: https://github.com/stampbot/extra-codeowners/issues/4#issuecomment-7029566017
+[worker-test]: ../../maintainers/evidence/2026-11-23-candidate-checks-during-delivery-loss.md
 [merge-group-event]: https://docs.github.com/en/webhooks/webhook-events-and-payloads#merge_group
 [queue-entry]: https://docs.github.com/en/graphql/reference/pulls#mergequeueentry

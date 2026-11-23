@@ -23,7 +23,7 @@ production repositories.
 | --- | --- |
 | Source checkout | Available for development and evaluation |
 | GitHub App Manifest registration | Implemented |
-| Policy evaluation and Check Run | Implemented; production provider contracts remain open in [issue #1][issue-1] |
+| Policy evaluation and Check Run | Implemented; [live provider evidence][issue-1] covers advisory checks and a disposable one-entry queue |
 | GitHub release | Published automatically by successful `main` CI; an interrupted run may leave a draft until that run is retried |
 | Container image | Signed, attested, multi-platform alpha image in GitHub Container Registry (GHCR) |
 | Helm chart | Signed alpha OCI chart in GHCR |
@@ -149,11 +149,6 @@ GitHub's commit-to-pull-requests endpoint has another limit: its response does
 not say whether the list is complete. The service cannot revoke a check for a
 pull request GitHub omitted.
 
-[Issue #1][issue-1] owns the remaining live tests:
-
-- repeated validation of the explicit failure reset used during reevaluation
-- shared-head opening and retargeting with delayed or lost webhooks.
-
 Live tests have confirmed that an expected App source works in both
 repository and organization rulesets, that an App review can satisfy the
 ordinary approval count, and that the explicit failure reset blocks a merge.
@@ -166,20 +161,21 @@ date and release.
 The [access-loss tests](../maintainers/live-validation.md) covered suspension,
 uninstall and reinstall, transfer, deletion, and removal of one selected
 repository. A prior green check can stay visible after access is gone. A
-[separate queue probe](../maintainers/evidence/2026-11-20-repository-lifecycle-and-queue.md)
-showed that GitHub waited for a candidate check from the expected App. The
-probe used manual Check Runs, so it does not establish that Extra CODEOWNERS
-can safely evaluate merge groups.
+[native review handback](../maintainers/evidence/2026-11-23-candidate-checks-during-delivery-loss.md#hand-back-enforcement-before-removing-access)
+blocked an actual merge attempt while the App was suspended, even though
+the old success was still visible.
 
-A [later operator probe](../maintainers/evidence/2026-11-21-queued-policy-proof.md)
-evaluated live policy and proved that GitHub merged a verified candidate in the
-single-entry fixture. It also refused a PR whose head was based on an older
-target tip. An opt-in worker can now exercise that path in a disposable
-repository. Tests against the deployed worker are still needed; the earlier
-operator probe doesn't verify its webhook or write path.
+In the [deployed one-entry queue test](../maintainers/evidence/2026-11-23-candidate-checks-during-delivery-loss.md),
+two PRs showed an old success while their webhooks were unavailable. GitHub
+waited for separate candidate checks. A redelivered candidate failed, an
+undelivered candidate timed out, and an eligible control merged. This
+addresses the shared-head window for the tested rules in [issue #1][issue-1],
+not for a required check on the PR head alone.
 
 Keep GitHub's native **Require review from Code Owners** rule on production
-repositories until that contract is proven.
+repositories. The one-entry worker remains experimental, and
+[issue #4](https://github.com/stampbot/extra-codeowners/issues/4) tracks
+broader queue support. The tests don't make review dismissal atomic with merge.
 
 ## DCO and release-evidence limits
 

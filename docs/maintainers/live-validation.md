@@ -109,6 +109,14 @@ App review changed the result to failure on the same candidate. A separate
 pass let GitHub merge only into the disposable branch. The verifier refused
 a PR based on the earlier tip.
 
+The [November 23 deployed-worker receipt](evidence/2026-11-23-candidate-checks-during-delivery-loss.md)
+records a new PR and a retargeted PR that inherited an old pass. GitHub
+waited for a check on each candidate instead of merging on the old pass.
+The App rejected a redelivered candidate, GitHub dropped the undelivered
+candidate on timeout, and a fresh eligible candidate merged. Restoring
+native review also blocked a PR with an old passing check after the
+playground installation was suspended.
+
 ## Diagnostics and approval probe: November 2, 2026
 
 Alpha.65 runs on two Kubernetes nodes with shared PostgreSQL state. The
