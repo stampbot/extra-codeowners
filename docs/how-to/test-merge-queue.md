@@ -112,11 +112,11 @@ progress, don't assume that a rule change can cancel it.
    rule and the original approval count. Preserve unrelated checks and
    restrictions.
 2. Verify that GitHub lists the restored rule on the target. Use a test PR
-   with a green App check and enough ordinary approvals, but no review from
-   an eligible code owner. Confirm GitHub reports the missing code-owner
-   review. A PR blocked only by a queued check or the ordinary review count
-   isn't evidence that native review works. Don't proceed if you can't
-   confirm the native rule.
+   whose author isn't a code owner of the changed path. Give it a green App
+   check and enough ordinary approvals, but no review from an eligible code
+   owner. Confirm GitHub reports the missing code-owner review. Neither a
+   successful queue admission nor a PR blocked by an unrelated check proves
+   the restored rule works. Don't proceed if you can't confirm it.
 3. Remove the fixture's required App check and any queue rule added for
    the experiment. Return the rest of the rules to the captured baseline.
    Clear both experimental repository settings on every replica.

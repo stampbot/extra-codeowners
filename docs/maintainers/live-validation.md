@@ -156,6 +156,11 @@ and the alpha.115 worker passed the candidate. GitHub merged that commit
 without a bypass. The worker retired the check's timer and left its
 successful result intact.
 
+The [November 23 database rehearsal](evidence/2026-11-23-published-schema-0012-restore.md)
+used the published alpha.114 and alpha.115 images. It migrated an isolated
+restore to schema 0012, verified that each image refused the other's schema,
+and restored the earlier backup with the test delivery intact.
+
 ## Diagnostics and approval probe: November 2, 2026
 
 Alpha.65 runs on two Kubernetes nodes with shared PostgreSQL state. The

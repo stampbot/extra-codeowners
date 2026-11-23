@@ -106,9 +106,10 @@ plan too.
 Use this order if evaluation is unavailable, wrong, or being retired:
 
 1. Restore GitHub's native **Require review from Code Owners** rule.
-2. Wait until GitHub shows that protection as active. Confirm GitHub reports
-   a missing code-owner review on a test PR whose App check and ordinary
-   approval count are already satisfied.
+2. Wait until GitHub shows that protection as active. Use a test PR whose
+   author doesn't own the changed path. Confirm GitHub reports a missing
+   code-owner review even though the App check and ordinary approval count
+   are already satisfied.
 3. Remove the `Extra CODEOWNERS / approval` requirement.
 4. Disable or remove repository policy.
 5. Only then remove the repository from the App installation or suspend the

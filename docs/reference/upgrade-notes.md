@@ -201,6 +201,11 @@ it doesn't infer which old checks passed or withdraw them at upgrade. Empty
 an active experimental fixture queue before draining the deployment. The
 compatibility marker moves from `10` to `11`.
 
+The [published-image rehearsal](../maintainers/evidence/2026-11-23-published-schema-0012-restore.md)
+verified upgrading an alpha.114 backup to alpha.115 and restoring the
+earlier schema on disposable PostgreSQL. Verify a separate backup of your
+own database before changing its schema.
+
 No supported application release predates the planned `0.1.0`. Databases
 created by pre-release builds have no Alembic revision, so the current `0.1.0`
 source provides the one-time `--adopt-pre-alembic-schema` path. Adoption
