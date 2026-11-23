@@ -45,6 +45,11 @@ covered by the PR file evidence, including both names of a rename. The
 assessment rereads the PR and queue entry before handing the result to the
 worker.
 
+The [November 22 operator probe](../../maintainers/evidence/2026-11-22-relative-queue-candidate.md)
+observed that path coverage for a behind-base PR with two commits. It also
+confirmed that a check on a replaced candidate didn't satisfy the new
+candidate during the test. Neither result came from the deployed worker.
+
 Storage keys the work by installation, repository ID and candidate commit.
 A cancellation stays with that commit. If an earlier checks request arrives
 after cancellation, it can't put that candidate back into evaluation.
