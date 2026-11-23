@@ -17,10 +17,12 @@ wheels and other missing notice material remain under
 For machine-readable C-library identities and their source-recipe bindings,
 use the companion [wheel-native catalogs](native-components.md). Those catalogs
 do not replace the source archives or establish complete source delivery.
+To check whether the released image loads your replacement for a bundled
+Psycopg library, use the [replacement test](../how-to/test-replacement-library.md).
 
 ## CPython contents and identity
 
-Each bundle has two regular files:
+Every bundle includes:
 
 - `Python-<version>.tar.xz`, unchanged from the upstream download.
 - `manifest.json`, recording the source URL, SHA-256, size, and CPython version.
@@ -37,14 +39,39 @@ Release verification fails if that asset or its signature is missing. Older
 inventories without this field remain verifiable; successful verification of
 an old release does not mean it delivered source.
 
-In schema version 2, `manifest.json` also has a `bundled_notices` list. For
-CPython 3.14.10, it points to the Expat 2.9.0 license, the HACL* SHA-3 notice,
-and the libmpdec 2.5.1 notice headers. Each entry gives the file's path and
-SHA-256 inside the retained `Python-3.14.10.tar.xz`.
-Use the list to find those texts; it's not a complete list of bundled
-components. The release workflow requires a reviewed list for the exact
-source archive. Older, signed schema version 1 bundles still verify without
-that list.
+Starting with schema version 2, `manifest.json` lists selected
+`bundled_notices` with a path and SHA-256 inside the source archive. For
+CPython 3.14.10, version 2 indexes Expat, libmpdec, and the HACL* SHA-3 notice.
+
+Version 3 also indexes the notices for HACL* MD5, SHA-1, SHA-2, BLAKE2, and
+HMAC. The amd64 manifest includes the two BLAKE2 SIMD files selected by that
+build; the arm64 manifest doesn't. These entries point to the source files
+that contain the notices. They don't inventory every file or built object.
+
+Version 5 also indexes CPython's `Doc/license.rst`. That file contains
+the Python project's licenses and acknowledgements for incorporated
+software, including Mersenne Twister, mimalloc and the Unicode Character
+Database. Read it inside the retained source archive. Its index entry
+identifies the upstream notice text; it isn't a list of linked libraries.
+
+The release workflow requires the current index for the reviewed archive.
+Older, signed schema versions 1 through 4 remain verifiable with their
+original contents.
+
+### pip in an earlier image layer
+
+Schema versions 4 and 5 also include `image-manifest.json` and
+`layer-sources/pip-26.2.2.tar.gz`. An earlier layer ships pip before a later
+layer removes it from the final filesystem. Both layers still ship with the
+image, so the source bundle includes pip even though the final filesystem
+inventory doesn't list it.
+
+The verifier hashes the raw OCI manifest and compares it to the released
+platform digest. It then requires the reviewed pip layer for that platform.
+The bundle's `layer_sources` entry records the wheel path and hash checked
+inside that layer, plus the pip source archive's path and hash. The retained
+archive contains pip's license texts and its vendored sources. This evidence
+covers pip, not every file from an earlier layer.
 
 ## Verify a CPython source bundle
 
@@ -91,9 +118,11 @@ archive checksum alone does not authenticate its publisher.
 
 The verifier rejects altered source bytes, a changed inventory, missing or
 duplicate members, links, and unexpected archive entries. Downloads and
-verification have a 64 MiB source limit; the outer bundle may be at most
-65 MiB before or after decompression. These limits apply to the retained
-compressed source archive, not to extracting it yourself.
+verification limit the CPython archive to 64 MiB. Schemas 4 and 5 add up to
+4 MiB for pip source and 64 KiB for the OCI manifest. The outer bundle is
+limited to 69 MiB plus 64 KiB before and after decompression; older bundles
+keep their 65 MiB limit. These limits don't bound what the upstream archives
+expand to if you extract them yourself.
 
 For license texts already present in the runtime, use the separate
 [recipient notice bundle](recipient-notices.md).
@@ -358,6 +387,41 @@ records that source and recipe; it does not prove a reproducible build or
 supply everything needed to relink the wheel. The arm64 library still uses
 the separate RPM source. Schema 4 and earlier bundles are unchanged.
 
+### The CFFI and Protobuf wheels
+
+Schema 6 adds `wheel_supplements` to the Python source manifest for amd64
+and arm64. Each entry identifies the locked wheel, the installed extension,
+and the retained Python source archive by SHA-256. If any of those change,
+the collector requires a new recipe instead of reusing the old evidence.
+
+- CFFI 2.1.0 statically links libffi 3.4.6 into `_cffi_backend`. The bundle
+  contains that version's source tarball (including its `LICENSE`) and the
+  CFFI workflow that builds it. Debian's separately installed `libffi8`
+  does not cover this copy.
+- Protobuf 7.35.1 includes `utf8_range` in `google/_upb/_message.abi3.so`.
+  The locked Protobuf source archive already contains the C sources. The
+  supplement adds their separate `utf8_range.LICENSE` notice from upstream.
+
+Look under `supplements/` in `python-source-<arch>.tar.gz` for these files.
+`manifest.json` records each path, origin, SHA-256 and size. The collector
+verifies the files without running the CFFI workflow. These entries retain
+version-matched source and notices; they do not reproduce either wheel build.
+
+### The charset-normalizer wheel
+
+Schema 7 also records the mypyc runtime inside the charset-normalizer
+3.4.9 wheels. Its entry in `wheel_supplements` identifies the wheel and
+the compiled extension by SHA-256. The wheel's own license doesn't
+include the runtime's notices.
+
+The bundle supplies `mypyc.LICENSE` and the three possible upstream source
+archives. Both shipped binaries export `CPyImport_SetDunderAttrs`. Of the
+published versions the upstream build could select, only 1.20.2, 2.0.0, and
+2.1.0 contain that function. The license file is identical in all three,
+including the Python Software Foundation terms for portions of the
+runtime. The manifest lists `source_candidates` rather than choosing one
+compiler version: the published wheels and SBOMs don't record that choice.
+
 ## Rust dependencies in Python wheels
 
 Releases whose inventory declares `python.rust_source_bundle` also supply
@@ -368,9 +432,9 @@ archive includes the source and notices supplied by its upstream package.
 The collector reads each wheel's version-matched Python source distribution
 and its top-level `Cargo.lock`. A registry dependency must match a lockfile
 entry with a crates.io origin and SHA-256 checksum. Workspace entries point
-back to the retained Python source archive. Downloads use fixed crates.io
-URLs, not the SBOM's download hints. The collector checks hashes, rejects
-redirects, and never executes upstream code or extracts it to disk.
+back to the retained Python source archive. Crate downloads use fixed
+crates.io URLs, not the SBOM's download hints. The collector checks hashes,
+rejects redirects, and never executes upstream code or extracts it to disk.
 
 `manifest.json` maps the reported Cargo components to those sources. It records
 the SBOM and lockfile hashes, preserves declared licenses, and binds the result
@@ -379,6 +443,20 @@ or ambiguous mappings stop publication. This covers the Cargo components
 reported by those SBOMs; it is not a complete inventory of native C libraries
 or a conclusion about license compliance. Those remaining checks are tracked
 in [issue #18][source-work].
+
+Schema 2 adds `registry_crate_notices`. Each entry names the crate archive,
+hashes its `Cargo.toml`, and records the crate's own license declaration
+separately from the wheel's SBOM. The entry lists the paths, sizes, and
+SHA-256 hashes of selected notice files inside the crate. It includes the
+file named by `package.license-file` when present, even if its filename
+doesn't look like a license.
+
+Some crates omit texts that upstream publishes separately. For the reviewed
+`wit-bindgen-rt` archive, the bundle includes three such files under
+`notices/wit-bindgen-rt/0.39.0/`. `upstream_notices` records the pinned source
+URL, size, and SHA-256 of each. Workspace components still point to the
+retained Python source archive. The index does not say which features were
+compiled into a wheel or whether every copyright holder's notice is present.
 
 From a trusted checkout of the release tag, download the platform's Rust and
 Python source bundles, recipient notice bundle, inventory, and digest file.
@@ -397,7 +475,10 @@ python -I -S -B tools/release_rust_sources.py verify \
 ```
 
 Verification succeeds silently. It rereads the retained SBOMs and lockfiles
-and checks every crate archive against the resulting plan. A crate archive is
+and checks every crate archive against the resulting plan. For schema 2 it
+also reconstructs the notice index and checks the supplemental texts. The
+release workflow requires that schema with `--require-notice-index`; leave
+the flag off for historical schema 1 bundles. A crate archive is
 limited to 16 MiB; the complete bundle is limited to 128 MiB before and after
 decompression. Older inventories without `python.rust_source_bundle` do not
 promise this evidence, so historical rescans do not require it retroactively.

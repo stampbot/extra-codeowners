@@ -60,6 +60,7 @@ def _sibling(name: str) -> ModuleType:
 
 _python_sources = _sibling("release_python_sources")
 _notices = _sibling("release_notices")
+_rust_notices = _sibling("release_rust_notices")
 
 
 def _json(data: bytes) -> dict[str, Any]:
@@ -306,26 +307,34 @@ def _check(source: dict[str, Any], contents: bytes) -> None:
 def fetch(source: dict[str, Any]) -> bytes:
     """Download only a checksum-pinned static.crates.io archive; reject redirects."""
     _validate_source(source)
+    contents = _download(source["url"], MAX_SOURCE)
+    _check(source, contents)
+    return contents
+
+
+def _download(url: str, limit: int) -> bytes:
+    """Read an already-approved exact URL with no redirects."""
     opener = urllib.request.build_opener(_python_sources._NoRedirect())
-    request = urllib.request.Request(  # noqa: S310 - exact HTTPS origin and path validated above.
-        source["url"], headers={"User-Agent": "extra-codeowners-source-evidence"}
+    request = urllib.request.Request(  # noqa: S310 - callers supply fixed or verified HTTPS URLs.
+        url, headers={"User-Agent": "extra-codeowners-source-evidence"}
     )
     for attempt in range(3):
         try:
             with opener.open(request, timeout=20) as response:
-                if response.status != 200 or response.geturl() != source["url"]:
+                if response.status != 200 or response.geturl() != url:
                     raise RustSourceError("unexpected Cargo source response")
                 length = response.headers.get("Content-Length")
                 if length is not None and (
-                    not length.isascii()
-                    or not length.isdecimal()
-                    or not 0 < int(length) <= MAX_SOURCE
+                    not length.isascii() or not length.isdecimal() or not 0 < int(length) <= limit
                 ):
                     raise RustSourceError("unsafe Cargo source response size")
-                contents: bytes = response.read(MAX_SOURCE + 1)
+                contents: bytes = response.read(limit + 1)
                 if length is not None and len(contents) != int(length):
                     raise RustSourceError("Cargo source response length differs from its header")
-            _check(source, contents)
+                if not 0 < len(contents) <= limit:
+                    raise RustSourceError(
+                        "Cargo source response exceeds its size limit or is empty"
+                    )
             return contents
         except urllib.error.HTTPError as error:
             if error.code not in {408, 429, 500, 502, 503, 504} or attempt == 2:
@@ -371,24 +380,63 @@ def fetch_all(manifest: dict[str, Any]) -> dict[str, bytes]:
     return payloads
 
 
-def build(manifest: dict[str, Any], payloads: dict[str, bytes]) -> bytes:
+def _with_notice_index(
+    manifest: dict[str, Any], payloads: dict[str, bytes], external: dict[str, Any]
+) -> dict[str, Any]:
+    index = []
+    for source in manifest["sources"]:
+        record: dict[str, Any] = _rust_notices.inspect(source, payloads[source["path"]])
+        prefix = f"notices/{source['name']}/{source['version']}/"
+        supplements = [path for path in sorted(external) if path.startswith(prefix)]
+        if not record["files"] and not supplements:
+            raise RustSourceError(f"no selected source notice for {source['path']}")
+        index.append({**record, "upstream_notice_paths": supplements})
+    external_records = [
+        {"path": path, "url": value.url, "size": value.size, "sha256": value.sha256}
+        for path, value in sorted(external.items())
+    ]
+    return {
+        **manifest,
+        "schema_version": 2,
+        "registry_crate_notices": index,
+        "upstream_notices": external_records,
+    }
+
+
+def build(
+    manifest: dict[str, Any],
+    payloads: dict[str, bytes],
+    *,
+    upstream_notices: dict[str, bytes] | None = None,
+) -> bytes:
     """Package verified source archives and their component mapping deterministically."""
-    encoded = (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode()
-    if len(encoded) > MAX_METADATA or len(manifest["sources"]) > MAX_COMPONENTS:
-        raise RustSourceError("Cargo source manifest exceeds its size limit")
     expected = {source["path"] for source in manifest["sources"]}
-    if len(expected) != len(manifest["sources"]) or set(payloads) != expected:
+    if len(expected) != len(manifest["sources"]) or len(expected) > MAX_COMPONENTS:
+        raise RustSourceError("invalid Cargo source plan")
+    if set(payloads) != expected:
         raise RustSourceError("Cargo source payloads do not match the plan")
     for source in manifest["sources"]:
         _check(source, payloads[source["path"]])
-    if sum(map(len, payloads.values())) > MAX_BUNDLE - MAX_METADATA:
+    external_payloads = {} if upstream_notices is None else upstream_notices
+    if upstream_notices is not None:
+        external = _rust_notices.supplements(manifest["sources"])
+        if set(external) != set(external_payloads):
+            raise RustSourceError("upstream Rust notice payloads do not match the plan")
+        for path, value in external.items():
+            value.check(external_payloads[path])
+        manifest = _with_notice_index(manifest, payloads, external)
+    encoded = (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode()
+    if len(encoded) > MAX_METADATA:
+        raise RustSourceError("Cargo source manifest exceeds its size limit")
+    files = {**payloads, **external_payloads}
+    if sum(map(len, files.values())) > MAX_BUNDLE - MAX_METADATA:
         raise RustSourceError("Cargo sources exceed the bundle size limit")
     output = io.BytesIO()
     with (
         gzip.GzipFile(fileobj=output, mode="wb", filename="", mtime=0) as compressed,
         tarfile.open(fileobj=compressed, mode="w|", format=tarfile.USTAR_FORMAT) as archive,
     ):
-        for path, contents in sorted({"manifest.json": encoded, **payloads}.items()):
+        for path, contents in sorted({"manifest.json": encoded, **files}.items()):
             member = tarfile.TarInfo(path)
             member.size = len(contents)
             member.mode = 0o644
@@ -396,7 +444,7 @@ def build(manifest: dict[str, Any], payloads: dict[str, bytes]) -> bytes:
     return output.getvalue()
 
 
-def verify(manifest: dict[str, Any], bundle: bytes) -> None:
+def verify(manifest: dict[str, Any], bundle: bytes, *, require_notice_index: bool = False) -> None:
     """Verify all bytes against a plan derived again from the signed inputs."""
     if len(bundle) > MAX_BUNDLE:
         raise RustSourceError("Cargo source bundle exceeds its size limit")
@@ -406,6 +454,9 @@ def verify(manifest: dict[str, Any], bundle: bytes) -> None:
     for source in expected.values():
         _validate_source(source)
     seen: set[str] = set()
+    stored: dict[str, Any] | None = None
+    external: dict[str, Any] = {}
+    indexed_payloads: dict[str, bytes] = {}
     with gzip.GzipFile(fileobj=io.BytesIO(bundle)) as compressed:
         raw = compressed.read(MAX_BUNDLE + 1)
     if len(raw) > MAX_BUNDLE:
@@ -415,33 +466,52 @@ def verify(manifest: dict[str, Any], bundle: bytes) -> None:
         for member in archive:
             if (
                 member.name in seen
-                or member.name not in {*expected, "manifest.json"}
+                or (stored is None and member.name != "manifest.json")
+                or member.name not in {*expected, *external, "manifest.json"}
                 or not member.isfile()
                 or member.pax_headers
                 or member.offset != offset
                 or member.offset_data != member.offset + 512
             ):
                 raise RustSourceError("unexpected Cargo source bundle member")
-            limit = MAX_METADATA if member.name == "manifest.json" else MAX_SOURCE
+            if member.name == "manifest.json":
+                limit = MAX_METADATA
+            elif member.name in external:
+                limit = external[member.name].size
+            else:
+                limit = MAX_SOURCE
             if not 0 < member.size <= limit:
                 raise RustSourceError("unsafe Cargo source member size")
             stream = archive.extractfile(member)
             assert stream is not None
             contents = stream.read(limit + 1)
             if member.name == "manifest.json":
-                if json.dumps(_json(contents), sort_keys=True) != json.dumps(
-                    manifest, sort_keys=True
-                ):
-                    raise RustSourceError("Cargo source manifest differs from its signed inputs")
+                stored = _json(contents)
+                schema = stored.get("schema_version")
+                if type(schema) is not int or schema not in (1, 2):
+                    raise RustSourceError("unsupported Cargo source manifest")
+                if require_notice_index and schema != 2:
+                    raise RustSourceError("Cargo source bundle omitted the required notice index")
+                if schema == 2:
+                    external = _rust_notices.supplements(manifest["sources"])
+            elif member.name in external:
+                external[member.name].check(contents)
             else:
                 _check(expected[member.name], contents)
+                assert stored is not None
+                if stored["schema_version"] == 2:
+                    indexed_payloads[member.name] = contents
             seen.add(member.name)
             offset = member.offset_data + ((member.size + 511) // 512) * 512
         padding = raw[offset:]
         if len(padding) < 1024 or len(padding) % 512 or any(padding):
             raise RustSourceError("Cargo source bundle has invalid end markers")
-    if seen != {*expected, "manifest.json"}:
+    if seen != {*expected, *external, "manifest.json"} or stored is None:
         raise RustSourceError("Cargo source bundle is incomplete")
+    if stored["schema_version"] == 2:
+        manifest = _with_notice_index(manifest, indexed_payloads, external)
+    if json.dumps(stored, sort_keys=True) != json.dumps(manifest, sort_keys=True):
+        raise RustSourceError("Cargo source manifest differs from its signed inputs")
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -454,6 +524,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--architecture", choices=["amd64", "arm64"], required=True)
     parser.add_argument("--platform-digest", required=True)
     parser.add_argument("--bundle", type=Path)
+    parser.add_argument("--require-notice-index", action="store_true")
     args = parser.parse_args(argv)
     if args.command != "plan" and args.bundle is None:
         parser.error("--bundle is required for fetch and verify")
@@ -469,12 +540,24 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "plan":
             sys.stdout.write(json.dumps(manifest, sort_keys=True, indent=2) + "\n")
         elif args.command == "fetch":
-            bundle = build(manifest, fetch_all(manifest))
-            verify(manifest, bundle)
+            supplemental = (
+                {
+                    path: _download(value.url, value.size)
+                    for path, value in _rust_notices.supplements(manifest["sources"]).items()
+                }
+                if args.require_notice_index
+                else None
+            )
+            bundle = build(manifest, fetch_all(manifest), upstream_notices=supplemental)
+            verify(manifest, bundle, require_notice_index=args.require_notice_index)
             args.bundle.write_bytes(bundle)
             args.bundle.chmod(0o444)
         else:
-            verify(manifest, _read(args.bundle, MAX_BUNDLE))
+            verify(
+                manifest,
+                _read(args.bundle, MAX_BUNDLE),
+                require_notice_index=args.require_notice_index,
+            )
     except (ValueError, OSError, EOFError, tarfile.TarError, zipfile.BadZipFile) as error:
         sys.stderr.write(f"Cargo source evidence failed: {error}\n")
         return 1

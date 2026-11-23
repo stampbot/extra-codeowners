@@ -12,6 +12,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+from typing import TypedDict
 from unittest.mock import Mock
 
 import pytest
@@ -21,6 +22,11 @@ from tools import release_sources as sources
 DIGEST = "sha256:" + "a" * 64
 SOURCE = b"opaque upstream source archive"
 SOURCE_NAME = "Python-3.14.7.tar.xz"
+
+
+class _PlatformArgs(TypedDict):
+    architecture: str
+    platform_digest: str
 
 
 def _inventory() -> bytes:
@@ -264,6 +270,9 @@ def test_notice_manifest_is_bound_to_exact_source_bytes(monkeypatch: pytest.Monk
         "_BUNDLED_NOTICES",
         {("3.14.7", archive_hash): (("fixture", "1.2.3", "Modules/fixture/NOTICE", notice_hash),)},
     )
+    monkeypatch.setattr(
+        sources, "_HACL_NOTICES", {("3.14.7", archive_hash): {"common": (), "amd64": ()}}
+    )
     bundle = sources.build_bundle(
         _inventory(),
         SOURCE,
@@ -272,7 +281,7 @@ def test_notice_manifest_is_bound_to_exact_source_bytes(monkeypatch: pytest.Monk
         require_bundled_notices=True,
     )
     manifest = _verify(bundle)
-    assert manifest["schema_version"] == 2
+    assert manifest["schema_version"] == 3
     assert manifest["bundled_notices"] == [
         {
             "component": "fixture",
@@ -309,4 +318,236 @@ def test_release_verifier_requires_notices_but_legacy_bundles_still_verify() -> 
             architecture="amd64",
             platform_digest=DIGEST,
             require_bundled_notices=True,
+        )
+
+
+@pytest.mark.parametrize("architecture", ["amd64", "arm64"])
+def test_current_notice_index_keeps_the_platform_scope_and_preserves_schema_two(
+    monkeypatch: pytest.MonkeyPatch, architecture: str
+) -> None:
+    key = ("3.14.7", hashlib.sha256(SOURCE).hexdigest())
+    monkeypatch.setattr(
+        sources,
+        "_BUNDLED_NOTICES",
+        {key: (("fixture", "1.2.3", "Modules/fixture/NOTICE", "a" * 64),)},
+    )
+    monkeypatch.setattr(
+        sources,
+        "_HACL_NOTICES",
+        {key: {"common": (("Common.c", "b" * 64),), "amd64": (("Simd.c", "c" * 64),), "arm64": ()}},
+    )
+    inventory = _inventory().replace(b"amd64", architecture.encode())
+    args = _PlatformArgs(architecture=architecture, platform_digest=DIGEST)
+    bundle = sources.build_bundle(inventory, SOURCE, require_bundled_notices=True, **args)
+    observed = sources.verify_bundle(inventory, bundle, require_bundled_notices=True, **args)
+    assert observed["schema_version"] == 3
+    records = observed["bundled_notices"]
+    assert isinstance(records, list)
+    paths = [record["path"] for record in records]
+    assert paths == [
+        "Python-3.14.7/Modules/fixture/NOTICE",
+        "Python-3.14.7/Modules/_hacl/Common.c",
+        *(["Python-3.14.7/Modules/_hacl/Simd.c"] if architecture == "amd64" else []),
+    ]
+    forged = {**observed, "bundled_notices": records[:-1]}
+    with pytest.raises(sources.SourceError, match="manifest differs"):
+        sources.verify_bundle(
+            inventory,
+            _repack(bundle, "manifest.json", json.dumps(forged).encode()),
+            require_bundled_notices=False,
+            **args,
+        )
+    legacy = {**observed, "schema_version": 2, "bundled_notices": records[:1]}
+    legacy_bundle = _repack(bundle, "manifest.json", json.dumps(legacy).encode())
+    assert sources.verify_bundle(
+        inventory, legacy_bundle, require_bundled_notices=False, **args
+    ) == (legacy)
+    with pytest.raises(sources.SourceError, match="omitted the required bundled notices"):
+        sources.verify_bundle(inventory, legacy_bundle, require_bundled_notices=True, **args)
+
+
+def test_current_notice_index_needs_matching_hacl_evidence(monkeypatch: pytest.MonkeyPatch) -> None:
+    key = ("3.14.7", hashlib.sha256(SOURCE).hexdigest())
+    monkeypatch.setattr(
+        sources,
+        "_BUNDLED_NOTICES",
+        {key: (("fixture", "1.2.3", "Modules/fixture/NOTICE", "a" * 64),)},
+    )
+    with pytest.raises(sources.SourceError, match="no HACL notice review"):
+        sources.build_bundle(
+            _inventory(),
+            SOURCE,
+            architecture="amd64",
+            platform_digest=DIGEST,
+            require_bundled_notices=True,
+        )
+
+
+@pytest.fixture
+def layer_case(monkeypatch: pytest.MonkeyPatch) -> tuple[bytes, str, bytes, bytes]:
+    source_key = ("3.14.7", hashlib.sha256(SOURCE).hexdigest())
+    layer_digest = "sha256:" + "c" * 64
+    child = json.dumps(
+        {
+            "schemaVersion": 2,
+            "mediaType": sources._OCI_MANIFEST,
+            "layers": [
+                {"digest": layer_digest, "size": 12345, "mediaType": sources._OCI_GZIP_LAYER}
+            ],
+        }
+    ).encode()
+    child_digest = "sha256:" + hashlib.sha256(child).hexdigest()
+    pip_source = b"fictional pip source distribution"
+    monkeypatch.setattr(sources, "_PIP_SOURCE_SHA256", hashlib.sha256(pip_source).hexdigest())
+    monkeypatch.setattr(sources, "_PIP_SOURCE_SIZE", len(pip_source))
+    monkeypatch.setattr(sources, "_PIP_LAYERS", {"amd64": (layer_digest, 12345)})
+    monkeypatch.setattr(
+        sources,
+        "_BUNDLED_NOTICES",
+        {source_key: (("fixture", "1.2.3", "Modules/fixture/NOTICE", "a" * 64),)},
+    )
+    monkeypatch.setattr(sources, "_HACL_NOTICES", {source_key: {"common": (), "amd64": ()}})
+    monkeypatch.setattr(sources, "_INCORPORATED_NOTICES", {source_key: "b" * 64})
+    inventory = _inventory().replace(DIGEST.encode(), child_digest.encode())
+    return inventory, child_digest, child, pip_source
+
+
+def test_layer_sources_round_trip_and_are_required_only_for_new_releases(
+    layer_case: tuple[bytes, str, bytes, bytes],
+) -> None:
+    inventory, digest, child, pip_source = layer_case
+    bundle = sources.build_bundle(
+        inventory,
+        SOURCE,
+        architecture="amd64",
+        platform_digest=digest,
+        layer_evidence=(child, pip_source),
+    )
+    manifest = sources.verify_bundle(
+        inventory,
+        bundle,
+        architecture="amd64",
+        platform_digest=digest,
+        require_layer_sources=True,
+    )
+    assert manifest["schema_version"] == 5
+    assert manifest["image_manifest"] == "image-manifest.json"
+    assert manifest["layer_sources"] == [sources._pip_record("amd64", digest, child, pip_source)]
+    notices = manifest["bundled_notices"]
+    assert isinstance(notices, list)
+    assert notices[-1] == {
+        "component": "cpython-incorporated-software",
+        "version": "3.14.7",
+        "path": "Python-3.14.7/Doc/license.rst",
+        "sha256": "b" * 64,
+    }
+    old = {**manifest, "schema_version": 4, "bundled_notices": notices[:-1]}
+    for claimed_schema, should_verify in [(4, True), (5, False)]:
+        changed = _repack(
+            bundle, "manifest.json", json.dumps({**old, "schema_version": claimed_schema}).encode()
+        )
+        if should_verify:
+            assert (
+                sources.verify_bundle(
+                    inventory,
+                    changed,
+                    architecture="amd64",
+                    platform_digest=digest,
+                    require_layer_sources=True,
+                )
+                == old
+            )
+        else:
+            with pytest.raises(sources.SourceError, match="differs"):
+                sources.verify_bundle(
+                    inventory,
+                    changed,
+                    architecture="amd64",
+                    platform_digest=digest,
+                    require_layer_sources=True,
+                )
+    with tarfile.open(fileobj=io.BytesIO(bundle), mode="r:gz") as tar:
+        for name, expected in [
+            ("image-manifest.json", child),
+            (sources._PIP_SOURCE_PATH, pip_source),
+        ]:
+            member = tar.extractfile(name)
+            assert member is not None and member.read() == expected
+
+    historical = sources.build_bundle(
+        inventory,
+        SOURCE,
+        architecture="amd64",
+        platform_digest=digest,
+        require_bundled_notices=True,
+    )
+    assert (
+        sources.verify_bundle(inventory, historical, architecture="amd64", platform_digest=digest)[
+            "schema_version"
+        ]
+        == 3
+    )
+    with pytest.raises(sources.SourceError, match="omitted the required layer sources"):
+        sources.verify_bundle(
+            inventory,
+            historical,
+            architecture="amd64",
+            platform_digest=digest,
+            require_layer_sources=True,
+        )
+    with pytest.raises(sources.SourceError, match="older source bundle schema"):
+        sources.verify_bundle(
+            inventory,
+            _repack(historical, "image-manifest.json", child, append=True),
+            architecture="amd64",
+            platform_digest=digest,
+        )
+
+
+@pytest.mark.parametrize("member", ["image-manifest.json", sources._PIP_SOURCE_PATH])
+def test_layer_verification_rejects_altered_retained_bytes(
+    layer_case: tuple[bytes, str, bytes, bytes], member: str
+) -> None:
+    inventory, digest, child, pip_source = layer_case
+    bundle = sources.build_bundle(
+        inventory,
+        SOURCE,
+        architecture="amd64",
+        platform_digest=digest,
+        layer_evidence=(child, pip_source),
+    )
+    with pytest.raises(sources.SourceError, match=r"child digest|reviewed size or checksum"):
+        sources.verify_bundle(
+            inventory,
+            _repack(bundle, member, b"forged"),
+            architecture="amd64",
+            platform_digest=digest,
+            require_layer_sources=True,
+        )
+
+
+@pytest.mark.parametrize("change", ["removed", "duplicated", "different-size", "different-media"])
+def test_layer_identity_drift_fails_even_with_a_matching_child_digest(
+    layer_case: tuple[bytes, str, bytes, bytes], change: str
+) -> None:
+    inventory, digest, child, pip_source = layer_case
+    altered = json.loads(child)
+    layer = altered["layers"][0]
+    if change == "removed":
+        layer["digest"] = "sha256:" + "d" * 64
+    elif change == "duplicated":
+        altered["layers"].append(layer)
+    elif change == "different-size":
+        layer["size"] += 1
+    else:
+        layer["mediaType"] = "application/vnd.oci.image.layer.v1.tar"
+    forged = json.dumps(altered).encode()
+    forged_digest = "sha256:" + hashlib.sha256(forged).hexdigest()
+    with pytest.raises(sources.SourceError, match="reviewed pip layer"):
+        sources.build_bundle(
+            inventory.replace(digest.encode(), forged_digest.encode()),
+            SOURCE,
+            architecture="amd64",
+            platform_digest=forged_digest,
+            layer_evidence=(forged, pip_source),
         )

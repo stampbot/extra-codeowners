@@ -446,6 +446,18 @@ jobs:
               "${ARCHITECTURE}" "${platform_digest}" >&2
             exit 1
           fi
+          for attempt in 1 2 3; do
+            if docker buildx imagetools inspect --raw "${IMAGE}@${platform_digest}" \
+              >"image-manifest-${ARCHITECTURE}.json"; then
+              break
+            fi
+            printf 'Native child manifest attempt %d failed.\n' "${attempt}" >&2
+            if (( attempt < 3 )); then
+              sleep "$((attempt * 5))"
+            else
+              exit 1
+            fi
+          done
           printf '%s\n' "${DIGEST}" >"build-index-${ARCHITECTURE}.txt"
           printf '%s\n' "${platform_digest}" >"digest-${ARCHITECTURE}.txt"
 
@@ -493,6 +505,8 @@ jobs:
             --bundle "recipient-notices-${ARCHITECTURE}.tar.gz"
           python -I -S -B tools/release_sources.py fetch \
             --require-bundled-notices \
+            --require-layer-sources \
+            --image-manifest "image-manifest-${ARCHITECTURE}.json" \
             --architecture "${ARCHITECTURE}" \
             --platform-digest "${platform_digest}" \
             --inventory "distribution-inventory-${ARCHITECTURE}.json" \
@@ -516,6 +530,7 @@ jobs:
             --python-sources "python-source-${ARCHITECTURE}.tar.gz" \
             --catalog "native-components-${ARCHITECTURE}.cdx.json"
           python -I -S -B tools/release_rust_sources.py fetch \
+            --require-notice-index \
             --architecture "${ARCHITECTURE}" \
             --platform-digest "${platform_digest}" \
             --inventory "distribution-inventory-${ARCHITECTURE}.json" \
@@ -741,6 +756,7 @@ jobs:
               --catalog "release/image/${architecture}/native-components-${architecture}.cdx.json"
             python -I -S -B tools/release_sources.py verify \
               --require-bundled-notices \
+              --require-layer-sources \
               --architecture "${architecture}" \
               --platform-digest "${platform_digest}" \
               --inventory "release/image/${architecture}/distribution-inventory-${architecture}.json" \
@@ -752,6 +768,7 @@ jobs:
               --lock uv.lock \
               --bundle "release/image/${architecture}/python-source-${architecture}.tar.gz"
             python -I -S -B tools/release_rust_sources.py verify \
+              --require-notice-index \
               --architecture "${architecture}" \
               --platform-digest "${platform_digest}" \
               --inventory "release/image/${architecture}/distribution-inventory-${architecture}.json" \

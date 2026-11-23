@@ -80,6 +80,11 @@ Those files are not added to the runtime notice bundle. See the
 [selected upstream notice contract](native-components.md#selected-upstream-notices)
 for the paths, hashes and remaining attribution limits.
 
+The [wheel supplements](source-archives.md#the-cffi-and-protobuf-wheels)
+also contain notices that the original wheels didn't ship. These stay in
+the Python source bundle, including the separate
+[mypyc runtime notice](source-archives.md#the-charset-normalizer-wheel).
+
 ## Verify a bundle
 
 Check out the release tag, then download the matching inventory and notice
@@ -125,6 +130,9 @@ It does not make alpha releases supported for production use.
 
 The raw inventory records installed Debian package identities and Python
 metadata so you can check those questions against the exact image.
+It describes the final filesystem, not the full layer history. The
+[CPython source bundle](source-archives.md#pip-in-an-earlier-image-layer)
+also retains pip source for the reviewed layer that still ships it.
 [Issue #18][issue-18] tracks missing notice attribution and the remaining
 work to deliver corresponding source.
 

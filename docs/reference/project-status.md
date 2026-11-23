@@ -199,19 +199,16 @@ hosted service are separate roadmap items, with no availability date.
 
 ## Remaining work {#remaining-work}
 
-This is the one list of open work. Other pages describe current limits and
-link here instead of keeping their own lists. Each item links to the issue that
-holds its evidence and decisions, except the requirement coverage gaps, which
-have no issue yet.
+Other pages describe current limits and link here for open work. The closed
+[provider verification issue][issue-1] records the tested GitHub behavior;
+the [production enforcement blocker](#production-enforcement-blocker) explains
+what those tests did not establish.
 
 ### Gates for the first supported release
 
 The [First supported release][milestone] milestone holds the gates that must
 close before the project is presented as production-ready:
 
-- [Issue #1][issue-1]: prove live check invalidation, shared-head behavior,
-  and installation access loss. This is the
-  [production enforcement blocker](#production-enforcement-blocker).
 - [Issue #18][issue-18]: finish notice attribution for CPython and libraries
   shipped in Python wheels and complete corresponding-source delivery.
   The release gate already rejects changes to captured third-party records

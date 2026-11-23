@@ -1,8 +1,8 @@
 {
   "@context": "https://openvex.dev/ns/v0.2.0",
-  "@id": "urn:uuid:ffb01c54-9409-5740-bd39-6eeceb3d38e0",
+  "@id": "urn:uuid:de0a7644-cf8c-5792-9446-0eca13985e32",
   "author": "Extra CODEOWNERS maintainers",
-  "last_updated": "2026-11-23T07:24:37Z",
+  "last_updated": "2026-11-23T08:57:57Z",
   "role": "VEX document producer",
   "statements": [
     {
@@ -2028,9 +2028,9 @@
       }
     }
   ],
-  "timestamp": "2026-11-23T07:24:37Z",
+  "timestamp": "2026-11-23T08:57:57Z",
   "tooling": "Vexcalibur + Extra CODEOWNERS runtime binding",
-  "version": 44,
+  "version": 46,
   "x_extra_codeowners_runtime": {
     "files": {
       ".dockerignore": "3f9dc9d3a79fe3085f25de88403b5563ad5c7fa7010bef94c5e55f24bd3cf691",
@@ -2091,9 +2091,12 @@
       "tools/source_recipes/cryptography-50.0.0.json": "14c8c00339ada71aa1f975b2d20052582f251a44c2c8f1cdbb2d8fc0bb802779",
       "tools/source_recipes/libxcrypt-psycopg-binary-3.3.4-amd64.json": "9d8fce80d3a12112639d7d393cbb7b51d4fae93b8891e2e5bb63183d2df57872",
       "tools/source_recipes/psycopg-binary-3.3.4.json": "ec227aa110315f82c25335837e258806930c7afbe980c8b2ff6b476343c243b5",
+      "tools/source_recipes/wheel-supplement-cffi-2.1.0.json": "c8772df66c2e766fbd8d62f2891123ba3341b94e3f59fff96efc5c5eed70f034",
+      "tools/source_recipes/wheel-supplement-charset-normalizer-3.4.9.json": "9df99186ee25d2452f08e4b4de17faf148695b054cc1feeac571922406f8e9ad",
+      "tools/source_recipes/wheel-supplement-protobuf-7.35.1.json": "5b407c288cf74e090f4934113f9bb6f7907a37d6ccbb228321bedb0612b03c8f",
       "uv.lock": "9b38f0929d3ea110b3d016bc638547e9f6244949009d2bc4dadff6141d496f90"
     },
-    "review": "Retain the reviewed version-matched amd64 libxcrypt source and builder script for the pinned wheel. No binary, runtime behavior, dependency or assessment changes relative to main.",
+    "review": "Retain the upstream mypyc license and candidate sources for the shipped charset-normalizer wheel; runtime and vulnerability assessments unchanged.",
     "schema_version": 1
   }
 }
