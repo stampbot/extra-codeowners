@@ -13,7 +13,6 @@ from sqlalchemy import select
 
 import extra_codeowners.merge_group_work as candidate_work
 from extra_codeowners.database import JobRequest, QueueStore, WebhookDelivery, utcnow
-from extra_codeowners.merge_group_work import MergeGroupQueue
 from extra_codeowners.merge_queue import MergeCandidateIdentity, MergeGroupTrigger
 from extra_codeowners.migrations import upgrade_database
 
@@ -53,7 +52,7 @@ def test_delivery_and_candidate_survive_an_ingress_restart(
     ingress, worker = replica_pair
     assert ingress.accept_delivery("one", "merge_group", TRIGGER)
     ingress.close()
-    claim = MergeGroupQueue(worker).claim("first-worker", 60)
+    claim = candidate_work.MergeGroupQueue(worker).claim("first-worker", 60)
     assert claim is not None
     assert claim.trigger == TRIGGER
     assert claim.generation == 1
@@ -62,7 +61,7 @@ def test_delivery_and_candidate_survive_an_ingress_restart(
         assert delivery is not None
         assert delivery.merge_group_digest is not None and len(delivery.merge_group_digest) == 64
     assert not worker.accept_delivery("one", "merge_group", TRIGGER)
-    assert MergeGroupQueue(worker).is_current(claim)
+    assert candidate_work.MergeGroupQueue(worker).is_current(claim)
 
 
 def test_conflicting_candidate_delivery_is_not_committed(
@@ -77,7 +76,7 @@ def test_conflicting_candidate_delivery_is_not_committed(
         ingress.accept_delivery("invalid", "merge_group", conflicting)
     with worker.session() as session:
         assert session.scalars(select(WebhookDelivery.delivery_id)).all() == ["one"]
-    claim = MergeGroupQueue(worker).claim("current", 60)
+    claim = candidate_work.MergeGroupQueue(worker).claim("current", 60)
     assert claim is not None and claim.trigger == TRIGGER and claim.generation == 1
 
 
@@ -87,7 +86,7 @@ def test_cancelled_candidate_cannot_be_revived_by_delayed_delivery(
 ) -> None:
     # Verifies XCO-001. Duplicates and reordering cannot authorize a cancelled candidate.
     ingress, worker = replica_pair
-    queue = MergeGroupQueue(worker)
+    queue = candidate_work.MergeGroupQueue(worker)
     cancelled = replace(TRIGGER, action="destroyed")
     original = None
     if not destroyed_first:
@@ -116,7 +115,7 @@ def test_lease_takeover_with_same_owner_cannot_reuse_expired_attempt(
     now = utcnow() + timedelta(seconds=1)
     clock = Mock(return_value=now)
     monkeypatch.setattr(candidate_work, "utcnow", clock)
-    first, second = MergeGroupQueue(ingress), MergeGroupQueue(worker)
+    first, second = candidate_work.MergeGroupQueue(ingress), candidate_work.MergeGroupQueue(worker)
     old = first.claim("same-slot", 5)
     assert old is not None
     clock.return_value = now + timedelta(seconds=5)
@@ -138,7 +137,7 @@ def test_retry_waits_without_starving_a_cancellation(
     now = utcnow() + timedelta(seconds=1)
     clock = Mock(return_value=now)
     monkeypatch.setattr(candidate_work, "utcnow", clock)
-    queue = MergeGroupQueue(worker)
+    queue = candidate_work.MergeGroupQueue(worker)
     first = queue.claim("one", 60)
     assert first is not None and queue.retry(first, 30)
     assert queue.claim("two", 60) is None
@@ -155,7 +154,7 @@ def test_review_delivery_requeues_bound_candidate_with_no_cross_repository_effec
 ) -> None:
     ingress, worker = replica_pair
     assert ingress.accept_delivery("queued", "merge_group", TRIGGER)
-    queue = MergeGroupQueue(worker)
+    queue = candidate_work.MergeGroupQueue(worker)
     first = queue.claim("initial", 60)
     assert first is not None and queue.bind(first, IDENTITY)
     assert not queue.bind(first, replace(IDENTITY, entry_id="MQE_wrong"))
