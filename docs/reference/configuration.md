@@ -316,7 +316,12 @@ does not depend on this probe.
 | `EXTRA_CODEOWNERS_ORG_CONFIG_REPOSITORY` | string | `.github` | Literal repository name used for organization policy: `1`–`100` characters, with no `/` or `\`, and not `.` or `..`. Changing it creates a different trust-policy location and changes which repository is excluded from evaluation. |
 | `EXTRA_CODEOWNERS_POLICY_PATH` | string | `.github/extra-codeowners.toml` | Literal relative POSIX path used for organization and repository policy. Empty, absolute, wildcard, backslash, `.`-segment, and `..`-segment forms are rejected. The effective path is non-delegable by default. A repository may opt only that path into normal App delegation with `allow_delegation_for_policy_file = true`; an organization guardrail still overrides it. Coordinate any change across both policy scopes. |
 | `EXTRA_CODEOWNERS_CHECK_NAME` | string | `Extra CODEOWNERS / approval` | Printable Check Run name after surrounding whitespace is removed; length `1` through `255`. A change must be coordinated with every required-check rule. |
+| `EXTRA_CODEOWNERS_EXPERIMENTAL_MERGE_QUEUE_REPOSITORY` | string | unset | One disposable `owner/repository` route. Set it with the repository ID below; the organization policy repository is excluded. Requires a worker. |
+| `EXTRA_CODEOWNERS_EXPERIMENTAL_MERGE_QUEUE_REPOSITORY_ID` | integer | unset | Positive GitHub repository ID for the same route. Both fields must match before ingress accepts candidate work. |
 | `EXTRA_CODEOWNERS_ALLOW_INSECURE_CHANGES` | boolean | `false` | When `true`, suppresses only the built-in non-delegable path list for every installation served by that process. It emits a startup warning and sets the insecure-mode metric to `1`. Organization-added guardrails and normal delegation matching still apply. |
+
+Leave the merge queue settings unset outside the [disposable fixture](../explanation/design/2026-11-21-merge-queue-candidate-checks.md#proposed-first-proof).
+The pair is an experimental opt-in, not a supported enforcement mode.
 
 ### App setup settings
 

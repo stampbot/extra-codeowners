@@ -52,6 +52,7 @@ from extra_codeowners.github import (
     InstallationRepositoriesChangedError,
     PullRequestTooLargeError,
 )
+from extra_codeowners.merge_group_worker import MergeGroupWorker
 from extra_codeowners.merge_queue import (
     MergeCandidateIdentity,
     MergeGroupTrigger,
@@ -3270,6 +3271,13 @@ class Worker:
         """
         async with asyncio.TaskGroup() as tasks:
             tasks.create_task(self._sample_metrics(stop), name="worker-metrics")
+            queue_repo = self.settings.experimental_merge_queue_repository
+            queue_repo_id = self.settings.experimental_merge_queue_repository_id
+            if queue_repo is not None and queue_repo_id is not None:
+                candidate_worker = MergeGroupWorker(
+                    self.evaluator, self._slot_owner("merge", 0), (queue_repo, queue_repo_id)
+                )
+                tasks.create_task(candidate_worker.run(stop), name="merge-group-worker")
             for slot in range(self.settings.worker_invalidation_concurrency):
                 tasks.create_task(
                     self._run_invalidation_slot(stop, slot, recovery_first=slot == 0),

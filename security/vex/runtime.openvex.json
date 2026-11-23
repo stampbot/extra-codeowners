@@ -1,8 +1,8 @@
 {
   "@context": "https://openvex.dev/ns/v0.2.0",
-  "@id": "urn:uuid:b7aa8454-c9b2-577c-822b-30eed673c7c3",
+  "@id": "urn:uuid:9b4be2fd-aaa5-570a-9c01-79bcb869de6d",
   "author": "Extra CODEOWNERS maintainers",
-  "last_updated": "2026-11-23T06:24:42Z",
+  "last_updated": "2026-11-23T06:39:56Z",
   "role": "VEX document producer",
   "statements": [
     {
@@ -2028,9 +2028,9 @@
       }
     }
   ],
-  "timestamp": "2026-11-23T06:24:42Z",
+  "timestamp": "2026-11-23T06:39:56Z",
   "tooling": "Vexcalibur + Extra CODEOWNERS runtime binding",
-  "version": 40,
+  "version": 41,
   "x_extra_codeowners_runtime": {
     "files": {
       ".dockerignore": "3f9dc9d3a79fe3085f25de88403b5563ad5c7fa7010bef94c5e55f24bd3cf691",
@@ -2053,20 +2053,21 @@
       "extra_codeowners/alembic/versions/0011_merge_group_work.py": "16eedda902e3bd29b4d9e88db189bd294ea1d275ea14444215cdbeb0315739c8",
       "extra_codeowners/alembic/versions/__init__.py": "c421d4569599794de9ddda269e84b775d6e8204164cb9dff2487ca86560d21ae",
       "extra_codeowners/api_budget.py": "2fb099057e6d7935df7774bd53187c201707c32f6896c3927b9ccece5b1ce162",
-      "extra_codeowners/app.py": "d30ca24500e3b0d3ace360140d56d568d6bd06865acac406ddaa8a4c623d89ad",
+      "extra_codeowners/app.py": "68739542e78662ee5261a024c0ea31ccc1f6d5d07926afd4c68fe4e6eefe041c",
       "extra_codeowners/base_evidence.py": "0f1707afceceb8606cf05771b87c23fe7693932991856c35a237063e4e190cd6",
       "extra_codeowners/build_identity.py": "5c3b38f087460fca37660ddeaa8a004d05348f8c947c04fc2444739ab7896968",
       "extra_codeowners/cli.py": "79a5c200397f9544492ec6071890ff5835c1ed625c623a0a86ed3a60503e65f4",
       "extra_codeowners/codeowners.py": "da8be54dbc8a79dcbaf39d49491f950d5405d74d6bb5e07da5247644f5ffcfd8",
-      "extra_codeowners/database.py": "2475a4ba9a8c509ac44e41bf2aa44c6fb7688b875f13d2ee6e06b6ee8e9b9b51",
+      "extra_codeowners/database.py": "d3ab3f7e76a08adcda19e0833cd6ebd984cea558a7462ecac91509e06e059a05",
       "extra_codeowners/dco.py": "8c3a0b541fe021fb9f05500ca9278306901010c219e7e1199ca5e205c138e68d",
       "extra_codeowners/discovery_cache.py": "6ab8504381c2f8b627b97d40cd8a709168c11c5f1f32fde7fca8c0be18b04d8c",
       "extra_codeowners/evaluator.py": "b81b9d1c6fe81d591867b0993d413030caab8af48703c4725f14c04fe2e3f9a6",
-      "extra_codeowners/github.py": "9f8ba7f77faad6d3cea71d47c5b3a499ffd3b25035863eb25508acee6413b484",
+      "extra_codeowners/github.py": "453a9db2063701d4f89defd56fc4a1d5ee37164de0b3481e726f94cf3d6f0f1d",
       "extra_codeowners/logging.py": "a59227e76ec7809ff8bb88fee997abb9b99f32e81a4c8d16bcfc72c0c0abf33f",
       "extra_codeowners/manifest.py": "33d42ac16b8218562f2baf6c0bc7c6664b03354bbf274cb0381e94740b76681e",
-      "extra_codeowners/merge_group_work.py": "033a4d1ebafc27d64ab49af0096bce4ce7573fcefbd1abdaa3791119ccfd257b",
-      "extra_codeowners/merge_queue.py": "2e78b235a4901a238ea7caca8d5210fb805a61433fd0f2f9787737d975dd67cc",
+      "extra_codeowners/merge_group_work.py": "e232b766804a1bb944e335addee9bedb381d6570b669adcfe0958e68779090f3",
+      "extra_codeowners/merge_group_worker.py": "cfbea67127476b51e38e6f45267bc857e1d8bb1ddd53951dfa27b0683c43c0b8",
+      "extra_codeowners/merge_queue.py": "be59369f77380dacc63f52eca47088e3d713b1f4657b3308fbca95737a4c4905",
       "extra_codeowners/merge_queue_paths.py": "022a6ca85b9d3d08c4aea250851465212541b85ae58e492509bcec735c181c83",
       "extra_codeowners/metrics.py": "64785df4eef0b99bacd2cda27ae7a6bae2142a3b246b3b7fb00996631edae9c6",
       "extra_codeowners/migrations.py": "a86d239779ed7b0e38118a3f7c1dee9b33c71519656699f101ac556eed671a46",
@@ -2078,8 +2079,8 @@
       "extra_codeowners/reconciliation_sweep.py": "075cedff6f789a39b4171d2a49eb461ccffdf3fb546183fa421af588f0443d9c",
       "extra_codeowners/reconciliation_tracing.py": "0f650bf2300e26d1485fa7df71b71dccbb7739653e049d452d6b30ee9b6b9931",
       "extra_codeowners/request_timing.py": "7c53fcfdec4b8a5b1cf3427c8bd354b76bc6f255ac7374540a6cae0886a48c19",
-      "extra_codeowners/service.py": "2d3051db477ab011d378ebd23a413f6ec48e994868bb04c6fc50a4d3f115389b",
-      "extra_codeowners/settings.py": "bd1d3cd0acf23ea4b26869fc1e024438aba7b9acf43f3850c4e6be2e9a5b5437",
+      "extra_codeowners/service.py": "aa77a7c26ded7cb33b2566857306f79ec369454f142e0a0b210003779f5c12f3",
+      "extra_codeowners/settings.py": "bd8fdddfb96b497d399d897931a6f95094f8827c4b5c4445ef505b8701790c61",
       "extra_codeowners/trace_context.py": "f79ca91baa1dd615c80546c66a6b370ba78ec7106dece3feb201d10250078532",
       "extra_codeowners/tracing.py": "49641dd6cb9b5b6da1e6026b90925a73eb3112d13a069afd202e741d261f76f9",
       "extra_codeowners/webhooks.py": "617838a5ae081a87c95773d7cd77ec55287d0b9d4aad61e2d99e51ec76710619",
@@ -2091,7 +2092,7 @@
       "tools/source_recipes/psycopg-binary-3.3.4.json": "ec227aa110315f82c25335837e258806930c7afbe980c8b2ff6b476343c243b5",
       "uv.lock": "9b38f0929d3ea110b3d016bc638547e9f6244949009d2bc4dadff6141d496f90"
     },
-    "review": "Add local merge group storage and a database migration without changing GitHub ingress or publishing. No runtime dependency or vulnerability assessment changed.",
+    "review": "Add the default-disabled, single-repository candidate worker and delivery path. The worker uses the existing GitHub client and provider checks; runtime dependencies, TLS options, crypto callers, and vulnerability assessments are unchanged.",
     "schema_version": 1
   }
 }

@@ -147,6 +147,11 @@ class MergeGroupTrigger:
     def base_branch(self) -> str:
         return self.base_ref.removeprefix(_HEADS)
 
+    @property
+    def check_external_id(self) -> str:
+        """Distinguish a managed candidate check from an ordinary PR-head check."""
+        return f"merge-group:{self.repository_id}:{self.head_sha}"
+
     @classmethod
     def from_payload(cls, action: MergeGroupAction, payload: dict[str, Any]) -> MergeGroupTrigger:
         repo = _record(payload.get("repository"))

@@ -478,6 +478,13 @@ GitHub evidence.
 
 An authenticated event or action with no mapping returns `{"accepted":true,"queued":false}`. It is neither retained nor deduplicated. Pull-request work for the configured organization-policy repository is handled this way because that repository stays under native human enforcement.
 
+The experimental worker accepts signed `merge_group.checks_requested` and
+`merge_group.destroyed` deliveries only for the configured test repository's
+route and immutable ID. The sender must include both commit SHAs and full
+branch refs. Ingress stores the candidate and returns without writing a
+Check Run. It returns `503` without accepting the delivery if the worker is
+unavailable. With the experiment disabled, candidate events have no mapping.
+
 The following policy-source and repository-lifecycle events are retained as installation-wide fan-out work:
 
 - a relevant organization-policy push to its default branch

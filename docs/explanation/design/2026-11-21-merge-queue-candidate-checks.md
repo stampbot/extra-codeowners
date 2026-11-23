@@ -10,9 +10,9 @@ check on GitHub's queue candidate could close that particular gap.
 | Field | Value |
 | --- | --- |
 | Date | 2026-11-21 |
-| Status | Proposed; storage and read-only assessment, no serving integration |
+| Status | Proposed; experimental worker implemented, live validation incomplete |
 | Owner | Maintainers |
-| Scope | A first proof with one queue entry and an isolated GitHub App |
+| Scope | A first proof with one queue entry and one disposable repository |
 | Related | [Shared-commit blocker][shared-head], [merge-queue work][queue-work], [November 20 provider test][provider-test] |
 
 ## What we know
@@ -36,15 +36,22 @@ The service's read-only assessment uses the normal PR evaluator. It reads
 policy at the candidate's target commit and checks approvals against the PR
 head. Each path the candidate changes relative to that target must be
 covered by the PR file evidence, including both names of a rename. The
-assessment rereads the PR and queue entry before returning. It doesn't write
-a Check Run, so it can't close the production gap.
+assessment rereads the PR and queue entry before handing the result to the
+worker.
 
 Storage keys the work by installation, repository ID and candidate commit.
 A cancellation stays with that commit. If an earlier checks request arrives
 after cancellation, it can't put that candidate back into evaluation.
 Each lease names one attempt at one generation, so an old attempt can't
-finish a replacement's work. The webhook receiver and publishing worker
-aren't connected to this queue yet.
+finish a replacement's work.
+
+The worker writes to the candidate commit, not the PR head. It checks its
+lease, the queue entry, and the database's authority and PR-head fences
+before writing. An already-published candidate can be revoked, but the
+worker won't restore it to success: GitHub can remove it from the queue as
+soon as the failure lands. Queue a fresh candidate after fixing the cause.
+If a write may have succeeded and can't be confirmed, the worker tries to
+restore a blocking result before releasing the writer lock.
 
 ## Boundaries
 
@@ -80,10 +87,13 @@ human code-owner approval the project was designed to complement.
 
 ## Proposed first proof
 
-Use a separate App installed only on the disposable repository. Give it
-read access to **Merge queues**, subscribe to `merge_group`, and grant
-**Checks: write**. Add only the other read permissions the evaluation
-needs. GitHub documents the [event and its permission][merge-group-event].
+Leave production review rules in place. Set both
+[`EXTRA_CODEOWNERS_EXPERIMENTAL_MERGE_QUEUE_*` settings](../../reference/configuration.md#policy-and-security-settings)
+to the route and immutable ID of one disposable repository. Use the same
+pair on every replica that serves the fixture. The App needs read access to
+**Merge queues** and a subscription to `merge_group`, in addition to its
+usual checks and review permissions. It doesn't need permission to merge
+or approve PRs. GitHub documents the [event and its permission][merge-group-event].
 The test must capture a real App delivery; a workflow event or a synthetic
 request isn't evidence about the installation delivery.
 
@@ -92,6 +102,12 @@ and the setting that requires each entry to pass. Verify these settings
 and the expected check source independently in the fixture. Limit the
 first test to a queue snapshot with exactly one entry. One build slot
 alone doesn't establish that a candidate represents one PR.
+
+If the first candidate delivery is lost, this worker doesn't discover it
+by polling. GitHub should wait for its check; redeliver the event or queue
+a new candidate to try again. To end the test, remove the fixture-only
+required check and clear both opt-in settings. Clearing the settings
+doesn't withdraw results that GitHub already recorded.
 
 The following order keeps the evaluation tied to what GitHub may merge:
 

@@ -19,8 +19,10 @@ stale-review rules, signed commits, merge restrictions, or other checks.
 - Let the App publish `Extra CODEOWNERS / approval` at least once so GitHub can
   offer the App as the check's expected source.
 
-The current App does not evaluate `merge_group` events. If the repository uses
-a merge queue, preserve its existing code-owner rule and stop here.
+Merge queue enforcement isn't supported. If the repository uses a merge queue,
+preserve its existing code-owner rule and stop here. The
+[experimental worker](../explanation/design/2026-11-21-merge-queue-candidate-checks.md)
+is for a disposable test repository.
 
 ## 1. Record the current protection
 
