@@ -39,6 +39,7 @@ the older results and links newer receipts.
 - [November 23, 2026: independent review count in the merge queue](2026-11-23-independent-review-count.md)
 - [November 23, 2026: a queued candidate lost its approval](2026-11-23-missed-review-dismissal.md)
 - [November 23, 2026: the worker checked a candidate with another PR waiting](2026-11-23-worker-with-queued-follower.md)
+- [November 23, 2026: an approved candidate merged under both rules](2026-11-23-approved-candidate-merged.md)
 
 ## Add a receipt
 
