@@ -206,8 +206,12 @@ def build(
     """Bind a deterministic CycloneDX catalog to verified platform evidence."""
     raw = _json(inventory)
     python = raw.get("python")
-    if not isinstance(python, dict) or python.get("source_recipe_schema") != 4:
-        raise NativeComponentError("native component catalog requires source recipe schema 4")
+    if (
+        not isinstance(python, dict)
+        or type(python.get("source_recipe_schema")) is not int
+        or python["source_recipe_schema"] not in {4, 5}
+    ):
+        raise NativeComponentError("native component catalog requires source recipe schema 4 or 5")
     source_plan: dict[str, Any] = _python.plan(inventory, lock, architecture, digest)
     source_payloads = None
     if source_licenses and python_sources is None:
@@ -278,6 +282,11 @@ def build(
         }
         if source.get("wheel_files"):
             properties["native-files"] = json.dumps(source["wheel_files"], sort_keys=True)
+        if "build_recipe" in source:
+            properties["build-recipe"] = json.dumps(source["build_recipe"], sort_keys=True)
+            properties["builder-image"] = source["builder_image"]
+            properties["builder-library-sha256"] = source["builder_library_sha256"]
+            properties["wheel-sha256"] = source["wheel_sha256"]
         license_evidence: dict[str, Any] = {}
         if source_payloads is not None:
             if custom is None:

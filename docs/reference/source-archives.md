@@ -342,6 +342,22 @@ this bundle retains the official release tarball of that version. License
 texts remain inside the retained archives. [Issue #18][source-work] tracks
 missing components and notice coverage.
 
+### The amd64 Psycopg libxcrypt build
+
+Schema 5 also retains the libxcrypt 4.5.2 tarball and the manylinux install
+script for the amd64 Psycopg 3.3.4 wheel. The entry in `embedded_sources`
+records the wheel hash, the installed `libcrypt` file's hash and size, and the
+builder image digest. Its `build_recipe` field records the script's path and
+hash. The collector checks both downloads and stores the script as data; it
+does not run it.
+
+The script from the pinned manylinux commit matches the copy in the builder
+image. The wheel's `libcrypt` file has the same code and read-only data sections
+as the builder's library, even though the full file hashes differ. This
+records that source and recipe; it does not prove a reproducible build or
+supply everything needed to relink the wheel. The arm64 library still uses
+the separate RPM source. Schema 4 and earlier bundles are unchanged.
+
 ## Rust dependencies in Python wheels
 
 Releases whose inventory declares `python.rust_source_bundle` also supply

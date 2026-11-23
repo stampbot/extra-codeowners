@@ -40,6 +40,15 @@ OPENSSL_URL = re.compile(
     r"https://github\.com/openssl/openssl/releases/download/"
     r"openssl-([0-9]+\.[0-9]+\.[0-9]+)/openssl-\1\.tar\.gz\Z"
 )
+LIBXCRYPT_URL = re.compile(
+    r"https://github\.com/besser82/libxcrypt/releases/download/"
+    r"v([0-9]+\.[0-9]+\.[0-9]+)/libxcrypt-\1\.tar\.xz\Z"
+)
+LIBXCRYPT_RECIPE_URL = re.compile(
+    r"https://raw\.githubusercontent\.com/pypa/manylinux/[0-9a-f]{40}/"
+    r"docker/build_scripts/install-libxcrypt\.sh\Z"
+)
+SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 POSTGRESQL_URL = re.compile(
     r"https://ftp\.postgresql\.org/pub/source/v([0-9]+\.[0-9]+)/postgresql-\1\.tar\.bz2\Z"
 )
@@ -239,12 +248,126 @@ def _embedded_recipe(
 
 
 def _all_sources(manifest: dict[str, Any]) -> list[dict[str, Any]]:
+    embedded = manifest.get("embedded_sources", [])
     result: list[dict[str, Any]] = [
         *manifest["sources"],
         *manifest.get("native_sources", []),
-        *manifest.get("embedded_sources", []),
+        *embedded,
+        *(source["build_recipe"] for source in embedded if "build_recipe" in source),
     ]
     return result
+
+
+def _libxcrypt_recipe(
+    name: str, version: str, architecture: str, python: dict[str, Any], package: dict[str, Any]
+) -> dict[str, Any]:
+    """Bind the amd64 libxcrypt archive and script to the locked Psycopg wheel."""
+    platform = _recipe_platform(name, version, architecture, python)
+    path = RECIPE_DIRECTORY / f"libxcrypt-{name}-{version}-{architecture}.json"
+    try:
+        with path.open("rb") as stream:
+            recipe = _json(stream.read(MAX_METADATA + 1))
+    except FileNotFoundError as error:
+        raise PythonSourceError("libxcrypt source recipe requires review for this wheel") from error
+    if (
+        type(recipe.get("schema_version")) is not int
+        or recipe["schema_version"] != 1
+        or recipe.get("distribution") != name
+        or recipe.get("distribution_version") != version
+        or recipe.get("architecture") != architecture
+    ):
+        raise PythonSourceError("invalid libxcrypt source recipe identity")
+    wheel_hash = _text(recipe.get("wheel_sha256"), SHA256)
+    wheel_filename = (
+        f"psycopg_binary-{version}-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.whl"
+    )
+    wheels = package.get("wheels")
+    if (
+        not isinstance(wheels, list)
+        or sum(
+            isinstance(wheel, dict)
+            and wheel.get("hash") == f"sha256:{wheel_hash}"
+            and isinstance(wheel.get("url"), str)
+            and wheel["url"].rsplit("/", 1)[-1] == wheel_filename
+            for wheel in wheels
+        )
+        != 1
+    ):
+        raise PythonSourceError("locked Psycopg wheel changed; review its libxcrypt recipe")
+    source, binding, builder = (recipe.get(field) for field in ("source", "wheel_file", "builder"))
+    if (
+        not isinstance(source, dict)
+        or not isinstance(binding, dict)
+        or not isinstance(builder, dict)
+    ):
+        raise PythonSourceError("libxcrypt recipe omitted source or builder evidence")
+    script = builder.get("script")
+    if not isinstance(script, dict):
+        raise PythonSourceError("libxcrypt recipe omitted its install script")
+    original_hash = _text(builder.get("library_sha256"), SHA256)
+    native_path = f"psycopg_binary.libs/libcrypt-{original_hash[:8]}.so.1"
+    if binding.get("path") != native_path:
+        raise PythonSourceError("libxcrypt builder library does not match the wheel filename")
+    _verify_wheel_file(python.get("native_files"), native_path, binding)
+    version_of_source = _text(source.get("version"), VERSION)
+    url = _text(source.get("url"), LIBXCRYPT_URL)
+    match = LIBXCRYPT_URL.fullmatch(url)
+    assert match is not None
+    if match[1] != version_of_source:
+        raise PythonSourceError("libxcrypt source identity disagrees with its URL")
+    size, script_size = source.get("size"), script.get("size")
+    if type(size) is not int or not 0 < size <= MAX_FILE:
+        raise PythonSourceError("invalid libxcrypt source archive size")
+    if type(script_size) is not int or not 0 < script_size <= 64 * 1024:
+        raise PythonSourceError("invalid libxcrypt install script size")
+    image = _text(
+        builder.get("image"),
+        re.compile(r"quay\.io/pypa/manylinux2014_x86_64@sha256:[0-9a-f]{64}\Z"),
+    )
+    return {
+        "distribution": name,
+        "distribution_version": version,
+        "source_component": {"name": "libxcrypt", "version": version_of_source},
+        "sbom_sha256": platform["sbom_sha256"],
+        "wheel_sha256": wheel_hash,
+        "wheel_files": [
+            {"path": native_path, "sha256": binding["sha256"], "size": binding["size"]}
+        ],
+        "builder_image": image,
+        "builder_library_sha256": original_hash,
+        "url": url,
+        "sha256": _text(source.get("sha256"), SHA256),
+        "size": size,
+        "path": f"embedded/{name}/{architecture}/libxcrypt-{version_of_source}.tar.xz",
+        "build_recipe": {
+            "url": _text(script.get("url"), LIBXCRYPT_RECIPE_URL),
+            "sha256": _text(script.get("sha256"), SHA256),
+            "size": script_size,
+            "path": f"recipes/{name}/{architecture}/libxcrypt-{version_of_source}/"
+            "install-libxcrypt.sh",
+        },
+    }
+
+
+def _verify_wheel_file(native: object, path: str, binding: dict[str, Any]) -> None:
+    bound_hash = _text(binding.get("sha256"), SHA256)
+    bound_size = binding.get("size")
+    if type(bound_size) is not int or not 0 < bound_size <= MAX_FILE:
+        raise PythonSourceError("ambiguous custom native-file binding")
+    if not isinstance(native, list) or any(not isinstance(item, dict) for item in native):
+        raise PythonSourceError("custom source recipe requires reviewed native-file evidence")
+    selected = [
+        item for item in native if str(item.get("path", "")).endswith("/site-packages/" + path)
+    ]
+    if (
+        len(selected) != 1
+        or selected[0].get("kind") != "regular"
+        or selected[0].get("link_target") is not None
+        or selected[0].get("sha256") != bound_hash
+        or type(selected[0].get("size")) is not int
+        or selected[0].get("size") != bound_size
+    ):
+        raise PythonSourceError("wheel native file changed; review its custom source recipe")
 
 
 def _psycopg_custom_recipe(
@@ -300,31 +423,14 @@ def _psycopg_custom_recipe(
                     r"psycopg_binary\.libs/lib[A-Za-z0-9_+-][A-Za-z0-9_.+-]*\.so(?:\.[0-9.]+)?\Z"
                 ),
             )
-            bound_hash = _text(binding.get("sha256"), re.compile(r"[0-9a-f]{64}\Z"))
-            bound_size = binding.get("size")
-            if path in used_files or type(bound_size) is not int or not 0 < bound_size <= MAX_FILE:
+            if path in used_files:
                 raise PythonSourceError("ambiguous custom native-file binding")
             used_files.add(path)
             library = path.rsplit("/", 1)[1].split("-", 1)[0]
             if library not in expected_libraries[component] or library in bound_libraries:
                 raise PythonSourceError("custom source component has ambiguous native files")
             bound_libraries.add(library)
-            selected = [
-                item
-                for item in native
-                if str(item.get("path", "")).endswith("/site-packages/" + path)
-            ]
-            if (
-                len(selected) != 1
-                or selected[0].get("kind") != "regular"
-                or selected[0].get("link_target") is not None
-                or selected[0].get("sha256") != bound_hash
-                or type(selected[0].get("size")) is not int
-                or selected[0].get("size") != bound_size
-            ):
-                raise PythonSourceError(
-                    "wheel native file changed; review its custom source recipe"
-                )
+            _verify_wheel_file(native, path, binding)
         filename = url.rsplit("/", 1)[1]
         if len(filename) > 100:
             raise PythonSourceError("custom source filename exceeds the archive format limit")
@@ -387,7 +493,7 @@ def plan(inventory: bytes, lock: bytes, architecture: str, digest: str) -> dict[
         raise PythonSourceError("unexpected Python source bundle name")
     distributions = python.get("distributions") if isinstance(python, dict) else None
     recipe_schema = python.get("source_recipe_schema", 0) if isinstance(python, dict) else 0
-    if type(recipe_schema) is not int or recipe_schema not in {0, 1, 2, 3, 4}:
+    if type(recipe_schema) is not int or recipe_schema not in {0, 1, 2, 3, 4, 5}:
         raise PythonSourceError("unsupported source recipe schema")
     if not isinstance(distributions, list) or not 1 <= len(distributions) <= 512:
         raise PythonSourceError("invalid installed distribution list")
@@ -420,6 +526,10 @@ def plan(inventory: bytes, lock: bytes, architecture: str, digest: str) -> dict[
         if recipe_schema >= 4 and name == "psycopg-binary":
             assert isinstance(python, dict)
             embedded_sources.extend(_psycopg_custom_recipe(name, version, architecture, python))
+            if recipe_schema >= 5 and architecture == "amd64":
+                embedded_sources.append(
+                    _libxcrypt_recipe(name, version, architecture, python, package)
+                )
         sdist = package.get("sdist")
         if sdist is None:
             reviewed = REVIEWED_BINARY_SOURCES.get((name, version)) if recipe_schema >= 1 else None
@@ -449,11 +559,6 @@ def plan(inventory: bytes, lock: bytes, architecture: str, digest: str) -> dict[
                 "path": f"sources/{name}/{url.rsplit('/', 1)[1]}",
             }
         )
-    if (
-        sum(source["size"] for source in [*sources, *native_sources, *embedded_sources])
-        > MAX_BUNDLE - MAX_METADATA
-    ):
-        raise PythonSourceError("source archives exceed bundle size limit")
     manifest = {
         "schema_version": 1,
         "image": {"architecture": architecture, "platform_digest": digest},
@@ -488,6 +593,8 @@ def plan(inventory: bytes, lock: bytes, architecture: str, digest: str) -> dict[
             "listed in this manifest; unreported components and other build inputs "
             "remain separate. No claim of exact upstream binary build inputs."
         )
+    if sum(source["size"] for source in _all_sources(manifest)) > MAX_BUNDLE - MAX_METADATA:
+        raise PythonSourceError("source archives exceed bundle size limit")
     return manifest
 
 
@@ -525,7 +632,7 @@ class _SourceRedirect(urllib.request.HTTPRedirectHandler):
         except ValueError as error:
             raise PythonSourceError("invalid source redirect target") from error
         if (
-            OPENSSL_URL.fullmatch(req.full_url)
+            (OPENSSL_URL.fullmatch(req.full_url) or LIBXCRYPT_URL.fullmatch(req.full_url))
             and req.get_method() == "GET"
             and target.scheme == "https"
             and target.hostname == "release-assets.githubusercontent.com"
@@ -534,8 +641,8 @@ class _SourceRedirect(urllib.request.HTTPRedirectHandler):
             and target.password is None
             and not target.fragment
         ):
-            # Only this reviewed GitHub release URL may take one asset hop.
-            # A second redirect no longer matches OPENSSL_URL and is rejected.
+            # The reviewed GitHub release URLs may take one asset hop.
+            # The asset URL doesn't match either release pattern.
             # Construct a new GET rather than forwarding headers or data.
             return urllib.request.Request(newurl)  # noqa: S310 - HTTPS asset origin checked above.
         raise PythonSourceError("source download unexpectedly redirected")
@@ -549,6 +656,8 @@ def fetch(source: dict[str, Any]) -> bytes:
         or PSYCOPG_URL.fullmatch(value)
         or RPM_URL.fullmatch(value)
         or OPENSSL_URL.fullmatch(value)
+        or LIBXCRYPT_URL.fullmatch(value)
+        or LIBXCRYPT_RECIPE_URL.fullmatch(value)
         or POSTGRESQL_URL.fullmatch(value)
         or OPENLDAP_URL.fullmatch(value)
     ):

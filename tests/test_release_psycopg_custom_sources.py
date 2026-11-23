@@ -15,6 +15,7 @@ from tools import release_python_sources as sources
 
 DIGEST = "sha256:" + "a" * 64
 RECIPE = "psycopg-binary-3.3.4.json"
+LIBXCRYPT_RECIPE = "libxcrypt-psycopg-binary-3.3.4-amd64.json"
 
 
 def recipe() -> dict[str, Any]:
@@ -59,6 +60,104 @@ version = "3.3.4"
 source = {registry = "https://pypi.org/simple"}
 """
     return json.dumps(inventory).encode(), lock
+
+
+def libxcrypt_inputs() -> tuple[dict[str, Any], dict[str, Any], bytes]:
+    reviewed: dict[str, Any] = json.loads(
+        (sources.RECIPE_DIRECTORY / LIBXCRYPT_RECIPE).read_bytes()
+    )
+    inventory, lock = inputs(schema=5)
+    raw: dict[str, Any] = json.loads(inventory)
+    binding = reviewed["wheel_file"]
+    raw["python"]["native_files"].append(
+        {
+            **binding,
+            "path": "opt/venv/lib/python3.14/site-packages/" + binding["path"],
+            "kind": "regular",
+            "link_target": None,
+        }
+    )
+    wheel = "psycopg_binary-3.3.4-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.whl"
+    lock += f'wheels = [{{url = "https://files.pythonhosted.org/{wheel}", '.encode()
+    lock += f'hash = "sha256:{reviewed["wheel_sha256"]}"}}]\n'.encode()
+    return reviewed, raw, lock
+
+
+def test_libxcrypt_is_only_required_from_schema_five_on_amd64() -> None:
+    arm_four = sources.plan(*inputs("arm64", 4), "arm64", DIGEST)
+    arm_five = sources.plan(*inputs("arm64", 5), "arm64", DIGEST)
+    assert arm_five == {**arm_four, "inventory_sha256": arm_five["inventory_sha256"]}
+    reviewed, raw, lock = libxcrypt_inputs()
+    result = sources.plan(json.dumps(raw).encode(), lock, "amd64", DIGEST)
+    libxcrypt = next(
+        item
+        for item in result["embedded_sources"]
+        if item["source_component"]["name"] == "libxcrypt"
+    )
+    assert libxcrypt["source_component"] == {"name": "libxcrypt", "version": "4.5.2"}
+    assert libxcrypt["wheel_files"] == [reviewed["wheel_file"]]
+    assert libxcrypt["builder_image"] == reviewed["builder"]["image"]
+    assert libxcrypt["sha256"] == reviewed["source"]["sha256"]
+    assert libxcrypt["build_recipe"] == {
+        **reviewed["builder"]["script"],
+        "path": "recipes/psycopg-binary/amd64/libxcrypt-4.5.2/install-libxcrypt.sh",
+    }
+    raw["python"]["source_recipe_schema"] = 4
+    assert sources.plan(json.dumps(raw).encode(), lock, "amd64", DIGEST)["embedded_sources"] == [
+        item for item in result["embedded_sources"] if item != libxcrypt
+    ]
+
+
+@pytest.mark.parametrize(
+    "change", ["locked_hash", "locked_platform", "payload", "link", "builder", "script"]
+)
+def test_libxcrypt_provenance_drifts_fail_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, change: str
+) -> None:
+    reviewed, raw, lock = libxcrypt_inputs()
+    payload = raw["python"]["native_files"][-1]
+    if change == "locked_hash":
+        lock = lock.replace(reviewed["wheel_sha256"].encode(), b"0" * 64)
+    elif change == "locked_platform":
+        lock = lock.replace(b"x86_64", b"aarch64")
+    elif change == "payload":
+        payload["sha256"] = "0" * 64
+    elif change == "link":
+        payload["kind"] = "symlink"
+    elif change == "builder":
+        reviewed["builder"]["library_sha256"] = "0" * 64
+    else:
+        reviewed["builder"]["script"]["url"] = (
+            "https://raw.githubusercontent.com/pypa/manylinux/main/"
+            "docker/build_scripts/install-libxcrypt.sh"
+        )
+    (tmp_path / RECIPE).write_text(json.dumps(recipe()))
+    (tmp_path / LIBXCRYPT_RECIPE).write_text(json.dumps(reviewed))
+    monkeypatch.setattr(sources, "RECIPE_DIRECTORY", tmp_path)
+    with pytest.raises(sources.PythonSourceError):
+        sources.plan(json.dumps(raw).encode(), lock, "amd64", DIGEST)
+
+
+def test_libxcrypt_bundle_requires_the_exact_script_bytes() -> None:
+    _, raw, lock = libxcrypt_inputs()
+    planned = sources.plan(json.dumps(raw).encode(), lock, "amd64", DIGEST)
+    component = next(
+        item
+        for item in planned["embedded_sources"]
+        if item["source_component"]["name"] == "libxcrypt"
+    )
+    manifest = {**planned, "sources": [], "native_sources": [], "embedded_sources": [component]}
+    source, script = b"fictional source archive", b"fictional build script"
+    for entry, data in ((component, source), (component["build_recipe"], script)):
+        entry.update(size=len(data), sha256=hashlib.sha256(data).hexdigest())
+    payloads = {component["path"]: source, component["build_recipe"]["path"]: script}
+    assert sources.verify(manifest, sources.build(manifest, payloads)) == payloads
+    del payloads[component["build_recipe"]["path"]]
+    with pytest.raises(sources.PythonSourceError, match="payload set"):
+        sources.build(manifest, payloads)
+    payloads[component["build_recipe"]["path"]] = b"!" * len(script)
+    with pytest.raises(sources.PythonSourceError, match="SHA-256"):
+        sources.build(manifest, payloads)
 
 
 @pytest.mark.parametrize(("architecture", "rpm_count"), [("amd64", 6), ("arm64", 8)])
