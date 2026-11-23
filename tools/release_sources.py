@@ -27,6 +27,39 @@ MAX_SOURCE_BYTES = 64 * 1024 * 1024
 MAX_BUNDLE_BYTES = MAX_SOURCE_BYTES + 1024 * 1024
 MAX_INVENTORY_BYTES = 16 * 1024 * 1024
 
+# Bind the reviewed file paths and hashes to the exact upstream archive, not
+# just to a version string. The two-platform runtime evidence is in #18:
+# https://github.com/stampbot/extra-codeowners/issues/18#issuecomment-7069586882
+# https://github.com/stampbot/extra-codeowners/issues/18#issuecomment-7083094097
+_BUNDLED_NOTICES = {
+    ("3.14.10", "de414a57119abef52784d8993e341d53aed635fc2b05c2607d9f98a2c5b72032"): (
+        (
+            "expat",
+            "2.9.0",
+            "Modules/expat/COPYING",
+            "31b15de82aa19a845156169a17a5488bf597e561b2c318d159ed583139b25e87",
+        ),
+        (
+            "hacl-star",
+            "8ba599b2f6c9701b3dc961db895b0856a2210f76",
+            "Modules/_hacl/Hacl_Hash_SHA3.c",
+            "8744f5b6e054c3e5c44f413a60f9154b76dd7230135dcee26fd063755ec64be1",
+        ),
+        (
+            "libmpdec",
+            "2.5.1",
+            "Modules/_decimal/libmpdec/mpdecimal.c",
+            "4f89b8095e408a18deff79cfb605299e615bae747898eb105d8936064f7fb626",
+        ),
+        (
+            "libmpdec",
+            "2.5.1",
+            "Modules/_decimal/libmpdec/mpdecimal.h",
+            "ea0b9c6b296c13aed6ecaa50b463e39a9c1bdc059b84f50507fd8247b2e660f9",
+        ),
+    ),
+}
+
 
 class SourceError(ValueError):
     """The source bytes or their image identity could not be verified."""
@@ -89,14 +122,19 @@ def _identity(inventory: bytes, architecture: str, platform_digest: str) -> tupl
 
 
 def _manifest(
-    inventory: bytes, architecture: str, platform_digest: str, source: bytes
+    inventory: bytes,
+    architecture: str,
+    platform_digest: str,
+    source: bytes,
+    *,
+    require_bundled_notices: bool = False,
 ) -> dict[str, object]:
     version, checksum, url = _identity(inventory, architecture, platform_digest)
     if not 0 < len(source) <= MAX_SOURCE_BYTES:
         raise SourceError("source archive has an unsafe size")
     if hashlib.sha256(source).hexdigest() != checksum:
         raise SourceError("source archive checksum differs from the image inventory")
-    return {
+    manifest: dict[str, object] = {
         "schema_version": 1,
         "image": {"architecture": architecture, "platform_digest": platform_digest},
         "inventory_sha256": hashlib.sha256(inventory).hexdigest(),
@@ -111,13 +149,39 @@ def _manifest(
         "evidence": "source archive identified by the Docker Official Python image",
         "scope": "CPython upstream source only; not the complete container source",
     }
+    if require_bundled_notices:
+        notices = _BUNDLED_NOTICES.get((version, checksum))
+        if not notices:
+            raise SourceError("no bundled notice review for this exact CPython source archive")
+        manifest["schema_version"] = 2
+        manifest["bundled_notices"] = [
+            {
+                "component": component,
+                "version": component_version,
+                "path": f"Python-{version}/{path}",
+                "sha256": digest,
+            }
+            for component, component_version, path, digest in notices
+        ]
+    return manifest
 
 
 def build_bundle(
-    inventory: bytes, source: bytes, *, architecture: str, platform_digest: str
+    inventory: bytes,
+    source: bytes,
+    *,
+    architecture: str,
+    platform_digest: str,
+    require_bundled_notices: bool = False,
 ) -> bytes:
     """Return a deterministic bundle after checking the upstream archive hash."""
-    manifest = _manifest(inventory, architecture, platform_digest, source)
+    manifest = _manifest(
+        inventory,
+        architecture,
+        platform_digest,
+        source,
+        require_bundled_notices=require_bundled_notices,
+    )
     version, _, _ = _identity(inventory, architecture, platform_digest)
     output = io.BytesIO()
     with (
@@ -148,7 +212,12 @@ def _bounded_read(stream: _Reader, limit: int) -> bytes:
 
 
 def verify_bundle(
-    inventory: bytes, bundle: bytes, *, architecture: str, platform_digest: str
+    inventory: bytes,
+    bundle: bytes,
+    *,
+    architecture: str,
+    platform_digest: str,
+    require_bundled_notices: bool = False,
 ) -> dict[str, object]:
     """Check identity, manifest, and archive bytes without filesystem extraction."""
     version, _, _ = _identity(inventory, architecture, platform_digest)
@@ -186,10 +255,19 @@ def verify_bundle(
                 raise SourceError("source bundle contains trailing data or lacks end markers")
     except (OSError, EOFError, tarfile.TarError) as error:
         raise SourceError("invalid compressed source bundle") from error
-    expected = _manifest(
-        inventory, architecture, platform_digest, files[f"Python-{version}.tar.xz"]
-    )
     actual = _json(files["manifest.json"])
+    schema = actual.get("schema_version")
+    if type(schema) is not int or schema not in {1, 2}:
+        raise SourceError("unsupported source manifest schema")
+    if require_bundled_notices and schema != 2:
+        raise SourceError("source manifest omitted the required bundled notices")
+    expected = _manifest(
+        inventory,
+        architecture,
+        platform_digest,
+        files[f"Python-{version}.tar.xz"],
+        require_bundled_notices=schema == 2,
+    )
     if json.dumps(actual, sort_keys=True) != json.dumps(expected, sort_keys=True):
         raise SourceError("source manifest differs from the selected inventory and archive")
     return actual
@@ -235,6 +313,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--architecture", choices=("amd64", "arm64"), required=True)
     parser.add_argument("--platform-digest", required=True)
     parser.add_argument("--bundle", type=Path, required=True)
+    parser.add_argument(
+        "--require-bundled-notices",
+        action="store_true",
+        help="include reviewed bundled notices when fetching; require them when verifying",
+    )
     args = parser.parse_args(argv)
     try:
         with args.inventory.open("rb") as stream:
@@ -248,6 +331,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 source,
                 architecture=args.architecture,
                 platform_digest=args.platform_digest,
+                require_bundled_notices=args.require_bundled_notices,
             )
             # Never leave an output artifact after a failed download or validation.
             verify_bundle(
@@ -255,6 +339,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 bundle,
                 architecture=args.architecture,
                 platform_digest=args.platform_digest,
+                require_bundled_notices=args.require_bundled_notices,
             )
             with args.bundle.open("xb") as output:
                 output.write(bundle)
@@ -266,6 +351,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 bundle,
                 architecture=args.architecture,
                 platform_digest=args.platform_digest,
+                require_bundled_notices=args.require_bundled_notices,
             )
     except (SourceError, OSError) as error:
         sys.stderr.write(f"source evidence: {error}\n")

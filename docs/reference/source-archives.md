@@ -37,6 +37,15 @@ Release verification fails if that asset or its signature is missing. Older
 inventories without this field remain verifiable; successful verification of
 an old release does not mean it delivered source.
 
+In schema version 2, `manifest.json` also has a `bundled_notices` list. For
+CPython 3.14.10, it points to the Expat 2.9.0 license, the HACL* SHA-3 notice,
+and the libmpdec 2.5.1 notice headers. Each entry gives the file's path and
+SHA-256 inside the retained `Python-3.14.10.tar.xz`.
+Use the list to find those texts; it's not a complete list of bundled
+components. The release workflow requires a reviewed list for the exact
+source archive. Older, signed schema version 1 bundles still verify without
+that list.
+
 ## Verify a CPython source bundle
 
 Use Bash with Python 3.12 or newer, GitHub CLI, and Cosign installed. Start from
