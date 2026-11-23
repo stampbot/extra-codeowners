@@ -50,6 +50,13 @@ observed that path coverage for a behind-base PR with two commits. It also
 confirmed that a check on a replaced candidate didn't satisfy the new
 candidate during the test. Neither result came from the deployed worker.
 
+The [November 23 queue observation][waiting-entry] found that a second PR
+can wait without changing the first candidate. The App token could read
+entries through GraphQL but not the queue configuration. It could read the
+effective branch rule through REST. The experimental worker now checks both
+responses before using the front entry. This does not make multiple builds
+or multi-PR candidates eligible.
+
 Storage keys the work by installation, repository ID and candidate commit.
 A cancellation stays with that commit. If an earlier checks request arrives
 after cancellation, it can't put that candidate back into evaluation.
@@ -160,5 +167,6 @@ The [shared-commit issue][shared-head] remains the release gate.
 [queue-work]: https://github.com/stampbot/extra-codeowners/issues/4
 [provider-test]: https://github.com/stampbot/extra-codeowners/issues/4#issuecomment-7029566017
 [worker-test]: ../../maintainers/evidence/2026-11-23-candidate-checks-during-delivery-loss.md
+[waiting-entry]: ../../maintainers/evidence/2026-11-23-queue-entry-waiting.md
 [merge-group-event]: https://docs.github.com/en/webhooks/webhook-events-and-payloads#merge_group
 [queue-entry]: https://docs.github.com/en/graphql/reference/pulls#mergequeueentry

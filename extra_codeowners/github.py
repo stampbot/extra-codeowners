@@ -40,6 +40,8 @@ from extra_codeowners.dco import (
 )
 from extra_codeowners.discovery_cache import CacheEntry, CacheLookupStatus, DiscoveryCache
 from extra_codeowners.merge_queue import (
+    MAX_MERGE_QUEUE_BRANCH_RULES,
+    MAX_MERGE_QUEUE_ENTRIES,
     QUEUE_CANDIDATE_QUERY,
     MergeCandidateIdentity,
     MergeGroupTrigger,
@@ -408,6 +410,7 @@ class _BoundedJsonResponse:
     retry_after: str | None
     rate_limit_remaining: str | None
     rate_limit_reset: str | None
+    has_link: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -1534,6 +1537,7 @@ class GitHubClient:
                 retry_after=response.headers.get("retry-after"),
                 rate_limit_remaining=response.headers.get("x-ratelimit-remaining"),
                 rate_limit_reset=response.headers.get("x-ratelimit-reset"),
+                has_link="link" in response.headers,
             )
 
     async def _get_bounded_json(
@@ -1859,6 +1863,17 @@ class GitHubClient:
             trigger.installation_id, trigger.repository, refresh=True
         ):
             raise GitHubError("merge candidate repository is outside the installation")
+        branch = quote(trigger.base_branch, safe="")
+        rules = await self._bounded_json_request(
+            "GET",
+            f"/repos/{trigger.repository}/rules/branches/{branch}",
+            trigger.installation_id,
+            params={"per_page": MAX_MERGE_QUEUE_BRANCH_RULES},
+            max_bytes=MAX_MERGE_QUEUE_RESPONSE_BYTES,
+            queue_read=True,
+        )
+        if rules.status_code != 200 or rules.has_link:
+            raise GitHubError("GitHub did not return branch rules in one complete response")
         owner, name = trigger.repository.split("/", 1)
         data = await self._graphql(
             trigger.installation_id,
@@ -1869,13 +1884,14 @@ class GitHubClient:
                 "branch": trigger.base_branch,
                 "base": trigger.base_ref,
                 "head": trigger.head_ref,
+                "entryLimit": MAX_MERGE_QUEUE_ENTRIES,
             },
             operation="merge queue candidate",
             max_bytes=MAX_MERGE_QUEUE_RESPONSE_BYTES,
             queue_read=True,
         )
         try:
-            return bind_candidate(trigger, data.get("repository"))
+            return bind_candidate(trigger, data.get("repository"), effective_rules=rules.payload)
         except MergeQueueEvidenceError as error:
             raise GitHubError(str(error)) from error
 

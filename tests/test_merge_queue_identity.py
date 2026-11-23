@@ -12,6 +12,7 @@ import pytest
 
 from extra_codeowners.github import GitHubClient, GitHubError
 from extra_codeowners.merge_queue import (
+    MAX_MERGE_QUEUE_ENTRIES,
     MergeGroupTrigger,
     MergeQueueEvidenceError,
     bind_candidate,
@@ -103,13 +104,55 @@ def _graph() -> dict[str, Any]:
     }
 
 
+def _rules() -> list[dict[str, Any]]:
+    return [
+        {"type": "required_status_checks"},
+        {
+            "type": "merge_queue",
+            "parameters": {
+                "grouping_strategy": "ALLGREEN",
+                "merge_method": "SQUASH",
+                "max_entries_to_build": 1,
+                "min_entries_to_merge": 1,
+                "max_entries_to_merge": 1,
+            },
+        },
+    ]
+
+
+def _waiting(position: int) -> dict[str, Any]:
+    return {
+        "id": f"waiting-entry-{position}",
+        "position": position,
+        "state": "QUEUED",
+        "baseCommit": None,
+        "headCommit": None,
+        "pullRequest": {
+            "id": f"waiting-pr-{position}",
+            "number": 100 + position,
+            "repository": {"id": "repository-node"},
+            "baseRefName": TARGET.base_branch,
+            "state": "OPEN",
+            "isDraft": False,
+        },
+    }
+
+
+def _crowded_graph(count: int) -> dict[str, Any]:
+    result = _graph()
+    entries = result["mergeQueue"]["entries"]
+    entries["totalCount"] = count
+    entries["nodes"].extend(_waiting(position) for position in range(2, count + 1))
+    return result
+
+
 def test_verified_delivery_only_identifies_the_candidate() -> None:
     # Verifies XCO-014: a verified delivery supplies only a trigger.
     assert _trigger(_event()) == TARGET
     assert _trigger(_event("destroyed")) == replace(TARGET, action="destroyed")
     assert _trigger(_event("future_action")) is None
     assert _trigger(_event(), event="pull_request") is None
-    identified = bind_candidate(TARGET, _graph())
+    identified = bind_candidate(TARGET, _graph(), effective_rules=_rules())
     assert identified.pull_number == 17  # The ref's unrelated pr-99 is not a PR identity.
     assert identified.pull_head_sha == "c" * 40
     assert identified.entry_id == "entry-node"
@@ -166,11 +209,98 @@ def test_refuses_missing_stale_or_ambiguous_queue_evidence(
         parent = parent[part]
     parent[path[-1]] = value
     with pytest.raises(MergeQueueEvidenceError):
-        bind_candidate(TARGET, graph)
+        bind_candidate(TARGET, graph, effective_rules=_rules())
+
+
+@pytest.mark.parametrize("count", [2, 3, MAX_MERGE_QUEUE_ENTRIES])
+def test_waiting_entries_do_not_change_the_only_built_candidate(count: int) -> None:
+    # Verifies XCO-007. Waiting entries don't get to borrow the front candidate.
+    binding = bind_candidate(TARGET, _crowded_graph(count), effective_rules=_rules())
+    assert binding == bind_candidate(TARGET, _graph(), effective_rules=_rules())
+
+
+@pytest.mark.parametrize(
+    ("path", "value"),
+    [
+        (("state",), "AWAITING_CHECKS"),
+        (("headCommit",), {"oid": "d" * 40}),
+        (("baseCommit",), {"oid": TARGET.base_sha}),
+        (("id",), "entry-node"),
+        (("position",), 1),
+        (("position",), 3),
+        (("pullRequest",), None),
+        (("pullRequest", "id"), "pr-node"),
+        (("pullRequest", "number"), 17),
+        (("pullRequest", "baseRefName"), "another-base"),
+        (("pullRequest", "repository", "id"), "another-repo"),
+        (("pullRequest", "state"), "CLOSED"),
+        (("pullRequest", "isDraft"), True),
+    ],
+)
+def test_waiting_entry_cannot_hide_conflicting_evidence(
+    path: tuple[str, ...], value: object
+) -> None:
+    # Verifies XCO-001. An entry must be positively identified as still unbuilt.
+    graph = _crowded_graph(2)
+    row = graph["mergeQueue"]["entries"]["nodes"][1]
+    for part in path[:-1]:
+        row = row[part]
+    row[path[-1]] = value
+    with pytest.raises(MergeQueueEvidenceError):
+        bind_candidate(TARGET, graph, effective_rules=_rules())
+
+
+@pytest.mark.parametrize("missing", ["baseCommit", "headCommit"])
+def test_waiting_commits_must_be_explicitly_null(missing: str) -> None:
+    graph = _crowded_graph(2)
+    del graph["mergeQueue"]["entries"]["nodes"][1][missing]
+    with pytest.raises(MergeQueueEvidenceError, match="waiting PR"):
+        bind_candidate(TARGET, graph, effective_rules=_rules())
+
+
+def test_queue_over_the_limit_does_not_supply_complete_evidence() -> None:
+    with pytest.raises(MergeQueueEvidenceError, match="complete merge queue entry list"):
+        bind_candidate(
+            TARGET, _crowded_graph(MAX_MERGE_QUEUE_ENTRIES + 1), effective_rules=_rules()
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("grouping_strategy", "HEADGREEN"),
+        ("merge_method", "REBASE"),
+        ("max_entries_to_build", 2),
+        ("max_entries_to_build", True),
+        ("max_entries_to_merge", "1"),
+        ("min_entries_to_merge", 2),
+        ("max_entries_to_merge", None),
+    ],
+)
+def test_queue_requires_the_effective_serial_rule(field: str, value: object) -> None:
+    rules = _rules()
+    rules[1]["parameters"][field] = value
+    # Verifies XCO-014: the signed trigger doesn't prove the active rules.
+    with pytest.raises(MergeQueueEvidenceError, match="serial fixture"):
+        bind_candidate(TARGET, _crowded_graph(2), effective_rules=rules)
+
+
+@pytest.mark.parametrize(
+    "rules",
+    [None, [], [{"type": "required_status_checks"}], _rules() + _rules(), _rules() * 50, [{}]],
+)
+def test_missing_duplicate_or_excessive_branch_rules_do_not_authorize_candidate(
+    rules: object,
+) -> None:
+    with pytest.raises(MergeQueueEvidenceError):
+        bind_candidate(TARGET, _graph(), effective_rules=rules)
 
 
 @pytest.mark.asyncio
-async def test_merge_queue_refresh_cannot_evict_or_reuse_the_write_token(private_key: str) -> None:
+@pytest.mark.parametrize("paginated", [False, True])
+async def test_merge_queue_refresh_cannot_evict_or_reuse_the_write_token(
+    private_key: str, paginated: bool
+) -> None:
     queue_reads = 0
     token_requests: list[dict[str, str]] = []
     pull_tokens: list[str] = []
@@ -204,11 +334,25 @@ async def test_merge_queue_refresh_cannot_evict_or_reuse_the_write_token(private
                 "branch": TARGET.base_branch,
                 "base": TARGET.base_ref,
                 "head": TARGET.head_ref,
+                "entryLimit": MAX_MERGE_QUEUE_ENTRIES,
             }
             queue_reads += 1
             if queue_reads == 1:
                 return httpx.Response(401, json={"message": "expired"})
-            return httpx.Response(200, json={"data": {"repository": _graph()}})
+            return httpx.Response(200, json={"data": {"repository": _crowded_graph(2)}})
+        if path == "/repos/example/project/rules/branches/release/main":
+            assert request.method == "GET"
+            assert b"/branches/release%2Fmain?" in request.url.raw_path
+            assert request.url.params["per_page"] == "100"
+            assert request.headers["authorization"] == "Bearer fictional-queue-0"
+            assert queue_reads == 0
+            return httpx.Response(
+                200,
+                json=_rules(),
+                headers={"link": '<https://api.github.com/?page=2>; rel="next"'}
+                if paginated
+                else {},
+            )
         assert path == "/repos/example/project/pulls/17"
         pull_tokens.append(request.headers["authorization"])
         return httpx.Response(200, json={})
@@ -216,16 +360,20 @@ async def test_merge_queue_refresh_cannot_evict_or_reuse_the_write_token(private
     client = GitHubClient(1, private_key, transport=httpx.MockTransport(handle))
     try:
         await client.get_pull(7, TARGET.repository, 17)
-        actual = await client.get_merge_candidate(TARGET)
+        if paginated:
+            with pytest.raises(GitHubError, match="complete response"):
+                await client.get_merge_candidate(TARGET)
+        else:
+            actual = await client.get_merge_candidate(TARGET)
+            assert actual == bind_candidate(TARGET, _graph(), effective_rules=_rules())
         await client.get_pull(7, TARGET.repository, 17)
     finally:
         await client.close()
-    assert actual == bind_candidate(TARGET, _graph())
     assert token_requests == [
         {"checks": "write", "contents": "read", "members": "read", "pull_requests": "read"},
         queue_permission,
-        queue_permission,
-    ]
+    ] + ([] if paginated else [queue_permission])
+    assert queue_reads == (0 if paginated else 2)
     assert pull_tokens == ["Bearer fictional-write", "Bearer fictional-write"]
 
 

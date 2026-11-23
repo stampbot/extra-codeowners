@@ -123,6 +123,11 @@ candidate on timeout, and a fresh eligible candidate merged. Restoring
 native review also blocked a PR with an old passing check after the
 playground installation was suspended.
 
+The [November 23 queue observation](evidence/2026-11-23-queue-entry-waiting.md)
+separated the number of entries from the number of candidates. With one
+build slot and one PR per merge, a second PR waited without a candidate.
+The first candidate stayed unchanged. The App did not evaluate either entry.
+
 ## Diagnostics and approval probe: November 2, 2026
 
 Alpha.65 runs on two Kubernetes nodes with shared PostgreSQL state. The

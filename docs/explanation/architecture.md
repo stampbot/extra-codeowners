@@ -570,6 +570,11 @@ not interrupt an active scan or bound how long an old success remains visible.
 Neither setting makes the system strongly consistent. This reconciler does
 not discover merge queue candidates. A separate experimental worker reads
 `merge_group` deliveries for one explicitly configured test repository.
+The worker checks the effective branch rule and the full queue snapshot. It
+requires squash merging, one build slot, one PR per merge, and `ALLGREEN`.
+Only the first entry can have a candidate; any later entry must still be
+waiting without a base or candidate commit. Missing rules, a partial list,
+or a second built candidate blocks publication.
 The [merge queue design](design/2026-11-21-merge-queue-candidate-checks.md)
 describes what that worker checks and what it can't prove.
 
