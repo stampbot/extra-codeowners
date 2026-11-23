@@ -2141,8 +2141,10 @@ async def test_request_deadline_includes_a_contended_installation_token(
         installation_id: int,
         *,
         stop: asyncio.Event | None = None,
+        queue_read: bool = False,
     ) -> str:
         del installation_id, stop
+        assert not queue_read
         await token_release.wait()
         return "installation-token"
 
@@ -2256,8 +2258,10 @@ async def test_streaming_request_deadline_includes_a_contended_installation_toke
         installation_id: int,
         *,
         stop: asyncio.Event | None = None,
+        queue_read: bool = False,
     ) -> str:
         del installation_id, stop
+        assert not queue_read
         await token_release.wait()
         return "installation-token"
 
