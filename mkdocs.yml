@@ -39,6 +39,7 @@ nav:
       - Deploy an alpha in shadow mode: how-to/deploy.md
       - Upgrade, back up, and restore: how-to/upgrade.md
       - Operate and recover: how-to/operate.md
+      - Test a replacement library in the image: how-to/test-replacement-library.md
   - Reference:
       - Project status: reference/project-status.md
       - Recipient notice bundles: reference/recipient-notices.md
