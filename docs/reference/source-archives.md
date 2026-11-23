@@ -13,7 +13,6 @@ builders, and the project does not rebuild dependencies to make that claim.
 This is not yet the complete container source. Some libraries inside Python
 wheels and other missing notice material remain under
 [issue #18](https://github.com/stampbot/extra-codeowners/issues/18).
-The bundles do not establish distribution approval.
 
 For machine-readable C-library identities and their source-recipe bindings,
 use the companion [wheel-native catalogs](native-components.md). Those catalogs
@@ -301,8 +300,8 @@ A changed or missing selected SBOM, or a Cryptography version without a
 reviewed recipe, stops schema 3 collection. Review its source mapping and
 update the recipe before publishing. Historical schema 0–2 inventories keep
 their original contract; verifying an older release does not retroactively
-require this archive. Unreported components, the remaining notice review and
-distribution approval stay in [issue #18][source-work].
+require this archive. [Issue #18][source-work] tracks components these
+inventories don't identify and notices that still need review.
 
 ### Psycopg's custom-library sources
 
@@ -331,9 +330,8 @@ installed or executed during collection.
 These are version-matched sources, not proof of the upstream builder's exact
 inputs. In particular, Psycopg's OpenSSL recipe fetches a Git tag archive;
 this bundle retains the official release tarball of that version. License
-texts remain inside the retained archives. Notice coverage, unreported
-components and maintainer distribution approval remain in
-[issue #18][source-work].
+texts remain inside the retained archives. [Issue #18][source-work] tracks
+missing components and notice coverage.
 
 ## Rust dependencies in Python wheels
 

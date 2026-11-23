@@ -164,7 +164,7 @@ earlier exclusions remained, and no fix, severity or project-ignore filter
 removed a native finding. These are scans of the authenticated alpha.88
 catalogs, whose native identities remain unchanged in the reviewed runtime;
 they are not observations of a newly published release. Complete native
-coverage and distribution approval remain open in issue #18.
+coverage remains open in issue #18.
 The later binding-only revision adds the caller receipt to the reviewed
 inputs without changing those statement objects or their assessment dates.
 
@@ -196,8 +196,8 @@ and dates. Vexcalibur 1.1.1 formatted the new local findings offline.
 
 The libraries remain present and unpatched. These statements cover the shipped
 amd64/arm64 service, not operator commands, plugins, custom FFI, other builds
-or execution after compromise. Native scanner matching, complete notice/source
-review and distribution approval remain separate from this reachability review.
+or execution after compromise. This reachability review doesn't establish
+scanner coverage or completeness of notices or source archives.
 
 ## Wheel-native OpenSSL intake: November 11, 2026 UTC
 
@@ -250,8 +250,8 @@ The Dockerfile, base digest, lock and application code are unchanged. The
 libraries remain present and unpatched. These conclusions do not cover
 operator commands, plugins, custom FFI, other builds or execution after
 compromise. The native reports remain separate from the blocking image scan.
-RPM advisory context, complete native coverage, notices, source adequacy and
-distribution approval remain in
+RPM advisory context, complete native coverage, notices, and source adequacy
+remain in
 [issue #18](https://github.com/stampbot/extra-codeowners/issues/18).
 
 ## Installation retry cadence: November 11, 2026 UTC

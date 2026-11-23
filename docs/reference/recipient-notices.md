@@ -124,10 +124,9 @@ retained source artifact is the complete corresponding source for a component.
 It does not make alpha releases supported for production use.
 
 The raw inventory records installed Debian package identities and Python
-metadata so those questions can be reviewed against the exact image. The
-project still needs an approved, reviewed corresponding-source delivery
-mechanism and maintainer approval of the distribution process. Those remaining
-decisions are tracked in [issue #18][issue-18].
+metadata so you can check those questions against the exact image.
+[Issue #18][issue-18] tracks missing notice attribution and the remaining
+work to deliver corresponding source.
 
 [issue-18]: https://github.com/stampbot/extra-codeowners/issues/18
 [review-changes]: https://github.com/stampbot/extra-codeowners/blob/main/CONTRIBUTING.md#review-changes-to-container-components

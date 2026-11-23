@@ -58,8 +58,8 @@ recovery unresolved; the later alpha.92 receipt below covers the follow-up.
 
 The [native catalog and VEX receipt](evidence/2026-11-11-native-catalog-and-vex.md)
 records independently verified publication, scoped OpenSSL exclusions and real
-scanner comparisons on both architectures. Remaining findings stay visible;
-this is not a complete native-security or distribution approval.
+scanner comparisons on both architectures. The reports still show the findings
+outside those exclusions.
 
 The [November 12 base-refresh receipt](evidence/2026-11-12-base-refresh-stability.md)
 records alpha.89 verification and rollout. An unchanged base update retained
@@ -115,8 +115,8 @@ Alpha.65 runs on two Kubernetes nodes with shared PostgreSQL state. The
 diagnostics from [PR #253][diagnostics] are deployed through
 [Argo PR #2626][diagnostics-deployment]. Release signatures and source-bound
 provenance verified against the exact main commit. Inventory, notice, source
-and OpenVEX verification passed too; those checks do not establish the
-distribution approval tracked in [issue #18][sources].
+and OpenVEX verification passed too. Those checks didn't establish whether the
+release included every required notice and source file ([issue #18][sources]).
 
 On a retained delegated-path PR, removing its required label produced an
 explicit blocking failure after about 8.5 seconds and the final
