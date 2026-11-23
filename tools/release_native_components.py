@@ -13,6 +13,7 @@ import importlib.util
 import json
 import re
 import sys
+import tomllib
 from collections.abc import Sequence
 from pathlib import Path
 from types import ModuleType
@@ -28,6 +29,8 @@ _NOTICE_PATH = re.compile(r"[A-Za-z0-9_.+/-]{1,512}\Z")
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _RPM_NOTICE_RECEIPT = Path(__file__).with_name("release_rpm_notice_evidence.json")
 _RPM_BINARY_RECEIPT = Path(__file__).with_name("release_rpm_binary_evidence.json")
+_STATIC_WHEEL_RECEIPT = Path(__file__).with_name("release_crypto_static_evidence.json")
+_STATIC_EXTENSION = "cryptography/hazmat/bindings/_rust.abi3.so"
 
 
 class NativeComponentError(ValueError):
@@ -228,6 +231,66 @@ def _rpm_binary_packages(
     return packages, hashlib.sha256(data).hexdigest()
 
 
+def _require_locked_crypto_wheel(lock: bytes, version: str, filename: str, digest: str) -> None:
+    packages = tomllib.loads(lock.decode())["package"]
+    urls = [
+        wheel["url"]
+        for package in packages
+        if package.get("name") == "cryptography" and package.get("version") == version
+        for wheel in package.get("wheels", [])
+        if wheel["hash"] == f"sha256:{digest}" and wheel["url"].rsplit("/", 1)[-1] == filename
+    ]
+    if len(urls) != 1:
+        raise NativeComponentError("reviewed static OpenSSL evidence needs its locked wheel")
+
+
+def _static_wheel_properties(
+    receipt: dict[str, Any],
+    architecture: str,
+    source: dict[str, Any],
+    lock: bytes,
+    native_files: object,
+) -> dict[str, str]:
+    platforms = receipt.get("platforms")
+    if (
+        type(receipt.get("schema_version")) is not int
+        or receipt["schema_version"] != 1
+        or not isinstance(platforms, dict)
+        or not isinstance(platforms.get(architecture), dict)
+    ):
+        raise NativeComponentError("invalid static wheel evidence receipt")
+    record = platforms[architecture]
+    version = _identity(receipt.get("distribution_version"))
+    component = receipt.get("component")
+    expected = source["source_component"]
+    if (
+        not isinstance(component, dict)
+        or source["distribution"] != "cryptography"
+        or source["distribution_version"] != version
+        or expected != {"name": "openssl", "version": component.get("version")}
+        or component.get("name") != "openssl"
+        or component.get("source_sha256") != source["sha256"]
+        or record.get("sbom_sha256") != source["sbom_sha256"]
+    ):
+        raise NativeComponentError("static wheel receipt differs from reviewed OpenSSL source")
+    extension = record.get("extension")
+    if not isinstance(extension, dict) or extension.get("path") != _STATIC_EXTENSION:
+        raise NativeComponentError("static wheel evidence names a different extension")
+    digest = record.get("wheel_sha256")
+    if not isinstance(digest, str) or _SHA256.fullmatch(digest) is None:
+        raise NativeComponentError("invalid reviewed Cryptography wheel checksum")
+    filename = _identity(record.get("wheel_filename"))
+    _require_locked_crypto_wheel(lock, version, filename, digest)
+    _python._verify_wheel_file(native_files, _STATIC_EXTENSION, extension)
+    return {
+        "identity-evidence": "reviewed OpenSSL code in the exact compiled Cryptography extension",
+        "native-files": json.dumps([extension], sort_keys=True),
+        "wheel-filename": filename,
+        "wheel-sha256": digest,
+        "native-linkage": "static",
+    }
+
+
 def build(
     inventory: bytes,
     lock: bytes,
@@ -240,6 +303,7 @@ def build(
     rpm_notice_receipt: Path | None = None,
     source_licenses: bool = False,
     rpm_binary_receipt: Path | None = None,
+    static_wheel_receipt: Path | None = None,
 ) -> bytes:
     """Bind a deterministic CycloneDX catalog to verified platform evidence."""
     raw = _json(inventory)
@@ -281,6 +345,17 @@ def build(
     sources = [*source_plan["native_sources"], *source_plan["embedded_sources"]]
     if not 1 <= len(sources) <= MAX_COMPONENTS:
         raise NativeComponentError("invalid reviewed native component count")
+    static_properties: dict[str, str] = {}
+    static_receipt_hash: str | None = None
+    if static_wheel_receipt is not None:
+        crypto_sources = [source for source in sources if source["distribution"] == "cryptography"]
+        if source_payloads is None or len(crypto_sources) != 1:
+            raise NativeComponentError("static wheel evidence requires verified OpenSSL source")
+        receipt = _read(static_wheel_receipt)
+        static_properties = _static_wheel_properties(
+            _json(receipt), architecture, crypto_sources[0], lock, python["native_files"]
+        )
+        static_receipt_hash = hashlib.sha256(receipt).hexdigest()
     parents = {
         item["normalized_name"]: item["version"]
         for item in raw["python"]["distributions"]
@@ -328,6 +403,8 @@ def build(
         }
         if source.get("wheel_files"):
             properties["native-files"] = json.dumps(source["wheel_files"], sort_keys=True)
+        if distribution == "cryptography":
+            properties.update(static_properties)
         if "build_recipe" in source:
             properties["build-recipe"] = json.dumps(source["build_recipe"], sort_keys=True)
             properties["builder-image"] = source["builder_image"]
@@ -399,6 +476,9 @@ def build(
     if rpm_binary_hash is not None:
         evidence_properties["rpm-binary-evidence"] = "1"
         evidence_properties["rpm-binary-receipt-sha256"] = rpm_binary_hash
+    if static_receipt_hash is not None:
+        evidence_properties["static-wheel-evidence"] = "1"
+        evidence_properties["static-wheel-receipt-sha256"] = static_receipt_hash
     document = {
         "bomFormat": "CycloneDX",
         "specVersion": "1.5",
@@ -448,6 +528,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--rpm-binaries", action="store_true", help="require RPM binary evidence")
     parser.add_argument("--rpm-binary-receipt", type=Path, help="receipt from the release revision")
     parser.add_argument(
+        "--static-wheel-receipt",
+        type=Path,
+        help="reviewed static wheel receipt from the release revision",
+    )
+    parser.add_argument(
         "--source-licenses", action="store_true", help="require reviewed upstream license texts"
     )
     parser.add_argument("--architecture", choices=("amd64", "arm64"), required=True)
@@ -465,6 +550,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         rpm_notices = args.rpm_notices
         source_licenses = args.source_licenses
         rpm_binaries = args.rpm_binaries
+        static_receipt = args.static_wheel_receipt
         if existing is not None:
             metadata = _json(existing).get("metadata")
             if not isinstance(metadata, dict) or not isinstance(metadata.get("properties"), list):
@@ -481,6 +567,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "name": "extra-codeowners:rpm-binary-evidence",
                 "value": "1",
             } in metadata["properties"]
+            if {
+                "name": "extra-codeowners:static-wheel-evidence",
+                "value": "1",
+            } in metadata["properties"]:
+                static_receipt = static_receipt or _STATIC_WHEEL_RECEIPT
         if args.rpm_binary_receipt is not None and not rpm_binaries:
             raise NativeComponentError("binary RPM receipt supplied without its evidence contract")
         data = build(
@@ -496,6 +587,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             rpm_binary_receipt=(args.rpm_binary_receipt or _RPM_BINARY_RECEIPT)
             if rpm_binaries
             else None,
+            static_wheel_receipt=static_receipt,
         )
         if args.command == "generate":
             with args.catalog.open("xb") as output:
