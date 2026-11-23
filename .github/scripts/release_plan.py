@@ -271,13 +271,24 @@ def read_release_channel(repository: Path, commit: Commit) -> str | None:
 
 
 def select_release_channel(
-    repository: Path, commits: Sequence[Commit], *, initial_channel: str
-) -> str:
-    """Replay meaningful, terminal Git-trailer transitions in commit order."""
+    repository: Path,
+    commits: Sequence[Commit],
+    *,
+    initial_channel: str,
+    allow_major_alpha: bool = False,
+) -> tuple[str, bool]:
+    """Replay channel transitions and any explicit start of a new major alpha."""
     channel = initial_channel
+    new_major_alpha = False
     for commit in commits:
         requested = read_release_channel(repository, commit)
         if requested is None:
+            continue
+        if allow_major_alpha and requested == "alpha" and is_breaking(commit):
+            if new_major_alpha:
+                raise ReleasePlanError("a new major alpha is already pending publication")
+            new_major_alpha = True
+            channel = requested
             continue
         if requested == channel:
             raise ReleasePlanError(
@@ -285,16 +296,22 @@ def select_release_channel(
                 "current release channel"
             )
         channel = requested
-    return channel
+    if new_major_alpha and channel == "stable":
+        raise ReleasePlanError(
+            "publish the new major alpha before promoting it to stable; "
+            "cancel the premature promotion with Release-Channel: alpha without a breaking marker"
+        )
+    return channel, new_major_alpha
+
+
+def is_breaking(commit: Commit) -> bool:
+    """Recognize the same breaking-change markers on both release channels."""
+    return bool(BREAKING_SUBJECT.match(commit.subject) or BREAKING_BODY.search(commit.body))
 
 
 def bump_stable(version: Version, commits: Sequence[Commit]) -> Version:
     """Apply a conventional-commit bump to a stable version."""
-    breaking = any(
-        BREAKING_SUBJECT.match(commit.subject) or BREAKING_BODY.search(commit.body)
-        for commit in commits
-    )
-    if breaking:
+    if any(is_breaking(commit) for commit in commits):
         return Version(version.major + 1, 0, 0)
     if any(FEATURE_SUBJECT.match(commit.subject) for commit in commits):
         return Version(version.major, version.minor + 1, 0)
@@ -343,7 +360,7 @@ def calculate_release_plan(repository: Path) -> ReleasePlan:
 
     if not tags:
         commits = read_commits(repository, "HEAD", oldest_first=True)
-        channel = select_release_channel(repository, commits, initial_channel="alpha")
+        channel, _ = select_release_channel(repository, commits, initial_channel="alpha")
         version = Version(0, 1, 0, alpha=1 if channel == "alpha" else None)
         return ReleasePlan(version=version, previous_tag=None)
 
@@ -364,18 +381,24 @@ def calculate_release_plan(repository: Path) -> ReleasePlan:
         raise ReleasePlanError(f"no commits follow {latest.name}")
 
     initial_channel = "alpha" if latest.version.alpha is not None else "stable"
-    channel = select_release_channel(repository, commits, initial_channel=initial_channel)
+    channel, new_major_alpha = select_release_channel(
+        repository,
+        commits,
+        initial_channel=initial_channel,
+        allow_major_alpha=latest.version.alpha is not None,
+    )
     if latest.version.alpha is not None:
-        next_version = (
-            Version(latest.version.major, latest.version.minor, latest.version.patch)
-            if channel == "stable"
-            else Version(
+        if new_major_alpha:
+            next_version = Version(latest.version.major + 1, 0, 0, alpha=1)
+        elif channel == "stable":
+            next_version = Version(latest.version.major, latest.version.minor, latest.version.patch)
+        else:
+            next_version = Version(
                 latest.version.major,
                 latest.version.minor,
                 latest.version.patch,
                 alpha=latest.version.alpha + 1,
             )
-        )
     else:
         stable_version = bump_stable(latest.version, commits)
         next_version = (

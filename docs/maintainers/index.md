@@ -66,8 +66,11 @@ Release-Channel: stable
 
 The planner replays those transitions in commit order. `alpha` starts the next
 semantic version as `.alpha.1`; `stable` promotes the current alpha base
-without another conventional bump. A repeated, malformed, or duplicated
-trailer fails the release rather than changing state implicitly. See the
+without another conventional bump. To leave an already-published alpha for a
+new major alpha, use `alpha` and a conventional breaking-change marker on the
+same commit. The new major alpha has to publish before a separate `stable`
+commit can promote it. Other repeated transitions and malformed or duplicated
+trailers fail planning. See the
 [contributor guide](https://github.com/stampbot/extra-codeowners/blob/main/CONTRIBUTING.md#choose-a-release-channel)
 for the merge-message procedure.
 

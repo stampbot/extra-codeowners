@@ -822,8 +822,11 @@ The planner reads the reachable release tags and refuses malformed, ambiguous,
 nonlinear, or nonmonotonic history. Release-channel transitions are terminal
 Git trailers in commits on `main`: `Release-Channel: alpha` starts an alpha
 line and `Release-Channel: stable` promotes its current base version. It
-replays meaningful transitions in commit order; a repeated, malformed, or
-duplicated transition fails closed. Without a transition, an alpha increments
+replays meaningful transitions in commit order. On an existing alpha line, an
+explicit `alpha` trailer on a breaking-change commit starts the next major
+line as an alpha. The new line must publish before a later commit can promote
+it. Other repeated transitions and malformed or duplicated trailers fail
+planning. Without a transition, an alpha increments
 its numeric suffix and a stable release applies conventional-commit rules: a
 breaking change bumps the major version, `feat` bumps the minor version, and
 everything else bumps the patch version. Python archive metadata uses the
