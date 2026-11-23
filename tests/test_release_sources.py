@@ -264,6 +264,9 @@ def test_notice_manifest_is_bound_to_exact_source_bytes(monkeypatch: pytest.Monk
         "_BUNDLED_NOTICES",
         {("3.14.7", archive_hash): (("fixture", "1.2.3", "Modules/fixture/NOTICE", notice_hash),)},
     )
+    monkeypatch.setattr(
+        sources, "_HACL_NOTICES", {("3.14.7", archive_hash): {"common": (), "amd64": ()}}
+    )
     bundle = sources.build_bundle(
         _inventory(),
         SOURCE,
@@ -272,7 +275,7 @@ def test_notice_manifest_is_bound_to_exact_source_bytes(monkeypatch: pytest.Monk
         require_bundled_notices=True,
     )
     manifest = _verify(bundle)
-    assert manifest["schema_version"] == 2
+    assert manifest["schema_version"] == 3
     assert manifest["bundled_notices"] == [
         {
             "component": "fixture",
@@ -306,6 +309,68 @@ def test_release_verifier_requires_notices_but_legacy_bundles_still_verify() -> 
         sources.verify_bundle(
             _inventory(),
             legacy,
+            architecture="amd64",
+            platform_digest=DIGEST,
+            require_bundled_notices=True,
+        )
+
+
+@pytest.mark.parametrize("architecture", ["amd64", "arm64"])
+def test_current_notice_index_keeps_the_platform_scope_and_preserves_schema_two(
+    monkeypatch: pytest.MonkeyPatch, architecture: str
+) -> None:
+    key = ("3.14.7", hashlib.sha256(SOURCE).hexdigest())
+    monkeypatch.setattr(
+        sources,
+        "_BUNDLED_NOTICES",
+        {key: (("fixture", "1.2.3", "Modules/fixture/NOTICE", "a" * 64),)},
+    )
+    monkeypatch.setattr(
+        sources,
+        "_HACL_NOTICES",
+        {key: {"common": (("Common.c", "b" * 64),), "amd64": (("Simd.c", "c" * 64),), "arm64": ()}},
+    )
+    inventory = _inventory().replace(b"amd64", architecture.encode())
+    args = {"architecture": architecture, "platform_digest": DIGEST}
+    bundle = sources.build_bundle(inventory, SOURCE, require_bundled_notices=True, **args)
+    observed = sources.verify_bundle(inventory, bundle, require_bundled_notices=True, **args)
+    assert observed["schema_version"] == 3
+    records = observed["bundled_notices"]
+    assert isinstance(records, list)
+    paths = [record["path"] for record in records]
+    assert paths == [
+        "Python-3.14.7/Modules/fixture/NOTICE",
+        "Python-3.14.7/Modules/_hacl/Common.c",
+        *(["Python-3.14.7/Modules/_hacl/Simd.c"] if architecture == "amd64" else []),
+    ]
+    forged = {**observed, "bundled_notices": records[:-1]}
+    with pytest.raises(sources.SourceError, match="manifest differs"):
+        sources.verify_bundle(
+            inventory,
+            _repack(bundle, "manifest.json", json.dumps(forged).encode()),
+            require_bundled_notices=False,
+            **args,
+        )
+    legacy = {**observed, "schema_version": 2, "bundled_notices": records[:1]}
+    legacy_bundle = _repack(bundle, "manifest.json", json.dumps(legacy).encode())
+    assert sources.verify_bundle(
+        inventory, legacy_bundle, require_bundled_notices=False, **args
+    ) == (legacy)
+    with pytest.raises(sources.SourceError, match="omitted the required bundled notices"):
+        sources.verify_bundle(inventory, legacy_bundle, require_bundled_notices=True, **args)
+
+
+def test_current_notice_index_needs_matching_hacl_evidence(monkeypatch: pytest.MonkeyPatch) -> None:
+    key = ("3.14.7", hashlib.sha256(SOURCE).hexdigest())
+    monkeypatch.setattr(
+        sources,
+        "_BUNDLED_NOTICES",
+        {key: (("fixture", "1.2.3", "Modules/fixture/NOTICE", "a" * 64),)},
+    )
+    with pytest.raises(sources.SourceError, match="no HACL notice review"):
+        sources.build_bundle(
+            _inventory(),
+            SOURCE,
             architecture="amd64",
             platform_digest=DIGEST,
             require_bundled_notices=True,
