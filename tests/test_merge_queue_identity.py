@@ -248,3 +248,48 @@ async def test_scope_loss_and_destroyed_event_never_read_the_queue(private_key: 
     finally:
         await client.close()
     assert paths == ["/repos/example/project/installation"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad_field", [None, "app", "head_sha", "external_id", "conclusion"])
+async def test_candidate_write_requires_exact_check_receipt(
+    private_key: str, bad_field: str | None
+) -> None:
+    # Verifies XCO-007. A REST success code alone is not check publication evidence.
+    check_name = "Fixture check"
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.url.path == f"/app/installations/{TARGET.installation_id}/access_tokens":
+            return httpx.Response(
+                201,
+                json={
+                    "token": "synthetic-writer",
+                    "expires_at": (datetime.now(UTC) + timedelta(hours=1)).isoformat(),
+                },
+            )
+        assert request.url.path == f"/repos/{TARGET.repository}/check-runs"
+        assert request.method == "POST"
+        sent = json.loads(request.content)
+        assert sent["head_sha"] == TARGET.head_sha
+        assert sent["external_id"] == TARGET.check_external_id
+        result = {**sent, "id": 100, "app": {"id": 1}}
+        if bad_field is not None:
+            result[bad_field] = None
+        return httpx.Response(201, json=result)
+
+    client = GitHubClient(1, private_key, transport=httpx.MockTransport(handle))
+    try:
+        if bad_field is None:
+            await client.write_merge_group_check(TARGET, check_name, approved=True, summary="test")
+        else:
+            with pytest.raises(GitHubError):
+                await client.write_merge_group_check(
+                    TARGET, check_name, approved=True, summary="test"
+                )
+        destroyed = replace(TARGET, action="destroyed")
+        with pytest.raises(ValueError, match="only reset"):
+            await client.write_merge_group_check(
+                destroyed, check_name, approved=False, summary="test"
+            )
+    finally:
+        await client.close()

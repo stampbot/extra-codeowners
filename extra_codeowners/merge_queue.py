@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from extra_codeowners.merge_queue_paths import MergeTreeEvidenceError, require_object_id
-from extra_codeowners.models import ChangedFile, ChangedFileStatus
+from extra_codeowners.models import ChangedFile, ChangedFileStatus, EvaluationResult
 
 MergeGroupAction = Literal["checks_requested", "destroyed"]
 
@@ -147,6 +147,11 @@ class MergeGroupTrigger:
     def base_branch(self) -> str:
         return self.base_ref.removeprefix(_HEADS)
 
+    @property
+    def check_external_id(self) -> str:
+        """Distinguish a managed candidate check from an ordinary PR-head check."""
+        return f"merge-group:{self.repository_id}:{self.head_sha}"
+
     @classmethod
     def from_payload(cls, action: MergeGroupAction, payload: dict[str, Any]) -> MergeGroupTrigger:
         repo = _record(payload.get("repository"))
@@ -175,6 +180,14 @@ class MergeCandidateIdentity:
     pull_id: str
     pull_number: int
     pull_head_sha: str
+
+
+@dataclass(frozen=True, slots=True)
+class MergeCandidateAssessment:
+    """Read-only result, tied to a candidate and the PR head whose reviews it used."""
+
+    identity: MergeCandidateIdentity
+    result: EvaluationResult
 
 
 def _require_ref(value: object, ref: str, sha: str) -> None:

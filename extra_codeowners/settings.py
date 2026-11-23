@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import stat
 from functools import cached_property
 from pathlib import Path
@@ -13,7 +14,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import ArgumentError
 
-from extra_codeowners.database import isolated_postgresql_connect_args
+from extra_codeowners.database import (
+    isolated_postgresql_connect_args,
+    normalize_repository_full_name,
+)
 
 MAX_SECRET_FILE_BYTES = 64 * 1024
 MAX_SECRET_SYMLINKS = 16
@@ -283,11 +287,42 @@ class Settings(BaseSettings):
     org_config_repository: str = ".github"
     policy_path: str = ".github/extra-codeowners.toml"
     check_name: str = "Extra CODEOWNERS / approval"
+    experimental_merge_queue_repository: str | None = None
+    experimental_merge_queue_repository_id: int | None = Field(default=None, gt=0, le=2**63 - 1)
     allow_insecure_changes: bool = False
 
     setup_enabled: bool = False
     setup_state_secret: SecretStr | None = None
     setup_state_ttl_seconds: int = Field(default=600, ge=60, le=3600)
+
+    @field_validator("experimental_merge_queue_repository")
+    @classmethod
+    def validate_experimental_merge_queue_repository(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        repository = normalize_repository_full_name(value)
+        if re.fullmatch(r"[a-z0-9_.-]+/[a-z0-9_.-]+", repository) is None:
+            raise ValueError("experimental merge queue needs one GitHub owner/repository route")
+        return repository
+
+    @model_validator(mode="after")
+    def validate_experimental_merge_queue(self) -> Self:
+        repository = self.experimental_merge_queue_repository
+        repository_id = self.experimental_merge_queue_repository_id
+        if (repository is None) != (repository_id is None):
+            raise ValueError("experimental merge queue needs both the repository route and ID")
+        if repository is not None and (
+            not self.worker_enabled or self.is_organization_config_repository(repository)
+        ):
+            raise ValueError("experimental merge queue needs an enabled worker and a target repo")
+        return self
+
+    @field_validator("experimental_merge_queue_repository_id", mode="before")
+    @classmethod
+    def validate_experimental_merge_queue_id(cls, value: object) -> object:
+        if isinstance(value, bool):
+            raise ValueError("experimental merge queue repository ID must be a number")
+        return value
 
     @field_validator("github_api_url")
     @classmethod

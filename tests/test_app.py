@@ -21,6 +21,7 @@ from extra_codeowners.build_identity import BuildIdentity
 from extra_codeowners.database import QueueStore
 from extra_codeowners.github import GitHubRateLimitError
 from extra_codeowners.manifest import ManifestService
+from extra_codeowners.merge_group_work import MergeGroupQueue
 from extra_codeowners.migrations import upgrade_database
 from extra_codeowners.service import Reconciler, Worker
 from extra_codeowners.settings import Settings
@@ -292,6 +293,68 @@ def webhook_headers(body: bytes, delivery: str = "delivery-1") -> dict[str, str]
         "X-GitHub-Event": "pull_request",
         "Content-Type": "application/json",
     }
+
+
+@pytest.mark.parametrize(
+    ("configured", "repo_id", "valid_signature", "queued"),
+    [
+        (True, 24, True, True),
+        (True, 25, True, False),
+        (False, 24, True, False),
+        (True, 24, False, False),
+    ],
+)
+def test_candidate_ingress_requires_signature_and_exact_opt_in_scope(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    configured: bool,
+    repo_id: int,
+    valid_signature: bool,
+    queued: bool,
+) -> None:
+    # Verifies XCO-013. Claimable work exists after the successful response.
+    async def idle(_worker: Worker, stop: asyncio.Event) -> None:
+        await stop.wait()
+
+    monkeypatch.setattr(Worker, "run", idle)
+    settings = configured_settings().model_copy(
+        update={
+            "worker_enabled": True,
+            "experimental_merge_queue_repository": "example/project" if configured else None,
+            "experimental_merge_queue_repository_id": 24 if configured else None,
+        }
+    )
+    with_store = migrated_store(f"sqlite:///{tmp_path / 'queue-ingress.db'}")
+    app = app_module.create_app(settings, github=StubGitHub(), store=with_store)  # type: ignore[arg-type]
+    payload = {
+        "action": "checks_requested",
+        "installation": {"id": 10},
+        "repository": {"id": repo_id, "full_name": "Example/Project"},
+        "merge_group": {
+            "head_sha": HEAD,
+            "base_sha": "b" * 40,
+            "base_ref": "refs/heads/main",
+            "head_ref": "refs/heads/gh-readonly-queue/main/pr-7-fictional",
+        },
+    }
+    body = json.dumps(payload).encode()
+    headers = {**webhook_headers(body), "X-GitHub-Event": "merge_group"}
+    if not valid_signature:
+        headers["X-Hub-Signature-256"] = "sha256=" + "0" * 64
+    try:
+        with TestClient(app) as client:
+            response = client.post("/webhooks/github", content=body, headers=headers)
+        assert response.status_code == (202 if valid_signature else 401)
+        if valid_signature:
+            assert response.json() == {"accepted": True, "queued": queued}
+        claim = MergeGroupQueue(with_store).claim("observer", 60)
+        if queued:
+            assert claim is not None and claim.trigger.repository_id == repo_id
+            assert claim.trigger.head_sha == HEAD
+        else:
+            assert claim is None
+    finally:
+        with_store.close()
 
 
 # Verifies XCO-013.

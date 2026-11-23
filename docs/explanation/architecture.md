@@ -567,8 +567,11 @@ missed-event recovery: a long scan still has to reach the PR, and a worker then
 has to evaluate it. A shorter interval spends more GitHub API budget; it does
 not interrupt an active scan or bound how long an old success remains visible.
 
-Neither setting makes the system strongly consistent. Merge queues add a
-separate `merge_group` state that this version does not evaluate.
+Neither setting makes the system strongly consistent. This reconciler does
+not discover merge queue candidates. A separate experimental worker reads
+`merge_group` deliveries for one explicitly configured test repository.
+The [merge queue design](design/2026-11-21-merge-queue-candidate-checks.md)
+describes what that worker checks and what it can't prove.
 
 The reconciler keeps each completed-pull fingerprint for whichever is longer:
 delivery retention, or one scan interval plus one recheck interval. A slow

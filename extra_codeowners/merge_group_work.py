@@ -8,7 +8,14 @@ from datetime import datetime, timedelta
 from sqlalchemy import or_, select, update
 from sqlalchemy.sql.elements import ColumnElement
 
-from extra_codeowners.database import MergeGroupWork, QueueStore, utcnow
+from extra_codeowners.database import (
+    AuthorityEpoch,
+    AuthorityJob,
+    MergeGroupWork,
+    QueueStore,
+    SharedHeadEpoch,
+    utcnow,
+)
 from extra_codeowners.merge_queue import MergeCandidateIdentity, MergeGroupTrigger
 
 
@@ -20,6 +27,14 @@ class ClaimedMergeGroup:
     generation: int
     attempts: int
     lease_owner: str
+
+
+@dataclass(frozen=True, slots=True)
+class MergeGroupEvidenceEpoch:
+    """Durable generations observed before reading mutable approval evidence."""
+
+    installation: int
+    pull_head: int
 
 
 def _key(trigger: MergeGroupTrigger) -> tuple[ColumnElement[bool], ...]:
@@ -59,19 +74,31 @@ class MergeGroupQueue:
     def __init__(self, store: QueueStore) -> None:
         self.store = store
 
-    def claim(self, owner: str, lease_seconds: int) -> ClaimedMergeGroup | None:
+    def claim(
+        self,
+        owner: str,
+        lease_seconds: int,
+        *,
+        repository_scope: tuple[str, int] | None = None,
+    ) -> ClaimedMergeGroup | None:
         """Claim available work across replicas, putting cancellations first."""
         if not 0 < len(owner) <= 128 or lease_seconds <= 0:
             raise ValueError("merge group claim needs an owner and a positive lease")
         for _ in range(3):
             now = utcnow()
             with self.store.session() as session:
-                ready = (
+                ready: tuple[ColumnElement[bool], ...] = (
                     _pending(),
                     MergeGroupWork.available_at <= now,
                     _unleased(now),
                     self.store._provider_available_condition(MergeGroupWork.installation_id, now),
                 )
+                if repository_scope is not None:
+                    repository, repository_id = repository_scope
+                    ready += (
+                        MergeGroupWork.repository_full_name == repository,
+                        MergeGroupWork.repository_id == repository_id,
+                    )
                 row = session.scalar(
                     select(MergeGroupWork)
                     .where(*ready)
@@ -148,6 +175,48 @@ class MergeGroupQueue:
                 )
             )
             return getattr(result, "rowcount", 0) == 1
+
+    def evidence_epoch(
+        self, job: ClaimedMergeGroup, identity: MergeCandidateIdentity
+    ) -> MergeGroupEvidenceEpoch | None:
+        """Return current evidence generations only after authority and reset work finish."""
+        trigger = job.trigger
+        if trigger != identity.trigger or trigger.action != "checks_requested":
+            return None
+        with self.store.session() as session:
+            claimed = session.scalar(
+                select(MergeGroupWork.generation).where(
+                    *_owns(job, utcnow()),
+                    MergeGroupWork.entry_id == identity.entry_id,
+                    MergeGroupWork.pull_head_sha == identity.pull_head_sha,
+                )
+            )
+            authority_pending = session.scalar(
+                select(AuthorityJob.id)
+                .where(
+                    AuthorityJob.installation_id == trigger.installation_id,
+                    AuthorityJob.scope_key.in_(("*", trigger.repository)),
+                    AuthorityJob.base_ref.in_(("", trigger.base_branch)),
+                )
+                .limit(1)
+            )
+            if claimed is None or authority_pending is not None:
+                return None
+            installation = session.scalar(
+                select(AuthorityEpoch.generation).where(
+                    AuthorityEpoch.installation_id == trigger.installation_id
+                )
+            )
+            head = session.execute(
+                select(SharedHeadEpoch.generation, SharedHeadEpoch.invalidated_generation).where(
+                    SharedHeadEpoch.installation_id == trigger.installation_id,
+                    SharedHeadEpoch.repository_full_name == trigger.repository,
+                    SharedHeadEpoch.head_sha == identity.pull_head_sha,
+                )
+            ).one_or_none()
+            if head is not None and head.generation != head.invalidated_generation:
+                return None
+            return MergeGroupEvidenceEpoch(installation or 0, head.generation if head else 0)
 
     def renew(self, job: ClaimedMergeGroup, lease_seconds: int) -> bool:
         """Extend a live attempt's lease without reviving an expired one."""

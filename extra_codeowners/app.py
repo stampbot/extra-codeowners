@@ -20,10 +20,11 @@ from pydantic import BaseModel, ConfigDict, Field
 from extra_codeowners import __version__
 from extra_codeowners.api_budget import RecoveryApiBudget
 from extra_codeowners.build_identity import load_build_identity
-from extra_codeowners.database import JobRequest, QueueStore
+from extra_codeowners.database import AuthorityRequest, JobRequest, QueueStore
 from extra_codeowners.github import GitHubClient, GitHubRateLimitError
 from extra_codeowners.logging import configure_logging
 from extra_codeowners.manifest import ManifestError, ManifestService
+from extra_codeowners.merge_queue import MergeGroupTrigger
 from extra_codeowners.metrics import INSECURE_MODE, WEBHOOK_FAILURES, WEBHOOKS
 from extra_codeowners.service import EvaluationService, Reconciler, Worker
 from extra_codeowners.settings import Settings, get_settings
@@ -32,6 +33,7 @@ from extra_codeowners.webhooks import (
     MAX_WEBHOOK_BYTES,
     WebhookError,
     evaluation_job,
+    merge_group_trigger,
     verify_webhook,
 )
 
@@ -547,12 +549,27 @@ def create_app(
                 event=request.headers.get("x-github-event"),
                 secret=secret,
             )
-            job = evaluation_job(
-                webhook,
-                policy_path=runtime.policy_path,
-                org_config_repository=runtime.org_config_repository,
-                expected_app_id=runtime.github_app_id,
-            )
+            job: JobRequest | AuthorityRequest | MergeGroupTrigger | None
+            if webhook.event == "merge_group":
+                candidate = (
+                    merge_group_trigger(webhook)
+                    if runtime.experimental_merge_queue_repository is not None
+                    else None
+                )
+                job = (
+                    candidate
+                    if candidate is not None
+                    and candidate.repository == runtime.experimental_merge_queue_repository
+                    and candidate.repository_id == runtime.experimental_merge_queue_repository_id
+                    else None
+                )
+            else:
+                job = evaluation_job(
+                    webhook,
+                    policy_path=runtime.policy_path,
+                    org_config_repository=runtime.org_config_repository,
+                    expected_app_id=runtime.github_app_id,
+                )
             if isinstance(job, JobRequest) and runtime.is_organization_config_repository(
                 job.repository_full_name
             ):
@@ -585,6 +602,16 @@ def create_app(
                 status_code=status.HTTP_202_ACCEPTED,
             )
         queue_store: QueueStore = request.app.state.store
+        if isinstance(job, MergeGroupTrigger):
+            worker_task: asyncio.Task[None] | None = request.app.state.worker_task
+            if worker_task is None or worker_task.done():
+                raise HTTPException(
+                    status.HTTP_503_SERVICE_UNAVAILABLE,
+                    "candidate worker is unavailable; redeliver after recovery",
+                )
+        repository = (
+            job.repository if isinstance(job, MergeGroupTrigger) else job.repository_full_name
+        )
         tracing: Tracing = request.app.state.tracing
         producer_trace_context = None
         try:
@@ -603,7 +630,7 @@ def create_app(
                     if isinstance(job, JobRequest)
                     else {
                         "github.delivery_id": webhook.delivery_id,
-                        "github.scope": job.scope_key,
+                        "github.scope": repository or "*",
                     }
                 ),
                 root=True,
@@ -618,6 +645,13 @@ def create_app(
                     job,
                     runtime.webhook_invalidation_timeout_seconds,
                     trace_context=producer_trace_context,
+                    invalidate_merge_groups=(
+                        runtime.experimental_merge_queue_repository is not None
+                        and (
+                            repository is None
+                            or repository == runtime.experimental_merge_queue_repository
+                        )
+                    ),
                 )
         except Exception as error:
             WEBHOOK_FAILURES.labels("durable_acceptance").inc()
@@ -718,7 +752,7 @@ def create_app(
             delivery_id=webhook.delivery_id,
             github_event=webhook.event,
             action=webhook.action or "received",
-            repository=job.repository_full_name,
+            repository=repository,
             pull_number=job.pull_number if isinstance(job, JobRequest) else None,
             accepted=accepted,
             queued=queued,

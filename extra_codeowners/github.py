@@ -2398,6 +2398,88 @@ class GitHubClient:
             check_name,
         )
 
+    def _validate_merge_group_check(
+        self, run: object, trigger: MergeGroupTrigger, check_name: str
+    ) -> int:
+        if not isinstance(run, dict):
+            raise GitHubError("merge group check evidence is not an object")
+        app, run_id = run.get("app"), run.get("id")
+        if (
+            not isinstance(app, dict)
+            or type(app.get("id")) is not int
+            or app["id"] != self.app_id
+            or type(run_id) is not int
+            or run_id <= 0
+            or run.get("head_sha") != trigger.head_sha
+            or run.get("name") != check_name
+            or run.get("external_id") != trigger.check_external_id
+        ):
+            raise GitHubError("check run does not identify this App and merge candidate")
+        return run_id
+
+    async def existing_merge_group_check(
+        self, trigger: MergeGroupTrigger, check_name: str
+    ) -> int | None:
+        """Read only an unambiguous check this App published for this candidate."""
+        result = await self._request(
+            "GET",
+            f"/repos/{trigger.repository}/commits/{trigger.head_sha}/check-runs",
+            installation_id=trigger.installation_id,
+            params={
+                "check_name": check_name,
+                "app_id": self.app_id,
+                "filter": "latest",
+                "per_page": 2,
+            },
+        )
+        count, runs = result.get("total_count"), result.get("check_runs")
+        if (
+            type(count) is not int
+            or count not in {0, 1}
+            or not isinstance(runs, list)
+            or count != len(runs)
+        ):
+            raise GitHubError("merge group check list is incomplete or ambiguous")
+        return self._validate_merge_group_check(runs[0], trigger, check_name) if runs else None
+
+    async def write_merge_group_check(
+        self,
+        trigger: MergeGroupTrigger,
+        check_name: str,
+        *,
+        check_id: int | None = None,
+        approved: bool,
+        summary: str,
+    ) -> None:
+        """Write an exact candidate result; a destroyed group can only reset a known check."""
+        if trigger.action == "destroyed" and (approved or check_id is None):
+            raise ValueError("destroyed candidate may only reset an existing check")
+        base = f"/repos/{trigger.repository}/check-runs"
+        conclusion = "success" if approved else "failure"
+        payload: dict[str, Any] = {
+            "name": check_name,
+            "external_id": trigger.check_external_id,
+            "status": "completed",
+            "conclusion": conclusion,
+            "completed_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+            "output": {"title": "Merge candidate CODEOWNER approvals", "summary": summary[:65535]},
+        }
+        if check_id is None:
+            payload["head_sha"] = trigger.head_sha
+        result = await self._request(
+            "POST" if check_id is None else "PATCH",
+            base if check_id is None else f"{base}/{check_id}",
+            installation_id=trigger.installation_id,
+            json=payload,
+        )
+        written = self._validate_merge_group_check(result, trigger, check_name)
+        if (
+            (check_id is not None and written != check_id)
+            or result.get("status") != "completed"
+            or result.get("conclusion") != conclusion
+        ):
+            raise GitHubError("GitHub did not confirm the requested merge group check")
+
     async def check_run_is_completed(
         self,
         installation_id: int,

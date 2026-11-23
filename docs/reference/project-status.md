@@ -174,7 +174,9 @@ can safely evaluate merge groups.
 A [later operator probe](../maintainers/evidence/2026-11-21-queued-policy-proof.md)
 evaluated live policy and proved that GitHub merged a verified candidate in the
 single-entry fixture. It also refused a PR whose head was based on an older
-target tip. The deployed service still doesn't evaluate `merge_group` events.
+target tip. An opt-in worker can now exercise that path in a disposable
+repository. Tests against the deployed worker are still needed; the earlier
+operator probe doesn't verify its webhook or write path.
 
 Keep GitHub's native **Require review from Code Owners** rule on production
 repositories until that contract is proven.

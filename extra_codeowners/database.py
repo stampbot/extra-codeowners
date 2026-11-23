@@ -357,16 +357,21 @@ def _enqueue_merge_group(session: Session, request: MergeGroupTrigger) -> None:
         work.lease_until = None
 
 
-def _requeue_merge_groups_for_pull(session: Session, request: JobRequest) -> None:
+def _requeue_merge_groups(
+    session: Session, installation_id: int, repository: str | None, pull_number: int | None = None
+) -> None:
     now = utcnow()
+    scope = [
+        MergeGroupWork.installation_id == installation_id,
+        MergeGroupWork.destroyed.is_(False),
+    ]
+    if repository is not None:
+        scope.append(MergeGroupWork.repository_full_name == repository)
+    if pull_number is not None:
+        scope.append(MergeGroupWork.pull_number == pull_number)
     session.execute(
         update(MergeGroupWork)
-        .where(
-            MergeGroupWork.installation_id == request.installation_id,
-            MergeGroupWork.repository_full_name == request.repository_full_name,
-            MergeGroupWork.pull_number == request.pull_number,
-            MergeGroupWork.destroyed.is_(False),
-        )
+        .where(*scope)
         .values(
             generation=MergeGroupWork.generation + 1,
             requested_at=now,
@@ -2608,7 +2613,12 @@ class QueueStore:
                                 shared_head_generation,
                             )
                             if invalidate_merge_groups:
-                                _requeue_merge_groups_for_pull(session, request)
+                                _requeue_merge_groups(
+                                    session,
+                                    request.installation_id,
+                                    request.repository_full_name,
+                                    request.pull_number,
+                                )
                         elif isinstance(request, AuthorityRequest):
                             delivery.installation_id = request.installation_id
                             delivery.repository_full_name = request.repository_full_name
@@ -2617,6 +2627,10 @@ class QueueStore:
                                     session, request.installation_id
                                 )
                             self._enqueue_authority_in_session(session, request)
+                            if invalidate_merge_groups:
+                                _requeue_merge_groups(
+                                    session, request.installation_id, request.repository_full_name
+                                )
                         elif isinstance(request, MergeGroupTrigger):
                             _enqueue_merge_group(session, request)
                     return DeliveryAcceptance(
