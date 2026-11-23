@@ -16,20 +16,22 @@ from tools import release_python_sources as sources
 DIGEST = "sha256:" + "a" * 64
 
 
-def inputs(architecture: str = "amd64", schema: int = 3) -> tuple[bytes, bytes]:
-    recipe = json.loads((sources.RECIPE_DIRECTORY / "cryptography-50.0.0.json").read_bytes())
+def inputs(
+    architecture: str = "amd64", schema: int = 3, *, version: str = "50.0.0"
+) -> tuple[bytes, bytes]:
+    recipe = json.loads((sources.RECIPE_DIRECTORY / f"cryptography-{version}.json").read_bytes())
     platform = recipe["platforms"][architecture]
     raw = {
         "schema_version": 2,
         "image": {"architecture": architecture, "platform_digest": DIGEST},
         "python": {
             "source_recipe_schema": schema,
-            "distributions": [{"normalized_name": "cryptography", "version": "50.0.0"}],
+            "distributions": [{"normalized_name": "cryptography", "version": version}],
             "embedded_sboms": [
                 {
                     "distribution": "cryptography",
                     "path": "opt/venv/lib/python3.14/site-packages/"
-                    "cryptography-50.0.0.dist-info/sboms/sbom.json",
+                    f"cryptography-{version}.dist-info/sboms/sbom.json",
                     "kind": "regular",
                     "link_target": None,
                     "sha256": platform["sbom_sha256"],
@@ -38,7 +40,7 @@ def inputs(architecture: str = "amd64", schema: int = 3) -> tuple[bytes, bytes]:
                 {
                     "distribution": "cryptography",
                     "path": "opt/venv/lib/python3.14/site-packages/"
-                    "cryptography-50.0.0.dist-info/sboms/cryptography-rust.cyclonedx.json",
+                    f"cryptography-{version}.dist-info/sboms/cryptography-rust.cyclonedx.json",
                     "kind": "regular",
                     "link_target": None,
                     "sha256": "f" * 64,
@@ -48,12 +50,14 @@ def inputs(architecture: str = "amd64", schema: int = 3) -> tuple[bytes, bytes]:
         },
     }
     url = (
-        "https://files.pythonhosted.org/packages/aa/bb/" + "c" * 60 + "/cryptography-50.0.0.tar.gz"
+        "https://files.pythonhosted.org/packages/aa/bb/"
+        + "c" * 60
+        + f"/cryptography-{version}.tar.gz"
     )
     lock = f'''version = 1
 [[package]]
 name = "cryptography"
-version = "50.0.0"
+version = "{version}"
 source = {{registry = "https://pypi.org/simple"}}
 sdist = {{url = "{url}", hash = "sha256:{"a" * 64}", size = 100}}
 '''.encode()
@@ -61,15 +65,34 @@ sdist = {{url = "{url}", hash = "sha256:{"a" * 64}", size = 100}}
 
 
 @pytest.mark.parametrize("architecture", ["amd64", "arm64"])
-def test_reviewed_openssl_source_is_bound_to_the_platform_sbom(architecture: str) -> None:
-    manifest = sources.plan(*inputs(architecture), architecture, DIGEST)
+@pytest.mark.parametrize(
+    ("version", "openssl", "digest", "size"),
+    [
+        (
+            "50.0.0",
+            "4.0.1",
+            "2db3f3a0d6ea4b59e1f094ace2c8cd536dffb87cdc39084c5afa1e6f7f37dd09",
+            55079428,
+        ),
+        (
+            "50.0.2",
+            "4.0.3",
+            "325b5c806167c13b40b1ffeadfe0248197c00eccc4cf123ec1e28d2d2fd216d9",
+            55235667,
+        ),
+    ],
+)
+def test_reviewed_openssl_source_is_bound_to_the_platform_sbom(
+    architecture: str, version: str, openssl: str, digest: str, size: int
+) -> None:
+    manifest = sources.plan(*inputs(architecture, version=version), architecture, DIGEST)
     assert len(manifest["embedded_sources"]) == 1
     entry = manifest["embedded_sources"][0]
     assert entry["distribution"] == "cryptography"
-    assert entry["distribution_version"] == "50.0.0"
-    assert entry["source_component"] == {"name": "openssl", "version": "4.0.1"}
-    assert entry["sha256"] == "2db3f3a0d6ea4b59e1f094ace2c8cd536dffb87cdc39084c5afa1e6f7f37dd09"
-    assert entry["size"] == 55079428
+    assert entry["distribution_version"] == version
+    assert entry["source_component"] == {"name": "openssl", "version": openssl}
+    assert entry["sha256"] == digest
+    assert entry["size"] == size
     assert f"/{architecture}/" in entry["path"]
     assert len(manifest["sources"]) == 1
 

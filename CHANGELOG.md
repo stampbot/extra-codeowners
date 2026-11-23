@@ -6,6 +6,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Rel
 
 ## [Unreleased]
 
+### Security
+
+- Update the container to Cryptography 50.0.2, whose Linux wheels ship OpenSSL
+  4.0.3. This fixes the August and September findings that still applied to
+  Cryptography's OpenSSL 4.0.1. It doesn't change the OpenSSL copy that Psycopg
+  uses for PostgreSQL.
+
 ### Fixed
 
 - Stop the periodic reconciler from flapping the check on quiet pull requests.

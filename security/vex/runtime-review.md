@@ -1,5 +1,28 @@
 # Runtime vulnerability review
 
+## Cryptography's OpenSSL update: November 23, 2026 UTC
+
+Cryptography 50.0.2 ships OpenSSL 4.0.3 in both locked Linux wheels. The
+wheel and source hashes match the upstream build and their PyPI publishing
+attestations. The extension contains OpenSSL 4.0.3 and doesn't load a separate
+OpenSSL library. Each platform's wheel and compiled extension have a
+different hash, so the release checks them separately.
+
+The new `fixed` statements cover [CVE-2026-35189](https://openssl-library.org/news/secadv/20260929.txt)
+and [CVE-2026-75803](https://openssl-library.org/news/secadv/20260825.txt) on
+this OpenSSL copy. OpenSSL fixed them in 4.0.3 and 4.0.2, respectively.
+Vexcalibur formatted the statements from the upstream advisories. The prior
+4.0.1 exclusions and unresolved entries stay with the releases that shipped
+that version; they don't apply to the new wheel.
+
+The application still loads its configured RSA key and uses it to sign
+short-lived GitHub App tokens. Database TLS, the Dockerfile, and the separate
+Psycopg, Debian and CPython assessments are unchanged. The
+[November advisory](https://openssl-library.org/news/secadv/20261117.txt)
+covers fixes after 4.0.3 and 3.5.9. Those findings remain visible.
+See [#344](https://github.com/stampbot/extra-codeowners/issues/344) for the
+wheel, source, and runtime checks.
+
 ## Psycopg's OpenSSL update: November 23, 2026 UTC
 
 Psycopg Binary 3.3.9 bundles OpenSSL 3.5.9 on amd64 and arm64. Both locked
@@ -14,11 +37,10 @@ in 3.5.8. Vexcalibur formatted those two findings offline. The application
 still processes certificates on database TLS connections. The statements
 don't rely on a claim that this code is unreachable.
 
-The current statement no longer lists the 3.5.4 component or carries its
-exclusions over to the new wheel. For shared findings, the remaining
-Cryptography assessments describe that component's unchanged RSA signing
-path. Its two candidate findings above remain under investigation.
-Debian and CPython keep their own existing statements. Neither new wheel
+The alpha.110 statement doesn't list the 3.5.4 component or carry its
+exclusions over to the new wheel. At that release, Cryptography still shipped
+4.0.1 and the two findings above remained under investigation for that copy.
+Debian and CPython kept their own statements. Neither Psycopg wheel
 imports the reviewed glibc formatting, resolver-debug or zlib gzip-writer
 functions. The application, TLS settings and Dockerfile are unchanged.
 

@@ -6,9 +6,10 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
 import httpx
+import jwt
 import pytest
 from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.asymmetric import ec, rsa
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.trace import StatusCode
@@ -236,7 +237,14 @@ async def test_app_identity_probe_requires_the_exact_numeric_app_id(
     assert len(requests) == 1
     assert requests[0].method == "GET"
     assert requests[0].url.path == "/app"
-    assert requests[0].headers["authorization"].startswith("Bearer ")
+    authorization = requests[0].headers["authorization"]
+    assert authorization.startswith("Bearer ")
+    key = serialization.load_pem_private_key(private_key.encode(), password=None)
+    assert isinstance(key, rsa.RSAPrivateKey)
+    claims = jwt.decode(
+        authorization.removeprefix("Bearer "), key.public_key(), algorithms=["RS256"], issuer="1"
+    )
+    assert claims["exp"] - claims["iat"] == 600
 
 
 @pytest.mark.asyncio

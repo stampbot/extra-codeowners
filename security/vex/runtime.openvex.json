@@ -1,8 +1,8 @@
 {
   "@context": "https://openvex.dev/ns/v0.2.0",
-  "@id": "urn:uuid:a35d0e86-8b49-5921-8349-63d733d0c03a",
+  "@id": "urn:uuid:f8c04a9e-7eea-522e-bd79-b2e2917049cb",
   "author": "Extra CODEOWNERS maintainers",
-  "last_updated": "2026-11-23T10:59:39Z",
+  "last_updated": "2026-11-23T12:09:34Z",
   "role": "VEX document producer",
   "statements": [
     {
@@ -832,423 +832,33 @@
     {
       "products": [
         {
-          "@id": "pkg:generic/openssl@4.0.1",
+          "@id": "pkg:generic/openssl@4.0.3",
           "identifiers": {
-            "purl": "pkg:generic/openssl@4.0.1"
+            "purl": "pkg:generic/openssl@4.0.3"
           }
         }
       ],
-      "status": "under_investigation",
-      "status_notes": "Analysis detail: Candidate retained from the alpha.83 native report: Grype 0.118.0, database built 2026-11-10T06:21:20Z. Application-specific reachability has not been established. No fix or not-affected conclusion is made, including for TLS and certificate-processing paths. This intake is not a complete native-library assessment or distribution approval.\nSource: Grype/NVD native candidate (https://nvd.nist.gov/vuln/detail/CVE-2026-14456)\nOriginal Vexcalibur analysis state: in_triage\nSource record modified: 2026-11-11T05:20:18Z",
-      "timestamp": "2026-11-11T05:20:18Z",
-      "vulnerability": {
-        "name": "CVE-2026-14456"
-      }
-    },
-    {
-      "products": [
-        {
-          "@id": "pkg:generic/openssl@4.0.1",
-          "identifiers": {
-            "purl": "pkg:generic/openssl@4.0.1"
-          }
-        }
-      ],
-      "status": "under_investigation",
-      "status_notes": "Analysis detail: Candidate retained from the alpha.83 native report: Grype 0.118.0, database built 2026-11-10T06:21:20Z. Application-specific reachability has not been established. No fix or not-affected conclusion is made, including for TLS and certificate-processing paths. This intake is not a complete native-library assessment or distribution approval.\nSource: Grype/NVD native candidate (https://nvd.nist.gov/vuln/detail/CVE-2026-14457)\nOriginal Vexcalibur analysis state: in_triage\nSource record modified: 2026-11-11T05:20:18Z",
-      "timestamp": "2026-11-11T05:20:18Z",
-      "vulnerability": {
-        "name": "CVE-2026-14457"
-      }
-    },
-    {
-      "products": [
-        {
-          "@id": "pkg:generic/openssl@4.0.1",
-          "identifiers": {
-            "purl": "pkg:generic/openssl@4.0.1"
-          }
-        }
-      ],
-      "status": "under_investigation",
-      "status_notes": "Analysis detail: Candidate retained from the alpha.83 native report: Grype 0.118.0, database built 2026-11-10T06:21:20Z. Application-specific reachability has not been established. No fix or not-affected conclusion is made, including for TLS and certificate-processing paths. This intake is not a complete native-library assessment or distribution approval.\nSource: Grype/NVD native candidate (https://nvd.nist.gov/vuln/detail/CVE-2026-18798)\nOriginal Vexcalibur analysis state: in_triage\nSource record modified: 2026-11-11T05:20:18Z",
-      "timestamp": "2026-11-11T05:20:18Z",
-      "vulnerability": {
-        "name": "CVE-2026-18798"
-      }
-    },
-    {
-      "products": [
-        {
-          "@id": "pkg:generic/openssl@4.0.1",
-          "identifiers": {
-            "purl": "pkg:generic/openssl@4.0.1"
-          }
-        }
-      ],
-      "status": "under_investigation",
-      "status_notes": "Analysis detail: Candidate retained from the alpha.83 native report: Grype 0.118.0, database built 2026-11-10T06:21:20Z. Application-specific reachability has not been established. No fix or not-affected conclusion is made, including for TLS and certificate-processing paths. This intake is not a complete native-library assessment or distribution approval.\nSource: Grype/NVD native candidate (https://nvd.nist.gov/vuln/detail/CVE-2026-35189)\nOriginal Vexcalibur analysis state: in_triage\nSource record modified: 2026-11-11T05:20:18Z",
-      "timestamp": "2026-11-11T05:20:18Z",
+      "status": "fixed",
+      "status_notes": "Analysis detail: OpenSSL identifies 4.0.3 as the fix for excessive allocation while processing X.509 CRL distribution points. Both reviewed Cryptography 50.0.2 wheels contain OpenSSL 4.0.3. This source-bound assessment does not apply to other OpenSSL builds.\nSource: OpenSSL security advisory (https://openssl-library.org/news/secadv/20260929.txt)\nOriginal Vexcalibur analysis state: resolved\nConfirmed fixed product version: 4.0.3\nSource record modified: 2026-11-23T12:07:08Z",
+      "timestamp": "2026-11-23T12:07:08Z",
       "vulnerability": {
         "name": "CVE-2026-35189"
       }
     },
     {
-      "impact_statement": "This finding requires an OpenSSL QUIC server that performs address-validation accounting. Extra CODEOWNERS uses Cryptography\u2019s OpenSSL 4.0.1 to load its configured RSA App key and sign RS256 JWTs. It does not use that component for TLS, QUIC, DTLS, CMS, or CMP. Database TLS uses a separate copy of OpenSSL. The library is present and unpatched; this is not a blanket OpenSSL exclusion. Scope is the shipped Linux amd64/arm64 service, not operator commands, other builds, plugins, custom FFI, or execution after compromise.",
-      "justification": "vulnerable_code_not_in_execute_path",
       "products": [
         {
-          "@id": "pkg:generic/openssl@4.0.1",
+          "@id": "pkg:generic/openssl@4.0.3",
           "identifiers": {
-            "purl": "pkg:generic/openssl@4.0.1"
+            "purl": "pkg:generic/openssl@4.0.3"
           }
         }
       ],
-      "status": "not_affected",
-      "status_notes": "Analysis detail: This finding requires an OpenSSL QUIC server that performs address-validation accounting. Extra CODEOWNERS uses Cryptography\u2019s OpenSSL 4.0.1 to load its configured RSA App key and sign RS256 JWTs. It does not use that component for TLS, QUIC, DTLS, CMS, or CMP. Database TLS uses a separate copy of OpenSSL. The library is present and unpatched; this is not a blanket OpenSSL exclusion. Scope is the shipped Linux amd64/arm64 service, not operator commands, other builds, plugins, custom FFI, or execution after compromise.\nSource: Extra CODEOWNERS native protocol source review (https://openssl-library.org/news/secadv/20260929.txt)\nOriginal Vexcalibur analysis state: not_affected\nSource record modified: 2026-11-13T17:19:42Z",
-      "timestamp": "2026-11-23T10:56:52Z",
-      "vulnerability": {
-        "name": "CVE-2026-35191"
-      }
-    },
-    {
-      "impact_statement": "This finding requires an OpenSSL QUIC endpoint that reassembles stream frames. Extra CODEOWNERS uses Cryptography\u2019s OpenSSL 4.0.1 to load its configured RSA App key and sign RS256 JWTs. It does not use that component for TLS, QUIC, DTLS, CMS, or CMP. Database TLS uses a separate copy of OpenSSL. The library is present and unpatched; this is not a blanket OpenSSL exclusion. Scope is the shipped Linux amd64/arm64 service, not operator commands, other builds, plugins, custom FFI, or execution after compromise.",
-      "justification": "vulnerable_code_not_in_execute_path",
-      "products": [
-        {
-          "@id": "pkg:generic/openssl@4.0.1",
-          "identifiers": {
-            "purl": "pkg:generic/openssl@4.0.1"
-          }
-        }
-      ],
-      "status": "not_affected",
-      "status_notes": "Analysis detail: This finding requires an OpenSSL QUIC endpoint that reassembles stream frames. Extra CODEOWNERS uses Cryptography\u2019s OpenSSL 4.0.1 to load its configured RSA App key and sign RS256 JWTs. It does not use that component for TLS, QUIC, DTLS, CMS, or CMP. Database TLS uses a separate copy of OpenSSL. The library is present and unpatched; this is not a blanket OpenSSL exclusion. Scope is the shipped Linux amd64/arm64 service, not operator commands, other builds, plugins, custom FFI, or execution after compromise.\nSource: Extra CODEOWNERS native protocol source review (https://openssl-library.org/news/secadv/20260929.txt)\nOriginal Vexcalibur analysis state: not_affected\nSource record modified: 2026-11-13T17:19:42Z",
-      "timestamp": "2026-11-23T10:56:52Z",
-      "vulnerability": {
-        "name": "CVE-2026-42772"
-      }
-    },
-    {
-      "products": [
-        {
-          "@id": "pkg:generic/openssl@4.0.1",
-          "identifiers": {
-            "purl": "pkg:generic/openssl@4.0.1"
-          }
-        }
-      ],
-      "status": "under_investigation",
-      "status_notes": "Analysis detail: Candidate retained from the alpha.83 native report: Grype 0.118.0, database built 2026-11-10T06:21:20Z. Application-specific reachability has not been established. No fix or not-affected conclusion is made, including for TLS and certificate-processing paths. This intake is not a complete native-library assessment or distribution approval.\nSource: Grype/NVD native candidate (https://nvd.nist.gov/vuln/detail/CVE-2026-54872)\nOriginal Vexcalibur analysis state: in_triage\nSource record modified: 2026-11-11T05:20:18Z",
-      "timestamp": "2026-11-11T05:20:18Z",
-      "vulnerability": {
-        "name": "CVE-2026-54872"
-      }
-    },
-    {
-      "impact_statement": "This finding requires an OpenSSL QUIC endpoint that retains packet metadata. Extra CODEOWNERS uses Cryptography\u2019s OpenSSL 4.0.1 to load its configured RSA App key and sign RS256 JWTs. It does not use that component for TLS, QUIC, DTLS, CMS, or CMP. Database TLS uses a separate copy of OpenSSL. The library is present and unpatched; this is not a blanket OpenSSL exclusion. Scope is the shipped Linux amd64/arm64 service, not operator commands, other builds, plugins, custom FFI, or execution after compromise.",
-      "justification": "vulnerable_code_not_in_execute_path",
-      "products": [
-        {
-          "@id": "pkg:generic/openssl@4.0.1",
-          "identifiers": {
-            "purl": "pkg:generic/openssl@4.0.1"
-          }
-        }
-      ],
-      "status": "not_affected",
-      "status_notes": "Analysis detail: This finding requires an OpenSSL QUIC endpoint that retains packet metadata. Extra CODEOWNERS uses Cryptography\u2019s OpenSSL 4.0.1 to load its configured RSA App key and sign RS256 JWTs. It does not use that component for TLS, QUIC, DTLS, CMS, or CMP. Database TLS uses a separate copy of OpenSSL. The library is present and unpatched; this is not a blanket OpenSSL exclusion. Scope is the shipped Linux amd64/arm64 service, not operator commands, other builds, plugins, custom FFI, or execution after compromise.\nSource: Extra CODEOWNERS native protocol source review (https://openssl-library.org/news/secadv/20260929.txt)\nOriginal Vexcalibur analysis state: not_affected\nSource record modified: 2026-11-13T17:19:42Z",
-      "timestamp": "2026-11-23T10:56:52Z",
-      "vulnerability": {
-        "name": "CVE-2026-54873"
-      }
-    },
-    {
-      "products": [
-        {
-          "@id": "pkg:generic/openssl@4.0.1",
-          "identifiers": {
-            "purl": "pkg:generic/openssl@4.0.1"
-          }
-        }
-      ],
-      "status": "under_investigation",
-      "status_notes": "Analysis detail: Candidate retained from the alpha.83 native report: Grype 0.118.0, database built 2026-11-10T06:21:20Z. Application-specific reachability has not been established. No fix or not-affected conclusion is made, including for TLS and certificate-processing paths. This intake is not a complete native-library assessment or distribution approval.\nSource: Grype/NVD native candidate (https://nvd.nist.gov/vuln/detail/CVE-2026-54874)\nOriginal Vexcalibur analysis state: in_triage\nSource record modified: 2026-11-11T05:20:18Z",
-      "timestamp": "2026-11-11T05:20:18Z",
-      "vulnerability": {
-        "name": "CVE-2026-54874"
-      }
-    },
-    {
-      "products": [
-        {
-          "@id": "pkg:generic/openssl@4.0.1",
-          "identifiers": {
-            "purl": "pkg:generic/openssl@4.0.1"
-          }
-        }
-      ],
-      "status": "under_investigation",
-      "status_notes": "Analysis detail: Candidate retained from the alpha.83 native report: Grype 0.118.0, database built 2026-11-10T06:21:20Z. Application-specific reachability has not been established. No fix or not-affected conclusion is made, including for TLS and certificate-processing paths. This intake is not a complete native-library assessment or distribution approval.\nSource: Grype/NVD native candidate (https://nvd.nist.gov/vuln/detail/CVE-2026-54875)\nOriginal Vexcalibur analysis state: in_triage\nSource record modified: 2026-11-11T05:20:18Z",
-      "timestamp": "2026-11-11T05:20:18Z",
-      "vulnerability": {
-        "name": "CVE-2026-54875"
-      }
-    },
-    {
-      "products": [
-        {
-          "@id": "pkg:generic/openssl@4.0.1",
-          "identifiers": {
-            "purl": "pkg:generic/openssl@4.0.1"
-          }
-        }
-      ],
-      "status": "under_investigation",
-      "status_notes": "Analysis detail: Candidate retained from the alpha.83 native report: Grype 0.118.0, database built 2026-11-10T06:21:20Z. Application-specific reachability has not been established. No fix or not-affected conclusion is made, including for TLS and certificate-processing paths. This intake is not a complete native-library assessment or distribution approval.\nSource: Grype/NVD native candidate (https://nvd.nist.gov/vuln/detail/CVE-2026-54876)\nOriginal Vexcalibur analysis state: in_triage\nSource record modified: 2026-11-11T05:20:18Z",
-      "timestamp": "2026-11-11T05:20:18Z",
-      "vulnerability": {
-        "name": "CVE-2026-54876"
-      }
-    },
-    {
-      "impact_statement": "This finding requires a caller of the CMS decryption and key-unwrapping path. Extra CODEOWNERS uses Cryptography\u2019s OpenSSL 4.0.1 to load its configured RSA App key and sign RS256 JWTs. It does not use that component for TLS, QUIC, DTLS, CMS, or CMP. Database TLS uses a separate copy of OpenSSL. The library is present and unpatched; this is not a blanket OpenSSL exclusion. Scope is the shipped Linux amd64/arm64 service, not operator commands, other builds, plugins, custom FFI, or execution after compromise.",
-      "justification": "vulnerable_code_not_in_execute_path",
-      "products": [
-        {
-          "@id": "pkg:generic/openssl@4.0.1",
-          "identifiers": {
-            "purl": "pkg:generic/openssl@4.0.1"
-          }
-        }
-      ],
-      "status": "not_affected",
-      "status_notes": "Analysis detail: This finding requires a caller of the CMS decryption and key-unwrapping path. Extra CODEOWNERS uses Cryptography\u2019s OpenSSL 4.0.1 to load its configured RSA App key and sign RS256 JWTs. It does not use that component for TLS, QUIC, DTLS, CMS, or CMP. Database TLS uses a separate copy of OpenSSL. The library is present and unpatched; this is not a blanket OpenSSL exclusion. Scope is the shipped Linux amd64/arm64 service, not operator commands, other builds, plugins, custom FFI, or execution after compromise.\nSource: Extra CODEOWNERS CMS/CMP source review (https://openssl-library.org/news/secadv/20260825.txt)\nOriginal Vexcalibur analysis state: not_affected\nSource record modified: 2026-11-11T07:21:56Z",
-      "timestamp": "2026-11-23T10:56:52Z",
-      "vulnerability": {
-        "name": "CVE-2026-63072"
-      }
-    },
-    {
-      "impact_statement": "This finding requires a CMP client that validates a configured sender or pinned CMP server. Extra CODEOWNERS uses Cryptography\u2019s OpenSSL 4.0.1 to load its configured RSA App key and sign RS256 JWTs. It does not use that component for TLS, QUIC, DTLS, CMS, or CMP. Database TLS uses a separate copy of OpenSSL. The library is present and unpatched; this is not a blanket OpenSSL exclusion. Scope is the shipped Linux amd64/arm64 service, not operator commands, other builds, plugins, custom FFI, or execution after compromise.",
-      "justification": "vulnerable_code_not_in_execute_path",
-      "products": [
-        {
-          "@id": "pkg:generic/openssl@4.0.1",
-          "identifiers": {
-            "purl": "pkg:generic/openssl@4.0.1"
-          }
-        }
-      ],
-      "status": "not_affected",
-      "status_notes": "Analysis detail: This finding requires a CMP client that validates a configured sender or pinned CMP server. Extra CODEOWNERS uses Cryptography\u2019s OpenSSL 4.0.1 to load its configured RSA App key and sign RS256 JWTs. It does not use that component for TLS, QUIC, DTLS, CMS, or CMP. Database TLS uses a separate copy of OpenSSL. The library is present and unpatched; this is not a blanket OpenSSL exclusion. Scope is the shipped Linux amd64/arm64 service, not operator commands, other builds, plugins, custom FFI, or execution after compromise.\nSource: Extra CODEOWNERS native source review (https://openssl-library.org/news/secadv/20260825.txt)\nOriginal Vexcalibur analysis state: not_affected\nSource record modified: 2026-11-11T05:20:18Z",
-      "timestamp": "2026-11-23T10:56:52Z",
-      "vulnerability": {
-        "name": "CVE-2026-63073"
-      }
-    },
-    {
-      "impact_statement": "This finding requires a reused CMP server context. Extra CODEOWNERS uses Cryptography\u2019s OpenSSL 4.0.1 to load its configured RSA App key and sign RS256 JWTs. It does not use that component for TLS, QUIC, DTLS, CMS, or CMP. Database TLS uses a separate copy of OpenSSL. The library is present and unpatched; this is not a blanket OpenSSL exclusion. Scope is the shipped Linux amd64/arm64 service, not operator commands, other builds, plugins, custom FFI, or execution after compromise.",
-      "justification": "vulnerable_code_not_in_execute_path",
-      "products": [
-        {
-          "@id": "pkg:generic/openssl@4.0.1",
-          "identifiers": {
-            "purl": "pkg:generic/openssl@4.0.1"
-          }
-        }
-      ],
-      "status": "not_affected",
-      "status_notes": "Analysis detail: This finding requires a reused CMP server context. Extra CODEOWNERS uses Cryptography\u2019s OpenSSL 4.0.1 to load its configured RSA App key and sign RS256 JWTs. It does not use that component for TLS, QUIC, DTLS, CMS, or CMP. Database TLS uses a separate copy of OpenSSL. The library is present and unpatched; this is not a blanket OpenSSL exclusion. Scope is the shipped Linux amd64/arm64 service, not operator commands, other builds, plugins, custom FFI, or execution after compromise.\nSource: Extra CODEOWNERS CMS/CMP source review (https://openssl-library.org/news/secadv/20260825.txt)\nOriginal Vexcalibur analysis state: not_affected\nSource record modified: 2026-11-11T07:21:56Z",
-      "timestamp": "2026-11-23T10:56:52Z",
-      "vulnerability": {
-        "name": "CVE-2026-63074"
-      }
-    },
-    {
-      "products": [
-        {
-          "@id": "pkg:generic/openssl@4.0.1",
-          "identifiers": {
-            "purl": "pkg:generic/openssl@4.0.1"
-          }
-        }
-      ],
-      "status": "under_investigation",
-      "status_notes": "Analysis detail: Candidate retained from the alpha.83 native report: Grype 0.118.0, database built 2026-11-10T06:21:20Z. Application-specific reachability has not been established. No fix or not-affected conclusion is made, including for TLS and certificate-processing paths. This intake is not a complete native-library assessment or distribution approval.\nSource: Grype/NVD native candidate (https://nvd.nist.gov/vuln/detail/CVE-2026-63075)\nOriginal Vexcalibur analysis state: in_triage\nSource record modified: 2026-11-11T05:20:18Z",
-      "timestamp": "2026-11-11T05:20:18Z",
-      "vulnerability": {
-        "name": "CVE-2026-63075"
-      }
-    },
-    {
-      "impact_statement": "This finding requires the CMP server password-protection verification path. Extra CODEOWNERS uses Cryptography\u2019s OpenSSL 4.0.1 to load its configured RSA App key and sign RS256 JWTs. It does not use that component for TLS, QUIC, DTLS, CMS, or CMP. Database TLS uses a separate copy of OpenSSL. The library is present and unpatched; this is not a blanket OpenSSL exclusion. Scope is the shipped Linux amd64/arm64 service, not operator commands, other builds, plugins, custom FFI, or execution after compromise.",
-      "justification": "vulnerable_code_not_in_execute_path",
-      "products": [
-        {
-          "@id": "pkg:generic/openssl@4.0.1",
-          "identifiers": {
-            "purl": "pkg:generic/openssl@4.0.1"
-          }
-        }
-      ],
-      "status": "not_affected",
-      "status_notes": "Analysis detail: This finding requires the CMP server password-protection verification path. Extra CODEOWNERS uses Cryptography\u2019s OpenSSL 4.0.1 to load its configured RSA App key and sign RS256 JWTs. It does not use that component for TLS, QUIC, DTLS, CMS, or CMP. Database TLS uses a separate copy of OpenSSL. The library is present and unpatched; this is not a blanket OpenSSL exclusion. Scope is the shipped Linux amd64/arm64 service, not operator commands, other builds, plugins, custom FFI, or execution after compromise.\nSource: Extra CODEOWNERS CMS/CMP source review (https://openssl-library.org/news/secadv/20260825.txt)\nOriginal Vexcalibur analysis state: not_affected\nSource record modified: 2026-11-11T07:21:56Z",
-      "timestamp": "2026-11-23T10:56:52Z",
-      "vulnerability": {
-        "name": "CVE-2026-63076"
-      }
-    },
-    {
-      "impact_statement": "This finding requires a caller that switches TLS server contexts during a handshake. Extra CODEOWNERS uses Cryptography\u2019s OpenSSL 4.0.1 to load its configured RSA App key and sign RS256 JWTs. It does not use that component for TLS, QUIC, DTLS, CMS, or CMP. Database TLS uses a separate copy of OpenSSL. The library is present and unpatched; this is not a blanket OpenSSL exclusion. Scope is the shipped Linux amd64/arm64 service, not operator commands, other builds, plugins, custom FFI, or execution after compromise.",
-      "justification": "vulnerable_code_not_in_execute_path",
-      "products": [
-        {
-          "@id": "pkg:generic/openssl@4.0.1",
-          "identifiers": {
-            "purl": "pkg:generic/openssl@4.0.1"
-          }
-        }
-      ],
-      "status": "not_affected",
-      "status_notes": "Analysis detail: This finding requires a caller that switches TLS server contexts during a handshake. Extra CODEOWNERS uses Cryptography\u2019s OpenSSL 4.0.1 to load its configured RSA App key and sign RS256 JWTs. It does not use that component for TLS, QUIC, DTLS, CMS, or CMP. Database TLS uses a separate copy of OpenSSL. The library is present and unpatched; this is not a blanket OpenSSL exclusion. Scope is the shipped Linux amd64/arm64 service, not operator commands, other builds, plugins, custom FFI, or execution after compromise.\nSource: Extra CODEOWNERS native protocol source review (https://openssl-library.org/news/secadv/20260929.txt)\nOriginal Vexcalibur analysis state: not_affected\nSource record modified: 2026-11-13T17:19:42Z",
-      "timestamp": "2026-11-23T10:56:52Z",
-      "vulnerability": {
-        "name": "CVE-2026-72897"
-      }
-    },
-    {
-      "products": [
-        {
-          "@id": "pkg:generic/openssl@4.0.1",
-          "identifiers": {
-            "purl": "pkg:generic/openssl@4.0.1"
-          }
-        }
-      ],
-      "status": "under_investigation",
-      "status_notes": "Analysis detail: Candidate retained from the alpha.83 native report: Grype 0.118.0, database built 2026-11-10T06:21:20Z. Application-specific reachability has not been established. No fix or not-affected conclusion is made, including for TLS and certificate-processing paths. This intake is not a complete native-library assessment or distribution approval.\nSource: Grype/NVD native candidate (https://nvd.nist.gov/vuln/detail/CVE-2026-75803)\nOriginal Vexcalibur analysis state: in_triage\nSource record modified: 2026-11-11T05:20:18Z",
-      "timestamp": "2026-11-11T05:20:18Z",
+      "status": "fixed",
+      "status_notes": "Analysis detail: OpenSSL identifies 4.0.2 as the fix for the one-shot AEAD cipher issue. Both reviewed Cryptography 50.0.2 wheels contain OpenSSL 4.0.3. This source-bound assessment does not apply to other OpenSSL builds.\nSource: OpenSSL security advisory (https://openssl-library.org/news/secadv/20260825.txt)\nOriginal Vexcalibur analysis state: resolved\nConfirmed fixed product version: 4.0.3\nSource record modified: 2026-11-23T12:07:08Z",
+      "timestamp": "2026-11-23T12:07:08Z",
       "vulnerability": {
         "name": "CVE-2026-75803"
-      }
-    },
-    {
-      "impact_statement": "This finding requires an OpenSSL QUIC endpoint that enforces connection flow control. Extra CODEOWNERS uses Cryptography\u2019s OpenSSL 4.0.1 to load its configured RSA App key and sign RS256 JWTs. It does not use that component for TLS, QUIC, DTLS, CMS, or CMP. Database TLS uses a separate copy of OpenSSL. The library is present and unpatched; this is not a blanket OpenSSL exclusion. Scope is the shipped Linux amd64/arm64 service, not operator commands, other builds, plugins, custom FFI, or execution after compromise.",
-      "justification": "vulnerable_code_not_in_execute_path",
-      "products": [
-        {
-          "@id": "pkg:generic/openssl@4.0.1",
-          "identifiers": {
-            "purl": "pkg:generic/openssl@4.0.1"
-          }
-        }
-      ],
-      "status": "not_affected",
-      "status_notes": "Analysis detail: This finding requires an OpenSSL QUIC endpoint that enforces connection flow control. Extra CODEOWNERS uses Cryptography\u2019s OpenSSL 4.0.1 to load its configured RSA App key and sign RS256 JWTs. It does not use that component for TLS, QUIC, DTLS, CMS, or CMP. Database TLS uses a separate copy of OpenSSL. The library is present and unpatched; this is not a blanket OpenSSL exclusion. Scope is the shipped Linux amd64/arm64 service, not operator commands, other builds, plugins, custom FFI, or execution after compromise.\nSource: Extra CODEOWNERS native protocol source review (https://openssl-library.org/news/secadv/20260929.txt)\nOriginal Vexcalibur analysis state: not_affected\nSource record modified: 2026-11-13T17:19:42Z",
-      "timestamp": "2026-11-23T10:56:52Z",
-      "vulnerability": {
-        "name": "CVE-2026-75804"
-      }
-    },
-    {
-      "impact_statement": "This finding requires a CMP client that processes a CSR-based revocation response. Extra CODEOWNERS uses Cryptography\u2019s OpenSSL 4.0.1 to load its configured RSA App key and sign RS256 JWTs. It does not use that component for TLS, QUIC, DTLS, CMS, or CMP. Database TLS uses a separate copy of OpenSSL. The library is present and unpatched; this is not a blanket OpenSSL exclusion. Scope is the shipped Linux amd64/arm64 service, not operator commands, other builds, plugins, custom FFI, or execution after compromise.",
-      "justification": "vulnerable_code_not_in_execute_path",
-      "products": [
-        {
-          "@id": "pkg:generic/openssl@4.0.1",
-          "identifiers": {
-            "purl": "pkg:generic/openssl@4.0.1"
-          }
-        }
-      ],
-      "status": "not_affected",
-      "status_notes": "Analysis detail: This finding requires a CMP client that processes a CSR-based revocation response. Extra CODEOWNERS uses Cryptography\u2019s OpenSSL 4.0.1 to load its configured RSA App key and sign RS256 JWTs. It does not use that component for TLS, QUIC, DTLS, CMS, or CMP. Database TLS uses a separate copy of OpenSSL. The library is present and unpatched; this is not a blanket OpenSSL exclusion. Scope is the shipped Linux amd64/arm64 service, not operator commands, other builds, plugins, custom FFI, or execution after compromise.\nSource: Extra CODEOWNERS CMS/CMP source review (https://openssl-library.org/news/secadv/20260929.txt)\nOriginal Vexcalibur analysis state: not_affected\nSource record modified: 2026-11-11T07:21:56Z",
-      "timestamp": "2026-11-23T10:56:52Z",
-      "vulnerability": {
-        "name": "CVE-2026-75805"
-      }
-    },
-    {
-      "products": [
-        {
-          "@id": "pkg:generic/openssl@4.0.1",
-          "identifiers": {
-            "purl": "pkg:generic/openssl@4.0.1"
-          }
-        }
-      ],
-      "status": "under_investigation",
-      "status_notes": "Analysis detail: Candidate retained from the alpha.83 native report: Grype 0.118.0, database built 2026-11-10T06:21:20Z. Application-specific reachability has not been established. No fix or not-affected conclusion is made, including for TLS and certificate-processing paths. This intake is not a complete native-library assessment or distribution approval.\nSource: Grype/NVD native candidate (https://nvd.nist.gov/vuln/detail/CVE-2026-75806)\nOriginal Vexcalibur analysis state: in_triage\nSource record modified: 2026-11-11T05:20:18Z",
-      "timestamp": "2026-11-11T05:20:18Z",
-      "vulnerability": {
-        "name": "CVE-2026-75806"
-      }
-    },
-    {
-      "products": [
-        {
-          "@id": "pkg:generic/openssl@4.0.1",
-          "identifiers": {
-            "purl": "pkg:generic/openssl@4.0.1"
-          }
-        }
-      ],
-      "status": "under_investigation",
-      "status_notes": "Analysis detail: Candidate retained from the alpha.83 native report: Grype 0.118.0, database built 2026-11-10T06:21:20Z. Application-specific reachability has not been established. No fix or not-affected conclusion is made, including for TLS and certificate-processing paths. This intake is not a complete native-library assessment or distribution approval.\nSource: Grype/NVD native candidate (https://nvd.nist.gov/vuln/detail/CVE-2026-77696)\nOriginal Vexcalibur analysis state: in_triage\nSource record modified: 2026-11-11T05:20:18Z",
-      "timestamp": "2026-11-11T05:20:18Z",
-      "vulnerability": {
-        "name": "CVE-2026-77696"
-      }
-    },
-    {
-      "impact_statement": "This finding requires DTLS handshake retransmission. Extra CODEOWNERS uses Cryptography\u2019s OpenSSL 4.0.1 to load its configured RSA App key and sign RS256 JWTs. It does not use that component for TLS, QUIC, DTLS, CMS, or CMP. Database TLS uses a separate copy of OpenSSL. The library is present and unpatched; this is not a blanket OpenSSL exclusion. Scope is the shipped Linux amd64/arm64 service, not operator commands, other builds, plugins, custom FFI, or execution after compromise.",
-      "justification": "vulnerable_code_not_in_execute_path",
-      "products": [
-        {
-          "@id": "pkg:generic/openssl@4.0.1",
-          "identifiers": {
-            "purl": "pkg:generic/openssl@4.0.1"
-          }
-        }
-      ],
-      "status": "not_affected",
-      "status_notes": "Analysis detail: This finding requires DTLS handshake retransmission. Extra CODEOWNERS uses Cryptography\u2019s OpenSSL 4.0.1 to load its configured RSA App key and sign RS256 JWTs. It does not use that component for TLS, QUIC, DTLS, CMS, or CMP. Database TLS uses a separate copy of OpenSSL. The library is present and unpatched; this is not a blanket OpenSSL exclusion. Scope is the shipped Linux amd64/arm64 service, not operator commands, other builds, plugins, custom FFI, or execution after compromise.\nSource: Extra CODEOWNERS native protocol source review (https://openssl-library.org/news/secadv/20260929.txt)\nOriginal Vexcalibur analysis state: not_affected\nSource record modified: 2026-11-13T17:19:42Z",
-      "timestamp": "2026-11-23T10:56:52Z",
-      "vulnerability": {
-        "name": "CVE-2026-84782"
-      }
-    },
-    {
-      "products": [
-        {
-          "@id": "pkg:generic/openssl@4.0.1",
-          "identifiers": {
-            "purl": "pkg:generic/openssl@4.0.1"
-          }
-        }
-      ],
-      "status": "under_investigation",
-      "status_notes": "Analysis detail: Candidate retained from the alpha.83 native report: Grype 0.118.0, database built 2026-11-10T06:21:20Z. Application-specific reachability has not been established. No fix or not-affected conclusion is made, including for TLS and certificate-processing paths. This intake is not a complete native-library assessment or distribution approval.\nSource: Grype/NVD native candidate (https://nvd.nist.gov/vuln/detail/CVE-2026-84783)\nOriginal Vexcalibur analysis state: in_triage\nSource record modified: 2026-11-11T05:20:18Z",
-      "timestamp": "2026-11-11T05:20:18Z",
-      "vulnerability": {
-        "name": "CVE-2026-84783"
-      }
-    },
-    {
-      "products": [
-        {
-          "@id": "pkg:generic/openssl@4.0.1",
-          "identifiers": {
-            "purl": "pkg:generic/openssl@4.0.1"
-          }
-        }
-      ],
-      "status": "under_investigation",
-      "status_notes": "Analysis detail: Candidate retained from the alpha.83 native report: Grype 0.118.0, database built 2026-11-10T06:21:20Z. Application-specific reachability has not been established. No fix or not-affected conclusion is made, including for TLS and certificate-processing paths. This intake is not a complete native-library assessment or distribution approval.\nSource: Grype/NVD native candidate (https://nvd.nist.gov/vuln/detail/CVE-2026-84784)\nOriginal Vexcalibur analysis state: in_triage\nSource record modified: 2026-11-11T05:20:18Z",
-      "timestamp": "2026-11-11T05:20:18Z",
-      "vulnerability": {
-        "name": "CVE-2026-84784"
       }
     },
     {
@@ -1373,9 +983,9 @@
       }
     }
   ],
-  "timestamp": "2026-11-23T10:59:39Z",
+  "timestamp": "2026-11-23T12:09:34Z",
   "tooling": "Vexcalibur + Extra CODEOWNERS runtime binding",
-  "version": 47,
+  "version": 48,
   "x_extra_codeowners_runtime": {
     "files": {
       ".dockerignore": "3f9dc9d3a79fe3085f25de88403b5563ad5c7fa7010bef94c5e55f24bd3cf691",
@@ -1429,11 +1039,12 @@
       "extra_codeowners/trace_context.py": "f79ca91baa1dd615c80546c66a6b370ba78ec7106dece3feb201d10250078532",
       "extra_codeowners/tracing.py": "49641dd6cb9b5b6da1e6026b90925a73eb3112d13a069afd202e741d261f76f9",
       "extra_codeowners/webhooks.py": "617838a5ae081a87c95773d7cd77ec55287d0b9d4aad61e2d99e51ec76710619",
-      "pyproject.toml": "fe6d4cd61e93dbdfb6930e9fcb151670041f02d3566a8be8e43e3c507b9ba5a5",
+      "pyproject.toml": "df173084fc06361a680c48a40c2284c56321c107f3148b9cfb1b92d95eb3caeb",
       "security/vex/glibc-format-callers.json": "a06a8c36b621b44f049c11befe07699f805ee518c1d5bf14b03a62a760d4412f",
       "security/vex/native-openssl-callers.json": "7c38eb02a457c870db4d04a5df7f85381cd87355001fc88c306aa6a8989f70cd",
       "security/vex/native-protocol-callers.json": "d31e0df96a1901843552b6f14c76eeed966880ebf75ea17562fae9180c1d6cfb",
       "tools/source_recipes/cryptography-50.0.0.json": "14c8c00339ada71aa1f975b2d20052582f251a44c2c8f1cdbb2d8fc0bb802779",
+      "tools/source_recipes/cryptography-50.0.2.json": "8f3d5d2ca958b2cfcf2c090a6778a3a77e27467070ec5d8b4791ea4cce8dcd93",
       "tools/source_recipes/libxcrypt-psycopg-binary-3.3.4-amd64.json": "9d8fce80d3a12112639d7d393cbb7b51d4fae93b8891e2e5bb63183d2df57872",
       "tools/source_recipes/libxcrypt-psycopg-binary-3.3.9-amd64.json": "6ba2e176ed562ff68c592d86b12d8c918916230b35e590151771876c05faf58a",
       "tools/source_recipes/psycopg-binary-3.3.4.json": "ec227aa110315f82c25335837e258806930c7afbe980c8b2ff6b476343c243b5",
@@ -1442,9 +1053,9 @@
       "tools/source_recipes/wheel-supplement-cffi-2.1.0.json": "c8772df66c2e766fbd8d62f2891123ba3341b94e3f59fff96efc5c5eed70f034",
       "tools/source_recipes/wheel-supplement-charset-normalizer-3.4.9.json": "9df99186ee25d2452f08e4b4de17faf148695b054cc1feeac571922406f8e9ad",
       "tools/source_recipes/wheel-supplement-protobuf-7.35.1.json": "5b407c288cf74e090f4934113f9bb6f7907a37d6ccbb228321bedb0612b03c8f",
-      "uv.lock": "29ae666f4369a31ae367a4d29460ed849b2f9cfad1c23694be115c428135feef"
+      "uv.lock": "f8a9a125ba46d5275da8300e3f640e5767df2f451f7601a26e4be17c81e3f70e"
     },
-    "review": "Psycopg 3.3.9 replaces its bundled 3.5.4 OpenSSL with the source-bound 3.5.9 on both architectures. Keep only two upstream-confirmed fixed findings for the new copy. Retire 3.5.4 reachability claims; Cryptography's scoped RSA signing analysis, other component statements, and application entrypoints are unchanged.",
+    "review": "Cryptography 50.0.2 wheels on amd64 and arm64 contain OpenSSL 4.0.3. Two source-bound fixes replace the old 4.0.1 assessment; no exclusions are carried forward. The App RSA signing path, Psycopg, Debian and CPython are unchanged.",
     "schema_version": 1
   }
 }
