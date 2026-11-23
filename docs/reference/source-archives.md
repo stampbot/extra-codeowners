@@ -20,7 +20,7 @@ do not replace the source archives or establish complete source delivery.
 
 ## CPython contents and identity
 
-Each bundle has two regular files:
+Every bundle includes:
 
 - `Python-<version>.tar.xz`, unchanged from the upstream download.
 - `manifest.json`, recording the source URL, SHA-256, size, and CPython version.
@@ -47,8 +47,23 @@ build; the arm64 manifest doesn't. These entries point to the source files
 that contain the notices. They don't inventory every file or built object.
 
 The release workflow requires the current index for the reviewed archive.
-Older, signed schema versions 1 and 2 remain verifiable with their original
-contents.
+Older, signed schema versions 1 through 3 remain verifiable with their
+original contents.
+
+### pip in an earlier image layer
+
+Schema version 4 also includes `image-manifest.json` and
+`layer-sources/pip-26.2.2.tar.gz`. An earlier layer ships pip before a later
+layer removes it from the final filesystem. Both layers still ship with the
+image, so the source bundle includes pip even though the final filesystem
+inventory doesn't list it.
+
+The verifier hashes the raw OCI manifest and compares it to the released
+platform digest. It then requires the reviewed pip layer for that platform.
+The bundle's `layer_sources` entry records the wheel path and hash checked
+inside that layer, plus the pip source archive's path and hash. The retained
+archive contains pip's license texts and its vendored sources. This evidence
+covers pip, not every file from an earlier layer.
 
 ## Verify a CPython source bundle
 
@@ -95,9 +110,11 @@ archive checksum alone does not authenticate its publisher.
 
 The verifier rejects altered source bytes, a changed inventory, missing or
 duplicate members, links, and unexpected archive entries. Downloads and
-verification have a 64 MiB source limit; the outer bundle may be at most
-65 MiB before or after decompression. These limits apply to the retained
-compressed source archive, not to extracting it yourself.
+verification limit the CPython archive to 64 MiB. Schema 4 adds up to
+4 MiB for pip source and 64 KiB for the OCI manifest. The outer bundle is
+limited to 69 MiB plus 64 KiB before and after decompression; older bundles
+keep their 65 MiB limit. These limits don't bound what the upstream archives
+expand to if you extract them yourself.
 
 For license texts already present in the runtime, use the separate
 [recipient notice bundle](recipient-notices.md).
