@@ -52,6 +52,13 @@ from extra_codeowners.github import (
     InstallationRepositoriesChangedError,
     PullRequestTooLargeError,
 )
+from extra_codeowners.merge_queue import (
+    MergeCandidateIdentity,
+    MergeGroupTrigger,
+    MergeQueueEvidenceError,
+    require_candidate_pull,
+    require_reviewed_paths,
+)
 from extra_codeowners.metrics import (
     DEAD_JOBS,
     EVALUATION_SECONDS,
@@ -121,6 +128,22 @@ class BaseRecheckChangedError(RuntimeError):
 class _Assessment:
     result: EvaluationResult
     base_fingerprint: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _CandidatePolicyScope:
+    installation_id: int
+    repository_full_name: str
+    pull_number: int
+    authority_generation: int
+
+
+@dataclass(frozen=True, slots=True)
+class MergeCandidateAssessment:
+    """Read-only result, tied to a candidate and the PR head whose reviews it used."""
+
+    identity: MergeCandidateIdentity
+    result: EvaluationResult
 
 
 class SharedHeadLeaseLostError(RuntimeError):
@@ -1026,12 +1049,14 @@ class EvaluationService:
 
     async def _evaluate_current(
         self,
-        job: ClaimedJob,
+        job: ClaimedJob | _CandidatePolicyScope,
         pull: dict[str, Any],
         head_sha: str,
         policy_sha: str,
         expected_changed_files: int,
         repository_policy: RepositoryPolicy,
+        *,
+        candidate_paths: frozenset[str] | None = None,
     ) -> _Assessment:
         if not repository_policy.enabled:
             return _Assessment(
@@ -1136,6 +1161,9 @@ class EvaluationService:
             return _Assessment(_failure("github_codeowners_error", "; ".join(messages)))
 
         try:
+            changed_files = self._changed_files(file_values)
+            if candidate_paths is not None:
+                require_reviewed_paths(candidate_paths, changed_files)
             author_identity = (
                 self._pull_request_author_identity(pull)
                 if repository_policy.allow_author_as_codeowner
@@ -1166,7 +1194,8 @@ class EvaluationService:
                     owner_aliases=aliases,
                     direct_owner_eligible=direct_owner_eligible,
                 )
-            changed_files = self._changed_files(file_values)
+        except MergeQueueEvidenceError as error:
+            return _Assessment(_failure("candidate_paths_not_covered", str(error)))
         except EvidenceLimitError as error:
             return _Assessment(_failure("evidence_limit_exceeded", str(error)))
         except (ValidationError, ValueError) as error:
@@ -1205,6 +1234,87 @@ class EvaluationService:
                 policy_path=self.settings.policy_path,
             )
         return _Assessment(result, fingerprint)
+
+    async def assess_merge_candidate(
+        self, trigger: MergeGroupTrigger, *, authority_generation: int
+    ) -> MergeCandidateAssessment:
+        """Evaluate a current queue candidate without changing work, audits or checks.
+
+        The result is a snapshot, not a publication permit. A worker still needs
+        fresh evidence and the durable revocation and authority fences.
+        """
+        if self.settings.is_organization_config_repository(trigger.repository):
+            raise GitHubError("the organization policy repository uses native enforcement")
+        if type(authority_generation) is not int or authority_generation < 0:
+            raise ValueError("authority_generation must be a nonnegative integer")
+
+        identity = await self.github.get_merge_candidate(trigger)
+        if identity.trigger != trigger:
+            raise GitHubError("GitHub returned evidence for a different merge candidate")
+        scope = _CandidatePolicyScope(
+            trigger.installation_id, trigger.repository, identity.pull_number, authority_generation
+        )
+        pull = await self.github.get_pull(
+            scope.installation_id, scope.repository_full_name, scope.pull_number
+        )
+        require_candidate_pull(identity, pull)
+        file_count = _required_nonnegative_int(
+            pull.get("changed_files"), "pull_request.changed_files"
+        )
+        labels = _label_names(pull)
+        repository_text = await self._repository_policy_text(
+            trigger.installation_id, trigger.repository, trigger.base_sha
+        )
+        check_author = False
+        author_identity = None
+        try:
+            policy = (
+                RepositoryPolicy()
+                if repository_text is None
+                else RepositoryPolicy.from_toml(repository_text)
+            )
+        except (ValidationError, ValueError) as error:
+            result = _failure("invalid_policy", str(error))
+        else:
+            check_author = policy.allow_author_as_codeowner
+            if check_author:
+                author_identity = self._pull_request_author_identity(pull)
+            candidate_paths: frozenset[str] | None = None
+            if policy.enabled and file_count < MAX_PULL_FILES:
+                paths = await self.github.get_candidate_changed_paths(
+                    trigger.installation_id,
+                    trigger.repository,
+                    target_sha=trigger.base_sha,
+                    candidate_sha=trigger.head_sha,
+                )
+                if paths.target_sha != trigger.base_sha or paths.candidate_sha != trigger.head_sha:
+                    raise GitHubError("GitHub returned paths for a different merge candidate")
+                candidate_paths = paths.paths
+            result = (
+                await self._evaluate_current(
+                    scope,
+                    pull,
+                    identity.pull_head_sha,
+                    trigger.base_sha,
+                    file_count,
+                    policy,
+                    candidate_paths=candidate_paths,
+                )
+            ).result
+
+        observed = await self.github.get_pull(
+            scope.installation_id, scope.repository_full_name, scope.pull_number
+        )
+        require_candidate_pull(identity, observed)
+        if (
+            _required_nonnegative_int(observed.get("changed_files"), "pull_request.changed_files")
+            != file_count
+            or _label_names(observed) != labels
+            or (check_author and self._pull_request_author_identity(observed) != author_identity)
+            or await self.github.get_merge_candidate(trigger) != identity
+        ):
+            raise GitHubError("pull request or merge queue entry changed during evaluation")
+        return MergeCandidateAssessment(identity, result)
 
     async def base_refresh_fingerprint(
         self,

@@ -1,8 +1,8 @@
 {
   "@context": "https://openvex.dev/ns/v0.2.0",
-  "@id": "urn:uuid:a1eab261-95ef-5d32-9efd-904dacf36225",
+  "@id": "urn:uuid:9cc4e3cb-1828-52f7-8303-3bded8c273bb",
   "author": "Extra CODEOWNERS maintainers",
-  "last_updated": "2026-11-23T05:31:37Z",
+  "last_updated": "2026-11-23T06:09:46Z",
   "role": "VEX document producer",
   "statements": [
     {
@@ -2028,9 +2028,9 @@
       }
     }
   ],
-  "timestamp": "2026-11-23T05:31:37Z",
+  "timestamp": "2026-11-23T06:09:46Z",
   "tooling": "Vexcalibur + Extra CODEOWNERS runtime binding",
-  "version": 38,
+  "version": 39,
   "x_extra_codeowners_runtime": {
     "files": {
       ".dockerignore": "3f9dc9d3a79fe3085f25de88403b5563ad5c7fa7010bef94c5e55f24bd3cf691",
@@ -2064,7 +2064,7 @@
       "extra_codeowners/github.py": "9f8ba7f77faad6d3cea71d47c5b3a499ffd3b25035863eb25508acee6413b484",
       "extra_codeowners/logging.py": "a59227e76ec7809ff8bb88fee997abb9b99f32e81a4c8d16bcfc72c0c0abf33f",
       "extra_codeowners/manifest.py": "33d42ac16b8218562f2baf6c0bc7c6664b03354bbf274cb0381e94740b76681e",
-      "extra_codeowners/merge_queue.py": "8fcd5112044798a44ca1dbc97487b2f9bc2583a282a40399758d73f91dd83693",
+      "extra_codeowners/merge_queue.py": "2e78b235a4901a238ea7caca8d5210fb805a61433fd0f2f9787737d975dd67cc",
       "extra_codeowners/merge_queue_paths.py": "022a6ca85b9d3d08c4aea250851465212541b85ae58e492509bcec735c181c83",
       "extra_codeowners/metrics.py": "64785df4eef0b99bacd2cda27ae7a6bae2142a3b246b3b7fb00996631edae9c6",
       "extra_codeowners/migrations.py": "a86d239779ed7b0e38118a3f7c1dee9b33c71519656699f101ac556eed671a46",
@@ -2076,7 +2076,7 @@
       "extra_codeowners/reconciliation_sweep.py": "075cedff6f789a39b4171d2a49eb461ccffdf3fb546183fa421af588f0443d9c",
       "extra_codeowners/reconciliation_tracing.py": "0f650bf2300e26d1485fa7df71b71dccbb7739653e049d452d6b30ee9b6b9931",
       "extra_codeowners/request_timing.py": "7c53fcfdec4b8a5b1cf3427c8bd354b76bc6f255ac7374540a6cae0886a48c19",
-      "extra_codeowners/service.py": "91bc466d802d37abf5deed860c73a5f2df483e5b7f61f99d52fd9b6cbaee0f2f",
+      "extra_codeowners/service.py": "2d3051db477ab011d378ebd23a413f6ec48e994868bb04c6fc50a4d3f115389b",
       "extra_codeowners/settings.py": "bd1d3cd0acf23ea4b26869fc1e024438aba7b9acf43f3850c4e6be2e9a5b5437",
       "extra_codeowners/trace_context.py": "f79ca91baa1dd615c80546c66a6b370ba78ec7106dece3feb201d10250078532",
       "extra_codeowners/tracing.py": "49641dd6cb9b5b6da1e6026b90925a73eb3112d13a069afd202e741d261f76f9",
@@ -2089,7 +2089,7 @@
       "tools/source_recipes/psycopg-binary-3.3.4.json": "ec227aa110315f82c25335837e258806930c7afbe980c8b2ff6b476343c243b5",
       "uv.lock": "9b38f0929d3ea110b3d016bc638547e9f6244949009d2bc4dadff6141d496f90"
     },
-    "review": "Added a bounded query to identify one merge candidate and a verified-delivery parser. Queue inspection uses an isolated read-only token. No runtime client calls the new query or parser. No dependencies, native paths, Dockerfile, or vulnerability assessments changed.",
+    "review": "Share the existing PR approval evaluator with a read-only merge candidate assessment. No webhook, publication, dependency, or vulnerability-assessment behavior changed.",
     "schema_version": 1
   }
 }

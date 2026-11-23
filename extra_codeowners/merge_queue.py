@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from extra_codeowners.merge_queue_paths import MergeTreeEvidenceError, require_object_id
+from extra_codeowners.models import ChangedFile, ChangedFileStatus
 
 MergeGroupAction = Literal["checks_requested", "destroyed"]
 
@@ -244,3 +245,43 @@ def bind_candidate(trigger: MergeGroupTrigger, graph: object) -> MergeCandidateI
         pull_number=_positive_id(pull.get("number")),
         pull_head_sha=head,
     )
+
+
+def require_candidate_pull(identity: MergeCandidateIdentity, value: object) -> None:
+    """Check that the REST policy input still describes the GraphQL queue entry."""
+    pull = _record(value)
+    base, head = _record(pull.get("base")), _record(pull.get("head"))
+    repo = _record(base.get("repo"))
+    trigger = identity.trigger
+    if (
+        _positive_id(pull.get("number")) != identity.pull_number
+        or pull.get("node_id") != identity.pull_id
+        or pull.get("state") != "open"
+        or pull.get("draft") is not False
+        or pull.get("merged") is not False
+        or _positive_id(repo.get("id")) != trigger.repository_id
+        or repo.get("node_id") != identity.repository_node_id
+        or _repository_name(repo.get("full_name")).lower() != trigger.repository
+        or base.get("ref") != trigger.base_branch
+        or base.get("sha") != trigger.base_sha
+        or head.get("sha") != identity.pull_head_sha
+    ):
+        raise MergeQueueEvidenceError("pull evidence does not match the current queue entry")
+
+
+def require_reviewed_paths(
+    candidate_paths: frozenset[str], changed_files: tuple[ChangedFile, ...]
+) -> None:
+    """Require policy coverage for each path changed relative to the candidate base."""
+    reviewed: set[str] = set()
+    filenames: set[str] = set()
+    for change in changed_files:
+        if change.path in filenames:
+            raise MergeQueueEvidenceError("pull file evidence repeated a filename")
+        filenames.add(change.path)
+        if change.status is not ChangedFileStatus.UNCHANGED:
+            reviewed.add(change.path)
+            if change.previous_path is not None:
+                reviewed.add(change.previous_path)
+    if not candidate_paths <= reviewed:
+        raise MergeQueueEvidenceError("merge candidate changes paths not covered by the PR")
