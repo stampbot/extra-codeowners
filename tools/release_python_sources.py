@@ -59,6 +59,10 @@ UTF8_RANGE_NOTICE_URL = re.compile(
     r"https://raw\.githubusercontent\.com/protocolbuffers/protobuf/[0-9a-f]{40}/"
     r"third_party/utf8_range/LICENSE\Z"
 )
+MYPYC_NOTICE_URL = re.compile(
+    r"https://raw\.githubusercontent\.com/python/mypy/[0-9a-f]{40}/LICENSE\Z"
+)
+WHEEL_SUPPLEMENT_SCHEMA = {"cffi": 6, "protobuf": 6, "charset-normalizer": 7}
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 POSTGRESQL_URL = re.compile(
     r"https://ftp\.postgresql\.org/pub/source/v([0-9]+\.[0-9]+)/postgresql-\1\.tar\.bz2\Z"
@@ -441,6 +445,7 @@ def _wheel_supplement(
     if not isinstance(native_file, dict):
         raise PythonSourceError(f"{name} wheel supplement omitted its native file")
     machine = {"amd64": "x86_64", "arm64": "aarch64"}[architecture]
+    expected_component: dict[str, object]
     if name == "cffi":
         native_path = f"_cffi_backend.cpython-314-{machine}-linux-gnu.so"
         component_version = _text(component.get("version"), re.compile(r"[0-9]+\.[0-9]+\.[0-9]+\Z"))
@@ -449,10 +454,28 @@ def _wheel_supplement(
             "source": (f"libffi-{component_version}.tar.gz", LIBFFI_URL, MAX_FILE),
             "recipe": ("cffi-ci.yaml", CFFI_RECIPE_URL, 64 * 1024),
         }
-    else:
+    elif name == "protobuf":
         native_path = "google/_upb/_message.abi3.so"
         expected_component = {"name": "utf8_range"}
         expected_artifacts = {"notice": ("utf8_range.LICENSE", UTF8_RANGE_NOTICE_URL, 64 * 1024)}
+    elif name == "charset-normalizer":
+        native_path = _text(
+            native_file.get("path"),
+            re.compile(rf"[0-9a-f]{{20}}__mypyc\.cpython-314-{machine}-linux-gnu\.so\Z"),
+        )
+        candidates = component.get("source_candidates")
+        if not isinstance(candidates, list) or not 1 <= len(candidates) <= 8:
+            raise PythonSourceError("mypyc source supplement requires a bounded candidate set")
+        versions = [_text(item, re.compile(r"[0-9]+\.[0-9]+\.[0-9]+\Z")) for item in candidates]
+        if len(set(versions)) != len(versions):
+            raise PythonSourceError("duplicate mypyc source candidate")
+        expected_component = {"name": "mypyc-runtime", "source_candidates": versions}
+        expected_artifacts = {
+            **{f"source-{item}": (f"mypy-{item}.tar.gz", URL, MAX_FILE) for item in versions},
+            "notice": ("mypyc.LICENSE", MYPYC_NOTICE_URL, 64 * 1024),
+        }
+    else:
+        raise PythonSourceError(f"unsupported wheel supplement: {name}")
     if component != expected_component or set(records) != expected_artifacts.keys():
         raise PythonSourceError(f"{name} wheel supplement has unexpected components or artifacts")
     if native_file.get("path") != native_path:
@@ -466,6 +489,8 @@ def _wheel_supplement(
         url = _text(record.get("url"), pattern)
         if role == "source" and url.rsplit("/", 1)[-1] != f"v{component['version']}":
             raise PythonSourceError("libffi source version disagrees with its URL")
+        if role.startswith("source-") and url.rsplit("/", 1)[-1] != filename:
+            raise PythonSourceError("mypyc source candidate version disagrees with its URL")
         size = record.get("size")
         if type(size) is not int or not 0 < size <= size_limit:
             raise PythonSourceError(f"invalid {name} wheel supplement size")
@@ -613,7 +638,7 @@ def plan(inventory: bytes, lock: bytes, architecture: str, digest: str) -> dict[
         raise PythonSourceError("unexpected Python source bundle name")
     distributions = python.get("distributions") if isinstance(python, dict) else None
     recipe_schema = python.get("source_recipe_schema", 0) if isinstance(python, dict) else 0
-    if type(recipe_schema) is not int or recipe_schema not in {0, 1, 2, 3, 4, 5, 6}:
+    if type(recipe_schema) is not int or recipe_schema not in {0, 1, 2, 3, 4, 5, 6, 7}:
         raise PythonSourceError("unsupported source recipe schema")
     if not isinstance(distributions, list) or not 1 <= len(distributions) <= 512:
         raise PythonSourceError("invalid installed distribution list")
@@ -651,9 +676,11 @@ def plan(inventory: bytes, lock: bytes, architecture: str, digest: str) -> dict[
                 embedded_sources.append(
                     _libxcrypt_recipe(name, version, architecture, python, package)
                 )
+        supplement_schema = WHEEL_SUPPLEMENT_SCHEMA.get(name)
+        retain_supplement = supplement_schema is not None and recipe_schema >= supplement_schema
         sdist = package.get("sdist")
         if sdist is None:
-            if recipe_schema >= 6 and name in {"cffi", "protobuf"}:
+            if retain_supplement:
                 raise PythonSourceError(f"{name} wheel supplement requires a locked source archive")
             reviewed = REVIEWED_BINARY_SOURCES.get((name, version)) if recipe_schema >= 1 else None
             if reviewed is not None:
@@ -681,7 +708,7 @@ def plan(inventory: bytes, lock: bytes, architecture: str, digest: str) -> dict[
             "path": f"sources/{name}/{url.rsplit('/', 1)[1]}",
         }
         sources.append(locked_source)
-        if recipe_schema >= 6 and name in {"cffi", "protobuf"}:
+        if retain_supplement:
             assert isinstance(python, dict)
             wheel_supplements.append(
                 _wheel_supplement(name, version, architecture, python, package, locked_source)
@@ -797,6 +824,7 @@ def fetch(source: dict[str, Any]) -> bytes:
         or LIBFFI_URL.fullmatch(value)
         or CFFI_RECIPE_URL.fullmatch(value)
         or UTF8_RANGE_NOTICE_URL.fullmatch(value)
+        or MYPYC_NOTICE_URL.fullmatch(value)
         or POSTGRESQL_URL.fullmatch(value)
         or OPENLDAP_URL.fullmatch(value)
     ):

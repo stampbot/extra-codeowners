@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "distribution": "charset-normalizer",
+  "distribution_version": "3.4.9",
+  "sdist_sha256": "673611bbd43f0810bec0b0f028ddeaaa501190339cac411f347ac76917c3ae7b",
+  "component": {
+    "name": "mypyc-runtime",
+    "source_candidates": [
+      "1.20.2",
+      "2.0.0",
+      "2.1.0"
+    ]
+  },
+  "platforms": {
+    "amd64": {
+      "wheel_filename": "charset_normalizer-3.4.9-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+      "wheel_sha256": "c25fe15c70c59eb7c5ce8c06a1f3fa1da0ecc5ea1e7a5922c40fd2fa9b0d5046",
+      "native_file": {
+        "path": "ada92cb5d92a588d1b93__mypyc.cpython-314-x86_64-linux-gnu.so",
+        "sha256": "9c77a4224b74e54cbc4587716ab0269f8d4c19f3818c82766d58d91649cd917f",
+        "size": 453544
+      }
+    },
+    "arm64": {
+      "wheel_filename": "charset_normalizer-3.4.9-cp314-cp314-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl",
+      "wheel_sha256": "8a79d9f4d8001473a30c163556b3c3bfebec837495a412dde78b51672f6134f9",
+      "native_file": {
+        "path": "ada92cb5d92a588d1b93__mypyc.cpython-314-aarch64-linux-gnu.so",
+        "sha256": "f6cbee6ff1ea6c662aeb032b98f60d48ba0c1bbbc8902226a25c6b1120e7dad2",
+        "size": 613448
+      }
+    }
+  },
+  "artifacts": {
+    "source-1.20.2": {
+      "url": "https://files.pythonhosted.org/packages/04/af/e3d4b3e9ec91a0ff9aabfdb38692952acf49bbb899c2e4c29acb3a6da3ae/mypy-1.20.2.tar.gz",
+      "sha256": "e8222c26daaafd9e8626dec58ae36029f82585890589576f769a650dd20fd665",
+      "size": 3817349
+    },
+    "source-2.0.0": {
+      "url": "https://files.pythonhosted.org/packages/cf/dc/7e6d49f04fca40b9dd5c752a51a432ffe67fb45200702bc9eee0cb4bbb26/mypy-2.0.0.tar.gz",
+      "sha256": "1a9e3900ac5c40f1fe813506c7739da6e6f0eab2729067ebd94bfb0bbba53532",
+      "size": 3869036
+    },
+    "source-2.1.0": {
+      "url": "https://files.pythonhosted.org/packages/82/15/cca9d88503549ed6fedeaa1d448cdddd542ee8a490232d732e278036fbf2/mypy-2.1.0.tar.gz",
+      "sha256": "81e76ad12c2d804512e9b13240d1588316531bfba07558286078bfbce9613633",
+      "size": 3898359
+    },
+    "notice": {
+      "url": "https://raw.githubusercontent.com/python/mypy/c1c336d7e34eb313080c79b156518c58d27c7234/LICENSE",
+      "sha256": "fdf1cd17f50e1305ed8cfd37467312d27a984648dba622cef70573b5512e4e1b",
+      "size": 12842
+    }
+  }
+}
