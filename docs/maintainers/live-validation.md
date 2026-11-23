@@ -161,6 +161,8 @@ used the published alpha.114 and alpha.115 images. It migrated an isolated
 restore to schema 0012, verified that each image refused the other's schema,
 and restored the earlier backup with the test delivery intact.
 
+The [November 23 native-review handback](evidence/2026-11-23-native-review-restored-with-queue.md) kept the queue and one ordinary review in place. GitHub first admitted a Dependabot PR with Stampbot's approval. After we restored native review, GitHub refused to queue the same head even though the App check and Stampbot review were unchanged.
+
 ## Diagnostics and approval probe: November 2, 2026
 
 Alpha.65 runs on two Kubernetes nodes with shared PostgreSQL state. The
