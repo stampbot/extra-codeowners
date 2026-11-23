@@ -76,6 +76,22 @@ def _properties(values: dict[str, str]) -> list[dict[str, str]]:
     ]
 
 
+def _builder_properties(source: dict[str, Any]) -> dict[str, str]:
+    if "build_recipe" not in source:
+        return {}
+    properties = {
+        "build-recipe": json.dumps(source["build_recipe"], sort_keys=True),
+        "builder-image": source["builder_image"],
+        "builder-library-sha256": source["builder_library_sha256"],
+        "wheel-sha256": source["wheel_sha256"],
+    }
+    if "build_recipe_dependencies" in source:
+        properties["build-recipe-dependencies"] = json.dumps(
+            source["build_recipe_dependencies"], sort_keys=True
+        )
+    return properties
+
+
 def _identity(value: object) -> str:
     if not isinstance(value, str) or _TEXT.fullmatch(value) is None:
         raise NativeComponentError("invalid native component identity")
@@ -429,15 +445,7 @@ def build(
             properties["native-files"] = json.dumps(source["wheel_files"], sort_keys=True)
         if distribution == "cryptography":
             properties.update(static_properties)
-        if "build_recipe" in source:
-            properties["build-recipe"] = json.dumps(source["build_recipe"], sort_keys=True)
-        if "build_recipe_dependencies" in source:
-            properties["build-recipe-dependencies"] = json.dumps(
-                source["build_recipe_dependencies"], sort_keys=True
-            )
-            properties["builder-image"] = source["builder_image"]
-            properties["builder-library-sha256"] = source["builder_library_sha256"]
-            properties["wheel-sha256"] = source["wheel_sha256"]
+        properties.update(_builder_properties(source))
         license_evidence: dict[str, Any] = {}
         if source_payloads is not None:
             if custom is None:

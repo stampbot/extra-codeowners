@@ -22,6 +22,28 @@ from tools import release_native_components as catalog
 DIGEST = "sha256:" + "a" * 64
 
 
+def test_historical_builder_fields_do_not_require_a_recipe_helper() -> None:
+    recipe = {"path": "fictional/install.sh", "sha256": "a" * 64}
+    old = {
+        "build_recipe": recipe,
+        "builder_image": "example.com/fixture@" + DIGEST,
+        "builder_library_sha256": "b" * 64,
+        "wheel_sha256": "c" * 64,
+    }
+    expected = {
+        "build-recipe": json.dumps(recipe, sort_keys=True),
+        "builder-image": old["builder_image"],
+        "builder-library-sha256": old["builder_library_sha256"],
+        "wheel-sha256": old["wheel_sha256"],
+    }
+    assert catalog._builder_properties(old) == expected
+    helper = {"path": "fictional/build_utils.sh", "sha256": "d" * 64}
+    assert catalog._builder_properties({**old, "build_recipe_dependencies": [helper]}) == {
+        **expected,
+        "build-recipe-dependencies": json.dumps([helper], sort_keys=True),
+    }
+
+
 @pytest.fixture
 def evidence(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     inventory = {
