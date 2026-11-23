@@ -233,6 +233,13 @@ upstream sdists listed in `uv.lock` for the distributions installed on that
 platform. Package names and versions must match; downloads must match the
 lock's SHA-256 and size. The collector never extracts or runs them.
 
+Release jobs can reuse cached downloads. The collector checks the size and
+SHA-256 of every cached archive against the current source plan before it
+uses the bytes. Missing or mismatched bytes trigger a fresh download from
+the reviewed origin. If those bytes can't be verified, the build stops.
+The collector also rejects symlinks in place of cache files. The cache
+doesn't change which sources a release must include.
+
 `manifest.json` binds the bundle to the platform digest, inventory hash, and
 lock hash. It lists each archive under `sources/<package>/`. The application's
 own sdist is delivered separately in the same release. Packages without a

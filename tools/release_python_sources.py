@@ -15,6 +15,7 @@ import json
 import re
 import sys
 import tarfile
+import tempfile
 import time
 import tomllib
 import urllib.error
@@ -22,6 +23,7 @@ import urllib.parse
 import urllib.request
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 from pathlib import Path
 from typing import IO, Any
 
@@ -888,8 +890,7 @@ class _SourceRedirect(urllib.request.HTTPRedirectHandler):
         raise PythonSourceError("source download unexpectedly redirected")
 
 
-def fetch(source: dict[str, Any]) -> bytes:
-    """Fetch an opaque archive from a permitted source origin with retries."""
+def _source_url(source: dict[str, Any]) -> str:
     value = source.get("url")
     if not isinstance(value, str) or not (
         URL.fullmatch(value)
@@ -910,7 +911,10 @@ def fetch(source: dict[str, Any]) -> bytes:
         or KERBEROS_URL.fullmatch(value)
     ):
         raise PythonSourceError("invalid source archive URL")
-    url = value
+    return value
+
+
+def _download(url: str, source: dict[str, Any]) -> bytes:
     opener = urllib.request.build_opener(_SourceRedirect())
     for attempt in range(3):
         try:
@@ -922,9 +926,49 @@ def fetch(source: dict[str, Any]) -> bytes:
             return data
         except (urllib.error.URLError, TimeoutError, http.client.IncompleteRead) as error:
             if attempt == 2:
-                raise PythonSourceError("source download failed after three attempts") from error
+                origin = urllib.parse.urlsplit(url)
+                filename = origin.path.rsplit("/", 1)[-1]
+                reason = (
+                    f"HTTP {error.code}"
+                    if isinstance(error, urllib.error.HTTPError)
+                    else type(error).__name__
+                )
+                msg = (
+                    f"source download failed after three attempts: "
+                    f"{origin.hostname}/{filename} ({reason})"
+                )
+                raise PythonSourceError(msg) from error
             time.sleep(2 ** (attempt + 1))
     raise AssertionError("unreachable")  # pragma: no cover
+
+
+def fetch(source: dict[str, Any], *, cache: Path | None = None) -> bytes:
+    """Read verified bytes from a cache or fetch them from the reviewed origin."""
+    url = _source_url(source)
+    if cache is None:
+        return _download(url, source)
+    digest, size = source.get("sha256"), source.get("size")
+    if not isinstance(digest, str) or not SHA256.fullmatch(digest):
+        raise PythonSourceError("invalid source cache digest")
+    if type(size) is not int or not 0 < size <= MAX_FILE:
+        raise PythonSourceError("invalid cached source size")
+    if cache.is_symlink() or not cache.is_dir():
+        raise PythonSourceError("source cache must be a dedicated directory, not a symlink")
+    entry = cache / digest
+    if entry.is_symlink() or (entry.exists() and not entry.is_file()):
+        raise PythonSourceError("source cache entry is not a regular file")
+    if entry.is_file():
+        with entry.open("rb") as stream:
+            data = stream.read(size + 1)
+        if len(data) == size and hashlib.sha256(data).hexdigest() == digest:
+            return data
+
+    data = _download(url, source)
+    with tempfile.TemporaryDirectory(prefix=".download-", dir=cache) as directory:
+        partial_file = Path(directory) / "source"
+        partial_file.write_bytes(data)
+        partial_file.replace(entry)
+    return data
 
 
 def build(manifest: dict[str, Any], payloads: dict[str, bytes]) -> bytes:
@@ -1012,6 +1056,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--architecture", choices=("amd64", "arm64"), required=True)
     parser.add_argument("--platform-digest", required=True)
     parser.add_argument("--bundle", type=Path, required=True)
+    parser.add_argument("--cache", type=Path, help="dedicated download cache for fetch")
     args = parser.parse_args(argv)
     try:
         with args.inventory.open("rb") as stream:
@@ -1020,11 +1065,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             lock = stream.read(MAX_METADATA + 1)
         manifest = plan(inventory, lock, args.architecture, args.platform_digest)
         if args.command == "fetch":
+            if args.cache is not None:
+                args.cache.mkdir(parents=True, exist_ok=True)
+            download = fetch if args.cache is None else partial(fetch, cache=args.cache)
             with ThreadPoolExecutor(max_workers=4) as executor:
                 payloads = dict(
                     zip(
                         (source["path"] for source in _all_sources(manifest)),
-                        executor.map(fetch, _all_sources(manifest)),
+                        executor.map(download, _all_sources(manifest)),
                         strict=True,
                     )
                 )
@@ -1033,6 +1081,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             with args.bundle.open("xb") as output:
                 output.write(bundle)
         else:
+            if args.cache is not None:
+                raise PythonSourceError("--cache is only valid for fetch")
             with args.bundle.open("rb") as stream:
                 bundle = stream.read(MAX_BUNDLE + 1)
             verify(manifest, bundle)
