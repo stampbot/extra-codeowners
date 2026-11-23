@@ -1,30 +1,30 @@
 {
   "schema_version": 1,
-  "distribution_version": "50.0.0",
+  "distribution_version": "50.0.2",
   "component": {
     "name": "openssl",
-    "version": "4.0.1",
-    "source_sha256": "2db3f3a0d6ea4b59e1f094ace2c8cd536dffb87cdc39084c5afa1e6f7f37dd09"
+    "version": "4.0.3",
+    "source_sha256": "325b5c806167c13b40b1ffeadfe0248197c00eccc4cf123ec1e28d2d2fd216d9"
   },
   "platforms": {
     "amd64": {
-      "wheel_filename": "cryptography-50.0.0-cp311-abi3-manylinux_2_34_x86_64.whl",
-      "wheel_sha256": "82148ec5bddac30b51a5b3c1945075f896fa022cb93f8e4a01e9f6ee95292c5f",
-      "sbom_sha256": "3b0e4a8dd582b545032c0c1c8b0ce656a24076c0a84edbf359fa2906c07838e5",
+      "wheel_filename": "cryptography-50.0.2-cp311-abi3-manylinux_2_34_x86_64.whl",
+      "wheel_sha256": "9dab55f57c74c3cad24c323bacbbd04be4705ba6eb0d92e920b1fc4837ed5079",
+      "sbom_sha256": "90a9c8d03d95672422f4e7c611fb6d35d1a7c5fed98d032d9dc57d8965e239e6",
       "extension": {
         "path": "cryptography/hazmat/bindings/_rust.abi3.so",
-        "size": 14357504,
-        "sha256": "613ec570594be2691ce18fe8aa51aa4716584c0e586ec97dd790c4b9757b5a83"
+        "size": 14434376,
+        "sha256": "1e5d23fa66915204b9b67202a46993844d81cda56f6ad52cead2def37617ee29"
       }
     },
     "arm64": {
-      "wheel_filename": "cryptography-50.0.0-cp311-abi3-manylinux_2_34_aarch64.whl",
-      "wheel_sha256": "07949c449a1abcf60d1ee6e88956d89404c7df3c8258f46589e912988e551987",
-      "sbom_sha256": "93ad31c3495f414a4df747e204d1348863963996736743fd0ee276185d2359a3",
+      "wheel_filename": "cryptography-50.0.2-cp311-abi3-manylinux_2_34_aarch64.whl",
+      "wheel_sha256": "87e9ce85beb6b328ba370cc6e6aea483c92617b4c95b1d33a49297eb662bfb04",
+      "sbom_sha256": "b0bf7d97f711a6abea7658c0e84ad5954226663559cba3ae14321e70adb72184",
       "extension": {
         "path": "cryptography/hazmat/bindings/_rust.abi3.so",
-        "size": 13533808,
-        "sha256": "62bcd2062548a2e0815fa4253a7a19d24ac96bfcaa98570dd323cf3cc94e0c03"
+        "size": 13652416,
+        "sha256": "b52e6ae53c343ce97478ee10d93a0263576d778de65333c234577298d1e9ef07"
       }
     }
   }

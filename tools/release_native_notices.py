@@ -43,6 +43,11 @@ _SOURCE_LICENSES = {
         "7d5450cb2d142651b8afa315b5f238efc805dad827d91ba367d8516bc9d49e7a",
         "Apache-2.0",
     ),
+    ("openssl", "4.0.3", "325b5c806167c13b40b1ffeadfe0248197c00eccc4cf123ec1e28d2d2fd216d9"): (
+        "openssl-4.0.3/LICENSE.txt",
+        "7d5450cb2d142651b8afa315b5f238efc805dad827d91ba367d8516bc9d49e7a",
+        "Apache-2.0",
+    ),
     ("libpq", "18.0", "0d5b903b1e5fe361bca7aa9507519933773eb34266b1357c4e7780fdee6d6078"): (
         "postgresql-18.0/COPYRIGHT",
         "5ed3ce5c9373dff7f98b1fae7a6c7ccd98df7d734d46d24c1bcebf1240be8307",

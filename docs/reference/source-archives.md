@@ -310,8 +310,8 @@ source recipe is not a claim that rebuilding it produces byte-identical wheels.
 
 ### Cryptography's embedded OpenSSL source
 
-Schema 3 adds the OpenSSL source archive identified by Cryptography 50.0.0's
-wheel SBOM on each platform. It appears in the existing Python source bundle
+Starting with schema 3, the release includes the OpenSSL source archive named
+by Cryptography's wheel SBOM for each platform. It appears in the Python source bundle
 under `embedded/cryptography/<architecture>/`. The manifest's
 `embedded_sources` records the component version, archive URL, SHA-256, size
 and reviewed wheel-SBOM hash, alongside the same platform/inventory binding
@@ -320,8 +320,9 @@ too; no new asset or command is needed.
 
 The reviewed recipe selects `sboms/sbom.json`, not Cryptography's separate
 Rust SBOM. Its two platform hashes bind the claim to the inspected wheel
-metadata. That metadata identifies OpenSSL 4.0.1 and its upstream archive's
-SHA-256; the reviewed archive also matches OpenSSL's published checksum.
+metadata. The recipe for each Cryptography version pins the OpenSSL version
+and archive hash. Maintainers check the archive against OpenSSL's published
+checksum before adding a recipe.
 The source archive retains OpenSSL's license text. This does not make the
 recipient notice inventory complete or establish an upstream binary's exact
 build inputs.
