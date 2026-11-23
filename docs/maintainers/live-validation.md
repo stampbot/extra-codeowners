@@ -128,6 +128,11 @@ separated the number of entries from the number of candidates. With one
 build slot and one PR per merge, a second PR waited without a candidate.
 The first candidate stayed unchanged. The App did not evaluate either entry.
 
+The [November 23 withdrawal probe](evidence/2026-11-23-held-candidate-check-withdrawal.md)
+held a candidate behind a second required check. The expected App changed
+the same Check Run from success to failure, and GitHub removed the candidate.
+The probe wrote the result by hand; it didn't test a review dismissal.
+
 ## Diagnostics and approval probe: November 2, 2026
 
 Alpha.65 runs on two Kubernetes nodes with shared PostgreSQL state. The

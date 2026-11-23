@@ -35,6 +35,7 @@ the older results and links newer receipts.
 - [November 23, 2026: candidate checks during webhook loss](2026-11-23-candidate-checks-during-delivery-loss.md)
 - [November 23, 2026: alpha.107 source and notices](2026-11-23-alpha107-source-and-notices.md)
 - [November 23, 2026: a second PR waits without a candidate](2026-11-23-queue-entry-waiting.md)
+- [November 23, 2026: GitHub removes a held candidate after its check fails](2026-11-23-held-candidate-check-withdrawal.md)
 
 ## Add a receipt
 
