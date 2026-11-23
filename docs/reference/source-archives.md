@@ -358,6 +358,26 @@ records that source and recipe; it does not prove a reproducible build or
 supply everything needed to relink the wheel. The arm64 library still uses
 the separate RPM source. Schema 4 and earlier bundles are unchanged.
 
+### The CFFI and Protobuf wheels
+
+Schema 6 adds `wheel_supplements` to the Python source manifest for amd64
+and arm64. Each entry identifies the locked wheel, the installed extension,
+and the retained Python source archive by SHA-256. If any of those change,
+the collector requires a new recipe instead of reusing the old evidence.
+
+- CFFI 2.1.0 statically links libffi 3.4.6 into `_cffi_backend`. The bundle
+  contains that version's source tarball (including its `LICENSE`) and the
+  CFFI workflow that builds it. Debian's separately installed `libffi8`
+  does not cover this copy.
+- Protobuf 7.35.1 includes `utf8_range` in `google/_upb/_message.abi3.so`.
+  The locked Protobuf source archive already contains the C sources. The
+  supplement adds their separate `utf8_range.LICENSE` notice from upstream.
+
+Look under `supplements/` in `python-source-<arch>.tar.gz` for these files.
+`manifest.json` records each path, origin, SHA-256 and size. The collector
+verifies the files without running the CFFI workflow. These entries retain
+version-matched source and notices; they do not reproduce either wheel build.
+
 ## Rust dependencies in Python wheels
 
 Releases whose inventory declares `python.rust_source_bundle` also supply

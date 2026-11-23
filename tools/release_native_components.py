@@ -311,7 +311,7 @@ def build(
     if (
         not isinstance(python, dict)
         or type(python.get("source_recipe_schema")) is not int
-        or python["source_recipe_schema"] not in {4, 5}
+        or python["source_recipe_schema"] not in {4, 5, 6}
     ):
         raise NativeComponentError("native component catalog requires source recipe schema 4 or 5")
     source_plan: dict[str, Any] = _python.plan(inventory, lock, architecture, digest)
