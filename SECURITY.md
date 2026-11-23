@@ -100,14 +100,16 @@ identities described below.
 
 Wheel-bundled OpenSSL and other C libraries have separate
 [native component catalogs](docs/reference/native-components.md) and rescan
-reports. The current VEX has eight native OpenSSL assessments for CMS, CMP and
-a 32-bit-only overflow; 51 other native candidates remain `under_investigation`.
+reports. For the alpha.107 baseline, OpenVEX excludes 25 native OpenSSL
+component/CVE pairs within the reviewed paths. It leaves 57 pairs
+`under_investigation`.
 The [caller evidence](security/vex/native-openssl-callers.json) and runtime
 review explain their scope. TLS and certificate-processing findings are not
 blanket exclusions. The image severity gate does not yet assess the native
-catalog; its separate reports retain both raw and VEX-applied results. Native
-coverage and further reachability review remain in
-[issue #18](https://github.com/stampbot/extra-codeowners/issues/18).
+catalog; its separate reports retain both raw and VEX-applied results. See
+[recurring scans](https://github.com/stampbot/extra-codeowners/issues/22) and
+the [Psycopg wheel update](https://github.com/stampbot/extra-codeowners/issues/341)
+for further security work.
 
 The OpenSSL-only statements for [3.5.6](security/vex/openssl-3.5.6.openvex.json)
 and [3.5.7](security/vex/openssl-3.5.7.openvex.json) remain as historical evidence.

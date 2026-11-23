@@ -10,10 +10,10 @@
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
 Extra CODEOWNERS is a self-hosted GitHub App for teams that trust automation
-to approve routine pull requests. It publishes a required check that accepts
-either a human CODEOWNER approval or an approval from an explicitly enrolled
-GitHub App. A repository may also opt in to treating its eligible pull-request
-author as human CODEOWNER evidence for that check.
+to approve routine pull requests. It posts a check that can count an enrolled
+App's approval for a lockfile and still report that an application change needs
+a human code owner. If the repository opts in, the author can cover paths they
+already own.
 
 People and teams stay in GitHub's standard `CODEOWNERS` file. A separate
 policy says which Apps may cover which owners and paths.
@@ -40,8 +40,8 @@ That becomes awkward when an App such as
 request is routine. Stampbot can approve a policy-compliant `uv.lock` update,
 for example, but GitHub still waits for a human code owner.
 
-Extra CODEOWNERS replaces that one decision with a check. It evaluates each
-distinct effective owner set separately:
+Extra CODEOWNERS evaluates that one decision. It checks each distinct set of
+owners separately:
 
 ```text
 appropriate human CODEOWNER approval
@@ -73,15 +73,15 @@ ordinary approval count and other rules still apply.
 ## What stays in GitHub
 
 Keep your ordinary pull-request rules: minimum approval count, stale-review
-handling, signed commits, and unrelated required checks. Extra CODEOWNERS is
-intended to replace only **Require review from Code Owners**.
+handling, signed commits, and unrelated required checks. In production, keep
+**Require review from Code Owners** too. Use the alpha check to see how your
+policy would handle a PR without letting it decide whether the PR can merge.
 
 GitHub's public contract doesn't say whether a third-party App review counts
-toward the ordinary approval minimum. Test that combination in a disposable
-repository before you rely on it. A nonzero minimum may still require a human
-even when the Extra CODEOWNERS check succeeds; the
+toward the ordinary approval minimum. It counted in a disposable repository,
+but test your own rules before relying on that behavior. The
 [native CODEOWNERS comparison](docs/explanation/native-codeowners.md#what-changes-in-repository-rules)
-explains the open contract and links to the live probe.
+explains how the review count and the check differ.
 
 The App doesn't submit reviews, merge pull requests, grant another App access,
 or edit `CODEOWNERS`. It reads GitHub evidence and publishes one Check Run.
@@ -95,18 +95,15 @@ review. Review the check's expected source and its explanatory output with the
 same care as a required review rule, especially while contributors are learning
 the different UI.
 
-The check is asynchronous. When an approval is dismissed or changed, a prior
-success remains visible until GitHub delivers the event and the App resets and
-re-evaluates the check. That is normally short, but it cannot be made zero by a
-third-party App. Reconciliation repairs missed deliveries; it is not an
-instantaneous revocation mechanism. Keep GitHub's native code-owner rule for a
-boundary that cannot tolerate that stale-success window.
+When someone dismisses an approval, GitHub can still show the old pass until
+the App learns about the change and resets the check. Reconciliation can repair
+a missed event, but it can't make dismissal and merging happen together.
 
-This composition still needs live provider testing before production use.
-Check Runs belong to commits, while labels, changed paths, and reviews belong
-to pull requests. [Issue #1](https://github.com/stampbot/extra-codeowners/issues/1)
-tracks the shared-commit edge cases and other GitHub contracts that must be
-proven.
+GitHub attaches checks to commits, not pull requests. If two PRs share a head
+commit, both can show the same pass even when their policies or approvals
+differ. In a [live one-entry queue test](docs/maintainers/evidence/2026-11-23-candidate-checks-during-delivery-loss.md),
+GitHub waited for a separate check on the commit it would merge. That result
+doesn't make a required check on the PR head safe for production.
 
 ## How delegation is split
 
@@ -144,21 +141,25 @@ path matching, labels, built-in protected files, and the insecure escape hatch.
 ## Run the project locally
 
 You can inspect the code and run the local suite from a clean checkout with
-Bash, Git, and
-[`mise`](https://mise.jdx.dev/) installed:
+Bash, Git, and [`mise`](https://mise.jdx.dev/) installed:
 
 ```bash
 git clone https://github.com/stampbot/extra-codeowners.git
 cd extra-codeowners
+```
+
+Read `mise.toml` before running `mise trust`; that command records a local
+trust decision.
+
+```bash
 mise trust
 mise install
 mise run bootstrap
 mise run test
 ```
 
-Read `mise.toml` before `mise trust`; that command records a local trust
-decision. A successful run ends with the test suite passing. It doesn't
-register a GitHub App or prove the live GitHub contracts.
+A successful run ends with the test suite passing. It doesn't register a
+GitHub App or prove the live GitHub contracts.
 
 To publish a check in a test repository, follow the
 [first-check tutorial](docs/tutorials/development-installation.md). Keep

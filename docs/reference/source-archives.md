@@ -10,9 +10,9 @@ shared by both platforms. These bundles retain version-matched upstream source
 and build recipes. They do not prove the exact inputs used by upstream binary
 builders, and the project does not rebuild dependencies to make that claim.
 
-This is not yet the complete container source. Some libraries inside Python
-wheels and other missing notice material remain under
-[issue #18](https://github.com/stampbot/extra-codeowners/issues/18).
+The [alpha.107 source and notice receipt][source-receipt] records how the
+published archives covered the reviewed runtime. Older releases contain only
+the archives and notices promised by their own inventories.
 
 For machine-readable C-library identities and their source-recipe bindings,
 use the companion [wheel-native catalogs](native-components.md). Those catalogs
@@ -338,8 +338,8 @@ A changed or missing selected SBOM, or a Cryptography version without a
 reviewed recipe, stops schema 3 collection. Review its source mapping and
 update the recipe before publishing. Historical schema 0–2 inventories keep
 their original contract; verifying an older release does not retroactively
-require this archive. [Issue #18][source-work] tracks components these
-inventories don't identify and notices that still need review.
+require this archive. The [alpha.107 receipt][source-receipt] covers the
+version-matched sources published for its wheel and both image digests.
 
 ### Psycopg's custom-library sources
 
@@ -368,8 +368,8 @@ installed or executed during collection.
 These are version-matched sources, not proof of the upstream builder's exact
 inputs. In particular, Psycopg's OpenSSL recipe fetches a Git tag archive;
 this bundle retains the official release tarball of that version. License
-texts remain inside the retained archives. [Issue #18][source-work] tracks
-missing components and notice coverage.
+texts remain inside the retained archives. Review the sources again when
+an updated wheel ships different libraries.
 
 ### The amd64 Psycopg libxcrypt build
 
@@ -440,9 +440,9 @@ rejects redirects, and never executes upstream code or extracts it to disk.
 the SBOM and lockfile hashes, preserves declared licenses, and binds the result
 to the platform inventory, Python source bundle, and notice manifest. Missing
 or ambiguous mappings stop publication. This covers the Cargo components
-reported by those SBOMs; it is not a complete inventory of native C libraries
-or a conclusion about license compliance. Those remaining checks are tracked
-in [issue #18][source-work].
+reported by those SBOMs. See the [wheel-native catalogs](native-components.md)
+for the separately reviewed C libraries. Neither inventory decides license
+compliance.
 
 Schema 2 adds `registry_crate_notices`. Each entry names the crate archive,
 hashes its `Cargo.toml`, and records the crate's own license declaration
@@ -483,4 +483,4 @@ limited to 16 MiB; the complete bundle is limited to 128 MiB before and after
 decompression. Older inventories without `python.rust_source_bundle` do not
 promise this evidence, so historical rescans do not require it retroactively.
 
-[source-work]: https://github.com/stampbot/extra-codeowners/issues/18
+[source-receipt]: ../maintainers/evidence/2026-11-23-alpha107-source-and-notices.md

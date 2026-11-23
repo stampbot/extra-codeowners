@@ -89,9 +89,10 @@ for CPython, installed Debian packages, locked Python distributions and
 reviewed wheel-native components. The latter include Cryptography's OpenSSL
 and Psycopg's libpq, OpenSSL and OpenLDAP sources, with their existing build
 recipes. These are version-matched archives, not proof of exact upstream
-binary build inputs. [Issue #18][issue-18] tracks complete
-corresponding-source delivery, and
-[issue #74][issue-74] tracks clean-client verification of a published release.
+binary build inputs. The [alpha.107 receipt][source-receipt] records the
+published source and notice checks that closed [issue #18][issue-18].
+[Issue #74][issue-74] tracks clean-client verification of the first
+supported release.
 
 ### Raw container inventory
 
@@ -110,8 +111,8 @@ container. It records:
 For images containing CPython source metadata, the inventory also identifies
 the interpreter version, the source URL and SHA-256 declared by the pinned
 base image, and the matching runtime license. The notice bundle preserves the
-metadata and license. Source-archive delivery and full build-recipe evidence
-remain part of issue #18.
+metadata and license. The source archive adds incorporated-software notices
+and source for the reviewed earlier pip layer.
 
 Regular files are hashed. Filesystem links are recorded as links rather than
 followed.
@@ -130,8 +131,8 @@ This is raw review evidence. The release workflow uses it to construct and
 verify the accompanying [recipient notice bundle](recipient-notices.md), while
 keeping missing declared license files visible. Neither artifact decides
 whether package metadata, bundled material, or source availability satisfies a
-redistribution obligation. [Issue #18][issue-18] tracks the remaining notices
-and source coverage.
+redistribution obligation. See the [source and notice receipt][source-receipt]
+for the release that established those bindings on both platforms.
 
 ## Production enforcement blocker {#production-enforcement-blocker}
 
@@ -205,22 +206,18 @@ Other pages describe current limits and link here for open work. The closed
 the [production enforcement blocker](#production-enforcement-blocker) explains
 what those tests did not establish.
 
-### Gates for the first supported release
+### Before a stable release
 
-The [First supported release][milestone] milestone holds the gates that must
-close before the project is presented as production-ready:
+The [First supported release][milestone] milestone records the completed
+release gates and the requested deep security review. The verified
+prerelease doesn't remove the [production enforcement blocker](#production-enforcement-blocker).
+Keep GitHub's native code-owner review in production.
 
-- [Issue #18][issue-18]: finish notice attribution for CPython and libraries
-  shipped in Python wheels and complete corresponding-source delivery.
-  The release gate already rejects changes to captured third-party records
-  when they differ from the reviewed inventory on either platform.
-  Separate [wheel-native catalogs](native-components.md) expose the
-  reviewed C-library identities and source bindings. They do not merge those
-  libraries into the required image scan or complete their license review.
-  Catalogs with version 2 source-notice evidence also identify selected files
-  in the retained distro source RPMs. They don't yet attribute every binary.
-  Separate native scans retain both raw findings and a VEX-applied report;
-  a passing image gate is not a clean native assessment.
+The release gate rejects unreviewed changes to captured third-party records
+on either platform. [Wheel-native catalogs](native-components.md) link the
+reviewed libraries to retained sources. Their separate raw and VEX-applied
+reports still show unresolved findings; a passing image gate isn't a clean
+native assessment.
 
 ### Hardening and verification
 
@@ -232,7 +229,9 @@ close before the project is presented as production-ready:
   its own checker.
 - [Issue #22][issue-22]: rescan published image digests for newly disclosed
   vulnerabilities.
-- [Issue #74][issue-74]: verify the first immutable release from a clean
+- [Issue #341][issue-341]: assess the Psycopg wheel update, including its
+  bundled OpenSSL fixes and new source bindings.
+- [Issue #74][issue-74]: verify the first supported release from a clean
   client.
 - [Issue #24][issue-24]: harden the `stampbot` organization's identity and
   new-repository defaults.
@@ -275,6 +274,8 @@ on this list opens or closes.
 [issue-7]: https://github.com/stampbot/extra-codeowners/issues/7
 [issue-10]: https://github.com/stampbot/extra-codeowners/issues/10
 [issue-18]: https://github.com/stampbot/extra-codeowners/issues/18
+[issue-341]: https://github.com/stampbot/extra-codeowners/issues/341
+[source-receipt]: ../maintainers/evidence/2026-11-23-alpha107-source-and-notices.md
 [issue-22]: https://github.com/stampbot/extra-codeowners/issues/22
 [issue-24]: https://github.com/stampbot/extra-codeowners/issues/24
 [issue-30]: https://github.com/stampbot/extra-codeowners/issues/30
