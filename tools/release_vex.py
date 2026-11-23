@@ -129,6 +129,7 @@ def _runtime_files(root: Path) -> dict[str, str]:
         paths.extend(sorted(recipes.glob("*.json")))
     for name in (
         "glibc-format-callers.json",
+        "native-november-callers.json",
         "native-openssl-callers.json",
         "native-protocol-callers.json",
     ):

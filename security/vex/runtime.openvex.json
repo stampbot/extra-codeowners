@@ -1,8 +1,8 @@
 {
   "@context": "https://openvex.dev/ns/v0.2.0",
-  "@id": "urn:uuid:f8c04a9e-7eea-522e-bd79-b2e2917049cb",
+  "@id": "urn:uuid:860b7382-5011-5d30-9966-bb36daaaa616",
   "author": "Extra CODEOWNERS maintainers",
-  "last_updated": "2026-11-23T12:09:34Z",
+  "last_updated": "2026-11-23T13:15:01Z",
   "role": "VEX document producer",
   "statements": [
     {
@@ -981,11 +981,371 @@
       "vulnerability": {
         "name": "CVE-2026-75803"
       }
+    },
+    {
+      "impact_statement": "This finding requires the caller to append a PEM X.509 info read to an existing stack. None of the reviewed caller-side ELF files imports that API. The retained OpenSSL file lookup passes a null stack, and Cryptography's configured key loader uses its Rust PEM/private-key parser. The Psycopg Binary 3.3.9 copy is bound to the verified libpq client and wheel payloads. This is scoped to the default Extra CODEOWNERS service on Linux amd64 and arm64. The embedded library remains present and unpatched. It does not cover custom providers, operator commands, arbitrary native callers, or execution after compromise.",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@3.5.9",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@3.5.9"
+          }
+        }
+      ],
+      "status": "not_affected",
+      "status_notes": "Analysis detail: Version-bound caller review in security/vex/native-november-callers.json.\nSource: OpenSSL advisory and signed Extra CODEOWNERS native caller review (https://openssl-library.org/news/secadv/20261117.txt)\nOriginal Vexcalibur analysis state: not_affected\nSource record modified: 2026-11-23T13:11:35Z",
+      "timestamp": "2026-11-23T13:11:35Z",
+      "vulnerability": {
+        "name": "CVE-2026-107493"
+      }
+    },
+    {
+      "impact_statement": "This finding requires the caller to append a PEM X.509 info read to an existing stack. None of the reviewed caller-side ELF files imports that API. The retained OpenSSL file lookup passes a null stack, and Cryptography's configured key loader uses its Rust PEM/private-key parser. The static Cryptography 50.0.2 copy is bound to the inspected extension used for configured RSA key loading and RS256 App signing. This is scoped to the default Extra CODEOWNERS service on Linux amd64 and arm64. The embedded library remains present and unpatched. It does not cover custom providers, operator commands, arbitrary native callers, or execution after compromise.",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@4.0.3",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@4.0.3"
+          }
+        }
+      ],
+      "status": "not_affected",
+      "status_notes": "Analysis detail: Version-bound caller review in security/vex/native-november-callers.json.\nSource: OpenSSL advisory and signed Extra CODEOWNERS native caller review (https://openssl-library.org/news/secadv/20261117.txt)\nOriginal Vexcalibur analysis state: not_affected\nSource record modified: 2026-11-23T13:11:35Z",
+      "timestamp": "2026-11-23T13:11:35Z",
+      "vulnerability": {
+        "name": "CVE-2026-107493"
+      }
+    },
+    {
+      "impact_statement": "The affected connection-ID retirement path is in QUIC. Neither embedded copy serves a QUIC connection in Extra CODEOWNERS. The Psycopg Binary 3.3.9 copy is bound to the verified libpq client and wheel payloads. This is scoped to the default Extra CODEOWNERS service on Linux amd64 and arm64. The embedded library remains present and unpatched. It does not cover custom providers, operator commands, arbitrary native callers, or execution after compromise.",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@3.5.9",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@3.5.9"
+          }
+        }
+      ],
+      "status": "not_affected",
+      "status_notes": "Analysis detail: Version-bound caller review in security/vex/native-november-callers.json.\nSource: OpenSSL advisory and signed Extra CODEOWNERS native caller review (https://www.cve.org/CVERecord?id=CVE-2026-107494)\nOriginal Vexcalibur analysis state: not_affected\nSource record modified: 2026-11-23T13:11:35Z",
+      "timestamp": "2026-11-23T13:11:35Z",
+      "vulnerability": {
+        "name": "CVE-2026-107494"
+      }
+    },
+    {
+      "impact_statement": "The affected connection-ID retirement path is in QUIC. Neither embedded copy serves a QUIC connection in Extra CODEOWNERS. The static Cryptography 50.0.2 copy is bound to the inspected extension used for configured RSA key loading and RS256 App signing. This is scoped to the default Extra CODEOWNERS service on Linux amd64 and arm64. The embedded library remains present and unpatched. It does not cover custom providers, operator commands, arbitrary native callers, or execution after compromise.",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@4.0.3",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@4.0.3"
+          }
+        }
+      ],
+      "status": "not_affected",
+      "status_notes": "Analysis detail: Version-bound caller review in security/vex/native-november-callers.json.\nSource: OpenSSL advisory and signed Extra CODEOWNERS native caller review (https://www.cve.org/CVERecord?id=CVE-2026-107494)\nOriginal Vexcalibur analysis state: not_affected\nSource record modified: 2026-11-23T13:11:35Z",
+      "timestamp": "2026-11-23T13:11:35Z",
+      "vulnerability": {
+        "name": "CVE-2026-107494"
+      }
+    },
+    {
+      "impact_statement": "This finding needs CMS encryption. The service does not encrypt CMS messages or pass such input to either embedded copy. The Psycopg Binary 3.3.9 copy is bound to the verified libpq client and wheel payloads. This is scoped to the default Extra CODEOWNERS service on Linux amd64 and arm64. The embedded library remains present and unpatched. It does not cover custom providers, operator commands, arbitrary native callers, or execution after compromise.",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@3.5.9",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@3.5.9"
+          }
+        }
+      ],
+      "status": "not_affected",
+      "status_notes": "Analysis detail: Version-bound caller review in security/vex/native-november-callers.json.\nSource: OpenSSL advisory and signed Extra CODEOWNERS native caller review (https://openssl-library.org/news/secadv/20261110.txt)\nOriginal Vexcalibur analysis state: not_affected\nSource record modified: 2026-11-23T13:11:35Z",
+      "timestamp": "2026-11-23T13:11:35Z",
+      "vulnerability": {
+        "name": "CVE-2026-107496"
+      }
+    },
+    {
+      "impact_statement": "This finding needs CMS encryption. The service does not encrypt CMS messages or pass such input to either embedded copy. The static Cryptography 50.0.2 copy is bound to the inspected extension used for configured RSA key loading and RS256 App signing. This is scoped to the default Extra CODEOWNERS service on Linux amd64 and arm64. The embedded library remains present and unpatched. It does not cover custom providers, operator commands, arbitrary native callers, or execution after compromise.",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@4.0.3",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@4.0.3"
+          }
+        }
+      ],
+      "status": "not_affected",
+      "status_notes": "Analysis detail: Version-bound caller review in security/vex/native-november-callers.json.\nSource: OpenSSL advisory and signed Extra CODEOWNERS native caller review (https://openssl-library.org/news/secadv/20261110.txt)\nOriginal Vexcalibur analysis state: not_affected\nSource record modified: 2026-11-23T13:11:35Z",
+      "timestamp": "2026-11-23T13:11:35Z",
+      "vulnerability": {
+        "name": "CVE-2026-107496"
+      }
+    },
+    {
+      "impact_statement": "This finding needs CMS or PKCS#7 SignedData verification with revocation checking. The service verifies GitHub webhook HMACs and signs App tokens; it does not verify CMS messages. PostgreSQL certificate processing is not a CMS SignedData call. The Psycopg Binary 3.3.9 copy is bound to the verified libpq client and wheel payloads. This is scoped to the default Extra CODEOWNERS service on Linux amd64 and arm64. The embedded library remains present and unpatched. It does not cover custom providers, operator commands, arbitrary native callers, or execution after compromise.",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@3.5.9",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@3.5.9"
+          }
+        }
+      ],
+      "status": "not_affected",
+      "status_notes": "Analysis detail: Version-bound caller review in security/vex/native-november-callers.json.\nSource: OpenSSL advisory and signed Extra CODEOWNERS native caller review (https://www.cve.org/CVERecord?id=CVE-2026-121482)\nOriginal Vexcalibur analysis state: not_affected\nSource record modified: 2026-11-23T13:11:35Z",
+      "timestamp": "2026-11-23T13:11:35Z",
+      "vulnerability": {
+        "name": "CVE-2026-121482"
+      }
+    },
+    {
+      "impact_statement": "This finding needs CMS or PKCS#7 SignedData verification with revocation checking. The service verifies GitHub webhook HMACs and signs App tokens; it does not verify CMS messages. PostgreSQL certificate processing is not a CMS SignedData call. The static Cryptography 50.0.2 copy is bound to the inspected extension used for configured RSA key loading and RS256 App signing. This is scoped to the default Extra CODEOWNERS service on Linux amd64 and arm64. The embedded library remains present and unpatched. It does not cover custom providers, operator commands, arbitrary native callers, or execution after compromise.",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@4.0.3",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@4.0.3"
+          }
+        }
+      ],
+      "status": "not_affected",
+      "status_notes": "Analysis detail: Version-bound caller review in security/vex/native-november-callers.json.\nSource: OpenSSL advisory and signed Extra CODEOWNERS native caller review (https://www.cve.org/CVERecord?id=CVE-2026-121482)\nOriginal Vexcalibur analysis state: not_affected\nSource record modified: 2026-11-23T13:11:35Z",
+      "timestamp": "2026-11-23T13:11:35Z",
+      "vulnerability": {
+        "name": "CVE-2026-121482"
+      }
+    },
+    {
+      "impact_statement": "The affected stream lifetime handling is in an OpenSSL QUIC server. The application listens for HTTP, and the database client uses stream TLS. The Psycopg Binary 3.3.9 copy is bound to the verified libpq client and wheel payloads. This is scoped to the default Extra CODEOWNERS service on Linux amd64 and arm64. The embedded library remains present and unpatched. It does not cover custom providers, operator commands, arbitrary native callers, or execution after compromise.",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@3.5.9",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@3.5.9"
+          }
+        }
+      ],
+      "status": "not_affected",
+      "status_notes": "Analysis detail: Version-bound caller review in security/vex/native-november-callers.json.\nSource: OpenSSL advisory and signed Extra CODEOWNERS native caller review (https://openssl-library.org/news/secadv/20261117.txt)\nOriginal Vexcalibur analysis state: not_affected\nSource record modified: 2026-11-23T13:11:35Z",
+      "timestamp": "2026-11-23T13:11:35Z",
+      "vulnerability": {
+        "name": "CVE-2026-124709"
+      }
+    },
+    {
+      "impact_statement": "The affected stream lifetime handling is in an OpenSSL QUIC server. The application listens for HTTP, and the database client uses stream TLS. The static Cryptography 50.0.2 copy is bound to the inspected extension used for configured RSA key loading and RS256 App signing. This is scoped to the default Extra CODEOWNERS service on Linux amd64 and arm64. The embedded library remains present and unpatched. It does not cover custom providers, operator commands, arbitrary native callers, or execution after compromise.",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@4.0.3",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@4.0.3"
+          }
+        }
+      ],
+      "status": "not_affected",
+      "status_notes": "Analysis detail: Version-bound caller review in security/vex/native-november-callers.json.\nSource: OpenSSL advisory and signed Extra CODEOWNERS native caller review (https://openssl-library.org/news/secadv/20261117.txt)\nOriginal Vexcalibur analysis state: not_affected\nSource record modified: 2026-11-23T13:11:35Z",
+      "timestamp": "2026-11-23T13:11:35Z",
+      "vulnerability": {
+        "name": "CVE-2026-124709"
+      }
+    },
+    {
+      "impact_statement": "This finding needs server-side TLS with the Suite B context flag. The shipped HTTP listener does not terminate TLS, and the inspected libpq source calls SSL_connect as a TLS client, without that context flag. The Psycopg Binary 3.3.9 copy is bound to the verified libpq client and wheel payloads. This is scoped to the default Extra CODEOWNERS service on Linux amd64 and arm64. The embedded library remains present and unpatched. It does not cover custom providers, operator commands, arbitrary native callers, or execution after compromise.",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@3.5.9",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@3.5.9"
+          }
+        }
+      ],
+      "status": "not_affected",
+      "status_notes": "Analysis detail: Version-bound caller review in security/vex/native-november-callers.json.\nSource: OpenSSL advisory and signed Extra CODEOWNERS native caller review (https://openssl-library.org/news/secadv/20261117.txt)\nOriginal Vexcalibur analysis state: not_affected\nSource record modified: 2026-11-23T13:11:35Z",
+      "timestamp": "2026-11-23T13:11:35Z",
+      "vulnerability": {
+        "name": "CVE-2026-35190"
+      }
+    },
+    {
+      "impact_statement": "This finding needs server-side TLS with the Suite B context flag. The shipped HTTP listener does not terminate TLS, and the inspected libpq source calls SSL_connect as a TLS client, without that context flag. The static Cryptography 50.0.2 copy is bound to the inspected extension used for configured RSA key loading and RS256 App signing. This is scoped to the default Extra CODEOWNERS service on Linux amd64 and arm64. The embedded library remains present and unpatched. It does not cover custom providers, operator commands, arbitrary native callers, or execution after compromise.",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@4.0.3",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@4.0.3"
+          }
+        }
+      ],
+      "status": "not_affected",
+      "status_notes": "Analysis detail: Version-bound caller review in security/vex/native-november-callers.json.\nSource: OpenSSL advisory and signed Extra CODEOWNERS native caller review (https://openssl-library.org/news/secadv/20261117.txt)\nOriginal Vexcalibur analysis state: not_affected\nSource record modified: 2026-11-23T13:11:35Z",
+      "timestamp": "2026-11-23T13:11:35Z",
+      "vulnerability": {
+        "name": "CVE-2026-35190"
+      }
+    },
+    {
+      "impact_statement": "This finding needs a DANE-enabled TLS client. The version-matched OpenSSL docs require explicit DANE setup on the context and connection; the shipped database and App-signing callers do not set up DANE. The Psycopg Binary 3.3.9 copy is bound to the verified libpq client and wheel payloads. This is scoped to the default Extra CODEOWNERS service on Linux amd64 and arm64. The embedded library remains present and unpatched. It does not cover custom providers, operator commands, arbitrary native callers, or execution after compromise.",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@3.5.9",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@3.5.9"
+          }
+        }
+      ],
+      "status": "not_affected",
+      "status_notes": "Analysis detail: Version-bound caller review in security/vex/native-november-callers.json.\nSource: OpenSSL advisory and signed Extra CODEOWNERS native caller review (https://www.cve.org/CVERecord?id=CVE-2026-84786)\nOriginal Vexcalibur analysis state: not_affected\nSource record modified: 2026-11-23T13:11:35Z",
+      "timestamp": "2026-11-23T13:11:35Z",
+      "vulnerability": {
+        "name": "CVE-2026-84786"
+      }
+    },
+    {
+      "impact_statement": "This finding needs a DANE-enabled TLS client. The version-matched OpenSSL docs require explicit DANE setup on the context and connection; the shipped database and App-signing callers do not set up DANE. The static Cryptography 50.0.2 copy is bound to the inspected extension used for configured RSA key loading and RS256 App signing. This is scoped to the default Extra CODEOWNERS service on Linux amd64 and arm64. The embedded library remains present and unpatched. It does not cover custom providers, operator commands, arbitrary native callers, or execution after compromise.",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@4.0.3",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@4.0.3"
+          }
+        }
+      ],
+      "status": "not_affected",
+      "status_notes": "Analysis detail: Version-bound caller review in security/vex/native-november-callers.json.\nSource: OpenSSL advisory and signed Extra CODEOWNERS native caller review (https://www.cve.org/CVERecord?id=CVE-2026-84786)\nOriginal Vexcalibur analysis state: not_affected\nSource record modified: 2026-11-23T13:11:35Z",
+      "timestamp": "2026-11-23T13:11:35Z",
+      "vulnerability": {
+        "name": "CVE-2026-84786"
+      }
+    },
+    {
+      "impact_statement": "This finding needs OpenSSL's QUIC automatic peer-address detection. The service has no OpenSSL QUIC connection. The Psycopg Binary 3.3.9 copy is bound to the verified libpq client and wheel payloads. This is scoped to the default Extra CODEOWNERS service on Linux amd64 and arm64. The embedded library remains present and unpatched. It does not cover custom providers, operator commands, arbitrary native callers, or execution after compromise.",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@3.5.9",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@3.5.9"
+          }
+        }
+      ],
+      "status": "not_affected",
+      "status_notes": "Analysis detail: Version-bound caller review in security/vex/native-november-callers.json.\nSource: OpenSSL advisory and signed Extra CODEOWNERS native caller review (https://openssl-library.org/news/secadv/20261110.txt)\nOriginal Vexcalibur analysis state: not_affected\nSource record modified: 2026-11-23T13:11:35Z",
+      "timestamp": "2026-11-23T13:11:35Z",
+      "vulnerability": {
+        "name": "CVE-2026-88822"
+      }
+    },
+    {
+      "impact_statement": "This finding needs OpenSSL's QUIC automatic peer-address detection. The service has no OpenSSL QUIC connection. The static Cryptography 50.0.2 copy is bound to the inspected extension used for configured RSA key loading and RS256 App signing. This is scoped to the default Extra CODEOWNERS service on Linux amd64 and arm64. The embedded library remains present and unpatched. It does not cover custom providers, operator commands, arbitrary native callers, or execution after compromise.",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@4.0.3",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@4.0.3"
+          }
+        }
+      ],
+      "status": "not_affected",
+      "status_notes": "Analysis detail: Version-bound caller review in security/vex/native-november-callers.json.\nSource: OpenSSL advisory and signed Extra CODEOWNERS native caller review (https://openssl-library.org/news/secadv/20261110.txt)\nOriginal Vexcalibur analysis state: not_affected\nSource record modified: 2026-11-23T13:11:35Z",
+      "timestamp": "2026-11-23T13:11:35Z",
+      "vulnerability": {
+        "name": "CVE-2026-88822"
+      }
+    },
+    {
+      "impact_statement": "This finding is in DTLS handshake reassembly. The database transport uses stream TLS, and the App signing path does not handle DTLS messages. The Psycopg Binary 3.3.9 copy is bound to the verified libpq client and wheel payloads. This is scoped to the default Extra CODEOWNERS service on Linux amd64 and arm64. The embedded library remains present and unpatched. It does not cover custom providers, operator commands, arbitrary native callers, or execution after compromise.",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@3.5.9",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@3.5.9"
+          }
+        }
+      ],
+      "status": "not_affected",
+      "status_notes": "Analysis detail: Version-bound caller review in security/vex/native-november-callers.json.\nSource: OpenSSL advisory and signed Extra CODEOWNERS native caller review (https://www.cve.org/CVERecord?id=CVE-2026-95690)\nOriginal Vexcalibur analysis state: not_affected\nSource record modified: 2026-11-23T13:11:35Z",
+      "timestamp": "2026-11-23T13:11:35Z",
+      "vulnerability": {
+        "name": "CVE-2026-95690"
+      }
+    },
+    {
+      "impact_statement": "This finding is in DTLS handshake reassembly. The database transport uses stream TLS, and the App signing path does not handle DTLS messages. The static Cryptography 50.0.2 copy is bound to the inspected extension used for configured RSA key loading and RS256 App signing. This is scoped to the default Extra CODEOWNERS service on Linux amd64 and arm64. The embedded library remains present and unpatched. It does not cover custom providers, operator commands, arbitrary native callers, or execution after compromise.",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@4.0.3",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@4.0.3"
+          }
+        }
+      ],
+      "status": "not_affected",
+      "status_notes": "Analysis detail: Version-bound caller review in security/vex/native-november-callers.json.\nSource: OpenSSL advisory and signed Extra CODEOWNERS native caller review (https://www.cve.org/CVERecord?id=CVE-2026-95690)\nOriginal Vexcalibur analysis state: not_affected\nSource record modified: 2026-11-23T13:11:35Z",
+      "timestamp": "2026-11-23T13:11:35Z",
+      "vulnerability": {
+        "name": "CVE-2026-95690"
+      }
+    },
+    {
+      "impact_statement": "The finding involves the OpenSSL QUIC client handshake. Libpq uses stream TLS and Cryptography signs App tokens; neither calls the QUIC client path. The Psycopg Binary 3.3.9 copy is bound to the verified libpq client and wheel payloads. This is scoped to the default Extra CODEOWNERS service on Linux amd64 and arm64. The embedded library remains present and unpatched. It does not cover custom providers, operator commands, arbitrary native callers, or execution after compromise.",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@3.5.9",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@3.5.9"
+          }
+        }
+      ],
+      "status": "not_affected",
+      "status_notes": "Analysis detail: Version-bound caller review in security/vex/native-november-callers.json.\nSource: OpenSSL advisory and signed Extra CODEOWNERS native caller review (https://openssl-library.org/news/secadv/20261110.txt)\nOriginal Vexcalibur analysis state: not_affected\nSource record modified: 2026-11-23T13:11:35Z",
+      "timestamp": "2026-11-23T13:11:35Z",
+      "vulnerability": {
+        "name": "CVE-2026-95691"
+      }
+    },
+    {
+      "impact_statement": "The finding involves the OpenSSL QUIC client handshake. Libpq uses stream TLS and Cryptography signs App tokens; neither calls the QUIC client path. The static Cryptography 50.0.2 copy is bound to the inspected extension used for configured RSA key loading and RS256 App signing. This is scoped to the default Extra CODEOWNERS service on Linux amd64 and arm64. The embedded library remains present and unpatched. It does not cover custom providers, operator commands, arbitrary native callers, or execution after compromise.",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "products": [
+        {
+          "@id": "pkg:generic/openssl@4.0.3",
+          "identifiers": {
+            "purl": "pkg:generic/openssl@4.0.3"
+          }
+        }
+      ],
+      "status": "not_affected",
+      "status_notes": "Analysis detail: Version-bound caller review in security/vex/native-november-callers.json.\nSource: OpenSSL advisory and signed Extra CODEOWNERS native caller review (https://openssl-library.org/news/secadv/20261110.txt)\nOriginal Vexcalibur analysis state: not_affected\nSource record modified: 2026-11-23T13:11:35Z",
+      "timestamp": "2026-11-23T13:11:35Z",
+      "vulnerability": {
+        "name": "CVE-2026-95691"
+      }
     }
   ],
-  "timestamp": "2026-11-23T12:09:34Z",
+  "timestamp": "2026-11-23T13:15:01Z",
   "tooling": "Vexcalibur + Extra CODEOWNERS runtime binding",
-  "version": 48,
+  "version": 49,
   "x_extra_codeowners_runtime": {
     "files": {
       ".dockerignore": "3f9dc9d3a79fe3085f25de88403b5563ad5c7fa7010bef94c5e55f24bd3cf691",
@@ -1041,6 +1401,7 @@
       "extra_codeowners/webhooks.py": "617838a5ae081a87c95773d7cd77ec55287d0b9d4aad61e2d99e51ec76710619",
       "pyproject.toml": "df173084fc06361a680c48a40c2284c56321c107f3148b9cfb1b92d95eb3caeb",
       "security/vex/glibc-format-callers.json": "a06a8c36b621b44f049c11befe07699f805ee518c1d5bf14b03a62a760d4412f",
+      "security/vex/native-november-callers.json": "d3b6b8ab0caa7767688e39ac2a12a6e978b435829902c6ecf0d7551b2094847d",
       "security/vex/native-openssl-callers.json": "7c38eb02a457c870db4d04a5df7f85381cd87355001fc88c306aa6a8989f70cd",
       "security/vex/native-protocol-callers.json": "d31e0df96a1901843552b6f14c76eeed966880ebf75ea17562fae9180c1d6cfb",
       "tools/source_recipes/cryptography-50.0.0.json": "14c8c00339ada71aa1f975b2d20052582f251a44c2c8f1cdbb2d8fc0bb802779",
@@ -1055,7 +1416,7 @@
       "tools/source_recipes/wheel-supplement-protobuf-7.35.1.json": "5b407c288cf74e090f4934113f9bb6f7907a37d6ccbb228321bedb0612b03c8f",
       "uv.lock": "f8a9a125ba46d5275da8300e3f640e5767df2f451f7601a26e4be17c81e3f70e"
     },
-    "review": "Cryptography 50.0.2 wheels on amd64 and arm64 contain OpenSSL 4.0.3. Two source-bound fixes replace the old 4.0.1 assessment; no exclusions are carried forward. The App RSA signing path, Psycopg, Debian and CPython are unchanged.",
+    "review": "Review alpha.111 signed wheel files and version-matched callers for the November OpenSSL findings. Scope 20 protocol and caller exclusions to the default Linux service on both platforms. Keep all other claims and the five remaining findings unchanged; no runtime code or packages changed.",
     "schema_version": 1
   }
 }

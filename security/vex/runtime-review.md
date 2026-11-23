@@ -1,5 +1,54 @@
 # Runtime vulnerability review
 
+## November OpenSSL findings in alpha.111
+
+The [alpha.111 native rescan](https://github.com/stampbot/extra-codeowners/actions/runs/45177432863)
+reported 25 library/CVE matches on each architecture. The raw reports keep
+all of them. This review records 20 `not_affected` pairs across the two
+wheel-bundled copies, OpenSSL 3.5.9 and 4.0.3.
+
+The [caller receipt](native-november-callers.json) ties the review to the
+published image and inventory hashes. For each architecture, 17 native
+files from the locked wheels matched the signed inventory by byte count
+and SHA-256. We compared the caller imports with the version-matched
+Psycopg, Cryptography, and OpenSSL source. An absent symbol supports that
+review; it isn't proof by itself.
+
+The app serves webhooks over HTTP and uses the static Cryptography copy
+to load its configured RSA key and sign GitHub App tokens. Libpq uses
+standard stream TLS as a client. HTTPS requests from the Python client
+use the interpreter's separate TLS stack. The reviewed pairs require
+the following paths:
+
+| Findings | Required path outside the reviewed service |
+| --- | --- |
+| [CVE-2026-107494][nov-quic-queue], [CVE-2026-124709][nov17], [CVE-2026-88822][nov10], [CVE-2026-95691][nov10] | An OpenSSL QUIC connection |
+| [CVE-2026-95690][nov-dtls] | DTLS handshake processing |
+| [CVE-2026-107496][nov10], [CVE-2026-121482][nov-cms] | CMS encryption or CMS/PKCS#7 SignedData verification |
+| [CVE-2026-84786][nov-dane] | A TLS client that explicitly enables DANE |
+| [CVE-2026-35190][nov17] | A TLS server context with the Suite B certificate flag |
+| [CVE-2026-107493][nov17] | A PEM reader that appends to a preexisting X.509 stack |
+
+For the last finding, both retained OpenSSL file-lookup implementations
+pass a null stack to the affected reader. Cryptography uses its Rust PEM
+parser for the configured private key. This isn't an exclusion for TLS
+certificate parsing in general.
+
+Five pairs still have no exclusion: [CVE-2026-88823][nov10] and
+[CVE-2026-95692][nov10] on both copies, and [CVE-2026-121481][nov-base64]
+on 4.0.3. The review does not establish their reachability.
+The libraries remain present and unpatched. The assessment covers the
+default service only, not custom TLS providers, operator commands, or
+arbitrary native code. It makes no claim about Debian or CPython.
+
+[nov10]: https://openssl-library.org/news/secadv/20261110.txt
+[nov17]: https://openssl-library.org/news/secadv/20261117.txt
+[nov-quic-queue]: https://www.cve.org/CVERecord?id=CVE-2026-107494
+[nov-dtls]: https://www.cve.org/CVERecord?id=CVE-2026-95690
+[nov-cms]: https://www.cve.org/CVERecord?id=CVE-2026-121482
+[nov-dane]: https://www.cve.org/CVERecord?id=CVE-2026-84786
+[nov-base64]: https://www.cve.org/CVERecord?id=CVE-2026-121481
+
 ## Cryptography's OpenSSL update: November 23, 2026 UTC
 
 Cryptography 50.0.2 ships OpenSSL 4.0.3 in both locked Linux wheels. The
