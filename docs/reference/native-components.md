@@ -102,6 +102,29 @@ These are license texts from the source archives. They don't assign a license
 to a compiled library or to its parent wheel. RPM-origin components still
 have notice references without an embedded license assertion.
 
+### RPM binary attribution
+
+When `extra-codeowners:rpm-binary-evidence` is `1`, the catalog
+ties each RPM entry in the Psycopg wheel's SBOM to a shipped library. The
+binding records the library's original path and SHA-256 in the vendor RPM
+and its size and SHA-256 in the wheel. The verifier checks the original path
+against the SBOM, the renamed file against the signed inventory, and the
+wheel against the lockfile.
+
+The `binary-rpm-*` properties identify the vendor binary RPM. They record
+its declared license and the hashes of any files it marks as license texts.
+Those hashes match selected notices in the retained source RPM. An empty
+license-files object means the vendor did not mark any files, not that the
+library has no notice obligations. The vendor's declaration is not a license
+conclusion for the compiled library.
+
+Generation uses `tools/release_rpm_binary_evidence.json` and stops if the
+bindings no longer match. To update the receipt for a different wheel,
+verify the vendor RPM signatures, compare the original ELF code and
+read-only data against the wheel, and confirm the license file hashes in
+the source notice receipt. Verify older catalogs with their own release
+checkout; they don't gain attribution from a later receipt.
+
 ## Verify a catalog
 
 Check out the release tag and download these assets from that same release:

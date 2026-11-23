@@ -801,9 +801,11 @@ def test_native_catalog_is_verified_before_release_state_and_published_with_evid
     attest = _named_step(jobs["publish"], "Attest native component catalogs")
     sign = _named_step(jobs["publish"], "Sign release files")
     assert "tools/release_native_components.py generate" in collect
+    assert "--rpm-binaries" in collect
     assert "--lock uv.lock" in collect and "--notices" in collect
     assert "native-components-${{ matrix.architecture }}.cdx.json" in upload
     assert "tools/release_native_components.py verify" in verify
+    assert "--rpm-binaries" in verify
     assert jobs["publish"].index(verify) < jobs["publish"].index("id: tag")
     assert "actions/attest-build-provenance@" in attest
     assert "subject-path: release/image/*/native-components-*.cdx.json" in attest
