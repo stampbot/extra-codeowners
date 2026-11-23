@@ -201,5 +201,8 @@ complete corresponding source, complete attribution, or whether a vulnerability
 is reachable. It adds no VEX exclusion and changes no package version. The separate
 [runtime security review](https://github.com/stampbot/extra-codeowners/blob/main/security/vex/runtime-review.md)
 records the selected native OpenSSL assessments and unresolved candidates.
-Native vulnerability triage and distribution review remain
-in [issue #18](https://github.com/stampbot/extra-codeowners/issues/18).
+The [alpha.107 receipt](../maintainers/evidence/2026-11-23-alpha107-source-and-notices.md)
+records what the published catalogs and archives cover. The
+[Psycopg wheel update](https://github.com/stampbot/extra-codeowners/issues/341)
+and [recurring scans](https://github.com/stampbot/extra-codeowners/issues/22)
+track separate security work.

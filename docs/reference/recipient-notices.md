@@ -133,8 +133,8 @@ metadata so you can check those questions against the exact image.
 It describes the final filesystem, not the full layer history. The
 [CPython source bundle](source-archives.md#pip-in-an-earlier-image-layer)
 also retains pip source for the reviewed layer that still ships it.
-[Issue #18][issue-18] tracks missing notice attribution and the remaining
-work to deliver corresponding source.
+The [alpha.107 verification receipt][source-receipt] records the coverage of
+the published notice and source bundles on both platforms.
 
-[issue-18]: https://github.com/stampbot/extra-codeowners/issues/18
+[source-receipt]: ../maintainers/evidence/2026-11-23-alpha107-source-and-notices.md
 [review-changes]: https://github.com/stampbot/extra-codeowners/blob/main/CONTRIBUTING.md#review-changes-to-container-components

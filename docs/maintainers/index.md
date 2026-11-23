@@ -158,8 +158,9 @@ defines that reuse contract.
 The publisher verifies `debian-source.tar` before allocating immutable release
 state, then signs and attests it alongside the other assets. Source collection
 fails if any installed Debian source package cannot be recovered or checked.
-The remaining native-wheel and notice work is tracked in #18; the source bundles
-do not claim exact upstream build provenance or legal approval.
+The [alpha.107 receipt](evidence/2026-11-23-alpha107-source-and-notices.md)
+records delivery for the reviewed Debian, CPython and wheel components. The
+bundles do not prove the exact inputs used to build upstream binaries.
 
 Schema 3 Python source bundles also retain the OpenSSL archive identified by
 Cryptography's reviewed wheel SBOMs. Changed SBOM bytes or a Cryptography version
