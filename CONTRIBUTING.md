@@ -273,9 +273,19 @@ That commit produces `v1.2.4`; later ordinary commits again use the
 conventional-commit rules. The planner replays trailer transitions in merged
 commit order, so a later trailer can reverse an earlier, unreleased transition.
 
-Use one `Release-Channel` trailer only when changing channels. Its value must
-be exactly `alpha` or `stable`; a repeated, malformed, or duplicated trailer
-fails release planning rather than silently guessing. The colon is required:
+To start the next major line while already on alpha, use `Release-Channel: alpha`
+on a commit with a conventional breaking-change marker (`!` in the subject or
+`BREAKING CHANGE:` in the body). From `v0.1.0-alpha.106`, that produces
+`v1.0.0-alpha.1`, not `v1.0.0`. Wait for the new alpha to publish and verify it
+before merging a separate `Release-Channel: stable` commit. A breaking-change
+marker on its own still increments the current alpha's suffix.
+If a stable request lands too early, the planner refuses to publish. Cancel
+that request with `Release-Channel: alpha` on a commit **without** a breaking
+marker. That lets the next successful run publish the new alpha.
+
+Use one `Release-Channel` trailer per transition. Its value must be exactly
+`alpha` or `stable`. A malformed or duplicated trailer, a no-op transition,
+or a second unpublished major restart fails release planning. The colon is required:
 `Release-Channel=stable` is not valid. Keep the trailer in the final block with
 any `Signed-off-by` line. For a squash merge, check the resulting commit
 message: a pull-request body is not a substitute unless GitHub includes the

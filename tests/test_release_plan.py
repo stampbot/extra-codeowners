@@ -110,6 +110,79 @@ def test_release_channel_trailer_enters_alpha_from_a_stable_release(repository: 
     assert release_plan.calculate_release_plan(repository).tag == "v1.2.4-alpha.1"
 
 
+@pytest.mark.parametrize(
+    ("subject", "body"),
+    [
+        ("feat!: start the next major", ""),
+        ("feat: start the next major", "BREAKING CHANGE: set the first supported contract.\n\n"),
+    ],
+)
+def test_breaking_commit_can_explicitly_start_a_new_major_alpha(
+    repository: Path, subject: str, body: str
+) -> None:
+    tag(repository, "v0.1.0-alpha.106")
+    commit(repository, subject, body + "Release-Channel: alpha")
+
+    assert output_map(release_plan.calculate_release_plan(repository)) == {
+        "tag": "v1.0.0-alpha.1",
+        "version": "1.0.0-alpha.1",
+        "python_version": "1.0.0a1",
+        "previous_tag": "v0.1.0-alpha.106",
+        "superseded": "false",
+    }
+
+
+def test_breaking_commit_without_a_trailer_keeps_the_current_alpha_line(repository: Path) -> None:
+    tag(repository, "v0.1.0-alpha.106")
+    commit(repository, "feat!: change an alpha interface")
+
+    assert release_plan.calculate_release_plan(repository).tag == "v0.1.0-alpha.107"
+
+
+def test_new_major_alpha_must_be_published_before_promotion(repository: Path) -> None:
+    tag(repository, "v0.1.0-alpha.106")
+    first_alpha = commit(repository, "feat!: start the next major", "Release-Channel: alpha")
+    commit(repository, "chore: promote the tested alpha", "Release-Channel: stable")
+
+    with pytest.raises(release_plan.ReleasePlanError, match="publish the new major alpha"):
+        release_plan.calculate_release_plan(repository)
+
+    git(repository, "tag", "v1.0.0-alpha.1", first_alpha)
+    assert release_plan.calculate_release_plan(repository).tag == "v1.0.0"
+
+
+def test_queue_can_publish_first_alpha_without_a_second_rollover(repository: Path) -> None:
+    tag(repository, "v0.1.0-alpha.106")
+    older_run = commit(repository, "feat!: start the next major", "Release-Channel: alpha")
+    commit(repository, "fix: update the next major")
+    assert release_plan.calculate_release_plan(repository).tag == "v1.0.0-alpha.1"
+    tag(repository, "v1.0.0-alpha.1")
+    assert release_plan.calculate_release_plan(repository).tag == "v1.0.0-alpha.1"
+    commit(repository, "fix: stay on the new alpha line")
+    assert release_plan.calculate_release_plan(repository).tag == "v1.0.0-alpha.2"
+    git(repository, "checkout", "--detach", older_run)
+    plan = release_plan.calculate_release_plan(repository)
+    assert plan.superseded and plan.tag == "v1.0.0-alpha.1"
+
+
+def test_can_cancel_a_premature_promotion_without_rewriting_history(repository: Path) -> None:
+    tag(repository, "v0.1.0-alpha.106")
+    commit(repository, "feat!: start the next major", "Release-Channel: alpha")
+    commit(repository, "chore: promote the new major", "Release-Channel: stable")
+    commit(repository, "chore: cancel the early promotion", "Release-Channel: alpha")
+
+    assert release_plan.calculate_release_plan(repository).tag == "v1.0.0-alpha.1"
+
+
+def test_two_unpublished_major_restarts_are_rejected(repository: Path) -> None:
+    tag(repository, "v0.1.0-alpha.106")
+    commit(repository, "feat!: start the next major", "Release-Channel: alpha")
+    commit(repository, "feat!: start another major", "Release-Channel: alpha")
+
+    with pytest.raises(release_plan.ReleasePlanError, match="already pending publication"):
+        release_plan.calculate_release_plan(repository)
+
+
 def test_release_channel_trailer_promotes_alpha_to_stable(repository: Path) -> None:
     tag(repository, "v1.2.4-alpha.7")
     commit(repository, "fix: promote the release line", "Release-Channel: stable")

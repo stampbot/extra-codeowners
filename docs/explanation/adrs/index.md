@@ -15,7 +15,7 @@ old one.
 | 2026-07-13 | [Store webhook work before acknowledging it](2026-07-13-store-webhook-work-first.md) | Accepted |
 | 2026-07-15 | [Apply schema changes only through an explicit migrator](2026-07-15-explicit-schema-migrations.md) | Accepted |
 | 2026-08-17 | [Build the runtime image on Debian slim](2026-08-17-debian-slim-runtime.md) | Accepted |
-| 2026-08-17 | [Release every main commit from its CI run](2026-08-17-release-from-main-ci.md) | Accepted |
+| 2026-08-17 | [Release every main commit from its CI run](2026-08-17-release-from-main-ci.md) | Accepted; [major-alpha exception](2026-11-23-start-a-new-major-alpha-line.md) |
 | 2026-10-11 | [Keep the published result on a scheduled recheck](2026-10-11-keep-results-on-scheduled-rechecks.md) | Accepted |
 | 2026-11-02 | [Bound discovery optimizations without weakening evidence](2026-11-02-bounded-discovery-optimizations.md) | Accepted |
 | 2026-11-05 | [Link bounded request traces to a reconciliation summary](2026-11-05-linked-reconciliation-traces.md) | Accepted |
@@ -24,6 +24,7 @@ old one.
 | 2026-11-12 | [Keep valid results while reassessing a base update](2026-11-12-keep-valid-results-on-base-refresh.md) | Accepted |
 | 2026-11-12 | [Bound read-ahead and resume an active reconciliation sweep](2026-11-12-bound-active-reconciliation-sweeps.md) | Accepted |
 | 2026-11-12 | [Scope repository access grants to their repository](2026-11-12-scope-repository-team-grants.md) | Accepted |
+| 2026-11-23 | [Start a new major alpha line without publishing stable](2026-11-23-start-a-new-major-alpha-line.md) | Accepted |
 
 These first five were written in October 2026 to record decisions already in
 effect. Their dates come from the commits and pull requests that made each
