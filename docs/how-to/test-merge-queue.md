@@ -123,10 +123,7 @@ progress, don't assume that a rule change can cancel it.
 4. Only then remove repository access, suspend the installation, or remove
    test-only permissions and subscriptions.
 
-Clearing the settings or taking away access doesn't erase checks GitHub
-already recorded. The [handback evidence](../maintainers/evidence/2026-11-23-candidate-checks-during-delivery-loss.md#hand-back-enforcement-before-removing-access)
-shows GitHub blocking a PR after native review was restored while its old
-App result was still passing.
+Clearing the settings or taking away access doesn't erase checks GitHub already recorded. In the [native-review handback test](../maintainers/evidence/2026-11-23-native-review-restored-with-queue.md), GitHub refused to queue a PR without code-owner review. The App check still passed, and Stampbot's approval was still on the PR.
 
 [alpha]: https://github.com/stampbot/extra-codeowners/releases/tag/v0.1.0-alpha.115
 [github-queue]: https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/configuring-pull-request-merges/managing-a-merge-queue
