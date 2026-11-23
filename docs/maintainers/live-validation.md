@@ -139,6 +139,23 @@ Extra CODEOWNERS had already passed on the same PR head. A separate required
 check kept the candidate waiting. An ordinary PR test showed the App change
 the head's check to failure after review dismissal, not a candidate check.
 
+The [November 23 missed-dismissal probe](evidence/2026-11-23-missed-review-dismissal.md)
+ran alpha.115 in an isolated Job. The worker kept a valid candidate check
+passing through a timer recheck, then changed it to failure after a real
+Stampbot review was dismissed. The worker didn't receive the dismissal event.
+GitHub removed the candidate without merging the PR.
+
+The [November 23 two-entry probe](evidence/2026-11-23-worker-with-queued-follower.md)
+repeated the test with a second PR waiting without a candidate. After the
+first check failed and GitHub removed its candidate, GitHub built a new
+candidate for the second PR. The new commit had neither required check.
+
+The [November 23 merge control](evidence/2026-11-23-approved-candidate-merged.md)
+kept GitHub's ordinary review requirement on. Stampbot supplied the review,
+and the alpha.115 worker passed the candidate. GitHub merged that commit
+without a bypass. The worker retired the check's timer and left its
+successful result intact.
+
 ## Diagnostics and approval probe: November 2, 2026
 
 Alpha.65 runs on two Kubernetes nodes with shared PostgreSQL state. The
