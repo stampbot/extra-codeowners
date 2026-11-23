@@ -48,6 +48,17 @@ LIBXCRYPT_RECIPE_URL = re.compile(
     r"https://raw\.githubusercontent\.com/pypa/manylinux/[0-9a-f]{40}/"
     r"docker/build_scripts/install-libxcrypt\.sh\Z"
 )
+LIBFFI_URL = re.compile(
+    r"https://codeload\.github\.com/libffi/libffi/tar\.gz/refs/tags/v([0-9]+\.[0-9]+\.[0-9]+)\Z"
+)
+CFFI_RECIPE_URL = re.compile(
+    r"https://raw\.githubusercontent\.com/python-cffi/cffi/[0-9a-f]{40}/"
+    r"\.github/workflows/ci\.yaml\Z"
+)
+UTF8_RANGE_NOTICE_URL = re.compile(
+    r"https://raw\.githubusercontent\.com/protocolbuffers/protobuf/[0-9a-f]{40}/"
+    r"third_party/utf8_range/LICENSE\Z"
+)
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 POSTGRESQL_URL = re.compile(
     r"https://ftp\.postgresql\.org/pub/source/v([0-9]+\.[0-9]+)/postgresql-\1\.tar\.bz2\Z"
@@ -254,6 +265,11 @@ def _all_sources(manifest: dict[str, Any]) -> list[dict[str, Any]]:
         *manifest.get("native_sources", []),
         *embedded,
         *(source["build_recipe"] for source in embedded if "build_recipe" in source),
+        *(
+            artifact
+            for item in manifest.get("wheel_supplements", [])
+            for artifact in item["artifacts"]
+        ),
     ]
     return result
 
@@ -368,6 +384,110 @@ def _verify_wheel_file(native: object, path: str, binding: dict[str, Any]) -> No
         or selected[0].get("size") != bound_size
     ):
         raise PythonSourceError("wheel native file changed; review its custom source recipe")
+
+
+def _wheel_supplement(
+    name: str,
+    version: str,
+    architecture: str,
+    python: dict[str, Any],
+    package: dict[str, Any],
+    sdist: dict[str, Any],
+) -> dict[str, Any]:
+    """Bind sources or notices not reported in an embedded wheel SBOM."""
+    path = RECIPE_DIRECTORY / f"wheel-supplement-{name}-{version}.json"
+    try:
+        with path.open("rb") as stream:
+            recipe = _json(stream.read(MAX_METADATA + 1))
+    except FileNotFoundError as error:
+        raise PythonSourceError(
+            f"{name} wheel supplement requires review for this version"
+        ) from error
+    if (
+        type(recipe.get("schema_version")) is not int
+        or recipe["schema_version"] != 1
+        or recipe.get("distribution") != name
+        or recipe.get("distribution_version") != version
+        or recipe.get("sdist_sha256") != sdist["sha256"]
+        or not isinstance(recipe.get("platforms"), dict)
+    ):
+        raise PythonSourceError(f"{name} wheel supplement disagrees with locked source")
+    platform = recipe["platforms"].get(architecture)
+    component, records = recipe.get("component"), recipe.get("artifacts")
+    if (
+        not isinstance(platform, dict)
+        or not isinstance(component, dict)
+        or not isinstance(records, dict)
+    ):
+        raise PythonSourceError(f"{name} wheel supplement omitted required evidence")
+    wheel_filename = _text(
+        platform.get("wheel_filename"), re.compile(r"[a-z0-9][A-Za-z0-9_.+-]{0,199}\.whl\Z")
+    )
+    wheel_hash = _text(platform.get("wheel_sha256"), SHA256)
+    wheels = package.get("wheels")
+    if (
+        not isinstance(wheels, list)
+        or sum(
+            isinstance(wheel, dict)
+            and wheel.get("hash") == f"sha256:{wheel_hash}"
+            and isinstance(wheel.get("url"), str)
+            and wheel["url"].rsplit("/", 1)[-1] == wheel_filename
+            for wheel in wheels
+        )
+        != 1
+    ):
+        raise PythonSourceError(f"locked {name} wheel changed; review its source supplement")
+    native_file = platform.get("native_file")
+    if not isinstance(native_file, dict):
+        raise PythonSourceError(f"{name} wheel supplement omitted its native file")
+    machine = {"amd64": "x86_64", "arm64": "aarch64"}[architecture]
+    if name == "cffi":
+        native_path = f"_cffi_backend.cpython-314-{machine}-linux-gnu.so"
+        component_version = _text(component.get("version"), re.compile(r"[0-9]+\.[0-9]+\.[0-9]+\Z"))
+        expected_component = {"name": "libffi", "version": component_version}
+        expected_artifacts = {
+            "source": (f"libffi-{component_version}.tar.gz", LIBFFI_URL, MAX_FILE),
+            "recipe": ("cffi-ci.yaml", CFFI_RECIPE_URL, 64 * 1024),
+        }
+    else:
+        native_path = "google/_upb/_message.abi3.so"
+        expected_component = {"name": "utf8_range"}
+        expected_artifacts = {"notice": ("utf8_range.LICENSE", UTF8_RANGE_NOTICE_URL, 64 * 1024)}
+    if component != expected_component or set(records) != expected_artifacts.keys():
+        raise PythonSourceError(f"{name} wheel supplement has unexpected components or artifacts")
+    if native_file.get("path") != native_path:
+        raise PythonSourceError(f"{name} wheel supplement has the wrong native path")
+    _verify_wheel_file(python.get("native_files"), native_path, native_file)
+    artifacts = []
+    for role, (filename, pattern, size_limit) in expected_artifacts.items():
+        record = records[role]
+        if not isinstance(record, dict):
+            raise PythonSourceError(f"invalid {name} wheel supplement artifact")
+        url = _text(record.get("url"), pattern)
+        if role == "source" and url.rsplit("/", 1)[-1] != f"v{component['version']}":
+            raise PythonSourceError("libffi source version disagrees with its URL")
+        size = record.get("size")
+        if type(size) is not int or not 0 < size <= size_limit:
+            raise PythonSourceError(f"invalid {name} wheel supplement size")
+        artifacts.append(
+            {
+                "role": role,
+                "path": f"supplements/{name}/{architecture}/{filename}",
+                "url": url,
+                "sha256": _text(record.get("sha256"), SHA256),
+                "size": size,
+            }
+        )
+    return {
+        "distribution": name,
+        "distribution_version": version,
+        "component": component,
+        "sdist": {"path": sdist["path"], "sha256": sdist["sha256"]},
+        "wheel_filename": wheel_filename,
+        "wheel_sha256": wheel_hash,
+        "native_file": {key: native_file[key] for key in ("path", "sha256", "size")},
+        "artifacts": artifacts,
+    }
 
 
 def _psycopg_custom_recipe(
@@ -493,13 +613,14 @@ def plan(inventory: bytes, lock: bytes, architecture: str, digest: str) -> dict[
         raise PythonSourceError("unexpected Python source bundle name")
     distributions = python.get("distributions") if isinstance(python, dict) else None
     recipe_schema = python.get("source_recipe_schema", 0) if isinstance(python, dict) else 0
-    if type(recipe_schema) is not int or recipe_schema not in {0, 1, 2, 3, 4, 5}:
+    if type(recipe_schema) is not int or recipe_schema not in {0, 1, 2, 3, 4, 5, 6}:
         raise PythonSourceError("unsupported source recipe schema")
     if not isinstance(distributions, list) or not 1 <= len(distributions) <= 512:
         raise PythonSourceError("invalid installed distribution list")
     sources: list[dict[str, Any]] = []
     native_sources: list[dict[str, Any]] = []
     embedded_sources: list[dict[str, Any]] = []
+    wheel_supplements: list[dict[str, Any]] = []
     unresolved = []
     own = []
     seen = set()
@@ -532,6 +653,8 @@ def plan(inventory: bytes, lock: bytes, architecture: str, digest: str) -> dict[
                 )
         sdist = package.get("sdist")
         if sdist is None:
+            if recipe_schema >= 6 and name in {"cffi", "protobuf"}:
+                raise PythonSourceError(f"{name} wheel supplement requires a locked source archive")
             reviewed = REVIEWED_BINARY_SOURCES.get((name, version)) if recipe_schema >= 1 else None
             if reviewed is not None:
                 sources.append({**identity, **reviewed})
@@ -550,15 +673,19 @@ def plan(inventory: bytes, lock: bytes, architecture: str, digest: str) -> dict[
         size = sdist.get("size")
         if type(size) is not int or not 0 < size <= MAX_FILE:
             raise PythonSourceError("invalid source archive size")
-        sources.append(
-            {
-                **identity,
-                "url": url,
-                "sha256": checksum,
-                "size": size,
-                "path": f"sources/{name}/{url.rsplit('/', 1)[1]}",
-            }
-        )
+        locked_source = {
+            **identity,
+            "url": url,
+            "sha256": checksum,
+            "size": size,
+            "path": f"sources/{name}/{url.rsplit('/', 1)[1]}",
+        }
+        sources.append(locked_source)
+        if recipe_schema >= 6 and name in {"cffi", "protobuf"}:
+            assert isinstance(python, dict)
+            wheel_supplements.append(
+                _wheel_supplement(name, version, architecture, python, package, locked_source)
+            )
     manifest = {
         "schema_version": 1,
         "image": {"architecture": architecture, "platform_digest": digest},
@@ -592,6 +719,15 @@ def plan(inventory: bytes, lock: bytes, architecture: str, digest: str) -> dict[
             "Python sources, reviewed native source RPMs and reviewed embedded sources "
             "listed in this manifest; unreported components and other build inputs "
             "remain separate. No claim of exact upstream binary build inputs."
+        )
+    if recipe_schema >= 6:
+        manifest["wheel_supplements"] = sorted(
+            wheel_supplements, key=lambda item: item["distribution"]
+        )
+        manifest["scope"] = (
+            "Python sources, reviewed native source RPMs, embedded sources and wheel supplements "
+            "listed in this manifest. Other components and build inputs remain separate. "
+            "No claim of exact upstream binary build inputs."
         )
     if sum(source["size"] for source in _all_sources(manifest)) > MAX_BUNDLE - MAX_METADATA:
         raise PythonSourceError("source archives exceed bundle size limit")
@@ -658,6 +794,9 @@ def fetch(source: dict[str, Any]) -> bytes:
         or OPENSSL_URL.fullmatch(value)
         or LIBXCRYPT_URL.fullmatch(value)
         or LIBXCRYPT_RECIPE_URL.fullmatch(value)
+        or LIBFFI_URL.fullmatch(value)
+        or CFFI_RECIPE_URL.fullmatch(value)
+        or UTF8_RANGE_NOTICE_URL.fullmatch(value)
         or POSTGRESQL_URL.fullmatch(value)
         or OPENLDAP_URL.fullmatch(value)
     ):

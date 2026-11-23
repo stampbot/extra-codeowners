@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "distribution": "protobuf",
+  "distribution_version": "7.35.1",
+  "sdist_sha256": "ce115a26fe0c39a2c29973d914d327e516a6455464489fe3cd1e51a1b354f81a",
+  "component": {"name": "utf8_range"},
+  "platforms": {
+    "amd64": {
+      "wheel_filename": "protobuf-7.35.1-cp310-abi3-manylinux2014_x86_64.whl",
+      "wheel_sha256": "74758715c53d7158fb76caf4f0cfdacc5329a4b1bb994f865d6cf302d413a1c4",
+      "native_file": {
+        "path": "google/_upb/_message.abi3.so",
+        "sha256": "685c76567dcef743e9a404bc201598c31c0a21013ec9e2e402fa47091b11e650",
+        "size": 406232
+      }
+    },
+    "arm64": {
+      "wheel_filename": "protobuf-7.35.1-cp310-abi3-manylinux2014_aarch64.whl",
+      "wheel_sha256": "11d6b0ec246892d85215b0a13ca6e0233cf5284b68f0ac02646427f4ff88a799",
+      "native_file": {
+        "path": "google/_upb/_message.abi3.so",
+        "sha256": "f05ca1065b634a0bb72af60be9ccdaeeb161e21e7a34e727c1b902be7542dd45",
+        "size": 426472
+      }
+    }
+  },
+  "artifacts": {
+    "notice": {
+      "url": "https://raw.githubusercontent.com/protocolbuffers/protobuf/35cd01f9fe9afbeea38cc7b979a3b6bfcde82c03/third_party/utf8_range/LICENSE",
+      "sha256": "02de69b64fc36d9e938f418e52723e42f0b2b226d58a9cb3c8dcbdf7059f5074",
+      "size": 1091
+    }
+  }
+}

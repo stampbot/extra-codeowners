@@ -196,7 +196,7 @@ def test_collect_inventory_records_raw_os_python_and_native_evidence() -> None:
     python = inventory["python"]
     assert isinstance(python, dict)
     distributions = python["distributions"]
-    assert python["source_recipe_schema"] == 5
+    assert python["source_recipe_schema"] == 6
     assert python["rust_source_bundle"] == "rust-source-amd64.tar.gz"
     assert python["native_component_catalog"] == "native-components-amd64.cdx.json"
     assert isinstance(distributions, list)
