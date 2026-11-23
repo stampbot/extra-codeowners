@@ -133,6 +133,12 @@ held a candidate behind a second required check. The expected App changed
 the same Check Run from success to failure, and GitHub removed the candidate.
 The probe wrote the result by hand; it didn't test a review dismissal.
 
+The [November 23 review-count probe](evidence/2026-11-23-independent-review-count.md)
+found that GitHub refused queue entry until Stampbot approved, even though
+Extra CODEOWNERS had already passed on the same PR head. A separate required
+check kept the candidate waiting. An ordinary PR test showed the App change
+the head's check to failure after review dismissal, not a candidate check.
+
 ## Diagnostics and approval probe: November 2, 2026
 
 Alpha.65 runs on two Kubernetes nodes with shared PostgreSQL state. The
@@ -274,12 +280,9 @@ Completing the fixture does not turn that result into a pass. See
 
 ## Work still needed
 
-The performance gate remains open. These results do not establish quiet
-recovery or complete coverage of repository lifecycle transitions and App
-access loss. The
-[remaining work](../reference/project-status.md#remaining-work) list tracks
-those gates, along with the distribution source work in
-[issue #18][sources], which passing approval tests doesn't close.
+See [remaining work](../reference/project-status.md#remaining-work) for
+current release gates. This page keeps historical results, including tests
+that didn't settle a gate and runs that passed on an older release.
 
 When you add results here, record delivery payload contracts separately from
 service behavior: an event in GitHub's delivery log doesn't prove the service
