@@ -39,6 +39,13 @@ from extra_codeowners.dco import (
     RepositoryIdentity,
 )
 from extra_codeowners.discovery_cache import CacheEntry, CacheLookupStatus, DiscoveryCache
+from extra_codeowners.merge_queue_paths import (
+    CandidateChangedPaths,
+    MergeTreeEvidenceError,
+    changed_paths,
+    commit_tree_id,
+    require_object_id,
+)
 from extra_codeowners.metrics import (
     GITHUB_API_REQUEST_SECONDS,
     GITHUB_API_REQUESTS,
@@ -60,6 +67,8 @@ MAX_DCO_COMMIT_LIST_RESPONSE_BYTES: Final = 256 * 1024
 MAX_DCO_COMMIT_DETAIL_RESPONSE_BYTES: Final = 8 * 1024 * 1024
 MAX_DCO_AGGREGATE_MESSAGE_BYTES: Final = 16 * 1024 * 1024
 MAX_DCO_DETAIL_CONCURRENCY: Final = 2
+MAX_MERGE_COMMIT_RESPONSE_BYTES: Final = 2 * 1024 * 1024
+MAX_MERGE_TREE_RESPONSE_BYTES: Final = 8 * 1024 * 1024
 MAX_JSON_RESPONSE_DEPTH: Final = 64
 PENDING_CHECK_EXTERNAL_ID_PREFIX: Final = "extra-codeowners:pending:"
 MAX_CONFIG_BYTES: Final = 1_000_000
@@ -109,6 +118,10 @@ def _request_operation(method: str, path: str) -> str:
         return "pull.list"
     if re.fullmatch(r"/repos/[^/]+/[^/]+/git/ref/heads/.+", path):
         return "repository.ref"
+    if re.fullmatch(r"/repos/[^/]+/[^/]+/git/commits/[0-9a-f]{40}", path):
+        return "commit.tree"
+    if re.fullmatch(r"/repos/[^/]+/[^/]+/git/trees/[0-9a-f]{40}", path):
+        return "tree.read"
     if re.fullmatch(r"/repos/[^/]+/[^/]+/pulls/\d+/files", path):
         return "pull.files"
     if re.fullmatch(r"/repos/[^/]+/[^/]+/pulls/\d+/reviews", path):
@@ -1581,6 +1594,56 @@ class GitHubClient:
         return await self._request(
             "GET", f"/repos/{repository}/pulls/{number}", installation_id=installation_id
         )
+
+    async def get_candidate_changed_paths(
+        self,
+        installation_id: int,
+        repository: str,
+        *,
+        target_sha: str,
+        candidate_sha: str,
+    ) -> CandidateChangedPaths:
+        """Read the candidate's changes relative to the target, without file-list truncation."""
+        try:
+            if not _REPOSITORY_FULL_NAME_RE.fullmatch(repository) or any(
+                part in {".", ".."} for part in repository.split("/")
+            ):
+                raise MergeTreeEvidenceError("invalid merge candidate repository")
+            require_object_id(target_sha)
+            require_object_id(candidate_sha)
+
+            async def tree_for(sha: str) -> str:
+                payload = await self._get_bounded_json(
+                    f"/repos/{repository}/git/commits/{sha}",
+                    installation_id,
+                    max_bytes=MAX_MERGE_COMMIT_RESPONSE_BYTES,
+                )
+                return commit_tree_id(payload, sha)
+
+            before = await tree_for(target_sha)
+            after = await tree_for(candidate_sha)
+            if before == after:
+                return CandidateChangedPaths(target_sha, candidate_sha, frozenset())
+
+            # GitHub only returns the first 300 files from the Compare API.
+            # A truncated tree also cannot prove that every changed path was reviewed.
+            async def read_tree(tree_id: str) -> object:
+                return await self._get_bounded_json(
+                    f"/repos/{repository}/git/trees/{tree_id}",
+                    installation_id,
+                    params={"recursive": "1"},
+                    max_bytes=MAX_MERGE_TREE_RESPONSE_BYTES,
+                )
+
+            paths = changed_paths(
+                await read_tree(before),
+                await read_tree(after),
+                target_tree_id=before,
+                candidate_tree_id=after,
+            )
+        except MergeTreeEvidenceError as error:
+            raise GitHubError(str(error)) from error
+        return CandidateChangedPaths(target_sha, candidate_sha, paths)
 
     async def installation_includes_repository(
         self,
