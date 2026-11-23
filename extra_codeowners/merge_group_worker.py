@@ -28,15 +28,16 @@ class CandidateEvaluator(Protocol):
 
     def _check_write_guard(
         self, installation_id: int, head_sha: str
-    ) -> AbstractAsyncContextManager[None]: ...
+    ) -> AbstractAsyncContextManager[None]:
+        raise NotImplementedError
 
-    def _authority_publish_guard(
-        self, installation_id: int
-    ) -> AbstractAsyncContextManager[None]: ...
+    def _authority_publish_guard(self, installation_id: int) -> AbstractAsyncContextManager[None]:
+        raise NotImplementedError
 
     async def assess_merge_candidate(
         self, trigger: MergeGroupTrigger, *, authority_generation: int
-    ) -> MergeCandidateAssessment: ...
+    ) -> MergeCandidateAssessment:
+        raise NotImplementedError
 
 
 class MergeGroupWorker:

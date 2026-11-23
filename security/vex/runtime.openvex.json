@@ -1,8 +1,8 @@
 {
   "@context": "https://openvex.dev/ns/v0.2.0",
-  "@id": "urn:uuid:921f02d2-3aa0-5f62-ab1e-179dee12b88f",
+  "@id": "urn:uuid:dce8c356-39fb-54db-b1f0-a321208cd030",
   "author": "Extra CODEOWNERS maintainers",
-  "last_updated": "2026-11-23T06:44:39Z",
+  "last_updated": "2026-11-23T06:56:53Z",
   "role": "VEX document producer",
   "statements": [
     {
@@ -2028,9 +2028,9 @@
       }
     }
   ],
-  "timestamp": "2026-11-23T06:44:39Z",
+  "timestamp": "2026-11-23T06:56:53Z",
   "tooling": "Vexcalibur + Extra CODEOWNERS runtime binding",
-  "version": 42,
+  "version": 43,
   "x_extra_codeowners_runtime": {
     "files": {
       ".dockerignore": "3f9dc9d3a79fe3085f25de88403b5563ad5c7fa7010bef94c5e55f24bd3cf691",
@@ -2066,7 +2066,7 @@
       "extra_codeowners/logging.py": "a59227e76ec7809ff8bb88fee997abb9b99f32e81a4c8d16bcfc72c0c0abf33f",
       "extra_codeowners/manifest.py": "33d42ac16b8218562f2baf6c0bc7c6664b03354bbf274cb0381e94740b76681e",
       "extra_codeowners/merge_group_work.py": "e232b766804a1bb944e335addee9bedb381d6570b669adcfe0958e68779090f3",
-      "extra_codeowners/merge_group_worker.py": "575cf3a28271b4815af0f3723df6b01360a9df0424cc1deecac48353a96ecfd2",
+      "extra_codeowners/merge_group_worker.py": "ab3458ce000d089d5e87d2379cac47dd25fddc1fa177975a3735fa1bdab9c388",
       "extra_codeowners/merge_queue.py": "212ef3859072466722fa3d502b6e4524cfff93dc24244ad435e05a8d96d50e1d",
       "extra_codeowners/merge_queue_paths.py": "022a6ca85b9d3d08c4aea250851465212541b85ae58e492509bcec735c181c83",
       "extra_codeowners/metrics.py": "64785df4eef0b99bacd2cda27ae7a6bae2142a3b246b3b7fb00996631edae9c6",
@@ -2092,7 +2092,7 @@
       "tools/source_recipes/psycopg-binary-3.3.4.json": "ec227aa110315f82c25335837e258806930c7afbe980c8b2ff6b476343c243b5",
       "uv.lock": "9b38f0929d3ea110b3d016bc638547e9f6244949009d2bc4dadff6141d496f90"
     },
-    "review": "Separate the candidate worker from the service through a narrow evaluator protocol. Runtime dependencies, provider writes, TLS options, and vulnerability assessments are unchanged.",
+    "review": "Use explicit unimplemented protocol methods rather than no-op bodies for the candidate worker interface. No runtime dependency, worker behavior or vulnerability assessment changed.",
     "schema_version": 1
   }
 }
