@@ -13,11 +13,11 @@ The alpha series establishes this compatibility contract:
 
 | Field | Contract |
 | --- | --- |
-| Database head | `0010_authority_discovery_cursor` |
-| Head change | Yes; authority discovery now records progress across quota pauses and replica takeover. |
-| Supported source releases | `0.1.0-alpha.58` through `0.1.0-alpha.61` at `0009_conditional_request_budget`, `0.1.0-alpha.56` and `0.1.0-alpha.57` at `0008_recovery_api_budget`, `0.1.0-alpha.43` at `0007_reconciliation_completion`, `0.1.0-alpha.42` at `0006_webhook_trace_links`, or `0.1.0-alpha.14` at `0005_reconciliation_state_index`, after a controlled migration. |
+| Database head | `0011_merge_group_work` |
+| Head change | Yes; the database can retain merge candidate work and cancellation records. |
+| Supported source releases | Alpha releases at `0010_authority_discovery_cursor`, `0.1.0-alpha.58` through `0.1.0-alpha.61` at `0009_conditional_request_budget`, `0.1.0-alpha.56` and `0.1.0-alpha.57` at `0008_recovery_api_budget`, `0.1.0-alpha.43` at `0007_reconciliation_completion`, `0.1.0-alpha.42` at `0006_webhook_trace_links`, or `0.1.0-alpha.14` at `0005_reconciliation_state_index`, after a controlled migration. |
 | Target application compatible before migration | No; startup requires the exact head. |
-| Required process state | Stop webhook ingress and every older worker before applying `0010_authority_discovery_cursor`. Remove the HPA and either commit a zero-replica drain state or suspend GitOps reconciliation before scaling down; see the [drain procedure](../how-to/upgrade.md#drain-a-kubernetes-release). |
+| Required process state | Stop webhook ingress and every older worker before applying `0011_merge_group_work`. Remove the HPA and either commit a zero-replica drain state or suspend GitOps reconciliation before scaling down; see the [drain procedure](../how-to/upgrade.md#drain-a-kubernetes-release). |
 | In-place database downgrade | Not supported. |
 | Rollback after head change | Restore the verified pre-migration backup. An older image rejects this head. |
 | Backup required | Yes, before deployment and before every pre-release schema adoption. |
@@ -97,8 +97,8 @@ assumed request allowance is loaded during migration.
 
 An already-running process does not revalidate the Alembic head before every
 claim. Stop every older ingress, worker, and reconciler before this revision
-runs. Start only the target artifact after `database check` reports
-`0010_authority_discovery_cursor` and validates that artifact's
+runs. Start only the target artifact after `database check` reports its bundled
+revision and validates that artifact's
 `required-release-contract`. Readiness removes an old process from webhook
 traffic after migration, but it does not cancel work that process already
 claimed. For Kubernetes, a zero-replica Deployment is not proof of a drain
@@ -188,6 +188,12 @@ verify a backup first. Apply the migration with the target artifact, then run
 the target `database check` before starting two replicas. An older artifact
 rejects the new head; rollback requires restoring the verified pre-migration
 backup.
+
+Revision `0011_merge_group_work` adds an empty table for candidate work and a
+nullable digest on webhook deliveries. The digest identifies the accepted
+candidate fields without retaining the payload. Existing deliveries, jobs and
+checks are unchanged. The compatibility marker moves from `9` to `10`.
+This revision doesn't enable merge queue enforcement.
 
 No supported application release predates the planned `0.1.0`. Databases
 created by pre-release builds have no Alembic revision, so the current `0.1.0`

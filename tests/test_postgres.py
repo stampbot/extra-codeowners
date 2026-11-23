@@ -32,6 +32,8 @@ from extra_codeowners.database import (
     SharedHeadEpoch,
     utcnow,
 )
+from extra_codeowners.merge_group_work import ClaimedMergeGroup, MergeGroupQueue
+from extra_codeowners.merge_queue import MergeGroupTrigger
 
 BASELINE_REVISION = migrations.BASELINE_REVISION
 MIGRATION_LOCK_KEY = migrations.MIGRATION_LOCK_KEY
@@ -39,6 +41,57 @@ current_revision = migrations.current_revision
 upgrade_database = migrations.upgrade_database
 
 pytestmark = pytest.mark.integration
+
+
+def test_postgres_merge_group_claim_is_exclusive_and_revoked_across_replicas(
+    postgres_store: QueueStore,
+) -> None:
+    # Verifies XCO-001 and XCO-013 across two independent production-style pools.
+    trigger = MergeGroupTrigger(
+        "checks_requested",
+        23,
+        9876543210,
+        "example/queue-lab",
+        "refs/heads/main",
+        "a" * 40,
+        "refs/heads/gh-readonly-queue/main/pr-7-fictional",
+        "b" * 40,
+    )
+    destroyed = MergeGroupTrigger(
+        "destroyed",
+        trigger.installation_id,
+        trigger.repository_id,
+        trigger.repository,
+        trigger.base_ref,
+        trigger.base_sha,
+        trigger.head_ref,
+        trigger.head_sha,
+    )
+    peer = QueueStore(postgres_url())
+    try:
+        assert postgres_store.accept_delivery("queued", "merge_group", trigger)
+        first, second = MergeGroupQueue(postgres_store), MergeGroupQueue(peer)
+        start = threading.Barrier(2)
+
+        def claim(queue: MergeGroupQueue, owner: str) -> ClaimedMergeGroup | None:
+            start.wait(timeout=5)
+            return queue.claim(owner, 60)
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            a = pool.submit(claim, first, "replica-a")
+            b = pool.submit(claim, second, "replica-b")
+            claimed = [result for result in (a.result(), b.result()) if result is not None]
+        assert len(claimed) == 1
+        running = claimed[0]
+        assert second.is_current(running)
+        assert peer.accept_delivery("cancelled", "merge_group", destroyed)
+        assert not first.complete(running)
+        revocation = second.claim("revocation", 60)
+        assert revocation is not None and revocation.trigger == destroyed
+        assert revocation.generation == running.generation + 1
+        assert first.complete(revocation)
+    finally:
+        peer.close()
 
 
 # Verifies XCO-009, XCO-010, XCO-018.

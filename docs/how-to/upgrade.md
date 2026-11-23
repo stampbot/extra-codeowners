@@ -85,7 +85,7 @@ An `0.1.0-alpha.14` artifact prints:
 Database migration 0005_reconciliation_state_index is compatible.
 ```
 
-The target artifact prints `0010_authority_discovery_cursor` after the
+The target artifact prints `0011_merge_group_work` after the
 migration in step 5.
 
 Record the reported revision, current image digest, chart revision, PostgreSQL
@@ -417,7 +417,7 @@ run_without_libpq_environment \
 For the target artifact, success prints:
 
 ```text
-Database is at migration 0010_authority_discovery_cursor.
+Database is at migration 0011_merge_group_work.
 ```
 
 The migrator:
@@ -523,7 +523,7 @@ kubectl --namespace "$NAMESPACE" wait \
     "job/$DEPLOYMENT-migrate" --container=migrate >"$FIRST_MIGRATION_LOG"
 )
 grep --fixed-strings --line-regexp \
-  'Database is at migration 0010_authority_discovery_cursor.' \
+  'Database is at migration 0011_merge_group_work.' \
   "$FIRST_MIGRATION_LOG"
 kubectl --namespace "$NAMESPACE" rollout status \
   "deployment/$DEPLOYMENT" --timeout=10m
@@ -586,12 +586,12 @@ test ! -e "$SECOND_MIGRATION_LOG"
     "job/$DEPLOYMENT-migrate" --container=migrate >"$SECOND_MIGRATION_LOG"
 )
 grep --fixed-strings --line-regexp \
-  'Database is at migration 0010_authority_discovery_cursor.' \
+  'Database is at migration 0011_merge_group_work.' \
   "$SECOND_MIGRATION_LOG"
 ```
 
 The second migrator takes the same advisory lock and confirms that the database
-is already at `0010_authority_discovery_cursor`. Alembic makes no schema change, but
+is already at `0011_merge_group_work`. Alembic makes no schema change, but
 the migrator still validates the `required-release-contract` before it prints
 success.
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import threading
@@ -44,10 +45,11 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sess
 from sqlalchemy.pool import NullPool
 from sqlalchemy.sql.elements import ColumnElement
 
+from extra_codeowners.merge_queue import MergeGroupTrigger
 from extra_codeowners.trace_context import TrustedTraceContext
 
-SCHEMA_VERSION = 9
-DATABASE_MIGRATION_HEAD = "0010_authority_discovery_cursor"
+SCHEMA_VERSION = 10
+DATABASE_MIGRATION_HEAD = "0011_merge_group_work"
 DATABASE_CONNECT_TIMEOUT_SECONDS = 3
 DATABASE_POOL_TIMEOUT_SECONDS = 2
 DATABASE_STATEMENT_TIMEOUT_MILLISECONDS = 3_000
@@ -260,6 +262,120 @@ class WebhookDelivery(Base):
     producer_trace_id: Mapped[str | None] = mapped_column(String(32))
     producer_span_id: Mapped[str | None] = mapped_column(String(16))
     producer_trace_flags: Mapped[int | None] = mapped_column(Integer)
+    merge_group_digest: Mapped[str | None] = mapped_column(String(64))
+
+
+class MergeGroupWork(Base):
+    """Latest work for an immutable candidate, including its cancellation."""
+
+    __tablename__ = "merge_group_work"
+    __table_args__ = (
+        Index("ix_merge_group_claim", "available_at", "lease_until"),
+        Index("ix_merge_group_pull", "installation_id", "repository_full_name", "pull_number"),
+        CheckConstraint(
+            "generation >= 1 AND completed_generation >= 0 AND completed_generation <= generation",
+            name="ck_merge_group_generation",
+        ),
+    )
+
+    installation_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    repository_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    head_sha: Mapped[str] = mapped_column(String(40), primary_key=True)
+    repository_full_name: Mapped[str] = mapped_column(String(512), nullable=False)
+    base_ref: Mapped[str] = mapped_column(String(1024), nullable=False)
+    base_sha: Mapped[str] = mapped_column(String(40), nullable=False)
+    head_ref: Mapped[str] = mapped_column(String(1024), nullable=False)
+    destroyed: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    pull_number: Mapped[int | None] = mapped_column(BigInteger)
+    # Bind an observed queue entry, not only a possibly reused ref or commit.
+    entry_id: Mapped[str | None] = mapped_column(String(256))
+    pull_id: Mapped[str | None] = mapped_column(String(256))
+    pull_head_sha: Mapped[str | None] = mapped_column(String(40))
+    generation: Mapped[int] = mapped_column(BigInteger, nullable=False, default=1)
+    completed_generation: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    attempts: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    lease_owner: Mapped[str | None] = mapped_column(String(128))
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+def _merge_group_delivery_digest(request: MergeGroupTrigger) -> str:
+    data = (
+        request.action,
+        request.installation_id,
+        request.repository_id,
+        normalize_repository_full_name(request.repository),
+        request.base_ref,
+        request.base_sha,
+        request.head_ref,
+        request.head_sha,
+    )
+    return hashlib.sha256(json.dumps(data, separators=(",", ":")).encode()).hexdigest()
+
+
+def _enqueue_merge_group(session: Session, request: MergeGroupTrigger) -> None:
+    work = session.get(
+        MergeGroupWork,
+        (request.installation_id, request.repository_id, request.head_sha),
+        with_for_update=True,
+    )
+    repo = normalize_repository_full_name(request.repository)
+    requested_identity = (repo, request.base_ref, request.base_sha, request.head_ref)
+    destroyed = request.action == "destroyed"
+    now = utcnow()
+    if work is None:
+        session.add(
+            MergeGroupWork(
+                installation_id=request.installation_id,
+                repository_id=request.repository_id,
+                head_sha=request.head_sha,
+                repository_full_name=repo,
+                base_ref=request.base_ref,
+                base_sha=request.base_sha,
+                head_ref=request.head_ref,
+                destroyed=destroyed,
+                requested_at=now,
+                available_at=now,
+            )
+        )
+        return
+    if (
+        work.repository_full_name,
+        work.base_ref,
+        work.base_sha,
+        work.head_ref,
+    ) != requested_identity:
+        raise RuntimeError("merge group delivery disagrees with the recorded candidate identity")
+    if not work.destroyed:
+        work.destroyed = destroyed
+        work.generation += 1
+        work.attempts = 0
+        work.requested_at = now
+        work.available_at = now
+        work.lease_owner = None
+        work.lease_until = None
+
+
+def _requeue_merge_groups_for_pull(session: Session, request: JobRequest) -> None:
+    now = utcnow()
+    session.execute(
+        update(MergeGroupWork)
+        .where(
+            MergeGroupWork.installation_id == request.installation_id,
+            MergeGroupWork.repository_full_name == request.repository_full_name,
+            MergeGroupWork.pull_number == request.pull_number,
+            MergeGroupWork.destroyed.is_(False),
+        )
+        .values(
+            generation=MergeGroupWork.generation + 1,
+            requested_at=now,
+            available_at=now,
+            attempts=0,
+            lease_owner=None,
+            lease_until=None,
+        )
+    )
 
 
 class EvaluationAudit(Base):
@@ -2389,10 +2505,11 @@ class QueueStore:
         self,
         delivery_id: str,
         event: str,
-        request: JobRequest | AuthorityRequest | None,
+        request: JobRequest | AuthorityRequest | MergeGroupTrigger | None,
         authority_guard_timeout_seconds: float = 5.0,
         *,
         trace_context: TrustedTraceContext | None = None,
+        invalidate_merge_groups: bool = False,
     ) -> DeliveryAcceptance:
         """Record and enqueue one webhook atomically.
 
@@ -2400,8 +2517,15 @@ class QueueStore:
         head fence accepted in this transaction. A duplicate delivery returns
         its original token instead of borrowing a newer head generation.
         """
+        merge_group_digest = (
+            _merge_group_delivery_digest(request)
+            if isinstance(request, MergeGroupTrigger)
+            else None
+        )
+        if (event == "merge_group") != (merge_group_digest is not None):
+            raise ValueError("merge group delivery must have a matching candidate trigger")
         authority_guard: CheckWriteGuard | None = None
-        if isinstance(request, AuthorityRequest):
+        if isinstance(request, (AuthorityRequest, MergeGroupTrigger)):
             authority_guard = self.acquire_authority_guard(
                 request.installation_id,
                 shared=False,
@@ -2418,6 +2542,11 @@ class QueueStore:
                             if existing_delivery.event != event:
                                 raise RuntimeError(
                                     "accepted delivery ID was replayed with a different event"
+                                )
+                            if existing_delivery.merge_group_digest != merge_group_digest:
+                                raise RuntimeError(
+                                    "accepted delivery ID was replayed with different "
+                                    "merge group evidence"
                                 )
                             if isinstance(request, JobRequest):
                                 expected_identity = (
@@ -2449,6 +2578,7 @@ class QueueStore:
                         delivery = WebhookDelivery(
                             delivery_id=delivery_id,
                             event=event,
+                            merge_group_digest=merge_group_digest,
                             invalidation_required=isinstance(request, JobRequest),
                             producer_trace_id=(
                                 trace_context.trace_id if trace_context is not None else None
@@ -2477,6 +2607,8 @@ class QueueStore:
                                 delivery_id,
                                 shared_head_generation,
                             )
+                            if invalidate_merge_groups:
+                                _requeue_merge_groups_for_pull(session, request)
                         elif isinstance(request, AuthorityRequest):
                             delivery.installation_id = request.installation_id
                             delivery.repository_full_name = request.repository_full_name
@@ -2485,6 +2617,8 @@ class QueueStore:
                                     session, request.installation_id
                                 )
                             self._enqueue_authority_in_session(session, request)
+                        elif isinstance(request, MergeGroupTrigger):
+                            _enqueue_merge_group(session, request)
                     return DeliveryAcceptance(
                         accepted=True,
                         shared_head_generation=shared_head_generation,

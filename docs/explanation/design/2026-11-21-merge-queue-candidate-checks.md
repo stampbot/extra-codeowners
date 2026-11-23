@@ -10,7 +10,7 @@ check on GitHub's queue candidate could close that particular gap.
 | Field | Value |
 | --- | --- |
 | Date | 2026-11-21 |
-| Status | Proposed; read-only assessment only |
+| Status | Proposed; storage and read-only assessment, no serving integration |
 | Owner | Maintainers |
 | Scope | A first proof with one queue entry and an isolated GitHub App |
 | Related | [Shared-commit blocker][shared-head], [merge-queue work][queue-work], [November 20 provider test][provider-test] |
@@ -37,7 +37,14 @@ policy at the candidate's target commit and checks approvals against the PR
 head. Each path the candidate changes relative to that target must be
 covered by the PR file evidence, including both names of a rename. The
 assessment rereads the PR and queue entry before returning. It doesn't write
-a Check Run or accept webhook work, so it can't close the production gap.
+a Check Run, so it can't close the production gap.
+
+Storage keys the work by installation, repository ID and candidate commit.
+A cancellation stays with that commit. If an earlier checks request arrives
+after cancellation, it can't put that candidate back into evaluation.
+Each lease names one attempt at one generation, so an old attempt can't
+finish a replacement's work. The webhook receiver and publishing worker
+aren't connected to this queue yet.
 
 ## Boundaries
 
