@@ -352,9 +352,9 @@ archive includes the source and notices supplied by its upstream package.
 The collector reads each wheel's version-matched Python source distribution
 and its top-level `Cargo.lock`. A registry dependency must match a lockfile
 entry with a crates.io origin and SHA-256 checksum. Workspace entries point
-back to the retained Python source archive. Downloads use fixed crates.io
-URLs, not the SBOM's download hints. The collector checks hashes, rejects
-redirects, and never executes upstream code or extracts it to disk.
+back to the retained Python source archive. Crate downloads use fixed
+crates.io URLs, not the SBOM's download hints. The collector checks hashes,
+rejects redirects, and never executes upstream code or extracts it to disk.
 
 `manifest.json` maps the reported Cargo components to those sources. It records
 the SBOM and lockfile hashes, preserves declared licenses, and binds the result
@@ -363,6 +363,20 @@ or ambiguous mappings stop publication. This covers the Cargo components
 reported by those SBOMs; it is not a complete inventory of native C libraries
 or a conclusion about license compliance. Those remaining checks are tracked
 in [issue #18][source-work].
+
+Schema 2 adds `registry_crate_notices`. Each entry names the crate archive,
+hashes its `Cargo.toml`, and records the crate's own license declaration
+separately from the wheel's SBOM. The entry lists the paths, sizes, and
+SHA-256 hashes of selected notice files inside the crate. It includes the
+file named by `package.license-file` when present, even if its filename
+doesn't look like a license.
+
+Some crates omit texts that upstream publishes separately. For the reviewed
+`wit-bindgen-rt` archive, the bundle includes three such files under
+`notices/wit-bindgen-rt/0.39.0/`. `upstream_notices` records the pinned source
+URL, size, and SHA-256 of each. Workspace components still point to the
+retained Python source archive. The index does not say which features were
+compiled into a wheel or whether every copyright holder's notice is present.
 
 From a trusted checkout of the release tag, download the platform's Rust and
 Python source bundles, recipient notice bundle, inventory, and digest file.
@@ -381,7 +395,10 @@ python -I -S -B tools/release_rust_sources.py verify \
 ```
 
 Verification succeeds silently. It rereads the retained SBOMs and lockfiles
-and checks every crate archive against the resulting plan. A crate archive is
+and checks every crate archive against the resulting plan. For schema 2 it
+also reconstructs the notice index and checks the supplemental texts. The
+release workflow requires that schema with `--require-notice-index`; leave
+the flag off for historical schema 1 bundles. A crate archive is
 limited to 16 MiB; the complete bundle is limited to 128 MiB before and after
 decompression. Older inventories without `python.rust_source_bundle` do not
 promise this evidence, so historical rescans do not require it retroactively.
