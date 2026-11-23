@@ -26,13 +26,16 @@ from typing import IO, Protocol
 MAX_SOURCE_BYTES = 64 * 1024 * 1024
 MAX_BUNDLE_BYTES = MAX_SOURCE_BYTES + 1024 * 1024
 MAX_INVENTORY_BYTES = 16 * 1024 * 1024
+CURRENT_NOTICE_SCHEMA = 3
+_CPYTHON_31410 = ("3.14.10", "de414a57119abef52784d8993e341d53aed635fc2b05c2607d9f98a2c5b72032")
+_HACL_REVISION = "8ba599b2f6c9701b3dc961db895b0856a2210f76"
 
 # Bind the reviewed file paths and hashes to the exact upstream archive, not
 # just to a version string. The two-platform runtime evidence is in #18:
 # https://github.com/stampbot/extra-codeowners/issues/18#issuecomment-7069586882
 # https://github.com/stampbot/extra-codeowners/issues/18#issuecomment-7083094097
-_BUNDLED_NOTICES = {
-    ("3.14.10", "de414a57119abef52784d8993e341d53aed635fc2b05c2607d9f98a2c5b72032"): (
+_BUNDLED_NOTICES: dict[tuple[str, str], tuple[tuple[str, str, str, str], ...]] = {
+    _CPYTHON_31410: (
         (
             "expat",
             "2.9.0",
@@ -41,7 +44,7 @@ _BUNDLED_NOTICES = {
         ),
         (
             "hacl-star",
-            "8ba599b2f6c9701b3dc961db895b0856a2210f76",
+            _HACL_REVISION,
             "Modules/_hacl/Hacl_Hash_SHA3.c",
             "8744f5b6e054c3e5c44f413a60f9154b76dd7230135dcee26fd063755ec64be1",
         ),
@@ -58,6 +61,49 @@ _BUNDLED_NOTICES = {
             "ea0b9c6b296c13aed6ecaa50b463e39a9c1bdc059b84f50507fd8247b2e660f9",
         ),
     ),
+}
+
+# These paths are relative to the retained CPython archive root. Its build
+# templates and the generated configs for both alpha.100 images were checked:
+# https://github.com/stampbot/extra-codeowners/issues/18#issuecomment-7093155810
+_HACL_NOTICES = {
+    _CPYTHON_31410: {
+        "common": (
+            ("Hacl_Hash_MD5.c", "5b91ed0339074e2e546119833398e2cdb7190c33a59c405bf43b2417c789547d"),
+            (
+                "Hacl_Hash_SHA1.c",
+                "ce08721d491f3b8a9bd4cde6c27bfcc8fc01471512ccca4bd3c0b764cb551d29",
+            ),
+            (
+                "Hacl_Hash_SHA2.c",
+                "f8af382de7e29a73c726f9c70770498ddd99e2c4702489ed6e634f0b68597c95",
+            ),
+            (
+                "Hacl_Hash_Blake2b.c",
+                "6a492aa586f2d10b1b300ce8ce4c72c976ff7548fee667aded2253f99969ac87",
+            ),
+            (
+                "Hacl_Hash_Blake2s.c",
+                "f3204f3e60734d811b6630f879b69ce54eaf367f3fca5889c1026e7a1f3ee1e4",
+            ),
+            ("Hacl_HMAC.c", "142adb769ff02b8a5327f0eb837e1f9a797bdf9a1684d21acd749dbb5b2e5be2"),
+            (
+                "Hacl_Streaming_HMAC.c",
+                "29fcf948a3715e09cbbd434cebb6105f276236a6e4947d237b7bf06634bf2432",
+            ),
+        ),
+        "amd64": (
+            (
+                "Hacl_Hash_Blake2b_Simd256.c",
+                "9eb22953ce60dde9dc970fec9dfce9d94235f4b7ccd8f0151cad4707dc835d1d",
+            ),
+            (
+                "Hacl_Hash_Blake2s_Simd128.c",
+                "c93746df2f219cbb1634ee6fb0ab1c4cbd381d1f36c637114c68346c9935326d",
+            ),
+        ),
+        "arm64": (),
+    },
 }
 
 
@@ -127,7 +173,7 @@ def _manifest(
     platform_digest: str,
     source: bytes,
     *,
-    require_bundled_notices: bool = False,
+    notice_schema: int = 1,
 ) -> dict[str, object]:
     version, checksum, url = _identity(inventory, architecture, platform_digest)
     if not 0 < len(source) <= MAX_SOURCE_BYTES:
@@ -135,7 +181,7 @@ def _manifest(
     if hashlib.sha256(source).hexdigest() != checksum:
         raise SourceError("source archive checksum differs from the image inventory")
     manifest: dict[str, object] = {
-        "schema_version": 1,
+        "schema_version": notice_schema,
         "image": {"architecture": architecture, "platform_digest": platform_digest},
         "inventory_sha256": hashlib.sha256(inventory).hexdigest(),
         "component": "cpython",
@@ -149,11 +195,22 @@ def _manifest(
         "evidence": "source archive identified by the Docker Official Python image",
         "scope": "CPython upstream source only; not the complete container source",
     }
-    if require_bundled_notices:
+    if notice_schema >= 2:
         notices = _BUNDLED_NOTICES.get((version, checksum))
         if not notices:
             raise SourceError("no bundled notice review for this exact CPython source archive")
-        manifest["schema_version"] = 2
+        if notice_schema >= 3:
+            platform_notices = _HACL_NOTICES.get((version, checksum))
+            if not platform_notices or architecture not in platform_notices:
+                raise SourceError("no HACL notice review for this CPython source and platform")
+            additional = (*platform_notices["common"], *platform_notices[architecture])
+            notices = (
+                *notices,
+                *(
+                    ("hacl-star", _HACL_REVISION, f"Modules/_hacl/{path}", digest)
+                    for path, digest in additional
+                ),
+            )
         manifest["bundled_notices"] = [
             {
                 "component": component,
@@ -180,7 +237,7 @@ def build_bundle(
         architecture,
         platform_digest,
         source,
-        require_bundled_notices=require_bundled_notices,
+        notice_schema=CURRENT_NOTICE_SCHEMA if require_bundled_notices else 1,
     )
     version, _, _ = _identity(inventory, architecture, platform_digest)
     output = io.BytesIO()
@@ -257,16 +314,16 @@ def verify_bundle(
         raise SourceError("invalid compressed source bundle") from error
     actual = _json(files["manifest.json"])
     schema = actual.get("schema_version")
-    if type(schema) is not int or schema not in {1, 2}:
+    if type(schema) is not int or schema not in {1, 2, CURRENT_NOTICE_SCHEMA}:
         raise SourceError("unsupported source manifest schema")
-    if require_bundled_notices and schema != 2:
+    if require_bundled_notices and schema != CURRENT_NOTICE_SCHEMA:
         raise SourceError("source manifest omitted the required bundled notices")
     expected = _manifest(
         inventory,
         architecture,
         platform_digest,
         files[f"Python-{version}.tar.xz"],
-        require_bundled_notices=schema == 2,
+        notice_schema=schema,
     )
     if json.dumps(actual, sort_keys=True) != json.dumps(expected, sort_keys=True):
         raise SourceError("source manifest differs from the selected inventory and archive")
@@ -316,7 +373,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--require-bundled-notices",
         action="store_true",
-        help="include reviewed bundled notices when fetching; require them when verifying",
+        help="include the current reviewed notice index when fetching; require it when verifying",
     )
     args = parser.parse_args(argv)
     try:
