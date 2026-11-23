@@ -242,6 +242,115 @@ def test_build_is_deterministic_and_verify_rejects_tampering(tmp_path: Path) -> 
         rust.verify(manifest, gzip.compress(gzip.decompress(bundle) + b"nonzero trailer"))
 
 
+def test_notice_index_binds_crate_metadata_nested_notice_and_upstream_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    license_text = b"Fictional license text."
+    nested_notice = b"Fictional copyright notice."
+    supplemental = b"Fictional upstream notice."
+    archive_root = "dependency-2.0.0/"
+    config = b'[package]\nname = "dependency"\nversion = "2.0.0"\nlicense-file = "COPYRIGHTS"\n'
+    crate = archive(
+        [
+            (archive_root + "Cargo.toml", config),
+            (archive_root + "COPYRIGHTS", license_text),
+            (archive_root + "src/vendor/LICENSE", nested_notice),
+        ]
+    )
+    manifest = plan(
+        tmp_path, cargo=LOCK.replace(CHECKSUM.encode(), hashlib.sha256(crate).hexdigest().encode())
+    )
+    source_path = manifest["sources"][0]["path"]
+    supplemental_path = "notices/dependency/2.0.0/NOTICE"
+    fixture_notice = rust._rust_notices.UpstreamNotice(
+        supplemental_path,
+        "https://example.com/NOTICE",
+        len(supplemental),
+        hashlib.sha256(supplemental).hexdigest(),
+    )
+    monkeypatch.setattr(
+        rust._rust_notices, "supplements", lambda _sources: {supplemental_path: fixture_notice}
+    )
+    bundle = rust.build(
+        manifest, {source_path: crate}, upstream_notices={supplemental_path: supplemental}
+    )
+    rust.verify(manifest, bundle, require_notice_index=True)
+    rust.verify(manifest, bundle)
+    with pytest.raises(ValueError, match="required notice index"):
+        rust.verify(manifest, rust.build(manifest, {source_path: crate}), require_notice_index=True)
+    with tarfile.open(fileobj=io.BytesIO(bundle), mode="r:gz") as result:
+        stream = result.extractfile("manifest.json")
+        assert stream is not None
+        indexed = json.load(stream)
+    assert indexed["schema_version"] == 2
+    assert indexed["registry_crate_notices"] == [
+        {
+            "cargo_license": None,
+            "cargo_license_file": "COPYRIGHTS",
+            "cargo_toml_sha256": hashlib.sha256(config).hexdigest(),
+            "crate_source": source_path,
+            "files": [
+                {
+                    "path": archive_root + "COPYRIGHTS",
+                    "size": len(license_text),
+                    "sha256": hashlib.sha256(license_text).hexdigest(),
+                },
+                {
+                    "path": archive_root + "src/vendor/LICENSE",
+                    "size": len(nested_notice),
+                    "sha256": hashlib.sha256(nested_notice).hexdigest(),
+                },
+            ],
+            "upstream_notice_paths": [supplemental_path],
+        }
+    ]
+    files = [
+        ("manifest.json", json.dumps(indexed).encode()),
+        (supplemental_path, supplemental),
+        (source_path, crate),
+    ]
+    with pytest.raises(ValueError, match="reviewed file"):
+        rust.verify(
+            manifest, archive([files[0], (supplemental_path, b"X" * len(supplemental)), files[2]])
+        )
+    with pytest.raises(ValueError, match="incomplete"):
+        rust.verify(manifest, archive([files[0], files[2]]))
+    indexed["registry_crate_notices"] = []
+    with pytest.raises(ValueError, match="manifest differs"):
+        rust.verify(
+            manifest, archive([("manifest.json", json.dumps(indexed).encode()), *files[1:]])
+        )
+
+
+def test_selected_notice_is_mandatory_for_version_two(tmp_path: Path) -> None:
+    crate = archive(
+        [("dependency-2.0.0/Cargo.toml", b'[package]\nname = "dependency"\nversion = "2.0.0"\n')]
+    )
+    manifest = plan(
+        tmp_path, cargo=LOCK.replace(CHECKSUM.encode(), hashlib.sha256(crate).hexdigest().encode())
+    )
+    with pytest.raises(ValueError, match="no selected source notice"):
+        rust.build(manifest, {manifest["sources"][0]["path"]: crate}, upstream_notices={})
+
+
+@pytest.mark.parametrize(
+    "extra, message",
+    [
+        (("dependency-2.0.0/../LICENSE", b"traversal"), "invalid or duplicate path"),
+        (("dependency-2.0.0/Cargo.toml", b"duplicate"), "invalid or duplicate path"),
+        (("dependency-2.0.0/NOTICE-OTHER", b"unrelated file"), "declared license file"),
+    ],
+)
+def test_notice_reader_rejects_ambiguous_archive_members(
+    tmp_path: Path, extra: tuple[str, bytes], message: str
+) -> None:
+    source = plan(tmp_path)["sources"][0]
+    config = b'[package]\nname = "dependency"\nversion = "2.0.0"\nlicense-file = "MISSING"\n'
+    data = archive([("dependency-2.0.0/Cargo.toml", config), extra])
+    with pytest.raises(ValueError, match=message):
+        rust._rust_notices.inspect(source, data)
+
+
 def response(contents: bytes = CRATE, /, **headers: str) -> Mock:
     value = Mock()
     value.status = 200

@@ -530,6 +530,7 @@ jobs:
             --python-sources "python-source-${ARCHITECTURE}.tar.gz" \
             --catalog "native-components-${ARCHITECTURE}.cdx.json"
           python -I -S -B tools/release_rust_sources.py fetch \
+            --require-notice-index \
             --architecture "${ARCHITECTURE}" \
             --platform-digest "${platform_digest}" \
             --inventory "distribution-inventory-${ARCHITECTURE}.json" \
@@ -767,6 +768,7 @@ jobs:
               --lock uv.lock \
               --bundle "release/image/${architecture}/python-source-${architecture}.tar.gz"
             python -I -S -B tools/release_rust_sources.py verify \
+              --require-notice-index \
               --architecture "${architecture}" \
               --platform-digest "${platform_digest}" \
               --inventory "release/image/${architecture}/distribution-inventory-${architecture}.json" \
