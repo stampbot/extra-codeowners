@@ -830,7 +830,9 @@ planning. Without a transition, an alpha increments
 its numeric suffix and a stable release applies conventional-commit rules: a
 breaking change bumps the major version, `feat` bumps the minor version, and
 everything else bumps the patch version. Python archive metadata uses the
-matching PEP 440 form.
+matching PEP 440 form. The
+[major-alpha decision record](adrs/2026-11-23-start-a-new-major-alpha-line.md)
+explains the exception to the original release rules.
 
 A release that has not been superseded builds the Python wheel, source
 distribution, chart, and two native images in parallel from the exact commit

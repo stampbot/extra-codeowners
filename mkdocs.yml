@@ -74,6 +74,7 @@ nav:
           - Results during base refresh: explanation/adrs/2026-11-12-keep-valid-results-on-base-refresh.md
           - Active reconciliation sweeps: explanation/adrs/2026-11-12-bound-active-reconciliation-sweeps.md
           - Repository team access grants: explanation/adrs/2026-11-12-scope-repository-team-grants.md
+          - Start a new major alpha line: explanation/adrs/2026-11-23-start-a-new-major-alpha-line.md
       - Design comparisons:
           - Bounded reconciliation traces: explanation/design/2026-11-02-bounded-reconciliation-traces.md
           - Merge-queue candidate checks: explanation/design/2026-11-21-merge-queue-candidate-checks.md

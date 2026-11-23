@@ -72,10 +72,11 @@ matching immutable state, and refuses a collision.
 
 Release-channel trailers provide an audited, portable promotion control:
 `Release-Channel: alpha` starts the next semantic version as an alpha and
-`Release-Channel: stable` promotes the current alpha base. Without a trailer,
-an alpha increments its numeric suffix and stable releases use conventional
-commits to select major, minor, or patch bumps. There is no release pull
-request or manually maintained version file. See the
+`Release-Channel: stable` promotes the current alpha base. On an existing
+alpha line, an `alpha` trailer on a breaking-change commit starts the next
+major alpha. Without a trailer, an alpha increments its numeric suffix and
+stable releases use conventional commits to choose the bump. No release pull
+request or version file is needed. See the
 [contributor guide](https://github.com/stampbot/extra-codeowners/blob/main/CONTRIBUTING.md#choose-a-release-channel)
 for the exact merge-message procedure.
 
