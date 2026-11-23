@@ -16,9 +16,13 @@ _HEADS = "refs/heads/"
 _QUEUE = "gh-readonly-queue/"
 _INVALID_REF = re.compile(r"[\x00-\x20\x7f~^:?*\[\\]|\.\.|@\{")
 
+MAX_MERGE_QUEUE_ENTRIES = 100
+MAX_MERGE_QUEUE_BRANCH_RULES = 100
+
 QUEUE_CANDIDATE_QUERY = """\
 query QueueCandidate(
-  $owner: String!, $repo: String!, $branch: String!, $base: String!, $head: String!
+  $owner: String!, $repo: String!, $branch: String!, $base: String!, $head: String!,
+  $entryLimit: Int!
 ) {
   repository(owner: $owner, name: $repo) {
     id
@@ -28,7 +32,7 @@ query QueueCandidate(
     head: ref(qualifiedName: $head) { name prefix target { __typename oid } }
     mergeQueue(branch: $branch) {
       id
-      entries(first: 2) {
+      entries(first: $entryLimit) {
         totalCount
         pageInfo { hasNextPage }
         nodes {
@@ -202,10 +206,73 @@ def _require_ref(value: object, ref: str, sha: str) -> None:
         raise MergeQueueEvidenceError("merge queue ref changed or no longer points to a commit")
 
 
-def bind_candidate(trigger: MergeGroupTrigger, graph: object) -> MergeCandidateIdentity:
-    """Bind one pending candidate to the target and PR returned by GitHub."""
+def require_serial_queue_rule(rules: object) -> None:
+    """Require the effective queue rule tested in the one-build fixture."""
+    if not isinstance(rules, list) or not 0 < len(rules) < MAX_MERGE_QUEUE_BRANCH_RULES:
+        raise MergeQueueEvidenceError("GitHub did not return a complete branch rule list")
+    merge_rules: list[dict[str, Any]] = []
+    for value in rules:
+        rule = _record(value)
+        kind = rule.get("type")
+        if not isinstance(kind, str) or not kind:
+            raise MergeQueueEvidenceError("GitHub omitted an effective branch rule type")
+        if kind == "merge_queue":
+            merge_rules.append(_record(rule.get("parameters")))
+    if len(merge_rules) != 1:
+        raise MergeQueueEvidenceError(
+            "GitHub did not return exactly one effective merge queue rule"
+        )
+    parameters = merge_rules[0]
+    counts = ("max_entries_to_build", "min_entries_to_merge", "max_entries_to_merge")
+    if (
+        parameters.get("grouping_strategy") != "ALLGREEN"
+        or parameters.get("merge_method") != "SQUASH"
+        or any(type(parameters.get(field)) is not int or parameters[field] != 1 for field in counts)
+    ):
+        raise MergeQueueEvidenceError(
+            "effective merge queue rule does not match the serial fixture"
+        )
+
+
+def _require_waiting_entries(nodes: list[object], identity: MergeCandidateIdentity) -> None:
+    """Distinguish unbuilt PRs from a second candidate or conflicting entry."""
+    entry_ids = {identity.entry_id}
+    pull_ids = {identity.pull_id}
+    pull_numbers = {identity.pull_number}
+    for position, value in enumerate(nodes, start=2):
+        entry = _record(value)
+        entry_id = _node_id(entry.get("id"))
+        pull = _record(entry.get("pullRequest"))
+        pull_id = _node_id(pull.get("id"))
+        pull_number = _positive_id(pull.get("number"))
+        if (
+            _positive_id(entry.get("position")) != position
+            or entry.get("state") != "QUEUED"
+            or "baseCommit" not in entry
+            or entry["baseCommit"] is not None
+            or "headCommit" not in entry
+            or entry["headCommit"] is not None
+            or entry_id in entry_ids
+            or pull_id in pull_ids
+            or pull_number in pull_numbers
+            or _record(pull.get("repository")).get("id") != identity.repository_node_id
+            or pull.get("baseRefName") != identity.trigger.base_branch
+            or pull.get("state") != "OPEN"
+            or pull.get("isDraft") is not False
+        ):
+            raise MergeQueueEvidenceError("another merge queue entry is not an unbuilt waiting PR")
+        entry_ids.add(entry_id)
+        pull_ids.add(pull_id)
+        pull_numbers.add(pull_number)
+
+
+def bind_candidate(
+    trigger: MergeGroupTrigger, graph: object, *, effective_rules: object
+) -> MergeCandidateIdentity:
+    """Bind the only built candidate to its target and PR in a serial queue."""
     if trigger.action != "checks_requested":
         raise MergeQueueEvidenceError("destroyed candidates are not eligible for evaluation")
+    require_serial_queue_rule(effective_rules)
     repo = _record(graph)
     route = repo.get("nameWithOwner")
     if (
@@ -221,14 +288,15 @@ def bind_candidate(trigger: MergeGroupTrigger, graph: object) -> MergeCandidateI
     queue = _record(repo.get("mergeQueue"))
     entries = _record(queue.get("entries"))
     nodes = entries.get("nodes")
+    count = entries.get("totalCount")
     if (
-        type(entries.get("totalCount")) is not int
-        or entries["totalCount"] != 1
+        type(count) is not int
+        or not 0 < count <= MAX_MERGE_QUEUE_ENTRIES
         or _record(entries.get("pageInfo")).get("hasNextPage") is not False
         or not isinstance(nodes, list)
-        or len(nodes) != 1
+        or len(nodes) != count
     ):
-        raise MergeQueueEvidenceError("GitHub did not return exactly one queue entry")
+        raise MergeQueueEvidenceError("GitHub did not return a complete merge queue entry list")
     entry = _record(nodes[0])
     if (
         entry.get("state") != "AWAITING_CHECKS"
@@ -249,7 +317,7 @@ def bind_candidate(trigger: MergeGroupTrigger, graph: object) -> MergeCandidateI
         or head == trigger.head_sha
     ):
         raise MergeQueueEvidenceError("queue entry does not identify the open PR and its revisions")
-    return MergeCandidateIdentity(
+    identity = MergeCandidateIdentity(
         trigger=trigger,
         repository_node_id=repo_id,
         queue_id=_node_id(queue.get("id")),
@@ -258,6 +326,8 @@ def bind_candidate(trigger: MergeGroupTrigger, graph: object) -> MergeCandidateI
         pull_number=_positive_id(pull.get("number")),
         pull_head_sha=head,
     )
+    _require_waiting_entries(nodes[1:], identity)
+    return identity
 
 
 def require_candidate_pull(identity: MergeCandidateIdentity, value: object) -> None:

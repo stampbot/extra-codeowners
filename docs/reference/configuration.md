@@ -322,6 +322,10 @@ does not depend on this probe.
 
 Leave the merge queue settings unset outside the [disposable fixture](../explanation/design/2026-11-21-merge-queue-candidate-checks.md#proposed-first-proof).
 The pair is an experimental opt-in, not a supported enforcement mode.
+The target branch must have one active merge queue rule: squash, `ALLGREEN`,
+one build slot, and exactly one PR per merge. The worker requires fewer
+than 100 effective branch rules and a complete snapshot of at most 100
+queue entries. Both responses must fit within 64 KiB each.
 
 ### App setup settings
 

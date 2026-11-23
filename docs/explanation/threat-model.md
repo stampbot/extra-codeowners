@@ -279,7 +279,8 @@ The implementation does not currently cover:
 - GitHub Enterprise Server, until named server versions have been tested
 - high-assurance merge queues; the
   [experimental candidate worker](design/2026-11-21-merge-queue-candidate-checks.md)
-  is limited to one disposable test repository and hasn't passed live validation
+  is limited to one disposable test repository. The first live test used one
+  entry; it did not test published results after an approval was withdrawn
 - a transfer or installation change that removes repository access before
   control returns to native enforcement
 - tenant isolation or service-level commitments for a hosted multi-tenant

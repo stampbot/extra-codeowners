@@ -1,5 +1,14 @@
 # Runtime vulnerability review
 
+## Experimental queue rule reads: November 23, 2026 UTC
+
+The candidate worker now reads effective branch rules using the existing
+GitHub HTTPS client and read-only queue token. Both the REST response and
+the GraphQL entry list go through the existing bounded JSON parser. The
+change adds no native caller, TLS setting, package, or image input. The
+existing vulnerability assessments and their dates are unchanged; only the
+reviewed runtime binding advances.
+
 ## November OpenSSL findings in alpha.111
 
 The [alpha.111 native rescan](https://github.com/stampbot/extra-codeowners/actions/runs/45177432863)

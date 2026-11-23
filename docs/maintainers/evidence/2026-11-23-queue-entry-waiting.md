@@ -1,9 +1,9 @@
 # November 23, 2026: One candidate with a second pull request waiting
 
 GitHub kept the first candidate unchanged when a second pull request joined
-the queue. The second PR had no candidate of its own. The distinction matters
-because Extra CODEOWNERS currently rejects a queue with more than one entry,
-even when only the first entry has a candidate.
+the queue. The second PR had no candidate of its own. At the time of the
+test, Extra CODEOWNERS rejected any queue with more than one entry, even
+when only the first entry had a candidate.
 
 ## Setup
 

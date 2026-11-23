@@ -1,8 +1,8 @@
 {
   "@context": "https://openvex.dev/ns/v0.2.0",
-  "@id": "urn:uuid:860b7382-5011-5d30-9966-bb36daaaa616",
+  "@id": "urn:uuid:e2f3c049-f090-567d-ae83-78a9af57e833",
   "author": "Extra CODEOWNERS maintainers",
-  "last_updated": "2026-11-23T13:15:01Z",
+  "last_updated": "2026-11-23T13:44:27Z",
   "role": "VEX document producer",
   "statements": [
     {
@@ -1343,9 +1343,9 @@
       }
     }
   ],
-  "timestamp": "2026-11-23T13:15:01Z",
+  "timestamp": "2026-11-23T13:44:27Z",
   "tooling": "Vexcalibur + Extra CODEOWNERS runtime binding",
-  "version": 49,
+  "version": 51,
   "x_extra_codeowners_runtime": {
     "files": {
       ".dockerignore": "3f9dc9d3a79fe3085f25de88403b5563ad5c7fa7010bef94c5e55f24bd3cf691",
@@ -1377,12 +1377,12 @@
       "extra_codeowners/dco.py": "8c3a0b541fe021fb9f05500ca9278306901010c219e7e1199ca5e205c138e68d",
       "extra_codeowners/discovery_cache.py": "6ab8504381c2f8b627b97d40cd8a709168c11c5f1f32fde7fca8c0be18b04d8c",
       "extra_codeowners/evaluator.py": "b81b9d1c6fe81d591867b0993d413030caab8af48703c4725f14c04fe2e3f9a6",
-      "extra_codeowners/github.py": "453a9db2063701d4f89defd56fc4a1d5ee37164de0b3481e726f94cf3d6f0f1d",
+      "extra_codeowners/github.py": "005588214882da4fa80fecf0253fc7fe19bf44f0a0973ecbf81f22eb1cbb134d",
       "extra_codeowners/logging.py": "a59227e76ec7809ff8bb88fee997abb9b99f32e81a4c8d16bcfc72c0c0abf33f",
       "extra_codeowners/manifest.py": "33d42ac16b8218562f2baf6c0bc7c6664b03354bbf274cb0381e94740b76681e",
       "extra_codeowners/merge_group_work.py": "e232b766804a1bb944e335addee9bedb381d6570b669adcfe0958e68779090f3",
       "extra_codeowners/merge_group_worker.py": "ab3458ce000d089d5e87d2379cac47dd25fddc1fa177975a3735fa1bdab9c388",
-      "extra_codeowners/merge_queue.py": "212ef3859072466722fa3d502b6e4524cfff93dc24244ad435e05a8d96d50e1d",
+      "extra_codeowners/merge_queue.py": "8e5dcab3aff60ad1cb87d1cdf86e4e2e6fec9153d6c357876da90b119b030010",
       "extra_codeowners/merge_queue_paths.py": "022a6ca85b9d3d08c4aea250851465212541b85ae58e492509bcec735c181c83",
       "extra_codeowners/metrics.py": "64785df4eef0b99bacd2cda27ae7a6bae2142a3b246b3b7fb00996631edae9c6",
       "extra_codeowners/migrations.py": "a86d239779ed7b0e38118a3f7c1dee9b33c71519656699f101ac556eed671a46",
@@ -1416,7 +1416,7 @@
       "tools/source_recipes/wheel-supplement-protobuf-7.35.1.json": "5b407c288cf74e090f4934113f9bb6f7907a37d6ccbb228321bedb0612b03c8f",
       "uv.lock": "f8a9a125ba46d5275da8300e3f640e5767df2f451f7601a26e4be17c81e3f70e"
     },
-    "review": "Review alpha.111 signed wheel files and version-matched callers for the November OpenSSL findings. Scope 20 protocol and caller exclusions to the default Linux service on both platforms. Keep all other claims and the five remaining findings unchanged; no runtime code or packages changed.",
+    "review": "The experimental queue uses its existing read-only GitHub HTTPS token and bounded REST/GraphQL JSON parsing. This affects no native caller, package version, TLS option, or image dependency.",
     "schema_version": 1
   }
 }

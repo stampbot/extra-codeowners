@@ -175,7 +175,7 @@ addresses the shared-head window for the tested rules in [issue #1][issue-1],
 not for a required check on the PR head alone.
 
 Keep GitHub's native **Require review from Code Owners** rule on production
-repositories. The one-entry worker remains experimental, and
+repositories. The candidate worker remains experimental, and
 [issue #4](https://github.com/stampbot/extra-codeowners/issues/4) tracks
 broader queue support. The tests don't make review dismissal atomic with merge.
 
