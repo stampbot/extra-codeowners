@@ -1,7 +1,8 @@
 """Catalog reviewed C-library identities from wheel SBOMs and source recipes.
 
-This offline catalog supplements the image SBOM. It does not infer licenses,
-prove exact upstream build inputs, or assess vulnerability reachability.
+This offline catalog supplements the image SBOM. It can include reviewed
+source license texts. It does not conclude binary licenses, prove exact
+upstream build inputs, or assess vulnerability reachability.
 """
 
 from __future__ import annotations
@@ -200,6 +201,7 @@ def build(
     *,
     rpm_notices: bool = False,
     rpm_notice_receipt: Path | None = None,
+    source_licenses: bool = False,
 ) -> bytes:
     """Bind a deterministic CycloneDX catalog to verified platform evidence."""
     raw = _json(inventory)
@@ -208,6 +210,8 @@ def build(
         raise NativeComponentError("native component catalog requires source recipe schema 4")
     source_plan: dict[str, Any] = _python.plan(inventory, lock, architecture, digest)
     source_payloads = None
+    if source_licenses and python_sources is None:
+        raise NativeComponentError("source license evidence requires the verified Python sources")
     rpm_archives = None
     rpm_receipt_hash = None
     if rpm_notices:
@@ -274,6 +278,7 @@ def build(
         }
         if source.get("wheel_files"):
             properties["native-files"] = json.dumps(source["wheel_files"], sort_keys=True)
+        license_evidence: dict[str, Any] = {}
         if source_payloads is not None:
             if custom is None:
                 if rpm_archives is None:
@@ -289,26 +294,34 @@ def build(
                         "not complete binary attribution or approval"
                     )
             else:
+                texts = _native_notices.read_notices(source, source_payloads[source["path"]])
                 properties["source-notice-files"] = json.dumps(
-                    _native_notices.inspect(source, source_payloads[source["path"]]), sort_keys=True
+                    _native_notices.describe_notices(texts), sort_keys=True
                 )
                 properties["source-notice-review"] = (
                     "selected upstream texts only; not complete binary attribution or approval"
                 )
+                if source_licenses:
+                    license_evidence = _native_notices.source_license_evidence(source, texts)
+                    properties["source-license-scope"] = (
+                        "top-level license text from verified upstream source; "
+                        "not a license conclusion for the compiled library"
+                    )
         ref = "native:" + hashlib.sha256(f"{parent}\n{purl}".encode()).hexdigest()
         if ref in refs:
             raise NativeComponentError("duplicate native source component")
         refs.add(ref)
-        components.append(
-            {
-                "type": "library",
-                "bom-ref": ref,
-                "name": name,
-                "version": component_version,
-                "purl": purl,
-                "properties": _properties(properties),
-            }
-        )
+        component_record: dict[str, Any] = {
+            "type": "library",
+            "bom-ref": ref,
+            "name": name,
+            "version": component_version,
+            "purl": purl,
+            "properties": _properties(properties),
+        }
+        if license_evidence:
+            component_record["evidence"] = license_evidence
+        components.append(component_record)
         dependencies[parent].append(ref)
     if consumed != set(reported):
         raise NativeComponentError("wheel SBOM has a native component without a reviewed source")
@@ -317,6 +330,8 @@ def build(
         evidence_properties["source-notice-evidence"] = "2" if rpm_archives is not None else "1"
     if rpm_receipt_hash is not None:
         evidence_properties["rpm-notice-receipt-sha256"] = rpm_receipt_hash
+    if source_licenses:
+        evidence_properties["source-license-evidence"] = "1"
     document = {
         "bomFormat": "CycloneDX",
         "specVersion": "1.5",
@@ -363,6 +378,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--rpm-notices", action="store_true", help="require RPM source notice evidence (version 2)"
     )
     parser.add_argument("--rpm-notice-receipt", type=Path, help="receipt from the release revision")
+    parser.add_argument(
+        "--source-licenses", action="store_true", help="require reviewed upstream license texts"
+    )
     parser.add_argument("--architecture", choices=("amd64", "arm64"), required=True)
     parser.add_argument("--platform-digest", required=True)
     parser.add_argument("--catalog", type=Path, required=True)
@@ -374,6 +392,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         existing = _read(args.catalog) if args.command == "verify" else None
         rpm_notices = args.rpm_notices
+        source_licenses = args.source_licenses
         if existing is not None:
             metadata = _json(existing).get("metadata")
             if not isinstance(metadata, dict) or not isinstance(metadata.get("properties"), list):
@@ -381,6 +400,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             rpm_notices |= {
                 "name": "extra-codeowners:source-notice-evidence",
                 "value": "2",
+            } in metadata["properties"]
+            source_licenses |= {
+                "name": "extra-codeowners:source-license-evidence",
+                "value": "1",
             } in metadata["properties"]
         data = build(
             _read(args.inventory),
@@ -391,6 +414,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.python_sources,
             rpm_notices=rpm_notices,
             rpm_notice_receipt=args.rpm_notice_receipt,
+            source_licenses=source_licenses,
         )
         if args.command == "generate":
             with args.catalog.open("xb") as output:

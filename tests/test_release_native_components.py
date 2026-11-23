@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import copy
 import hashlib
 import io
@@ -262,6 +263,7 @@ def test_cli_generates_and_verifies_without_overwriting(
     sources = tmp_path / "sources.tar.gz"
     sources.write_bytes(b"fictional verified source bundle")
     payloads = {}
+    reviewed = {}
     for item in evidence["plan"]["embedded_sources"]:
         name = item["source_component"]["name"]
         prefix, filenames = {
@@ -269,6 +271,13 @@ def test_cli_generates_and_verifies_without_overwriting(
             "libpq": ("postgresql", ["COPYRIGHT"]),
             "openldap": ("openldap", ["COPYRIGHT", "LICENSE"]),
         }[name]
+        source_version = item["source_component"]["version"]
+        license_path = f"{prefix}-{source_version}/{filenames[-1]}"
+        reviewed[name, source_version, item["sha256"]] = (
+            license_path,
+            hashlib.sha256(b"fiction").hexdigest(),
+            "MIT",
+        )
         archive = io.BytesIO()
         with tarfile.open(fileobj=archive, mode="w:gz") as tar:
             for filename in filenames:
@@ -280,11 +289,13 @@ def test_cli_generates_and_verifies_without_overwriting(
         payloads[item["path"]] = archive.getvalue()
     verifier = Mock(return_value=payloads)
     monkeypatch.setattr(catalog._python, "verify", verifier)
+    monkeypatch.setattr(catalog._native_notices, "_SOURCE_LICENSES", reviewed)
     source = evidence["plan"]["native_sources"][0]
     receipt = tmp_path / "rpm-notices.json"
     receipt.write_text(json.dumps({"schema_version": 1, "archives": rpm_notices(source)}))
     monkeypatch.setattr(catalog, "_RPM_NOTICE_RECEIPT", receipt)
-    _exercise_cli(inventory, lock, output, sources, receipt)
+    args = _exercise_cli(inventory, lock, output, sources, receipt)
+    _exercise_source_license_cli(args, output)
     verifier.assert_called_with(evidence["plan"], b"fictional verified source bundle")
     verifier.side_effect = ValueError("fictional source hash mismatch")
     with pytest.raises(ValueError, match="source hash mismatch"):
@@ -348,7 +359,9 @@ def test_rpm_notice_receipt_rejects_mismatched_or_malformed_records(
         catalog._rpm_notice_files(archives, source)
 
 
-def _exercise_cli(inventory: Path, lock: Path, output: Path, sources: Path, receipt: Path) -> None:
+def _exercise_cli(
+    inventory: Path, lock: Path, output: Path, sources: Path, receipt: Path
+) -> list[str]:
     args = [
         "--inventory",
         str(inventory),
@@ -420,6 +433,31 @@ def _exercise_cli(inventory: Path, lock: Path, output: Path, sources: Path, rece
     assert catalog.main(["verify", *args, "--rpm-notice-receipt", str(historical_receipt)]) == 0
     with pytest.raises(SystemExit):
         catalog.main(["generate", *args, "--rpm-notice-receipt", str(historical_receipt)])
+    receipt.write_bytes(historical_receipt.read_bytes())
+    assert catalog.main(["verify", *args]) == 0
+    return args
+
+
+def _exercise_source_license_cli(args: list[str], output: Path) -> None:
+    with pytest.raises(SystemExit):
+        catalog.main(["verify", *args, "--rpm-notices", "--source-licenses"])
+    output.unlink()
+    flags = ["--rpm-notices", "--source-licenses"]
+    assert catalog.main(["generate", *args, *flags]) == 0
+    assert catalog.main(["verify", *args]) == 0
+    assert catalog.main(["verify", *args, *flags]) == 0
+    document = json.loads(output.read_bytes())
+    parts = [item for item in document["components"] if "evidence" in item]
+    assert len(parts) == 4
+    assert all("licenses" not in item for item in document["components"])
+    for item in parts:
+        attached = item["evidence"]["licenses"][0]["license"]
+        assert attached["id"] == "MIT"
+        assert base64.b64decode(attached["text"]["content"], validate=True) == b"fiction"
+    parts[0]["evidence"]["licenses"][0]["license"]["text"]["content"] = "YQ=="
+    output.write_text(json.dumps(document))
+    with pytest.raises(SystemExit):
+        catalog.main(["verify", *args])
 
 
 def test_provenance_verifier_selects_sources_only_for_the_versioned_notice_contract(
