@@ -321,7 +321,7 @@ does not depend on this probe.
 | `EXTRA_CODEOWNERS_EXPERIMENTAL_MERGE_QUEUE_RECHECK_SECONDS` | integer | `30` | Inclusive range `5` through `300`. Delay before rechecking a confirmed candidate pass in the opted-in repository. This is not a revocation deadline. |
 | `EXTRA_CODEOWNERS_ALLOW_INSECURE_CHANGES` | boolean | `false` | When `true`, suppresses only the built-in non-delegable path list for every installation served by that process. It emits a startup warning and sets the insecure-mode metric to `1`. Organization-added guardrails and normal delegation matching still apply. |
 
-Leave the merge queue settings unset outside the [disposable fixture](../explanation/design/2026-11-21-merge-queue-candidate-checks.md#proposed-first-proof).
+Leave the merge queue settings unset outside the [disposable fixture](../how-to/test-merge-queue.md).
 The pair is an experimental opt-in, not a supported enforcement mode.
 The target branch must have one active merge queue rule: squash, `ALLGREEN`,
 one build slot, and exactly one PR per merge. The worker requires fewer
