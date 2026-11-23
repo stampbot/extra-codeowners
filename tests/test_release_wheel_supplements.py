@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -12,7 +13,13 @@ import pytest
 from tools import release_python_sources as sources
 
 DIGEST = "sha256:" + "f" * 64
-WHEELS = [("cffi", "2.1.0"), ("protobuf", "7.35.1")]
+WHEELS = [("cffi", "2.1.0"), ("protobuf", "7.35.1"), ("charset-normalizer", "3.4.9")]
+MYPYC_VERSIONS = ["1.20.2", "2.0.0", "2.1.0"]
+ARTIFACT_ROLES = {
+    "cffi": {"source", "recipe"},
+    "protobuf": {"notice"},
+    "charset-normalizer": {"notice", *(f"source-{v}" for v in MYPYC_VERSIONS)},
+}
 
 
 def inputs(name: str, version: str, arch: str) -> tuple[dict[str, Any], str]:
@@ -24,7 +31,7 @@ def inputs(name: str, version: str, arch: str) -> tuple[dict[str, Any], str]:
         "schema_version": 2,
         "image": {"architecture": arch, "platform_digest": DIGEST},
         "python": {
-            "source_recipe_schema": 6,
+            "source_recipe_schema": 7,
             "distributions": [{"normalized_name": name, "version": version}],
             "native_files": [
                 {
@@ -64,9 +71,10 @@ def test_plan_binds_each_wheel_and_retains_only_its_supplements(
     assert all(
         record["path"].startswith(f"supplements/{name}/{arch}/") for record in item["artifacts"]
     )
-    assert {record["role"] for record in item["artifacts"]} == (
-        {"source", "recipe"} if name == "cffi" else {"notice"}
-    )
+    assert {record["role"] for record in item["artifacts"]} == ARTIFACT_ROLES[name]
+    if name == "charset-normalizer":
+        assert item["component"] == {"name": "mypyc-runtime", "source_candidates": MYPYC_VERSIONS}
+        assert "version" not in item["component"]
     assert manifest["embedded_sources"] == []
 
 
@@ -95,6 +103,34 @@ def test_schema_five_does_not_require_a_supplement() -> None:
     inventory["python"]["native_files"] = []
     historical = sources.plan(json.dumps(inventory).encode(), lock.encode(), "amd64", DIGEST)
     assert "wheel_supplements" not in historical
+
+
+def test_schema_six_does_not_require_mypyc_evidence() -> None:
+    inventory, lock = inputs("charset-normalizer", "3.4.9", "amd64")
+    inventory["python"]["source_recipe_schema"] = 6
+    inventory["python"]["native_files"] = []
+    historical = sources.plan(json.dumps(inventory).encode(), lock.encode(), "amd64", DIGEST)
+    assert historical["wheel_supplements"] == []
+
+
+@pytest.mark.parametrize("case", ["duplicate-version", "wrong-url", "missing-source"])
+def test_mypyc_recipe_requires_each_distinct_candidate(
+    case: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    name, version = "charset-normalizer", "3.4.9"
+    inventory, lock = inputs(name, version, "amd64")
+    receipt = f"wheel-supplement-{name}-{version}.json"
+    recipe = json.loads((sources.RECIPE_DIRECTORY / receipt).read_bytes())
+    if case == "duplicate-version":
+        recipe["component"]["source_candidates"] = ["2.1.0", "2.1.0"]
+    elif case == "wrong-url":
+        recipe["artifacts"]["source-2.0.0"]["url"] = recipe["artifacts"]["source-2.1.0"]["url"]
+    else:
+        del recipe["artifacts"]["source-1.20.2"]
+    (tmp_path / receipt).write_text(json.dumps(recipe), encoding="utf-8")
+    monkeypatch.setattr(sources, "RECIPE_DIRECTORY", tmp_path)
+    with pytest.raises(sources.PythonSourceError, match=r"mypyc|artifacts"):
+        sources.plan(json.dumps(inventory).encode(), lock.encode(), "amd64", DIGEST)
 
 
 def test_bundle_requires_every_supplement_and_verifies_its_bytes() -> None:

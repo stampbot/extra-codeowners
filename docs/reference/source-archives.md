@@ -378,6 +378,21 @@ Look under `supplements/` in `python-source-<arch>.tar.gz` for these files.
 verifies the files without running the CFFI workflow. These entries retain
 version-matched source and notices; they do not reproduce either wheel build.
 
+### The charset-normalizer wheel
+
+Schema 7 also records the mypyc runtime inside the charset-normalizer
+3.4.9 wheels. Its entry in `wheel_supplements` identifies the wheel and
+the compiled extension by SHA-256. The wheel's own license doesn't
+include the runtime's notices.
+
+The bundle supplies `mypyc.LICENSE` and the three possible upstream source
+archives. Both shipped binaries export `CPyImport_SetDunderAttrs`. Of the
+published versions the upstream build could select, only 1.20.2, 2.0.0, and
+2.1.0 contain that function. The license file is identical in all three,
+including the Python Software Foundation terms for portions of the
+runtime. The manifest lists `source_candidates` rather than choosing one
+compiler version: the published wheels and SBOMs don't record that choice.
+
 ## Rust dependencies in Python wheels
 
 Releases whose inventory declares `python.rust_source_bundle` also supply
