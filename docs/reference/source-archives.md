@@ -17,6 +17,8 @@ wheels and other missing notice material remain under
 For machine-readable C-library identities and their source-recipe bindings,
 use the companion [wheel-native catalogs](native-components.md). Those catalogs
 do not replace the source archives or establish complete source delivery.
+To check whether the released image loads your replacement for a bundled
+Psycopg library, use the [replacement test](../how-to/test-replacement-library.md).
 
 ## CPython contents and identity
 
