@@ -31,11 +31,15 @@ MAX_BUNDLE_BYTES = MAX_LEGACY_BUNDLE_BYTES + MAX_IMAGE_MANIFEST_BYTES + MAX_LAYE
 MAX_INVENTORY_BYTES = 16 * 1024 * 1024
 CURRENT_NOTICE_SCHEMA = 3
 LAYER_SOURCE_SCHEMA = 4
+INCORPORATED_NOTICES_SCHEMA = 5
 IMAGE_MANIFEST_PATH = "image-manifest.json"
 _OCI_MANIFEST = "application/vnd.oci.image.manifest.v1+json"
 _OCI_GZIP_LAYER = "application/vnd.oci.image.layer.v1.tar+gzip"
 _CPYTHON_31410 = ("3.14.10", "de414a57119abef52784d8993e341d53aed635fc2b05c2607d9f98a2c5b72032")
 _HACL_REVISION = "8ba599b2f6c9701b3dc961db895b0856a2210f76"
+_INCORPORATED_NOTICES = {
+    _CPYTHON_31410: "8a7329b25131f64b2bea284155f0824876b1af9f4a2f970e6335751d97dfa6dd"
+}
 
 # Both shipped layers contain the identical wheel, even though a later layer
 # hides it with a whiteout. The version and byte comparison are recorded at:
@@ -291,6 +295,14 @@ def _manifest(
                     for path, digest in additional
                 ),
             )
+        if notice_schema >= INCORPORATED_NOTICES_SCHEMA:
+            doc_checksum = _INCORPORATED_NOTICES.get((version, checksum))
+            if not doc_checksum:
+                raise SourceError("no incorporated-software notice review for this CPython archive")
+            notices = (
+                *notices,
+                ("cpython-incorporated-software", version, "Doc/license.rst", doc_checksum),
+            )
         manifest["bundled_notices"] = [
             {
                 "component": component,
@@ -300,7 +312,7 @@ def _manifest(
             }
             for component, component_version, path, digest in notices
         ]
-    if notice_schema == LAYER_SOURCE_SCHEMA:
+    if notice_schema >= LAYER_SOURCE_SCHEMA:
         if layer_evidence is None:
             raise SourceError("source bundle omitted the OCI manifest or pip source archive")
         manifest["image_manifest"] = IMAGE_MANIFEST_PATH
@@ -323,7 +335,7 @@ def build_bundle(
     """Return a deterministic bundle after checking the upstream archive hash."""
     schema = CURRENT_NOTICE_SCHEMA if require_bundled_notices else 1
     if layer_evidence is not None:
-        schema = LAYER_SOURCE_SCHEMA
+        schema = INCORPORATED_NOTICES_SCHEMA
     manifest = _manifest(
         inventory,
         architecture,
@@ -421,13 +433,19 @@ def verify_bundle(
         raise SourceError("invalid compressed source bundle") from error
     actual = _json(files["manifest.json"])
     schema = actual.get("schema_version")
-    if type(schema) is not int or schema not in {1, 2, CURRENT_NOTICE_SCHEMA, LAYER_SOURCE_SCHEMA}:
+    if type(schema) is not int or schema not in {
+        1,
+        2,
+        CURRENT_NOTICE_SCHEMA,
+        LAYER_SOURCE_SCHEMA,
+        INCORPORATED_NOTICES_SCHEMA,
+    }:
         raise SourceError("unsupported source manifest schema")
     if require_bundled_notices and schema < CURRENT_NOTICE_SCHEMA:
         raise SourceError("source manifest omitted the required bundled notices")
-    if require_layer_sources and schema != LAYER_SOURCE_SCHEMA:
+    if require_layer_sources and schema < LAYER_SOURCE_SCHEMA:
         raise SourceError("source manifest omitted the required layer sources")
-    if schema == LAYER_SOURCE_SCHEMA:
+    if schema >= LAYER_SOURCE_SCHEMA:
         if set(files) != expected_paths | layer_paths:
             raise SourceError("source bundle omitted the OCI manifest or pip source archive")
         layer_evidence = (files[IMAGE_MANIFEST_PATH], files[_PIP_SOURCE_PATH])

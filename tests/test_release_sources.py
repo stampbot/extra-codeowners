@@ -407,6 +407,7 @@ def layer_case(monkeypatch: pytest.MonkeyPatch) -> tuple[bytes, str, bytes, byte
         {source_key: (("fixture", "1.2.3", "Modules/fixture/NOTICE", "a" * 64),)},
     )
     monkeypatch.setattr(sources, "_HACL_NOTICES", {source_key: {"common": (), "amd64": ()}})
+    monkeypatch.setattr(sources, "_INCORPORATED_NOTICES", {source_key: "b" * 64})
     inventory = _inventory().replace(DIGEST.encode(), child_digest.encode())
     return inventory, child_digest, child, pip_source
 
@@ -429,9 +430,42 @@ def test_layer_sources_round_trip_and_are_required_only_for_new_releases(
         platform_digest=digest,
         require_layer_sources=True,
     )
-    assert manifest["schema_version"] == 4
+    assert manifest["schema_version"] == 5
     assert manifest["image_manifest"] == "image-manifest.json"
     assert manifest["layer_sources"] == [sources._pip_record("amd64", digest, child, pip_source)]
+    notices = manifest["bundled_notices"]
+    assert isinstance(notices, list)
+    assert notices[-1] == {
+        "component": "cpython-incorporated-software",
+        "version": "3.14.7",
+        "path": "Python-3.14.7/Doc/license.rst",
+        "sha256": "b" * 64,
+    }
+    old = {**manifest, "schema_version": 4, "bundled_notices": notices[:-1]}
+    for claimed_schema, should_verify in [(4, True), (5, False)]:
+        changed = _repack(
+            bundle, "manifest.json", json.dumps({**old, "schema_version": claimed_schema}).encode()
+        )
+        if should_verify:
+            assert (
+                sources.verify_bundle(
+                    inventory,
+                    changed,
+                    architecture="amd64",
+                    platform_digest=digest,
+                    require_layer_sources=True,
+                )
+                == old
+            )
+        else:
+            with pytest.raises(sources.SourceError, match="differs"):
+                sources.verify_bundle(
+                    inventory,
+                    changed,
+                    architecture="amd64",
+                    platform_digest=digest,
+                    require_layer_sources=True,
+                )
     with tarfile.open(fileobj=io.BytesIO(bundle), mode="r:gz") as tar:
         for name, expected in [
             ("image-manifest.json", child),

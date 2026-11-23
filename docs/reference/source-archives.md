@@ -48,13 +48,19 @@ HMAC. The amd64 manifest includes the two BLAKE2 SIMD files selected by that
 build; the arm64 manifest doesn't. These entries point to the source files
 that contain the notices. They don't inventory every file or built object.
 
+Version 5 also indexes CPython's `Doc/license.rst`. That file contains
+the Python project's licenses and acknowledgements for incorporated
+software, including Mersenne Twister, mimalloc and the Unicode Character
+Database. Read it inside the retained source archive. Its index entry
+identifies the upstream notice text; it isn't a list of linked libraries.
+
 The release workflow requires the current index for the reviewed archive.
-Older, signed schema versions 1 through 3 remain verifiable with their
+Older, signed schema versions 1 through 4 remain verifiable with their
 original contents.
 
 ### pip in an earlier image layer
 
-Schema version 4 also includes `image-manifest.json` and
+Schema versions 4 and 5 also include `image-manifest.json` and
 `layer-sources/pip-26.2.2.tar.gz`. An earlier layer ships pip before a later
 layer removes it from the final filesystem. Both layers still ship with the
 image, so the source bundle includes pip even though the final filesystem
@@ -112,7 +118,7 @@ archive checksum alone does not authenticate its publisher.
 
 The verifier rejects altered source bytes, a changed inventory, missing or
 duplicate members, links, and unexpected archive entries. Downloads and
-verification limit the CPython archive to 64 MiB. Schema 4 adds up to
+verification limit the CPython archive to 64 MiB. Schemas 4 and 5 add up to
 4 MiB for pip source and 64 KiB for the OCI manifest. The outer bundle is
 limited to 69 MiB plus 64 KiB before and after decompression; older bundles
 keep their 65 MiB limit. These limits don't bound what the upstream archives
