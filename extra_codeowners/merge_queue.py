@@ -267,7 +267,11 @@ def _require_waiting_entries(nodes: list[object], identity: MergeCandidateIdenti
 
 
 def bind_candidate(
-    trigger: MergeGroupTrigger, graph: object, *, effective_rules: object
+    trigger: MergeGroupTrigger,
+    graph: object,
+    *,
+    effective_rules: object,
+    rechecking: bool = False,
 ) -> MergeCandidateIdentity:
     """Bind the only built candidate to its target and PR in a serial queue."""
     if trigger.action != "checks_requested":
@@ -298,8 +302,11 @@ def bind_candidate(
     ):
         raise MergeQueueEvidenceError("GitHub did not return a complete merge queue entry list")
     entry = _record(nodes[0])
+    eligible_states = (
+        ("AWAITING_CHECKS", "MERGEABLE", "LOCKED") if rechecking else ("AWAITING_CHECKS",)
+    )
     if (
-        entry.get("state") != "AWAITING_CHECKS"
+        entry.get("state") not in eligible_states
         or _positive_id(entry.get("position")) != 1
         or _record(entry.get("baseCommit")).get("oid") != trigger.base_sha
         or _record(entry.get("headCommit")).get("oid") != trigger.head_sha
@@ -328,6 +335,24 @@ def bind_candidate(
     )
     _require_waiting_entries(nodes[1:], identity)
     return identity
+
+
+def candidate_pull_is_closed(
+    trigger: MergeGroupTrigger, pull_id: str, pull_number: int, value: object
+) -> bool:
+    """Retire a timer only after a fresh read identifies its closed PR."""
+    pull = _record(value)
+    repo = _record(_record(pull.get("base")).get("repo"))
+    if (
+        _positive_id(pull.get("number")) != pull_number
+        or pull.get("node_id") != pull_id
+        or _positive_id(repo.get("id")) != trigger.repository_id
+        or _repository_name(repo.get("full_name")).lower() != trigger.repository
+        or pull.get("state") not in ("open", "closed")
+        or type(pull.get("merged")) is not bool
+    ):
+        raise MergeQueueEvidenceError("could not confirm current candidate PR lifecycle")
+    return bool(pull["state"] == "closed")
 
 
 def require_candidate_pull(identity: MergeCandidateIdentity, value: object) -> None:

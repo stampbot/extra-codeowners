@@ -1855,7 +1855,9 @@ class GitHubClient:
             raise GitHubError(f"GraphQL {operation} omitted its data object")
         return data
 
-    async def get_merge_candidate(self, trigger: MergeGroupTrigger) -> MergeCandidateIdentity:
+    async def get_merge_candidate(
+        self, trigger: MergeGroupTrigger, *, rechecking: bool = False
+    ) -> MergeCandidateIdentity:
         """Identify a waiting candidate using fresh, read-only GitHub evidence."""
         if trigger.action != "checks_requested":
             raise GitHubError("destroyed candidates are not eligible for evaluation")
@@ -1891,7 +1893,12 @@ class GitHubClient:
             queue_read=True,
         )
         try:
-            return bind_candidate(trigger, data.get("repository"), effective_rules=rules.payload)
+            return bind_candidate(
+                trigger,
+                data.get("repository"),
+                effective_rules=rules.payload,
+                rechecking=rechecking,
+            )
         except MergeQueueEvidenceError as error:
             raise GitHubError(str(error)) from error
 
@@ -2466,7 +2473,7 @@ class GitHubClient:
         check_id: int | None = None,
         approved: bool,
         summary: str,
-    ) -> None:
+    ) -> int:
         """Write an exact candidate result; a destroyed group can only reset a known check."""
         if trigger.action == "destroyed" and (approved or check_id is None):
             raise ValueError("destroyed candidate may only reset an existing check")
@@ -2495,6 +2502,22 @@ class GitHubClient:
             or result.get("conclusion") != conclusion
         ):
             raise GitHubError("GitHub did not confirm the requested merge group check")
+        return written
+
+    async def merge_group_check_is_passing(
+        self, trigger: MergeGroupTrigger, check_name: str, check_id: int
+    ) -> bool:
+        """Confirm the identity and current conclusion of a previously published pass."""
+        run = await self._request(
+            "GET",
+            f"/repos/{trigger.repository}/check-runs/{check_id}",
+            installation_id=trigger.installation_id,
+        )
+        if self._validate_merge_group_check(run, trigger, check_name) != check_id:
+            raise GitHubError("GitHub returned a different merge group check")
+        if run.get("status") != "completed" or run.get("conclusion") not in ("success", "failure"):
+            raise GitHubError("GitHub did not return a recognized completed merge group check")
+        return bool(run["conclusion"] == "success")
 
     async def check_run_is_completed(
         self,

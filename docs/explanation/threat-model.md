@@ -193,6 +193,11 @@ The [dated live results](../maintainers/live-validation.md) distinguish tested
 behavior from the merge and access-loss paths that remain open. Successful
 approval tests do not remove the shared-head limitation above.
 
+The experimental candidate timer watches passes the worker already confirmed.
+It can't recover a missing first candidate delivery. An expired lease,
+GitHub request failure, or quota pause can delay a revocation. Even when the
+timer reaches GitHub, a review change and the final merge aren't atomic.
+
 ## Why some paths cannot be delegated
 
 Some files decide who may approve. Others decide what trusted automation will

@@ -575,6 +575,15 @@ requires squash merging, one build slot, one PR per merge, and `ALLGREEN`.
 Only the first entry can have a candidate; any later entry must still be
 waiting without a base or candidate commit. Missing rules, a partial list,
 or a second built candidate blocks publication.
+
+That worker also schedules rechecks of passes it confirmed. The database
+holds the Check Run ID and due time, so one replica claims a recheck and a
+new delivery can supersede it. An unchanged decision leaves the check alone.
+If the evidence no longer supports the pass, or a first attempt can't prove
+it, the worker tries to revoke the same Check Run. It does not create or
+restore a passing check from a timer. A confirmed closed PR is history;
+the timer retires without a write.
+
 The [merge queue design](design/2026-11-21-merge-queue-candidate-checks.md)
 describes what that worker checks and what it can't prove.
 
