@@ -1,8 +1,8 @@
 # Prepare repository rules
 
-Extra CODEOWNERS replaces one part of GitHub's pull-request policy: native
-code-owner review. It does not replace the repository's minimum approval count,
-stale-review rules, signed commits, merge restrictions, or other checks.
+Test Extra CODEOWNERS as an alternative to native code-owner review in a
+disposable repository. Keep the ordinary approval count, stale-review rules,
+signed commits, merge restrictions, and other required checks in place.
 
 !!! warning
     Use this procedure only in a disposable repository for now. A GitHub Check
@@ -19,10 +19,9 @@ stale-review rules, signed commits, merge restrictions, or other checks.
 - Let the App publish `Extra CODEOWNERS / approval` at least once so GitHub can
   offer the App as the check's expected source.
 
-Merge queue enforcement isn't supported. If the repository uses a merge queue,
-preserve its existing code-owner rule and stop here. The
-[experimental worker](../explanation/design/2026-11-21-merge-queue-candidate-checks.md)
-is for a disposable test repository.
+If the repository uses a merge queue, stop here. Follow the
+[experimental queue procedure](test-merge-queue.md) only in a disposable
+repository. Keep native code-owner review active in production.
 
 ## 1. Record the current protection
 
@@ -46,10 +45,12 @@ In the applicable ruleset or branch-protection rule:
 1. Keep **Require a pull request before merging** enabled.
 2. Keep the desired **Required approvals** count, including `1` or more.
 3. Keep stale-review dismissal and latest-push approval rules.
-4. Disable **Require review from Code Owners**.
-5. Require `Extra CODEOWNERS / approval`, selecting the Extra CODEOWNERS App as
+4. Require `Extra CODEOWNERS / approval`, selecting the Extra CODEOWNERS App as
    its expected source.
-6. Preserve every unrelated check, bypass restriction, and merge rule.
+5. Verify that GitHub applies the App requirement to the test branch. Only
+   then disable **Require review from Code Owners** on that branch.
+6. Verify that every unrelated check, bypass restriction, and merge rule
+   still applies.
 
 GitHub's public documentation does not promise that a third-party App review
 counts toward the ordinary numeric approval rule. Verify that behavior in this
@@ -105,7 +106,10 @@ plan too.
 Use this order if evaluation is unavailable, wrong, or being retired:
 
 1. Restore GitHub's native **Require review from Code Owners** rule.
-2. Wait until GitHub shows that protection as active.
+2. Wait until GitHub shows that protection as active. Use a test PR whose
+   author doesn't own the changed path. Confirm GitHub reports a missing
+   code-owner review even though the App check and ordinary approval count
+   are already satisfied.
 3. Remove the `Extra CODEOWNERS / approval` requirement.
 4. Disable or remove repository policy.
 5. Only then remove the repository from the App installation or suspend the

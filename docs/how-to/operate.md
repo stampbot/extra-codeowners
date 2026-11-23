@@ -837,6 +837,11 @@ Do this while the App still has access. GitHub can keep showing an old
 passing Check Run after it blocks the App from updating it, as observed in
 the [playground suspension test](../maintainers/evidence/2026-11-19-installation-suspend-resume.md).
 
+If you ran a disposable merge-queue experiment, follow its
+[queue handback procedure](test-merge-queue.md#return-to-native-review)
+before you revoke access. Turning off the worker doesn't empty GitHub's
+queue or erase a passing check.
+
 Suspend the installation for a temporary interruption. If you intend to
 uninstall it, confirm you can restore the required repository access before
 uninstalling. Check the installation account so you don't interrupt a

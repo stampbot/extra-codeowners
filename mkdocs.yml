@@ -34,6 +34,7 @@ nav:
       - Register a GitHub App: how-to/register-app.md
       - Configure policy: how-to/configure.md
       - Prepare repository rules: how-to/prepare-repository-rules.md
+      - Test the experimental merge queue: how-to/test-merge-queue.md
       - Preflight a disposable evaluation beta: how-to/preflight-evaluation-beta.md
       - Troubleshoot a check: how-to/troubleshoot-check.md
       - Deploy an alpha in shadow mode: how-to/deploy.md
@@ -117,6 +118,7 @@ nav:
           - November missed review dismissal: maintainers/evidence/2026-11-23-missed-review-dismissal.md
           - November queue with a waiting PR: maintainers/evidence/2026-11-23-worker-with-queued-follower.md
           - November approved candidate merge: maintainers/evidence/2026-11-23-approved-candidate-merged.md
+          - November published schema 0012 restore: maintainers/evidence/2026-11-23-published-schema-0012-restore.md
       - Respond to dependency audit: how-to/respond-to-dependency-audit.md
       - Rescan a published image: how-to/rescan-published-image.md
       - Review or recover a Renovate update: how-to/manage-renovate-updates.md

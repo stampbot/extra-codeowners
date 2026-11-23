@@ -105,13 +105,24 @@ Each repository job lists the affected open pull requests, creates or supersedes
 
 Direct subscriptions shorten the stale-success window, but webhook delivery and GitHub API updates remain eventually consistent. Reconciliation periodically revisits otherwise idle open pull requests after a missed or unsupported change.
 
-`merge_group` is not supported. GitHub requires Merge queues read to deliver that event. Extra CODEOWNERS will request that permission only after merge-queue evaluation exists and has passed contract testing.
+### Experimental merge queue events
+
+The default App Manifest doesn't request **Merge queues** or subscribe to
+`merge_group`. To run the [disposable queue experiment](../how-to/test-merge-queue.md),
+grant **Merge queues** read to the test App and subscribe to that event.
+GitHub requires the permission for delivery. Only the repository whose route
+and ID match the experimental settings can enqueue candidate work.
+
+Initial evaluation needs a matching `merge_group.checks_requested` delivery.
+The candidate worker can recheck a confirmed pass, but ordinary reconciliation
+doesn't discover a candidate whose initial delivery never arrived.
 
 GitHub's [webhook event reference](https://docs.github.com/en/webhooks/webhook-events-and-payloads) lists current event-to-permission requirements.
 
 ## Installation-token scope
 
-The service authenticates as the App to mint short-lived installation tokens. Each request explicitly downscopes the token to:
+The service authenticates as the App to mint short-lived installation tokens.
+Ordinary evaluation explicitly requests:
 
 ```text
 checks: write
@@ -121,6 +132,11 @@ pull_requests: read
 ```
 
 The runtime token deliberately omits `statuses`. If that token is compromised, it cannot write commit statuses even though the App registration includes Commit statuses write for expected-source selection.
+
+For experimental queue and effective-rule reads, the worker uses a separate
+token with `contents: read`, `pull_requests: read`, and `merge_queues: read`.
+It uses the ordinary evaluation token for review evidence and Check Run
+publication.
 
 Runtime tokens are also:
 

@@ -105,6 +105,9 @@ human code-owner approval the project was designed to complement.
 
 ## Proposed first proof
 
+For the current operator procedure, see
+[Test the experimental merge queue](../../how-to/test-merge-queue.md).
+
 Leave production review rules in place. Set both
 [`EXTRA_CODEOWNERS_EXPERIMENTAL_MERGE_QUEUE_*` settings](../../reference/configuration.md#policy-and-security-settings)
 to the route and immutable ID of one disposable repository. Use the same
@@ -125,9 +128,10 @@ If the first candidate delivery is lost, this worker doesn't discover it
 by polling. GitHub should wait for its check; redeliver the event or queue
 a new candidate to try again. The timer only rechecks a pass the worker
 already confirmed. A check on a replacement candidate needs its own delivery
-and evaluation. To end the test, remove the fixture-only
-required check and clear both opt-in settings. Clearing the settings
-doesn't withdraw results that GitHub already recorded.
+and evaluation. To end the test, use the
+[native-review handback](../../how-to/test-merge-queue.md#return-to-native-review)
+before clearing the settings or removing repository access. Clearing the
+settings doesn't withdraw results that GitHub already recorded.
 
 The following order keeps the evaluation tied to what GitHub may merge:
 
