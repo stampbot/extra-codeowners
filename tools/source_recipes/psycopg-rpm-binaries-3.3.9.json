@@ -1,0 +1,141 @@
+{
+  "schema_version": 1,
+  "platforms": {
+    "amd64": {
+      "wheel_filename": "psycopg_binary-3.3.9-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.whl",
+      "wheel_sha256": "4992acd5a7479013d52615b8c23fdce9bc22f3cacbfb1007fa474e6b5ebe94c7",
+      "wheel_sbom_sha256": "72f74b207f9928fd2c87edace7ee00a525b1a2540df09f3c39356e7c09b21ea4",
+      "packages": {
+        "pkg:rpm/centos/libcom_err@1.42.9-19.el7": {
+          "source_archive": "native/psycopg-binary/amd64/e2fsprogs-1.42.9-19.el7.src.rpm",
+          "source_sha256": "718f64bd465d1770eaf6490157a861d3dba2846b4a636a67d27bd4d38e6b86cf",
+          "rpm_filename": "libcom_err-1.42.9-19.el7.x86_64.rpm",
+          "rpm_sha256": "b98e19c3bbf6de458697a895654db0d75e93e7738ef22bc1540e2c78fa91748b",
+          "rpm_declared_license": "MIT",
+          "notices": {},
+          "files": {
+            "libcom_err-2abe824b.so.2.1": {
+              "rpm_path": "/usr/lib64/libcom_err.so.2.1",
+              "original_sha256": "2abe824bc4b40f400391ad327090796ecc2cd48df173c2f82134ec5c1d3d6c91",
+              "sha256": "5426dcb54dd01c9eedda05e2179f0e47114e8b48a534ffe9e94916e79471b257",
+              "size": 17497
+            }
+          }
+        },
+        "pkg:rpm/centos/cyrus-sasl-lib@2.1.26-24.el7_9": {
+          "source_archive": "native/psycopg-binary/amd64/cyrus-sasl-2.1.26-24.el7_9.src.rpm",
+          "source_sha256": "c49472bd08c6060f53a9dace005b81cf466836790d2dcb407a536820f6319e77",
+          "rpm_filename": "cyrus-sasl-lib-2.1.26-24.el7_9.x86_64.rpm",
+          "rpm_sha256": "e1d065bfaef705d407c6134352d1afc64ecf26a5970a0e5282f6dda745483db8",
+          "rpm_declared_license": "BSD with advertising",
+          "notices": {},
+          "files": {
+            "libsasl2-84219a89.so.3.0.0": {
+              "rpm_path": "/usr/lib64/libsasl2.so.3.0.0",
+              "original_sha256": "84219a89b635c809c66b297f2970df52f1f38dd429426c213d0340dea5e7ec9d",
+              "sha256": "a01821d4716316892f28751616ad586f679ec66bc18a775205e1a0fab579f00b",
+              "size": 142953
+            }
+          }
+        },
+        "pkg:rpm/centos/keyutils-libs@1.5.8-3.el7": {
+          "source_archive": "native/psycopg-binary/amd64/keyutils-1.5.8-3.el7.src.rpm",
+          "source_sha256": "eff16e16f707fd28436afe4cf7b7c2e34b9f827e7f6beacf3c6eecbf74e9f850",
+          "rpm_filename": "keyutils-libs-1.5.8-3.el7.x86_64.rpm",
+          "rpm_sha256": "16c7cb17dd4eced77c44697bc431c0ac9eb012da78fc91abacd828d3aa8e5dd3",
+          "rpm_declared_license": "GPLv2+ and LGPLv2+",
+          "notices": {},
+          "files": {
+            "libkeyutils-dfe70bd6.so.1.5": {
+              "rpm_path": "/lib64/libkeyutils.so.1.5",
+              "original_sha256": "dfe70bd63f57aa3fc805f88ffb04b9440794faacbf7cffd080fc68984d25f3fb",
+              "sha256": "c29e41b03cf4b2dffbfb4960946e2b42f82c0ca5d53d231d3f0fc597ba274488",
+              "size": 17913
+            }
+          }
+        }
+      }
+    },
+    "arm64": {
+      "wheel_filename": "psycopg_binary-3.3.9-cp314-cp314-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl",
+      "wheel_sha256": "eed1ac135d652e4454777afb4e4bb52cf88520bbfa2f30ae83066cd4df656697",
+      "wheel_sbom_sha256": "cac3781f1a042daf62cf9a7f338cc82321fa1de0c66ce6ec79e3852b261e9dce",
+      "packages": {
+        "pkg:rpm/almalinux/libcom_err@1.45.6-7.el8_10": {
+          "source_archive": "native/psycopg-binary/arm64/e2fsprogs-1.45.6-7.el8_10.src.rpm",
+          "source_sha256": "7042d97c138a6b6c8d5a9282bf9bb736f8d377d4055fe0da2e0d3f459141b2a0",
+          "rpm_filename": "libcom_err-1.45.6-7.el8_10.aarch64.rpm",
+          "rpm_sha256": "be7f7c2c75976f72aa4d0bb6995aeb6dc3da292ae53f6aad3bbec8c53edbe24f",
+          "rpm_declared_license": "MIT",
+          "notices": {
+            "/usr/share/licenses/libcom_err/NOTICE": "5da5ef153e559c1d990d4c3eedbedd4442db892d37eae1f35fff069de8ec9020"
+          },
+          "files": {
+            "libcom_err-6d8d18aa.so.2.1": {
+              "rpm_path": "/usr/lib64/libcom_err.so.2.1",
+              "original_sha256": "6d8d18aa08233430a78edb7e366b9685058de66e52bc4d4364fddcb5aa6b8a89",
+              "sha256": "b335a27b7304dfd71b7539777c47d5600930ab63f7c5f47cbb5a12257d60aaae",
+              "size": 132169
+            }
+          }
+        },
+        "pkg:rpm/almalinux/keyutils-libs@1.5.10-9.el8": {
+          "source_archive": "native/psycopg-binary/arm64/keyutils-1.5.10-9.el8.src.rpm",
+          "source_sha256": "13fec652f642858757755b64195189abef7c0ff8025e9807ddba467e4ad8fbb6",
+          "rpm_filename": "keyutils-libs-1.5.10-9.el8.aarch64.rpm",
+          "rpm_sha256": "87e96ac645e1deb805d1314776cfb0bdd992e5c65c268b9ef65347f26094eba3",
+          "rpm_declared_license": "GPLv2+ and LGPLv2+",
+          "notices": {
+            "/usr/share/licenses/keyutils-libs/LICENCE.LGPL": "0d15593e3a8ad90917f8509b5ac1e4b5e5d196434a68029aa9dc0858a4a4c521"
+          },
+          "files": {
+            "libkeyutils-fe6e95a9.so.1.6": {
+              "rpm_path": "/usr/lib64/libkeyutils.so.1.6",
+              "original_sha256": "fe6e95a96416fb372f304ca612810071a67b63794d6eff255515562633d6a113",
+              "sha256": "0d2a628040cf8f759447db3556701af6aa4b5b3e36a7a55d07a944c52ce33d22",
+              "size": 132697
+            }
+          }
+        },
+        "pkg:rpm/almalinux/cyrus-sasl-lib@2.1.27-6.el8_5": {
+          "source_archive": "native/psycopg-binary/arm64/cyrus-sasl-2.1.27-6.el8_5.src.rpm",
+          "source_sha256": "f388fd13b3b10aec374f61bc1753b19ae019b0ab4937bf9bd9cbdf0f445c079a",
+          "rpm_filename": "cyrus-sasl-lib-2.1.27-6.el8_5.aarch64.rpm",
+          "rpm_sha256": "f75d1b8631a9271be94a1d7cbdae9def711995cb5331aa7de223cf7473a0bb2d",
+          "rpm_declared_license": "BSD with advertising",
+          "notices": {
+            "/usr/share/licenses/cyrus-sasl-lib/COPYING": "9d6e5d1632140a6c135b251260953650d17d87cd1124f87aaf72192aa4580d4b"
+          },
+          "files": {
+            "libsasl2-076b3c1f.so.3.0.0": {
+              "rpm_path": "/usr/lib64/libsasl2.so.3.0.0",
+              "original_sha256": "076b3c1f61606df2c3e298c6ed2349cf8499eb05b50c0f62e6f8e48908754d0f",
+              "sha256": "101ed25950445ee037d948864059f53ce76b6d057e35f51b2a4f1b97e146108a",
+              "size": 331305
+            }
+          }
+        },
+        "pkg:rpm/almalinux/libxcrypt@4.1.1-6.el8": {
+          "source_archive": "native/psycopg-binary/arm64/libxcrypt-4.1.1-6.el8.src.rpm",
+          "source_sha256": "3c492b21903329f611e7945134ed851beb2f8a38a2909109fb94c5fa20ae08bb",
+          "rpm_filename": "libxcrypt-4.1.1-6.el8.aarch64.rpm",
+          "rpm_sha256": "b574668ace5378e9c18d278aa776e51c9e65961f1c796c4583783900c87d5bf7",
+          "rpm_declared_license": "LGPLv2+ and BSD and Public Domain",
+          "notices": {
+            "/usr/share/licenses/libxcrypt/AUTHORS": "46cfa431806b5fce8e9ea2736b1f4bbaa2a5f2048f18a3515a9e1f3925a83a2d",
+            "/usr/share/licenses/libxcrypt/COPYING.LIB": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551",
+            "/usr/share/licenses/libxcrypt/LICENSING": "eaa47c6ebef90e3180e24f1a2c4086a925bdea8159f97998a9ad7c8f6d336d98"
+          },
+          "files": {
+            "libcrypt-258f54d5.so.1.1.0": {
+              "rpm_path": "/lib64/libcrypt.so.1.1.0",
+              "original_sha256": "258f54d5a25341bc920f901c2b1301ced84374bb7944cd29aca5d7f8029fe43d",
+              "sha256": "980d4781ae9ad8d1b2f60be52cfbbf176d32cc62ecf888920f347e9957636ee2",
+              "size": 198433
+            }
+          }
+        }
+      }
+    }
+  }
+}

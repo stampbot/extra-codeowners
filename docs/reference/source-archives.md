@@ -241,16 +241,14 @@ source recipe is available. An unresolved entry is a missing source-delivery
 item, not an exemption. These archives do not supply every native library
 embedded in a wheel.
 
-For `psycopg-binary` 3.3.4, the bundle includes the upstream repository archive
-at commit `83f110367cdd249cc0a352e2246ecea9e878e5a0`, the commit referenced by
-the signed 3.3.4 tag. The manifest records the tag object, archive checksum,
-size, and paths to the upstream wheel and libpq build recipes. Downloads use
-the commit-specific GitHub archive URL and must match the reviewed bytes;
-the collector neither follows redirects nor runs those recipes.
+For `psycopg-binary`, the bundle retains the wrapper source and build recipes
+from the commit named by the upstream signed release tag. The manifest gives
+the tag object, commit, archive hash and size, and paths to the recipes.
+The collector verifies the downloaded bytes and doesn't run the recipes.
 
-That archive supplies Psycopg's wrapper source and recipes. Native-library
-sources are delivered separately by schemas 2 and 4 below. A later Psycopg
-version cannot silently reuse the 3.3.4 recipe; its source identity needs review.
+The wrapper archive doesn't supply the native libraries that Psycopg bundles.
+Their source is recorded separately. A wheel update needs a recipe for that
+version; it doesn't inherit the previous wheel's source evidence.
 
 The signed inventory selects wrapper-recipe delivery with
 `python.source_recipe_schema: 1`. Schema 2 also retains the reviewed source
@@ -282,9 +280,10 @@ decompression. No dependency is rebuilt to produce this evidence.
 
 ### Psycopg's distro-library sources
 
-Schema 2 Python source bundles also contain source RPMs for the distro packages
-reported by the audited Psycopg 3.3.4 wheel SBOMs: six source packages on amd64
-and eight on arm64. Each source RPM contains its upstream sources, distro
+Schema 2 Python source bundles also contain source RPMs for the packages
+reported by the audited Psycopg wheel SBOMs. For 3.3.9 that is three source
+packages on amd64 and four on arm64; 3.3.4 reported six and eight, respectively.
+Each source RPM contains its upstream sources, distro
 patches, and RPM build recipe. Files appear under
 `native/psycopg-binary/<architecture>/`; `manifest.json` lists them in
 `native_sources` with their source package, reported binary package, SHA-256,
@@ -343,46 +342,49 @@ version-matched sources published for its wheel and both image digests.
 
 ### Psycopg's custom-library sources
 
-Schema 4 retains PostgreSQL 18.0's source for libpq, OpenSSL 3.5.4 and
-OpenLDAP 2.6.9 for Psycopg 3.3.4 on both platforms. The files live under
-`embedded/psycopg-binary/<architecture>/` in the same Python source bundle.
-Its `embedded_sources` entries record their versions, URLs, SHA-256 and size.
-The existing Psycopg repository archive supplies the build recipes and inline
-libpq patches; the distro-library RPMs above remain separate.
+Schema 4 retains the sources for libraries Psycopg builds separately from
+its distro RPMs. The files live under
+`embedded/psycopg-binary/<architecture>/`. Each `embedded_sources` entry
+gives the archive URL, version, SHA-256 and size.
 
-Each platform's recipe binds both its wheel SBOM and all five custom native
-libraries by path, SHA-256 and size. A changed, missing, duplicated or linked
+| Source | Psycopg 3.3.4 | Psycopg 3.3.9 |
+| --- | --- | --- |
+| PostgreSQL (libpq) | 18.0 | 18.6 |
+| OpenSSL | 3.5.4 | 3.5.9 |
+| OpenLDAP | 2.6.9 | 2.6.16 |
+| MIT Kerberos | Uses distro Kerberos | 1.22.2 |
+
+Psycopg's wrapper archive contains the build recipes and inline libpq patches.
+In 3.3.9, MIT Kerberos supplies the five custom Kerberos libraries, including
+`libcom_err.so.3.0`. Cyrus SASL still uses `libcom_err.so.2.1` from a distro
+RPM. There are separate source entries for those two copies.
+
+Each platform's recipe binds its wheel SBOM and custom libraries by path,
+SHA-256 and size. A changed, missing, duplicated or linked
 library stops collection, even if the SBOM did not report that change. A new
 Psycopg version needs a new reviewed recipe. Historical schema 0–3 inventories
 keep the source contracts they originally declared.
 
-The reviewed versions were checked against libpq and OpenLDAP's runtime
-version APIs and OpenSSL's version strings, using native files matched to the
-signed inventories on both architectures. The retained archives matched
-OpenSSL's release-asset checksum, PostgreSQL's SHA-256 and OpenLDAP's SHA3-512.
-The recipe pins SHA-256 and size for subsequent collection. PostgreSQL and
-OpenLDAP downloads must use their fixed HTTPS origins without redirects;
-OpenSSL uses the one-hop release-asset rule above. No source is built,
-installed or executed during collection.
-
-These are version-matched sources, not proof of the upstream builder's exact
-inputs. In particular, Psycopg's OpenSSL recipe fetches a Git tag archive;
-this bundle retains the official release tarball of that version. License
-texts remain inside the retained archives. Review the sources again when
-an updated wheel ships different libraries.
+For 3.3.9 the retained OpenSSL and PostgreSQL archives match the tag archives
+named by the upstream build recipe. For 3.3.4 the bundle instead supplies
+the official release tarballs. Both versions pin source size and SHA-256;
+the collected files are version-matched evidence, not proof that the source
+and recipes reproduce the wheels. The collector doesn't build or execute
+the sources.
 
 ### The amd64 Psycopg libxcrypt build
 
 Schema 5 also retains the libxcrypt 4.5.2 tarball and the manylinux install
-script for the amd64 Psycopg 3.3.4 wheel. The entry in `embedded_sources`
+script for amd64 Psycopg. The entry in `embedded_sources`
 records the wheel hash, the installed `libcrypt` file's hash and size, and the
 builder image digest. Its `build_recipe` field records the script's path and
-hash. The collector checks both downloads and stores the script as data; it
-does not run it.
+hash. For 3.3.9, `build_recipe_dependencies` also identifies the
+`build_utils.sh` helper from that builder. The collector stores the scripts
+as data and doesn't run them.
 
 The script from the pinned manylinux commit matches the copy in the builder
-image. The wheel's `libcrypt` file has the same code and read-only data sections
-as the builder's library, even though the full file hashes differ. This
+image. The wheel's `libcrypt` file has the same code as the builder's library,
+even though the full file hashes differ. This
 records that source and recipe; it does not prove a reproducible build or
 supply everything needed to relink the wheel. The arm64 library still uses
 the separate RPM source. Schema 4 and earlier bundles are unchanged.

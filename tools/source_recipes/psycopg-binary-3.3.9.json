@@ -1,0 +1,273 @@
+{
+  "distribution": "psycopg-binary",
+  "platforms": {
+    "amd64": {
+      "sbom_sha256": "72f74b207f9928fd2c87edace7ee00a525b1a2540df09f3c39356e7c09b21ea4",
+      "sbom_size": 2422,
+      "custom_sources": [
+        {
+          "name": "openssl",
+          "version": "3.5.9",
+          "url": "https://codeload.github.com/openssl/openssl/tar.gz/refs/tags/openssl-3.5.9",
+          "sha256": "796831ec533bf41998eaaee9d632d921b8a69f57394fa4086ff01a941113d26d",
+          "size": 53459568,
+          "wheel_files": [
+            {
+              "path": "psycopg_binary.libs/libcrypto-3a0647ea.so.3",
+              "sha256": "e1a48391f48cb5f8392140b43ef9f2fa52f58321f8eadd8a83dc20f7fe398b9e",
+              "size": 5863273
+            },
+            {
+              "path": "psycopg_binary.libs/libssl-6a9b88ec.so.3",
+              "sha256": "5b9d9f1923a0ffd4fd2666819846d61c5bad31f1bf3a16c65bf1fccf5aa37d17",
+              "size": 1048985
+            }
+          ]
+        },
+        {
+          "name": "libpq",
+          "version": "18.6",
+          "url": "https://codeload.github.com/postgres/postgres/tar.gz/refs/tags/REL_18_6",
+          "sha256": "ff9b1187e3ab120282b9f3e09a5efba2425838b3a843150c5cb2f019f47ac400",
+          "size": 29996378,
+          "wheel_files": [
+            {
+              "path": "psycopg_binary.libs/libpq-e9b5c9ac.so.5.18",
+              "sha256": "ee8ad7e6497816c693acc1a9691528e3600db2dc0f5f97634653ec5c025ac565",
+              "size": 420153
+            }
+          ]
+        },
+        {
+          "name": "openldap",
+          "version": "2.6.16",
+          "url": "https://www.openldap.org/software/download/OpenLDAP/openldap-release/openldap-2.6.16.tgz",
+          "sha256": "8d8452bc3f56aa7a392c62dd377733f83d1314eed6c52fe44028439a3bb4df18",
+          "size": 6531689,
+          "wheel_files": [
+            {
+              "path": "psycopg_binary.libs/liblber-7b3e3cc5.so.2.0.200",
+              "sha256": "42e1b323980f325b3fc45b888d026a8fd8cb669997b54885f863f50e48f8f6ef",
+              "size": 56881
+            },
+            {
+              "path": "psycopg_binary.libs/libldap-fb847fea.so.2.0.200",
+              "sha256": "841d1b8a667ab165835b08203fb10cf18904e161d5c3a8b1e4b2c623b04ad505",
+              "size": 402281
+            }
+          ]
+        },
+        {
+          "name": "krb5",
+          "version": "1.22.2",
+          "url": "https://kerberos.org/dist/krb5/1.22/krb5-1.22.2.tar.gz",
+          "sha256": "3243ffbc8ea4d4ac22ddc7dd2a1dc54c57874c40648b60ff97009763554eaf13",
+          "size": 8747729,
+          "wheel_files": [
+            {
+              "path": "psycopg_binary.libs/libcom_err-55c5739a.so.3.0",
+              "sha256": "c4455194ec84307401ae1dc0049e53703d383c1f1094e613e4a54b19f90094e3",
+              "size": 25257
+            },
+            {
+              "path": "psycopg_binary.libs/libgssapi_krb5-923083ce.so.2.2",
+              "sha256": "7355c441d02abe41d34959c6f51caa5fac17014799935673ad3cb987b03226e4",
+              "size": 329425
+            },
+            {
+              "path": "psycopg_binary.libs/libk5crypto-459efceb.so.3.1",
+              "sha256": "f4901987c99506969fb156c455d3774fad5aad7bff950fd572dfab8a59a901a6",
+              "size": 178817
+            },
+            {
+              "path": "psycopg_binary.libs/libkrb5-f18b4d11.so.3.3",
+              "sha256": "066e6f8c94967fa3f91f0c723834bde429a18a387e8ec791d34ac56c05bf975b",
+              "size": 821993
+            },
+            {
+              "path": "psycopg_binary.libs/libkrb5support-93fbab13.so.0.1",
+              "sha256": "3404c3db9216ffbbe10f13e5b65b122e1ac6744082c639891f69f0ef28711a2f",
+              "size": 55905
+            }
+          ]
+        }
+      ],
+      "sources": [
+        {
+          "name": "cyrus-sasl",
+          "reported_package": {
+            "name": "cyrus-sasl-lib",
+            "version": "2.1.26-24.el7_9"
+          },
+          "sha256": "c49472bd08c6060f53a9dace005b81cf466836790d2dcb407a536820f6319e77",
+          "size": 1782723,
+          "url": "https://vault.centos.org/7.9.2009/updates/Source/SPackages/cyrus-sasl-2.1.26-24.el7_9.src.rpm",
+          "version": "2.1.26-24.el7_9"
+        },
+        {
+          "name": "keyutils",
+          "reported_package": {
+            "name": "keyutils-libs",
+            "version": "1.5.8-3.el7"
+          },
+          "sha256": "eff16e16f707fd28436afe4cf7b7c2e34b9f827e7f6beacf3c6eecbf74e9f850",
+          "size": 77575,
+          "url": "https://vault.centos.org/7.9.2009/os/Source/SPackages/keyutils-1.5.8-3.el7.src.rpm",
+          "version": "1.5.8-3.el7"
+        },
+        {
+          "name": "e2fsprogs",
+          "reported_package": {
+            "name": "libcom_err",
+            "version": "1.42.9-19.el7"
+          },
+          "sha256": "718f64bd465d1770eaf6490157a861d3dba2846b4a636a67d27bd4d38e6b86cf",
+          "size": 4765994,
+          "url": "https://vault.centos.org/7.9.2009/os/Source/SPackages/e2fsprogs-1.42.9-19.el7.src.rpm",
+          "version": "1.42.9-19.el7"
+        }
+      ]
+    },
+    "arm64": {
+      "sbom_sha256": "cac3781f1a042daf62cf9a7f338cc82321fa1de0c66ce6ec79e3852b261e9dce",
+      "sbom_size": 2946,
+      "custom_sources": [
+        {
+          "name": "openssl",
+          "version": "3.5.9",
+          "url": "https://codeload.github.com/openssl/openssl/tar.gz/refs/tags/openssl-3.5.9",
+          "sha256": "796831ec533bf41998eaaee9d632d921b8a69f57394fa4086ff01a941113d26d",
+          "size": 53459568,
+          "wheel_files": [
+            {
+              "path": "psycopg_binary.libs/libcrypto-5e36fb0e.so.3",
+              "sha256": "07c01e7f3ac614267f752806ed5b02a5ba46c0c5442e921888b4ab33f7681046",
+              "size": 5543705
+            },
+            {
+              "path": "psycopg_binary.libs/libssl-8f8630a8.so.3",
+              "sha256": "f43ad55c18136e899edbb199863032d0d32b02bfc4c97ce5183f7cb35d7a1800",
+              "size": 1204601
+            }
+          ]
+        },
+        {
+          "name": "libpq",
+          "version": "18.6",
+          "url": "https://codeload.github.com/postgres/postgres/tar.gz/refs/tags/REL_18_6",
+          "sha256": "ff9b1187e3ab120282b9f3e09a5efba2425838b3a843150c5cb2f019f47ac400",
+          "size": 29996378,
+          "wheel_files": [
+            {
+              "path": "psycopg_binary.libs/libpq-53e4e5f8.so.5.18",
+              "sha256": "005cf0155d5c6712950445d67c6773c322481f4a35d825e7e802b7118f419360",
+              "size": 661793
+            }
+          ]
+        },
+        {
+          "name": "openldap",
+          "version": "2.6.16",
+          "url": "https://www.openldap.org/software/download/OpenLDAP/openldap-release/openldap-2.6.16.tgz",
+          "sha256": "8d8452bc3f56aa7a392c62dd377733f83d1314eed6c52fe44028439a3bb4df18",
+          "size": 6531689,
+          "wheel_files": [
+            {
+              "path": "psycopg_binary.libs/liblber-39a5c986.so.2.0.200",
+              "sha256": "ba34d65e9311738220963ada65eb8af1c21fc1aa21a59b67f9d90257dfeb9b6d",
+              "size": 265745
+            },
+            {
+              "path": "psycopg_binary.libs/libldap-ed13728f.so.2.0.200",
+              "sha256": "14bdab9186c092030749f6441771dee20eef27be68bfcbd349829602b4ec4d79",
+              "size": 607033
+            }
+          ]
+        },
+        {
+          "name": "krb5",
+          "version": "1.22.2",
+          "url": "https://kerberos.org/dist/krb5/1.22/krb5-1.22.2.tar.gz",
+          "sha256": "3243ffbc8ea4d4ac22ddc7dd2a1dc54c57874c40648b60ff97009763554eaf13",
+          "size": 8747729,
+          "wheel_files": [
+            {
+              "path": "psycopg_binary.libs/libcom_err-ade663e2.so.3.0",
+              "sha256": "04ee759572b2a05a6200a480c15dd122a7aca9c6463263ade7e641b415ef79ba",
+              "size": 393889
+            },
+            {
+              "path": "psycopg_binary.libs/libgssapi_krb5-2d78fad2.so.2.2",
+              "sha256": "bebf29bbc91252d85fcfc63d8fed11cb63d0c19fee396cc4648fcb83ad9a91b6",
+              "size": 534225
+            },
+            {
+              "path": "psycopg_binary.libs/libk5crypto-08068307.so.3.1",
+              "sha256": "95663ee5a44bdcf6605c5d34f99b9df29dba817a1b42926ecd0423cf841ae777",
+              "size": 461433
+            },
+            {
+              "path": "psycopg_binary.libs/libkrb5-138a6e7a.so.3.3",
+              "sha256": "699a5d77386702975951fb4d719ecc7f2a8a99e3bf07c04901bb4e508fc6b163",
+              "size": 1067705
+            },
+            {
+              "path": "psycopg_binary.libs/libkrb5support-bba7dd31.so.0.1",
+              "sha256": "dcd22fcb775157912400d3fc70d38cb722c81539b340f00596a556807e87c61c",
+              "size": 395881
+            }
+          ]
+        }
+      ],
+      "sources": [
+        {
+          "name": "cyrus-sasl",
+          "reported_package": {
+            "name": "cyrus-sasl-lib",
+            "version": "2.1.27-6.el8_5"
+          },
+          "sha256": "f388fd13b3b10aec374f61bc1753b19ae019b0ab4937bf9bd9cbdf0f445c079a",
+          "size": 4031617,
+          "url": "https://vault.almalinux.org/8.10/BaseOS/Source/Packages/cyrus-sasl-2.1.27-6.el8_5.src.rpm",
+          "version": "2.1.27-6.el8_5"
+        },
+        {
+          "name": "keyutils",
+          "reported_package": {
+            "name": "keyutils-libs",
+            "version": "1.5.10-9.el8"
+          },
+          "sha256": "13fec652f642858757755b64195189abef7c0ff8025e9807ddba467e4ad8fbb6",
+          "size": 102531,
+          "url": "https://vault.almalinux.org/8.10/BaseOS/Source/Packages/keyutils-1.5.10-9.el8.src.rpm",
+          "version": "1.5.10-9.el8"
+        },
+        {
+          "name": "e2fsprogs",
+          "reported_package": {
+            "name": "libcom_err",
+            "version": "1.45.6-7.el8_10"
+          },
+          "sha256": "7042d97c138a6b6c8d5a9282bf9bb736f8d377d4055fe0da2e0d3f459141b2a0",
+          "size": 5680481,
+          "url": "https://vault.almalinux.org/8.10/BaseOS/Source/Packages/e2fsprogs-1.45.6-7.el8_10.src.rpm",
+          "version": "1.45.6-7.el8_10"
+        },
+        {
+          "name": "libxcrypt",
+          "reported_package": {
+            "name": "libxcrypt",
+            "version": "4.1.1-6.el8"
+          },
+          "sha256": "3c492b21903329f611e7945134ed851beb2f8a38a2909109fb94c5fa20ae08bb",
+          "size": 228407,
+          "url": "https://vault.almalinux.org/8.10/BaseOS/Source/Packages/libxcrypt-4.1.1-6.el8.src.rpm",
+          "version": "4.1.1-6.el8"
+        }
+      ]
+    }
+  },
+  "schema_version": 2,
+  "scope": "Source RPMs for reported packages and version-matched custom build sources bound to reviewed native files. The amd64 libxcrypt build is recorded separately.",
+  "version": "3.3.9"
+}

@@ -64,6 +64,28 @@ def test_libxcrypt_xz_supplies_both_selected_notices() -> None:
         notices.read_notices(source, compressed[:-3])
 
 
+def test_kerberos_distribution_notice_is_not_assigned_a_single_license(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = "krb5-9.8.7/NOTICE"
+    text = b"fictional distribution notice with several terms"
+    source = {
+        "source_component": {"name": "krb5", "version": "9.8.7"},
+        "path": "embedded/krb5-9.8.7.tar.gz",
+        "sha256": "a" * 64,
+    }
+    monkeypatch.setattr(
+        notices,
+        "_SOURCE_LICENSES",
+        {("krb5", "9.8.7", "a" * 64): (path, hashlib.sha256(text).hexdigest(), "Test notice")},
+    )
+    selected = notices.read_notices(source, gzip.compress(archive([(path, text)])))
+    assert selected == {path: text}
+    license_entry = notices.source_license_evidence(source, selected)["licenses"][0]["license"]
+    assert license_entry["name"] == "Test notice"
+    assert "id" not in license_entry
+
+
 @pytest.mark.parametrize(
     "kind", ["missing", "duplicate", "symlink", "hardlink", "empty", "oversize", "renamed"]
 )

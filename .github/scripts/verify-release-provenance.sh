@@ -301,7 +301,18 @@ for architecture in amd64 arm64; do
     select(.name == "extra-codeowners:rpm-binary-evidence") | .value' "${catalog}")"
   if [[ "${rpm_binary_evidence}" == 1 ]]; then
     binary_receipt="${temporary_directory}/release-rpm-binaries.json"
-    git show "${revision}:tools/release_rpm_binary_evidence.json" >"${binary_receipt}"
+    psycopg_version="$(jq -er '
+      [.python.distributions[] | select(.normalized_name == "psycopg-binary") | .version]
+      | if length == 1 and (.[0] | type) == "string" then .[0]
+        else error("expected one Psycopg binary wheel version") end
+    ' "${inventory}")"
+    [[ "${psycopg_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+    if [[ "${psycopg_version}" == 3.3.4 ]]; then
+      receipt_path="tools/release_rpm_binary_evidence.json"
+    else
+      receipt_path="tools/source_recipes/psycopg-rpm-binaries-${psycopg_version}.json"
+    fi
+    git show "${revision}:${receipt_path}" >"${binary_receipt}"
     native_notice_args+=(--rpm-binary-receipt "${binary_receipt}")
   fi
   static_wheel_evidence="$(jq -r '.metadata.properties[]? |

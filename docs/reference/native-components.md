@@ -25,9 +25,10 @@ The collector combines two kinds of evidence:
 - Cryptography's OpenSSL declaration and Psycopg's RPM-origin library
   declarations come from the exact retained wheel SBOMs. Repeated declarations
   of one RPM package become one catalog component.
-- Psycopg's custom OpenSSL, libpq, and OpenLDAP, and its amd64 libxcrypt build,
-  come from reviewed source recipes bound to installed files in the signed
-  inventory. Auditwheel's SBOM does not declare those libraries. The
+- Psycopg's custom OpenSSL, libpq, and OpenLDAP, its amd64 libxcrypt build,
+  and MIT Kerberos starting in Psycopg 3.3.9 come from reviewed source
+  recipes. The recipes bind the installed files in the signed inventory
+  because the wheel's SBOM doesn't declare those libraries. The
   [libxcrypt recipe entry](source-archives.md#the-amd64-psycopg-libxcrypt-build)
   also points to the pinned builder image and install script.
 
@@ -55,6 +56,7 @@ source bundle, not the runtime notice bundle.
 For OpenSSL, the selection is the archive's top-level `LICENSE.txt`. For
 libpq, it is PostgreSQL's top-level `COPYRIGHT`. OpenLDAP supplies top-level
 `COPYRIGHT` and `LICENSE`; libxcrypt supplies `COPYING.LIB` and `LICENSING`.
+The selection for MIT Kerberos is its distribution `NOTICE`.
 Each selected component has a
 `extra-codeowners:source-notice-files` property containing JSON records with
 the inner archive path, byte size and SHA-256. Its existing `source-archive`
@@ -88,7 +90,7 @@ source. Catalogs without the metadata property make no notice-selection claim.
 
 Catalogs with `extra-codeowners:source-license-evidence` set to `1` also
 carry selected top-level license texts. Each affected component records an
-SPDX identifier and the exact text as base64 in the CycloneDX
+SPDX identifier or notice name and the exact text as base64 in the CycloneDX
 `evidence.licenses` field. For amd64 libxcrypt this is `COPYING.LIB`;
 `LICENSING` in the same archive describes per-file terms. The matching file
 paths and SHA-256 hashes are in `extra-codeowners:source-notice-files`.
@@ -118,12 +120,16 @@ license-files object means the vendor did not mark any files, not that the
 library has no notice obligations. The vendor's declaration is not a license
 conclusion for the compiled library.
 
-Generation uses `tools/release_rpm_binary_evidence.json` and stops if the
-bindings no longer match. To update the receipt for a different wheel,
+Generation chooses the receipt by the installed Psycopg version. For 3.3.4
+it uses `tools/release_rpm_binary_evidence.json`; later versions use
+`tools/source_recipes/psycopg-rpm-binaries-VERSION.json`. If the bindings
+don't match, generation stops. To update the receipt for a different wheel,
 verify the vendor RPM signatures, compare the original ELF code and
 read-only data against the wheel, and confirm the license file hashes in
 the source notice receipt. Verify older catalogs with their own release
 checkout; they don't gain attribution from a later receipt.
+Starting with 3.3.9, generation also stops if any file in
+`psycopg_binary.libs` has no source binding or appears in more than one.
 
 ### OpenSSL in Cryptography
 

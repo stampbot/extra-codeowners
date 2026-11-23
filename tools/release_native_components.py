@@ -220,15 +220,30 @@ def _rpm_binary_packages(
         or sbom is None
     ):
         raise NativeComponentError("binary RPM evidence needs a supported receipt and wheel SBOM")
-    version = next(
-        item["version"]
-        for item in python["distributions"]
-        if item["normalized_name"] == "psycopg-binary"
-    )
+    version = _psycopg_version(python)
     packages: dict[str, dict[str, Any]] = _rpm_binaries.review(
         platforms[architecture], lock, sbom, python["native_files"], version
     )
     return packages, hashlib.sha256(data).hexdigest()
+
+
+def _psycopg_version(python: dict[str, Any]) -> str:
+    versions = [
+        item["version"]
+        for item in python["distributions"]
+        if item["normalized_name"] == "psycopg-binary"
+    ]
+    version = versions[0] if len(versions) == 1 else None
+    if not isinstance(version, str) or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version):
+        raise NativeComponentError("binary RPM evidence needs a reviewed Psycopg wheel version")
+    return version
+
+
+def _default_rpm_binary_receipt(python: dict[str, Any]) -> Path:
+    version = _psycopg_version(python)
+    if version == "3.3.4":
+        return _RPM_BINARY_RECEIPT
+    return _RPM_BINARY_RECEIPT.parent / "source_recipes" / f"psycopg-rpm-binaries-{version}.json"
 
 
 def _require_locked_crypto_wheel(lock: bytes, version: str, filename: str, digest: str) -> None:
@@ -303,6 +318,7 @@ def build(
     rpm_notice_receipt: Path | None = None,
     source_licenses: bool = False,
     rpm_binary_receipt: Path | None = None,
+    rpm_binaries: bool = False,
     static_wheel_receipt: Path | None = None,
 ) -> bytes:
     """Bind a deterministic CycloneDX catalog to verified platform evidence."""
@@ -336,12 +352,20 @@ def build(
     reported, rpm_sbom = _reported_components(source_plan, notice_files)
     rpm_packages = None
     rpm_binary_hash = None
-    if rpm_binary_receipt is not None:
+    if rpm_binaries or rpm_binary_receipt is not None:
         if rpm_archives is None:
             raise NativeComponentError("binary RPM evidence requires RPM source notices")
         rpm_packages, rpm_binary_hash = _rpm_binary_packages(
-            rpm_binary_receipt, architecture, lock, rpm_sbom, python
+            rpm_binary_receipt or _default_rpm_binary_receipt(python),
+            architecture,
+            lock,
+            rpm_sbom,
+            python,
         )
+        if _psycopg_version(python) != "3.3.4":
+            _rpm_binaries.verify_grafted_library_coverage(
+                python["native_files"], rpm_packages, source_plan["embedded_sources"]
+            )
     sources = [*source_plan["native_sources"], *source_plan["embedded_sources"]]
     if not 1 <= len(sources) <= MAX_COMPONENTS:
         raise NativeComponentError("invalid reviewed native component count")
@@ -407,6 +431,10 @@ def build(
             properties.update(static_properties)
         if "build_recipe" in source:
             properties["build-recipe"] = json.dumps(source["build_recipe"], sort_keys=True)
+        if "build_recipe_dependencies" in source:
+            properties["build-recipe-dependencies"] = json.dumps(
+                source["build_recipe_dependencies"], sort_keys=True
+            )
             properties["builder-image"] = source["builder_image"]
             properties["builder-library-sha256"] = source["builder_library_sha256"]
             properties["wheel-sha256"] = source["wheel_sha256"]
@@ -584,9 +612,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             rpm_notices=rpm_notices,
             rpm_notice_receipt=args.rpm_notice_receipt,
             source_licenses=source_licenses,
-            rpm_binary_receipt=(args.rpm_binary_receipt or _RPM_BINARY_RECEIPT)
-            if rpm_binaries
-            else None,
+            rpm_binary_receipt=args.rpm_binary_receipt,
+            rpm_binaries=rpm_binaries,
             static_wheel_receipt=static_receipt,
         )
         if args.command == "generate":

@@ -515,8 +515,10 @@ def test_static_attribution_binds_exact_cryptography_extension(
         assert json.loads(properties["native-files"])[0]["sha256"] == "d" * 64
 
 
+@pytest.mark.parametrize("psycopg_version", ["3.3.4", "3.3.9"])
 def test_provenance_verifier_selects_sources_only_for_the_versioned_notice_contract(
     tmp_path: Path,
+    psycopg_version: str,
 ) -> None:
     bash = shutil.which("bash")
     if bash is None or shutil.which("jq") is None:
@@ -529,6 +531,23 @@ def test_provenance_verifier_selects_sources_only_for_the_versioned_notice_contr
     rpm_notices = ["--rpm-notice-receipt", f"{tmp_path}/release-rpm-notices.json"]
     rpm_binaries = ["--rpm-binary-receipt", f"{tmp_path}/release-rpm-binaries.json"]
     static_wheel = ["--static-wheel-receipt", f"{tmp_path}/release-crypto-static.json"]
+    inventory = tmp_path / "inventory.json"
+    inventory.write_text(
+        json.dumps(
+            {
+                "python": {
+                    "distributions": [
+                        {"normalized_name": "psycopg-binary", "version": psycopg_version}
+                    ]
+                }
+            }
+        )
+    )
+    receipt_path = (
+        "tools/release_rpm_binary_evidence.json"
+        if psycopg_version == "3.3.4"
+        else f"tools/source_recipes/psycopg-rpm-binaries-{psycopg_version}.json"
+    )
     for marker, binary_marker, static_marker, expected in (
         (None, None, None, []),
         ("1", None, None, sources),
@@ -554,7 +573,7 @@ def test_provenance_verifier_selects_sources_only_for_the_versioned_notice_contr
             '  case "$*" in\n'
             '    "show fictional-revision:tools/release_rpm_notice_evidence.json")\n'
             "      printf 'fixture notice receipt';;\n"
-            '    "show fictional-revision:tools/release_rpm_binary_evidence.json")\n'
+            f'    "show fictional-revision:{receipt_path}")\n'
             "      printf 'fixture binary receipt';;\n"
             '    "show fictional-revision:tools/release_crypto_static_evidence.json")\n'
             "      printf 'fixture static receipt';;\n"
@@ -568,6 +587,7 @@ def test_provenance_verifier_selects_sources_only_for_the_versioned_notice_contr
             env={
                 **os.environ,
                 "catalog": str(path),
+                "inventory": str(inventory),
                 "asset_directory": str(tmp_path),
                 "architecture": "amd64",
                 "temporary_directory": str(tmp_path),
