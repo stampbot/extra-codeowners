@@ -145,6 +145,11 @@ passing through a timer recheck, then changed it to failure after a real
 Stampbot review was dismissed. The worker didn't receive the dismissal event.
 GitHub removed the candidate without merging the PR.
 
+The [November 23 two-entry probe](evidence/2026-11-23-worker-with-queued-follower.md)
+repeated the test with a second PR waiting without a candidate. After the
+first check failed and GitHub removed its candidate, GitHub built a new
+candidate for the second PR. The new commit had neither required check.
+
 ## Diagnostics and approval probe: November 2, 2026
 
 Alpha.65 runs on two Kubernetes nodes with shared PostgreSQL state. The
