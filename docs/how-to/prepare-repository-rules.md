@@ -7,8 +7,8 @@ signed commits, merge restrictions, and other required checks in place.
 !!! warning
     Use this procedure only in a disposable repository for now. A GitHub Check
     Run belongs to a commit, not one pull request, so another pull request can
-    briefly inherit an earlier success for the same head. This remains a
-    [production blocker](../reference/project-status.md#production-enforcement-blocker).
+    briefly inherit an earlier success for the same head. For enforcement,
+    1.0 requires a separate check on the queue's candidate commit.
 
 ## Before you begin
 
@@ -19,9 +19,10 @@ signed commits, merge restrictions, and other required checks in place.
 - Let the App publish `Extra CODEOWNERS / approval` at least once so GitHub can
   offer the App as the check's expected source.
 
-If the repository uses a merge queue, stop here. Follow the
-[experimental queue procedure](test-merge-queue.md) only in a disposable
-repository. Keep native code-owner review active in production.
+If the repository uses a merge queue, or you plan to enforce policy in
+production, use the [one-at-a-time queue procedure](test-merge-queue.md)
+instead. Keep native code-owner review active if the repository can't use
+that setup or you're running a prerelease.
 
 ## 1. Record the current protection
 

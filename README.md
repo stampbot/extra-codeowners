@@ -20,7 +20,7 @@ policy says which Apps may cover which owners and paths.
 
 > [!WARNING]
 > Extra CODEOWNERS is pre-release software. Alpha images and charts are for
-> non-required, shadow-mode testing only. Don't use them to enforce production
+> shadow mode and disposable tests. Don't use them to enforce production
 > merges. Legacy preview images — `:main` and its `sha-*` and `sha256-*`
 > companion tags — are unsupported and unsafe for deployment. They predate the
 > immutable release pipeline and lack the complete release and
@@ -73,9 +73,10 @@ ordinary approval count and other rules still apply.
 ## What stays in GitHub
 
 Keep your ordinary pull-request rules: minimum approval count, stale-review
-handling, signed commits, and unrelated required checks. In production, keep
-**Require review from Code Owners** too. Use the alpha check to see how your
-policy would handle a PR without letting it decide whether the PR can merge.
+handling, signed commits, and unrelated required checks. Keep **Require review
+from Code Owners** while trying an alpha. The [1.0 enforcement setup](docs/how-to/test-merge-queue.md)
+requires GitHub's one-at-a-time merge queue. Without that queue, keep native
+review on and use Extra CODEOWNERS as advice.
 
 GitHub's public contract doesn't say whether a third-party App review counts
 toward the ordinary approval minimum. It counted in a disposable repository,
@@ -84,7 +85,7 @@ but test your own rules before relying on that behavior. The
 explains how the review count and the check differ.
 
 The App doesn't submit reviews, merge pull requests, grant another App access,
-or edit `CODEOWNERS`. It reads GitHub evidence and publishes one Check Run.
+or edit `CODEOWNERS`. It reads GitHub evidence and publishes Check Runs.
 
 ### Read the check as a policy result, not a review
 
@@ -101,9 +102,10 @@ a missed event, but it can't make dismissal and merging happen together.
 
 GitHub attaches checks to commits, not pull requests. If two PRs share a head
 commit, both can show the same pass even when their policies or approvals
-differ. In a [live one-entry queue test](docs/maintainers/evidence/2026-11-23-candidate-checks-during-delivery-loss.md),
-GitHub waited for a separate check on the commit it would merge. That result
-doesn't make a required check on the PR head safe for production.
+differ. In a [live queue test](docs/maintainers/evidence/2026-11-23-candidate-checks-during-delivery-loss.md),
+GitHub waited for a separate check on the commit it would merge. Waiting PRs
+each need their own result when they reach the front. A pass on the PR head
+alone can't enforce that distinction.
 
 ## How delegation is split
 

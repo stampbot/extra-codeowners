@@ -568,8 +568,8 @@ has to evaluate it. A shorter interval spends more GitHub API budget; it does
 not interrupt an active scan or bound how long an old success remains visible.
 
 Neither setting makes the system strongly consistent. This reconciler does
-not discover merge queue candidates. A separate experimental worker reads
-`merge_group` deliveries for one explicitly configured test repository.
+not discover merge queue candidates. A separate worker reads `merge_group`
+deliveries for one explicitly configured repository per deployment.
 The worker checks the effective branch rule and the full queue snapshot. It
 requires squash merging, one build slot, one PR per merge, and `ALLGREEN`.
 Only the first entry can have a candidate; any later entry must still be
@@ -584,8 +584,8 @@ it, the worker tries to revoke the same Check Run. It does not create or
 restore a passing check from a timer. A confirmed closed PR is history;
 the timer retires without a write.
 
-The [merge queue design](design/2026-11-21-merge-queue-candidate-checks.md)
-describes what that worker checks and what it can't prove.
+The [serial queue decision](adrs/2026-11-25-require-a-serial-merge-queue.md)
+explains why the check on that candidate is needed for enforcement.
 
 The reconciler keeps each completed-pull fingerprint for whichever is longer:
 delivery retention, or one scan interval plus one recheck interval. A slow
@@ -872,9 +872,10 @@ chart artifact instead of publishing a second release. It also verifies GitHub
 provenance and Sigstore signatures against the release workflow and original
 commit. Conflicting, missing, or ambiguous evidence fails closed.
 
-These controls make releases repeatable, but they do not resolve the
-commit-scoped Check Run limitation above. Alpha releases remain suitable only
-for shadow-mode evaluation until the live GitHub contract is proven.
+These controls make releases repeatable. They don't change what the PR-head
+check authorizes. Use alpha releases for shadow mode and disposable tests.
+Production enforcement with a supported release needs the
+[one-at-a-time queue](../how-to/test-merge-queue.md).
 
 The planned `extra-codeowners-action` should run a prebuilt, signed container
 and reuse the same evaluator and policy schema. A hosted service would add new

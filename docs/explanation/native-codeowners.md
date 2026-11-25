@@ -110,14 +110,15 @@ questions:
 - Did the pull request collect enough approvals overall?
 - Did an eligible owner satisfy each owned path?
 
-Keep GitHub's numeric approval rule for the first question. In a disposable
-test repository, disable only **Require review from Code Owners** and require
-`Extra CODEOWNERS / approval` from the expected Extra CODEOWNERS App for the
-second.
+Keep GitHub's numeric approval rule for the first question. For the second,
+a supported deployment replaces only **Require review from Code Owners**.
+The branch requires a one-at-a-time merge queue and `Extra CODEOWNERS /
+approval` from the expected App. The check must pass again on the candidate.
 
 ```text
 ordinary approval count is satisfied
-AND Extra CODEOWNERS / approval succeeds from the expected App
+AND GitHub requires the one-at-a-time merge queue
+AND Extra CODEOWNERS / approval passes on the candidate from the expected App
 AND every other required rule succeeds
 ```
 
@@ -126,10 +127,10 @@ tests, an App-authored approving review did satisfy that count, but GitHub's
 public documentation doesn't promise it. Test the behavior in your disposable
 repository and keep the numeric rule.
 
-The [repository-rules guide](../how-to/prepare-repository-rules.md) gives the
+The [merge queue guide](../how-to/test-merge-queue.md) gives the
 complete test and rollback procedure.
 
-## The unresolved commit boundary
+## Why the queue needs a separate check {#the-unresolved-commit-boundary}
 
 The check's evidence belongs to a pull request: its base, changed paths,
 labels, and reviews. GitHub attaches the resulting Check Run to a commit.
@@ -140,11 +141,12 @@ CODEOWNERS revoke and recompute the result. Shared-head detection, durable
 invalidation, and generation guards reduce that window after the event
 arrives. They can't protect the time before delivery.
 
-In a [disposable one-entry queue](../maintainers/evidence/2026-11-23-candidate-checks-during-delivery-loss.md),
+In a [disposable queue test](../maintainers/evidence/2026-11-23-candidate-checks-during-delivery-loss.md),
 GitHub waited for a fresh check on the candidate it would merge, even while
-the PR head showed an old pass. That test didn't make a required check on the
-PR head safe, or prove the same behavior for larger groups. Keep native
-code-owner enforcement on production repositories.
+the PR head showed an old pass. The 1.0 configuration gives each PR its own
+candidate and evaluates it only when it reaches the front. Keep native
+code-owner enforcement if you can't require that configuration. It doesn't
+follow from the test that parallel builds or grouped merges are safe.
 
 ## Keep CODEOWNERS valid
 

@@ -34,10 +34,10 @@ nav:
       - Register a GitHub App: how-to/register-app.md
       - Configure policy: how-to/configure.md
       - Prepare repository rules: how-to/prepare-repository-rules.md
-      - Test the experimental merge queue: how-to/test-merge-queue.md
+      - Configure a one-at-a-time merge queue: how-to/test-merge-queue.md
       - Preflight a disposable evaluation beta: how-to/preflight-evaluation-beta.md
       - Troubleshoot a check: how-to/troubleshoot-check.md
-      - Deploy an alpha in shadow mode: how-to/deploy.md
+      - Deploy the GitHub App: how-to/deploy.md
       - Upgrade, back up, and restore: how-to/upgrade.md
       - Operate and recover: how-to/operate.md
       - Test a replacement library in the image: how-to/test-replacement-library.md
@@ -76,6 +76,7 @@ nav:
           - Active reconciliation sweeps: explanation/adrs/2026-11-12-bound-active-reconciliation-sweeps.md
           - Repository team access grants: explanation/adrs/2026-11-12-scope-repository-team-grants.md
           - Start a new major alpha line: explanation/adrs/2026-11-23-start-a-new-major-alpha-line.md
+          - Require a one-at-a-time merge queue: explanation/adrs/2026-11-25-require-a-serial-merge-queue.md
       - Design comparisons:
           - Bounded reconciliation traces: explanation/design/2026-11-02-bounded-reconciliation-traces.md
           - Merge-queue candidate checks: explanation/design/2026-11-21-merge-queue-candidate-checks.md

@@ -1,15 +1,13 @@
-# Deploy an alpha in shadow mode
+# Deploy the GitHub App
 
 Use this guide to deploy the self-hosted GitHub App with PostgreSQL and the
-published Helm chart. The current releases are alpha software. Run the check as
-non-required evidence while you test it; don't let it authorize a production
-merge.
+published Helm chart. Start with the check in shadow mode. If you're using a
+supported release and want to enforce policy, follow the
+[one-at-a-time queue setup](test-merge-queue.md) after deployment.
 
 !!! danger
-    Keep GitHub's native **Require review from Code Owners** rule on production
-    repositories. The commit-scoped Check Run behavior still has an open
-    provider contract in
-    [issue #1](https://github.com/stampbot/extra-codeowners/issues/1). Do not
+    While running an alpha, keep GitHub's native **Require review from Code
+    Owners** rule on production repositories. Do not
     deploy, mirror, or redistribute legacy preview images: `:main` and its
     `sha-*` and `sha256-*` companion tags. They are unsupported and unsafe for
     deployment because they predate the immutable release pipeline.
@@ -34,7 +32,7 @@ If the release contains a reviewed VEX claim, the same release includes
 attestation binds that statement to the multi-platform image digest. Use that
 asset with the released digest, not a statement from a newer source checkout.
 
-Replace `VERSION` with an exact value such as `0.1.0-alpha.8`. Don't use a
+Replace `VERSION` with the exact release version. Don't use a
 floating tag. Resolve and record the multi-platform image digest before you
 change the cluster; the chart also accepts that digest through `image.digest`.
 
@@ -42,7 +40,7 @@ The released chart sets its `appVersion` to the same version and uses it as the
 default image tag. Confirm that before installation:
 
 ```bash
-export VERSION='0.1.0-alpha.8'
+export VERSION='0.1.0-alpha.118'
 helm show chart \
   oci://ghcr.io/stampbot/charts/extra-codeowners \
   --version "$VERSION"
@@ -97,7 +95,7 @@ its residual risk.
 
 Before scheduling a deployment, obtain:
 
-- an Extra CODEOWNERS alpha image, verified and pinned by platform digest
+- an Extra CODEOWNERS image, verified and pinned by digest
 - the exact chart source associated with that image
 - a GitHub App with the
   [required permissions and events](../reference/github-permissions.md)

@@ -86,7 +86,7 @@ of the security contract.
 | A review is dismissed or changed after a successful check | Accept the review webhook durably, reset the managed check to an explicit `failure` before evaluation, verify that GitHub confirms the blocking state, require fresh exact-head evidence, and reconcile open pull requests. | GitHub delivery and Check Run updates are asynchronous. A prior success can remain mergeable between the review change and the App's reset; reconciliation repairs missed delivery but cannot eliminate this window. Keep native code-owner enforcement where that window is unacceptable. |
 | A head or base-branch commit arrives during evaluation | Require reviews for the exact head, fetch base and head again before publishing, and enqueue direct or base-ref fan-out work. | GitHub's check display remains eventually consistent during rapid changes. |
 | Contributor-controlled branch names create unbounded work or repeat closed history | Keep one discovery job per installation and repository. Up to 100 target branches share each current or next listing pass; overflow broadens that batch to every base. Claim installation work and batches covering every base before ordinary targeted work. | New pushes during a scan can require another pass. The shared repository fence can delay queued PRs outside its target branches; even urgent discovery can exhaust GitHub quota. |
-| Several pull requests share one head commit but need different decisions | Refuse success when another open PR already uses the head. Every accepted direct trigger advances a shared generation and durably queues revocation for that commit. With a managed check, invalidation fetches current state for every commit-to-pulls candidate, resets the check only while an associated PR remains open, and binds open peers to the current generation. Without a check, it skips reset and fan-out. An enrolled evaluation with an older generation requeues itself rather than discarding its work; success still requires fresh shared-head evidence. If all associated PRs are closed, completed results are preserved and unfinished work is cancelled. Publication requires the captured, current, and invalidated generations to match. | A PR opened or retargeted after success can inherit that commit-scoped result until GitHub delivers its webhook and the service accepts it. The commit-to-pulls response has no completeness marker, so an omitted candidate is also undetectable. These provider assumptions block production use until the live contract proves the control. |
+| Several pull requests share one head commit but need different decisions | Refuse success when another open PR already uses the head. Every accepted direct trigger advances a shared generation and durably queues revocation for that commit. With a managed check, invalidation fetches current state for every commit-to-pulls candidate, resets the check only while an associated PR remains open, and binds open peers to the current generation. Without a check, it skips reset and fan-out. An enrolled evaluation with an older generation requeues itself rather than discarding its work; success still requires fresh shared-head evidence. If all associated PRs are closed, completed results are preserved and unfinished work is cancelled. Publication requires the captured, current, and invalidated generations to match. | A PR opened or retargeted after success can inherit that commit-scoped result until GitHub delivers its webhook and the service accepts it. The commit-to-pulls response has no completeness marker, so an omitted PR is also undetectable. Production enforcement requires a separate check on the queue candidate. |
 | A mapped review, label, pull-request, or rerequest trigger races with evaluation | Record the trigger, its pull-request generation, its shared-head generation, and pending exact-head invalidation in one transaction. Bind the fast path to that generation. Lease durable invalidation ahead of evaluation, and recheck lease ownership immediately before the reset. Before completion, verify the captured generation is current and invalidated. Recheck the evaluation lease immediately before and after the completed write while holding the head publication guard. Treat an error or cancellation during the write or post-publication verification as uncertainty and attempt a shielded reset to a blocking result before releasing the guard. | GitHub may apply a write before its response is lost. A hard process stop or failed reset can leave that completed result visible until fast invalidation or durable retry reaches GitHub. |
 | A policy label is renamed or deleted | Subscribe to label-definition events, fan out repository evaluation, and fetch current pull-request label names. | Success may remain visible while processing and fan-out finish, or until reconciliation recovers a missed delivery. |
 | A rename moves content across ownership boundaries | Evaluate both the old and new path. | GitHub must provide the previous path. Incomplete rename evidence fails closed. |
@@ -174,10 +174,11 @@ measures required-check invalidation, shared-head inheritance, retargeting,
 expected-source rulesets, App reviews, and sanitized webhook payloads against a
 disposable GitHub.com repository. A run is evidence for the tested API and
 account at that recorded time. It cannot prove instant or reliable webhook
-delivery, and it does not remove the production blocker while success can be
-inherited before invalidation. Its delivery-log probe follows GitHub's
-pagination metadata within fixed bounds. When another page remains, an unseen
-delivery is incomplete evidence, not evidence that the delivery was absent.
+delivery. A passing PR-head check can still be inherited before invalidation,
+so it isn't sufficient for production enforcement. The fixture's delivery-log
+probe follows GitHub's pagination metadata within fixed bounds. When another
+page remains, an unseen delivery is incomplete evidence, not evidence that
+the delivery was absent.
 The same rule applies to cleanup: after an ambiguous repository create,
 repeated 404 responses trigger manual verification rather than a successful
 cleanup claim.
@@ -193,7 +194,7 @@ The [dated live results](../maintainers/live-validation.md) distinguish tested
 behavior from the merge and access-loss paths that remain open. Successful
 approval tests do not remove the shared-head limitation above.
 
-The experimental candidate timer watches passes the worker already confirmed.
+The candidate timer watches passes the worker already confirmed.
 It can't recover a missing first candidate delivery. An expired lease,
 GitHub request failure, or quota pause can delay a revocation. Even when the
 timer reaches GitHub, a review change and the final merge aren't atomic.
@@ -282,10 +283,10 @@ exposure window.
 The implementation does not currently cover:
 
 - GitHub Enterprise Server, until named server versions have been tested
-- high-assurance merge queues; the
-  [experimental candidate worker](design/2026-11-21-merge-queue-candidate-checks.md)
-  is limited to one disposable test repository. The first live test used one
-  entry; it did not test published results after an approval was withdrawn
+- parallel candidate builds, grouped merges, or candidate checks for more
+  than one configured repository per deployment. The
+  [one-at-a-time queue](adrs/2026-11-25-require-a-serial-merge-queue.md)
+  doesn't make approval withdrawal and merge atomic
 - a transfer or installation change that removes repository access before
   control returns to native enforcement
 - tenant isolation or service-level commitments for a hosted multi-tenant

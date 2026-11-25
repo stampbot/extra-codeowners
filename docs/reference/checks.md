@@ -346,8 +346,8 @@ Removing the configured organization-policy repository from App selection create
 
 The worker supersedes affected evaluations and attempts to invalidate their checks. A success can remain visible between the external change, webhook acceptance, durable fan-out, and GitHub's Check Run update. Reconciliation is the recovery path for missed delivery. If access has already been removed, it may be impossible for the App to update the old check at all.
 
-Merge queue enforcement remains experimental. The
-[disposable queue test](../how-to/test-merge-queue.md) separates a PR-head
-check from the check on GitHub's candidate commit. Its worker can recheck
-a confirmed pass, but it won't discover a candidate whose first delivery
-never arrived. Keep native code-owner review enabled in production.
+The [one-at-a-time merge queue](../how-to/test-merge-queue.md) needs a
+separate check on each candidate. A passing PR-head check can satisfy the
+App requirement for queue admission, not for the final merge. The worker can
+recheck a confirmed candidate pass. It won't discover a candidate whose
+first delivery never arrived.
