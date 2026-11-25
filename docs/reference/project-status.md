@@ -13,9 +13,10 @@ label probe under recovery work. These complete the validation tracked in
 [issue #203][issue-203]; they do not establish a recovery-latency guarantee or
 close the other release gates.
 
-Extra CODEOWNERS is ready for source review and non-required shadow-mode
-testing. It is not ready to replace GitHub's native code-owner enforcement on
-production repositories.
+Alpha releases are for source review, shadow mode, and disposable tests.
+The 1.0 enforcement contract requires a one-at-a-time GitHub Merge Queue.
+Keep native code-owner review enabled in production until a supported release
+is available and the repository meets that contract.
 
 ## Available surfaces
 
@@ -28,7 +29,7 @@ production repositories.
 | Container image | Signed, attested, multi-platform alpha image in GitHub Container Registry (GHCR) |
 | Helm chart | Signed alpha OCI chart in GHCR |
 | Python wheel and source distribution | Signed and attested GitHub release assets; not published to the Python Package Index (PyPI) |
-| Production code-owner enforcement | Not supported |
+| Production code-owner enforcement | Requires a supported release and the [serial queue setup](../how-to/test-merge-queue.md) |
 | Hosted service | Not available |
 | `extra-codeowners-action` Marketplace Action | Not available |
 
@@ -134,7 +135,7 @@ whether package metadata, bundled material, or source availability satisfies a
 redistribution obligation. See the [source and notice receipt][source-receipt]
 for the release that established those bindings on both platforms.
 
-## Production enforcement blocker {#production-enforcement-blocker}
+## Production enforcement limits {#production-enforcement-blocker}
 
 GitHub attaches a Check Run to a commit, but Extra CODEOWNERS evaluates one
 pull request: its base, changed paths, labels, and reviews. Two open pull
@@ -167,17 +168,24 @@ repository. A prior green check can stay visible after access is gone. A
 blocked an actual merge attempt while the App was suspended, even though
 the old success was still visible.
 
-In the [deployed one-entry queue test](../maintainers/evidence/2026-11-23-candidate-checks-during-delivery-loss.md),
+In the [deployed queue test](../maintainers/evidence/2026-11-23-candidate-checks-during-delivery-loss.md),
 two PRs showed an old success while their webhooks were unavailable. GitHub
 waited for separate candidate checks. A redelivered candidate failed, an
 undelivered candidate timed out, and an eligible control merged. This
 addresses the shared-head window for the tested rules in [issue #1][issue-1],
 not for a required check on the PR head alone.
 
-Keep GitHub's native **Require review from Code Owners** rule on production
-repositories. The candidate worker remains experimental, and
-[issue #4](https://github.com/stampbot/extra-codeowners/issues/4) tracks
-broader queue support. The tests don't make review dismissal atomic with merge.
+For 1.0, the [one-at-a-time queue decision][serial-adr] limits enforcement
+to GitHub.com repositories that can require a merge queue: organization-owned
+public repositories and private organization repositories on GitHub Enterprise
+Cloud. Candidate checks are opt-in for one repository per deployment. Require
+squash merging, one build slot, one PR per merge, and passing checks on every
+candidate. Other PRs can wait without a built candidate.
+
+Keep **Require review from Code Owners** everywhere else. Don't make the
+PR-head check the only code-owner rule. [Issue #4][issue-4] tracks parallel
+builds and grouped merges. The supported queue doesn't make review dismissal
+atomic with a merge already in progress.
 
 ## DCO and release-evidence limits
 
@@ -203,15 +211,16 @@ hosted service are separate roadmap items, with no availability date.
 
 Other pages describe current limits and link here for open work. The closed
 [provider verification issue][issue-1] records the tested GitHub behavior;
-the [production enforcement blocker](#production-enforcement-blocker) explains
-what those tests did not establish.
+the [production enforcement limits](#production-enforcement-blocker) describe
+where those tests apply.
 
 ### Before a stable release
 
-The [First supported release][milestone] milestone records the completed
-release gates and the requested deep security review. The verified
-prerelease doesn't remove the [production enforcement blocker](#production-enforcement-blocker).
-Keep GitHub's native code-owner review in production.
+The [First supported release][milestone] milestone tracks release gates.
+The maintainer's deep security review is separate from automated checks.
+A passing prerelease doesn't authorize a production rollout. Use the
+[candidate check and handback procedure](../how-to/test-merge-queue.md)
+with a supported release before switching production rules.
 
 The release gate rejects unreviewed changes to captured third-party records
 on either platform. [Wheel-native catalogs](native-components.md) link the
@@ -253,7 +262,7 @@ native assessment.
 
 ### Roadmap
 
-- [Issue #4][issue-4]: support merge queues and `merge_group` reevaluation.
+- [Issue #4][issue-4]: support parallel candidate builds and grouped merges.
 - [Issue #2][issue-2]: publish the `extra-codeowners-action` Marketplace
   Action.
 - [Issue #5][issue-5]: design the hosted service's security and operating
@@ -287,3 +296,4 @@ on this list opens or closes.
 [issue-203]: https://github.com/stampbot/extra-codeowners/issues/203
 [issue-302]: https://github.com/stampbot/extra-codeowners/issues/302
 [alpha92-performance]: ../maintainers/evidence/2026-11-12-checkpoint-continuation-and-alpha92.md
+[serial-adr]: ../explanation/adrs/2026-11-25-require-a-serial-merge-queue.md

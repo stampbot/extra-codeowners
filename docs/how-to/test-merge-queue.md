@@ -1,35 +1,44 @@
-# Test the experimental merge queue
+# Configure a one-at-a-time merge queue
 
-Use this procedure to check a merge queue in one disposable GitHub.com
-repository. Keep GitHub's native code-owner review on in production. The
-worker is experimental; a passing test doesn't change the
-[production support boundary](../reference/project-status.md#production-enforcement-blocker).
+Use a required merge queue when Extra CODEOWNERS replaces native code-owner
+review. Several PRs can wait in the queue. GitHub builds one candidate at a
+time, and the App evaluates the PR at the front against that candidate.
+The next PR needs its own result.
+
+!!! warning
+    Use an alpha only for a disposable queue test. The production procedure
+    requires a supported 1.0 or later release. If your repository can't use
+    the settings below, keep native code-owner review on and leave Extra
+    CODEOWNERS advisory. See the [support limits][support].
 
 ## Before you begin
 
-- Use an App registration and an installation you can change for the test.
-  Limit the installation to the test repository and its organization-policy
-  repository. The repository must be eligible for
-  [GitHub Merge Queue][github-queue].
-- Use a release that includes candidate rechecks, starting with
-  [alpha.115][alpha]. Follow the [upgrade guide](upgrade.md) if you have an
-  existing database. Work on a branch with a valid `CODEOWNERS` file and
-  at least one eligible human owner for the path you'll test.
+- Start in a disposable GitHub.com repository eligible for
+  [GitHub Merge Queue][github-queue]. Use an App registration you can change.
+  Limit that installation to the test repository and its organization-policy
+  repository. Each deployment can opt in one repository for candidate checks.
+- For a disposable test, use a release that includes candidate rechecks,
+  starting with [alpha.115][alpha]. Follow the [upgrade guide](upgrade.md)
+  if you have an existing database. Keep a valid `CODEOWNERS` file and an
+  eligible human owner for the path you'll test.
 - Arrange access to the App's settings and delivery log and to the rulesets
   that apply to the test branch. Record those rules before editing them,
   including organization rules, bypass actors, and other required checks.
 
-## 1. Turn on the worker for the fixture
+## 1. Turn on candidate checks
 
-Add **Merge queues: Read-only** to the test App's repository permissions.
+Add **Merge queues: Read-only** to the App's repository permissions.
 Subscribe to the [`merge_group` event][merge-group-event], and have the
 installation owner accept the updated permissions. The default App Manifest
 doesn't request either setting.
 
-Set the [experimental repository route and ID][settings] to the same
-test repository on every receiver and worker replica. Leave all other
-repositories out of the experiment. Keep the recheck interval at its
-default unless you're measuring it separately.
+Set `EXTRA_CODEOWNERS_EXPERIMENTAL_MERGE_QUEUE_REPOSITORY` and
+`EXTRA_CODEOWNERS_EXPERIMENTAL_MERGE_QUEUE_REPOSITORY_ID` on every receiver
+and worker replica. Use `owner/repository` and that repository's numeric
+GitHub ID. The `EXPERIMENTAL` names are unchanged for compatibility. Leave
+the [recheck interval][settings] at its default unless you've measured a
+different interval in your deployment. For Helm, set both variables in
+`extraEnv` as string values. The database migration Job doesn't need them.
 
 Verify service readiness and run the normal
 [policy tests](configure.md#5-test-the-boundary) before changing any rule.
@@ -38,30 +47,32 @@ The App doesn't need permission to submit reviews or merge.
 
 ## 2. Set and verify the queue rules
 
-On the disposable target branch, keep the ordinary pull-request requirement
-and its approving-review count. For the test, require at least one ordinary
-approval. Leave existing checks and restrictions in place. If another check
-is required, make sure it also runs on GitHub's candidate commit.
+Use a repository ruleset for the target branch. Keep the ordinary pull-request
+requirement and its approving-review count. For the disposable test, require
+at least one ordinary approval. Leave existing checks and restrictions in
+place. Every required CI check must report on GitHub's candidate commit, not
+only the PR head. For GitHub Actions, add the `merge_group` trigger.
 
 Require the queue and the Extra CODEOWNERS check from the installed App.
 Set the queue to squash merging, one build slot, a minimum and maximum of
 one PR per merge, and **Only merge non-failing pull requests**. Allow no
-bypass actors. Verify the App as the expected source before you disable
-native code-owner review on the test branch. If the rules span multiple
+bypass actors. Set the status check timeout long enough for candidate checks
+to finish. Verify the App as the expected source before you disable
+native code-owner review on the disposable branch. If the rules span multiple
 settings, keep native review active until the queue and App check are
 confirmed. Don't change the review count.
 
 To inspect active rules, run this read-only command in Bash from any
 directory with `gh` and `jq` installed. Authenticate `gh` to GitHub.com
-as a user who can read the test repository. Replace the example
-`FIXTURE_REPOSITORY` and `TARGET_BRANCH` with your repository and branch:
+as a user who can read the repository. Replace the example `REPOSITORY`
+and `TARGET_BRANCH` with your repository and branch:
 
 ```bash
-FIXTURE_REPOSITORY=example-org/disposable-repo
+REPOSITORY=example-org/disposable-repo
 TARGET_BRANCH=test-queue
 branch_path=$(jq -nr --arg branch "$TARGET_BRANCH" '$branch | @uri')
 gh api --paginate --slurp \
-  "repos/$FIXTURE_REPOSITORY/rules/branches/$branch_path?per_page=100" |
+  "repos/$REPOSITORY/rules/branches/$branch_path?per_page=100" |
   jq 'add | map(select(.type == "merge_queue" or .type == "pull_request"
     or .type == "required_status_checks")
     | {ruleset_id, type, parameters})'
@@ -78,22 +89,27 @@ Stop if a rule is missing, unreadable, or doesn't match the test plan.
 
 ## 3. Prove the gate works
 
-Run the tests with synthetic changes and no bypass. Add a separate required
-fixture check to hold a candidate for negative or timing tests. Pass that
-check on the PR head only; it must stay absent from the held candidate.
+Run these tests in the disposable repository with synthetic changes and no
+bypass. Add a separate required fixture check to hold a candidate for
+negative or timing tests. Pass that check on the PR head only; it must stay
+absent from the held candidate. Don't add the fixture check to production.
 
 1. With no ordinary approval, confirm that a green PR-head check doesn't let
    the PR enter GitHub's queue. On an approved PR, read a real App delivery
    and verify that GitHub built a candidate commit distinct from the PR head.
 2. Without a candidate result from the expected App, verify that GitHub
-   waits. Losing the first candidate delivery doesn't start a timer: GitHub
-   waits until the check expires, or until you redeliver the matching event
-   or requeue. Don't copy an earlier result to a new candidate.
+   waits. The App doesn't discover a candidate if its first event is lost.
+   GitHub waits until its queue timeout, unless you redeliver the matching
+   event or requeue. Don't copy an earlier result to a new candidate.
 3. Let the worker confirm a pass while the fixture check holds the candidate.
    A timer recheck should leave the same Check Run green if the review is
    still valid. Dismiss the eligible review and confirm that the worker
    changes that Check Run to failure and that the branch doesn't move.
-4. With a fresh eligible PR, verify that GitHub can merge once the ordinary
+4. While the first candidate is held, queue a second eligible PR. Verify
+   that it waits without a candidate. After the first entry leaves the queue,
+   verify that GitHub creates a different candidate and requires a result
+   for that commit. The first result can't satisfy it.
+5. With a fresh eligible PR, verify that GitHub can merge once the ordinary
    review count, candidate check, and every other rule are satisfied.
 
 Don't treat a response from the webhook receiver or a green check on the PR
@@ -101,9 +117,25 @@ head as proof of a passing candidate. Record the head and candidate commit
 separately. If any expected rejection instead merges, stop the experiment
 and restore native review.
 
+## 4. Switch a protected branch to candidate checks
+
+Do not use a prerelease for this step. After the disposable tests pass,
+deploy the supported release and configure the production repository using
+steps 1 and 2. Record its rules before changing them and keep native review
+on. Confirm a human-approved PR gets a candidate result from the expected
+App and that the other required checks report on that candidate. If GitHub
+doesn't enforce the queue and App requirement or you can't verify the result,
+stop and leave native review in place.
+
+When the queue and required check are active, disable only **Require review
+from Code Owners**. Read back the rules to confirm the review count, queue,
+and other protections stayed in place. If a candidate check is missing, use
+the delivery log to redeliver the matching event or requeue the PR. Don't
+copy a check from the old candidate or bypass the queue.
+
 ## Return to native review
 
-Stop adding test PRs to the queue. Remove queued entries and verify the
+Stop adding PRs to the queue. Remove queued entries and verify the
 queue is empty before changing protections. If a merge is already in
 progress, don't assume that a rule change can cancel it.
 
@@ -117,9 +149,10 @@ progress, don't assume that a rule change can cancel it.
    owner. Confirm GitHub reports the missing code-owner review. Neither a
    successful queue admission nor a PR blocked by an unrelated check proves
    the restored rule works. Don't proceed if you can't confirm it.
-3. Remove the fixture's required App check and any queue rule added for
-   the experiment. Return the rest of the rules to the captured baseline.
-   Clear both experimental repository settings on every replica.
+3. Remove the required Extra CODEOWNERS check and restore the recorded
+   queue configuration. Leave unrelated protections alone. Clear the two
+   candidate repository settings on every replica if the App will no
+   longer check that repository's queue.
 4. Only then remove repository access, suspend the installation, or remove
    test-only permissions and subscriptions.
 
@@ -130,3 +163,4 @@ Clearing the settings or taking away access doesn't erase checks GitHub already 
 [github-rules]: https://docs.github.com/en/rest/repos/rules#get-rules-for-a-branch
 [merge-group-event]: https://docs.github.com/en/webhooks/webhook-events-and-payloads#merge_group
 [settings]: ../reference/configuration.md#policy-and-security-settings
+[support]: ../reference/project-status.md#production-enforcement-blocker

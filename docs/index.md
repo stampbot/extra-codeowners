@@ -13,7 +13,7 @@ Regular pull requests keep going to their human owners.
 !!! warning "Use a disposable environment"
 
     Extra CODEOWNERS is pre-release software. An alpha artifact is for
-    non-required, shadow-mode testing, not production enforcement or supported
+    shadow mode and disposable tests, not production enforcement or supported
     distribution. Legacy preview images — `:main` and its `sha-*` and
     `sha256-*` companion tags — are unsupported and unsafe for deployment.
     Don't deploy, mirror, or redistribute them. Read the
@@ -35,9 +35,9 @@ and App evidence for another. Paths with no effective `CODEOWNERS` match create
 no code-owner requirement.
 
 The check evaluates the decision behind GitHub's **Require review from Code
-Owners** rule. Leave that rule enabled in production. The check doesn't replace
-your minimum approval count, stale-review setting, signed-commit policy, or
-other required checks.
+Owners** rule. Leave that rule enabled while trying an alpha. The check
+doesn't replace your minimum approval count, stale-review setting,
+signed-commit policy, or other required checks.
 
 GitHub doesn't publicly promise that a third-party App review counts toward
 the ordinary approval minimum. It did in the project's
@@ -68,9 +68,11 @@ After the first check works, continue with the pieces you need:
 2. [Run the live GitHub contract fixture](how-to/run-live-github-contract.md).
 3. [Exercise the replacement rule and its rollback](how-to/prepare-repository-rules.md).
 
-Keep GitHub's native code-owner rule enabled on production repositories. The
-[project status](reference/project-status.md#production-enforcement-blocker)
-explains why the live tests don't make a required check on the PR head safe.
+To replace native review with a supported release, follow the
+[one-at-a-time merge queue setup](how-to/test-merge-queue.md). If the
+repository can't use that queue, keep native review and leave the check
+advisory. A required check on the PR head alone can be shared by unrelated
+PRs that point to the same commit.
 
 ## Configure policy
 

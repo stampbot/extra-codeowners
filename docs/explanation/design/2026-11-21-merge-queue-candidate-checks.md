@@ -10,7 +10,7 @@ check on GitHub's queue candidate could close that particular gap.
 | Field | Value |
 | --- | --- |
 | Date | 2026-11-21 |
-| Status | Proposed; first deployed one-entry fixture tested |
+| Status | Decided for 1.0; [serial queue ADR](../adrs/2026-11-25-require-a-serial-merge-queue.md) |
 | Owner | Maintainers |
 | Scope | A first proof with one queue entry and one disposable repository |
 | Related | [Shared-commit blocker][shared-head], [merge-queue work][queue-work], [November 20 provider test][provider-test] |
@@ -106,7 +106,7 @@ human code-owner approval the project was designed to complement.
 ## Proposed first proof
 
 For the current operator procedure, see
-[Test the experimental merge queue](../../how-to/test-merge-queue.md).
+[Configure a one-at-a-time merge queue](../../how-to/test-merge-queue.md).
 
 Leave production review rules in place. Set both
 [`EXTRA_CODEOWNERS_EXPERIMENTAL_MERGE_QUEUE_*` settings](../../reference/configuration.md#policy-and-security-settings)
@@ -167,9 +167,10 @@ after the final read.
 
 If the App can't identify the candidate's contents or GitHub reuses a
 prior result for a different decision, stop before any production rollout.
-The [shared-commit issue][shared-head] remains the release gate.
+The [1.0 release gate][release-gate] tracks the resulting support decision.
 
 [shared-head]: https://github.com/stampbot/extra-codeowners/issues/1
+[release-gate]: https://github.com/stampbot/extra-codeowners/issues/347
 [queue-work]: https://github.com/stampbot/extra-codeowners/issues/4
 [provider-test]: https://github.com/stampbot/extra-codeowners/issues/4#issuecomment-7029566017
 [worker-test]: ../../maintainers/evidence/2026-11-23-candidate-checks-during-delivery-loss.md

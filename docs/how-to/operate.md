@@ -837,7 +837,7 @@ Do this while the App still has access. GitHub can keep showing an old
 passing Check Run after it blocks the App from updating it, as observed in
 the [playground suspension test](../maintainers/evidence/2026-11-19-installation-suspend-resume.md).
 
-If you ran a disposable merge-queue experiment, follow its
+If Extra CODEOWNERS is required on a merge queue, follow the
 [queue handback procedure](test-merge-queue.md#return-to-native-review)
 before you revoke access. Turning off the worker doesn't empty GitHub's
 queue or erase a passing check.
@@ -850,10 +850,14 @@ different installation of the same App.
 After resume or reinstall, verify access to the policy source and the intended
 repositories. Check that the corresponding lifecycle delivery reaches the
 service and wait for authority work and pull-request evaluations to finish.
-Verify current check results before relying on them for evaluation. Keep
-native enforcement in place where merges require code-owner review.
+Verify current check results before relying on them for evaluation. To switch
+back from native review, follow the [cutover procedure](test-merge-queue.md#4-switch-a-protected-branch-to-candidate-checks).
 
 ### Remove or add selected repositories
+
+If the branch requires candidate checks, use the
+[queue handback procedure](test-merge-queue.md#return-to-native-review)
+before deselecting its repository.
 
 Before deselecting an ordinary target:
 
