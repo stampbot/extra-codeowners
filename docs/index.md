@@ -95,7 +95,7 @@ shown in GitHub and says when an operator needs to step in.
 
 The repository also contains deployment and operations guides:
 
-- [deploy an alpha in shadow mode](how-to/deploy.md)
+- [deploy the GitHub App](how-to/deploy.md)
 - [upgrade, back up, and restore](how-to/upgrade.md)
 - [operate and recover](how-to/operate.md)
 - [review the architecture](explanation/architecture.md).

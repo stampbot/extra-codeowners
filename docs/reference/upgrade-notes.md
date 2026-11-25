@@ -198,7 +198,8 @@ This revision doesn't enable merge queue enforcement.
 Revision `0012_merge_candidate_recheck` adds a nullable Check Run ID and an
 index for due rechecks. It leaves old candidate rows untracked by the timer;
 it doesn't infer which old checks passed or withdraw them at upgrade. Empty
-an active experimental fixture queue before draining the deployment. The
+an active merge queue and restore native review before draining a deployment
+that supplies its required check. The
 compatibility marker moves from `10` to `11`.
 
 The [published-image rehearsal](../maintainers/evidence/2026-11-23-published-schema-0012-restore.md)
@@ -206,11 +207,10 @@ verified upgrading an alpha.114 backup to alpha.115 and restoring the
 earlier schema on disposable PostgreSQL. Verify a separate backup of your
 own database before changing its schema.
 
-No supported application release predates the planned `0.1.0`. Databases
-created by pre-release builds have no Alembic revision, so the current `0.1.0`
-source provides the one-time `--adopt-pre-alembic-schema` path. Adoption
-succeeds only when the unversioned database matches immutable revision
-`0001_initial_schema` exactly and the operator has verified a backup.
+Development databases created before Alembic have no revision. The one-time
+`--adopt-pre-alembic-schema` path accepts an unversioned database only when it
+matches immutable revision `0001_initial_schema` exactly and the operator has
+verified a backup.
 
 That comparison covers tables, columns, types, lengths, nullability, primary
 keys, named indexes and unique constraints, the compatibility marker, column

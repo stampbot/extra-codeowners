@@ -5,17 +5,16 @@ release workflow publishes it as an OCI chart at
 `oci://ghcr.io/stampbot/charts/extra-codeowners`.
 
 > [!CAUTION]
-> Alpha images and charts are for non-required shadow-mode testing. Never use
+> Alpha images and charts are for shadow mode and disposable tests. Never use
 > one to authorize production merges; keep GitHub's native **Require review
 > from Code Owners** rule in place. Legacy preview images — `:main` and its
 > `sha-*` and `sha256-*` companion tags — are unsupported and unsafe for
 > deployment. They must not be deployed, mirrored, or redistributed.
 
-The current Check Run design has a documented commit-to-pull-request
-inheritance window, tracked in
-[issue #1](https://github.com/stampbot/extra-codeowners/issues/1). Read the
-[project status](https://extra-codeowners.readthedocs.io/en/latest/reference/project-status/)
-before testing an alpha.
+For a supported release, replacing native code-owner review requires the
+[one-at-a-time merge queue](https://extra-codeowners.readthedocs.io/en/latest/how-to/test-merge-queue/).
+A check on the PR head alone isn't enough. Use the documented `extraEnv`
+settings to enable candidate checks for one repository.
 
 Read the
 [deployment guide](https://extra-codeowners.readthedocs.io/en/latest/how-to/deploy/),
@@ -30,7 +29,7 @@ and [upgrade procedure][upgrade] before evaluating the chart.
 | Helm | The Helm 3.x release pinned in the repository's [`mise.toml`][toolchain] |
 | GitHub CLI | A current release with `gh attestation verify` |
 | Docker Buildx | Required on the administration host to resolve the image digest |
-| Application image | An alpha image pinned by digest for shadow-mode testing |
+| Application image | An image matching the chart version, pinned by digest |
 | Database | PostgreSQL through the exact `postgresql+psycopg` driver, configured under the application's production transport rules |
 | GitHub | An installed Extra CODEOWNERS App |
 | Ingress | Public HTTPS access to only the webhook endpoint |
@@ -98,7 +97,7 @@ select the runtime-default seccomp profile. The default Deployment uses
 outside chart-managed resources. Set `highAvailability.enabled: true` to
 select the reviewed two-replica rolling Deployment preset.
 
-## Select an alpha release
+## Select a release
 
 Use one exact version for the chart and image. The packaged chart's
 `appVersion` selects the matching image tag unless `image.tag` or
@@ -108,8 +107,8 @@ tag cannot change the selected bytes.
 The release workflow builds and tests `amd64` and `arm64` images on native
 runners, then publishes one multi-platform tag. It signs and attests the image
 and chart. Record the version, source revision, multi-platform digest, and
-verification result before you run an alpha. Keep native review enforcement
-intact throughout the test. Use the central
+verification result before deploying. Keep native review enforcement intact
+when testing an alpha. Use the central
 [deployment guide](https://extra-codeowners.readthedocs.io/en/latest/how-to/deploy/)
 and [upgrade procedure][upgrade] for task steps; use this README for
 chart-specific inputs, defaults, and review constraints.
@@ -129,7 +128,7 @@ the downloaded chart archive before extracting it.
 set -euo pipefail
 umask 077
 
-export VERSION='0.1.0-alpha.8'
+export VERSION='0.1.0-alpha.118'
 export IMAGE_REPOSITORY='ghcr.io/stampbot/extra-codeowners'
 export CHART_DIRECTORY="$(mktemp -d)"
 
@@ -372,7 +371,7 @@ may retain it.
 
 ## Install and verify
 
-Install the reviewed alpha image and chart:
+Install the reviewed image and chart:
 
 ```bash
 helm install extra-codeowners \
