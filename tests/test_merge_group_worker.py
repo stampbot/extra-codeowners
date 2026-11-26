@@ -251,6 +251,50 @@ async def test_timer_rechecks_published_candidate_without_a_webhook(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("trigger_kind", ["pull_request", "destroyed"])
+@pytest.mark.parametrize("closed", [False, True])
+async def test_candidate_event_preserves_only_authoritatively_closed_history(
+    stack: tuple[MergeGroupWorker, QueueStore, Mock, AsyncMock],
+    trigger_kind: str,
+    closed: bool,
+) -> None:
+    # Verifies XCO-007: retirement must use the candidate's bound pull request.
+    worker, store, client, _ = stack
+    await worker.process(queued(worker, store))
+    client.existing_merge_group_check.return_value = 88
+    client.get_pull.return_value = {
+        "number": IDENTITY.pull_number,
+        "node_id": IDENTITY.pull_id,
+        "state": "closed" if closed else "open",
+        "merged": closed,
+        "base": {"repo": {"id": TRIGGER.repository_id, "full_name": TRIGGER.repository}},
+    }
+    if trigger_kind == "destroyed":
+        assert store.accept_delivery(
+            "queue-finished", "merge_group", replace(TRIGGER, action="destroyed")
+        )
+    else:
+        assert store.accept_delivery(
+            "pull-changed",
+            "pull_request",
+            JobRequest(
+                TRIGGER.installation_id,
+                TRIGGER.repository,
+                IDENTITY.pull_number,
+                "review",
+                head_sha_hint=IDENTITY.pull_head_sha,
+            ),
+            invalidate_merge_groups=True,
+        )
+    job = worker.queue.claim("queue-replica", 60, repository_scope=worker.repository)
+    assert job is not None and job.published is None
+    await worker.process(job)
+    assert client.write_merge_group_check.await_count == (1 if closed else 2)
+    if not closed:
+        assert client.write_merge_group_check.await_args.kwargs["approved"] is False
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(("destroyed", "known_check"), [(True, None), (True, 88), (False, 88)])
 async def test_only_reset_existing_checks_after_invalidation_or_cancellation(
     stack: tuple[MergeGroupWorker, QueueStore, Mock, AsyncMock],

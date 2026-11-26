@@ -159,6 +159,18 @@ def test_changed_file_path_is_not_silently_whitespace_normalized() -> None:
         ChangedFile(path=" docs/file.txt ")
 
 
+@pytest.mark.parametrize("character", [chr(0), chr(9), chr(10), chr(13), chr(127)])
+def test_file_evidence_rejects_unsupported_control_characters(character: str) -> None:
+    # Verifies XCO-001 and XCO-006.
+    unsupported = f"docs/sample{character}name.txt"
+    with pytest.raises(ValidationError, match="control characters"):
+        ChangedFile(path=unsupported)
+    with pytest.raises(ValidationError, match="control characters"):
+        ChangedFile(
+            path="docs/sample.txt", previous_path=unsupported, status=ChangedFileStatus.RENAMED
+        )
+
+
 def test_check_output_cannot_be_structurally_forged_by_repository_evidence() -> None:
     result = EvaluationResult(
         conclusion=EvaluationConclusion.FAILURE,

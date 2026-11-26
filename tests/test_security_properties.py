@@ -64,7 +64,7 @@ def test_invalid_webhook_signatures_always_fail_closed(body: bytes) -> None:
     with pytest.raises(WebhookError, match="signature mismatch"):
         verify_webhook(
             body,
-            signature="sha256=not-a-valid-digest",
+            signature="sha256=" + "0" * 64,
             delivery_id="synthetic-delivery",
             event="pull_request",
             secret="secret",

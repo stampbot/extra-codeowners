@@ -37,6 +37,7 @@ class ClaimedMergeGroup:
     attempts: int
     lease_owner: str
     published: PublishedMergeCandidate | None = None
+    pull_identity: tuple[str, int] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,17 +143,16 @@ class MergeGroupQueue:
                 )
                 if row is None:
                     return None
+                pull_identity = (
+                    (row.pull_id, row.pull_number)
+                    if row.pull_id is not None and row.pull_number is not None
+                    else None
+                )
                 published = None
                 if recheck:
-                    if (
-                        row.recheck_check_id is None
-                        or row.pull_id is None
-                        or row.pull_number is None
-                    ):
+                    if row.recheck_check_id is None or pull_identity is None:
                         raise RuntimeError("published candidate lost its check or PR identity")
-                    published = PublishedMergeCandidate(
-                        row.recheck_check_id, row.pull_id, row.pull_number
-                    )
+                    published = PublishedMergeCandidate(row.recheck_check_id, *pull_identity)
                 trigger = MergeGroupTrigger(
                     action="destroyed" if row.destroyed else "checks_requested",
                     installation_id=row.installation_id,
@@ -175,7 +175,7 @@ class MergeGroupQueue:
                 )
                 if getattr(result, "rowcount", 0) == 1:
                     return ClaimedMergeGroup(
-                        trigger, row.generation, row.attempts + 1, owner, published
+                        trigger, row.generation, row.attempts + 1, owner, published, pull_identity
                     )
         return None
 

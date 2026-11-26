@@ -4,18 +4,22 @@ import hmac
 import json
 import threading
 import time
+from collections.abc import AsyncIterator
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from httpx import ASGITransport, AsyncClient
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 
 import extra_codeowners.app as app_module
+import extra_codeowners.webhook_ingress as webhook_ingress
 from extra_codeowners import __version__
 from extra_codeowners.build_identity import BuildIdentity
 from extra_codeowners.database import QueueStore
@@ -1184,7 +1188,7 @@ def test_invalid_signature_returns_unauthorized(tmp_path: Path) -> None:
 def test_streamed_webhook_is_bounded_without_content_length(
     tmp_path: Path, monkeypatch: Any
 ) -> None:
-    monkeypatch.setattr(app_module, "MAX_WEBHOOK_BYTES", 4)
+    monkeypatch.setattr(webhook_ingress, "MAX_WEBHOOK_BYTES", 4)
     store = migrated_store(f"sqlite:///{tmp_path / 'app.db'}")
     app = app_module.create_app(configured_settings(), github=StubGitHub(), store=store)  # type: ignore[arg-type]
 
@@ -1200,6 +1204,58 @@ def test_streamed_webhook_is_bounded_without_content_length(
         )
 
     assert response.status_code == 413
+
+
+def test_webhook_rejects_missing_signature_without_reading_body(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    read_body = AsyncMock(side_effect=AssertionError("body must not be read"))
+    monkeypatch.setattr(webhook_ingress, "_read_verified_webhook", read_body)
+    store = migrated_store(f"sqlite:///{tmp_path / 'app.db'}")
+    app = app_module.create_app(configured_settings(), github=StubGitHub(), store=store)  # type: ignore[arg-type]
+    with TestClient(app) as client:
+        response = client.post("/webhooks/github", content=b"{}")
+    assert response.status_code == 401
+    read_body.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_webhook_read_timeout_releases_the_only_slot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Verifies XCO-013: neither a busy receiver nor an interrupted body acknowledges work.
+    monkeypatch.setattr(webhook_ingress, "BODY_READ_SLOTS", 1)
+    monkeypatch.setattr(webhook_ingress, "BODY_READ_TIMEOUT_SECONDS", 0.1)
+    store = migrated_store(f"sqlite:///{tmp_path / 'app.db'}")
+    deps = webhook_ingress.WebhookDependencies(
+        configured_settings(), store, None, None, Tracing(enabled=False)
+    )
+    app = FastAPI()
+    app.include_router(webhook_ingress.create_webhook_router(lambda _request: deps))
+    reading = asyncio.Event()
+    headers = {**webhook_headers(b"{}"), "X-GitHub-Event": "ping"}
+
+    async def paused_body() -> AsyncIterator[bytes]:
+        reading.set()
+        await asyncio.Event().wait()
+        yield b"{}"
+
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://example.test"
+        ) as client:
+            first = asyncio.create_task(
+                client.post("/webhooks/github", headers=headers, content=paused_body())
+            )
+            await asyncio.wait_for(reading.wait(), timeout=2)
+            busy = await client.post("/webhooks/github", headers=headers, content=b"{}")
+            assert busy.status_code == 503
+            assert (await first).status_code == 408
+            assert (
+                await client.post("/webhooks/github", headers=headers, content=b"{}")
+            ).status_code == 202
+    finally:
+        store.close()
 
 
 def test_setup_routes_are_hidden_when_disabled(tmp_path: Path) -> None:

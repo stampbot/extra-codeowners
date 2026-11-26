@@ -503,7 +503,9 @@ Webhook failures use these status codes:
 | --- | --- | --- |
 | Missing or malformed `X-Hub-Signature-256`, or a signature mismatch | `401` | Reject before parsing JSON. |
 | Missing or overlong delivery or event header; invalid `Content-Length`; malformed JSON; non-object JSON; invalid payload for a mapped event | `400` | Reject the request. |
+| Body read exceeds four seconds | `408` | Reject without accepting the delivery. |
 | Body larger than 10 MiB | `413` | Reject whether or not `Content-Length` is present. The service enforces the limit while streaming; ingress should enforce the same limit. |
+| All eight body-read slots in this process are occupied | `503` | Reject before reading the body. Restore capacity and redeliver. |
 | No configured webhook secret | `503` | Reject because the receiver is not configured. |
 | Retained direct trigger with no configured evaluator | `503` | Store the trigger, but report that synchronous check revocation is unavailable. |
 | Database failure while accepting mapped work | `503` | Do not acknowledge successful ingestion. |

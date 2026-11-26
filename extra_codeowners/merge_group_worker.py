@@ -154,6 +154,22 @@ class MergeGroupWorker:
         if existing != published.check_id:
             raise GitHubError("the current candidate check is not the recorded pass")
 
+    async def _bound_pull_is_closed(
+        self, trigger: MergeGroupTrigger, pull_identity: tuple[str, int] | None
+    ) -> bool:
+        if pull_identity is None:
+            return False
+        pull_id, pull_number = pull_identity
+        try:
+            pull = await self.github.get_pull(
+                trigger.installation_id, trigger.repository, pull_number
+            )
+            return candidate_pull_is_closed(trigger, pull_id, pull_number, pull)
+        except GitHubRateLimitError:
+            raise
+        except Exception:
+            return False  # A failed read isn't proof that the check is historical.
+
     async def _withdraw_or_retire(self, job: ClaimedMergeGroup) -> None:
         trigger, published = job.trigger, job.published
         if published is None:
@@ -161,17 +177,9 @@ class MergeGroupWorker:
         async with self.evaluator._check_write_guard(trigger.installation_id, trigger.head_sha):
             await self._require_attempt(job)
             await self._require_repository(trigger)
-            try:
-                pull = await self.github.get_pull(
-                    trigger.installation_id, trigger.repository, published.pull_number
-                )
-                closed = candidate_pull_is_closed(
-                    trigger, published.pull_id, published.pull_number, pull
-                )
-            except GitHubRateLimitError:
-                raise
-            except Exception:
-                closed = False  # A failed read isn't proof that the check is historical.
+            closed = await self._bound_pull_is_closed(
+                trigger, (published.pull_id, published.pull_number)
+            )
             await self._require_attempt(job)
             if not closed:
                 await self._require_recorded_check(job)
@@ -235,7 +243,10 @@ class MergeGroupWorker:
             existing = await self.github.existing_merge_group_check(trigger, name)
             await self._require_attempt(job)
             if existing is not None or trigger.action == "destroyed":
-                if existing is not None:
+                if existing is not None and not await self._bound_pull_is_closed(
+                    trigger, job.pull_identity
+                ):
+                    await self._require_attempt(job)
                     await self._revoke(trigger, existing)
                 await self._complete(job)
                 return

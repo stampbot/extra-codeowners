@@ -1,8 +1,8 @@
 {
   "@context": "https://openvex.dev/ns/v0.2.0",
-  "@id": "urn:uuid:e88eccc1-ab79-5b75-b5b9-2fc803165704",
+  "@id": "urn:uuid:d7b02baa-4ab0-54f9-afd0-7312674ed994",
   "author": "Extra CODEOWNERS maintainers",
-  "last_updated": "2026-11-23T14:14:46Z",
+  "last_updated": "2026-11-26T04:53:57Z",
   "role": "VEX document producer",
   "statements": [
     {
@@ -1343,9 +1343,9 @@
       }
     }
   ],
-  "timestamp": "2026-11-23T14:14:46Z",
+  "timestamp": "2026-11-26T04:53:57Z",
   "tooling": "Vexcalibur + Extra CODEOWNERS runtime binding",
-  "version": 53,
+  "version": 54,
   "x_extra_codeowners_runtime": {
     "files": {
       ".dockerignore": "3f9dc9d3a79fe3085f25de88403b5563ad5c7fa7010bef94c5e55f24bd3cf691",
@@ -1369,7 +1369,7 @@
       "extra_codeowners/alembic/versions/0012_merge_candidate_recheck.py": "3dee57dfd213a4457483d8fe88efa76e5753748e469c4ee51fbdecfcc25bc874",
       "extra_codeowners/alembic/versions/__init__.py": "c421d4569599794de9ddda269e84b775d6e8204164cb9dff2487ca86560d21ae",
       "extra_codeowners/api_budget.py": "2fb099057e6d7935df7774bd53187c201707c32f6896c3927b9ccece5b1ce162",
-      "extra_codeowners/app.py": "68739542e78662ee5261a024c0ea31ccc1f6d5d07926afd4c68fe4e6eefe041c",
+      "extra_codeowners/app.py": "48830712b319979eb3c123935c15135afb94a09c5d04d541cf017933ef91a82c",
       "extra_codeowners/base_evidence.py": "0f1707afceceb8606cf05771b87c23fe7693932991856c35a237063e4e190cd6",
       "extra_codeowners/build_identity.py": "5c3b38f087460fca37660ddeaa8a004d05348f8c947c04fc2444739ab7896968",
       "extra_codeowners/cli.py": "79a5c200397f9544492ec6071890ff5835c1ed625c623a0a86ed3a60503e65f4",
@@ -1381,13 +1381,13 @@
       "extra_codeowners/github.py": "8751a0a9725c73e5f69a69d1300fa50945b77fb2be50c753a6e472dd9e16bf26",
       "extra_codeowners/logging.py": "a59227e76ec7809ff8bb88fee997abb9b99f32e81a4c8d16bcfc72c0c0abf33f",
       "extra_codeowners/manifest.py": "33d42ac16b8218562f2baf6c0bc7c6664b03354bbf274cb0381e94740b76681e",
-      "extra_codeowners/merge_group_work.py": "ef73b3c0c5ab983f0bea56f08c19f79ff9e7b4c43f15fdd191cc161dbcec382b",
-      "extra_codeowners/merge_group_worker.py": "54d7be526e266a75f9ce7cb72e190978ed22c54abaa4cf71590e328055eaf7a2",
+      "extra_codeowners/merge_group_work.py": "7dbf80fadf5a4aafe7e4f32078fe432511a2582321e5b960da9641c6103a349d",
+      "extra_codeowners/merge_group_worker.py": "304a05c86fafdeb34642d7b4272dae6eca4e568ea93a66f0972a94856c1a90b4",
       "extra_codeowners/merge_queue.py": "a45169a436bfcf23e63e83f25e31f5371ec79c7dd148a3e3277815c7ae74f813",
       "extra_codeowners/merge_queue_paths.py": "022a6ca85b9d3d08c4aea250851465212541b85ae58e492509bcec735c181c83",
       "extra_codeowners/metrics.py": "64785df4eef0b99bacd2cda27ae7a6bae2142a3b246b3b7fb00996631edae9c6",
       "extra_codeowners/migrations.py": "a86d239779ed7b0e38118a3f7c1dee9b33c71519656699f101ac556eed671a46",
-      "extra_codeowners/models.py": "dc59959f56e35111fae00f8f60ef054ba80eb839eb2dae5b09165d4cdc349a48",
+      "extra_codeowners/models.py": "dea5b482c3c6228321b577e8d1916b9e1298d4248add5b0a4544982668ea0b60",
       "extra_codeowners/ordered_prefetch.py": "44c1e7383f94916e6d6c8da13976605440cb771c0b79e1c444c540bf6c14149a",
       "extra_codeowners/policy.py": "844abb482a7c9cc3190d624cc92ece2476128644718e4096f98bfa8a0abedf8a",
       "extra_codeowners/py.typed": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
@@ -1399,7 +1399,8 @@
       "extra_codeowners/settings.py": "737041d594fbc75aa855b59b1df53d42b40af46640e372f75b8f5df29bd82fd8",
       "extra_codeowners/trace_context.py": "f79ca91baa1dd615c80546c66a6b370ba78ec7106dece3feb201d10250078532",
       "extra_codeowners/tracing.py": "49641dd6cb9b5b6da1e6026b90925a73eb3112d13a069afd202e741d261f76f9",
-      "extra_codeowners/webhooks.py": "617838a5ae081a87c95773d7cd77ec55287d0b9d4aad61e2d99e51ec76710619",
+      "extra_codeowners/webhook_ingress.py": "ca7b9e231ca8db06e31a89c9700c38516c33de12b330859e8be14053e82a33c9",
+      "extra_codeowners/webhooks.py": "5c7d82babdc7d407c99ca1e0f9ce26ce8d13a6aa5c41cf1f42b8d9b929c4e649",
       "pyproject.toml": "df173084fc06361a680c48a40c2284c56321c107f3148b9cfb1b92d95eb3caeb",
       "security/vex/glibc-format-callers.json": "a06a8c36b621b44f049c11befe07699f805ee518c1d5bf14b03a62a760d4412f",
       "security/vex/native-november-callers.json": "d3b6b8ab0caa7767688e39ac2a12a6e978b435829902c6ecf0d7551b2094847d",
@@ -1417,7 +1418,7 @@
       "tools/source_recipes/wheel-supplement-protobuf-7.35.1.json": "5b407c288cf74e090f4934113f9bb6f7907a37d6ccbb228321bedb0612b03c8f",
       "uv.lock": "f8a9a125ba46d5275da8300e3f640e5767df2f451f7601a26e4be17c81e3f70e"
     },
-    "review": "Candidate revalidation reuses the GitHub client, evaluator, and SQLAlchemy queue. The nullable check ID and partial index add no native caller, FTS, package, image, or transport change.",
+    "review": "Review of bounded webhook ingress, ownership input validation and merge candidate retirement. The change keeps the existing HMAC, JSON and authenticated HTTP client operations; it does not add a native entrypoint, change database transport, or change dependencies. Existing vulnerability assessments are unchanged.",
     "schema_version": 1
   }
 }
