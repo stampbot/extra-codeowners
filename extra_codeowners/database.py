@@ -6,12 +6,12 @@ import hashlib
 import json
 import os
 import re
-import ssl
 import threading
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
+from ssl import get_default_verify_paths
 from typing import Any, Final, Literal
 
 from sqlalchemy import (
@@ -85,7 +85,7 @@ def _postgres_root_certificate(value: str | None) -> str:
     if value is None:
         # The Python distribution and the wheel's libpq may have been built on
         # different operating systems. Prefer the host bundle, not an ambient path.
-        bundle = ssl.get_default_verify_paths().openssl_cafile
+        bundle = get_default_verify_paths().openssl_cafile
         value = bundle if bundle is not None and os.path.isfile(bundle) else "system"
     if value == "system" and any(name in os.environ for name in ("SSL_CERT_FILE", "SSL_CERT_DIR")):
         raise ValueError("PostgreSQL system roots cannot use ambient OpenSSL trust paths")
