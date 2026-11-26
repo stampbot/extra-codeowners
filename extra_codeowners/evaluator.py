@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from extra_codeowners.codeowners import CodeownersParseError, parse_codeowners
+from extra_codeowners.codeowners import CodeownersDocument, CodeownersParseError, parse_codeowners
 from extra_codeowners.models import (
     ActorKind,
     EvaluationConclusion,
@@ -162,33 +162,44 @@ def _error_result(
     )
 
 
-def evaluate(data: EvaluationInput) -> EvaluationResult:
-    """Evaluate one pull request using only supplied, already-fetched evidence."""
-
-    if not data.repository_policy.enabled:
-        return EvaluationResult(
-            conclusion=EvaluationConclusion.FAILURE,
-            summary="Repository policy is missing or disabled; approval is denied.",
-            errors=(
-                EvaluationMessage(
-                    code="repository_policy_disabled",
-                    message=(
-                        "repository policy is missing or enabled=false; remove the required "
-                        "check from the ruleset before disabling Extra CODEOWNERS"
-                    ),
+def _disabled_repository() -> EvaluationResult:
+    return EvaluationResult(
+        conclusion=EvaluationConclusion.FAILURE,
+        summary="Repository policy is missing or disabled; approval is denied.",
+        errors=(
+            EvaluationMessage(
+                code="repository_policy_disabled",
+                message=(
+                    "repository policy is missing or enabled=false; remove the required "
+                    "check from the ruleset before disabling Extra CODEOWNERS"
                 ),
             ),
-        )
+        ),
+    )
 
+
+def invalid_codeowners_result(error: CodeownersParseError) -> EvaluationResult:
+    """Render the parser's line-level diagnostics without collecting evidence again."""
+    return _error_result(
+        tuple(EvaluationMessage(code=issue.code, message=issue.render()) for issue in error.issues)
+    )
+
+
+def evaluate(data: EvaluationInput) -> EvaluationResult:
+    """Evaluate one pull request using only supplied, already-fetched evidence."""
+    if not data.repository_policy.enabled:
+        return _disabled_repository()
     try:
         document = parse_codeowners(data.codeowners_text)
     except CodeownersParseError as error:
-        return _error_result(
-            tuple(
-                EvaluationMessage(code=issue.code, message=issue.render()) for issue in error.issues
-            )
-        )
+        return invalid_codeowners_result(error)
+    return evaluate_parsed(data, document)
 
+
+def evaluate_parsed(data: EvaluationInput, document: CodeownersDocument) -> EvaluationResult:
+    """Evaluate using the validated document parsed from this exact input."""
+    if not data.repository_policy.enabled:
+        return _disabled_repository()
     try:
         policy = compile_policy(
             data.organization_policy,
