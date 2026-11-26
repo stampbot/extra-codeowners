@@ -82,7 +82,8 @@ jobs:
             .github/scripts/smoke-container.sh \
             .github/scripts/test-helm-chart.sh \
             .github/scripts/test-postgres-backup-restore.sh \
-            .github/scripts/verify-release-provenance.sh
+            .github/scripts/verify-release-provenance.sh \
+            .github/scripts/verify-published-release.sh
 
   test:
     name: Test (Python ${{ matrix.python-version }})
