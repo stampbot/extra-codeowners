@@ -190,27 +190,28 @@ EXTRA_CODEOWNERS_GITHUB_WEBHOOK_SECRET_FILE=/run/secrets/extra-codeowners/github
 The database file contains:
 
 ```text
-EXTRA_CODEOWNERS_DATABASE_URL=postgresql+psycopg://DB_USER:DB_PASSWORD@DB_HOST:5432/DB_NAME?sslmode=require
+EXTRA_CODEOWNERS_DATABASE_URL=postgresql+psycopg://DB_USER:DB_PASSWORD@DB_HOST:5432/DB_NAME
 ```
 
 Replace the App ID and every database placeholder. The URL must use the exact
 `postgresql+psycopg` driver and contain one explicit host, database, username,
 and nonempty password. Percent-encode reserved characters in the username and
-password. For remote PostgreSQL, use `sslmode=require`. This encrypts the
-connection but does not verify the database certificate or hostname. The
-application prevents libpq from loading its default root certificate, so a file
-in the process account does not change that behavior. Treat the complete URL as
-a secret. An explicit port must be between 1 and 65535; omit it only when port
-5432 is correct.
+password. Treat the complete URL as a secret. An explicit port must be between
+1 and 65535; omit it only when port 5432 is correct.
 
-Only `host`, `hostaddr`, and `sslmode` query parameters are supported.
-`hostaddr` requires one explicit hostname, supplied either by the URL authority
-or by the `host` query parameter, plus `sslmode=require`. Connection-service
-URLs, `.pgpass`, ambient libpq connection variables, and unknown query
-parameters are unsupported. The runtime and migrator pin `gssencmode=disable`
-so GSSAPI encryption cannot bypass the required SSL transport, and pin
-`search_path=public`. Use `sslmode=require` or `sslmode=disable`;
-certificate-verification modes are unsupported.
+The Deployment and migration Job default to `postgresql.tlsMode: verify-full`.
+Use a database hostname that matches the certificate. For a private CA, mount
+the same trusted bundle in both workloads and set `sslrootcert` in the URL to
+the absolute path. The chart does not provision the bundle. If your deployment
+intentionally uses encryption without server verification, set
+`postgresql.tlsMode: require` and remove `sslrootcert` from the URL. An explicit
+remote URL `sslmode` must match the chart setting.
+
+The URL accepts only `host`, `hostaddr`, `sslmode`, and `sslrootcert`.
+`hostaddr` still requires one hostname, supplied in the URL authority or in
+its `host` query parameter. Connection service files, `.pgpass`, and ambient
+libpq connection variables are not supported. Both workloads disable GSSAPI
+encryption and set `search_path=public`.
 
 Export only file paths:
 
@@ -806,6 +807,7 @@ descriptions.
 | `image.tag` | string | empty | Overrides the chart app version. Leave it empty to use the image tag released with the chart. |
 | `image.digest` | string | empty | Empty or `sha256:` plus 64 lowercase hex characters; overrides the tag. |
 | `imagePullSecrets` | array | `[]` | Objects containing a nonempty `name`. |
+| `postgresql.tlsMode` | enum | `verify-full` | Applies to both the Deployment and migration Job. `require` encrypts the connection but does not verify the server. |
 | `nameOverride` | string | empty | Replaces the chart-name portion of resource names. |
 | `fullnameOverride` | string | empty | Replaces the complete generated resource name. |
 | `serviceAccount.create` | boolean | `true` | Creates the dedicated runtime account. |

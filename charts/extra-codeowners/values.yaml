@@ -84,6 +84,12 @@ existingSecret: ""
 # allowInsecureChanges disables only the application's built-in non-delegable paths.
 allowInsecureChanges: false
 
+# postgresql configures the same TLS policy for the application and migration Job.
+postgresql:
+  # postgresql.tlsMode authenticates the server by default. Use require only
+  # when another control authenticates the private route.
+  tlsMode: verify-full
+
 # extraEnvFrom is reserved and must remain empty. Use extraEnv with explicit
 # names and valueFrom references so chart validation can inspect every key.
 extraEnvFrom: []

@@ -260,7 +260,9 @@ def create_app(
 
         async with AsyncExitStack() as resources:
             resources.callback(tracing.shutdown)
-            queue_store = store or QueueStore(runtime.database_url.get_secret_value())
+            queue_store = store or QueueStore(
+                runtime.database_url.get_secret_value(), postgres_tls_mode=runtime.postgres_tls_mode
+            )
             if owned_store:
                 resources.push_async_callback(asyncio.to_thread, queue_store.close)
             await asyncio.to_thread(queue_store.initialize)

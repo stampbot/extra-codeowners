@@ -153,17 +153,16 @@ def test_isolated_postgresql_connect_args_reject_invalid_explicit_ports(port: in
         )
 
 
-def test_isolated_postgresql_connect_args_default_remote_transport_uses_tls() -> None:
+def test_isolated_postgresql_connect_args_defaults_to_verifying_remote_server() -> None:
     arguments = isolated_postgresql_connect_args(
         "postgresql+psycopg://user:password@db.example.test/database"
     )
 
-    assert arguments["sslmode"] == "require"
-    assert arguments["sslrootcert"] == LIBPQ_DISABLED_ROOT_CERT
-    assert not Path(LIBPQ_DISABLED_ROOT_CERT).exists()
+    assert arguments["sslmode"] == "verify-full"
+    assert arguments["sslrootcert"] != LIBPQ_DISABLED_ROOT_CERT
 
 
-@pytest.mark.parametrize("sslmode", ("allow", "prefer", "verify-ca", "verify-full"))
+@pytest.mark.parametrize("sslmode", ("allow", "prefer", "verify-ca"))
 def test_isolated_postgresql_connect_args_rejects_unsupported_tls_modes(sslmode: str) -> None:
     with pytest.raises(ValueError, match="unsupported TLS mode"):
         isolated_postgresql_connect_args(
@@ -172,11 +171,41 @@ def test_isolated_postgresql_connect_args_rejects_unsupported_tls_modes(sslmode:
 
 
 def test_isolated_postgresql_connect_args_rejects_certificate_configuration() -> None:
-    with pytest.raises(ValueError, match="unsupported connection parameters"):
+    with pytest.raises(ValueError, match="sslrootcert requires verified TLS"):
         isolated_postgresql_connect_args(
             "postgresql+psycopg://user:password@db.example.test/database?"
-            "sslmode=require&sslrootcert=%2Frun%2Fsecrets%2Fdatabase-ca%2Froot.pem"
+            "sslmode=require&sslrootcert=%2Frun%2Fsecrets%2Fdatabase-ca%2Froot.pem",
+            tls_mode="require",
         )
+
+
+def test_remote_postgresql_allows_pinning_an_operator_ca() -> None:
+    args = isolated_postgresql_connect_args(
+        "postgresql+psycopg://user:password@db.example.test/database?"
+        "sslrootcert=/run/secrets/extra-codeowners/ca.pem"
+    )
+    assert args["sslmode"] == "verify-full"
+    assert args["sslrootcert"] == "/run/secrets/extra-codeowners/ca.pem"
+
+
+@pytest.mark.parametrize("variable", ("SSL_CERT_FILE", "SSL_CERT_DIR"))
+def test_postgresql_system_ca_rejects_ambient_trust_paths(
+    monkeypatch: pytest.MonkeyPatch, variable: str
+) -> None:
+    monkeypatch.setenv(variable, "/some/other/path")
+    with pytest.raises(ValueError, match="ambient OpenSSL trust paths"):
+        isolated_postgresql_connect_args(
+            "postgresql+psycopg://user:password@db.example.test/database?sslrootcert=system"
+        )
+
+
+def test_remote_postgresql_requires_explicit_encryption_only_policy() -> None:
+    url = "postgresql+psycopg://user:password@db.example.test/database?sslmode=require"
+    with pytest.raises(ValueError, match="configured TLS policy"):
+        isolated_postgresql_connect_args(url)
+    args = isolated_postgresql_connect_args(url, tls_mode="require")
+    assert args["sslmode"] == "require"
+    assert args["sslrootcert"] == LIBPQ_DISABLED_ROOT_CERT
 
 
 def test_isolated_postgresql_connect_args_reject_an_empty_password() -> None:

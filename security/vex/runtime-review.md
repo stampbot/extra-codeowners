@@ -711,6 +711,14 @@ upgrades to the Dockerfile.
 
 ### Review boundaries
 
+The verified PostgreSQL default adds a trusted CA bundle and a hostname check
+to the existing libpq stream-TLS client. In the [libpq 18.6 TLS client](https://github.com/postgres/postgres/blob/REL_18_6/src/interfaces/libpq/fe-secure-openssl.c),
+an explicit PEM bundle loads through OpenSSL's certificate-store file lookup.
+[OpenSSL 3.5.9's file lookup](https://github.com/openssl/openssl/blob/openssl-3.5.9/crypto/x509/by_file.c)
+passes a null stack to the PEM reader; this does not add the existing-stack
+call that the retained PEM assessment excludes. This change does not alter
+package versions, add a new TLS protocol, or exclude any additional finding.
+
 The September 19 target-branch policy change adds authenticated GitHub reference
 reads through the existing HTTPX client, validates their JSON responses, and
 uses the resolved commit for policy and CODEOWNERS. It does not change the

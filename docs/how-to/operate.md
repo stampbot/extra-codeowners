@@ -809,9 +809,9 @@ and retirement plan documented for that version.
 
 Use overlapping credentials when the provider supports them:
 
-1. Create a replacement with the same narrow database privileges. Preserve
-   `sslmode=require` for a remote route, or the reviewed local proxy
-   path.
+1. Create a replacement with the same narrow database privileges. Keep the
+   existing TLS mode and trust bundle for a remote connection, or keep the
+   reviewed local proxy path.
 2. Store the explicit `postgresql+psycopg` URL as a new secret version without
    printing it. Keep every ambient libpq connection variable out of the
    process environment.

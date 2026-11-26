@@ -56,6 +56,7 @@ def database_migrate(
     database_url = settings.database_url.get_secret_value()
     upgrade_database(
         database_url,
+        postgres_tls_mode=settings.postgres_tls_mode,
         lock_timeout_seconds=lock_timeout_seconds,
         adopt_pre_alembic_schema=adopt_pre_alembic_schema,
     )
@@ -68,7 +69,7 @@ def database_check() -> None:
     settings = Settings()
     settings.validate_database()
     database_url = settings.database_url.get_secret_value()
-    store = QueueStore(database_url)
+    store = QueueStore(database_url, postgres_tls_mode=settings.postgres_tls_mode)
     try:
         store.initialize()
         typer.echo(f"Database migration {DATABASE_MIGRATION_HEAD} is compatible.")
@@ -130,7 +131,9 @@ def queue_status() -> None:
     """Report pending jobs and any legacy terminal rows."""
     settings = Settings()
     settings.validate_database()
-    store = QueueStore(settings.database_url.get_secret_value())
+    store = QueueStore(
+        settings.database_url.get_secret_value(), postgres_tls_mode=settings.postgres_tls_mode
+    )
     try:
         store.initialize()
         typer.echo(f"pending={store.pending_count()} dead={store.dead_count()}")
@@ -145,7 +148,9 @@ def requeue_dead(
     """Recover a bounded batch of legacy/manual terminal rows."""
     settings = Settings()
     settings.validate_database()
-    store = QueueStore(settings.database_url.get_secret_value())
+    store = QueueStore(
+        settings.database_url.get_secret_value(), postgres_tls_mode=settings.postgres_tls_mode
+    )
     try:
         store.initialize()
         count = store.requeue_dead(limit)

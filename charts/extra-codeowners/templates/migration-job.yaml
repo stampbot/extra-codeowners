@@ -58,6 +58,8 @@ spec:
           env:
             - name: EXTRA_CODEOWNERS_ENVIRONMENT
               value: production
+            - name: EXTRA_CODEOWNERS_POSTGRES_TLS_MODE
+              value: {{ .Values.postgresql.tlsMode | quote }}
             - name: PATH
               value: /opt/venv/bin:/usr/local/bin:/usr/bin:/bin
             - name: LD_PRELOAD

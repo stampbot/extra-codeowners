@@ -15,6 +15,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.exc import ArgumentError
 
 from extra_codeowners.database import (
+    PostgresTlsMode,
     isolated_postgresql_connect_args,
     normalize_repository_full_name,
 )
@@ -170,7 +171,9 @@ def _read_bounded_secret_file(path: Path) -> str:
         os.close(descriptor)
 
 
-def validate_production_database_transport(database_url_value: str) -> None:
+def validate_production_database_transport(
+    database_url_value: str, *, tls_mode: PostgresTlsMode = "verify-full"
+) -> None:
     """Reject a database URL whose transport is unsafe for production."""
     ambient = sorted(name for name in POSTGRESQL_CONNECTION_ENVIRONMENT if name in os.environ)
     if ambient:
@@ -207,21 +210,12 @@ def validate_production_database_transport(database_url_value: str) -> None:
         msg = "production PostgreSQL requires one explicit host or Unix-socket path"
         raise ValueError(msg)
     try:
-        isolated_postgresql_connect_args(database_url_value)
+        isolated_postgresql_connect_args(database_url_value, tls_mode=tls_mode)
     except (TypeError, ValueError) as error:
         raise ValueError(
             "production PostgreSQL requires an explicit database, username, password, and valid "
             f"route: {error}"
         ) from error
-    local_transport = hostaddr is None and (
-        effective_host in {"localhost", "127.0.0.1", "::1"} or effective_host.startswith("/")
-    )
-    if ssl_mode != "require" and not local_transport:
-        msg = (
-            "remote production PostgreSQL must use sslmode=require; a local "
-            "socket/proxy transport may omit TLS"
-        )
-        raise ValueError(msg)
 
 
 class Settings(BaseSettings):
@@ -230,6 +224,8 @@ class Settings(BaseSettings):
     Repository policy can narrow delegated authority but cannot alter these
     deployment-level trust settings.
     """
+
+    postgres_tls_mode: PostgresTlsMode = "verify-full"
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -511,7 +507,9 @@ class Settings(BaseSettings):
     def validate_database(self) -> None:
         """Reject database transports that are unsafe for production commands."""
         if self.environment == "production":
-            validate_production_database_transport(self.database_url.get_secret_value())
+            validate_production_database_transport(
+                self.database_url.get_secret_value(), tls_mode=self.postgres_tls_mode
+            )
 
     def is_organization_config_repository(self, repository_full_name: str) -> bool:
         """Return whether a repository is this owner's shared policy source."""

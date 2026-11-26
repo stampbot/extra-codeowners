@@ -23,6 +23,17 @@ helm lint charts/extra-codeowners
 
 helm template extra-codeowners charts/extra-codeowners >"${output}/default.yaml"
 helm template extra-codeowners charts/extra-codeowners \
+  --set-string postgresql.tlsMode=require >"${output}/postgresql-override.yaml"
+assert_database_tls_mode() {
+  awk -v mode="$2" '/name: EXTRA_CODEOWNERS_POSTGRES_TLS_MODE$/ {
+    count++
+    getline
+    if ($2 != ("\"" mode "\"")) invalid = 1
+  } END { exit !(count == 2 && !invalid) }' "$1"
+}
+assert_database_tls_mode "${output}/default.yaml" verify-full
+assert_database_tls_mode "${output}/postgresql-override.yaml" require
+helm template extra-codeowners charts/extra-codeowners \
   --set replicaCount=0 \
   --set highAvailability.enabled=false \
   --set autoscaling.enabled=false \
@@ -179,6 +190,12 @@ reject_values 'migration hook override' \
 reject_values 'migration ambient libpq environment' \
   --set-string migrations.extraEnv[0].name=PGSERVICE \
   --set-string migrations.extraEnv[0].value=database
+reject_values 'runtime PostgreSQL TLS environment override' \
+  --set-string extraEnv[0].name=EXTRA_CODEOWNERS_POSTGRES_TLS_MODE \
+  --set-string extraEnv[0].value=require
+reject_values 'migration PostgreSQL TLS environment override' \
+  --set-string migrations.extraEnv[0].name=EXTRA_CODEOWNERS_POSTGRES_TLS_MODE \
+  --set-string migrations.extraEnv[0].value=require
 reject_values 'migration loader injection' \
   --set-string migrations.extraEnv[0].name=LD_LIBRARY_PATH \
   --set-string migrations.extraEnv[0].value=/run/secrets/extra-codeowners
